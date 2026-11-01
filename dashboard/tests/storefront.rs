@@ -33,11 +33,10 @@ use std::time::Duration;
 
 use evento::remote::ServerHandle;
 use serde_json::{Value, json};
-use sqlx::SqlitePool;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use timada_catalog::{
     AddImage, CreateCategory, CreateProduct, DefineVariant, OptionSelection, categories_of_tenant,
 };
+use timada_core::db::Db;
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
     SubscriptionState, category_ancestors, find_category, menu_of, published_categories,
@@ -180,18 +179,10 @@ impl Harness {
         (created.token, created.key.id)
     }
 
-    /// A local database for one storefront replica, as a file: `:memory:`
-    /// would give every pooled connection its own empty database.
-    async fn local_pool(&self, name: &str) -> SqlitePool {
-        let options = SqliteConnectOptions::new()
-            .filename(self.dir.join(format!("{name}.db")))
-            .create_if_missing(true)
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
-        SqlitePoolOptions::new()
-            .max_connections(3)
-            .connect_with(options)
-            .await
-            .unwrap()
+    /// A local database for one storefront replica, in memory: every clone
+    /// of it is the same database, as a file's would be.
+    async fn local_db(&self, _name: &str) -> Db {
+        Db::from(evento::Turso::in_memory_concurrent().await.unwrap())
     }
 
     fn config(&self, token: &str) -> StoreConfig {
@@ -243,11 +234,13 @@ impl Harness {
     }
 }
 
-async fn local_cursors(pool: &SqlitePool) -> Vec<String> {
-    sqlx::query_scalar("SELECT key FROM subscriber ORDER BY key")
-        .fetch_all(pool)
+async fn local_cursors(db: &Db) -> Vec<String> {
+    db.fetch_all::<(String,)>("SELECT key FROM subscriber ORDER BY key", ())
         .await
         .unwrap()
+        .into_iter()
+        .map(|(key,)| key)
+        .collect()
 }
 
 /// Polls `check` until it holds or ten seconds pass.
@@ -262,8 +255,8 @@ where
     }
 }
 
-async fn published(pool: &SqlitePool) -> Vec<String> {
-    published_products(pool, &ProductQuery::default())
+async fn published(db: &Db) -> Vec<String> {
+    published_products(db, &ProductQuery::default())
         .await
         .unwrap()
         .items
@@ -317,28 +310,26 @@ async fn a_store_follows_its_tenant_catalog_locally() {
         .await
         .unwrap();
 
-    let pool = h.local_pool("acme-shop").await;
-    let store = Store::connect(h.config(&token), pool.clone())
-        .await
-        .unwrap();
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
     eventually("the published product is in the local copy", async || {
-        published(&pool).await == vec!["Blue Mug".to_owned()]
+        published(&db).await == vec!["Blue Mug".to_owned()]
     })
     .await;
-    let found = published_product_by_slug(&pool, "blue-mug")
+    let found = published_product_by_slug(&db, "blue-mug")
         .await
         .unwrap()
         .unwrap();
     assert_eq!(found.price().as_deref(), Some("12.50 €"));
     assert!(
-        published_product_by_slug(&pool, "draft-plate")
+        published_product_by_slug(&db, "draft-plate")
             .await
             .unwrap()
             .is_none(),
         "a draft is not for sale"
     );
     assert!(
-        published_product_by_slug(&pool, "zeta-thing")
+        published_product_by_slug(&db, "zeta-thing")
             .await
             .unwrap()
             .is_none(),
@@ -353,7 +344,7 @@ async fn a_store_follows_its_tenant_catalog_locally() {
         .unwrap();
     let started = std::time::Instant::now();
     eventually("the rename reaches the local copy", async || {
-        published(&pool).await == vec!["Big Blue Mug".to_owned()]
+        published(&db).await == vec!["Big Blue Mug".to_owned()]
     })
     .await;
     assert!(
@@ -364,7 +355,7 @@ async fn a_store_follows_its_tenant_catalog_locally() {
 
     // The cursor is local; the store has no cursor of ours.
     assert_eq!(
-        local_cursors(&pool).await,
+        local_cursors(&db).await,
         vec![CATALOG_SUBSCRIPTION.to_owned()]
     );
     assert!(
@@ -410,12 +401,10 @@ async fn a_restarted_store_resumes_from_its_local_cursor() {
         .unwrap();
     catalog.publish_product("alice", &first.id).await.unwrap();
 
-    let pool = h.local_pool("replica").await;
-    let store = Store::connect(h.config(&token), pool.clone())
-        .await
-        .unwrap();
+    let db = h.local_db("replica").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
     eventually("the first product arrives", async || {
-        published(&pool).await.len() == 1
+        published(&db).await.len() == 1
     })
     .await;
     let before = store.status().await.last_event_at;
@@ -438,14 +427,12 @@ async fn a_restarted_store_resumes_from_its_local_cursor() {
         .unwrap();
     catalog.publish_product("alice", &second.id).await.unwrap();
 
-    let store = Store::connect(h.config(&token), pool.clone())
-        .await
-        .unwrap();
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
     eventually("the second product arrives after the restart", async || {
-        published(&pool).await.len() == 2
+        published(&db).await.len() == 2
     })
     .await;
-    assert_eq!(local_cursors(&pool).await.len(), 1, "one cursor, resumed");
+    assert_eq!(local_cursors(&db).await.len(), 1, "one cursor, resumed");
     assert!(store.status().await.last_event_at >= before);
 
     store.shutdown().await;
@@ -457,10 +444,8 @@ async fn a_revoked_key_disconnects_the_store() {
     let h = harness(None).await;
     let acme = h.create("acme").await;
     let (token, key_id) = h.key(&acme).await;
-    let pool = h.local_pool("revoked").await;
-    let store = Store::connect(h.config(&token), pool.clone())
-        .await
-        .unwrap();
+    let db = h.local_db("revoked").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
     assert!(store.status().await.connected);
 
     h.platform
@@ -472,7 +457,7 @@ async fn a_revoked_key_disconnects_the_store() {
         !store.status().await.connected
     })
     .await;
-    let err = match Store::connect(h.config(&token), h.local_pool("again").await).await {
+    let err = match Store::connect(h.config(&token), h.local_db("again").await).await {
         Ok(_) => panic!("a revoked key must be refused"),
         Err(err) => format!("{err:#}"),
     };
@@ -508,19 +493,19 @@ async fn the_store_connects_over_tls() {
         .unwrap();
     catalog.publish_product("alice", &mug.id).await.unwrap();
 
-    let plain = Store::connect(h.config(&token), h.local_pool("plain").await).await;
+    let plain = Store::connect(h.config(&token), h.local_db("plain").await).await;
     assert!(
         plain.is_err(),
         "plain TCP against a TLS listener is refused"
     );
 
-    let pool = h.local_pool("tls").await;
+    let db = h.local_db("tls").await;
     let tls = StoreTls::from_ca_pem(&cert, "localhost").unwrap();
-    let store = Store::connect(h.config(&token).tls(tls), pool.clone())
+    let store = Store::connect(h.config(&token).tls(tls), db.clone())
         .await
         .unwrap();
     eventually("the product arrives over TLS", async || {
-        published(&pool).await == vec!["Secure Mug".to_owned()]
+        published(&db).await == vec!["Secure Mug".to_owned()]
     })
     .await;
 
@@ -608,22 +593,20 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
     let wool = stock(&catalog, "Wool Mat", 1990, &[&mats.id]).await;
     stock(&catalog, "Feather Wand", 990, &[&toys.id]).await;
 
-    let pool = h.local_pool("acme-shop").await;
-    let store = Store::connect(h.config(&token), pool.clone())
-        .await
-        .unwrap();
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
     eventually(
         "every published product reaches the local copy",
-        async || published(&pool).await.len() == 3,
+        async || published(&db).await.len() == 3,
     )
     .await;
     eventually("and so does the category tree", async || {
-        published_categories(&pool).await.unwrap().len() == 2
+        published_categories(&db).await.unwrap().len() == 2
     })
     .await;
 
     // The tree keeps its order and counts a subtree, not just one level.
-    let tree = published_categories(&pool).await.unwrap();
+    let tree = published_categories(&db).await.unwrap();
     assert_eq!(
         tree.iter()
             .map(|n| (n.category.name.as_str(), n.product_count))
@@ -639,7 +622,7 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
     );
 
     // A breadcrumb reads top-level first.
-    let mats_row = published_category_by_slug(&pool, "mats")
+    let mats_row = published_category_by_slug(&db, "mats")
         .await
         .unwrap()
         .unwrap();
@@ -658,14 +641,14 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
         .await
         .unwrap();
     eventually("the body reaches the store", async || {
-        published_category_body(&pool, &mats.id).await.unwrap() == "How to pick a mat."
+        published_category_body(&db, &mats.id).await.unwrap() == "How to pick a mat."
     })
     .await;
-    assert_eq!(published_category_body(&pool, &toys.id).await.unwrap(), "");
+    assert_eq!(published_category_body(&db, &toys.id).await.unwrap(), "");
 
     // A collection page asks for a subtree, in the order a shopper picked.
     let cheapest_first = published_products(
-        &pool,
+        &db,
         &ProductQuery::default()
             .in_category(bedding.id.clone())
             .sort(ProductSort::PriceAsc),
@@ -682,7 +665,7 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
     );
     assert_eq!(cheapest_first.total, 2, "the toy is in another tree");
     let dearest_first = published_products(
-        &pool,
+        &db,
         &ProductQuery::default()
             .in_category(bedding.id.clone())
             .sort(ProductSort::PriceDesc),
@@ -691,7 +674,7 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
     .unwrap();
     assert_eq!(dearest_first.items[0].name, "Cooling Mat");
     let searched = published_products(
-        &pool,
+        &db,
         &ProductQuery::default()
             .in_category(bedding.id.clone())
             .search("wool"),
@@ -708,7 +691,7 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
         .unwrap();
     eventually("the category page sorts by the new price", async || {
         published_products(
-            &pool,
+            &db,
             &ProductQuery::default()
                 .in_category(bedding.id.clone())
                 .sort(ProductSort::PriceAsc),
@@ -724,12 +707,12 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
     .await;
 
     // Related products share a category and never include the product itself.
-    let cooling_row = published_product_by_slug(&pool, "cooling-mat")
+    let cooling_row = published_product_by_slug(&db, "cooling-mat")
         .await
         .unwrap()
         .unwrap();
     assert_eq!(
-        published_related_products(&pool, &cooling_row, 4)
+        published_related_products(&db, &cooling_row, 4)
             .await
             .unwrap()
             .iter()
@@ -738,7 +721,7 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
         ["Wool Mat"]
     );
     assert_eq!(
-        published_product_categories(&pool, &cooling_row.id)
+        published_product_categories(&db, &cooling_row.id)
             .await
             .unwrap()
             .iter()
@@ -753,18 +736,18 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
         .await
         .unwrap();
     eventually("a hidden category leaves the menu", async || {
-        menu_of(&published_categories(&pool).await.unwrap())
+        menu_of(&published_categories(&db).await.unwrap())
             .iter()
             .map(|n| n.category.name.clone())
             .collect::<Vec<_>>()
             == ["Toys"]
     })
     .await;
-    let tree = published_categories(&pool).await.unwrap();
+    let tree = published_categories(&db).await.unwrap();
     assert_eq!(tree.len(), 2, "the tree still holds it");
     assert!(find_category(&tree, "mats").is_some());
     assert!(
-        published_category_by_slug(&pool, "bedding")
+        published_category_by_slug(&db, "bedding")
             .await
             .unwrap()
             .is_some_and(|c| !c.in_menu),
@@ -775,7 +758,7 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
         .await
         .unwrap();
     eventually("and comes back", async || {
-        menu_of(&published_categories(&pool).await.unwrap()).len() == 2
+        menu_of(&published_categories(&db).await.unwrap()).len() == 2
     })
     .await;
 
@@ -785,23 +768,23 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
         .await
         .unwrap();
     eventually("a product that left is no longer counted", async || {
-        find_category(&published_categories(&pool).await.unwrap(), "mats").map(|n| n.product_count)
+        find_category(&published_categories(&db).await.unwrap(), "mats").map(|n| n.product_count)
             == Some(1)
     })
     .await;
     catalog.archive_category("alice", &toys.id).await.unwrap();
     eventually("an archived category leaves the tree", async || {
-        published_categories(&pool).await.unwrap().len() == 1
+        published_categories(&db).await.unwrap().len() == 1
     })
     .await;
     assert!(
-        published_category_by_slug(&pool, "toys")
+        published_category_by_slug(&db, "toys")
             .await
             .unwrap()
             .is_none()
     );
     assert_eq!(
-        published(&pool).await.len(),
+        published(&db).await.len(),
         3,
         "its products are still for sale"
     );
@@ -839,20 +822,20 @@ async fn a_store_carries_the_gallery_with_the_address_it_is_loaded_from() {
 
     // The host says where its pictures are served from; the library turns
     // each one into an address a browser can load.
-    let pool = h.local_pool("acme-shop").await;
+    let db = h.local_db("acme-shop").await;
     let config = h
         .config(&token)
         .media_url("https://cdn.example/media/acme/");
-    let store = Store::connect(config, pool.clone()).await.unwrap();
+    let store = Store::connect(config, db.clone()).await.unwrap();
     eventually("the product reaches the local copy", async || {
-        published_product_by_slug(&pool, "cooling-mat")
+        published_product_by_slug(&db, "cooling-mat")
             .await
             .unwrap()
             .is_some_and(|p| p.images.len() == 2)
     })
     .await;
 
-    let mut product = published_product_by_slug(&pool, "cooling-mat")
+    let mut product = published_product_by_slug(&db, "cooling-mat")
         .await
         .unwrap()
         .unwrap();
@@ -882,7 +865,7 @@ async fn a_store_carries_the_gallery_with_the_address_it_is_loaded_from() {
         .await
         .unwrap();
     eventually("the new order reaches the local copy", async || {
-        published_product_by_slug(&pool, "cooling-mat")
+        published_product_by_slug(&db, "cooling-mat")
             .await
             .unwrap()
             .and_then(|p| p.image().map(|i| i.id.clone()))
@@ -894,7 +877,7 @@ async fn a_store_carries_the_gallery_with_the_address_it_is_loaded_from() {
         .await
         .unwrap();
     eventually("and so does a removal", async || {
-        published_product_by_slug(&pool, "cooling-mat")
+        published_product_by_slug(&db, "cooling-mat")
             .await
             .unwrap()
             .is_some_and(|p| p.images.len() == 1)
@@ -974,23 +957,21 @@ async fn a_store_carries_the_variants_a_shopper_picks_from() {
     catalog.publish_product("alice", &harness_id).await.unwrap();
     stock(&catalog, "Feather Wand", 990, &[]).await;
 
-    let pool = h.local_pool("acme-shop").await;
-    let store = Store::connect(h.config(&token), pool.clone())
-        .await
-        .unwrap();
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
     eventually("the varying product reaches the local copy", async || {
-        published_product_by_slug(&pool, "cat-harness")
+        published_product_by_slug(&db, "cat-harness")
             .await
             .unwrap()
             .is_some_and(|p| p.variants.len() == 3)
     })
     .await;
     eventually("and so does the plain one beside it", async || {
-        published(&pool).await.len() == 2
+        published(&db).await.len() == 2
     })
     .await;
 
-    let harness = published_product_by_slug(&pool, "cat-harness")
+    let harness = published_product_by_slug(&db, "cat-harness")
         .await
         .unwrap()
         .unwrap();
@@ -1033,7 +1014,7 @@ async fn a_store_carries_the_variants_a_shopper_picks_from() {
     );
 
     // Sorting goes by what a shopper would pay, not by the base price.
-    let cheapest = published_products(&pool, &ProductQuery::default().sort(ProductSort::PriceAsc))
+    let cheapest = published_products(&db, &ProductQuery::default().sort(ProductSort::PriceAsc))
         .await
         .unwrap();
     assert_eq!(
@@ -1044,7 +1025,7 @@ async fn a_store_carries_the_variants_a_shopper_picks_from() {
             .collect::<Vec<_>>(),
         ["Feather Wand", "Cat Harness"]
     );
-    let dearest = published_products(&pool, &ProductQuery::default().sort(ProductSort::PriceDesc))
+    let dearest = published_products(&db, &ProductQuery::default().sort(ProductSort::PriceDesc))
         .await
         .unwrap();
     assert_eq!(dearest.items[0].name, "Cat Harness");
@@ -1055,7 +1036,7 @@ async fn a_store_carries_the_variants_a_shopper_picks_from() {
         .await
         .unwrap();
     eventually("the narrower range reaches the local copy", async || {
-        published_product_by_slug(&pool, "cat-harness")
+        published_product_by_slug(&db, "cat-harness")
             .await
             .unwrap()
             .and_then(|p| p.price())
@@ -1145,7 +1126,7 @@ async fn dashboard_counts(h: &Harness, tenant: &TenantState) -> Vec<(String, i64
 }
 
 /// What the shop would show for each category, by slug.
-async fn storefront_counts(pool: &SqlitePool) -> Vec<(String, i64)> {
+async fn storefront_counts(db: &Db) -> Vec<(String, i64)> {
     fn walk(nodes: &[timada_storefront::CategoryNode], out: &mut Vec<(String, i64)>) {
         for node in nodes {
             out.push((node.category.slug.clone(), node.product_count));
@@ -1153,7 +1134,7 @@ async fn storefront_counts(pool: &SqlitePool) -> Vec<(String, i64)> {
         }
     }
     let mut out = Vec::new();
-    walk(&published_categories(pool).await.unwrap(), &mut out);
+    walk(&published_categories(db).await.unwrap(), &mut out);
     out.sort();
     out
 }
@@ -1190,24 +1171,22 @@ async fn the_back_office_and_the_shop_count_a_category_the_same_way() {
     stock(&catalog, "Cooling Mat", 2990, &[&mats.id]).await;
     stock(&catalog, "Wool Mat", 1990, &[&bedding.id, &mats.id]).await;
 
-    let pool = h.local_pool("acme-shop").await;
-    let store = Store::connect(h.config(&token), pool.clone())
-        .await
-        .unwrap();
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
     eventually("both products reach the shop", async || {
-        published(&pool).await.len() == 2
+        published(&db).await.len() == 2
     })
     .await;
 
     // A product in the sub-category counts for the parent's page, and one in
     // both is counted once rather than twice.
     let expected = vec![("bedding".to_owned(), 2), ("mats".to_owned(), 2)];
-    assert_eq!(storefront_counts(&pool).await, expected);
+    assert_eq!(storefront_counts(&db).await, expected);
     assert_eq!(dashboard_counts(&h, &acme).await, expected);
 
     // Taking a product out of the parent changes neither page: it is still
     // filed under the sub-category, which the parent's page covers.
-    let wool = published_product_by_slug(&pool, "wool-mat")
+    let wool = published_product_by_slug(&db, "wool-mat")
         .await
         .unwrap()
         .unwrap();
@@ -1216,14 +1195,14 @@ async fn the_back_office_and_the_shop_count_a_category_the_same_way() {
         .await
         .unwrap();
     eventually("the removal reaches the shop", async || {
-        published_product_categories(&pool, &wool.id)
+        published_product_categories(&db, &wool.id)
             .await
             .unwrap()
             .len()
             == 1
     })
     .await;
-    assert_eq!(storefront_counts(&pool).await, expected);
+    assert_eq!(storefront_counts(&db).await, expected);
     assert_eq!(dashboard_counts(&h, &acme).await, expected);
 
     // Out of the sub-category as well, and it leaves both pages.
@@ -1232,7 +1211,7 @@ async fn the_back_office_and_the_shop_count_a_category_the_same_way() {
         .await
         .unwrap();
     eventually("and so does the second removal", async || {
-        storefront_counts(&pool).await == vec![("bedding".to_owned(), 1), ("mats".to_owned(), 1)]
+        storefront_counts(&db).await == vec![("bedding".to_owned(), 1), ("mats".to_owned(), 1)]
     })
     .await;
     assert_eq!(
@@ -1269,12 +1248,12 @@ async fn a_store_with_a_checkout_key_sells() {
     catalog.publish_product("alice", &mug.id).await.unwrap();
 
     let api = dashboard_endpoint(h.platform.0.clone()).await;
-    let pool = h.local_pool("selling-shop").await;
-    let store = Store::connect(h.config(&token).api_url(&api), pool.clone())
+    let db = h.local_db("selling-shop").await;
+    let store = Store::connect(h.config(&token).api_url(&api), db.clone())
         .await
         .unwrap();
     eventually("the product is in the local copy", async || {
-        published(&pool).await == vec!["Blue Mug".to_owned()]
+        published(&db).await == vec!["Blue Mug".to_owned()]
     })
     .await;
 
@@ -1403,8 +1382,8 @@ async fn a_store_with_a_checkout_key_sells() {
 
     // A read-only key shows the catalog but cannot sell: the dashboard
     // refuses it (403), and the store API would its reads.
-    let read_pool = h.local_pool("window-shop").await;
-    let window = Store::connect(h.config(&read_token).api_url(&api), read_pool)
+    let read_db = h.local_db("window-shop").await;
+    let window = Store::connect(h.config(&read_token).api_url(&api), read_db)
         .await
         .unwrap();
     let err = window
@@ -1454,8 +1433,8 @@ async fn a_checkout_knows_how_to_pay_and_the_vat_in_the_total() {
     let book = sell("Cat Book", 1000, Some("books")).await;
 
     let api = dashboard_endpoint(h.platform.0.clone()).await;
-    let pool = h.local_pool("vat-shop").await;
-    let store = Store::connect(h.config(&token).api_url(api), pool.clone())
+    let db = h.local_db("vat-shop").await;
+    let store = Store::connect(h.config(&token).api_url(api), db.clone())
         .await
         .unwrap();
 
@@ -1547,12 +1526,12 @@ async fn a_store_shows_the_checkout_offers_and_prices_one_unit() {
         .unwrap();
 
     let api = dashboard_endpoint(h.platform.0.clone()).await;
-    let pool = h.local_pool("offer-shop").await;
-    let store = Store::connect(h.config(&token).api_url(api), pool.clone())
+    let db = h.local_db("offer-shop").await;
+    let store = Store::connect(h.config(&token).api_url(api), db.clone())
         .await
         .unwrap();
     eventually("both products are in the local copy", async || {
-        published(&pool).await.len() == 2
+        published(&db).await.len() == 2
     })
     .await;
 
@@ -1718,15 +1697,15 @@ async fn a_store_shows_the_published_reviews_and_sorts_by_them() {
         reviews.publish_review("alice", &review.id).await.unwrap();
     }
 
-    let pool = h.local_pool("acme-shop").await;
+    let db = h.local_db("acme-shop").await;
     let store = Store::connect(
         h.config(&token).media_url("https://media.example/acme"),
-        pool.clone(),
+        db.clone(),
     )
     .await
     .unwrap();
     let rated = async |query: ProductQuery| -> Vec<(String, i64, Option<f64>)> {
-        published_products(&pool, &query.sort(ProductSort::TopRated))
+        published_products(&db, &query.sort(ProductSort::TopRated))
             .await
             .unwrap()
             .items
@@ -2125,7 +2104,7 @@ async fn sign_in_codes_are_held_to_a_limit_per_shopper_and_per_key() {
         },
     )
     .await;
-    let store = Store::connect(h.config(&token).api_url(api), h.local_pool("codes").await)
+    let store = Store::connect(h.config(&token).api_url(api), h.local_db("codes").await)
         .await
         .unwrap();
     let ask = async |ip: Option<&str>| {
@@ -2245,11 +2224,11 @@ async fn a_store_shows_the_published_pages() {
         .await
         .unwrap();
 
-    let pool = h.local_pool("acme-shop").await;
+    let db = h.local_db("acme-shop").await;
     let config = h.config(&token).media_url("https://cdn.example/media/acme");
-    let store = Store::connect(config, pool.clone()).await.unwrap();
+    let store = Store::connect(config, db.clone()).await.unwrap();
     eventually("the published pages reach the local copy", async || {
-        published_page(&pool, "mentions-legales", None)
+        published_page(&db, "mentions-legales", None)
             .await
             .unwrap()
             .is_some()
@@ -2258,13 +2237,13 @@ async fn a_store_shows_the_published_pages() {
 
     // The draft has no page.
     assert!(
-        published_page(&pool, "brouillon", None)
+        published_page(&db, "brouillon", None)
             .await
             .unwrap()
             .is_none()
     );
 
-    let shown = published_page(&pool, "conditions-de-vente", store.media_url())
+    let shown = published_page(&db, "conditions-de-vente", store.media_url())
         .await
         .unwrap()
         .unwrap();
@@ -2277,7 +2256,7 @@ async fn a_store_shows_the_published_pages() {
     );
     assert_eq!(shown.meta_title, "CGV | Acme");
     assert_eq!(shown.meta_description, "Prix En euros.");
-    let legal_page = published_page(&pool, "mentions-legales", store.media_url())
+    let legal_page = published_page(&db, "mentions-legales", store.media_url())
         .await
         .unwrap()
         .unwrap();
@@ -2290,7 +2269,7 @@ async fn a_store_shows_the_published_pages() {
     );
 
     // Search matches the start of a word, title matches first.
-    let found = search_published_pages(&pool, "edit", 5).await.unwrap();
+    let found = search_published_pages(&db, "edit", 5).await.unwrap();
     assert_eq!(
         found
             .iter()
@@ -2303,30 +2282,24 @@ async fn a_store_shows_the_published_pages() {
     pages.unpublish_page("alice", &terms).await.unwrap();
     pages.rename_page("alice", &legal, "legal").await.unwrap();
     eventually("a moved page is found at its new slug", async || {
-        published_page(&pool, "legal", None)
-            .await
-            .unwrap()
-            .is_some()
+        published_page(&db, "legal", None).await.unwrap().is_some()
     })
     .await;
     assert!(
-        published_page(&pool, "mentions-legales", None)
+        published_page(&db, "mentions-legales", None)
             .await
             .unwrap()
             .is_none()
     );
     assert!(
-        published_page(&pool, "conditions-de-vente", None)
+        published_page(&db, "conditions-de-vente", None)
             .await
             .unwrap()
             .is_none()
     );
     pages.delete_page("alice", &legal).await.unwrap();
     eventually("a deleted page leaves the copy", async || {
-        published_page(&pool, "legal", None)
-            .await
-            .unwrap()
-            .is_none()
+        published_page(&db, "legal", None).await.unwrap().is_none()
     })
     .await;
 

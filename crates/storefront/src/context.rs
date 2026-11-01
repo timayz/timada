@@ -39,9 +39,9 @@ pub fn money(cx: &Cx) -> &MoneyFormat {
 /// A page of the published catalog.
 pub async fn products(cx: &Cx, query: &ProductQuery) -> Result<ProductPage> {
     let store = store(cx);
-    let mut page = published_products(store.pool(), query)
+    let mut page = published_products(store.db(), query)
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))?;
+        .map_err(Error::from_anyhow)?;
     for product in &mut page.items {
         product.fill_urls(store.media_url());
     }
@@ -52,17 +52,17 @@ pub async fn products(cx: &Cx, query: &ProductQuery) -> Result<ProductPage> {
 /// its count, for a filter's links: see
 /// [`published_option_values`](crate::published_option_values).
 pub async fn option_values(cx: &Cx, query: &ProductQuery, option: &str) -> Result<Vec<FacetValue>> {
-    published_option_values(store(cx).pool(), query, option)
+    published_option_values(store(cx).db(), query, option)
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))
+        .map_err(Error::from_anyhow)
 }
 
 /// A published product by slug, if any.
 pub async fn product_by_slug(cx: &Cx, slug: &str) -> Result<Option<Product>> {
     let store = store(cx);
-    let mut product = published_product_by_slug(store.pool(), slug)
+    let mut product = published_product_by_slug(store.db(), slug)
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))?;
+        .map_err(Error::from_anyhow)?;
     if let Some(product) = &mut product {
         product.fill_urls(store.media_url());
     }
@@ -89,9 +89,9 @@ pub async fn category_products(
 /// The live categories as trees, each with how many published products are in
 /// it and below it: what a navigation menu is built from.
 pub async fn categories(cx: &Cx) -> Result<Vec<CategoryNode>> {
-    published_categories(store(cx).pool())
+    published_categories(store(cx).db())
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))
+        .map_err(Error::from_anyhow)
 }
 
 /// The trees a menu shows: [`categories`] without the ones the merchant hid
@@ -103,17 +103,17 @@ pub async fn menu(cx: &Cx) -> Result<Vec<CategoryNode>> {
 
 /// A live category by slug, if any.
 pub async fn category_by_slug(cx: &Cx, slug: &str) -> Result<Option<Category>> {
-    published_category_by_slug(store(cx).pool(), slug)
+    published_category_by_slug(store(cx).db(), slug)
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))
+        .map_err(Error::from_anyhow)
 }
 
 /// The text a live category's page shows below its products, empty when it
 /// has none.
 pub async fn category_body(cx: &Cx, category_id: &str) -> Result<String> {
-    published_category_body(store(cx).pool(), category_id)
+    published_category_body(store(cx).db(), category_id)
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))
+        .map_err(Error::from_anyhow)
 }
 
 /// A live category by slug, or 404.
@@ -138,18 +138,18 @@ pub fn category_path(menu: &[CategoryNode], category: &Category) -> Vec<Category
 /// The live categories a product is filed under, in tree order: the first is
 /// what a breadcrumb usually shows.
 pub async fn product_categories(cx: &Cx, product: &Product) -> Result<Vec<Category>> {
-    crate::query::published_product_categories(store(cx).pool(), &product.id)
+    crate::query::published_product_categories(store(cx).db(), &product.id)
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))
+        .map_err(Error::from_anyhow)
 }
 
 /// Published products sharing a category with this one, newest first, at most
 /// `limit` of them and never the product itself.
 pub async fn related_products(cx: &Cx, product: &Product, limit: u32) -> Result<Vec<Product>> {
     let store = store(cx);
-    let mut related = crate::query::published_related_products(store.pool(), product, limit)
+    let mut related = crate::query::published_related_products(store.db(), product, limit)
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))?;
+        .map_err(Error::from_anyhow)?;
     for product in &mut related {
         product.fill_urls(store.media_url());
     }
@@ -171,9 +171,9 @@ pub async fn cart_recommendations(
         .chain(&cart.unavailable)
         .map(|line| line.product_id.clone())
         .collect();
-    let mut offered = crate::query::published_cart_recommendations(store.pool(), &ids, limit)
+    let mut offered = crate::query::published_cart_recommendations(store.db(), &ids, limit)
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))?;
+        .map_err(Error::from_anyhow)?;
     for product in &mut offered {
         product.fill_urls(store.media_url());
     }

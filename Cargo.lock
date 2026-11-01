@@ -2163,7 +2163,6 @@ dependencies = [
  "evento-sql",
  "evento-sql-migrator",
  "evento-turso",
- "sqlx_migrator",
 ]
 
 [[package]]
@@ -7392,7 +7391,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "sqlx",
  "timada-aliexpress",
  "timada-automations",
  "timada-catalog",
@@ -7589,8 +7587,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sqlx",
- "sqlx_migrator",
  "timada-catalog",
  "timada-core",
  "timada-invoicing",

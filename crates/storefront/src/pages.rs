@@ -8,7 +8,7 @@
 //! from [`StoreConfig::media_url`](crate::StoreConfig::media_url).
 
 use evento::{Executor, metadata::RawEvent, subscription::Context};
-use sqlx::{FromRow, SqlitePool};
+use timada_core::db::{Db, FromRow};
 use timada_pages::aggregator::Page;
 use timada_pages::{PageState, markdown_text, page_projection, render_markdown};
 use topcoat_core::context::Cx;
@@ -57,19 +57,19 @@ struct PageRow {
 
 /// A published page by slug, if any.
 pub async fn published_page(
-    pool: &SqlitePool,
+    db: &Db,
     slug: &str,
     media_url: Option<&str>,
-) -> sqlx::Result<Option<PublicPage>> {
+) -> anyhow::Result<Option<PublicPage>> {
     // A slug moving from one page to another is briefly on both: the one
     // that moved last wins.
-    let row: Option<PageRow> = sqlx::query_as(
-        "SELECT id, slug, title, body, text, meta_title, meta_description
-         FROM storefront_pages WHERE slug = ?1 ORDER BY updated_at DESC LIMIT 1",
-    )
-    .bind(slug)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<PageRow> = db
+        .fetch_optional(
+            "SELECT id, slug, title, body, text, meta_title, meta_description
+             FROM storefront_pages WHERE slug = ?1 ORDER BY updated_at DESC LIMIT 1",
+            (slug,),
+        )
+        .await?;
     Ok(row.map(|row| PublicPage {
         html: render_markdown(&row.body, media_url.unwrap_or_default()),
         meta_title: if row.meta_title.is_empty() {
@@ -92,21 +92,22 @@ pub async fn published_page(
 /// accents and case aside ("livrais" finds "livraison", "lit" does not find
 /// "politique"), title matches first, at most `limit`.
 pub async fn search_published_pages(
-    pool: &SqlitePool,
+    db: &Db,
     q: &str,
     limit: usize,
-) -> sqlx::Result<Vec<PageLink>> {
+) -> anyhow::Result<Vec<PageLink>> {
     let key = search_key(q);
     if key.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
     // A shop has a handful of pages: they are matched here rather than in
     // SQL, which has no accent folding.
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT slug, title, text FROM storefront_pages ORDER BY title COLLATE NOCASE, id",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows: Vec<(String, String, String)> = db
+        .fetch_all(
+            "SELECT slug, title, text FROM storefront_pages ORDER BY title COLLATE NOCASE, id",
+            (),
+        )
+        .await?;
     let starts_a_word = |text: &str| {
         search_key(text).split(' ').any(|word| {
             word.trim_matches(|c: char| !c.is_alphanumeric())
@@ -129,9 +130,9 @@ pub async fn search_published_pages(
 /// A published page by slug, if any.
 pub async fn page(cx: &Cx, slug: &str) -> Result<Option<PublicPage>> {
     let store = store(cx);
-    published_page(store.pool(), slug, store.media_url())
+    published_page(store.db(), slug, store.media_url())
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))
+        .map_err(Error::from_anyhow)
 }
 
 /// A published page by slug, or 404.
@@ -141,9 +142,9 @@ pub async fn require_page(cx: &Cx, slug: &str) -> Result<PublicPage> {
 
 /// The pages a search finds; see [`search_published_pages`].
 pub async fn search_pages(cx: &Cx, q: &str, limit: usize) -> Result<Vec<PageLink>> {
-    search_published_pages(store(cx).pool(), q, limit)
+    search_published_pages(store(cx).db(), q, limit)
         .await
-        .map_err(|err| Error::from_anyhow(err.into()))
+        .map_err(Error::from_anyhow)
 }
 
 /// Copies a page that is published, and drops one that is not (any more).
@@ -152,7 +153,7 @@ pub(crate) async fn on_page_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<Page>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(page) = page_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
@@ -160,18 +161,19 @@ pub(crate) async fn on_page_event<E: Executor>(
     else {
         return Ok(());
     };
-    upsert_page(&pool, &page).await
+    upsert_page(&db, &page).await
 }
 
-async fn upsert_page(pool: &SqlitePool, page: &PageState) -> anyhow::Result<()> {
+async fn upsert_page(db: &Db, page: &PageState) -> anyhow::Result<()> {
     if !page.published || page.deleted {
-        sqlx::query("DELETE FROM storefront_pages WHERE id = ?1")
-            .bind(&page.id)
-            .execute(pool)
-            .await?;
+        db.execute(
+            "DELETE FROM storefront_pages WHERE id = ?1",
+            (page.id.as_str(),),
+        )
+        .await?;
         return Ok(());
     }
-    sqlx::query(
+    db.execute(
         "INSERT INTO storefront_pages (id, slug, title, body, text, meta_title,
             meta_description, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -179,16 +181,17 @@ async fn upsert_page(pool: &SqlitePool, page: &PageState) -> anyhow::Result<()> 
             slug = excluded.slug, title = excluded.title, body = excluded.body,
             text = excluded.text, meta_title = excluded.meta_title,
             meta_description = excluded.meta_description, updated_at = excluded.updated_at",
+        (
+            page.id.as_str(),
+            page.slug.as_str(),
+            page.title.as_str(),
+            page.body.as_str(),
+            markdown_text(&page.body),
+            page.meta_title.as_str(),
+            page.meta_description.as_str(),
+            page.updated_at as i64,
+        ),
     )
-    .bind(&page.id)
-    .bind(&page.slug)
-    .bind(&page.title)
-    .bind(&page.body)
-    .bind(markdown_text(&page.body))
-    .bind(&page.meta_title)
-    .bind(&page.meta_description)
-    .bind(page.updated_at as i64)
-    .execute(pool)
     .await?;
     Ok(())
 }

@@ -126,8 +126,11 @@ start_storefront() {
   storefront=$!
 }
 
+# The storefront's own count of its copy, from its status endpoint: its file
+# is the one process's while it runs.
 products() {
-  sqlite3 data/load/chatounette.db "SELECT count(*) FROM storefront_products" 2>/dev/null || echo 0
+  curl -s http://127.0.0.1:3457/store/status 2>/dev/null \
+    | sed -nE 's/.*"products":([0-9]+).*/\1/p' | grep . || echo 0
 }
 
 # Starts the three nodes (migrating and seeding a fresh platform), then the

@@ -576,7 +576,7 @@ impl Store {
             .map(|l| l.product_id.as_str())
             .chain(quote.offers.iter().map(|offer| offer.product_id.as_str()))
             .collect();
-        let mut products = published_products_by_ids(self.pool(), &ids).await?;
+        let mut products = published_products_by_ids(self.db(), &ids).await?;
         for product in &mut products {
             product.fill_urls(self.media_url());
         }

@@ -689,7 +689,7 @@ fn default_write_backlog() -> usize {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct MonitoringConfig {
-    /// A `tracing_subscriber::EnvFilter` directive, e.g. `info,sqlx=warn`.
+    /// A `tracing_subscriber::EnvFilter` directive, e.g. `info,hyper=warn`.
     pub log_level: String,
     pub log_json: bool,
     pub log_target: bool,
@@ -712,7 +712,7 @@ impl Config {
             .set_default("auth.rp_name", "Timada")?
             .set_default("mail.from", "Timada <no-reply@timada.localhost>")?
             .set_default("mail.smtp_url", "smtp://localhost:1025")?
-            .set_default("monitoring.log_level", "info,sqlx=warn")?
+            .set_default("monitoring.log_level", "info")?
             .set_default("monitoring.log_json", false)?
             .set_default("monitoring.log_target", true)?
             .set_default("monitoring.log_line_number", true)?;

@@ -1,7 +1,9 @@
 //! The subscription that keeps the local product rows current from the
 //! store's catalog events. The handler reloads the product's write model from
 //! the store (its snapshot is local too) and rewrites the row, so a repeated
-//! delivery changes nothing. When what a category counts has changed, every
+//! delivery changes nothing. Every handler writes in one transaction of the
+//! local database ([`Db::write`]), run alongside the pages' reads and run
+//! again whole should another writer change the same rows. When what a category counts has changed, every
 //! category's counts, and the products each one's page lists, are worked out
 //! again in the same transaction, so the menu and a collection page read them
 //! instead of computing them on each request.
@@ -18,7 +20,6 @@ use evento::{
     metadata::RawEvent,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::SqlitePool;
 use timada_catalog::aggregator::Product;
 use timada_catalog::aggregator::category::Category;
 use timada_catalog::aggregator::stock::StockItem;
@@ -26,17 +27,20 @@ use timada_catalog::{
     CategoryLink, CategoryState, ProductState, StockState, StockSummary, category_counts,
     category_projection, product_projection, stock_projection,
 };
+use timada_core::db::{
+    Connection, Db, Value, execute, fetch_all, fetch_optional, params_from_iter, search_key,
+};
 use timada_reviews::aggregator::Review;
 use timada_reviews::{ReviewState, review_projection};
 
 /// The cursor identity of the catalog subscription, in the local database.
 pub const CATALOG_SUBSCRIPTION: &str = "storefront/catalog";
 
-/// Builds the subscription over every routing key of the store. `pool` is the
+/// Builds the subscription over every routing key of the store. `db` is the
 /// local database; start it with `.start(&executor)`.
-pub fn catalog_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilder<E> {
+pub fn catalog_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(CATALOG_SUBSCRIPTION)
-        .data(pool)
+        .data(db)
         .handler(on_product_event())
         .handler(on_category_event())
         .handler(on_stock_event())
@@ -50,7 +54,7 @@ async fn on_product_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<Product>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(product) = product_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
@@ -58,7 +62,7 @@ async fn on_product_event<E: Executor>(
     else {
         return Ok(());
     };
-    upsert_product(&pool, &product).await
+    upsert_product(&db, &product).await
 }
 
 #[evento::subscription_all]
@@ -66,7 +70,7 @@ async fn on_stock_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<StockItem>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(stock) = stock_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
@@ -78,33 +82,39 @@ async fn on_stock_event<E: Executor>(
         .load(&stock.product_id)
         .execute(context.executor)
         .await?;
-    upsert_stock(&pool, &stock, product.as_ref()).await
+    upsert_stock(&db, &stock, product.as_ref()).await
 }
 
 /// The stock row of one thing, and what its product's row says of it.
 async fn upsert_stock(
-    pool: &SqlitePool,
+    db: &Db,
     stock: &StockState,
     product: Option<&ProductState>,
 ) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
-    sqlx::query(
-        "INSERT INTO storefront_stock (product_id, variant_id, tracked, on_hand)
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT (product_id, variant_id) DO UPDATE SET
-            tracked = excluded.tracked, on_hand = excluded.on_hand",
-    )
-    .bind(&stock.product_id)
-    .bind(stock.variant_id.as_deref().unwrap_or(""))
-    .bind(stock.tracked)
-    .bind(i64::from(stock.on_hand))
-    .execute(&mut *tx)
-    .await?;
-    if let Some(product) = product {
-        refresh_stock(&mut tx, product).await?;
-    }
-    tx.commit().await?;
-    Ok(())
+    let env = (stock, product);
+    db.write(&env, |tx, (stock, product)| {
+        Box::pin(async move {
+            execute(
+                tx,
+                "INSERT INTO storefront_stock (product_id, variant_id, tracked, on_hand)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT (product_id, variant_id) DO UPDATE SET
+                    tracked = excluded.tracked, on_hand = excluded.on_hand",
+                (
+                    stock.product_id.as_str(),
+                    stock.variant_id.as_deref().unwrap_or(""),
+                    stock.tracked,
+                    i64::from(stock.on_hand),
+                ),
+            )
+            .await?;
+            if let Some(product) = product {
+                refresh_stock(tx, product).await?;
+            }
+            Ok(())
+        })
+    })
+    .await
 }
 
 /// Works out what the product's row says of its stock from the stock rows:
@@ -112,15 +122,12 @@ async fn upsert_stock(
 /// without variants) to what is on its shelf, `in_stock` whether anything of
 /// it can be bought. What a checkout holds is left out: it lapses on its
 /// own, and the cart and the payment check it exactly.
-async fn refresh_stock(
-    tx: &mut sqlx::SqliteConnection,
-    product: &ProductState,
-) -> anyhow::Result<()> {
-    let rows: Vec<(String, bool, i64)> = sqlx::query_as(
+async fn refresh_stock(tx: &Connection, product: &ProductState) -> anyhow::Result<()> {
+    let rows: Vec<(String, bool, i64)> = fetch_all(
+        tx,
         "SELECT variant_id, tracked, on_hand FROM storefront_stock WHERE product_id = ?1",
+        (product.id.as_str(),),
     )
-    .bind(&product.id)
-    .fetch_all(&mut *tx)
     .await?;
     let on_hand = |variant_id: Option<&str>| {
         rows.iter()
@@ -140,12 +147,16 @@ async fn refresh_stock(
         }
     }
     let in_stock = StockSummary::of(product, on_hand) != StockSummary::SoldOut;
-    sqlx::query("UPDATE storefront_products SET stock_json = ?2, in_stock = ?3 WHERE id = ?1")
-        .bind(&product.id)
-        .bind(serde_json::to_string(&counted)?)
-        .bind(in_stock)
-        .execute(&mut *tx)
-        .await?;
+    execute(
+        tx,
+        "UPDATE storefront_products SET stock_json = ?2, in_stock = ?3 WHERE id = ?1",
+        (
+            product.id.as_str(),
+            serde_json::to_string(&counted)?,
+            in_stock,
+        ),
+    )
+    .await?;
     Ok(())
 }
 
@@ -154,7 +165,7 @@ async fn on_category_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<Category>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(category) = category_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
@@ -162,7 +173,7 @@ async fn on_category_event<E: Executor>(
     else {
         return Ok(());
     };
-    upsert_category(&pool, &category).await
+    upsert_category(&db, &category).await
 }
 
 #[evento::subscription_all]
@@ -170,7 +181,7 @@ async fn on_review_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<Review>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(review) = review_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
@@ -178,200 +189,208 @@ async fn on_review_event<E: Executor>(
     else {
         return Ok(());
     };
-    upsert_review(&pool, &review).await
+    upsert_review(&db, &review).await
 }
 
 /// Copies a published review (and drops one that is not), then counts its
 /// product's reviews again, in one transaction.
-async fn upsert_review(pool: &SqlitePool, review: &ReviewState) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
-    match review.published_at {
-        Some(published_at) if review.is_published() => {
-            let photos: Vec<crate::ReviewPhoto> = review
-                .photos
-                .iter()
-                .map(|photo| crate::ReviewPhoto {
-                    id: photo.id.clone(),
-                    file: photo.file(),
-                    width: photo.width,
-                    height: photo.height,
-                    // Filled in when a page reads the review.
-                    url: String::new(),
-                })
-                .collect();
-            sqlx::query(
-                "INSERT INTO storefront_reviews (id, product_id, rating, title, body,
-                    author_name, variant_label, photos_json, published_at, reply, replied_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-                 ON CONFLICT (id) DO UPDATE SET photos_json = excluded.photos_json,
-                    reply = excluded.reply, replied_at = excluded.replied_at",
+async fn upsert_review(db: &Db, review: &ReviewState) -> anyhow::Result<()> {
+    db.write(review, |tx, review| {
+        Box::pin(async move {
+            match review.published_at {
+                Some(published_at) if review.is_published() => {
+                    let photos: Vec<crate::ReviewPhoto> = review
+                        .photos
+                        .iter()
+                        .map(|photo| crate::ReviewPhoto {
+                            id: photo.id.clone(),
+                            file: photo.file(),
+                            width: photo.width,
+                            height: photo.height,
+                            // Filled in when a page reads the review.
+                            url: String::new(),
+                        })
+                        .collect();
+                    execute(
+                        tx,
+                        "INSERT INTO storefront_reviews (id, product_id, rating, title, body,
+                            author_name, variant_label, photos_json, published_at, reply,
+                            replied_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                         ON CONFLICT (id) DO UPDATE SET photos_json = excluded.photos_json,
+                            reply = excluded.reply, replied_at = excluded.replied_at",
+                        (
+                            review.id.as_str(),
+                            review.product_id.as_str(),
+                            i64::from(review.rating),
+                            review.title.as_deref(),
+                            review.body.as_str(),
+                            review.author_name.as_str(),
+                            review.variant_label.as_deref(),
+                            serde_json::to_string(&photos)?,
+                            published_at as i64,
+                            review.reply.as_deref(),
+                            review.replied_at.map(|at| at as i64),
+                        ),
+                    )
+                    .await?;
+                }
+                _ => {
+                    execute(
+                        tx,
+                        "DELETE FROM storefront_reviews WHERE id = ?1",
+                        (review.id.as_str(),),
+                    )
+                    .await?;
+                }
+            }
+            // The average rounds half up; no review is 0 (a division by zero
+            // is NULL).
+            execute(
+                tx,
+                "UPDATE storefront_products SET (review_count, rating_x100) =
+                    (SELECT COUNT(*), COALESCE((SUM(rating) * 100 + COUNT(*) / 2) / COUNT(*), 0)
+                     FROM storefront_reviews WHERE product_id = ?1)
+                 WHERE id = ?1",
+                (review.product_id.as_str(),),
             )
-            .bind(&review.id)
-            .bind(&review.product_id)
-            .bind(i64::from(review.rating))
-            .bind(&review.title)
-            .bind(&review.body)
-            .bind(&review.author_name)
-            .bind(&review.variant_label)
-            .bind(serde_json::to_string(&photos)?)
-            .bind(published_at as i64)
-            .bind(&review.reply)
-            .bind(review.replied_at.map(|at| at as i64))
-            .execute(&mut *tx)
             .await?;
-        }
-        _ => {
-            sqlx::query("DELETE FROM storefront_reviews WHERE id = ?1")
-                .bind(&review.id)
-                .execute(&mut *tx)
-                .await?;
-        }
-    }
-    // The average rounds half up; no review is 0 (a division by zero is NULL).
-    sqlx::query(
-        "UPDATE storefront_products SET (review_count, rating_x100) =
-            (SELECT COUNT(*), COALESCE((SUM(rating) * 100 + COUNT(*) / 2) / COUNT(*), 0)
-             FROM storefront_reviews WHERE product_id = ?1)
-         WHERE id = ?1",
-    )
-    .bind(&review.product_id)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "UPDATE storefront_category_products SET (review_count, rating_x100) =
-            (SELECT review_count, rating_x100 FROM storefront_products WHERE id = ?1)
-         WHERE product_id = ?1",
-    )
-    .bind(&review.product_id)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(())
+            execute(
+                tx,
+                "UPDATE storefront_category_products SET (review_count, rating_x100) =
+                    (SELECT review_count, rating_x100 FROM storefront_products WHERE id = ?1)
+                 WHERE product_id = ?1",
+                (review.product_id.as_str(),),
+            )
+            .await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
 /// The product row, the categories it is in, the counts they change and what
 /// a search finds it by, in one transaction: a page never sees a product
 /// filed half-way.
-async fn upsert_product(pool: &SqlitePool, product: &ProductState) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
-    let was: Option<(bool, String, String)> = sqlx::query_as(
-        "SELECT status = 'published', slug, name FROM storefront_products WHERE id = ?1",
-    )
-    .bind(&product.id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let was_counted = was.as_ref().map(|(counted, _, _)| *counted);
-    let was_in: Vec<String> = sqlx::query_scalar(
-        "SELECT category_id FROM storefront_product_categories
-         WHERE product_id = ?1 ORDER BY category_id",
-    )
-    .bind(&product.id)
-    .fetch_all(&mut *tx)
-    .await?;
-    sqlx::query(
-        "INSERT INTO storefront_products (id, slug, name, description, amount_cents, currency,
-            status, updated_at, images_json, options_json, variants_json, attributes_json,
-            min_amount_cents, max_amount_cents)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
-         ON CONFLICT (id) DO UPDATE SET
-            slug = excluded.slug, name = excluded.name, description = excluded.description,
-            amount_cents = excluded.amount_cents, currency = excluded.currency,
-            status = excluded.status, updated_at = excluded.updated_at,
-            images_json = excluded.images_json, options_json = excluded.options_json,
-            variants_json = excluded.variants_json,
-            attributes_json = excluded.attributes_json,
-            min_amount_cents = excluded.min_amount_cents,
-            max_amount_cents = excluded.max_amount_cents",
-    )
-    .bind(&product.id)
-    .bind(&product.slug)
-    .bind(&product.name)
-    .bind(&product.description)
-    .bind(product.price.as_ref().map(|p| p.amount_cents as i64))
-    // The currency everything on this product is priced in, which for one
-    // sold only through its variants is theirs rather than a base price's.
-    .bind(product.currency())
-    .bind(product.status.as_str())
-    .bind(product.updated_at as i64)
-    .bind(images_json(product)?)
-    .bind(options_json(product)?)
-    .bind(variants_json(product)?)
-    .bind(attributes_json(product)?)
-    .bind(product.price_range().map(|(min, _, _)| min as i64))
-    .bind(product.price_range().map(|(_, max, _)| max as i64))
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query("DELETE FROM storefront_product_categories WHERE product_id = ?1")
-        .bind(&product.id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM storefront_product_options WHERE product_id = ?1")
-        .bind(&product.id)
-        .execute(&mut *tx)
-        .await?;
-    let options: Vec<crate::ProductOption> = serde_json::from_str(&options_json(product)?)?;
-    for row in option_rows(&options) {
-        sqlx::query(INSERT_OPTION)
-            .bind(&product.id)
-            .bind(&row.name_key)
-            .bind(&row.value_key)
-            .bind(&row.name)
-            .bind(&row.value)
-            .execute(&mut *tx)
+async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
+    db.write(product, |tx, product| {
+        Box::pin(async move {
+            let was: Option<(bool, String, String)> = fetch_optional(
+                tx,
+                "SELECT status = 'published', slug, name FROM storefront_products WHERE id = ?1",
+                (product.id.as_str(),),
+            )
             .await?;
-    }
-    for category_id in &product.categories {
-        sqlx::query(
-            "INSERT INTO storefront_product_categories (product_id, category_id)
-             VALUES (?1, ?2)",
-        )
-        .bind(&product.id)
-        .bind(category_id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if was
-        .as_ref()
-        .is_none_or(|(_, slug, name)| *slug != product.slug || *name != product.name)
-    {
-        sqlx::query(
-            "DELETE FROM storefront_products_fts
-             WHERE rowid = (SELECT rowid FROM storefront_products WHERE id = ?1)",
-        )
-        .bind(&product.id)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "INSERT INTO storefront_products_fts (rowid, slug, name)
-             SELECT rowid, slug, name FROM storefront_products WHERE id = ?1",
-        )
-        .bind(&product.id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    let is_counted = product.status.as_str() == "published";
-    // A rename or a new price leaves every count as it was; only the keys
-    // its categories' pages sort it by move.
-    if was_counted.unwrap_or(false) != is_counted
-        || (is_counted && !was_in.iter().eq(product.categories.iter()))
-    {
-        refresh_category_counts(&mut tx).await?;
-    } else if is_counted {
-        sqlx::query(
-            "UPDATE storefront_category_products
-             SET (updated_at, min_amount_cents, max_amount_cents) =
-                (SELECT updated_at, min_amount_cents, max_amount_cents
-                 FROM storefront_products WHERE id = ?1)
-             WHERE product_id = ?1",
-        )
-        .bind(&product.id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    // A variant added or removed changes what is counted.
-    refresh_stock(&mut tx, product).await?;
-    tx.commit().await?;
-    Ok(())
+            let was_counted = was.as_ref().map(|(counted, _, _)| *counted);
+            let was_in: Vec<(String,)> = fetch_all(
+                tx,
+                "SELECT category_id FROM storefront_product_categories
+                 WHERE product_id = ?1 ORDER BY category_id",
+                (product.id.as_str(),),
+            )
+            .await?;
+            let was_in: Vec<String> = was_in.into_iter().map(|(id,)| id).collect();
+            execute(
+                tx,
+                "INSERT INTO storefront_products (id, slug, name, description, amount_cents,
+                    currency, status, updated_at, images_json, options_json, variants_json,
+                    attributes_json, min_amount_cents, max_amount_cents, slug_search,
+                    name_search)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                 ON CONFLICT (id) DO UPDATE SET
+                    slug = excluded.slug, name = excluded.name, description = excluded.description,
+                    amount_cents = excluded.amount_cents, currency = excluded.currency,
+                    status = excluded.status, updated_at = excluded.updated_at,
+                    images_json = excluded.images_json, options_json = excluded.options_json,
+                    variants_json = excluded.variants_json,
+                    attributes_json = excluded.attributes_json,
+                    min_amount_cents = excluded.min_amount_cents,
+                    max_amount_cents = excluded.max_amount_cents,
+                    slug_search = excluded.slug_search, name_search = excluded.name_search",
+                params_from_iter([
+                    Value::from(product.id.as_str()),
+                    Value::from(product.slug.as_str()),
+                    Value::from(product.name.as_str()),
+                    Value::from(product.description.as_str()),
+                    Value::from(product.price.as_ref().map(|p| p.amount_cents as i64)),
+                    // The currency everything on this product is priced in,
+                    // which for one sold only through its variants is theirs
+                    // rather than a base price's.
+                    Value::from(product.currency()),
+                    Value::from(product.status.as_str()),
+                    Value::from(product.updated_at as i64),
+                    Value::from(images_json(product)?),
+                    Value::from(options_json(product)?),
+                    Value::from(variants_json(product)?),
+                    Value::from(attributes_json(product)?),
+                    Value::from(product.price_range().map(|(min, _, _)| min as i64)),
+                    Value::from(product.price_range().map(|(_, max, _)| max as i64)),
+                    Value::from(search_key(&product.slug)),
+                    Value::from(search_key(&product.name)),
+                ]),
+            )
+            .await?;
+            execute(
+                tx,
+                "DELETE FROM storefront_product_categories WHERE product_id = ?1",
+                (product.id.as_str(),),
+            )
+            .await?;
+            execute(
+                tx,
+                "DELETE FROM storefront_product_options WHERE product_id = ?1",
+                (product.id.as_str(),),
+            )
+            .await?;
+            let options: Vec<crate::ProductOption> = serde_json::from_str(&options_json(product)?)?;
+            for row in option_rows(&options) {
+                execute(
+                    tx,
+                    INSERT_OPTION,
+                    (
+                        product.id.as_str(),
+                        row.name_key.as_str(),
+                        row.value_key.as_str(),
+                        row.name.as_str(),
+                        row.value.as_str(),
+                    ),
+                )
+                .await?;
+            }
+            for category_id in &product.categories {
+                execute(
+                    tx,
+                    "INSERT INTO storefront_product_categories (product_id, category_id)
+                     VALUES (?1, ?2)",
+                    (product.id.as_str(), category_id.as_str()),
+                )
+                .await?;
+            }
+            let is_counted = product.status.as_str() == "published";
+            // A rename or a new price leaves every count as it was; only the
+            // keys its categories' pages sort it by move.
+            if was_counted.unwrap_or(false) != is_counted
+                || (is_counted && !was_in.iter().eq(product.categories.iter()))
+            {
+                refresh_category_counts(tx).await?;
+            } else if is_counted {
+                execute(
+                    tx,
+                    "UPDATE storefront_category_products
+                     SET (updated_at, min_amount_cents, max_amount_cents) =
+                        (SELECT updated_at, min_amount_cents, max_amount_cents
+                         FROM storefront_products WHERE id = ?1)
+                     WHERE product_id = ?1",
+                    (product.id.as_str(),),
+                )
+                .await?;
+            }
+            // A variant added or removed changes what is counted.
+            refresh_stock(tx, product).await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
 /// One row of `storefront_product_options`: a value an option of the product
@@ -480,91 +499,86 @@ fn attributes_json(product: &ProductState) -> anyhow::Result<String> {
 
 /// The category row, and its counts worked out again when it is new, moved
 /// or archived.
-async fn upsert_category(pool: &SqlitePool, category: &CategoryState) -> anyhow::Result<()> {
-    let mut tx = pool.begin().await?;
-    let was: Option<(Option<String>, bool)> =
-        sqlx::query_as("SELECT parent_id, archived FROM storefront_categories WHERE id = ?1")
-            .bind(&category.id)
-            .fetch_optional(&mut *tx)
+async fn upsert_category(db: &Db, category: &CategoryState) -> anyhow::Result<()> {
+    db.write(category, |tx, category| {
+        Box::pin(async move {
+            let was: Option<(Option<String>, bool)> = fetch_optional(
+                tx,
+                "SELECT parent_id, archived FROM storefront_categories WHERE id = ?1",
+                (category.id.as_str(),),
+            )
             .await?;
-    sqlx::query(
-        "INSERT INTO storefront_categories (id, slug, name, description, parent_id, position,
-            archived, in_menu, updated_at, body)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-         ON CONFLICT (id) DO UPDATE SET
-            slug = excluded.slug, name = excluded.name, description = excluded.description,
-            body = excluded.body, parent_id = excluded.parent_id, position = excluded.position,
-            archived = excluded.archived, in_menu = excluded.in_menu,
-            updated_at = excluded.updated_at",
-    )
-    .bind(&category.id)
-    .bind(&category.slug)
-    .bind(&category.name)
-    .bind(&category.description)
-    .bind(category.parent_id.as_deref())
-    .bind(category.position as i64)
-    .bind(category.archived)
-    .bind(!category.hidden_from_menu)
-    .bind(category.updated_at as i64)
-    .bind(&category.body)
-    .execute(&mut *tx)
-    .await?;
-    if was != Some((category.parent_id.clone(), category.archived)) {
-        refresh_category_counts(&mut tx).await?;
-    }
-    tx.commit().await?;
-    Ok(())
+            execute(
+                tx,
+                "INSERT INTO storefront_categories (id, slug, name, description, parent_id,
+                    position, archived, in_menu, updated_at, body)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT (id) DO UPDATE SET
+                    slug = excluded.slug, name = excluded.name,
+                    description = excluded.description, body = excluded.body,
+                    parent_id = excluded.parent_id, position = excluded.position,
+                    archived = excluded.archived, in_menu = excluded.in_menu,
+                    updated_at = excluded.updated_at",
+                (
+                    category.id.as_str(),
+                    category.slug.as_str(),
+                    category.name.as_str(),
+                    category.description.as_str(),
+                    category.parent_id.as_deref(),
+                    category.position as i64,
+                    category.archived,
+                    !category.hidden_from_menu,
+                    category.updated_at as i64,
+                    category.body.as_str(),
+                ),
+            )
+            .await?;
+            if was != Some((category.parent_id.clone(), category.archived)) {
+                refresh_category_counts(tx).await?;
+            }
+            Ok(())
+        })
+    })
+    .await
 }
 
 /// Works out and stores the counts of every category, from the published
 /// products filed under them, and which products each one's page lists.
-async fn refresh_category_counts(conn: &mut sqlx::SqliteConnection) -> sqlx::Result<()> {
-    // The catalog's row type reads the store's database; here the rows are
-    // sqlx's, until this replica moves too.
-    let links: Vec<CategoryLink> = sqlx::query_as::<_, (String, Option<String>, bool)>(
+async fn refresh_category_counts(conn: &Connection) -> anyhow::Result<()> {
+    let links: Vec<CategoryLink> = fetch_all(
+        conn,
         "SELECT id, parent_id, archived FROM storefront_categories",
+        (),
     )
-    .fetch_all(&mut *conn)
-    .await?
-    .into_iter()
-    .map(|(id, parent_id, archived)| CategoryLink {
-        id,
-        parent_id,
-        archived,
-    })
-    .collect();
-    let memberships: Vec<(String, String)> = sqlx::query_as(
+    .await?;
+    let memberships: Vec<(String, String)> = fetch_all(
+        conn,
         "SELECT pc.category_id, pc.product_id
          FROM storefront_product_categories pc
          JOIN storefront_products p ON p.id = pc.product_id
          WHERE p.status = 'published'",
+        (),
     )
-    .fetch_all(&mut *conn)
     .await?;
-    sqlx::query("DELETE FROM storefront_category_products")
-        .execute(&mut *conn)
-        .await?;
+    execute(conn, "DELETE FROM storefront_category_products", ()).await?;
     for (id, counts) in category_counts(links, &memberships) {
-        sqlx::query(
+        execute(
+            conn,
             "UPDATE storefront_categories SET product_count = ?2, subtree_count = ?3
              WHERE id = ?1 AND (product_count <> ?2 OR subtree_count <> ?3)",
+            (id.as_str(), counts.product_count, counts.subtree_count),
         )
-        .bind(&id)
-        .bind(counts.product_count)
-        .bind(counts.subtree_count)
-        .execute(&mut *conn)
         .await?;
         for product_id in &counts.subtree_products {
-            sqlx::query(
+            execute(
+                conn,
                 "INSERT INTO storefront_category_products (category_id, product_id, updated_at,
                     min_amount_cents, max_amount_cents, review_count, rating_x100)
                  SELECT ?1, id, updated_at, min_amount_cents, max_amount_cents, review_count,
                     rating_x100
                  FROM storefront_products WHERE id = ?2",
+                (id.as_str(), product_id.as_str()),
             )
-            .bind(&id)
-            .bind(product_id)
-            .execute(&mut *conn)
             .await?;
         }
     }

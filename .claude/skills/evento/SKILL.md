@@ -4,7 +4,7 @@ description: >-
   Build event-sourcing / CQRS / DDD features in Rust with the `evento` crate.
   Use when defining aggregates and events, writing commands that commit events,
   building projections/read models, wiring subscriptions, or setting up the
-  SQL/Fjall/remote executor and migrations. Triggers on `#[evento::aggregate]`,
+  SQL/Fjall/Turso/remote executor and migrations. Triggers on `#[evento::aggregate]`,
   `evento::create`/`evento::append`, `Projection`, `SubscriptionBuilder`,
   `Executor`, or a Cargo dependency on `evento`.
 ---
@@ -12,9 +12,9 @@ description: >-
 # Evento — event sourcing in Rust
 
 Evento stores state changes as immutable events and folds them into read models.
-Backends: SQLite / PostgreSQL / MySQL (via `sqlx`), embedded Fjall, a remote
-client/server executor (`remote`), and a consensus-replicated executor
-(`evento-accord`, alpha). Events are serialized with `bitcode`.
+Backends: SQLite / PostgreSQL / MySQL (via `sqlx`), embedded Fjall, embedded Turso
+(SQLite's schema in a pure-Rust async engine, `turso`), a remote client/server
+executor (`remote`), and a consensus-replicated executor (`evento-accord`, alpha). Events are serialized with `bitcode`.
 
 ## Setup
 
@@ -22,13 +22,13 @@ client/server executor (`remote`), and a consensus-replicated executor
 
 ```toml
 [dependencies]
-evento = { version = "=2.0.0-alpha.36", features = ["sqlite"] }  # or "postgres", "mysql", "fjall", "remote"
+evento = { version = "=2.0.0-alpha.37", features = ["turso"] }  # or "sqlite", "postgres", "mysql", "fjall", "remote"
 bitcode = "0.6"
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
 ```
 
-Feature flags: `sqlite` / `postgres` / `mysql` / `fjall` / `remote`, `sql` (all SQL),
+Feature flags: `sqlite` / `postgres` / `mysql` / `fjall` / `turso` / `remote`, `sql` (all SQL),
 `macro` (default, the proc-macros), `group` (multi-executor), `rw` (executor combinators:
 `Rw` read/write split and `Sidecar`; implied by `fjall`).
 
@@ -53,6 +53,44 @@ let executor = evento::Fjall::open("./events.db")?;
 // Tests/examples: a temp store, removed when the last clone of the executor drops.
 let executor = evento::Fjall::temporary()?;
 ```
+
+### Executor (Turso, embedded SQL — migrations run on open)
+
+```rust
+let executor = evento::Turso::open("./events.db").await?;
+
+// Tests/simulations: an in-memory database, gone when the last clone drops.
+let executor = evento::Turso::in_memory().await?;
+
+// Your own migrations share the database under your app name
+// (evento's are the app "evento"):
+const APP: evento::turso::migrate::Migrations = evento::turso::migrate::Migrations::new(
+    "my-app", &[evento::turso::migrate::Migration::up("001_views", "CREATE TABLE ...")]);
+let mut conn = executor.connect()?;
+APP.to_latest(&mut conn).await.map_err(|(_, e)| e)?;
+```
+
+Several writers in one database (the store, its accord journal, your read models) need
+the store opened in concurrent mode — `evento::Turso::open_concurrent(path)` /
+`in_memory_concurrent()` — which puts the file in Turso's MVCC mode (recorded in it; a
+later plain `open` finds it, `store.write_mode()` tells). The store's and journal's writes
+are then `BEGIN CONCURRENT` transactions retried on a write-write conflict, and your own
+writes go through `store.transaction(&env, |tx, env| Box::pin(async move { … Ok(()) }))`:
+the body is lent the transaction's connection and `env`, and must be repeatable (it is run
+again whole on a conflict). A plain `open` keeps Turso's single-writer WAL mode, where a
+second writer gets `Busy`. DDL needs a plain transaction even in MVCC mode: run migrations
+before the writers start.
+
+Read models on Turso mirror the SQL ones: `#[evento::projection(backend = turso,
+evento::turso::FromRow, Cursor, Debug)]` derives the row decoding (`#[turso(default)]`
+for a non-column field, `#[turso(rename = "col")]` for another column name; tuples such as
+`(String, i64)` decode by position; `evento::turso::Text<T>` for an enum stored as text) and the
+`#[cursor(by_name, Col::X, n)]` wrappers; `evento::turso::Reader::new(select).args(args)
+.execute::<ViewByName>(&conn)` pages them; `evento::turso::{execute, fetch_all,
+fetch_optional, fetch_one}` run sea-query statements on a `conn = executor.connect()?`.
+Full-text search needs the `turso-fts` feature: it is an index, not an FTS5 table —
+`CREATE INDEX t_fts ON t USING fts(a, b)`, `WHERE (a, b) MATCH ?`, and
+`fts_score(a, b, ?1)` / `fts_match(a, b, ?1)` naming every index column, then the query.
 
 ### Remote (client/server split) and executor combinators
 
@@ -103,9 +141,11 @@ let executor = evento::Sidecar::from((client, local));        // events: client;
 - `Rw::from((read_exec, write_exec))` splits reads from writes (CQRS with two databases).
 - `evento::Evento::new(exec)` type-erases any executor (`Arc<Box<dyn Executor>>`) —
   use it when a struct must hold "some executor" without a generic parameter.
-- **Accord (consensus-replicated, alpha):** `evento-accord` replicates writes
-  leaderlessly with any local backend serving reads; one process runs one node of
-  one cluster (`examples/bank-axum-accord/`, `evento-accord/OPERATIONS.md`).
+- **Accord (consensus-replicated, alpha):** the `accord` feature (`evento::accord`)
+  replicates writes leaderlessly with any local backend serving reads, whose
+  consensus journal it also enables (`evento::fjall::FjallJournal`, `evento::sql::SqlJournal`,
+  `evento::turso::TursoJournal`); one process runs one node of one cluster
+  (`examples/bank-axum-accord/`, `evento-accord/OPERATIONS.md`).
 
 ## 1. Define aggregates & events
 
@@ -167,9 +207,9 @@ registers `.handler(..)` or `.skip::<PaymentRefundedV2>()` also accepts
 consumers migrate one at a time. `#[evento::subscription_all]` sees stored
 events un-upcast.
 
-**Locking shapes.** `evento` with the `lock` feature as `evento::lock` (dev-dependency; the standalone `evento-lock` crate is the same code) records every event, every
+**Locking shapes.** `evento-lock` (dev-dependency, or `evento` with the `lock` feature as `evento::lock`) records every event, every
 `Encode` type an event reaches, and every executor-snapshotted view in
-`events.lock`; a test (`evento::lock::check(env!("CARGO_MANIFEST_DIR")).unwrap()`)
+`events.lock`; a test (`evento_lock::check(env!("CARGO_MANIFEST_DIR")).unwrap()`, or `evento::lock::check(..)`)
 fails when a frozen line changes. After adding an event run
 `EVENTO_LOCK=update cargo test` and commit `events.lock`. A failing lock means:
 restore the edit and add a variant, or bump the view's `.revision(n)`.
@@ -438,31 +478,3 @@ Canonical, compiling usage lives in this repo:
 - `evento-macro/README.md` — full macro reference (all options).
 - `evento-test/src/lib.rs` — the behavioral contract suite (load, routing isolation,
   snapshots, optimistic locking, multi-aggregate, full command lifecycle).
-
-## In this workspace
-
-- Layout per bounded context (mirrors `examples/bank`): `crates/<ctx>/src/{aggregator.rs,
-  command/{mod,<verb>}.rs, query/<view>.rs, error.rs, value_object.rs}`; `crates/catalog` and
-  `crates/tenancy` are the reference crates. Pin `#[evento::aggregate(name = "timada-<ctx>/<Enum>")]`
-  (crate names are permanent) and `#[evento::projection(name = "timada-<ctx>/<View>", …)]` on every
-  snapshotted view. A tenant-scoped context's gateway is `Command::new(executor, tenant_id)` and
-  names the tenant on every builder (`.tenant(&self.tenant)` before `.execute`/`.commit`); the
-  platform contexts (identity, tenancy) keep `Command(executor)` in the default tenant. One
-  subscription per read model follows every tenant: handlers take `event.tenant` and build the
-  gateway they write back with from it. `Command::unscoped(executor)` is for a store that is one
-  tenant's already (a storefront over the store API).
-- A crate using `#[evento::aggregate]` must depend on `bitcode` directly (the macro expands to
-  `bitcode::` paths; cargo-machete is told to ignore it), and a crate using `#[evento::subscription]`
-  in its tests must dev-depend on the `evento` facade (the macros emit `::evento::` paths).
-- Uniqueness (slugs, e-mails, tokens) is an index aggregate with a deterministic id
-  (`hash_ids([..])`), created by appending its first event at version 0.
-- Every event carries who did it (`*_by`); permissions are the host's, never the crate's.
-- The shapes are locked by `events.lock` at the workspace root, checked by
-  `dashboard/tests/events_lock.rs`. After adding an event, a nested `Encode` type or a snapshotted
-  view: `EVENTO_LOCK=update cargo test -p timada-dashboard --test events_lock`, commit the lock.
-  Never edit a persisted variant or enum; add a variant (and `#[evento(upcast_to = New)]` when the
-  old one must fold like the new one).
-- Executors in play: the store is `Rw<Sqlite, Sqlite>` over two pools behind one Accord node per
-  process (`dashboard/src/cluster.rs`, shaped like `examples/bank-axum-accord`), holding every
-  tenant's streams; the store API serves each key in its tenant (`Session::tenant`); a storefront
-  is `Sidecar<RemoteClient, Sqlite>` over the merchant app's pool. See `docs/architecture.md`.

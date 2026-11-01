@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, SqlitePool};
+use timada_core::db::{Db, FromRow, Json, Row};
 use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
 
@@ -32,7 +32,7 @@ use crate::query::Product;
 use crate::store::Store;
 
 /// A published review, as a product page shows it.
-#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Review {
     pub id: String,
     pub product_id: String,
@@ -44,7 +44,6 @@ pub struct Review {
     pub author_name: String,
     /// The variant bought (`Beige / Large`), if the product has variants.
     pub variant_label: Option<String>,
-    #[sqlx(json, rename = "photos_json")]
     pub photos: Vec<ReviewPhoto>,
     /// Unix seconds.
     pub published_at: i64,
@@ -52,6 +51,24 @@ pub struct Review {
     pub reply: Option<String>,
     /// Unix seconds of the answer.
     pub replied_at: Option<i64>,
+}
+
+impl FromRow for Review {
+    fn from_row(row: &Row<'_>) -> anyhow::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            product_id: row.get("product_id")?,
+            rating: row.get("rating")?,
+            title: row.get("title")?,
+            body: row.get("body")?,
+            author_name: row.get("author_name")?,
+            variant_label: row.get("variant_label")?,
+            photos: row.get::<Json<_>>("photos_json")?.0,
+            published_at: row.get("published_at")?,
+            reply: row.get("reply")?,
+            replied_at: row.get("replied_at")?,
+        })
+    }
 }
 
 impl Review {
@@ -106,30 +123,33 @@ impl ReviewPage {
 
 /// One page of the published reviews of `product_id`, newest first.
 pub async fn published_reviews(
-    pool: &SqlitePool,
+    db: &Db,
     product_id: &str,
     page: u32,
     per_page: u32,
-) -> sqlx::Result<ReviewPage> {
+) -> anyhow::Result<ReviewPage> {
     let page = page.max(1);
     let per_page = per_page.clamp(1, crate::MAX_PER_PAGE);
-    let total: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM storefront_reviews WHERE product_id = ?1")
-            .bind(product_id)
-            .fetch_one(pool)
-            .await?;
-    let items = sqlx::query_as(
-        "SELECT id, product_id, rating, title, body, author_name, variant_label, photos_json,
-            published_at, reply, replied_at
-         FROM storefront_reviews WHERE product_id = ?1
-         ORDER BY published_at DESC, id DESC
-         LIMIT ?2 OFFSET ?3",
-    )
-    .bind(product_id)
-    .bind(i64::from(per_page))
-    .bind(i64::from(page - 1) * i64::from(per_page))
-    .fetch_all(pool)
-    .await?;
+    let total: i64 = db
+        .fetch_scalar(
+            "SELECT COUNT(*) FROM storefront_reviews WHERE product_id = ?1",
+            (product_id,),
+        )
+        .await?;
+    let items = db
+        .fetch_all(
+            "SELECT id, product_id, rating, title, body, author_name, variant_label, photos_json,
+                published_at, reply, replied_at
+             FROM storefront_reviews WHERE product_id = ?1
+             ORDER BY published_at DESC, id DESC
+             LIMIT ?2 OFFSET ?3",
+            (
+                product_id,
+                i64::from(per_page),
+                i64::from(page - 1) * i64::from(per_page),
+            ),
+        )
+        .await?;
     Ok(ReviewPage {
         items,
         page,
@@ -139,16 +159,15 @@ pub async fn published_reviews(
 }
 
 /// The latest published reviews of the whole shop, newest first.
-pub async fn latest_reviews(pool: &SqlitePool, limit: u32) -> sqlx::Result<Vec<Review>> {
-    sqlx::query_as(
+pub async fn latest_reviews(db: &Db, limit: u32) -> anyhow::Result<Vec<Review>> {
+    db.fetch_all(
         "SELECT id, product_id, rating, title, body, author_name, variant_label, photos_json,
             published_at, reply, replied_at
          FROM storefront_reviews
          ORDER BY published_at DESC, id DESC
          LIMIT ?1",
+        (i64::from(limit.clamp(1, crate::MAX_PER_PAGE)),),
     )
-    .bind(i64::from(limit.clamp(1, crate::MAX_PER_PAGE)))
-    .fetch_all(pool)
     .await
 }
 
@@ -380,7 +399,7 @@ impl Store {
     /// addresses filled in.
     pub async fn reviews_of(&self, product_id: &str, page: u32) -> anyhow::Result<ReviewPage> {
         let mut reviews =
-            published_reviews(self.pool(), product_id, page, DEFAULT_REVIEWS_PER_PAGE).await?;
+            published_reviews(self.db(), product_id, page, DEFAULT_REVIEWS_PER_PAGE).await?;
         for review in &mut reviews.items {
             review.fill_urls(self.media_url());
         }
@@ -389,7 +408,7 @@ impl Store {
 
     /// See [`recent_reviews`].
     pub async fn recent_reviews(&self, limit: u32) -> anyhow::Result<Vec<Review>> {
-        let mut reviews = latest_reviews(self.pool(), limit).await?;
+        let mut reviews = latest_reviews(self.db(), limit).await?;
         for review in &mut reviews {
             review.fill_urls(self.media_url());
         }
