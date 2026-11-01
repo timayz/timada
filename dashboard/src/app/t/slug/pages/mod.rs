@@ -23,7 +23,7 @@ use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, format_time, notice, page_header, section_card,
     status_badge,
@@ -69,7 +69,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let can_manage = access.can(cx, PERMISSION_PAGES_MANAGE).await?;
     let TenantAccess { tenant, .. } = access;
-    let rows = pages_of_tenant(app_context::<ReadPool>(cx), &tenant.id)
+    let rows = pages_of_tenant(app_context::<Db>(cx), &tenant.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let slug = tenant.slug.clone();

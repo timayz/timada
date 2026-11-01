@@ -1,6 +1,6 @@
 //! Queries over `support_messages`, for the messages page of a tenant.
 
-use sqlx::{FromRow, SqlitePool};
+use timada_core::db::{Db, FromRow};
 
 use crate::value_object::MessageStatus;
 
@@ -38,39 +38,41 @@ pub struct MessageFilter {
 
 /// The tenant's messages matching `filter`, newest first.
 pub async fn messages_of_tenant(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     filter: &MessageFilter,
     limit: u32,
     offset: u32,
 ) -> anyhow::Result<Vec<MessageRow>> {
-    Ok(sqlx::query_as(
-        "SELECT * FROM support_messages
+    db.fetch_all(
+        "SELECT tenant_id, id, first_name, last_name, email, body, language, status,
+            received_at, handled_at, updated_at
+         FROM support_messages
          WHERE tenant_id = ?1 AND (?2 IS NULL OR status = ?2)
          ORDER BY received_at DESC, id DESC
          LIMIT ?3 OFFSET ?4",
+        (
+            tenant_id,
+            filter.status.map(MessageStatus::as_str),
+            i64::from(limit),
+            i64::from(offset),
+        ),
     )
-    .bind(tenant_id)
-    .bind(filter.status.map(MessageStatus::as_str))
-    .bind(i64::from(limit))
-    .bind(i64::from(offset))
-    .fetch_all(pool)
-    .await?)
+    .await
 }
 
 /// How many of the tenant's messages match `filter`.
 pub async fn count_messages(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     filter: &MessageFilter,
 ) -> anyhow::Result<u64> {
-    let (count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM support_messages
-         WHERE tenant_id = ?1 AND (?2 IS NULL OR status = ?2)",
-    )
-    .bind(tenant_id)
-    .bind(filter.status.map(MessageStatus::as_str))
-    .fetch_one(pool)
-    .await?;
+    let count: i64 = db
+        .fetch_scalar(
+            "SELECT COUNT(*) FROM support_messages
+             WHERE tenant_id = ?1 AND (?2 IS NULL OR status = ?2)",
+            (tenant_id, filter.status.map(MessageStatus::as_str)),
+        )
+        .await?;
     Ok(count as u64)
 }

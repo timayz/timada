@@ -52,7 +52,7 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::components::textarea::textarea;
-use crate::db::ReadPool;
+use crate::db::{Db, ReadPool};
 use crate::media::Media;
 use crate::ui::{
     LINK, Shell, document, empty_row, fact, facts, format_time, notice, page_header, section_card,
@@ -315,9 +315,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // The rating counts published reviews only; the link is for those who
     // may read the reviews.
     let can_read_reviews = access.can(cx, PERMISSION_REVIEWS_READ).await?;
-    let rating = timada_reviews::product_rating(pool, &access.tenant.id, &product.id)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?;
+    let rating =
+        timada_reviews::product_rating(app_context::<Db>(cx), &access.tenant.id, &product.id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
     let rating_label = match rating.average() {
         Some(average) => format!("★ {average:.1} · {} published", rating.review_count),
         None => "No published review".to_owned(),
@@ -445,7 +446,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         })
         .unwrap_or_else(|| "Not priced yet".to_owned());
     // What it may still join is the whole tree, which the read model holds.
-    let joinable: Vec<Choice> = rows_of(pool, &access.tenant.id)
+    let joinable: Vec<Choice> = rows_of(app_context::<Db>(cx), &access.tenant.id)
         .await?
         .iter()
         .filter(|row| !product.categories.contains(&row.category.id))

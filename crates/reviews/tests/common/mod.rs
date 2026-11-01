@@ -1,35 +1,22 @@
 #![allow(dead_code)]
 
-use evento::migrator::Migrate;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx_migrator::Info;
+use timada_core::db::Db;
 use timada_orders::aggregator::{Cancelled, Placed};
 use timada_orders::{OrderLine, Payment, ShippingAddress};
 use timada_reviews::{Command, ReviewPhoto, ReviewState, SubmitReview};
 
-pub type Reviews = Command<evento::Sqlite>;
+pub type Reviews = Command<evento::Turso>;
 
 /// A fresh in-memory event store with the read-model schema applied.
-pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
-    let options = SqliteConnectOptions::new()
-        .filename(":memory:")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
+pub async fn executor_with_pool() -> (evento::Turso, Db) {
+    let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    let mut conn = store.connect().unwrap();
+    timada_reviews::MIGRATIONS
+        .to_latest(&mut conn)
         .await
+        .map_err(|(_, err)| err)
         .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
-    migrator
-        .add_migrations(timada_reviews::migrations())
-        .unwrap();
-    migrator
-        .run(&mut *conn, &evento::migrator::Plan::apply_all())
-        .await
-        .unwrap();
-    drop(conn);
-    (pool.clone().into(), pool)
+    (store.clone(), Db::from(store))
 }
 
 pub async fn command() -> Reviews {
@@ -45,7 +32,7 @@ pub const TEA: &str = "product-tea";
 
 /// A paid order shipped to Ada Lovelace, in the tenant: a beige mug and
 /// some tea.
-pub async fn paid_order(executor: &evento::Sqlite, order_id: &str) {
+pub async fn paid_order(executor: &evento::Turso, order_id: &str) {
     let line = |product_id: &str, name: &str, variant_label: Option<&str>| OrderLine {
         product_id: product_id.to_owned(),
         name: name.to_owned(),
@@ -87,7 +74,7 @@ pub async fn paid_order(executor: &evento::Sqlite, order_id: &str) {
 }
 
 /// Cancels the order made by [`paid_order`].
-pub async fn cancel(executor: &evento::Sqlite, order_id: &str) {
+pub async fn cancel(executor: &evento::Turso, order_id: &str) {
     evento::append(order_id)
         .original_version(1)
         .event(&Cancelled {

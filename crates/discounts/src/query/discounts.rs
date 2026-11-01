@@ -1,6 +1,6 @@
 //! Queries over `discounts_codes`, for the discount pages of a tenant.
 
-use sqlx::{FromRow, SqlitePool};
+use timada_core::db::{Db, FromRow};
 
 use crate::value_object::DiscountValue;
 
@@ -42,17 +42,17 @@ impl DiscountRow {
 
 /// The tenant's discounts, newest first; archived ones only when asked.
 pub async fn discounts_of_tenant(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     include_archived: bool,
 ) -> anyhow::Result<Vec<DiscountRow>> {
-    Ok(sqlx::query_as(
-        "SELECT * FROM discounts_codes
+    db.fetch_all(
+        "SELECT tenant_id, id, code, percent_bps, amount_cents, currency, starts_at, ends_at,
+            max_uses, once_per_email, status, created_by, created_at, updated_at
+         FROM discounts_codes
          WHERE tenant_id = ?1 AND (?2 OR status <> 'archived')
          ORDER BY created_at DESC, id DESC",
+        (tenant_id, include_archived),
     )
-    .bind(tenant_id)
-    .bind(include_archived)
-    .fetch_all(pool)
-    .await?)
+    .await
 }

@@ -90,6 +90,8 @@ pub async fn open_store(path: &Path) -> Result<Store> {
 struct StoreReadModel {
     migrations: &'static Migrations<'static>,
     tables: &'static [&'static str],
+    /// A statement that puts back what an emptied table must hold (a totals
+    /// row); `""` when nothing.
     reset_rows: &'static str,
 }
 
@@ -103,6 +105,31 @@ const STORE_READ_MODELS: &[StoreReadModel] = &[
         migrations: &timada_tenancy::MIGRATIONS,
         tables: timada_tenancy::TABLES,
         reset_rows: timada_tenancy::RESET_ROWS,
+    },
+    StoreReadModel {
+        migrations: &timada_catalog::MIGRATIONS,
+        tables: timada_catalog::TABLES,
+        reset_rows: "",
+    },
+    StoreReadModel {
+        migrations: &timada_pages::MIGRATIONS,
+        tables: timada_pages::TABLES,
+        reset_rows: "",
+    },
+    StoreReadModel {
+        migrations: &timada_reviews::MIGRATIONS,
+        tables: timada_reviews::TABLES,
+        reset_rows: "",
+    },
+    StoreReadModel {
+        migrations: &timada_discounts::MIGRATIONS,
+        tables: timada_discounts::TABLES,
+        reset_rows: "",
+    },
+    StoreReadModel {
+        migrations: &timada_support::MIGRATIONS,
+        tables: timada_support::TABLES,
+        reset_rows: "",
     },
 ];
 
@@ -133,7 +160,9 @@ pub async fn reset_store_read_models(store: &Store) -> Result<()> {
         for table in read_model.tables {
             db.execute(&format!("DELETE FROM {table}"), ()).await?;
         }
-        db.execute(read_model.reset_rows, ()).await?;
+        if !read_model.reset_rows.is_empty() {
+            db.execute(read_model.reset_rows, ()).await?;
+        }
     }
     Ok(())
 }
@@ -271,14 +300,9 @@ pub fn prepare_database_dir(database_url: &str) -> Result<()> {
 /// The bounded contexts' read models still in their own file.
 pub fn read_model_migrator() -> Result<Migrator<sqlx::Sqlite>, sqlx_migrator::Error> {
     let mut migrator = Migrator::default();
-    migrator.add_migrations(timada_catalog::migrations())?;
     migrator.add_migrations(timada_orders::migrations())?;
     migrator.add_migrations(timada_shoppers::migrations())?;
-    migrator.add_migrations(timada_discounts::migrations())?;
-    migrator.add_migrations(timada_reviews::migrations())?;
-    migrator.add_migrations(timada_support::migrations())?;
     migrator.add_migrations(timada_newsletter::migrations())?;
-    migrator.add_migrations(timada_pages::migrations())?;
     migrator.add_migrations(timada_automations::migrations())?;
     migrator.add_migrations(timada_invoicing::migrations())?;
     migrator.add_migrations(timada_aliexpress::migrations())?;
