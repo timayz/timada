@@ -29,3 +29,6 @@ timada-pages = { path = "../pages" }
 reqwest.workspace = true
 bytes.workspace = true
 timada-invoicing = { path = "../invoicing", features = ["pdf"] }
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
