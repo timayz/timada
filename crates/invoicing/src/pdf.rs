@@ -601,14 +601,14 @@ mod tests {
         let usd = IssuedDocument {
             currency: "USD".into(),
             euro_rate: Some(rate.clone()),
-            total_vat_eur_cents: Some(654),
+            total_vat_eur_cents: Some(480),
             ..invoice(Some("FR85120027016"))
         };
         let d = inputs(&usd);
-        assert!(get(&d, "total_vat").starts_with("7,09\u{a0}"));
+        assert_eq!(get(&d, "total_vat"), "5,21\u{a0}$");
         assert_eq!(
             get(&d, "vat_in_euros"),
-            "TVA en euros : 6,54\u{a0}€ (1\u{a0}€ = 1,0850\u{a0}USD, taux de référence de la \
+            "TVA en euros : 4,80\u{a0}€ (1\u{a0}€ = 1,0850\u{a0}USD, taux de référence de la \
              Banque centrale européenne du 14/10/2026)."
         );
         let euros = inputs(&invoice(Some("FR85120027016")));
