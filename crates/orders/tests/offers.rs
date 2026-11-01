@@ -4,7 +4,7 @@ use common::*;
 use timada_discounts::{CreateDiscount, CreateOffer, DiscountValue};
 use timada_orders::{Checkout, OrderError};
 
-type Discounts = timada_discounts::Command<evento::Sqlite>;
+type Discounts = timada_discounts::Command<evento::Turso>;
 
 /// A tracker at 30.00 €, a bowl at 20.00 €, and an offer of one
 /// tracker at 12.00 € shaped by `offer`.

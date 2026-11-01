@@ -519,10 +519,20 @@ async fn upsert_category(pool: &SqlitePool, category: &CategoryState) -> anyhow:
 /// Works out and stores the counts of every category, from the published
 /// products filed under them, and which products each one's page lists.
 async fn refresh_category_counts(conn: &mut sqlx::SqliteConnection) -> sqlx::Result<()> {
-    let links: Vec<CategoryLink> =
-        sqlx::query_as("SELECT id, parent_id, archived FROM storefront_categories")
-            .fetch_all(&mut *conn)
-            .await?;
+    // The catalog's row type reads the store's database; here the rows are
+    // sqlx's, until this replica moves too.
+    let links: Vec<CategoryLink> = sqlx::query_as::<_, (String, Option<String>, bool)>(
+        "SELECT id, parent_id, archived FROM storefront_categories",
+    )
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|(id, parent_id, archived)| CategoryLink {
+        id,
+        parent_id,
+        archived,
+    })
+    .collect();
     let memberships: Vec<(String, String)> = sqlx::query_as(
         "SELECT pc.category_id, pc.product_id
          FROM storefront_product_categories pc

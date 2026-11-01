@@ -4,7 +4,7 @@ use common::*;
 use timada_catalog::{CreateProduct, DefineVariant, OptionSelection};
 use timada_discounts::{CreateOffer, DiscountError, MAX_OFFERS};
 
-type Catalog = timada_catalog::Command<evento::Sqlite>;
+type Catalog = timada_catalog::Command<evento::Turso>;
 
 /// A product at `amount_cents` EUR, published.
 async fn product(catalog: &Catalog, name: &str, amount_cents: u64) -> String {

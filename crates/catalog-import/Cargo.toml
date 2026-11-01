@@ -24,5 +24,3 @@ sha2.workspace = true
 bytes.workspace = true
 
 [dev-dependencies]
-sqlx.workspace = true
-sqlx_migrator.workspace = true

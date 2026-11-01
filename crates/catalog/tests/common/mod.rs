@@ -1,34 +1,21 @@
 #![allow(dead_code)]
 
-use evento::migrator::Migrate;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx_migrator::Info;
 use timada_catalog::{CategoryState, Command, CreateCategory, CreateProduct, ProductState};
+use timada_core::db::Db;
 
 /// A fresh in-memory event store with the read-model schema applied.
-pub async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
-    let options = SqliteConnectOptions::new()
-        .filename(":memory:")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
+pub async fn executor_with_pool() -> (evento::Turso, Db) {
+    let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    let mut conn = store.connect().unwrap();
+    timada_catalog::MIGRATIONS
+        .to_latest(&mut conn)
         .await
+        .map_err(|(_, err)| err)
         .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
-    migrator
-        .add_migrations(timada_catalog::migrations())
-        .unwrap();
-    migrator
-        .run(&mut *conn, &evento::migrator::Plan::apply_all())
-        .await
-        .unwrap();
-    drop(conn);
-    (pool.clone().into(), pool)
+    (store.clone(), Db::from(store))
 }
 
-pub async fn command() -> Command<evento::Sqlite> {
+pub async fn command() -> Command<evento::Turso> {
     Command::new(executor_with_pool().await.0, TENANT)
 }
 
@@ -44,7 +31,7 @@ pub fn create(name: &str) -> CreateProduct {
     }
 }
 
-pub async fn create_product(cmd: &Command<evento::Sqlite>, name: &str) -> ProductState {
+pub async fn create_product(cmd: &Command<evento::Turso>, name: &str) -> ProductState {
     cmd.create_product(ALICE, create(name)).await.unwrap()
 }
 
@@ -55,7 +42,7 @@ pub fn new_category(name: &str) -> CreateCategory {
     }
 }
 
-pub async fn create_category(cmd: &Command<evento::Sqlite>, name: &str) -> CategoryState {
+pub async fn create_category(cmd: &Command<evento::Turso>, name: &str) -> CategoryState {
     cmd.create_category(ALICE, new_category(name))
         .await
         .unwrap()
@@ -63,7 +50,7 @@ pub async fn create_category(cmd: &Command<evento::Sqlite>, name: &str) -> Categ
 
 /// A category under `parent_id`.
 pub async fn create_child(
-    cmd: &Command<evento::Sqlite>,
+    cmd: &Command<evento::Turso>,
     name: &str,
     parent_id: &str,
 ) -> CategoryState {

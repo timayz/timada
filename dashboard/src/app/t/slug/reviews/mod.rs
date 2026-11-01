@@ -31,7 +31,7 @@ use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, filter_bar, format_time, icons, notice, page_header,
     pager, section_card, status_badge,
@@ -138,7 +138,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map_err(topcoat::Error::from_anyhow)?
         .is_some();
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     let filter = ReviewFilter {
         status,
         rating,

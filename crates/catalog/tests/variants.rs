@@ -23,7 +23,7 @@ fn sell(selections: Vec<OptionSelection>, amount_cents: u64) -> DefineVariant {
 }
 
 /// A product varying by colour, with the option's id.
-async fn with_colours(cmd: &timada_catalog::Command<evento::Sqlite>) -> (String, String) {
+async fn with_colours(cmd: &timada_catalog::Command<evento::Turso>) -> (String, String) {
     let product = create_product(cmd, "Cat Harness").await;
     let colour = cmd
         .define_option(

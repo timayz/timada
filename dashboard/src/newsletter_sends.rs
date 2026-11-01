@@ -23,6 +23,8 @@ use std::time::Duration;
 
 use jiff::tz::TimeZone;
 use sqlx::SqlitePool;
+
+use crate::db::Db;
 use timada_core::Keys;
 use timada_newsletter::schedule::{parse_day, quota};
 use timada_newsletter::{
@@ -53,7 +55,7 @@ const NEW_PRODUCTS_LOOKBACK_SECS: i64 = 30 * 24 * 3600;
 /// campaign shows them: linked to their page on the storefront
 /// (`{storefront}/p/{slug}`), with their first picture.
 pub async fn new_products(
-    read_pool: &SqlitePool,
+    db: &Db,
     cx: &Cx,
     tenant: &timada_tenancy::TenantState,
     storefront: &str,
@@ -61,7 +63,7 @@ pub async fn new_products(
 ) -> anyhow::Result<Vec<NewProductVars>> {
     let media = topcoat::context::app_context::<Arc<crate::media::Media>>(cx);
     Ok(
-        timada_catalog::new_products(read_pool, &tenant.id, since, NEW_PRODUCTS_SHOWN)
+        timada_catalog::new_products(db, &tenant.id, since, NEW_PRODUCTS_SHOWN)
             .await?
             .into_iter()
             .map(|product| NewProductVars {
@@ -80,6 +82,8 @@ pub async fn new_products(
 /// The sweep, with what it needs outside any request.
 pub struct NewsletterSends {
     read_pool: SqlitePool,
+    /// The read models in the store's database: the catalog a campaign shows.
+    db: Db,
     /// The store, every tenant's.
     store: Executor,
     mail: Arc<AppContext>,
@@ -90,6 +94,7 @@ pub struct NewsletterSends {
 impl NewsletterSends {
     pub fn new(
         read_pool: SqlitePool,
+        db: Db,
         store: Executor,
         mail: Arc<AppContext>,
         keys: Arc<KeyVault>,
@@ -97,6 +102,7 @@ impl NewsletterSends {
     ) -> Arc<Self> {
         Arc::new(Self {
             read_pool,
+            db,
             store,
             mail,
             keys,
@@ -144,6 +150,7 @@ impl NewsletterSends {
             if let Err(err) = send_edition_batch(
                 &self.store,
                 &self.read_pool,
+                &self.db,
                 &cx,
                 &tenant,
                 &*self.keys.for_tenant(&tenant_id),
@@ -178,6 +185,7 @@ impl NewsletterSends {
         send_batch(
             &self.store,
             &self.read_pool,
+            &self.db,
             &cx,
             &tenant,
             &*self.keys.for_tenant(tenant_id),
@@ -191,9 +199,11 @@ impl NewsletterSends {
 
 /// Mails up to `batch` of the campaign's subscribers not mailed yet, then
 /// finishes the campaign when nobody is left. Returns how many were mailed.
+#[allow(clippy::too_many_arguments)]
 pub async fn send_batch<E: evento::Executor + Clone>(
     store: &E,
     read_pool: &SqlitePool,
+    db: &Db,
     cx: &Cx,
     tenant: &timada_tenancy::TenantState,
     keys: &dyn Keys,
@@ -236,7 +246,7 @@ pub async fn send_batch<E: evento::Executor + Clone>(
         text: campaign.text.as_deref(),
     };
     let since = campaign.sent_at.unwrap_or(campaign.created_at) as i64 - NEW_PRODUCTS_LOOKBACK_SECS;
-    let new_products = new_products(read_pool, cx, tenant, &storefront, since).await?;
+    let new_products = new_products(db, cx, tenant, &storefront, since).await?;
     let out = Outgoing {
         newsletter: &newsletter,
         cx,
@@ -481,6 +491,7 @@ pub async fn open_due_editions<E: evento::Executor + Clone>(
 pub async fn send_edition_batch<E: evento::Executor + Clone>(
     store: &E,
     read_pool: &SqlitePool,
+    db: &Db,
     cx: &Cx,
     tenant: &timada_tenancy::TenantState,
     keys: &dyn Keys,
@@ -561,7 +572,7 @@ pub async fn send_edition_batch<E: evento::Executor + Clone>(
         .map(|other| other.opened_at)
         .max()
         .unwrap_or(edition.opened_at as i64 - NEW_PRODUCTS_LOOKBACK_SECS);
-    let new_products = new_products(read_pool, cx, tenant, &storefront, since).await?;
+    let new_products = new_products(db, cx, tenant, &storefront, since).await?;
     let out = Outgoing {
         newsletter: &newsletter,
         cx,
@@ -671,8 +682,10 @@ mod tests {
     }
 
     /// An in-memory store, and an in-memory read-model database.
-    async fn store() -> (evento::Turso, SqlitePool) {
+    async fn store() -> (evento::Turso, SqlitePool, Db) {
         let store = evento::Turso::in_memory_concurrent().await.unwrap();
+        crate::db::migrate_store_read_models(&store).await.unwrap();
+        let db = Db::from(store.clone());
         let options = SqliteConnectOptions::new()
             .filename(":memory:")
             .create_if_missing(true);
@@ -687,18 +700,15 @@ mod tests {
             .add_migrations(timada_newsletter::migrations())
             .unwrap();
         migrator
-            .add_migrations(timada_catalog::migrations())
-            .unwrap();
-        migrator
             .run(&mut *conn, &evento::migrator::Plan::apply_all())
             .await
             .unwrap();
         drop(conn);
-        (store, pool)
+        (store, pool, db)
     }
 
-    async fn catch_up(store: &evento::Turso, pool: &SqlitePool, keys: Arc<MemoryKeys>) {
-        timada_catalog::read_model_subscription::<evento::Turso>(pool.clone())
+    async fn catch_up(store: &evento::Turso, pool: &SqlitePool, db: &Db, keys: Arc<MemoryKeys>) {
+        timada_catalog::read_model_subscription::<evento::Turso>(db.clone())
             .run_once(store)
             .await
             .unwrap();
@@ -794,7 +804,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_campaign_goes_out_once_to_each_subscriber_in_batches() {
-        let (store, pool) = store().await;
+        let (store, pool, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         for email in ["ada@example.com", "grace@example.com", "alan@example.com"] {
             subscribe(&store, &keys, email).await;
@@ -816,7 +826,7 @@ mod tests {
             .send_campaign("user-alice", &campaign)
             .await
             .unwrap();
-        catch_up(&store, &pool, keys.clone()).await;
+        catch_up(&store, &pool, &db, keys.clone()).await;
         let mut shop = timada_tenancy::TenantState {
             id: TENANT.into(),
             name: "Acme Tea".into(),
@@ -832,7 +842,7 @@ mod tests {
 
         // No storefront yet: no unsubscribe link, nothing goes out.
         assert_eq!(
-            send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 2)
+            send_batch(&store, &pool, &db, &cx, &shop, &*keys, &campaign, 2)
                 .await
                 .unwrap(),
             0
@@ -847,7 +857,7 @@ mod tests {
         // shop's mails ever carries marketing.
         shop.marketing_server_id = None;
         assert_eq!(
-            send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 2)
+            send_batch(&store, &pool, &db, &cx, &shop, &*keys, &campaign, 2)
                 .await
                 .unwrap(),
             0
@@ -858,7 +868,7 @@ mod tests {
         shop.marketing_server_id = Some("news".into());
 
         assert_eq!(
-            send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 2)
+            send_batch(&store, &pool, &db, &cx, &shop, &*keys, &campaign, 2)
                 .await
                 .unwrap(),
             2
@@ -866,14 +876,14 @@ mod tests {
         // A sweep before the read model caught up, or another node: the
         // claims are refused, nobody is mailed twice.
         assert_eq!(
-            send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 2)
+            send_batch(&store, &pool, &db, &cx, &shop, &*keys, &campaign, 2)
                 .await
                 .unwrap(),
             0
         );
-        catch_up(&store, &pool, keys.clone()).await;
+        catch_up(&store, &pool, &db, keys.clone()).await;
         assert_eq!(
-            send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 2)
+            send_batch(&store, &pool, &db, &cx, &shop, &*keys, &campaign, 2)
                 .await
                 .unwrap(),
             1
@@ -912,7 +922,7 @@ mod tests {
     /// campaign open until a sweep can mail them.
     #[tokio::test]
     async fn a_campaign_waits_for_a_missing_key_and_skips_who_left() {
-        let (store, pool) = store().await;
+        let (store, pool, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         for email in ["ada@example.com", "grace@example.com", "alan@example.com"] {
             subscribe(&store, &keys, email).await;
@@ -938,7 +948,7 @@ mod tests {
             .set_storefront_address("user-alice", Some(SHOP))
             .await
             .unwrap();
-        catch_up(&store, &pool, keys.clone()).await;
+        catch_up(&store, &pool, &db, keys.clone()).await;
         let shop = shop();
         let (cx, _platform, _orders, transport) = mail(&shop);
 
@@ -967,7 +977,7 @@ mod tests {
 
         // Alan is mailed, Ada is skipped for good, Grace waits: not finished.
         assert_eq!(
-            send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 10)
+            send_batch(&store, &pool, &db, &cx, &shop, &*keys, &campaign, 10)
                 .await
                 .unwrap(),
             1
@@ -975,7 +985,7 @@ mod tests {
         assert_eq!(recipients(&transport), ["alan@example.com"]);
         let state = newsletter.load_campaign(&campaign).await.unwrap().unwrap();
         assert_eq!(state.status, CampaignStatus::Sending, "Grace is still owed");
-        catch_up(&store, &pool, keys.clone()).await;
+        catch_up(&store, &pool, &db, keys.clone()).await;
         let owed = undelivered_subscribers(&pool, TENANT, &campaign, None, 10)
             .await
             .unwrap();
@@ -985,7 +995,7 @@ mod tests {
         // The key arrives: Grace is mailed and the campaign is finished.
         keys.put(&grace.key_id, &grace_key).await.unwrap();
         assert_eq!(
-            send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 10)
+            send_batch(&store, &pool, &db, &cx, &shop, &*keys, &campaign, 10)
                 .await
                 .unwrap(),
             1
@@ -996,7 +1006,7 @@ mod tests {
         );
         let state = newsletter.load_campaign(&campaign).await.unwrap().unwrap();
         assert_eq!(state.status, CampaignStatus::Sent);
-        catch_up(&store, &pool, keys.clone()).await;
+        catch_up(&store, &pool, &db, keys.clone()).await;
         let row = timada_newsletter::campaign_row(&pool, TENANT, &campaign)
             .await
             .unwrap()
@@ -1071,7 +1081,7 @@ mod tests {
     async fn a_scheduled_edition_reaches_each_zone_at_its_own_nine_oclock() {
         use timada_newsletter::schedule::{Cadence, Schedule};
 
-        let (store, pool) = store().await;
+        let (store, pool, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         for n in 0..4 {
             subscribe_in(
@@ -1121,21 +1131,30 @@ mod tests {
         open_due_editions(&store, &shop, &campaign, at("2030-01-07T18:00:00Z"))
             .await
             .unwrap();
-        catch_up(&store, &pool, keys.clone()).await;
+        catch_up(&store, &pool, &db, keys.clone()).await;
         assert!(open_editions(&pool).await.unwrap().is_empty());
 
         // 9:00 in Kiritimati: open, but nobody's slot has come.
         open_due_editions(&store, &shop, &campaign, at("2030-01-07T19:00:00Z"))
             .await
             .unwrap();
-        catch_up(&store, &pool, keys.clone()).await;
+        catch_up(&store, &pool, &db, keys.clone()).await;
         let [(_, edition)] = open_editions(&pool).await.unwrap().try_into().unwrap();
         let sweep = async |moment: &str| {
-            let mailed =
-                send_edition_batch(&store, &pool, &cx, &shop, &*keys, &edition, 100, at(moment))
-                    .await
-                    .unwrap();
-            catch_up(&store, &pool, keys.clone()).await;
+            let mailed = send_edition_batch(
+                &store,
+                &pool,
+                &db,
+                &cx,
+                &shop,
+                &*keys,
+                &edition,
+                100,
+                at(moment),
+            )
+            .await
+            .unwrap();
+            catch_up(&store, &pool, &db, keys.clone()).await;
             mailed
         };
         assert_eq!(sweep("2030-01-07T19:00:00Z").await, 0);
@@ -1168,7 +1187,7 @@ mod tests {
     async fn a_recurring_campaign_mails_each_subscriber_once_per_edition() {
         use timada_newsletter::schedule::{Cadence, Schedule};
 
-        let (store, pool) = store().await;
+        let (store, pool, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         subscribe_in(&store, &keys, "ada@example.com", Some("Europe/Paris")).await;
         timada_orders::Command::new(store.clone(), TENANT)
@@ -1198,17 +1217,37 @@ mod tests {
             open_due_editions(&store, &shop, &campaign, at(moment))
                 .await
                 .unwrap();
-            catch_up(&store, &pool, keys.clone()).await;
+            catch_up(&store, &pool, &db, keys.clone()).await;
             for (_, edition) in open_editions(&pool).await.unwrap() {
-                send_edition_batch(&store, &pool, &cx, &shop, &*keys, &edition, 100, at(moment))
-                    .await
-                    .unwrap();
-                catch_up(&store, &pool, keys.clone()).await;
+                send_edition_batch(
+                    &store,
+                    &pool,
+                    &db,
+                    &cx,
+                    &shop,
+                    &*keys,
+                    &edition,
+                    100,
+                    at(moment),
+                )
+                .await
+                .unwrap();
+                catch_up(&store, &pool, &db, keys.clone()).await;
                 // Twice in the same slot: no second mail.
-                send_edition_batch(&store, &pool, &cx, &shop, &*keys, &edition, 100, at(moment))
-                    .await
-                    .unwrap();
-                catch_up(&store, &pool, keys.clone()).await;
+                send_edition_batch(
+                    &store,
+                    &pool,
+                    &db,
+                    &cx,
+                    &shop,
+                    &*keys,
+                    &edition,
+                    100,
+                    at(moment),
+                )
+                .await
+                .unwrap();
+                catch_up(&store, &pool, &db, keys.clone()).await;
             }
             assert_eq!(transport.sent().len(), editions);
         }
@@ -1223,14 +1262,14 @@ mod tests {
         // Past its end date, the windows closed: the campaign is done.
         let after = at("2030-01-12T00:00:00Z");
         for (_, edition) in open_editions(&pool).await.unwrap() {
-            send_edition_batch(&store, &pool, &cx, &shop, &*keys, &edition, 100, after)
+            send_edition_batch(&store, &pool, &db, &cx, &shop, &*keys, &edition, 100, after)
                 .await
                 .unwrap();
         }
         open_due_editions(&store, &shop, &campaign, after)
             .await
             .unwrap();
-        catch_up(&store, &pool, keys.clone()).await;
+        catch_up(&store, &pool, &db, keys.clone()).await;
         assert!(open_editions(&pool).await.unwrap().is_empty());
         let state = newsletter.load_campaign(&campaign).await.unwrap().unwrap();
         assert_eq!(state.status, CampaignStatus::Sent);
@@ -1238,7 +1277,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_campaign_shows_the_products_just_in() {
-        let (store, pool) = store().await;
+        let (store, pool, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         subscribe(&store, &keys, "ada@example.com").await;
         timada_orders::Command::new(store.clone(), TENANT)
@@ -1293,11 +1332,11 @@ mod tests {
             .send_campaign("user-alice", &campaign)
             .await
             .unwrap();
-        catch_up(&store, &pool, keys.clone()).await;
+        catch_up(&store, &pool, &db, keys.clone()).await;
         let shop = shop();
         let (cx, _, _, transport) = mail(&shop);
         assert_eq!(
-            send_batch(&store, &pool, &cx, &shop, &*keys, &campaign, 10)
+            send_batch(&store, &pool, &db, &cx, &shop, &*keys, &campaign, 10)
                 .await
                 .unwrap(),
             1

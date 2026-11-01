@@ -249,7 +249,9 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
     let attention = |n: u64| if n > 0 { Tone::Warning } else { Tone::Neutral };
     let mut tiles = Vec::new();
     if nav.products {
-        let n = count_products(pool, id, &ProductFilter::default()).await?;
+        let n = count_products(app_context::<Db>(cx), id, &ProductFilter::default())
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
         tiles.push(Tile {
             label: "Products",
             value: n.to_string(),
@@ -297,7 +299,7 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
             status: Some(ReviewStatus::Pending),
             ..ReviewFilter::default()
         };
-        let n = count_reviews(pool, id, &filter)
+        let n = count_reviews(app_context::<Db>(cx), id, &filter)
             .await
             .map_err(topcoat::Error::from_anyhow)?;
         tiles.push(Tile {
@@ -313,7 +315,7 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
         let filter = MessageFilter {
             status: Some(MessageStatus::Open),
         };
-        let n = count_messages(pool, id, &filter)
+        let n = count_messages(app_context::<Db>(cx), id, &filter)
             .await
             .map_err(topcoat::Error::from_anyhow)?;
         tiles.push(Tile {

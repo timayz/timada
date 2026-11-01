@@ -1,6 +1,6 @@
 //! Queries over `pages`, for the pages list of a tenant.
 
-use sqlx::{FromRow, SqlitePool};
+use timada_core::db::{Db, FromRow};
 
 /// One row of `pages`.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -17,21 +17,23 @@ pub struct PageRow {
 }
 
 /// The tenant's pages, by title.
-pub async fn pages_of_tenant(pool: &SqlitePool, tenant_id: &str) -> anyhow::Result<Vec<PageRow>> {
-    Ok(sqlx::query_as(
-        "SELECT * FROM pages WHERE tenant_id = ?1
+pub async fn pages_of_tenant(db: &Db, tenant_id: &str) -> anyhow::Result<Vec<PageRow>> {
+    db.fetch_all(
+        "SELECT tenant_id, id, slug, title, published, created_at, updated_at FROM pages
+         WHERE tenant_id = ?1
          ORDER BY title COLLATE NOCASE, id",
+        (tenant_id,),
     )
-    .bind(tenant_id)
-    .fetch_all(pool)
-    .await?)
+    .await
 }
 
 /// How many pages the tenant has.
-pub async fn count_pages(pool: &SqlitePool, tenant_id: &str) -> anyhow::Result<u64> {
-    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pages WHERE tenant_id = ?1")
-        .bind(tenant_id)
-        .fetch_one(pool)
+pub async fn count_pages(db: &Db, tenant_id: &str) -> anyhow::Result<u64> {
+    let count: i64 = db
+        .fetch_scalar(
+            "SELECT COUNT(*) FROM pages WHERE tenant_id = ?1",
+            (tenant_id,),
+        )
         .await?;
     Ok(count as u64)
 }

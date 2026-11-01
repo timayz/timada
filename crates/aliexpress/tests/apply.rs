@@ -1,9 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use evento::migrator::Migrate;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx_migrator::Info;
 use timada_aliexpress::{
     AeProduct, AeSku, AeSkuProperty, Fit, LinkStatus, SyncRead, add_combinations, apply_sync, fit,
     map_product, track_imported,
@@ -15,29 +12,15 @@ const ALICE: &str = "user-alice";
 /// The tenant the tests act in.
 const TENANT: &str = "acme";
 
-async fn executor() -> evento::Sqlite {
-    let options = SqliteConnectOptions::new()
-        .filename(":memory:")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
+async fn executor() -> evento::Turso {
+    let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    let mut conn = store.connect().unwrap();
+    timada_catalog::MIGRATIONS
+        .to_latest(&mut conn)
         .await
+        .map_err(|(_, err)| err)
         .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
-    migrator
-        .add_migrations(timada_catalog::migrations())
-        .unwrap();
-    migrator
-        .add_migrations(timada_aliexpress::migrations())
-        .unwrap();
-    migrator
-        .run(&mut *conn, &evento::migrator::Plan::apply_all())
-        .await
-        .unwrap();
-    drop(conn);
-    pool.into()
+    store
 }
 
 fn fixture() -> AeProduct {
@@ -196,7 +179,7 @@ async fn one_node_renews_a_token() {
 }
 
 /// Imports the fixture as a draft; the link's id and the product's.
-async fn imported(executor: &evento::Sqlite) -> (String, String) {
+async fn imported(executor: &evento::Turso) -> (String, String) {
     let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
     let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
     let link_id = links
