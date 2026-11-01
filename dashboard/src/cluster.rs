@@ -28,8 +28,8 @@ use anyhow::{Context, Result};
 use evento::Evento;
 use evento::accord::{
     AccordExecutor, DataStore, ExecutorDataStore, HybridLogicalClock, InMemoryNetwork, Journal,
-    MessageSink, Node, NodeConfig, NodeId, PartialSnapshot, StaticTopology, TcpTransport, Topology,
-    serve,
+    LostJournal, MessageSink, Node, NodeConfig, NodeId, PartialSnapshot, StaticTopology,
+    TcpTransport, Topology, serve,
 };
 use evento::turso::TursoJournal;
 use tokio::sync::mpsc;
@@ -243,9 +243,21 @@ impl Cluster {
             }
             tracing::info!("store copied from a peer");
         } else {
-            node.recover_state()
-                .await
-                .context("cannot open the store (its journal does not match it; see `rejoin`)")?;
+            // Only the mismatch `rejoin` repairs gets its advice: a journal
+            // that holds nothing over a store that does not, or a join that
+            // never completed (`LostJournal`). Anything else (a store that
+            // cannot be read, a temporary directory that is gone, #338) is
+            // handed up as it came, so the operator reads the cause and not
+            // advice that would empty a healthy store.
+            node.recover_state().await.map_err(|err| {
+                if err.chain().any(|cause| cause.is::<LostJournal>()) {
+                    err.context(
+                        "cannot open the store (its journal does not match it; see `rejoin`)",
+                    )
+                } else {
+                    err
+                }
+            })?;
             tasks.push(node.start(inbox));
         }
         tasks.push(node.start_recovery());
