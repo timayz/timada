@@ -777,14 +777,25 @@ pub async fn published_product_by_slug(db: &Db, slug: &str) -> anyhow::Result<Op
 /// The published products among `ids`, in no particular order: what a cart
 /// page shows its lines with (a product missing here is off sale).
 pub async fn published_products_by_ids(db: &Db, ids: &[&str]) -> anyhow::Result<Vec<Product>> {
-    let ids = serde_json::to_string(ids).unwrap_or_else(|_| "[]".to_owned());
-    db.fetch_all(
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // One placeholder per id rather than a `json_each` list: given the list
+    // Turso walks every published product through the status index
+    // (`SEARCH p USING INDEX storefront_products_price (status=?)`), so a
+    // cart cost the whole catalogue; given the ids it reads them one by one
+    // through the primary key (see the `probe` tests).
+    let statement = format!(
         "SELECT id, slug, name, description, amount_cents, currency, updated_at,
             images_json, options_json, variants_json, attributes_json,
             min_amount_cents, max_amount_cents, review_count, rating_x100, stock_json, in_stock
          FROM storefront_products
-         WHERE id IN (SELECT value FROM json_each(?1)) AND status = 'published'",
-        (ids,),
+         WHERE id IN ({}) AND status = 'published'",
+        timada_core::db::placeholders(ids.len())
+    );
+    db.fetch_all(
+        &statement,
+        timada_core::db::params_from_iter(ids.iter().map(|id| (*id).to_owned())),
     )
     .await
 }
@@ -1231,6 +1242,23 @@ mod sql {
 
     fn owned(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|id| (*id).to_owned()).collect()
+    }
+
+    #[tokio::test]
+    async fn products_by_ids_keeps_the_published_ones_among_them() {
+        let db = catalog().await;
+        let found = published_products_by_ids(&db, &["basket", "draft", "missing", "collar"])
+            .await
+            .unwrap();
+        let mut ids: Vec<&str> = found.iter().map(|p| p.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["basket", "collar"]);
+        assert!(
+            published_products_by_ids(&db, &[])
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]
