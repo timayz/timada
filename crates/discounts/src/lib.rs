@@ -11,10 +11,11 @@
 //! deterministic id (the same create-unless-exists as a product slug).
 //! Archiving a discount gives its code back.
 //!
-//! Uses are counted where they cannot overrun: a code with a cap keeps one
-//! usage stream, and every checkout reserves its use there with an optimistic
-//! write before the shopper is asked to pay; a code good once per e-mail keeps
-//! one small stream per shopper the same way. A reservation the payment never
+//! Uses are counted where they cannot overrun: a code with a cap keeps a
+//! usage stream (in generations of at most [`USAGE_CHUNK`] events, so a popular
+//! code never runs out of stream versions), and every checkout reserves its
+//! use there with an optimistic write before the shopper is asked to pay; a
+//! code good once per e-mail keeps one small stream per shopper the same way. A reservation the payment never
 //! confirms lapses on its own (its expiry is read, never scheduled), and the
 //! order the payment makes consumes it for good.
 

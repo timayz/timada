@@ -128,7 +128,7 @@ async fn a_spent_use_stays_spent_and_is_told_once() {
         .await
         .unwrap();
     let usage = cmd.load_usage(id).await.unwrap().unwrap();
-    assert_eq!(usage.consumed.len(), 1);
+    assert_eq!(usage.consumed_count, 1);
     assert!(usage.reserved.is_empty());
     assert!(matches!(
         cmd.reserve_use(SHOP, id, "cart-b", "b@example.com", RESERVATION_SECS)
@@ -166,7 +166,7 @@ async fn an_order_whose_reservation_lapsed_is_still_counted() {
         .await
         .unwrap();
     let usage = cmd.load_usage(id).await.unwrap().unwrap();
-    assert_eq!(usage.consumed.len(), 2);
+    assert_eq!(usage.consumed_count, 2);
 }
 
 #[tokio::test]

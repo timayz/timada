@@ -4,7 +4,8 @@
 //! The dashboard holds the stock before the shopper is asked to pay; this
 //! subscription turns the hold into sold goods when the order is placed, so
 //! the hold never lapses and gives back what an order already took. Delivery
-//! may repeat: an order takes its share, and gives it back, once.
+//! may repeat: an order takes its share, and gives it back, once (the
+//! catalog keeps what each order took in a stream of the order's own).
 
 use evento::{
     Evento, Executor,
@@ -14,7 +15,6 @@ use evento::{
 use timada_catalog::{CatalogError, StockLine};
 
 use crate::aggregator::{Cancelled, Placed};
-use crate::command::order_projection;
 use crate::value_object::OrderLine;
 
 /// The cursor identity of the subscription, in the store.
@@ -85,17 +85,9 @@ async fn on_cancelled<E: Executor>(
     event: Event<Cancelled>,
 ) -> anyhow::Result<()> {
     let store: Store = context.extract();
-    let Some(order) = order_projection()
-        .load(&event.aggregate_id)
-        .tenant(&event.tenant)
-        .execute(context.executor)
-        .await?
-    else {
-        return Ok(());
-    };
     settled(
         timada_catalog::Command::new(store.0, &event.tenant)
-            .restore_stock(ORDERS_ACTOR, &order.id, &stock_lines(&order.lines))
+            .restore_stock(ORDERS_ACTOR, &event.aggregate_id)
             .await,
     )
 }
