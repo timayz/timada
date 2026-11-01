@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::SqlitePool;
+use crate::db::Db;
 use timada_orders::{FulfilledOrder, OrderState, OrderStatus, fulfilled_between};
 use timada_reviews::{MAX_REQUEST_DELAY_DAYS, review_id};
 use tokio::task::JoinHandle;
@@ -36,19 +36,16 @@ pub fn is_due(fulfilled_at: u64, days: u8, now: u64) -> bool {
 
 /// The sweep, with what it needs outside any request.
 pub struct ReviewRequests {
-    read_pool: SqlitePool,
+    /// The read models: the orders that left.
+    db: Db,
     /// The store, every tenant's.
     store: Executor,
     mail: Arc<AppContext>,
 }
 
 impl ReviewRequests {
-    pub fn new(read_pool: SqlitePool, store: Executor, mail: Arc<AppContext>) -> Arc<Self> {
-        Arc::new(Self {
-            read_pool,
-            store,
-            mail,
-        })
+    pub fn new(db: Db, store: Executor, mail: Arc<AppContext>) -> Arc<Self> {
+        Arc::new(Self { db, store, mail })
     }
 
     /// Sweeps every `every`, the first time right away.
@@ -69,7 +66,7 @@ impl ReviewRequests {
     /// tenant that fails is logged and the others still go.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
         let from = now.saturating_sub(u64::from(MAX_REQUEST_DELAY_DAYS) * DAY_SECS + WINDOW_SECS);
-        let orders = fulfilled_between(&self.read_pool, from as i64, now as i64 + 1).await?;
+        let orders = fulfilled_between(&self.db, from as i64, now as i64 + 1).await?;
         for tenant in orders.chunk_by(|a, b| a.tenant_id == b.tenant_id) {
             let tenant_id = &tenant[0].tenant_id;
             if let Err(err) = self.sweep_tenant(tenant_id, tenant, now).await {
@@ -190,8 +187,6 @@ async fn unreviewed<E: evento::Executor>(
 
 #[cfg(test)]
 mod tests {
-    use evento::migrator::Migrate;
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use timada_orders::aggregator::{Fulfilled, Placed};
     use timada_orders::{OrderLine, Payment, ShippingAddress};
     use timada_reviews::SubmitReview;
@@ -203,23 +198,8 @@ mod tests {
 
     const SHOP: &str = "https://shop.example";
 
-    async fn store() -> evento::Sqlite {
-        let options = SqliteConnectOptions::new()
-            .filename(":memory:")
-            .create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(options)
-            .await
-            .unwrap();
-        let mut conn = pool.acquire().await.unwrap();
-        evento::sql_migrator::new::<sqlx::Sqlite>()
-            .unwrap()
-            .run(&mut *conn, &evento::migrator::Plan::apply_all())
-            .await
-            .unwrap();
-        drop(conn);
-        pool.into()
+    async fn store() -> evento::Turso {
+        evento::Turso::in_memory_concurrent().await.unwrap()
     }
 
     fn shop(name: &str) -> timada_tenancy::TenantState {
@@ -241,7 +221,7 @@ mod tests {
     }
 
     /// A paid order of a mug and some tea, fulfilled now. Returns its row.
-    async fn fulfilled(store: &evento::Sqlite, order_id: &str) -> FulfilledOrder {
+    async fn fulfilled(store: &evento::Turso, order_id: &str) -> FulfilledOrder {
         let line = |product_id: &str, name: &str| OrderLine {
             product_id: product_id.to_owned(),
             name: name.to_owned(),
@@ -286,7 +266,7 @@ mod tests {
         }
     }
 
-    async fn with_storefront(store: &evento::Sqlite) {
+    async fn with_storefront(store: &evento::Turso) {
         timada_orders::Command::new(store.clone(), "tenant-1")
             .set_storefront_address("user-alice", Some(SHOP))
             .await

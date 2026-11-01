@@ -2,7 +2,7 @@
 //! `newsletter_deliveries`: the campaigns page of a tenant, and what the
 //! sending still owes.
 
-use sqlx::{FromRow, SqlitePool};
+use timada_core::db::{Db, FromRow};
 
 use crate::query::SubscriberRow;
 
@@ -55,58 +55,56 @@ macro_rules! select_campaigns {
 
 /// The tenant's campaigns, newest first.
 pub async fn campaigns_of_tenant(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     limit: u32,
     offset: u32,
 ) -> anyhow::Result<Vec<CampaignRow>> {
-    Ok(sqlx::query_as(select_campaigns!(
-        "WHERE c.tenant_id = ?1
+    db.fetch_all(
+        select_campaigns!(
+            "WHERE c.tenant_id = ?1
          ORDER BY c.created_at DESC, c.id DESC
          LIMIT ?2 OFFSET ?3"
-    ))
-    .bind(tenant_id)
-    .bind(i64::from(limit))
-    .bind(i64::from(offset))
-    .fetch_all(pool)
-    .await?)
+        ),
+        (tenant_id, i64::from(limit), i64::from(offset)),
+    )
+    .await
 }
 
 /// How many campaigns the tenant has.
-pub async fn count_campaigns(pool: &SqlitePool, tenant_id: &str) -> anyhow::Result<u64> {
-    let (count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM newsletter_campaigns WHERE tenant_id = ?1")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+pub async fn count_campaigns(db: &Db, tenant_id: &str) -> anyhow::Result<u64> {
+    let (count,): (i64,) = db
+        .fetch_one(
+            "SELECT COUNT(*) FROM newsletter_campaigns WHERE tenant_id = ?1",
+            (tenant_id,),
+        )
+        .await?;
     Ok(count as u64)
 }
 
 /// One of the tenant's campaigns.
 pub async fn campaign_row(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     campaign_id: &str,
 ) -> anyhow::Result<Option<CampaignRow>> {
-    Ok(
-        sqlx::query_as(select_campaigns!("WHERE c.tenant_id = ?1 AND c.id = ?2"))
-            .bind(tenant_id)
-            .bind(campaign_id)
-            .fetch_optional(pool)
-            .await?,
+    db.fetch_optional(
+        select_campaigns!("WHERE c.tenant_id = ?1 AND c.id = ?2"),
+        (tenant_id, campaign_id),
     )
+    .await
 }
 
 /// The campaigns going out, every tenant's: `(tenant id, campaign id)`,
 /// oldest first.
-pub async fn sending_campaigns(pool: &SqlitePool) -> anyhow::Result<Vec<(String, String)>> {
-    Ok(sqlx::query_as(
+pub async fn sending_campaigns(db: &Db) -> anyhow::Result<Vec<(String, String)>> {
+    db.fetch_all(
         "SELECT tenant_id, id FROM newsletter_campaigns
          WHERE status = 'sending'
          ORDER BY sent_at, id",
+        (),
     )
-    .fetch_all(pool)
-    .await?)
+    .await
 }
 
 /// Up to `limit` confirmed subscribers (in `language`, when given) that the
@@ -114,13 +112,13 @@ pub async fn sending_campaigns(pool: &SqlitePool) -> anyhow::Result<Vec<(String,
 /// behind: one claimed a moment ago may come back, and its claim is then
 /// refused.
 pub async fn undelivered_subscribers(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     campaign_id: &str,
     language: Option<&str>,
     limit: u32,
 ) -> anyhow::Result<Vec<SubscriberRow>> {
-    Ok(sqlx::query_as(
+    db.fetch_all(
         "SELECT s.* FROM newsletter_subscribers s
          WHERE s.tenant_id = ?1 AND s.status = 'confirmed'
            AND (?3 IS NULL OR s.language = ?3)
@@ -130,53 +128,48 @@ pub async fn undelivered_subscribers(
                  AND d.subscriber_id = s.id)
          ORDER BY s.id
          LIMIT ?4",
+        (tenant_id, campaign_id, language, i64::from(limit)),
     )
-    .bind(tenant_id)
-    .bind(campaign_id)
-    .bind(language)
-    .bind(i64::from(limit))
-    .fetch_all(pool)
-    .await?)
+    .await
 }
 
 /// How many confirmed subscribers (in `language`, when given) a campaign
 /// would go to.
 pub async fn count_audience(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     language: Option<&str>,
 ) -> anyhow::Result<u64> {
-    let (count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM newsletter_subscribers
+    let (count,): (i64,) = db
+        .fetch_one(
+            "SELECT COUNT(*) FROM newsletter_subscribers
          WHERE tenant_id = ?1 AND status = 'confirmed' AND (?2 IS NULL OR language = ?2)",
-    )
-    .bind(tenant_id)
-    .bind(language)
-    .fetch_one(pool)
-    .await?;
+            (tenant_id, language),
+        )
+        .await?;
     Ok(count as u64)
 }
 
 /// The scheduled campaigns, every tenant's: `(tenant id, campaign id)`.
-pub async fn scheduled_campaigns(pool: &SqlitePool) -> anyhow::Result<Vec<(String, String)>> {
-    Ok(sqlx::query_as(
+pub async fn scheduled_campaigns(db: &Db) -> anyhow::Result<Vec<(String, String)>> {
+    db.fetch_all(
         "SELECT tenant_id, id FROM newsletter_campaigns
          WHERE status = 'scheduled'
          ORDER BY sent_at, id",
+        (),
     )
-    .fetch_all(pool)
-    .await?)
+    .await
 }
 
 /// The editions going out, every tenant's: `(tenant id, edition id)`.
-pub async fn open_editions(pool: &SqlitePool) -> anyhow::Result<Vec<(String, String)>> {
-    Ok(sqlx::query_as(
+pub async fn open_editions(db: &Db) -> anyhow::Result<Vec<(String, String)>> {
+    db.fetch_all(
         "SELECT tenant_id, id FROM newsletter_editions
          WHERE status = 'open'
          ORDER BY opened_at, id",
+        (),
     )
-    .fetch_all(pool)
-    .await?)
+    .await
 }
 
 /// One row of `newsletter_editions`, with what its deliveries count.
@@ -200,12 +193,12 @@ pub struct EditionRow {
 
 /// A campaign's editions, newest first.
 pub async fn editions_of_campaign(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     campaign_id: &str,
     limit: u32,
 ) -> anyhow::Result<Vec<EditionRow>> {
-    Ok(sqlx::query_as(
+    db.fetch_all(
         "SELECT e.*,
             (SELECT COUNT(*) FROM newsletter_deliveries d
              WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id
@@ -221,12 +214,9 @@ pub async fn editions_of_campaign(
          WHERE e.tenant_id = ?1 AND e.campaign_id = ?2
          ORDER BY e.opened_at DESC, e.id DESC
          LIMIT ?3",
+        (tenant_id, campaign_id, i64::from(limit)),
     )
-    .bind(tenant_id)
-    .bind(campaign_id)
-    .bind(i64::from(limit))
-    .fetch_all(pool)
-    .await?)
+    .await
 }
 
 /// Where an edition stands in one time zone.
@@ -243,40 +233,36 @@ pub struct ZoneProgress {
 /// An edition's progress by the subscribers' time zone; `shop_zone` stands
 /// in for subscribers without one. Only zones with someone mailed or owed.
 pub async fn edition_progress(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     edition_id: &str,
     language: Option<&str>,
     shop_zone: &str,
 ) -> anyhow::Result<Vec<ZoneProgress>> {
-    Ok(sqlx::query_as(
-        "SELECT zone, SUM(delivered) AS delivered, SUM(owed) AS owed FROM (
+    db.fetch_all(
+        "SELECT zone, SUM(mailed) AS delivered, SUM(waiting) AS owed FROM (
             SELECT COALESCE(s.time_zone, ?4) AS zone,
                 CASE WHEN d.subscriber_id IS NOT NULL AND d.skipped = 0 THEN 1 ELSE 0 END
-                    AS delivered,
+                    AS mailed,
                 CASE WHEN d.subscriber_id IS NULL AND s.status = 'confirmed'
-                     AND (?3 IS NULL OR s.language = ?3) THEN 1 ELSE 0 END AS owed
+                     AND (?3 IS NULL OR s.language = ?3) THEN 1 ELSE 0 END AS waiting
             FROM newsletter_subscribers s
             LEFT JOIN newsletter_deliveries d
               ON d.tenant_id = s.tenant_id AND d.edition_id = ?2 AND d.subscriber_id = s.id
             WHERE s.tenant_id = ?1)
          GROUP BY zone
-         HAVING SUM(delivered) + SUM(owed) > 0
+         HAVING SUM(mailed) + SUM(waiting) > 0
          ORDER BY zone",
+        (tenant_id, edition_id, language, shop_zone),
     )
-    .bind(tenant_id)
-    .bind(edition_id)
-    .bind(language)
-    .bind(shop_zone)
-    .fetch_all(pool)
-    .await?)
+    .await
 }
 
 /// Up to `limit` confirmed subscribers in `zone` (in `language`, when
 /// given) that the edition was not mailed to yet, by id; `shop_zone` stands
 /// in for subscribers without one.
 pub async fn undelivered_in_zone(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     edition_id: &str,
     language: Option<&str>,
@@ -284,7 +270,7 @@ pub async fn undelivered_in_zone(
     zone: &str,
     limit: u32,
 ) -> anyhow::Result<Vec<SubscriberRow>> {
-    Ok(sqlx::query_as(
+    db.fetch_all(
         "SELECT s.* FROM newsletter_subscribers s
          WHERE s.tenant_id = ?1 AND s.status = 'confirmed'
            AND (?3 IS NULL OR s.language = ?3)
@@ -295,13 +281,14 @@ pub async fn undelivered_in_zone(
                  AND d.subscriber_id = s.id)
          ORDER BY s.id
          LIMIT ?6",
+        (
+            tenant_id,
+            edition_id,
+            language,
+            shop_zone,
+            zone,
+            i64::from(limit),
+        ),
     )
-    .bind(tenant_id)
-    .bind(edition_id)
-    .bind(language)
-    .bind(shop_zone)
-    .bind(zone)
-    .bind(i64::from(limit))
-    .fetch_all(pool)
-    .await?)
+    .await
 }

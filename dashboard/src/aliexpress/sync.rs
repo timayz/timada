@@ -10,8 +10,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::SqlitePool;
-
 use crate::db::Db;
 use timada_aliexpress::{ForwardRow, LinkRow, forwards_due, links_due};
 use tokio::task::JoinHandle;
@@ -30,8 +28,7 @@ const SWEEP_LIMIT: i64 = 500;
 const PACE: Duration = Duration::from_millis(200);
 
 pub struct AliexpressSync {
-    read_pool: SqlitePool,
-    /// The read models in the store's database (the companies' access).
+    /// The read models: the imports, the forwards, the companies' access.
     db: Db,
     /// The store, every tenant's.
     store: Executor,
@@ -39,14 +36,8 @@ pub struct AliexpressSync {
 }
 
 impl AliexpressSync {
-    pub fn new(
-        read_pool: SqlitePool,
-        db: Db,
-        store: Executor,
-        aliexpress: Arc<Aliexpress>,
-    ) -> Arc<Self> {
+    pub fn new(db: Db, store: Executor, aliexpress: Arc<Aliexpress>) -> Arc<Self> {
         Arc::new(Self {
-            read_pool,
             db,
             store,
             aliexpress,
@@ -78,7 +69,7 @@ impl AliexpressSync {
         self.renew_due(now).await?;
         let every = self.aliexpress.sync_every_secs();
         let before = now.saturating_sub(every) as i64;
-        let due = links_due(&self.read_pool, before, SWEEP_LIMIT).await?;
+        let due = links_due(&self.db, before, SWEEP_LIMIT).await?;
         let mut synced = 0;
         for shop in due.chunk_by(|a, b| a.tenant_id == b.tenant_id) {
             let tenant_id = &shop[0].tenant_id;
@@ -96,7 +87,7 @@ impl AliexpressSync {
     /// Reads the orders placed on AliExpress again, shop by shop; returns
     /// how many shop orders were fulfilled from them.
     pub async fn check_forwards(&self, now: u64) -> anyhow::Result<usize> {
-        let due = forwards_due(&self.read_pool, SWEEP_LIMIT).await?;
+        let due = forwards_due(&self.db, SWEEP_LIMIT).await?;
         let mut fulfilled = 0;
         for shop in due.chunk_by(|a, b| a.tenant_id == b.tenant_id) {
             let tenant_id = &shop[0].tenant_id;

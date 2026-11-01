@@ -22,7 +22,7 @@ use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, document, empty_row, format_time, notice, page_header, pager, section_card,
 };
@@ -65,7 +65,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let can_manage = access.can(cx, PERMISSION_CUSTOMERS_MANAGE).await?;
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     let total = count_shoppers(pool, &tenant.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;

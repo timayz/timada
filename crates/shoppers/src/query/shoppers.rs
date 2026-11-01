@@ -1,6 +1,6 @@
 //! Queries over `shoppers_shoppers`, for the customers page of a tenant.
 
-use sqlx::{FromRow, SqlitePool};
+use timada_core::db::{Db, FromRow};
 
 /// One shopper of a tenant, with the orders placed with their address.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -18,12 +18,12 @@ pub struct ShopperRow {
 
 /// The tenant's shoppers, newest first.
 pub async fn shoppers_of_tenant(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     limit: u32,
     offset: u32,
 ) -> anyhow::Result<Vec<ShopperRow>> {
-    Ok(sqlx::query_as(
+    db.fetch_all(
         "SELECT s.id, s.email, s.registered_at, s.address_count,
             (SELECT COUNT(*) FROM orders_orders o
              WHERE o.tenant_id = s.tenant_id AND o.email = s.email) AS order_count
@@ -31,20 +31,18 @@ pub async fn shoppers_of_tenant(
          WHERE s.tenant_id = ?1
          ORDER BY s.registered_at DESC, s.id DESC
          LIMIT ?2 OFFSET ?3",
+        (tenant_id, i64::from(limit), i64::from(offset)),
     )
-    .bind(tenant_id)
-    .bind(i64::from(limit))
-    .bind(i64::from(offset))
-    .fetch_all(pool)
-    .await?)
+    .await
 }
 
 /// How many shoppers the tenant has.
-pub async fn count_shoppers(pool: &SqlitePool, tenant_id: &str) -> anyhow::Result<u64> {
-    let (count,): (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM shoppers_shoppers WHERE tenant_id = ?1")
-            .bind(tenant_id)
-            .fetch_one(pool)
-            .await?;
+pub async fn count_shoppers(db: &Db, tenant_id: &str) -> anyhow::Result<u64> {
+    let (count,): (i64,) = db
+        .fetch_one(
+            "SELECT COUNT(*) FROM shoppers_shoppers WHERE tenant_id = ?1",
+            (tenant_id,),
+        )
+        .await?;
     Ok(count as u64)
 }

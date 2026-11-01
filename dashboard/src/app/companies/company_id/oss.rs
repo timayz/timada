@@ -16,7 +16,7 @@ use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{Shell, document, page_header, section_card};
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -50,7 +50,9 @@ pub async fn oss(cx: &Cx) -> Result<impl View> {
         .filter(|quarter| quarter_bounds(quarter).is_some())
         .unwrap_or_else(|| quarter_of(now));
     let (from, to) = quarter_bounds(&quarter).unwrap_or_default();
-    let rows = oss_return(app_context::<ReadPool>(cx), &company.id, from, to).await?;
+    let rows = oss_return(app_context::<Db>(cx), &company.id, from, to)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let id = company.id.clone();
     let link = |quarter: String| {
         href!(oss, CompanyId(id.clone()))

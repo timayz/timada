@@ -7,7 +7,7 @@ use crate::app::{self, Services};
 use crate::auth;
 use crate::cluster::{Cluster, Executor, Files};
 use crate::config::Config;
-use crate::db::{self, ReadPool, WritePool};
+use crate::db;
 use crate::store_api::{self, StoreConnections};
 
 pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> Result<()> {
@@ -16,7 +16,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let url = config.server.url.clone();
     let files = Files {
         path: config.database.path.clone(),
-        read_models_url: config.database.read_models.clone(),
     };
 
     // The store first: its node may have to copy it from a peer, which
@@ -32,12 +31,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     .await?;
     // The read models in the store's database.
     let db = db::Db::from(store.clone());
-    let write_pool = db::create_write_pool(&config.database.read_models).await?;
-    let read_pool = db::create_read_pool(
-        &config.database.read_models,
-        config.database.max_connections,
-    )
-    .await?;
 
     let peers = crate::peers::Peers::from_cluster(config.cluster.as_ref())?.map(Arc::new);
     let media = Arc::new(crate::media::Media::new(&config.media, peers.clone()));
@@ -110,7 +103,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let mut read_models = Vec::new();
     for (name, builder) in subscriptions(
         db.clone(),
-        write_pool.clone(),
         executor.clone(),
         media.clone(),
         keys.clone(),
@@ -130,7 +122,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let cluster_watch = cluster.watch(std::time::Duration::from_secs(60));
     // A few days after an order left, its buyer is asked for a review.
     let review_requests = crate::review_requests::ReviewRequests::new(
-        read_pool.clone(),
+        db.clone(),
         executor.clone(),
         background_mail.clone(),
     )
@@ -140,22 +132,18 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 
     // A card form left open past the time its goods were held for is closed
     // with Stripe before it can charge.
-    let lapsed_checkouts = crate::payments::LapsedCheckouts::new(
-        read_pool.clone(),
-        executor.clone(),
-        payments.clone(),
-    )
-    .start(std::time::Duration::from_secs(
-        config
-            .payments
-            .as_ref()
-            .map_or(60, |payments| payments.cancel_check_secs)
-            .max(1),
-    ));
+    let lapsed_checkouts =
+        crate::payments::LapsedCheckouts::new(db.clone(), executor.clone(), payments.clone())
+            .start(std::time::Duration::from_secs(
+                config
+                    .payments
+                    .as_ref()
+                    .map_or(60, |payments| payments.cancel_check_secs)
+                    .max(1),
+            ));
 
     // A campaign a merchant sent goes out a batch at a time.
     let newsletter_sends = crate::newsletter_sends::NewsletterSends::new(
-        read_pool.clone(),
         db.clone(),
         executor.clone(),
         background_mail.clone(),
@@ -168,8 +156,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 
     // The runs of the shops' automation scenarios move on a timer.
     let automation_runs = crate::automations::runner::Runner::new(
-        read_pool.clone(),
-        write_pool.clone(),
         db.clone(),
         executor.clone(),
         background_mail.clone(),
@@ -188,7 +174,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 
     // The products imported from AliExpress are read again on a timer.
     let aliexpress_sync = crate::aliexpress::sync::AliexpressSync::new(
-        read_pool.clone(),
         db.clone(),
         executor.clone(),
         aliexpress.clone(),
@@ -200,8 +185,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let router = app::router(Services {
         executor,
         db,
-        read_pool: ReadPool(read_pool.clone()),
-        write_pool: WritePool(write_pool.clone()),
         providers,
         webauthn,
         mailer,
@@ -244,8 +227,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         subscription.stopped().await;
     }
     cluster.shutdown().await;
-    read_pool.close().await;
-    write_pool.close().await;
     drop(store);
     Ok(())
 }
@@ -262,7 +243,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 #[allow(clippy::too_many_arguments)]
 fn subscriptions(
     db: db::Db,
-    write_pool: sqlx::SqlitePool,
     store: Executor,
     media: Arc<crate::media::Media>,
     keys: Arc<crate::key_vault::KeyVault>,
@@ -303,13 +283,10 @@ fn subscriptions(
             "catalog",
             timada_catalog::read_model_subscription(db.clone()),
         ),
-        (
-            "orders",
-            timada_orders::read_model_subscription(write_pool.clone()),
-        ),
+        ("orders", timada_orders::read_model_subscription(db.clone())),
         (
             "shoppers",
-            timada_shoppers::read_model_subscription(write_pool.clone(), ring.clone()),
+            timada_shoppers::read_model_subscription(db.clone(), ring.clone()),
         ),
         (
             "discounts",
@@ -325,28 +302,24 @@ fn subscriptions(
         ),
         (
             "newsletter",
-            timada_newsletter::read_model_subscription(write_pool.clone(), ring.clone()),
+            timada_newsletter::read_model_subscription(db.clone(), ring.clone()),
         ),
         (
             "automations",
-            timada_automations::read_model_subscription(write_pool.clone()),
+            timada_automations::read_model_subscription(db.clone()),
         ),
         ("pages", timada_pages::read_model_subscription(db.clone())),
         (
             "invoicing",
-            timada_invoicing::read_model_subscription(write_pool.clone()),
+            timada_invoicing::read_model_subscription(db.clone()),
         ),
         (
             "AliExpress",
-            timada_aliexpress::read_model_subscription(write_pool.clone()),
+            timada_aliexpress::read_model_subscription(db.clone()),
         ),
         (
             "AliExpress orders",
-            crate::aliexpress::forward::subscription(
-                aliexpress.clone(),
-                write_pool.clone(),
-                store.clone(),
-            ),
+            crate::aliexpress::forward::subscription(aliexpress.clone(), db.clone(), store.clone()),
         ),
         (
             "AliExpress products",
@@ -392,7 +365,7 @@ fn subscriptions(
         ),
         (
             "automation triggers",
-            crate::automations::triggers::subscription(write_pool.clone(), store.clone()),
+            crate::automations::triggers::subscription(db.clone(), store.clone()),
         ),
         (
             "order confirmations",

@@ -8,7 +8,7 @@ use evento::{
     metadata::RawEvent,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::{FromRow, SqlitePool};
+use timada_core::db::{Db, FromRow};
 
 use crate::aggregator::AliexpressProduct;
 use crate::aggregator::forward::Forward;
@@ -17,11 +17,11 @@ use crate::command::{ForwardState, LinkState, forward_projection, link_projectio
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-aliexpress/read-models";
 
-/// Builds the subscription over every tenant and routing key. `pool` is the
+/// Builds the subscription over every tenant and routing key. `db` is the
 /// read-model database and must be allowed to write.
-pub fn read_model_subscription<E: Executor>(pool: SqlitePool) -> SubscriptionBuilder<E> {
+pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
-        .data(pool)
+        .data(db)
         .handler(on_link_event())
         .handler(on_forward_event())
         .any_routing_key()
@@ -32,7 +32,7 @@ async fn on_link_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<AliexpressProduct>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(link) = link_projection()
         .load(&event.aggregate_id)
         .tenant(&event.tenant)
@@ -41,7 +41,7 @@ async fn on_link_event<E: Executor>(
     else {
         return Ok(());
     };
-    upsert_link(&pool, &event.tenant, &link).await
+    upsert_link(&db, &event.tenant, &link).await
 }
 
 #[evento::subscription_all]
@@ -49,7 +49,7 @@ async fn on_forward_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<Forward>,
 ) -> anyhow::Result<()> {
-    let pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let Some(forward) = forward_projection()
         .load(&event.aggregate_id)
         .tenant(&event.tenant)
@@ -58,12 +58,12 @@ async fn on_forward_event<E: Executor>(
     else {
         return Ok(());
     };
-    upsert_forward(&pool, &event.tenant, &forward).await
+    upsert_forward(&db, &event.tenant, &forward).await
 }
 
 /// Writes the row of a forward as the write model sees it.
 pub async fn upsert_forward(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     forward: &ForwardState,
 ) -> anyhow::Result<()> {
@@ -73,7 +73,7 @@ pub async fn upsert_forward(
         .map(|order| order.id.as_str())
         .collect::<Vec<_>>()
         .join(" ");
-    sqlx::query(
+    db.execute(
         "INSERT INTO aliexpress_forwards (tenant_id, id, order_id, status, ae_order_ids,
             tracking, last_error, placed_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
@@ -81,17 +81,18 @@ pub async fn upsert_forward(
             status = excluded.status, ae_order_ids = excluded.ae_order_ids,
             tracking = excluded.tracking, last_error = excluded.last_error,
             placed_at = excluded.placed_at, updated_at = excluded.updated_at",
+        (
+            tenant_id,
+            forward.id.as_str(),
+            forward.order_id.as_str(),
+            forward.status.as_str(),
+            ae_order_ids,
+            forward.tracking().join(" "),
+            forward.last_error.as_deref(),
+            forward.placed_at.map(|at| at as i64),
+            forward.updated_at as i64,
+        ),
     )
-    .bind(tenant_id)
-    .bind(&forward.id)
-    .bind(&forward.order_id)
-    .bind(forward.status.as_str())
-    .bind(ae_order_ids)
-    .bind(forward.tracking().join(" "))
-    .bind(&forward.last_error)
-    .bind(forward.placed_at.map(|at| at as i64))
-    .bind(forward.updated_at as i64)
-    .execute(pool)
     .await?;
     Ok(())
 }
@@ -115,26 +116,21 @@ pub struct ForwardRow {
 
 /// The orders of every shop placed on AliExpress and not settled yet, the
 /// longest unchanged first, grouped by tenant: what a sweep reads again.
-pub async fn forwards_due(pool: &SqlitePool, limit: i64) -> sqlx::Result<Vec<ForwardRow>> {
-    sqlx::query_as(
+pub async fn forwards_due(db: &Db, limit: i64) -> anyhow::Result<Vec<ForwardRow>> {
+    db.fetch_all(
         "SELECT tenant_id, id, order_id, status, ae_order_ids, tracking, last_error,
             placed_at, updated_at
          FROM aliexpress_forwards
          WHERE status = 'placed'
          ORDER BY tenant_id, updated_at LIMIT ?1",
+        (limit,),
     )
-    .bind(limit)
-    .fetch_all(pool)
     .await
 }
 
 /// Writes the row of a link as the write model sees it.
-pub async fn upsert_link(
-    pool: &SqlitePool,
-    tenant_id: &str,
-    link: &LinkState,
-) -> anyhow::Result<()> {
-    sqlx::query(
+pub async fn upsert_link(db: &Db, tenant_id: &str, link: &LinkState) -> anyhow::Result<()> {
+    db.execute(
         "INSERT INTO aliexpress_products (tenant_id, id, ae_product_id, product_id, status,
             offline, own_pricing, last_synced_at, last_error, requested_at, updated_at,
             new_combinations)
@@ -145,20 +141,21 @@ pub async fn upsert_link(
             last_synced_at = excluded.last_synced_at, last_error = excluded.last_error,
             requested_at = excluded.requested_at, updated_at = excluded.updated_at,
             new_combinations = excluded.new_combinations",
+        (
+            tenant_id,
+            link.id.as_str(),
+            link.ae_product_id.as_str(),
+            link.product_id.as_deref(),
+            link.status.as_str(),
+            link.offline,
+            link.pricing.is_some(),
+            link.last_synced_at.map(|at| at as i64),
+            link.last_error.as_deref(),
+            link.requested_at as i64,
+            link.updated_at as i64,
+            link.offered().count() as i64,
+        ),
     )
-    .bind(tenant_id)
-    .bind(&link.id)
-    .bind(&link.ae_product_id)
-    .bind(&link.product_id)
-    .bind(link.status.as_str())
-    .bind(link.offline)
-    .bind(link.pricing.is_some())
-    .bind(link.last_synced_at.map(|at| at as i64))
-    .bind(&link.last_error)
-    .bind(link.requested_at as i64)
-    .bind(link.updated_at as i64)
-    .bind(link.offered().count() as i64)
-    .execute(pool)
     .await?;
     Ok(())
 }
@@ -194,48 +191,44 @@ macro_rules! columns {
 }
 
 /// A shop's imports, most recently asked for first.
-pub async fn links_of_tenant(
-    pool: &SqlitePool,
-    tenant_id: &str,
-    limit: i64,
-) -> sqlx::Result<Vec<LinkRow>> {
-    sqlx::query_as(concat!(
-        columns!(),
-        "WHERE tenant_id = ?1 ORDER BY requested_at DESC, id DESC LIMIT ?2"
-    ))
-    .bind(tenant_id)
-    .bind(limit)
-    .fetch_all(pool)
+pub async fn links_of_tenant(db: &Db, tenant_id: &str, limit: i64) -> anyhow::Result<Vec<LinkRow>> {
+    db.fetch_all(
+        concat!(
+            columns!(),
+            "WHERE tenant_id = ?1 ORDER BY requested_at DESC, id DESC LIMIT ?2"
+        ),
+        (tenant_id, limit),
+    )
     .await
 }
 
 /// The import that filled a catalog product, if one did.
 pub async fn link_of_product(
-    pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     product_id: &str,
-) -> sqlx::Result<Option<LinkRow>> {
-    sqlx::query_as(concat!(
-        columns!(),
-        "WHERE tenant_id = ?1 AND product_id = ?2 AND status = 'linked'
+) -> anyhow::Result<Option<LinkRow>> {
+    db.fetch_optional(
+        concat!(
+            columns!(),
+            "WHERE tenant_id = ?1 AND product_id = ?2 AND status = 'linked'
          ORDER BY updated_at DESC LIMIT 1"
-    ))
-    .bind(tenant_id)
-    .bind(product_id)
-    .fetch_optional(pool)
+        ),
+        (tenant_id, product_id),
+    )
     .await
 }
 
 /// The linked items of every shop last read before `before` (unix seconds),
 /// oldest first, grouped by tenant: what a sweep reads again.
-pub async fn links_due(pool: &SqlitePool, before: i64, limit: i64) -> sqlx::Result<Vec<LinkRow>> {
-    sqlx::query_as(concat!(
-        columns!(),
-        "WHERE status = 'linked' AND (last_synced_at IS NULL OR last_synced_at < ?1)
+pub async fn links_due(db: &Db, before: i64, limit: i64) -> anyhow::Result<Vec<LinkRow>> {
+    db.fetch_all(
+        concat!(
+            columns!(),
+            "WHERE status = 'linked' AND (last_synced_at IS NULL OR last_synced_at < ?1)
          ORDER BY tenant_id, last_synced_at LIMIT ?2"
-    ))
-    .bind(before)
-    .bind(limit)
-    .fetch_all(pool)
+        ),
+        (before, limit),
+    )
     .await
 }

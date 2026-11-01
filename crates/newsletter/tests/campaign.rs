@@ -1,5 +1,7 @@
 mod common;
 
+use timada_core::db::Db;
+
 use std::sync::Arc;
 
 use common::*;
@@ -18,8 +20,8 @@ fn draft(subject: &str) -> CampaignDraft {
     }
 }
 
-async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool, keys: &Arc<MemoryKeys>) {
-    read_model_subscription::<evento::Sqlite>(pool.clone(), ring(keys))
+async fn catch_up(executor: &evento::Turso, pool: &Db, keys: &Arc<MemoryKeys>) {
+    read_model_subscription::<evento::Turso>(pool.clone(), ring(keys))
         .run_once(executor)
         .await
         .unwrap();

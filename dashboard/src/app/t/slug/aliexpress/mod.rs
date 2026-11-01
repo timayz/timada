@@ -41,7 +41,7 @@ use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::ReadPool;
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, fact, facts, format_time, icons, notice, page_header,
     section_card, status_badge,
@@ -347,10 +347,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await?;
     let query = query_params::<AliexpressQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     let links = links_of_tenant(pool, &access.tenant.id, LISTED)
         .await
-        .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
+        .map_err(topcoat::Error::from_anyhow)?;
     let aliexpress = app_context::<Arc<Aliexpress>>(cx);
     let company = aliexpress
         .company_of(&access.tenant)

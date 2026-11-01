@@ -29,7 +29,7 @@ use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::db::{Db, ReadPool};
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, format_date, notice, page_header, section_card,
     status_badge,
@@ -107,12 +107,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<DiscountsQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<ReadPool>(cx);
+    let pool = app_context::<Db>(cx);
     let rows = discounts_of_tenant(app_context::<Db>(cx), &tenant.id, false)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     // How many paid orders used each code, from the orders' read model.
-    let uses = timada_orders::discount_use_counts(pool, &tenant.id).await?;
+    let uses = timada_orders::discount_use_counts(pool, &tenant.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let slug = tenant.slug.clone();
     let title = format!("Discounts · {}", tenant.name);
 

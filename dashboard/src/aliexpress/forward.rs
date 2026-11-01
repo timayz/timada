@@ -9,12 +9,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::db::Db;
 use evento::{
     Evento, Executor,
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use sqlx::SqlitePool;
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem, Requested};
 use timada_aliexpress::{
     AeError, AliexpressError, ForwardStatus, LinkState, PlaceItem, PlaceOrder, Placement,
@@ -80,11 +80,11 @@ fn describe(err: &AeError) -> String {
 
 impl Aliexpress {
     /// Places the order a forward asks for, on the node that takes it on:
-    /// `store` is the store, `read_pool` the read models.
+    /// `store` is the store, `db` the read models.
     pub async fn forward_order<E: evento::Executor + Clone>(
         &self,
         store: &E,
-        read_pool: &SqlitePool,
+        db: &Db,
         tenant_id: &str,
         forward_id: &str,
     ) -> anyhow::Result<ForwardResult> {
@@ -95,9 +95,7 @@ impl Aliexpress {
         let Some(forward) = forwards.load_forward_by_id(forward_id).await? else {
             return Ok(ForwardResult::Skipped);
         };
-        let placed = self
-            .place(store, read_pool, tenant_id, &forward.order_id)
-            .await;
+        let placed = self.place(store, db, tenant_id, &forward.order_id).await;
         match placed {
             Ok(placement) => {
                 let ae_order_ids = placement.ae_order_ids.clone();
@@ -121,7 +119,7 @@ impl Aliexpress {
     async fn place<E: evento::Executor + Clone>(
         &self,
         store: &E,
-        read_pool: &SqlitePool,
+        db: &Db,
         tenant_id: &str,
         order_id: &str,
     ) -> Result<Placement, Refusal> {
@@ -156,7 +154,7 @@ impl Aliexpress {
             }
             OrderStatus::Cancelled => return Err(Refusal("The order is cancelled.".into())),
         }
-        let links = order_links(store, read_pool, tenant_id, &order)
+        let links = order_links(store, db, tenant_id, &order)
             .await
             .map_err(failed)?;
         let plan = forward_items(&order.lines, &links);
@@ -402,7 +400,7 @@ fn fit_tracking(numbers: &[String]) -> String {
 /// The linked AliExpress items an order's products were imported from.
 pub async fn order_links<E: evento::Executor + Clone>(
     store: &E,
-    read_pool: &SqlitePool,
+    db: &Db,
     tenant_id: &str,
     order: &OrderState,
 ) -> anyhow::Result<Vec<LinkState>> {
@@ -415,7 +413,7 @@ pub async fn order_links<E: evento::Executor + Clone>(
         {
             continue;
         }
-        let Some(row) = link_of_product(read_pool, tenant_id, &line.product_id).await? else {
+        let Some(row) = link_of_product(db, tenant_id, &line.product_id).await? else {
             continue;
         };
         if let Some(link) = links.load_link_by_id(&row.id).await?
@@ -433,12 +431,12 @@ struct Store(Evento);
 
 pub fn subscription<E: Executor>(
     aliexpress: Arc<Aliexpress>,
-    read_pool: SqlitePool,
+    db: Db,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(aliexpress)
-        .data(read_pool)
+        .data(db)
         .data(Store(store))
         .handler(on_order_placed())
         .handler(on_forward_requested())
@@ -457,7 +455,7 @@ async fn on_order_placed<E: Executor>(
         return Ok(());
     }
     let aliexpress: Arc<Aliexpress> = context.extract();
-    let read_pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let store: Store = context.extract();
     let Some(merchant) = aliexpress.active_tenant(&event.tenant).await? else {
         return Ok(());
@@ -474,7 +472,7 @@ async fn on_order_placed<E: Executor>(
     let Some(order) = orders.load_order(&event.aggregate_id).await? else {
         return Ok(());
     };
-    let links = order_links(&store.0, &read_pool, &event.tenant, &order).await?;
+    let links = order_links(&store.0, &db, &event.tenant, &order).await?;
     if forward_items(&order.lines, &links).items.is_empty() {
         return Ok(());
     }
@@ -496,10 +494,10 @@ async fn on_forward_requested<E: Executor>(
         return Ok(());
     }
     let aliexpress: Arc<Aliexpress> = context.extract();
-    let read_pool: SqlitePool = context.extract();
+    let db: Db = context.extract();
     let store: Store = context.extract();
     aliexpress
-        .forward_order(&store.0, &read_pool, &event.tenant, &event.aggregate_id)
+        .forward_order(&store.0, &db, &event.tenant, &event.aggregate_id)
         .await?;
     Ok(())
 }

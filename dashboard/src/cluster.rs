@@ -45,14 +45,12 @@ pub type Executor = Evento;
 /// Frames waiting for this node's inbox loop.
 const INBOX_FRAMES: usize = 1024;
 
-/// What `serve` needs to know about the store and the read models to open the
-/// node: where the files are, so a copy from a peer can empty them first.
+/// What `serve` needs to know about the store to open the node: where its
+/// file is, so a copy from a peer can empty it first.
 #[derive(Debug, Clone)]
 pub struct Files {
     /// `database.path`: the store.
     pub path: PathBuf,
-    /// `database.read_models`, a DSN: the read models not in the store yet.
-    pub read_models_url: String,
 }
 
 impl Files {
@@ -157,9 +155,6 @@ impl Cluster {
             crate::db::reset_store_read_models(&store)
                 .await
                 .context("cannot empty the read models before copying the store")?;
-            crate::db::recreate_read_models(&files.read_models_url)
-                .await
-                .context("cannot recreate the read models before copying the store")?;
         }
 
         // One store handle, cloned, for both the Accord data store and the

@@ -1,11 +1,9 @@
 mod common;
 
 use std::sync::{Arc, LazyLock};
+use timada_core::db::Db;
 
 use common::{MemoryKeys, TENANT, codes, ring};
-use evento::migrator::Migrate;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx_migrator::Info;
 use timada_orders::aggregator::Placed;
 use timada_orders::{Payment, ShippingAddress};
 use timada_shoppers::{Command, count_shoppers, read_model_subscription, shoppers_of_tenant};
@@ -17,43 +15,31 @@ const NOW: u64 = 1_700_000_000;
 static KEYS: LazyLock<Arc<MemoryKeys>> = LazyLock::new(Default::default);
 
 /// A fresh in-memory event store with the orders and shoppers read models.
-async fn executor_with_pool() -> (evento::Sqlite, sqlx::SqlitePool) {
-    let options = SqliteConnectOptions::new()
-        .filename(":memory:")
-        .create_if_missing(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(options)
-        .await
-        .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let mut migrator = evento::sql_migrator::new::<sqlx::Sqlite>().unwrap();
-    migrator
-        .add_migrations(timada_orders::migrations())
-        .unwrap();
-    migrator
-        .add_migrations(timada_shoppers::migrations())
-        .unwrap();
-    migrator
-        .run(&mut *conn, &evento::migrator::Plan::apply_all())
-        .await
-        .unwrap();
-    drop(conn);
-    (pool.clone().into(), pool)
+async fn executor_with_pool() -> (evento::Turso, Db) {
+    let store = evento::Turso::in_memory_concurrent().await.unwrap();
+    let mut conn = store.connect().unwrap();
+    for migrations in [&timada_orders::MIGRATIONS, &timada_shoppers::MIGRATIONS] {
+        migrations
+            .to_latest(&mut conn)
+            .await
+            .map_err(|(_, err)| err)
+            .unwrap();
+    }
+    (store.clone(), Db::from(store))
 }
 
-async fn catch_up(executor: &evento::Sqlite, pool: &sqlx::SqlitePool) {
-    timada_orders::read_model_subscription::<evento::Sqlite>(pool.clone())
+async fn catch_up(executor: &evento::Turso, pool: &Db) {
+    timada_orders::read_model_subscription::<evento::Turso>(pool.clone())
         .run_once(executor)
         .await
         .unwrap();
-    read_model_subscription::<evento::Sqlite>(pool.clone(), ring(&KEYS))
+    read_model_subscription::<evento::Turso>(pool.clone(), ring(&KEYS))
         .run_once(executor)
         .await
         .unwrap();
 }
 
-async fn sign_in(shoppers: &Command<evento::Sqlite>, email: &str, now: u64) -> String {
+async fn sign_in(shoppers: &Command<evento::Turso>, email: &str, now: u64) -> String {
     let issued = shoppers.issue_code(&codes(), email, now).await.unwrap();
     shoppers
         .sign_in(&**KEYS, &codes(), email, &issued.code, now)
@@ -74,7 +60,7 @@ fn address(city: &str) -> ShippingAddress {
 }
 
 /// A paid order placed with `email`, signed in or not.
-async fn placed(executor: &evento::Sqlite, order_id: &str, email: &str) {
+async fn placed(executor: &evento::Turso, order_id: &str, email: &str) {
     evento::append(order_id)
         .original_version(0)
         .event(&Placed {

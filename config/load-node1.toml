@@ -10,7 +10,6 @@ trusted_proxies = ["172.16.0.0/12"]
 
 [database]
 path = "data/load/node1/timada.db"
-read_models = "sqlite:data/load/node1/read-models.db"
 
 [media]
 dir = "data/load/node1/media"

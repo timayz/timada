@@ -18,7 +18,6 @@ pub async fn rejoin(config: Config) -> Result<()> {
     );
     let files = Files {
         path: config.database.path.clone(),
-        read_models_url: config.database.read_models.clone(),
     };
     let marker = mark_for_rejoin(&files)?;
     tracing::info!(marker = %marker.display(), "the next start copies the store from a peer");
