@@ -13,6 +13,8 @@ mod cluster;
 mod config;
 #[path = "../src/db.rs"]
 mod db;
+#[path = "../src/ecb.rs"]
+mod ecb;
 #[path = "../src/invoicing.rs"]
 mod invoicing;
 #[path = "../src/payments/mod.rs"]
@@ -206,6 +208,19 @@ impl vies::Vies for FakeVies {
     }
 }
 
+/// 1 € = 1.25 $ on the day of the tests, the day before's rate for pounds,
+/// and no other currency (no francs): the Bank, as far as these tests need
+/// it.
+fn fake_rates() -> Arc<dyn ecb::EuroRates> {
+    let today = timada_core::civil::format_date(now() as u64);
+    let yesterday = timada_core::civil::format_date(now() as u64 - 86_400);
+    let mut table = timada_invoicing::rates::RateTable::default();
+    table.insert(&today, "USD", "1.25");
+    table.insert(&yesterday, "USD", "1.20");
+    table.insert(&yesterday, "GBP", "0.80");
+    Arc::new(table)
+}
+
 /// One node with its platform store and tenants, paying through `G`: the
 /// fake Stripe unless said otherwise.
 struct Harness<G = FakeStripe> {
@@ -249,12 +264,13 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
     // every tenant.
     let mut subscriptions = Vec::new();
     for builder in [
-        payments::subscription(subscribed.clone(), platform.clone()),
+        payments::subscription(subscribed.clone(), fake_rates(), platform.clone()),
         timada_orders::discount_usage_subscription(platform.clone()),
         timada_orders::stock_usage_subscription(platform.clone()),
         invoicing::subscription(
             invoicing_platform.clone(),
             Arc::new(FakeVies),
+            fake_rates(),
             platform.clone(),
         ),
     ] {
@@ -690,38 +706,46 @@ async fn requests_that_cannot_go_ahead_are_refused() {
 }
 
 /// A VAT-registered merchant without the One-Stop Shop sells to consumers
-/// elsewhere in the EU in euros only; with it, in any currency.
+/// elsewhere in the EU in euros or in a currency the Bank publishes a euro
+/// rate for, which the sale is counted at; with the One-Stop Shop, in any
+/// currency.
 #[tokio::test]
-async fn a_distance_sale_in_another_currency_needs_the_one_stop_shop() {
+async fn a_distance_sale_in_another_currency_counts_at_the_euro_rate() {
     let h = harness().await;
     let acme = h.create("acme").await;
     let acme = h.connect_stripe(&acme).await;
     let store = h.store(&acme);
     let catalog = timada_catalog::Command::new(store.clone(), &acme.id);
     let orders = timada_orders::Command::new(store.clone(), &acme.id);
-    let hat = catalog
-        .create_product(
-            "alice",
-            CreateProduct {
-                name: "Hat".into(),
-                slug: None,
-            },
-        )
-        .await
-        .unwrap();
-    catalog
-        .price_product("alice", &hat.id, 3000, "USD")
-        .await
-        .unwrap();
-    catalog.publish_product("alice", &hat.id).await.unwrap();
-    let cart_in_usd = async || {
+    let invoicing = timada_invoicing::Command::new(store.clone(), &acme.id);
+    let priced_in = async |name: &str, currency: &str| {
+        let product = catalog
+            .create_product(
+                "alice",
+                CreateProduct {
+                    name: name.into(),
+                    slug: None,
+                },
+            )
+            .await
+            .unwrap();
+        catalog
+            .price_product("alice", &product.id, 3000, currency)
+            .await
+            .unwrap();
+        catalog.publish_product("alice", &product.id).await.unwrap();
+        product.id
+    };
+    let hat = priced_in("Hat", "USD").await;
+    let scarf = priced_in("Scarf", "CHF").await;
+    let cart_of = async |product_id: &str| {
         let cart_id = orders.create_cart(STOREFRONT_ACTOR).await.unwrap();
         orders
             .add_to_cart(
                 STOREFRONT_ACTOR,
                 &cart_id,
                 CartItem {
-                    product_id: hat.id.clone(),
+                    product_id: product_id.to_owned(),
                     variant_id: None,
                     quantity: 1,
                 },
@@ -742,20 +766,52 @@ async fn a_distance_sale_in_another_currency_needs_the_one_stop_shop() {
         ..checkout(Some(3000))
     };
 
-    // Refused: the sale would owe German VAT the merchant cannot remit.
-    let cart_id = cart_in_usd().await;
+    // Dollars: the sale goes ahead, under the threshold it carries French
+    // VAT, and the invoice says what it counted for and its VAT in euros.
+    // 30.00 $ at 20 %: 25.00 $, 20.00 € at 1.25; 5.00 $ of VAT, 4.00 €.
+    let cart_id = cart_of(&hat).await;
+    let PaymentAnswer::Requested(payment) = h.ask_with(&acme, &cart_id, to_germany.clone()).await
+    else {
+        panic!("a payment is opened");
+    };
+    h.stripe.pay(&payment.payment_id);
+    let body = succeeded(&payment.payment_id);
+    let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
+        panic!("the order is placed");
+    };
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
+    assert_eq!(invoice.currency, "USD");
+    assert_eq!(
+        invoice.regime,
+        timada_invoicing::tax::Regime::DistanceOrigin
+    );
+    assert_eq!(invoice.vat[0].rate_bps, 2000);
+    assert_eq!(invoice.eu_distance_sales_cents, 2000);
+    let rate = invoice
+        .euro_rate
+        .clone()
+        .expect("the day's rate is recorded");
+    assert_eq!(rate.currency, "USD");
+    assert_eq!(rate.per_euro, "1.25");
+    assert_eq!(rate.source, timada_invoicing::rates::ECB_SOURCE);
+    assert_eq!(invoice.total_vat_eur_cents, Some(400));
+
+    // Francs, which the Bank of these tests publishes no euro rate for:
+    // refused, the sale would owe German VAT the merchant cannot remit.
+    let cart_id = cart_of(&scarf).await;
     assert_eq!(
         h.ask_with(&acme, &cart_id, to_germany.clone()).await,
         PaymentAnswer::Refused("oss_required_for_currency".into())
     );
     // To France, or to a business, the currency is no concern.
-    let cart_id = cart_in_usd().await;
+    let cart_id = cart_of(&scarf).await;
     assert!(matches!(
         h.ask(&acme, &cart_id, Some(3000)).await,
         PaymentAnswer::Requested(_)
     ));
     orders.set_business_buyers("alice", true).await.unwrap();
-    let cart_id = cart_in_usd().await;
+    let cart_id = cart_of(&scarf).await;
     let business = Checkout {
         vat_number: Some("DE123456789".into()),
         ..to_germany.clone()
@@ -782,7 +838,7 @@ async fn a_distance_sale_in_another_currency_needs_the_one_stop_shop() {
         .set_company_identity("alice", &company_id, identity)
         .await
         .unwrap();
-    let cart_id = cart_in_usd().await;
+    let cart_id = cart_of(&scarf).await;
     let PaymentAnswer::Requested(payment) = h.ask_with(&acme, &cart_id, to_germany).await else {
         panic!("a payment is opened");
     };

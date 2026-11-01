@@ -2,9 +2,10 @@
 //! refund, in the store. What a document says comes from places
 //! only the dashboard sees together: the order and the cart it was paid
 //! from (the tenant's store), the kind of goods of each product (the
-//! catalog, same store), the merchant's legal identity (the platform store)
-//! and, for a business buyer, VIES's word on its VAT number. The invoicing
-//! crate decides the VAT from them.
+//! catalog, same store), the merchant's legal identity (the platform store),
+//! for a business buyer, VIES's word on its VAT number, and for a sale in
+//! another currency than the euro, the European Central Bank's euro rate of
+//! the day. The invoicing crate decides the VAT from them.
 
 use evento::{
     Evento, Executor,
@@ -13,6 +14,7 @@ use evento::{
 };
 use std::sync::Arc;
 
+use timada_invoicing::rates::EURO;
 use timada_invoicing::tax::TaxProfile;
 use timada_invoicing::{
     Address, InvoiceDiscount, InvoiceShipping, NewCreditNote, NewInvoice, NewInvoiceLine,
@@ -22,6 +24,7 @@ use timada_orders::aggregator::{Placed, Refunded};
 use timada_tenancy::LegalIdentity;
 
 use crate::cluster::Executor as Store;
+use crate::ecb::{EuroRates, RateAnswer};
 use crate::vies::{Vies, ViesAnswer, check_patiently};
 
 /// The cursor identity of the subscription, in the store.
@@ -42,11 +45,13 @@ struct TenantStore(Evento);
 pub fn subscription<E: Executor>(
     platform: Store,
     vies: Arc<dyn Vies>,
+    euro_rates: Arc<dyn EuroRates>,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(Platform(platform))
         .data(vies)
+        .data(euro_rates)
         .data(TenantStore(store))
         .handler(on_placed())
         .handler(on_refunded())
@@ -189,6 +194,30 @@ async fn on_placed<E: Executor>(
         .as_ref()
         .and_then(|order| order.billing.as_ref())
         .map_or_else(|| delivery.clone(), address);
+    // A sale in another currency: the euro rate of the day of issue, for
+    // the EU distance-sales threshold and the VAT in euros the invoice
+    // states. Without one, the crate issues what it can; a distance sale
+    // whose tax hangs on it is an error here, which retries once the rates
+    // are back.
+    let issued_at = now();
+    let currency = event.data.currency.clone();
+    let euro_rate = if currency.eq_ignore_ascii_case(EURO) {
+        None
+    } else {
+        let rates: Arc<dyn EuroRates> = context.extract();
+        let day = timada_core::civil::format_date(issued_at);
+        match rates.rate_on(&currency, &day).await {
+            RateAnswer::Rate(rate) => Some(rate),
+            RateAnswer::NoSuchCurrency => {
+                tracing::warn!(tenant = %event.tenant, order = %event.aggregate_id, %currency, "no euro reference rate for this currency: invoiced without one");
+                None
+            }
+            RateAnswer::Unavailable(reason) => {
+                tracing::warn!(tenant = %event.tenant, order = %event.aggregate_id, %currency, %reason, "the euro reference rates could not be read: invoiced without one");
+                None
+            }
+        }
+    };
     let invoice = invoicing
         .issue_invoice(
             NewInvoice {
@@ -215,9 +244,10 @@ async fn on_placed<E: Executor>(
                 },
                 buyer_vat_number,
                 vies_reference,
+                euro_rate,
             },
             &timada_invoicing::Ledger(platform.0.clone()),
-            now(),
+            issued_at,
         )
         .await?;
     tracing::info!(tenant = %event.tenant, order = %event.aggregate_id, invoice = %invoice.label, "invoice issued");

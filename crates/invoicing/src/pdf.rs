@@ -10,6 +10,7 @@ use typst_as_lib::{TypstEngine, TypstTemplateMainFile};
 use typst_pdf::{PdfOptions, PdfStandard, PdfStandards};
 
 use crate::command::{DocumentKind, IssuedDocument};
+use crate::rates::{ECB_SOURCE, EURO};
 use crate::tax::Regime;
 use crate::value_object::{
     Address, InvoiceLine, PAYMENT_METHOD_CARD, civil_date, excl_vat, format_amount_fr,
@@ -85,6 +86,40 @@ fn country_name_fr(code: &str) -> &str {
         "SI" => "Slovénie",
         "SK" => "Slovaquie",
         other => other,
+    }
+}
+
+/// What a document in another currency says of its VAT in euros, as French
+/// law asks (CGI art. 289; directive 2006/112/CE art. 230): the amount, the
+/// rate it was converted at and the day of that rate. Empty for a document
+/// in euros, one without VAT, or one issued without a rate.
+fn vat_in_euros(document: &IssuedDocument) -> String {
+    let (Some(rate), Some(eur_cents)) = (&document.euro_rate, document.total_vat_eur_cents) else {
+        return String::new();
+    };
+    if document.currency.eq_ignore_ascii_case(EURO) || document.total_vat_cents == 0 {
+        return String::new();
+    }
+    let source = if rate.source == ECB_SOURCE {
+        "taux de référence de la Banque centrale européenne"
+    } else {
+        "taux de change"
+    };
+    format!(
+        "TVA en euros : {} (1\u{a0}€ = {}\u{a0}{}, {} du {}).",
+        format_amount_fr(eur_cents, EURO),
+        rate.per_euro.replace('.', ","),
+        rate.currency,
+        source,
+        iso_date_fr(&rate.date)
+    )
+}
+
+/// `2026-10-14` as `14/10/2026`.
+fn iso_date_fr(date: &str) -> String {
+    match date.split('-').collect::<Vec<_>>()[..] {
+        [year, month, day] => format!("{day}/{month}/{year}"),
+        _ => date.to_owned(),
     }
 }
 
@@ -376,6 +411,7 @@ fn inputs(document: &IssuedDocument) -> Dict {
         regime => regime.mention().unwrap_or_default().to_owned(),
     };
     put("vat_mention", text(mention));
+    put("vat_in_euros", text(vat_in_euros(document)));
     put(
         "buyer_vat",
         text(document.buyer_vat_number.clone().unwrap_or_default()),
@@ -402,6 +438,7 @@ fn inputs(document: &IssuedDocument) -> Dict {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rates::ExchangeRate;
     use crate::value_object::{InvoiceLine, Seller, VatSubtotal, lines_breakdown};
 
     fn invoice(vat_number: Option<&str>) -> IssuedDocument {
@@ -554,6 +591,41 @@ mod tests {
         };
         assert!(get(&inputs(&export), "vat_mention").contains("art. 262 I du CGI"));
         assert!(render(&business).unwrap().starts_with(b"%PDF-"));
+    }
+
+    /// An invoice in dollars says its VAT in euros too, at the day's rate;
+    /// one in euros, or without VAT, says nothing of the kind.
+    #[test]
+    fn a_document_in_another_currency_says_its_vat_in_euros() {
+        let rate = ExchangeRate::ecb("USD", "1.0850", "2026-10-14");
+        let usd = IssuedDocument {
+            currency: "USD".into(),
+            euro_rate: Some(rate.clone()),
+            total_vat_eur_cents: Some(654),
+            ..invoice(Some("FR85120027016"))
+        };
+        let d = inputs(&usd);
+        assert!(get(&d, "total_vat").starts_with("7,09\u{a0}"));
+        assert_eq!(
+            get(&d, "vat_in_euros"),
+            "TVA en euros : 6,54\u{a0}€ (1\u{a0}€ = 1,0850\u{a0}USD, taux de référence de la \
+             Banque centrale européenne du 14/10/2026)."
+        );
+        let euros = inputs(&invoice(Some("FR85120027016")));
+        assert_eq!(get(&euros, "vat_in_euros"), "");
+        let unconverted = IssuedDocument {
+            currency: "USD".into(),
+            ..invoice(Some("FR85120027016"))
+        };
+        assert_eq!(get(&inputs(&unconverted), "vat_in_euros"), "");
+        let exempt = IssuedDocument {
+            currency: "USD".into(),
+            euro_rate: Some(rate),
+            total_vat_eur_cents: Some(0),
+            ..invoice(None)
+        };
+        assert_eq!(get(&inputs(&exempt), "vat_in_euros"), "");
+        assert!(render(&usd).is_ok());
     }
 
     #[test]

@@ -8,7 +8,9 @@
 //! crate; which level a kind of goods falls under in each country is ours
 //! (`data/tax_categories.json`), as are the few rates that table lacks (its
 //! `_overrides`, in basis points) and the yearly threshold of EU distance
-//! sales (the crate checks a threshold per sale).
+//! sales (the crate checks a threshold per sale). The threshold is counted
+//! in euros: a sale in another currency counts for what it is worth at the
+//! euro rate of the day ([`crate::rates`]).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -16,6 +18,7 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 use world_tax::TaxDatabase;
 
+use crate::rates::{EURO, ExchangeRate};
 use crate::value_object::vat_breakdown;
 
 /// The seller's country: every rule here is French law.
@@ -136,6 +139,9 @@ pub struct Decision {
     pub rates: Vec<Option<u32>>,
     /// The year's distance sales, this one included.
     pub distance: DistanceSales,
+    /// The euro rate this sale was counted at, when it was priced in another
+    /// currency and could be.
+    pub euro_rate: Option<ExchangeRate>,
 }
 
 /// Where a destination stands for VAT.
@@ -273,9 +279,9 @@ pub fn rate_bps(country: &str, category: &str) -> u32 {
 /// Why a sale cannot be taken at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaxRefusal {
-    /// An EU distance sale in a currency other than the euro from a seller
-    /// not registered for the One-Stop Shop. Only euro sales count towards
-    /// the yearly threshold (nothing here converts a currency), so the sale
+    /// An EU distance sale, from a seller not registered for the One-Stop
+    /// Shop, in a currency the European Central Bank publishes no euro rate
+    /// for. The sale cannot be counted against the yearly threshold, so it
     /// would have to be taxed at destination, which only the One-Stop Shop
     /// lets a French seller remit.
     OssRequiredForCurrency,
@@ -283,22 +289,35 @@ pub enum TaxRefusal {
 
 /// Whether a sale may go ahead at all, before anything is charged: a
 /// VAT-registered seller without the One-Stop Shop sells to consumers in
-/// other EU countries in euros only ([`TaxRefusal::OssRequiredForCurrency`]).
-/// Everything else is taxed one way or another by [`decide`].
+/// other EU countries in euros, or in a currency with a published euro rate
+/// (`rate_published`), and in no other
+/// ([`TaxRefusal::OssRequiredForCurrency`]). Everything else is taxed one
+/// way or another by [`decide`].
 pub fn accepts(
     profile: TaxProfile,
     destination: &Destination,
     currency: &str,
+    rate_published: bool,
 ) -> Result<(), TaxRefusal> {
-    let refused = profile.vat_registered
-        && !profile.oss_registered
-        && !currency.eq_ignore_ascii_case("EUR")
-        && is_distance_sale(profile, destination);
-    if refused {
+    if needs_euro_rate(profile, destination, currency) && !rate_published {
         Err(TaxRefusal::OssRequiredForCurrency)
     } else {
         Ok(())
     }
+}
+
+/// Whether the tax of a sale hangs on the euro rate of its currency: an EU
+/// distance sale in another currency than the euro, from a VAT-registered
+/// seller without the One-Stop Shop, is taxed in France or at destination
+/// according to what it counts for, in euros, against the yearly threshold.
+/// Every other sale in another currency is taxed the same with or without
+/// the rate (the rate then only serves the count and the VAT in euros a
+/// document states).
+pub fn needs_euro_rate(profile: TaxProfile, destination: &Destination, currency: &str) -> bool {
+    profile.vat_registered
+        && !profile.oss_registered
+        && !currency.eq_ignore_ascii_case(EURO)
+        && is_distance_sale(profile, destination)
 }
 
 /// Whether a sale is an EU distance sale (to a consumer in another EU
@@ -312,17 +331,35 @@ pub fn is_distance_sale(profile: TaxProfile, destination: &Destination) -> bool 
 }
 
 /// The tax of a sale whose lines are `(tax category, price VAT included)`,
-/// in `currency`, given the year's distance sales before it. Only sales in
-/// euros count towards the threshold; a distance sale in another currency
-/// is taxed at destination, which [`accepts`] lets through for a seller
-/// registered for the One-Stop Shop alone.
+/// in `currency`, given the year's distance sales before it. A sale in
+/// another currency than the euro counts towards the threshold for what it
+/// is worth at `euro_rate` (the rate of that currency on the day); without
+/// one it cannot be counted and is taxed at destination, which [`accepts`]
+/// lets through for a seller registered for the One-Stop Shop alone.
 pub fn decide(
     profile: TaxProfile,
     destination: &Destination,
     lines: &[(&str, u64)],
     currency: &str,
+    euro_rate: Option<&ExchangeRate>,
     before: DistanceSales,
 ) -> Decision {
+    let in_euros = currency.eq_ignore_ascii_case(EURO);
+    let euro_rate = euro_rate.filter(|rate| {
+        if in_euros {
+            return false;
+        }
+        let converts = rate.converts(currency);
+        if !converts {
+            tracing::warn!(
+                currency,
+                rate_currency = rate.currency,
+                per_euro = rate.per_euro,
+                "not the euro rate of this currency: ignored"
+            );
+        }
+        converts
+    });
     let rates_in = |country: &str| -> Vec<Option<u32>> {
         lines
             .iter()
@@ -342,17 +379,23 @@ pub fn decide(
         .sum();
         total - vat
     };
-    let count = |sales: u64| -> DistanceSales {
-        let sales_cents = if currency == "EUR" {
-            before.sales_cents + sales
+    // What a sum excluding VAT counts for, in euro cents; `None` when it
+    // cannot be counted.
+    let euro_cents = |cents: u64| -> Option<u64> {
+        if in_euros {
+            Some(cents)
         } else {
-            before.sales_cents
-        };
+            euro_rate.and_then(|rate| rate.to_euro_cents(cents))
+        }
+    };
+    let count = |sales: u64| -> DistanceSales {
+        let sales_cents = before.sales_cents + euro_cents(sales).unwrap_or(0);
         DistanceSales {
             sales_cents,
             passed: before.passed || sales_cents > EU_DISTANCE_THRESHOLD_CENTS,
         }
     };
+    let counted_at = || euro_rate.cloned();
     let none = || vec![None; lines.len()];
     match territory(&destination.country, &destination.postal_code) {
         Territory::Outside => Decision {
@@ -360,18 +403,21 @@ pub fn decide(
             tax_country: destination.country.clone(),
             rates: none(),
             distance: before,
+            euro_rate: None,
         },
         Territory::France if !profile.vat_registered => Decision {
             regime: Regime::Franchise,
             tax_country: SELLER_COUNTRY.to_owned(),
             rates: none(),
             distance: before,
+            euro_rate: None,
         },
         Territory::France => Decision {
             regime: Regime::Domestic,
             tax_country: SELLER_COUNTRY.to_owned(),
             rates: rates_in(SELLER_COUNTRY),
             distance: before,
+            euro_rate: None,
         },
         Territory::Eu(country) if profile.vat_registered && destination.vat_number.is_some() => {
             Decision {
@@ -379,6 +425,7 @@ pub fn decide(
                 tax_country: country,
                 rates: none(),
                 distance: before,
+                euro_rate: None,
             }
         }
         Territory::Eu(_) if !profile.vat_registered => {
@@ -389,12 +436,17 @@ pub fn decide(
                 tax_country: SELLER_COUNTRY.to_owned(),
                 rates,
                 distance,
+                euro_rate: counted_at(),
             }
         }
         Territory::Eu(country) => {
             let origin = rates_in(SELLER_COUNTRY);
-            let crosses = before.sales_cents + excl_vat(&origin) > EU_DISTANCE_THRESHOLD_CENTS;
-            if profile.oss_registered || before.passed || currency != "EUR" || crosses {
+            // In euros, or converted: whether this sale passes the
+            // threshold. A sale that cannot be counted is taxed at
+            // destination (see `accepts`).
+            let crosses = euro_cents(excl_vat(&origin))
+                .map(|sale| before.sales_cents + sale > EU_DISTANCE_THRESHOLD_CENTS);
+            if profile.oss_registered || before.passed || crosses.unwrap_or(true) {
                 let rates = rates_in(&country);
                 let distance = count(excl_vat(&rates));
                 Decision {
@@ -402,6 +454,7 @@ pub fn decide(
                     tax_country: country,
                     rates,
                     distance,
+                    euro_rate: counted_at(),
                 }
             } else {
                 let distance = count(excl_vat(&origin));
@@ -410,6 +463,7 @@ pub fn decide(
                     tax_country: SELLER_COUNTRY.to_owned(),
                     rates: origin,
                     distance,
+                    euro_rate: counted_at(),
                 }
             }
         }
@@ -636,6 +690,7 @@ mod tests {
             &to("FR", "75002"),
             &[("books", 1000)],
             "EUR",
+            None,
             below(),
         );
         assert_eq!(decision.regime, Regime::Domestic);
@@ -647,6 +702,7 @@ mod tests {
             &to("MC", "98000"),
             &[("standard", 1000)],
             "EUR",
+            None,
             below(),
         );
         assert_eq!(monaco.regime, Regime::Domestic);
@@ -656,6 +712,7 @@ mod tests {
             &to("FR", "75002"),
             &[("standard", 1000)],
             "EUR",
+            None,
             below(),
         );
         assert_eq!(franchise.regime, Regime::Franchise);
@@ -678,6 +735,7 @@ mod tests {
                 &to(country, postal),
                 &[("standard", 1000)],
                 "EUR",
+                None,
                 below(),
             );
             assert_eq!(decision.regime, Regime::Export, "{country} {postal}");
@@ -688,6 +746,7 @@ mod tests {
             &to("US", "10001"),
             &[("standard", 1000)],
             "EUR",
+            None,
             below(),
         );
         assert_eq!(exempt.regime, Regime::Export);
@@ -699,7 +758,14 @@ mod tests {
             vat_number: Some("DE123456789".into()),
             ..to("DE", "10115")
         };
-        let decision = decide(REGISTERED, &business, &[("standard", 1000)], "EUR", below());
+        let decision = decide(
+            REGISTERED,
+            &business,
+            &[("standard", 1000)],
+            "EUR",
+            None,
+            below(),
+        );
         assert_eq!(decision.regime, Regime::ReverseCharge);
         assert_eq!(decision.tax_country, "DE");
         assert_eq!(decision.rates, vec![None]);
@@ -714,7 +780,15 @@ mod tests {
             ..to("FR", "75002")
         };
         assert_eq!(
-            decide(REGISTERED, &french, &[("standard", 1000)], "EUR", below()).regime,
+            decide(
+                REGISTERED,
+                &french,
+                &[("standard", 1000)],
+                "EUR",
+                None,
+                below()
+            )
+            .regime,
             Regime::Domestic
         );
     }
@@ -723,7 +797,7 @@ mod tests {
     fn eu_consumers_pay_french_vat_until_the_threshold() {
         let lines = [("standard", 12_000)];
         // 100.00 excluding VAT at 20 %.
-        let first = decide(REGISTERED, &to("DE", "10115"), &lines, "EUR", below());
+        let first = decide(REGISTERED, &to("DE", "10115"), &lines, "EUR", None, below());
         assert_eq!(first.regime, Regime::DistanceOrigin);
         assert_eq!(first.tax_country, "FR");
         assert_eq!(first.rates, vec![Some(2000)]);
@@ -735,7 +809,7 @@ mod tests {
             sales_cents: 995_000,
             passed: false,
         };
-        let crossing = decide(REGISTERED, &to("DE", "10115"), &lines, "EUR", near);
+        let crossing = decide(REGISTERED, &to("DE", "10115"), &lines, "EUR", None, near);
         assert_eq!(crossing.regime, Regime::Oss);
         assert_eq!(crossing.tax_country, "DE");
         assert_eq!(crossing.rates, vec![Some(1900)]);
@@ -754,6 +828,7 @@ mod tests {
                 &to("IT", "00100"),
                 &[("books", 1000)],
                 "EUR",
+                None,
                 passed
             )
             .rates,
@@ -765,7 +840,7 @@ mod tests {
             oss_registered: true,
         };
         assert_eq!(
-            decide(oss, &to("DE", "10115"), &lines, "EUR", below()).regime,
+            decide(oss, &to("DE", "10115"), &lines, "EUR", None, below()).regime,
             Regime::Oss
         );
         // A book and a lamp to Latvia: 5 % through the override, then 21 %.
@@ -774,6 +849,7 @@ mod tests {
             &to("LV", "LV-1050"),
             &[("books", 1000), ("standard", 1000)],
             "EUR",
+            None,
             below(),
         );
         assert_eq!(latvia.regime, Regime::Oss);
@@ -782,39 +858,173 @@ mod tests {
         // Another currency is taxed at destination and not counted (and
         // only taken from a seller registered for the One-Stop Shop, see
         // `accepts`).
-        let usd = decide(oss, &to("DE", "10115"), &lines, "USD", below());
+        let usd = decide(oss, &to("DE", "10115"), &lines, "USD", None, below());
         assert_eq!(usd.regime, Regime::Oss);
         assert_eq!(usd.distance, below());
     }
 
+    /// Without the One-Stop Shop, a sale to an EU consumer in another
+    /// currency needs that currency's euro rate to be counted: a currency
+    /// the Bank publishes no rate for is refused.
     #[test]
-    fn a_distance_sale_in_another_currency_needs_the_one_stop_shop() {
+    fn a_distance_sale_in_a_currency_without_a_euro_rate_needs_the_one_stop_shop() {
         let oss = TaxProfile {
             vat_registered: true,
             oss_registered: true,
         };
         let germany = to("DE", "10115");
-        assert_eq!(
-            accepts(REGISTERED, &germany, "USD"),
-            Err(TaxRefusal::OssRequiredForCurrency)
-        );
-        assert_eq!(
-            accepts(REGISTERED, &germany, "eur"),
-            Ok(()),
+        assert!(needs_euro_rate(REGISTERED, &germany, "USD"));
+        assert!(
+            !needs_euro_rate(REGISTERED, &germany, "eur"),
             "case apart, euros"
         );
-        assert_eq!(accepts(REGISTERED, &germany, "EUR"), Ok(()));
-        assert_eq!(accepts(oss, &germany, "USD"), Ok(()));
+        assert!(!needs_euro_rate(oss, &germany, "USD"));
+        assert_eq!(
+            accepts(REGISTERED, &germany, "AED", false),
+            Err(TaxRefusal::OssRequiredForCurrency)
+        );
+        assert_eq!(accepts(REGISTERED, &germany, "USD", true), Ok(()));
+        assert_eq!(accepts(REGISTERED, &germany, "EUR", false), Ok(()));
+        assert_eq!(accepts(oss, &germany, "AED", false), Ok(()));
         // Not distance sales: France, outside the EU, a business buyer, a
         // seller under the exemption.
-        assert_eq!(accepts(REGISTERED, &to("FR", "75002"), "USD"), Ok(()));
-        assert_eq!(accepts(REGISTERED, &to("US", "10001"), "USD"), Ok(()));
+        assert_eq!(
+            accepts(REGISTERED, &to("FR", "75002"), "AED", false),
+            Ok(())
+        );
+        assert_eq!(
+            accepts(REGISTERED, &to("US", "10001"), "AED", false),
+            Ok(())
+        );
         let business = Destination {
             vat_number: Some("DE123456789".to_owned()),
             ..to("DE", "10115")
         };
-        assert_eq!(accepts(REGISTERED, &business, "USD"), Ok(()));
-        assert_eq!(accepts(TaxProfile::default(), &germany, "USD"), Ok(()));
+        assert_eq!(accepts(REGISTERED, &business, "AED", false), Ok(()));
+        assert!(!needs_euro_rate(REGISTERED, &business, "AED"));
+        assert_eq!(
+            accepts(TaxProfile::default(), &germany, "AED", false),
+            Ok(())
+        );
+    }
+
+    /// A sale in dollars counts for its worth in euros at the day's rate,
+    /// which is what decides whether it passes the threshold.
+    #[test]
+    fn a_sale_in_another_currency_counts_at_the_euro_rate() {
+        // 1 € = 1.25 $: 120.00 $ at 20 % is 100.00 $ excluding VAT, 80.00 €.
+        let usd = ExchangeRate::ecb("USD", "1.25", "2026-10-14");
+        let lines = [("standard", 12_000)];
+        let first = decide(
+            REGISTERED,
+            &to("DE", "10115"),
+            &lines,
+            "USD",
+            Some(&usd),
+            below(),
+        );
+        assert_eq!(first.regime, Regime::DistanceOrigin);
+        assert_eq!(first.rates, vec![Some(2000)]);
+        assert_eq!(first.distance.sales_cents, 8_000);
+        assert_eq!(first.euro_rate.as_ref(), Some(&usd));
+
+        // 9,930 € so far: 80 € more passes 10,000 €, so the sale is German
+        // already, and counted at the German rate (120 $ at 19 %: 100.84 $,
+        // 80.67 €).
+        let near = DistanceSales {
+            sales_cents: 993_000,
+            passed: false,
+        };
+        let crossing = decide(
+            REGISTERED,
+            &to("DE", "10115"),
+            &lines,
+            "USD",
+            Some(&usd),
+            near,
+        );
+        assert_eq!(crossing.regime, Regime::Oss);
+        assert_eq!(crossing.tax_country, "DE");
+        assert_eq!(crossing.rates, vec![Some(1900)]);
+        assert!(crossing.distance.passed);
+        assert_eq!(crossing.distance.sales_cents, 993_000 + 8_067);
+        // Just short: 9,910 € and 80 € is 9,990 €, French VAT.
+        let short = DistanceSales {
+            sales_cents: 991_000,
+            passed: false,
+        };
+        let under = decide(
+            REGISTERED,
+            &to("DE", "10115"),
+            &lines,
+            "USD",
+            Some(&usd),
+            short,
+        );
+        assert_eq!(under.regime, Regime::DistanceOrigin);
+        assert_eq!(under.distance.sales_cents, 999_000);
+        assert!(!under.distance.passed);
+
+        // The rate of another currency is no use: not counted, taxed at
+        // destination (what `accepts` refuses without the One-Stop Shop).
+        let gbp = ExchangeRate::ecb("GBP", "0.86", "2026-10-14");
+        let unconverted = decide(
+            REGISTERED,
+            &to("DE", "10115"),
+            &lines,
+            "USD",
+            Some(&gbp),
+            below(),
+        );
+        assert_eq!(unconverted.regime, Regime::Oss);
+        assert_eq!(unconverted.distance, below());
+        assert_eq!(unconverted.euro_rate, None);
+        let without = decide(REGISTERED, &to("DE", "10115"), &lines, "USD", None, below());
+        assert_eq!(without.regime, Regime::Oss);
+        assert_eq!(without.distance, below());
+        // A rate given with euros changes nothing and is not recorded.
+        let euros = decide(
+            REGISTERED,
+            &to("DE", "10115"),
+            &lines,
+            "EUR",
+            Some(&usd),
+            below(),
+        );
+        assert_eq!(euros.distance.sales_cents, 10_000);
+        assert_eq!(euros.euro_rate, None);
+        // Registered for the One-Stop Shop: German VAT as always, and the
+        // sale counted now that it can be.
+        let oss = TaxProfile {
+            vat_registered: true,
+            oss_registered: true,
+        };
+        let joined = decide(oss, &to("DE", "10115"), &lines, "USD", Some(&usd), below());
+        assert_eq!(joined.regime, Regime::Oss);
+        assert_eq!(joined.distance.sales_cents, 8_067);
+        assert_eq!(joined.euro_rate.as_ref(), Some(&usd));
+        // An exempt seller's sale counts the same way.
+        let exempt = decide(
+            TaxProfile::default(),
+            &to("DE", "10115"),
+            &lines,
+            "USD",
+            Some(&usd),
+            below(),
+        );
+        assert_eq!(exempt.regime, Regime::Franchise);
+        assert_eq!(exempt.distance.sales_cents, 9_600);
+        // A French sale in dollars: neither counted nor recorded.
+        let french = decide(
+            REGISTERED,
+            &to("FR", "75002"),
+            &lines,
+            "USD",
+            Some(&usd),
+            below(),
+        );
+        assert_eq!(french.regime, Regime::Domestic);
+        assert_eq!(french.euro_rate, None);
     }
 
     #[test]
@@ -824,6 +1034,7 @@ mod tests {
             &to("BE", "1000"),
             &[("standard", 5_000)],
             "EUR",
+            None,
             DistanceSales {
                 sales_cents: 998_000,
                 passed: false,

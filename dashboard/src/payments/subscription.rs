@@ -21,6 +21,7 @@ use timada_orders::{
 
 use super::webhook::OUT_OF_STOCK;
 use super::{DASHBOARD_ACTOR, NewPayment, Payments};
+use crate::ecb::{EuroRates, RateAnswer};
 
 /// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/payments";
@@ -37,9 +38,14 @@ struct Store(Evento);
 /// Follows every tenant's carts and answers each request to pay. Every node
 /// with the tenant open runs it: Stripe opens one payment per request (the
 /// request id is the idempotency key) and the first answer recorded wins.
-pub fn subscription<E: Executor>(payments: Arc<Payments>, store: Evento) -> SubscriptionBuilder<E> {
+pub fn subscription<E: Executor>(
+    payments: Arc<Payments>,
+    euro_rates: Arc<dyn EuroRates>,
+    store: Evento,
+) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(payments)
+        .data(euro_rates)
         .data(Store(store))
         .handler(on_checkout_requested())
         .any_routing_key()
@@ -94,8 +100,10 @@ async fn on_checkout_requested<E: Executor>(
         return Ok(());
     };
     // Nor one whose VAT the merchant could not remit: an EU distance sale
-    // in another currency than the euro needs the One-Stop Shop. The buyer's
-    // VAT number is taken at its word here; invoicing checks it with VIES.
+    // in another currency than the euro counts against the threshold at the
+    // European Central Bank's euro rate, so a currency the Bank publishes
+    // no rate for needs the One-Stop Shop. The buyer's VAT number is taken
+    // at its word here; invoicing checks it with VIES.
     let profile = TaxProfile {
         vat_registered: legal.is_vat_registered(),
         oss_registered: legal.oss_registered,
@@ -105,11 +113,26 @@ async fn on_checkout_requested<E: Executor>(
         postal_code: pending.request.shipping.postal_code.clone(),
         vat_number: pending.request.vat_number.clone(),
     };
-    if let Err(TaxRefusal::OssRequiredForCurrency) =
-        tax::accepts(profile, &destination, &pending.currency)
-    {
-        refuse(OSS_REQUIRED_FOR_CURRENCY).await?;
-        return Ok(());
+    if tax::needs_euro_rate(profile, &destination, &pending.currency) {
+        let rates: Arc<dyn EuroRates> = context.extract();
+        let day = timada_core::civil::format_date(now);
+        let published = match rates.rate_on(&pending.currency, &day).await {
+            RateAnswer::Rate(_) => true,
+            RateAnswer::NoSuchCurrency => false,
+            // Not a refusal of the sale: the request is answered once the
+            // rates can be read.
+            RateAnswer::Unavailable(reason) => {
+                tracing::warn!(tenant = %event.tenant, %cart_id, currency = %pending.currency, %reason, "the euro reference rates could not be read: payment refused for now");
+                refuse(PAYMENTS_UNAVAILABLE).await?;
+                return Ok(());
+            }
+        };
+        if let Err(TaxRefusal::OssRequiredForCurrency) =
+            tax::accepts(profile, &destination, &pending.currency, published)
+        {
+            refuse(OSS_REQUIRED_FOR_CURRENCY).await?;
+            return Ok(());
+        }
     }
     let Some(account) = payments.account_of(&merchant)? else {
         refuse(PAYMENTS_UNAVAILABLE).await?;

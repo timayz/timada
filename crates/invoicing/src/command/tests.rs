@@ -1,4 +1,5 @@
 use super::*;
+use crate::rates::ExchangeRate;
 use crate::tax::{Regime, TaxProfile};
 use crate::value_object::{PAYMENT_METHOD_CARD, book_id};
 
@@ -95,6 +96,21 @@ fn invoice(order_id: &str) -> NewInvoice {
         },
         buyer_vat_number: None,
         vies_reference: None,
+        euro_rate: None,
+    }
+}
+
+/// 1 € = 1.25 $ on the day of the tests.
+fn dollar_rate() -> ExchangeRate {
+    ExchangeRate::ecb("USD", "1.25", "2026-10-14")
+}
+
+/// [`to_germany`], priced in dollars with the day's rate.
+fn to_germany_in_dollars(order_id: &str, amount_cents: u64) -> NewInvoice {
+    NewInvoice {
+        currency: "USD".into(),
+        euro_rate: Some(dollar_rate()),
+        ..to_germany(order_id, amount_cents)
     }
 }
 
@@ -704,6 +720,7 @@ async fn a_crash_after_counting_reuses_the_decision() {
                     sales_cents: 1_100_000,
                     passed: true,
                 },
+                euro_rate: None,
             }
         })
         .await
@@ -779,4 +796,215 @@ fn shipping_on_free_goods_is_shared_evenly() {
     assert_eq!(shipping_shares(&[0, 0], 491), vec![246, 245]);
     assert_eq!(shipping_shares(&[300, 100], 400), vec![300, 100]);
     assert_eq!(shipping_shares(&[300, 100], 0), vec![0, 0]);
+}
+
+#[tokio::test]
+async fn a_distance_sale_in_dollars_counts_at_the_euro_rate() {
+    let cmd = command().await;
+    // 7,200 $ at 20 %: 6,000 $ excluding VAT, 4,800 € at 1.25; the VAT,
+    // 1,200 $, is 960 €.
+    let first = cmd
+        .issue_invoice_here(to_germany_in_dollars("o1", 720_000), NOW)
+        .await
+        .unwrap();
+    assert_eq!(first.regime, Regime::DistanceOrigin);
+    assert_eq!(first.currency, "USD");
+    assert_eq!(first.vat[0].rate_bps, 2000);
+    assert_eq!(first.total_vat_cents, 120_000);
+    assert_eq!(first.eu_distance_sales_cents, 480_000);
+    assert_eq!(first.euro_rate, Some(dollar_rate()));
+    assert_eq!(first.total_vat_eur_cents, Some(96_000));
+    // The same again: 9,600 €, still under.
+    let second = cmd
+        .issue_invoice_here(to_germany_in_dollars("o2", 720_000), NOW)
+        .await
+        .unwrap();
+    assert_eq!(second.regime, Regime::DistanceOrigin);
+    assert_eq!(second.eu_distance_sales_cents, 960_000);
+    // 1,200 $: 1,000 $ excluding VAT, 800 €, passes 10,000 €: German VAT,
+    // and counted at the German rate (1,008.40 $, 806.72 €).
+    let crossing = cmd
+        .issue_invoice_here(to_germany_in_dollars("o3", 120_000), NOW)
+        .await
+        .unwrap();
+    assert_eq!(crossing.regime, Regime::Oss);
+    assert_eq!(crossing.tax_country, "DE");
+    assert_eq!(crossing.vat[0].rate_bps, 1900);
+    assert!(crossing.eu_threshold_passed);
+    assert_eq!(crossing.eu_distance_sales_cents, 960_000 + 80_672);
+    assert_eq!(crossing.euro_rate, Some(dollar_rate()));
+    // Its VAT, 191.60 $, is 153.28 € at the day's rate.
+    assert_eq!(crossing.total_vat_cents, 19_160);
+    assert_eq!(crossing.total_vat_eur_cents, Some(15_328));
+    // Mixed with euros, every sale counts in euros.
+    let euros = cmd
+        .issue_invoice_here(to_germany("o4", 1_200), NOW)
+        .await
+        .unwrap();
+    assert_eq!(euros.eu_distance_sales_cents, 960_000 + 80_672 + 1_008);
+    assert_eq!(euros.euro_rate, None);
+    assert_eq!(euros.total_vat_eur_cents, None);
+
+    // A credit note gives the VAT back in dollars and in euros at the
+    // invoice's rate: 120 $ of the first invoice is 20 $ of VAT, 16 €.
+    let credit = cmd
+        .issue_credit_note(
+            NewCreditNote {
+                order_id: "o1".into(),
+                refund_id: "re_1".into(),
+                amount_cents: 12_000,
+                issued_by: "test".into(),
+            },
+            NOW + 86_400,
+        )
+        .await
+        .unwrap();
+    assert_eq!(credit.currency, "USD");
+    assert_eq!(credit.total_vat_cents, 2_000);
+    assert_eq!(credit.euro_rate, Some(dollar_rate()));
+    assert_eq!(credit.total_vat_eur_cents, Some(1_600));
+}
+
+#[tokio::test]
+async fn a_distance_sale_in_a_currency_without_a_euro_rate_is_not_issued() {
+    let cmd = command().await;
+    let without = NewInvoice {
+        euro_rate: None,
+        ..to_germany_in_dollars("o1", 12_000)
+    };
+    assert!(matches!(
+        cmd.issue_invoice_here(without, NOW).await.unwrap_err(),
+        InvoicingError::EuroRateMissing { ref currency } if currency == "USD"
+    ));
+    // The rate of another currency is no rate of this one.
+    let wrong = NewInvoice {
+        euro_rate: Some(ExchangeRate::ecb("GBP", "0.86", "2026-10-14")),
+        ..to_germany_in_dollars("o1", 12_000)
+    };
+    assert!(matches!(
+        cmd.issue_invoice_here(wrong, NOW).await.unwrap_err(),
+        InvoicingError::EuroRateMissing { .. }
+    ));
+    // Nothing was reserved or numbered.
+    assert!(cmd.load_invoice_of_order("o1").await.unwrap().is_none());
+    let next = cmd
+        .issue_invoice_here(to_germany_in_dollars("o2", 12_000), NOW)
+        .await
+        .unwrap();
+    assert_eq!(next.label, "F2026-000001");
+
+    // Registered for the One-Stop Shop, the sale goes ahead without a rate,
+    // taxed in Germany and not counted; with one, counted.
+    let oss = TaxProfile {
+        vat_registered: true,
+        oss_registered: true,
+    };
+    let joined = cmd
+        .issue_invoice_here(
+            NewInvoice {
+                tax: oss,
+                euro_rate: None,
+                ..to_germany_in_dollars("o3", 12_000)
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(joined.regime, Regime::Oss);
+    assert_eq!(joined.vat[0].rate_bps, 1900);
+    assert_eq!(joined.eu_distance_sales_cents, 8_000, "o2 alone counted");
+    assert_eq!(joined.euro_rate, None);
+    assert_eq!(joined.total_vat_eur_cents, None);
+    let counted = cmd
+        .issue_invoice_here(
+            NewInvoice {
+                tax: oss,
+                ..to_germany_in_dollars("o4", 12_000)
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(counted.regime, Regime::Oss);
+    assert_eq!(counted.eu_distance_sales_cents, 8_000 + 8_067);
+    assert_eq!(counted.euro_rate, Some(dollar_rate()));
+
+    // A French sale in dollars needs no rate; given one, the invoice states
+    // its VAT in euros and counts nothing.
+    let domestic = cmd
+        .issue_invoice_here(
+            NewInvoice {
+                currency: "USD".into(),
+                ..invoice("o5")
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(domestic.regime, Regime::Domestic);
+    assert_eq!(domestic.euro_rate, None);
+    let converted = cmd
+        .issue_invoice_here(
+            NewInvoice {
+                currency: "USD".into(),
+                euro_rate: Some(dollar_rate()),
+                ..invoice("o6")
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(converted.regime, Regime::Domestic);
+    assert_eq!(converted.eu_distance_sales_cents, 0);
+    assert_eq!(converted.euro_rate, Some(dollar_rate()));
+    assert_eq!(
+        converted.total_vat_eur_cents,
+        dollar_rate().to_euro_cents(converted.total_vat_cents)
+    );
+    // In euros, a rate is noise.
+    let euros = cmd
+        .issue_invoice_here(
+            NewInvoice {
+                euro_rate: Some(dollar_rate()),
+                ..invoice("o7")
+            },
+            NOW,
+        )
+        .await
+        .unwrap();
+    assert_eq!(euros.euro_rate, None);
+}
+
+#[tokio::test]
+async fn a_retry_records_the_rate_the_sale_was_counted_at() {
+    let cmd = command().await;
+    let platform = Ledger(cmd.executor.clone());
+    let yesterday = ExchangeRate::ecb("USD", "1.20", "2026-10-13");
+    // Counted at yesterday's rate (with the decision of the time), then
+    // nothing: the node went down before the number.
+    platform
+        .count("company-1", 2026, &invoice_id("o1"), "tenant-1", |_| {
+            crate::tax::Decision {
+                regime: Regime::DistanceOrigin,
+                tax_country: "FR".into(),
+                rates: vec![Some(2000)],
+                distance: DistanceSales {
+                    sales_cents: 500_000,
+                    passed: false,
+                },
+                euro_rate: Some(yesterday.clone()),
+            }
+        })
+        .await
+        .unwrap();
+    // The retry comes with today's rate and gets yesterday's back.
+    let invoice = cmd
+        .issue_invoice(to_germany_in_dollars("o1", 720_000), &platform, NOW)
+        .await
+        .unwrap();
+    assert_eq!(invoice.regime, Regime::DistanceOrigin);
+    assert_eq!(invoice.eu_distance_sales_cents, 500_000);
+    assert_eq!(invoice.euro_rate, Some(yesterday.clone()));
+    // 1,200 $ of VAT at 1.20: 1,000 €.
+    assert_eq!(invoice.total_vat_eur_cents, Some(100_000));
 }

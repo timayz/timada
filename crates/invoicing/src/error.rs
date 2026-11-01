@@ -10,6 +10,8 @@ pub enum InvoicingError {
     InvoiceNotFound,
     #[error("a credit note gives back more than the invoice is for")]
     CreditTooLarge,
+    #[error("no euro rate for {currency}: the sale cannot be counted against the EU threshold")]
+    EuroRateMissing { currency: String },
     #[error("another node is writing to the same series; try again")]
     Busy,
     #[error(transparent)]

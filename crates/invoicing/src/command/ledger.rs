@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
-use crate::aggregator::Counted;
+use crate::aggregator::{Converted, Counted};
 use crate::error::InvoicingError;
 use crate::tax::{Decision, DistanceSales, EU_DISTANCE_THRESHOLD_CENTS, Regime};
 use crate::value_object::ledger_id;
@@ -31,6 +31,7 @@ pub struct LedgerState {
 pub fn ledger_projection<E: Executor>() -> Projection<E, LedgerState> {
     Projection::new::<crate::aggregator::DistanceLedger>()
         .handler(on_counted())
+        .handler(on_converted())
         .strict()
 }
 
@@ -50,8 +51,22 @@ async fn on_counted(event: Event<Counted>, ledger: &mut LedgerState) -> anyhow::
             tax_country: data.tax_country.to_owned(),
             rates: data.rates.to_owned(),
             distance,
+            euro_rate: None,
         },
     );
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_converted(event: Event<Converted>, ledger: &mut LedgerState) -> anyhow::Result<()> {
+    // Written right after the `Counted` it belongs to.
+    let data = &event.data;
+    if let Some(decision) = ledger
+        .counted
+        .get_mut(&sale_key(&data.tenant_id, &data.document_id))
+    {
+        decision.euro_rate = Some(data.rate.to_owned());
+    }
     Ok(())
 }
 
@@ -98,7 +113,8 @@ impl<E: Executor> Ledger<E> {
                 None => self.start_of(company_id, year).await?,
             };
             let decision = decide(before);
-            let committed = evento::append(&open.id)
+            let mut write = evento::append(&open.id);
+            write
                 .original_version(
                     open.state
                         .as_ref()
@@ -112,9 +128,15 @@ impl<E: Executor> Ledger<E> {
                     rates: decision.rates.clone(),
                     sales_cents: decision.distance.sales_cents,
                     passed: decision.distance.passed,
-                })
-                .commit(&self.0)
-                .await;
+                });
+            if let Some(rate) = &decision.euro_rate {
+                write.event(&Converted {
+                    document_id: document_id.to_owned(),
+                    tenant_id: tenant_id.to_owned(),
+                    rate: rate.clone(),
+                });
+            }
+            let committed = write.commit(&self.0).await;
             match committed {
                 Ok(_) => return Ok(decision),
                 Err(WriteError::InvalidOriginalVersion) => continue,
