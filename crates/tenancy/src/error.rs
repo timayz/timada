@@ -20,6 +20,8 @@ pub enum TenancyError {
     InvalidAliexpressMarket,
     #[error("a price rule multiplies by 1 to 100 and adds at most 10,000")]
     InvalidPricingRule,
+    #[error("a phone number has 6 to 32 characters: digits, spaces, +, -, ( and )")]
+    InvalidPhone,
     #[error("set up the AliExpress app first")]
     AliexpressNotConfigured,
     #[error(
@@ -144,6 +146,7 @@ impl TenancyError {
             Self::InvalidPublishableKey => "invalid_publishable_key",
             Self::InvalidAliexpressMarket => "invalid_aliexpress_market",
             Self::InvalidPricingRule => "invalid_pricing_rule",
+            Self::InvalidPhone => "invalid_phone",
             Self::AliexpressNotConfigured => "aliexpress_not_configured",
             Self::InvalidMailServer => "invalid_mail_server",
             Self::TooManyMailServers => "too_many_mail_servers",

@@ -233,11 +233,28 @@ async fn the_market_is_the_shops_and_how_orders_go_is_kept_across_it() {
     };
     assert_eq!(forwarding(load().await), (true, false));
 
+    // The shop's phone for orders without one: checked, kept, cleared.
+    assert!(matches!(
+        cmd.set_aliexpress_order_phone(&owner, &tenant.id, Some("call me"))
+            .await,
+        Err(TenancyError::InvalidPhone)
+    ));
+    cmd.set_aliexpress_order_phone(&owner, &tenant.id, Some(" 01 89 76 02 12 "))
+        .await
+        .unwrap();
+    let phone = |state: timada_tenancy::TenantState| state.aliexpress.unwrap().order_phone;
+    assert_eq!(phone(load().await).as_deref(), Some("01 89 76 02 12"));
+
     // The market set again keeps them; stopping forgets everything.
     cmd.configure_aliexpress(&owner, &tenant.id, market())
         .await
         .unwrap();
     assert_eq!(forwarding(load().await), (true, false));
+    assert_eq!(phone(load().await).as_deref(), Some("01 89 76 02 12"));
+    cmd.set_aliexpress_order_phone(&owner, &tenant.id, Some(""))
+        .await
+        .unwrap();
+    assert_eq!(phone(load().await), None);
     cmd.remove_aliexpress(&owner, &tenant.id).await.unwrap();
     assert!(load().await.aliexpress.is_none());
     cmd.remove_aliexpress(&owner, &tenant.id).await.unwrap();
