@@ -1301,6 +1301,7 @@ async fn a_store_with_a_checkout_key_sells() {
             postal_code: "75002".into(),
             city: "Paris".into(),
             country: "FR".into(),
+            phone: Some("06 12 34 56 78".into()),
             ..Default::default()
         },
         note: None,

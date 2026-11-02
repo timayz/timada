@@ -162,6 +162,7 @@ if (key && window.Stripe) {
   });
   express.on("click", (event) => event.resolve({
     emailRequired: true,
+    phoneNumberRequired: true,
     shippingAddressRequired: true,
     // A whole address, else wallets hand only its country and postal code.
     billingAddressRequired: true,
@@ -562,8 +563,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <input id="checkout-email" name="email" type="email" required="" autocomplete="email" value=(&draft.email) readonly=(shopper.is_some())>
                             <label for="checkout-name">"Nom complet"</label>
                             <input id="checkout-name" name="name" required="" autocomplete="name" value=(&draft.name)>
-                            <label for="checkout-phone">"Téléphone (facultatif)"</label>
-                            <input id="checkout-phone" name="phone" type="tel" autocomplete="tel" value=(&draft.phone)>
+                            <label for="checkout-phone">"Téléphone"</label>
+                            <input id="checkout-phone" name="phone" type="tel" required="" autocomplete="tel" value=(&draft.phone)>
                         </section>
                         <section class="card">
                             <h2>"Adresse de livraison"</h2>

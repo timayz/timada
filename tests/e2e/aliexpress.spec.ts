@@ -349,7 +349,7 @@ async function buyRoses(page: Page, request: APIRequestContext, stripe: FakeStri
   await page.getByLabel("Code postal", { exact: true }).fill("75002");
   await page.getByLabel("Ville", { exact: true }).fill("Paris");
   await page.getByLabel("Pays", { exact: true }).selectOption("FR");
-  await page.getByLabel("Téléphone (facultatif)").fill("06 12 34 56 78");
+  await page.getByLabel("Téléphone").fill("06 12 34 56 78");
   await page.getByRole("button", { name: /^Payer ma commande/ }).click();
   await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
   const intent = stripe.lastIntent()!;

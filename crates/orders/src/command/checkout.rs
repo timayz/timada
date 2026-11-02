@@ -535,6 +535,11 @@ impl<E: Executor> super::Command<E> {
     ) -> Result<String, OrderError> {
         let email = normalize_email(&checkout.email)?;
         let shipping = normalize_shipping(checkout.shipping)?;
+        // The courier, and a supplier that ships for the shop, need to reach
+        // the shopper.
+        if shipping.phone.is_none() {
+            return Err(OrderError::MissingPhone);
+        }
         let billing = checkout.billing.map(normalize_billing).transpose()?;
         let note = normalize_note(checkout.note.as_deref())?;
         let vat_number = normalize_buyer_vat_number(checkout.vat_number.as_deref())?;
