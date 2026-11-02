@@ -5,6 +5,7 @@
 pub mod forward;
 pub mod subscription;
 pub mod sync;
+pub mod webhook;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -107,7 +108,7 @@ impl Aliexpress {
     }
 
     /// The platform's app key, for the address a company says yes on.
-    fn app(&self) -> anyhow::Result<&(String, String)> {
+    pub(crate) fn app(&self) -> anyhow::Result<&(String, String)> {
         self.app
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("no AliExpress app here (no [aliexpress] app_key)"))
@@ -261,6 +262,29 @@ impl Aliexpress {
             .load_tenant(tenant_id)
             .await?;
         Ok(tenant.filter(|tenant| !tenant.is_suspended()))
+    }
+
+    /// A shop able to call AliExpress: active, set up, and selling as a
+    /// company with an account, its access renewed first if due.
+    pub async fn connected_shop(
+        &self,
+        tenant_id: &str,
+        now: u64,
+    ) -> anyhow::Result<Option<(TenantState, CompanyState)>> {
+        let Some(tenant) = self.active_tenant(tenant_id).await? else {
+            return Ok(None);
+        };
+        if tenant.aliexpress.is_none() {
+            return Ok(None);
+        }
+        let Some(company) = self.company_of(&tenant).await? else {
+            return Ok(None);
+        };
+        let company = self.refresh_if_due(company, now).await?;
+        if company.aliexpress.is_none() {
+            return Ok(None);
+        }
+        Ok(Some((tenant, company)))
     }
 }
 

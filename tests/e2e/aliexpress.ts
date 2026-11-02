@@ -1,3 +1,4 @@
+import type { APIRequestContext } from "@playwright/test";
 import crypto from "node:crypto";
 import http from "node:http";
 import { PNG } from "./storefront";
@@ -8,7 +9,8 @@ import { PNG } from "./storefront";
 // stock, cost and availability a spec changes. Orders placed with
 // `aliexpress.ds.order.create` are kept, delivered by the services
 // `aliexpress.logistics.buyer.freight.calculate` offers, and read back with
-// `aliexpress.trade.ds.order.get` once a spec ships them. Every call is checked against
+// `aliexpress.trade.ds.order.get` once a spec ships them, or pushed to the
+// dashboard's webhook as AliExpress would. Every call is checked against
 // the platform app's secret the way AliExpress signs (HMAC-SHA256 over the
 // path, then the sorted name+value pairs, upper-case hex). config/e2e.toml
 // gives the dashboard the same key and secret and points it at the stand-in.
@@ -82,6 +84,30 @@ export class FakeAliexpress {
   /// The seller sends the parcel of an order.
   ship(orderId: string, tracking: string) {
     this.orders.find((order) => order.id === orderId)!.tracking = tracking;
+  }
+
+  /// AliExpress pushes an order's new status to the platform's webhook at
+  /// `url` (its message push: the body signed with the app's key and
+  /// secret in `Authorization`); the response.
+  push(request: APIRequestContext, url: string, orderId: string, status: string, options: { signature?: string; body?: string } = {}) {
+    const body =
+      options.body ??
+      JSON.stringify({
+        data: { buyerId: 1861703697, orderId: Number(orderId), orderStatus: status },
+        message_type: 53,
+        seller_id: "1234",
+        site: "ae_global",
+        timestamp: Math.floor(Date.now() / 1000),
+      });
+    return request.post(url, {
+      data: body,
+      headers: { "content-type": "application/json", authorization: options.signature ?? pushSignature(body) },
+    });
+  }
+
+  /// How many times an order was read (`aliexpress.trade.ds.order.get`).
+  orderReads(): number {
+    return this.calls.filter((call) => call === "aliexpress.trade.ds.order.get").length;
   }
 
   private handle(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -253,4 +279,10 @@ export class FakeAliexpress {
       },
     };
   }
+}
+
+/// What AliExpress puts in `Authorization` for a pushed `body`: HMAC-SHA256
+/// of the app key followed by the body, keyed by the secret, in lower hex.
+export function pushSignature(body: string, appKey = APP_KEY, appSecret = APP_SECRET): string {
+  return crypto.createHmac("sha256", appSecret).update(appKey + body).digest("hex");
 }

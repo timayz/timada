@@ -128,6 +128,20 @@ pub async fn forwards_due(db: &Db, limit: i64) -> anyhow::Result<Vec<ForwardRow>
     .await
 }
 
+/// The forward that bought `ae_order_id` on AliExpress, whichever tenant's,
+/// as the read model has it (a push may arrive before the row does).
+pub async fn forward_of_ae_order(db: &Db, ae_order_id: &str) -> anyhow::Result<Option<ForwardRow>> {
+    db.fetch_optional(
+        "SELECT tenant_id, id, order_id, status, ae_order_ids, tracking, last_error,
+            placed_at, updated_at
+         FROM aliexpress_forwards
+         WHERE ' ' || ae_order_ids || ' ' LIKE '% ' || ?1 || ' %'
+         ORDER BY updated_at DESC LIMIT 1",
+        (ae_order_id,),
+    )
+    .await
+}
+
 /// Writes the row of a link as the write model sees it.
 pub async fn upsert_link(db: &Db, tenant_id: &str, link: &LinkState) -> anyhow::Result<()> {
     db.execute(

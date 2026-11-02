@@ -21,6 +21,7 @@ mod map;
 mod model;
 mod query;
 mod value_object;
+mod webhook;
 
 pub use apply::*;
 pub use client::*;
@@ -31,3 +32,4 @@ pub use map::*;
 pub use model::*;
 pub use query::*;
 pub use value_object::*;
+pub use webhook::*;

@@ -211,7 +211,8 @@ dir = "data/shopper-keys"
 # call against the one app, whichever company it acts for.
 # [aliexpress]
 # # The app's key and secret, from AliExpress's open platform; both or
-# # neither.
+# # neither. Register `/aliexpress/callback` under server.url as the app's
+# # callback and `/aliexpress/webhook` as its message push callback.
 # app_key = ""
 # app_secret = ""
 # # How often, in seconds, this node looks for products due to be read again.

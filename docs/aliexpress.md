@@ -10,7 +10,10 @@ sells it.
 
 1. On AliExpress's open platform, create an app with access to the dropshipping API.
    AliExpress has to approve that access before product calls work.
-2. Register `/aliexpress/callback` under `server.url` as the app's callback.
+2. Register `/aliexpress/callback` under `server.url` as the app's callback, and
+   `/aliexpress/webhook` as its message push callback with the topic
+   `DROPSHIPPER_ORDER_STATUS_UPDATE` ticked (the App Console's notification tab).
+   AliExpress only pushes to an HTTPS address with a CA-issued OV or EV certificate.
 3. Put the app's key and secret in `[aliexpress]` (`app_key`, `app_secret`), with
    `secrets.key` set so the tokens can be sealed. Without both, nobody can connect.
 
@@ -151,7 +154,13 @@ recording the outcome, the order may be on AliExpress anyway. It is then never p
 again on its own: the merchant checks the account's orders on AliExpress first.
 
 Until each AliExpress order has a parcel number, the sweep reads it again on every
-pass (`aliexpress.trade.ds.order.get`). Once each does, and every line of the shop's
+pass (`aliexpress.trade.ds.order.get`). AliExpress also pushes each status change of
+an order to `/aliexpress/webhook` (message type 53, the body signed with the app's key
+and secret in `Authorization`): the order is read again at once, and the sweep stays
+the fallback the push's twelve retries do not cover. A push is answered before the
+read, within the half second AliExpress allows, and may come twice: the read records
+against the version it started from, so a second push changes nothing. Once each
+order has its parcel number, and every line of the shop's
 order was bought there, the order is fulfilled with those numbers as its tracking. A
 mixed order only shows them, for the merchant to fulfil. An order fulfilled by hand,
 cancelled, or placed more than 60 days ago is no longer read. The request and

@@ -15,7 +15,6 @@ use timada_aliexpress::{ForwardRow, LinkRow, forwards_due, links_due};
 use tokio::task::JoinHandle;
 
 use super::forward::CheckResult;
-use timada_tenancy::{CompanyState, TenantState};
 
 use super::{Aliexpress, SyncResult};
 use crate::cluster::Executor;
@@ -107,7 +106,7 @@ impl AliexpressSync {
         forwards: &[ForwardRow],
         now: u64,
     ) -> anyhow::Result<usize> {
-        let Some((tenant, company)) = self.connected_shop(tenant_id, now).await? else {
+        let Some((tenant, company)) = self.aliexpress.connected_shop(tenant_id, now).await? else {
             return Ok(0);
         };
         let store = self.store.clone();
@@ -158,36 +157,13 @@ impl AliexpressSync {
         Ok(())
     }
 
-    /// A shop able to call AliExpress: active, set up, and selling as a
-    /// company with an account, its access renewed first if due.
-    async fn connected_shop(
-        &self,
-        tenant_id: &str,
-        now: u64,
-    ) -> anyhow::Result<Option<(TenantState, CompanyState)>> {
-        let Some(tenant) = self.aliexpress.active_tenant(tenant_id).await? else {
-            return Ok(None);
-        };
-        if tenant.aliexpress.is_none() {
-            return Ok(None);
-        }
-        let Some(company) = self.aliexpress.company_of(&tenant).await? else {
-            return Ok(None);
-        };
-        let company = self.aliexpress.refresh_if_due(company, now).await?;
-        if company.aliexpress.is_none() {
-            return Ok(None);
-        }
-        Ok(Some((tenant, company)))
-    }
-
     async fn sweep_tenant(
         &self,
         tenant_id: &str,
         links: &[LinkRow],
         now: u64,
     ) -> anyhow::Result<usize> {
-        let Some((tenant, company)) = self.connected_shop(tenant_id, now).await? else {
+        let Some((tenant, company)) = self.aliexpress.connected_shop(tenant_id, now).await? else {
             return Ok(0);
         };
         let store = self.store.clone();
