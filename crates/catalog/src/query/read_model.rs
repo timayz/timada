@@ -10,7 +10,7 @@
 //! rebuilds a segment for every write that touches them. When what a category
 //! counts has changed, the counts of the tenant's categories are worked out
 //! again in the same transaction, so a page reads them instead of computing
-//! them. One subscription follows every tenant's streams: each row carries
+//! them. A deleted product loses its rows. One subscription follows every tenant's streams: each row carries
 //! the tenant of the event that made it, and the rows live in the store's own
 //! database ([`Db`]).
 
@@ -164,7 +164,40 @@ async fn on_product_event<E: Executor>(
     if superseded(&event, product.aggregate_version) {
         return Ok(());
     }
+    if product.deleted {
+        return delete_product_rows(&db, &event.tenant, &product.id).await;
+    }
     upsert_product(&db, &event.tenant, &product).await
+}
+
+/// Drops the rows of a deleted product: its own, its category memberships
+/// and its stock, in one transaction, and works the category counts out
+/// again when it was counted. Nothing to drop is fine: delivery may repeat.
+pub async fn delete_product_rows(db: &Db, tenant_id: &str, product_id: &str) -> anyhow::Result<()> {
+    let env = (tenant_id, product_id);
+    db.write(&env, |tx, (tenant_id, product_id)| {
+        Box::pin(async move {
+            let was_counted: Option<(bool,)> = fetch_optional(
+                tx,
+                "SELECT status <> 'archived' FROM catalog_products
+                 WHERE tenant_id = ?1 AND id = ?2",
+                (*tenant_id, *product_id),
+            )
+            .await?;
+            for statement in [
+                "DELETE FROM catalog_product_categories WHERE tenant_id = ?1 AND product_id = ?2",
+                "DELETE FROM catalog_stock WHERE tenant_id = ?1 AND product_id = ?2",
+                "DELETE FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
+            ] {
+                execute(tx, statement, (*tenant_id, *product_id)).await?;
+            }
+            if was_counted.is_some_and(|(counted,)| counted) {
+                refresh_category_counts(tx, tenant_id).await?;
+            }
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[evento::subscription_all]

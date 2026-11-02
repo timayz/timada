@@ -63,15 +63,17 @@ impl ProductRow {
 
 use timada_core::like_contains as contains;
 
-/// Which products a page lists: a search over slug and name, and one
-/// category they must belong to. Both are optional; the default matches
-/// every product of the tenant.
+/// Which products a page lists: a search over slug and name, one category
+/// they must belong to and one status they must have. All are optional; the
+/// default matches every product of the tenant.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProductFilter<'a> {
     /// Matched anywhere in the slug or the name.
     pub q: Option<&'a str>,
     /// The id of a category the product must be in.
     pub category: Option<&'a str>,
+    /// The status the product must have.
+    pub status: Option<ProductStatus>,
 }
 
 impl<'a> ProductFilter<'a> {
@@ -83,6 +85,16 @@ impl<'a> ProductFilter<'a> {
     pub fn category(mut self, category: Option<&'a str>) -> Self {
         self.category = category.map(str::trim).filter(|c| !c.is_empty());
         self
+    }
+
+    pub fn status(mut self, status: Option<ProductStatus>) -> Self {
+        self.status = status;
+        self
+    }
+
+    /// The status as the statements compare it (`?4`).
+    fn status_value(&self) -> Option<&'static str> {
+        self.status.map(ProductStatus::as_str)
     }
 }
 
@@ -105,11 +117,13 @@ macro_rules! products_from {
     };
 }
 
-/// The rest of the filter, shared by the list and the count.
+/// The rest of the filter, shared by the list and the count: `?3` the
+/// category, `?4` the status, each or `NULL`.
 macro_rules! products_where {
     () => {
         "AND (?3 IS NULL OR p.id IN (SELECT product_id FROM catalog_product_categories
-                WHERE tenant_id = ?1 AND category_id = ?3)) "
+                WHERE tenant_id = ?1 AND category_id = ?3))
+         AND (?4 IS NULL OR p.status = ?4) "
     };
 }
 
@@ -122,7 +136,7 @@ macro_rules! products_page {
                 p.stock_state ",
             products_from!($from),
             products_where!(),
-            "ORDER BY p.updated_at DESC, p.id DESC LIMIT ?4 OFFSET ?5"
+            "ORDER BY p.updated_at DESC, p.id DESC LIMIT ?5 OFFSET ?6"
         )
     };
 }
@@ -158,7 +172,14 @@ pub async fn products_of_tenant(
     };
     db.fetch_all(
         statement,
-        (tenant_id, search, filter.category, limit, offset),
+        (
+            tenant_id,
+            search,
+            filter.category,
+            filter.status_value(),
+            limit,
+            offset,
+        ),
     )
     .await
 }
@@ -171,8 +192,11 @@ pub async fn count_products(db: &Db, tenant_id: &str, filter: &ProductFilter<'_>
     } else {
         products_count!(pattern)
     };
-    db.fetch_scalar(statement, (tenant_id, search, filter.category))
-        .await
+    db.fetch_scalar(
+        statement,
+        (tenant_id, search, filter.category, filter.status_value()),
+    )
+    .await
 }
 
 /// One product of a tenant, by id.

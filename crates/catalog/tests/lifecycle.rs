@@ -60,3 +60,58 @@ async fn archiving_frees_the_slug_for_a_new_product() {
         second.id
     );
 }
+
+#[tokio::test]
+async fn deleting_hides_the_product_and_frees_its_slug() {
+    let cmd = command().await;
+    let mug = create_product(&cmd, "Blue Mug").await;
+    cmd.price_product(ALICE, &mug.id, 1250, "EUR")
+        .await
+        .unwrap();
+    cmd.publish_product(ALICE, &mug.id).await.unwrap();
+
+    let gone = cmd.delete_product(ALICE, &mug.id).await.unwrap();
+    assert_eq!(gone.id, mug.id, "what it was comes back, for the clean-up");
+    assert!(
+        cmd.load_product(&mug.id).await.unwrap().is_none(),
+        "gone from every page"
+    );
+    let state = cmd.load_product_any(&mug.id).await.unwrap().unwrap();
+    assert!(state.is_deleted());
+    assert!(
+        state.is_archived(),
+        "deleted counts as archived to everyone else"
+    );
+    assert!(!state.is_published());
+    assert!(matches!(
+        cmd.delete_product(ALICE, &mug.id).await,
+        Err(CatalogError::NotFound)
+    ));
+    assert!(matches!(
+        cmd.rename_product(ALICE, &mug.id, "Red Mug").await,
+        Err(CatalogError::NotFound)
+    ));
+    assert!(
+        cmd.load_product_by_slug("blue-mug")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let second = create_product(&cmd, "Blue Mug").await;
+    assert_eq!(second.slug, "blue-mug", "the plain slug is free again");
+}
+
+#[tokio::test]
+async fn an_archived_product_can_still_be_deleted() {
+    let cmd = command().await;
+    let mug = create_product(&cmd, "Blue Mug").await;
+    cmd.archive_product(ALICE, &mug.id).await.unwrap();
+    cmd.delete_product(ALICE, &mug.id).await.unwrap();
+    assert!(cmd.load_product(&mug.id).await.unwrap().is_none());
+    let second = create_product(&cmd, "Blue Mug").await;
+    assert_eq!(
+        second.slug, "blue-mug",
+        "the slug was freed once, by archiving, and stays free"
+    );
+}

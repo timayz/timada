@@ -306,6 +306,14 @@ Codes are unique across a tenant through the same index-aggregate pattern as slu
 (`timada-catalog/ProductSku`), compared without regard to case. A variant that goes,
 and an archived product, give their codes back.
 
+A product leaves the catalog one of two ways. `Archived` is final and keeps it on
+record: no more edits, its slug and codes free again, its row still listed as
+archived. `Deleted` is for a product nobody ever ordered: it is archived and, on
+top, every read model drops its rows and the host deletes its pictures' files, as if
+it had never been. The catalog cannot see the orders, so the dashboard checks the
+orders read model (`orders_order_products`, one row per product each order holds)
+before it deletes; a product once ordered can only be archived.
+
 ## Stock
 
 A shop may count what it holds of a product without variants, or of each variant.

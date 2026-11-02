@@ -38,7 +38,7 @@ use std::sync::Arc;
 
 use evento::subscription::{Context, SubscriptionBuilder};
 use evento::{Executor, metadata::Event};
-use timada_catalog::aggregator::{ImageAdded, ImageRemoved};
+use timada_catalog::aggregator::{Deleted as ProductDeleted, ImageAdded, ImageRemoved};
 use timada_catalog::{MAX_IMAGE_BYTES, product_projection};
 use timada_pages::aggregator::{
     Deleted as PageDeleted, ImageAdded as PageImageAdded, ImageRemoved as PageImageRemoved,
@@ -319,6 +319,7 @@ pub fn subscription<E: Executor>(media: Arc<Media>) -> SubscriptionBuilder<E> {
         .data(media)
         .handler(on_image_added())
         .handler(on_image_removed())
+        .handler(on_product_deleted())
         .handler(on_review_submitted())
         .handler(on_review_rejected())
         .handler(on_review_photo_removed())
@@ -377,11 +378,14 @@ async fn on_image_added<E: Executor>(
     event: Event<ImageAdded>,
 ) -> anyhow::Result<()> {
     let media: Arc<Media> = context.extract();
+    // Not the pictures of a deleted product: it still lists them, and
+    // nobody keeps them any more.
     let still_there = product_projection()
         .load(&event.aggregate_id)
         .tenant(&event.tenant)
         .execute(context.executor)
         .await?
+        .filter(|product| !product.deleted)
         .is_some_and(|product| {
             product
                 .images
@@ -410,6 +414,27 @@ async fn on_image_removed<E: Executor>(
     media
         .remove_image(&event.tenant, &event.data.image_id)
         .await;
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_product_deleted<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<ProductDeleted>,
+) -> anyhow::Result<()> {
+    let media: Arc<Media> = context.extract();
+    // The deleted state still lists the pictures the product had.
+    let Some(product) = product_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    for image in &product.images {
+        media.remove_image(&event.tenant, &image.id).await;
+    }
     Ok(())
 }
 

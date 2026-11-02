@@ -57,6 +57,7 @@ event timada-catalog/Product::AttributeRemoved { name: String, removed_by: Strin
 event timada-catalog/Product::AttributeSet { name: String, value: String, set_by: String }
 event timada-catalog/Product::Categorized { category_id: String, categorized_by: String }
 event timada-catalog/Product::Created { slug: String, name: String, created_by: String }
+event timada-catalog/Product::Deleted { deleted_by: String }
 event timada-catalog/Product::Described { description: String, described_by: String }
 event timada-catalog/Product::ImageAdded { image_id: String, ext: String, mime: String, size: u64, width: Option<u32>, height: Option<u32>, alt: String, added_by: String }
 event timada-catalog/Product::ImageAltChanged { image_id: String, alt: String, changed_by: String }

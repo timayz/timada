@@ -1,12 +1,14 @@
 import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
+import { selectByText } from "./forms";
 import { invite, inviteLink } from "./invitations";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // The catalog: an owner creates a product under /t/{slug}/products, edits it
-// on its page, uploads its pictures, publishes and archives it; the list (a
-// read model, a moment behind) follows; a member whose role lacks
-// `products:read` cannot open the pages.
+// on its page, uploads its pictures, publishes, archives and deletes it; the
+// list (a read model, a moment behind) follows and shows the published
+// products unless asked otherwise; a member whose role lacks `products:read`
+// cannot open the pages.
 
 /// A 1x1 PNG, as the bytes a browser posts when a file is chosen.
 const PNG = Buffer.from(
@@ -14,14 +16,14 @@ const PNG = Buffer.from(
   "base64",
 );
 
-test("an owner creates, edits, publishes and archives a product", async ({ page }) => {
+test("an owner creates, edits, publishes, archives and deletes a product", async ({ page }) => {
   await registerWithEmail(page, uniqueEmail("owner"));
   const { name, slug } = uniqueTenant("Catalog Shop");
   await createTenant(page, name);
 
   await page.getByRole("link", { name: "Products", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/t/${slug}/products$`));
-  await expect(page.getByText("No product yet.")).toBeVisible();
+  await expect(page.getByText("No published product yet.")).toBeVisible();
 
   // Create: lands on the product page, a draft without a price.
   await page.getByLabel("Name").fill("Blue Mug");
@@ -65,7 +67,7 @@ test("an owner creates, edits, publishes and archives a product", async ({ page 
   }).toPass({ timeout: 15_000 });
   await page.getByLabel("Search").fill("nothing-like-it");
   await page.getByRole("button", { name: "Search" }).click();
-  await expect(page.getByText("No product yet.")).toBeVisible();
+  await expect(page.getByText("No product matches.")).toBeVisible();
 
   // Archive: no more edits.
   await page.goto(productUrl);
@@ -74,6 +76,27 @@ test("an owner creates, edits, publishes and archives a product", async ({ page 
   await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "archived");
   await expect(page.getByRole("button", { name: "Rename" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Archive" })).toHaveCount(0);
+
+  // The list shows the published products unless asked for another status.
+  await expect(async () => {
+    await page.goto(`/t/${slug}/products`);
+    await expect(page.getByText("No published product yet.")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await selectByText(page, "Status", "Archived");
+  await page.getByRole("button", { name: "Search" }).click();
+  await expect(page).toHaveURL(/status=archived/);
+  await expect(row).toHaveAttribute("data-product-status", "archived");
+
+  // Delete: nobody ordered it, so it goes for good.
+  await page.goto(productUrl);
+  await page.getByRole("button", { name: "Delete product" }).click();
+  await expect(page).toHaveURL(new RegExp(`/t/${slug}/products\\?`));
+  await expect(page.getByRole("status")).toContainText("Product deleted");
+  expect((await page.request.get(productUrl)).status()).toBe(404);
+  await expect(async () => {
+    await page.goto(`/t/${slug}/products?status=all`);
+    await expect(page.getByText("No product yet.")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
 });
 
 test("the products pages need products:read", async ({ browser, request }) => {

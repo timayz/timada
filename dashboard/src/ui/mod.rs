@@ -100,6 +100,9 @@ pub fn describe_error(code: &str) -> &'static str {
         "product_not_found" => "This product does not exist.",
         "product_archived" => "This product is archived and cannot change any more.",
         "product_not_priced" => "Set a price before publishing.",
+        "product_ordered" => {
+            "This product has been ordered, so it stays on record: archive it instead."
+        }
         "invalid_category_name" => "A category name is 1 to 80 characters.",
         "invalid_category_slug" => {
             "A category slug is 2 to 64 lowercase letters, digits and dashes."
