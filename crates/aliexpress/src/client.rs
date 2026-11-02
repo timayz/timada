@@ -160,6 +160,8 @@ pub struct LogisticsAddress {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub address2: String,
     pub city: String,
+    /// The region, as AliExpress lists it; it refuses an order without one.
+    pub province: String,
     pub zip: String,
     /// ISO 3166 alpha-2.
     pub country: String,
