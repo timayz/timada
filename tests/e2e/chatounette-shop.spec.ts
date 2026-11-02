@@ -426,10 +426,10 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await expect(phoneCountry).toContainText("+33");
     await phoneCountry.click();
     await page.getByRole("combobox", { name: "Rechercher un pays" }).fill("belg");
-    await page.getByRole("option", { name: /Belgique|BE/ }).click();
+    await page.locator("#phone-country-list").getByRole("option", { name: /Belgique/ }).click();
     await expect(phoneCountry).toContainText("+32");
     await phoneCountry.click();
-    await expect(page.getByRole("option", { name: /Belgique|BE/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator("#phone-country-list").getByRole("option", { name: /Belgique/ })).toHaveAttribute("aria-selected", "true");
     await page.getByRole("combobox", { name: "Rechercher un pays" }).fill("+33");
     await page.keyboard.press("Enter");
     await expect(phoneCountry).toContainText("+33");

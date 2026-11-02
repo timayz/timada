@@ -18,13 +18,14 @@ mod slug_index;
 mod stock;
 mod variant;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::ops::Deref;
 
 pub use category::*;
 pub use create::*;
 pub use image::*;
+pub use option::*;
 pub use stock::*;
 pub use variant::*;
 
@@ -40,9 +41,10 @@ use crate::aggregator::category::{
 use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
     Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Created, Described, ImageAdded,
-    ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionRemoved, OptionRenamed,
-    OptionValuesChanged, Priced, Published, Released, Renamed, TaxCategorySet, Uncategorized,
-    Unpublished, VariantDefined, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged,
+    ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionLabelled, OptionRemoved,
+    OptionRenamed, OptionValueLabelled, OptionValuesChanged, Priced, Published, Released, Renamed,
+    TaxCategorySet, Uncategorized, Unpublished, VariantDefined, VariantImaged, VariantPriced,
+    VariantRemoved, VariantSkuChanged,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
@@ -164,6 +166,24 @@ pub struct ProductOption {
     pub id: String,
     pub name: String,
     pub values: Vec<String>,
+    /// What a shopper reads instead of the name, when the merchant set one.
+    pub label: Option<String>,
+    /// What a shopper reads instead of a value, for the values the merchant
+    /// labelled.
+    pub value_labels: BTreeMap<String, String>,
+}
+
+impl ProductOption {
+    /// What a shopper reads for the option: its label, else its name.
+    pub fn display_name(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.name)
+    }
+
+    /// What a shopper reads for one of its values: the value's label, else
+    /// the value.
+    pub fn display_value<'a>(&'a self, value: &'a str) -> &'a str {
+        self.value_labels.get(value).map_or(value, String::as_str)
+    }
 }
 
 /// One combination of the options, with its own price: what a shopper buys.
@@ -302,6 +322,22 @@ impl ProductState {
     pub fn variant(&self, variant_id: &str) -> Option<&ProductVariant> {
         self.variants.iter().find(|v| v.id == variant_id)
     }
+
+    /// What a shopper reads for a variant: the values it takes, each as its
+    /// option shows it (`Sable / Large`).
+    pub fn variant_label(&self, variant: &ProductVariant) -> String {
+        variant
+            .selections
+            .iter()
+            .map(|selection| {
+                self.option(&selection.option_id)
+                    .map_or(selection.value.as_str(), |option| {
+                        option.display_value(&selection.value)
+                    })
+            })
+            .collect::<Vec<_>>()
+            .join(" / ")
+    }
 }
 
 pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
@@ -323,6 +359,8 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_option_renamed())
         .handler(on_option_values_changed())
         .handler(on_option_removed())
+        .handler(on_option_labelled())
+        .handler(on_option_value_labelled())
         .handler(on_variant_defined())
         .handler(on_variant_priced())
         .handler(on_variant_sku_changed())
@@ -533,6 +571,8 @@ async fn on_option_defined(
         id: event.data.option_id.to_owned(),
         name: event.data.name.to_owned(),
         values: event.data.values.to_owned(),
+        label: None,
+        value_labels: BTreeMap::new(),
     });
     product.updated_at = event.timestamp;
     Ok(())
@@ -565,6 +605,10 @@ async fn on_option_values_changed(
         .find(|option| option.id == event.data.option_id)
     {
         option.values = event.data.values.to_owned();
+        // A value that left took its label with it.
+        option
+            .value_labels
+            .retain(|value, _| option.values.contains(value));
     }
     product.updated_at = event.timestamp;
     Ok(())
@@ -578,6 +622,47 @@ async fn on_option_removed(
     product
         .options
         .retain(|option| option.id != event.data.option_id);
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_option_labelled(
+    event: Event<OptionLabelled>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(option) = product
+        .options
+        .iter_mut()
+        .find(|option| option.id == event.data.option_id)
+    {
+        option.label = event.data.label.to_owned();
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_option_value_labelled(
+    event: Event<OptionValueLabelled>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(option) = product
+        .options
+        .iter_mut()
+        .find(|option| option.id == event.data.option_id)
+    {
+        match &event.data.label {
+            Some(label) => {
+                option
+                    .value_labels
+                    .insert(event.data.value.to_owned(), label.to_owned());
+            }
+            None => {
+                option.value_labels.remove(&event.data.value);
+            }
+        }
+    }
     product.updated_at = event.timestamp;
     Ok(())
 }

@@ -67,6 +67,9 @@ pub const MAX_OPTIONS: usize = 3;
 /// How many values one option takes, at most.
 pub const MAX_OPTION_VALUES: usize = 20;
 pub const MAX_OPTION_NAME_LEN: usize = 40;
+/// The longest label an option or one of its values shows instead of its
+/// name.
+pub const MAX_OPTION_LABEL_LEN: usize = 40;
 /// How many combinations one product sells, at most.
 pub const MAX_VARIANTS: usize = 100;
 pub const MAX_SKU_LEN: usize = 64;
@@ -169,6 +172,18 @@ pub fn normalize_sku(sku: &str) -> Result<String, CatalogError> {
     } else {
         Err(CatalogError::InvalidSku)
     }
+}
+
+/// Trims a label of an option or of one of its values and checks it is at
+/// most 40 characters; an empty one is no label.
+pub fn normalize_option_label(label: Option<&str>) -> Result<Option<String>, CatalogError> {
+    let Some(label) = label.map(str::trim).filter(|label| !label.is_empty()) else {
+        return Ok(None);
+    };
+    if label.chars().count() > MAX_OPTION_LABEL_LEN {
+        return Err(CatalogError::InvalidOptionLabel);
+    }
+    Ok(Some(label.to_owned()))
 }
 
 /// Trims an option's name and checks it is 1 to 40 characters.

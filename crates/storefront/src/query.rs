@@ -1,5 +1,6 @@
 //! What a storefront page reads: the published products of the local copy.
 
+use std::collections::BTreeMap;
 use timada_catalog::{TreeNode, TreeOf, tree_of};
 use timada_core::db::{Db, FromRow, Json, Row};
 
@@ -29,6 +30,26 @@ pub struct ProductOption {
     pub id: String,
     pub name: String,
     pub values: Vec<String>,
+    /// What a shopper reads instead of the name, when the merchant set one.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// What a shopper reads instead of a value, for the values the merchant
+    /// labelled.
+    #[serde(default)]
+    pub value_labels: BTreeMap<String, String>,
+}
+
+impl ProductOption {
+    /// What a shopper reads for the option: its label, else its name.
+    pub fn display_name(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.name)
+    }
+
+    /// What a shopper reads for one of its values: the value's label, else
+    /// the value.
+    pub fn display_value<'a>(&'a self, value: &'a str) -> &'a str {
+        self.value_labels.get(value).map_or(value, String::as_str)
+    }
 }
 
 /// One combination a shopper buys, with its own price.
@@ -228,6 +249,24 @@ impl Product {
             max_cents: self.max_amount_cents?,
             currency: self.currency.clone()?,
         })
+    }
+
+    /// What a shopper reads for a variant: the values it takes, each as its
+    /// option shows it (`Sable / Large`).
+    pub fn variant_label(&self, variant: &Variant) -> String {
+        variant
+            .selections
+            .iter()
+            .map(|selection| {
+                self.options
+                    .iter()
+                    .find(|option| option.id == selection.option_id)
+                    .map_or(selection.value.as_str(), |option| {
+                        option.display_value(&selection.value)
+                    })
+            })
+            .collect::<Vec<_>>()
+            .join(" / ")
     }
 
     /// The variant those `(option id, value)` pairs name, if the product
@@ -1165,6 +1204,8 @@ mod sql {
                 id: "opt-colour".to_owned(),
                 name: "Couleur".to_owned(),
                 values: colours.iter().map(|c| (*c).to_owned()).collect(),
+                label: None,
+                value_labels: BTreeMap::new(),
             }])
             .unwrap()
         };

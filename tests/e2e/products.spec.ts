@@ -235,6 +235,18 @@ test("an owner makes a product vary by colour and size, each combination priced"
   await expect(page.getByRole("button", { name: "Save option" })).toHaveCount(0);
   await expect(page.getByText("Remove every variant before changing the options.")).toBeVisible();
 
+  // Labels still change: what the shop shows for an option and its values,
+  // while the names and values an import matches on stay.
+  const colourOption = page.locator("[data-option]").filter({ hasText: "Colour" });
+  await page.getByLabel("Label of Colour", { exact: true }).fill("Couleur");
+  await page.getByLabel("Label of Beige (Colour)").fill("Sable");
+  await colourOption.getByRole("button", { name: "Save labels" }).click();
+  await expect(page.getByRole("status")).toContainText("Option labels saved.");
+  await expect(page.getByLabel("Label of Colour", { exact: true })).toHaveValue("Couleur");
+  await expect(page.getByLabel("Label of Beige (Colour)")).toHaveValue("Sable");
+  await expect(page.getByLabel("Label of Blue (Colour)")).toHaveValue("");
+  await expect(page.locator("[data-variant]").first()).toContainText("Colour: Beige · Size: S");
+
   // Facts go in the table beside the description.
   await page.getByLabel("Fact name").fill("Material");
   await page.getByLabel("Fact value").fill("Nylon");

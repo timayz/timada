@@ -270,7 +270,7 @@ picker.innerHTML = `
   <div class="phone-dialog" role="dialog" aria-modal="true" aria-label="Indicatif" hidden>
     <input type="search" class="phone-search" placeholder="Rechercher" aria-label="Rechercher un pays" role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls="phone-country-list" autocomplete="off">
     <p class="phone-none" hidden>Aucun pays trouvé</p>
-    <ul class="phone-list" id="phone-country-list" role="listbox" aria-label="Pays"></ul>
+    <ul class="phone-list" id="phone-country-list" role="listbox" aria-label="Pays de l'indicatif"></ul>
   </div>`;
 const phoneButton = picker.querySelector(".phone-country");
 const phoneDialog = picker.querySelector(".phone-dialog");

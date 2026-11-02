@@ -136,7 +136,7 @@ pub struct QuotedOffer {
     pub variant_id: Option<String>,
     /// The product's name.
     pub name: String,
-    /// The variant's values (`Beige / Large`).
+    /// The variant's values as the shop shows them (`Sable / Large`).
     pub variant_label: Option<String>,
     /// What the merchant titled it, if anything.
     pub title: Option<String>,
@@ -144,16 +144,6 @@ pub struct QuotedOffer {
     pub unit_amount_cents: u64,
     /// What the one unit costs with it.
     pub offer_amount_cents: u64,
-}
-
-/// `Beige / Large`: the values a variant takes.
-fn variant_label(variant: &timada_catalog::ProductVariant) -> String {
-    variant
-        .selections
-        .iter()
-        .map(|selection| selection.value.as_str())
-        .collect::<Vec<_>>()
-        .join(" / ")
 }
 
 impl<E: Executor> super::Command<E> {
@@ -231,7 +221,7 @@ impl<E: Executor> super::Command<E> {
                 product_id: product.id.clone(),
                 variant_id: line.variant_id.clone(),
                 name: product.name.clone(),
-                variant_label: variant.map(variant_label),
+                variant_label: variant.map(|variant| product.variant_label(variant)),
                 sku: variant.and_then(|variant| variant.sku.clone()),
                 unit_amount_cents: price.amount_cents,
                 quantity: line.quantity,
@@ -384,7 +374,7 @@ impl<E: Executor> super::Command<E> {
                 product_id: product.id.clone(),
                 variant_id: offer.variant_id,
                 name: product.name.clone(),
-                variant_label: variant.map(variant_label),
+                variant_label: variant.map(|variant| product.variant_label(variant)),
                 title: offer.title,
                 unit_amount_cents: price.amount_cents,
                 offer_amount_cents: offer.price_cents,
