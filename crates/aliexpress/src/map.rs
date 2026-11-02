@@ -83,6 +83,10 @@ pub fn shop_price(pricing: Option<&Pricing>, cost_cents: u64) -> u64 {
 
 /// Maps `product`, priced in `currency` (what the shop asked AliExpress
 /// for), with `pricing` turning costs into prices.
+///
+/// AliExpress quotes each combination in the currency asked for, whatever
+/// the seller lists the product in ([`AeProduct::currency`], often CNY), so
+/// only a combination that names another currency refuses the product.
 pub fn map_product(
     product: &AeProduct,
     currency: &str,
@@ -91,11 +95,17 @@ pub fn map_product(
     if !product.on_sale() {
         return Err(MapError::Offline);
     }
-    let currency = if product.currency.is_empty() {
-        currency.to_ascii_uppercase()
-    } else {
-        product.currency.to_ascii_uppercase()
-    };
+    let currency = currency.to_ascii_uppercase();
+    if let Some(quoted) = product
+        .skus
+        .iter()
+        .filter(|sku| sku.cost_cents.is_some())
+        .filter_map(|sku| sku.currency.as_deref())
+        .map(str::to_ascii_uppercase)
+        .find(|quoted| *quoted != currency)
+    {
+        return Err(MapError::Currency(quoted));
+    }
     if !CURRENCIES.contains(&currency.as_str()) {
         return Err(MapError::Currency(currency));
     }

@@ -18,6 +18,7 @@ fn the_answer_reads_whatever_shape_its_fields_come_in() {
     // The sale price wins over the list price; the shop's name for a value
     // over AliExpress's.
     assert_eq!(rose.cost_cents, Some(431));
+    assert_eq!(rose.currency.as_deref(), Some("EUR"));
     assert_eq!(rose.available, 120);
     assert_eq!(rose.properties[0].value, "Rose");
     let blue = product.sku("12000037002").unwrap();
@@ -65,10 +66,35 @@ fn without_a_rule_the_price_is_the_cost_and_a_withdrawn_product_is_refused() {
     let mut product = fixture();
     product.status = "offline".into();
     assert_eq!(map_product(&product, "EUR", None), Err(MapError::Offline));
+}
+
+#[test]
+fn the_combinations_price_currency_counts_not_the_sellers_listing_one() {
+    // The seller lists in CNY; the market asked for quotes every
+    // combination in EUR, some without saying so.
+    let product = fixture();
+    assert_eq!(product.currency, "CNY");
+    assert_eq!(product.sku("12000037002").unwrap().currency, None);
+    let mapped = map_product(&product, "eur", None).unwrap();
+    assert_eq!(mapped.seed.currency, "EUR");
+    assert_eq!(mapped.skus.len(), 2);
+
+    // A combination quoted in another currency refuses the product.
     let mut product = fixture();
-    product.currency = "CNY".into();
+    product.skus[0].currency = Some("USD".into());
     assert_eq!(
         map_product(&product, "EUR", None),
+        Err(MapError::Currency("USD".into()))
+    );
+    // An unpriced one does not, whatever it says.
+    let mut product = fixture();
+    product.skus[2].currency = Some("CNY".into());
+    assert!(map_product(&product, "EUR", None).is_ok());
+    // Quotes in a currency the shop cannot sell in refuse it too.
+    let mut product = fixture();
+    product.skus[0].currency = None;
+    assert_eq!(
+        map_product(&product, "CNY", None),
         Err(MapError::Currency("CNY".into()))
     );
 }

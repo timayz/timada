@@ -220,6 +220,7 @@ fn sku(id: &str, cost: u64, available: u32, properties: &[(&str, &str)]) -> AeSk
     AeSku {
         id: id.into(),
         cost_cents: Some(cost),
+        currency: None,
         available,
         properties: properties
             .iter()

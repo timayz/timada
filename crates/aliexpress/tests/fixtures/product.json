@@ -7,7 +7,7 @@
         "product_id": 1005006123456789,
         "subject": "Cat Harness &amp; Leash Set",
         "detail": "<p>Soft <b>mesh</b> harness.</p><p>Adjustable.</p>",
-        "currency_code": "EUR",
+        "currency_code": "CNY",
         "product_status_type": "onSelling"
       },
       "ae_multimedia_info_dto": {
@@ -20,6 +20,7 @@
             "sku_attr": "14:29#Rose;5:100014064",
             "offer_sale_price": "4.31",
             "sku_price": "6.00",
+            "currency_code": "EUR",
             "sku_available_stock": 120,
             "sku_stock": true,
             "ae_sku_property_dtos": {
