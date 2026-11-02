@@ -132,12 +132,75 @@ pub fn logistics_address(address: &ShippingAddress, language: Option<&str>) -> L
             .unwrap_or_default()
             .to_owned(),
         city: address.city.trim().to_owned(),
+        province: province_of(&country, &address.postal_code, &address.city),
         zip: address.postal_code.trim().to_owned(),
         country,
         phone_country,
         mobile_no,
         locale,
     }
+}
+
+/// The region AliExpress files an address under, which it will not do
+/// without: the French region of a French postal code, the city otherwise
+/// (the shop's addresses carry no region of their own).
+pub fn province_of(country: &str, postal_code: &str, city: &str) -> String {
+    let region = match country {
+        "FR" => french_region(postal_code),
+        _ => None,
+    };
+    region.map_or_else(|| city.trim().to_owned(), str::to_owned)
+}
+
+/// The region of a French postal code, named as AliExpress lists the
+/// regions of France (the 22 of before 2016, unaccented), by its department;
+/// `None` for a postal code that is not French.
+pub fn french_region(postal_code: &str) -> Option<&'static str> {
+    let digits: String = postal_code.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() != 5 {
+        return None;
+    }
+    if let Some(overseas) = match &digits[..3] {
+        "971" => Some("Guadeloupe"),
+        "972" => Some("Martinique"),
+        "973" => Some("Guyane"),
+        "974" => Some("Reunion"),
+        "975" => Some("Saint-Pierre-et-Miquelon"),
+        "976" => Some("Mayotte"),
+        "977" => Some("Saint-Barthelemy"),
+        "978" => Some("Saint-Martin"),
+        "986" => Some("Wallis-et-Futuna"),
+        "987" => Some("Polynesie Francaise"),
+        "988" => Some("Nouvelle-Caledonie"),
+        _ => None,
+    } {
+        return Some(overseas);
+    }
+    Some(match &digits[..2] {
+        "67" | "68" => "Alsace",
+        "24" | "33" | "40" | "47" | "64" => "Aquitaine",
+        "03" | "15" | "43" | "63" => "Auvergne",
+        "14" | "50" | "61" => "Basse-Normandie",
+        "21" | "58" | "71" | "89" => "Bourgogne",
+        "22" | "29" | "35" | "56" => "Bretagne",
+        "18" | "28" | "36" | "37" | "41" | "45" => "Centre",
+        "08" | "10" | "51" | "52" => "Champagne-Ardenne",
+        "20" => "Corse",
+        "25" | "39" | "70" | "90" => "Franche-Comte",
+        "27" | "76" => "Haute-Normandie",
+        "75" | "77" | "78" | "91" | "92" | "93" | "94" | "95" => "Ile-de-France",
+        "11" | "30" | "34" | "48" | "66" => "Languedoc-Roussillon",
+        "19" | "23" | "87" => "Limousin",
+        "54" | "55" | "57" | "88" => "Lorraine",
+        "09" | "12" | "31" | "32" | "46" | "65" | "81" | "82" => "Midi-Pyrenees",
+        "59" | "62" => "Nord-Pas-de-Calais",
+        "44" | "49" | "53" | "72" | "85" => "Pays de la Loire",
+        "02" | "60" | "80" => "Picardie",
+        "16" | "17" | "79" | "86" => "Poitou-Charentes",
+        "04" | "05" | "06" | "13" | "83" | "84" => "Provence-Alpes-Cote d'Azur",
+        "01" | "07" | "26" | "38" | "42" | "69" | "73" | "74" => "Rhone-Alpes",
+        _ => return None,
+    })
 }
 
 /// A phone as AliExpress wants it: the country's calling code (`+33`) and

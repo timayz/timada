@@ -445,6 +445,7 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
       address: "1 rue de la Paix",
       zip: "75002",
       city: "Paris",
+      province: "Ile-de-France",
       country: "FR",
       phone_country: "+33",
       mobile_no: "612345678",
