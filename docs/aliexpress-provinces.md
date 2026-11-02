@@ -21,47 +21,112 @@ maps the country.
 
 ## Countries the storefront ships to
 
-One line per country of the checkout's list. "Postal code →" says how well a
-postal code alone names the subdivision AliExpress is likely to list:
-**exact** can be mapped server-side like France, **approx** needs care at the
-borders, **none** needs the shopper to pick it at checkout. Tick "list" once
-the dropdown is pasted, "mapped" once the forwarder sends it.
+One entry per country of the checkout's list, the likeliest to forward
+first. "Postal code →" says how well a postal code alone names the
+subdivision AliExpress is likely to list: **exact** can be mapped server-side
+like France, **approx** needs care at the borders, **none** needs the
+shopper to pick it at checkout. Tick the country once both boxes under it
+are.
 
-| | Country | AliExpress list | Postal code → | Notes |
-|---|---|---|---|---|
-| - [x] list · [x] mapped | France (FR) | 94 metropolitan departments, unaccented, + `Other` | exact | #359 |
-| - [ ] list · [ ] mapped | Belgique (BE) | unknown (provinces?) | exact | postal ranges name the province |
-| - [ ] list · [ ] mapped | Luxembourg (LU) | unknown (cantons? maybe none) | approx | |
-| - [ ] list · [ ] mapped | Suisse (CH) | unknown (cantons?) | approx | PLZ cross cantons |
-| - [ ] list · [ ] mapped | Allemagne (DE) | unknown (Länder?) | approx | PLZ regions cross Länder |
-| - [ ] list · [ ] mapped | Espagne (ES) | unknown (provinces?) | exact | first two digits = province |
-| - [ ] list · [ ] mapped | Italie (IT) | unknown (provinces?) | approx | CAP mostly names the province |
-| - [ ] list · [ ] mapped | Pays-Bas (NL) | unknown (provinces?) | approx | |
-| - [ ] list · [ ] mapped | Portugal (PT) | unknown (districts?) | approx | |
-| - [ ] list · [ ] mapped | Autriche (AT) | unknown (Länder?) | approx | |
-| - [ ] list · [ ] mapped | Irlande (IE) | unknown (counties?) | approx | Eircode routing key |
-| - [ ] list · [ ] mapped | Royaume-Uni (GB) | counties + `Other` (forum reports) | none | `Other` may do |
-| - [ ] list · [ ] mapped | États-Unis (US) | states, required | exact | ZIP first three digits |
-| - [ ] list · [ ] mapped | Canada (CA) | provinces, required | exact | first letter of the postal code |
-| - [ ] list · [ ] mapped | Pologne (PL) | unknown (voivodeships?) | exact | first two digits |
-| - [ ] list · [ ] mapped | Roumanie (RO) | unknown (counties?) | exact | first two digits |
-| - [ ] list · [ ] mapped | Tchéquie (CZ) | unknown (regions?) | approx | |
-| - [ ] list · [ ] mapped | Slovaquie (SK) | unknown (regions?) | approx | |
-| - [ ] list · [ ] mapped | Hongrie (HU) | unknown (counties?) | approx | |
-| - [ ] list · [ ] mapped | Slovénie (SI) | unknown | approx | |
-| - [ ] list · [ ] mapped | Croatie (HR) | unknown (counties?) | approx | |
-| - [ ] list · [ ] mapped | Bulgarie (BG) | unknown (oblasts?) | approx | |
-| - [ ] list · [ ] mapped | Grèce (GR) | unknown (regions?) | approx | |
-| - [ ] list · [ ] mapped | Chypre (CY) | unknown (districts?) | approx | |
-| - [ ] list · [ ] mapped | Malte (MT) | unknown (maybe none) | none | |
-| - [ ] list · [ ] mapped | Monaco (MC) | unknown (maybe none) | none | one postal code |
-| - [ ] list · [ ] mapped | Danemark (DK) | unknown (regions?) | approx | |
-| - [ ] list · [ ] mapped | Suède (SE) | unknown (counties?) | approx | |
-| - [ ] list · [ ] mapped | Norvège (NO) | unknown (counties?) | approx | |
-| - [ ] list · [ ] mapped | Finlande (FI) | unknown (regions?) | approx | |
-| - [ ] list · [ ] mapped | Estonie (EE) | unknown (counties?) | approx | |
-| - [ ] list · [ ] mapped | Lettonie (LV) | unknown | approx | |
-| - [ ] list · [ ] mapped | Lituanie (LT) | unknown (counties?) | approx | |
+- [x] **France (FR)** — AliExpress list: 94 metropolitan departments, unaccented, + `Other` · postal code → exact · #359
+  - [x] dropdown pasted
+  - [x] forwarder mapped
+- [ ] **Belgique (BE)** — AliExpress list: unknown (provinces?) · postal code → exact · postal ranges name the province
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Luxembourg (LU)** — AliExpress list: unknown (cantons? maybe none) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Suisse (CH)** — AliExpress list: unknown (cantons?) · postal code → approx · PLZ cross cantons
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Allemagne (DE)** — AliExpress list: unknown (Länder?) · postal code → approx · PLZ regions cross Länder
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Espagne (ES)** — AliExpress list: unknown (provinces?) · postal code → exact · first two digits = province
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Italie (IT)** — AliExpress list: unknown (provinces?) · postal code → approx · CAP mostly names the province
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Pays-Bas (NL)** — AliExpress list: unknown (provinces?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Portugal (PT)** — AliExpress list: unknown (districts?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Autriche (AT)** — AliExpress list: unknown (Länder?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Irlande (IE)** — AliExpress list: unknown (counties?) · postal code → approx · Eircode routing key
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Royaume-Uni (GB)** — AliExpress list: counties + `Other` (forum reports) · postal code → none · `Other` may do
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **États-Unis (US)** — AliExpress list: states, required · postal code → exact · ZIP first three digits
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Canada (CA)** — AliExpress list: provinces, required · postal code → exact · first letter of the postal code
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Pologne (PL)** — AliExpress list: unknown (voivodeships?) · postal code → exact · first two digits
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Roumanie (RO)** — AliExpress list: unknown (counties?) · postal code → exact · first two digits
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Tchéquie (CZ)** — AliExpress list: unknown (regions?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Slovaquie (SK)** — AliExpress list: unknown (regions?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Hongrie (HU)** — AliExpress list: unknown (counties?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Slovénie (SI)** — AliExpress list: unknown · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Croatie (HR)** — AliExpress list: unknown (counties?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Bulgarie (BG)** — AliExpress list: unknown (oblasts?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Grèce (GR)** — AliExpress list: unknown (regions?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Chypre (CY)** — AliExpress list: unknown (districts?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Malte (MT)** — AliExpress list: unknown (maybe none) · postal code → none
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Monaco (MC)** — AliExpress list: unknown (maybe none) · postal code → none · one postal code
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Danemark (DK)** — AliExpress list: unknown (regions?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Suède (SE)** — AliExpress list: unknown (counties?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Norvège (NO)** — AliExpress list: unknown (counties?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Finlande (FI)** — AliExpress list: unknown (regions?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Estonie (EE)** — AliExpress list: unknown (counties?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Lettonie (LV)** — AliExpress list: unknown · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
+- [ ] **Lituanie (LT)** — AliExpress list: unknown (counties?) · postal code → approx
+  - [ ] dropdown pasted
+  - [ ] forwarder mapped
 
 ## When a country is mapped
 

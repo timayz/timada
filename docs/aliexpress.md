@@ -173,3 +173,9 @@ these calls too.
 
 Pictures are fetched without following redirects, and only from public hosts unless
 `mail.allow_private_hosts` is set.
+
+## Forwarded orders: the State/Province
+
+AliExpress checks the `province` of a delivery address against its list for
+the country; France is mapped from the postal code, the other countries are
+tracked in [aliexpress-provinces.md](aliexpress-provinces.md).
