@@ -499,8 +499,29 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     expect(auto.items[0].product_count).toBe(2);
     await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid");
 
+    // AliExpress pushes the order's new status to the platform's webhook
+    // (its message push, signed with the app's key and secret): the order
+    // is read again at once, without waiting for the sweep. A push that
+    // does not check out, or is not a push, is refused; another topic, or
+    // an order no shop placed, is taken and let go.
+    const pushUrl = "/aliexpress/webhook";
     aliexpress.ship(auto.id, "LP00123456FR");
+    const readsBefore = aliexpress.orderReads();
+    const pushed = await aliexpress.push(request, pushUrl, auto.id, "OrderShipped");
+    expect(pushed.status()).toBe(200);
+    await expect.poll(() => aliexpress.orderReads(), { timeout: 5_000 }).toBeGreaterThan(readsBefore);
     await forwardIs(page, second, "done");
+    const forged = await aliexpress.push(request, pushUrl, auto.id, "OrderShipped", { signature: "0".repeat(64) });
+    expect(forged.status()).toBe(401);
+    const unknown = await aliexpress.push(request, pushUrl, "8199999999999999", "OrderShipped");
+    expect(unknown.status()).toBe(200);
+    const otherTopic = await aliexpress.push(request, pushUrl, auto.id, "", {
+      body: JSON.stringify({ seller_id: "1234", message_type: 1, data: { trade_order_id: auto.id }, timestamp: 1, site: "ae_global" }),
+    });
+    expect(otherTopic.status()).toBe(200);
+    // (Valid JSON: Playwright re-encodes any other string before sending.)
+    const malformed = await aliexpress.push(request, pushUrl, auto.id, "", { body: JSON.stringify({ hello: "world" }) });
+    expect(malformed.status()).toBe(400);
     await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "fulfilled");
     await expect(page.locator("[data-order-tracking]")).toHaveText("LP00123456FR");
     await expect(page.locator("[data-order-aliexpress-tracking]")).toHaveText("LP00123456FR");
