@@ -223,7 +223,9 @@ export class FakeAliexpress {
             product_id: Number(PRODUCT_ID),
             subject: "Cat Tunnel Deluxe",
             detail: "<p>A <b>crinkly</b> tunnel cats hide in.</p>",
-            currency_code: "EUR",
+            // The seller's listing currency; the combinations are quoted
+            // in the market's.
+            currency_code: "CNY",
             product_status_type: this.offline ? "offline" : "onSelling",
           },
           ae_multimedia_info_dto: { image_urls: `${ALIEXPRESS_URL}/img/main1.png;${ALIEXPRESS_URL}/img/main2.png` },
@@ -232,6 +234,7 @@ export class FakeAliexpress {
               sku_id: sku.id,
               sku_attr: this.skuAttr(sku),
               offer_sale_price: sku.price,
+              currency_code: "EUR",
               sku_available_stock: sku.stock,
               sku_stock: sku.stock > 0,
               ae_sku_property_dtos: {
