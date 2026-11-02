@@ -440,7 +440,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
       billing_details: {
         name: "Ada Lovelace",
         email: "ada@example.org",
-        phone: "",
+        phone: "06 12 34 56 78",
         address: {
           line1: "1 rue de la Paix",
           line2: "",

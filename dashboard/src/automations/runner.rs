@@ -1239,7 +1239,7 @@ mod tests {
                         postal_code: "75002".into(),
                         city: "Paris".into(),
                         country: "FR".into(),
-                        phone: None,
+                        phone: Some("06 12 34 56 78".into()),
                     },
                     note: None,
                     expected_total_cents: None,
