@@ -132,10 +132,16 @@ What is bought:
   the card says so.
 - How AliExpress orders the combination (`sku_attr`) is read again from the product
   when the order is placed, and so is its stock.
-- Each item ships with **free delivery by AliExpress itself** (a Cainiao service),
-  tracked first. When AliExpress offers none to that country, nothing is placed and the
-  card says why. The address goes as given, with the phone split into its calling
-  code and national number. There is no province field.
+- Each item ships with **a delivery AliExpress runs itself** (a Cainiao service):
+  free before paid, tracked first, the cheapest paid one otherwise. When only the
+  seller delivers to that country, nothing is placed and the card says what was
+  offered.
+- The address goes as given, with the phone split into its calling code and national
+  number: the shopper's, or the shop's phone from the AliExpress page when they gave
+  none. AliExpress also wants a `province` from its own list for the country: a
+  French address names the postal code's department (`Rhone`, `Paris`…), any other
+  country sends the city, a stand-in tracked per country in
+  [aliexpress-provinces.md](aliexpress-provinces.md).
 
 A failure is shown on the card with *Place again*. One node takes each order on
 (`Started`, like an import). If AliExpress did not answer, or a node stopped before
