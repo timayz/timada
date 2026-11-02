@@ -30,8 +30,8 @@ use crate::components::avatar::{AvatarSize, avatar, avatar_fallback};
 use crate::components::badge::{BadgeVariant, badge};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::dropdown_menu::{
-    dropdown_menu, dropdown_menu_content, dropdown_menu_item,
-    dropdown_menu_separator, dropdown_menu_trigger,
+    dropdown_menu, dropdown_menu_content, dropdown_menu_item, dropdown_menu_separator,
+    dropdown_menu_trigger,
 };
 use crate::components::floating::FloatingAlign;
 use crate::components::sidebar::{
@@ -66,7 +66,6 @@ impl<'a> Shell<'a> {
             tenant: Some((tenant, nav)),
         }
     }
-
 }
 
 /// The groups of a tenant's rail.

@@ -52,10 +52,16 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX orders_carts_open ON orders_carts (tenant_id, updated_at)
-                WHERE order_id IS NULL;",
+                WHERE order_id IS NULL;
+        CREATE TABLE orders_order_products (
+                tenant_id TEXT NOT NULL,
+                product_id TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, product_id, order_id)
+            );",
     )],
 );
 
 /// The tables the migration creates: what a node empties before copying its
 /// store from a peer, so the subscriptions fill them again.
-pub const TABLES: &[&str] = &["orders_orders", "orders_carts"];
+pub const TABLES: &[&str] = &["orders_orders", "orders_carts", "orders_order_products"];

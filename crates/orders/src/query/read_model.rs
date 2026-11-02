@@ -1,5 +1,6 @@
-//! The subscription that keeps `orders_orders` and `orders_carts` current
-//! for every tenant.
+//! The subscription that keeps `orders_orders`, `orders_carts` and
+//! `orders_order_products` (which products each order holds, for whoever
+//! asks whether a product was ever ordered) current for every tenant.
 //!
 //! Each handler reloads the strict write model of the stream the event
 //! belongs to and rewrites its row, so delivery may repeat (the subscription
@@ -12,7 +13,7 @@ use evento::{
     metadata::RawEvent,
     subscription::{Context, SubscriptionBuilder},
 };
-use timada_core::db::{Db, Value, params_from_iter};
+use timada_core::db::{Db, Value, execute, params_from_iter};
 
 use crate::aggregator::{Cart, Order};
 use crate::command::{CartState, OrderState, cart_projection, order_projection};
@@ -90,41 +91,60 @@ pub async fn upsert_cart(db: &Db, tenant_id: &str, cart: &CartState) -> anyhow::
     Ok(())
 }
 
-/// Writes the row of an order as the write model sees it.
+/// Writes the row of an order as the write model sees it, and one row per
+/// product it holds, in one transaction.
 pub async fn upsert_order(db: &Db, tenant_id: &str, order: &OrderState) -> anyhow::Result<()> {
-    db.execute(
-        "INSERT INTO orders_orders (tenant_id, id, reference, cart_id, status, email, name,
-            country, item_count, total_cents, currency, placed_at, updated_at, payment_id,
-            refunded_cents, discount_id, discount_code, discount_cents, fulfilled_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-            ?18, ?19)
-         ON CONFLICT (tenant_id, id) DO UPDATE SET
-            status = excluded.status, updated_at = excluded.updated_at,
-            refunded_cents = excluded.refunded_cents, discount_id = excluded.discount_id,
-            discount_code = excluded.discount_code, discount_cents = excluded.discount_cents,
-            fulfilled_at = excluded.fulfilled_at",
-        params_from_iter([
-            Value::from(tenant_id),
-            Value::from(order.id.as_str()),
-            Value::from(order.reference.as_str()),
-            Value::from(order.cart_id.as_str()),
-            Value::from(order.status.as_str()),
-            Value::from(order.email.as_str()),
-            Value::from(order.shipping.name.as_str()),
-            Value::from(order.shipping.country.as_str()),
-            Value::from(i64::from(order.item_count())),
-            Value::from(order.total_cents as i64),
-            Value::from(order.currency.as_str()),
-            Value::from(order.placed_at as i64),
-            Value::from(order.updated_at as i64),
-            Value::from(order.payment.payment_id.as_str()),
-            Value::from(order.refunded_cents as i64),
-            Value::from(order.discount.as_ref().map(|d| d.discount_id.as_str())),
-            Value::from(order.discount.as_ref().map(|d| d.code.as_str())),
-            Value::from(order.discount.as_ref().map_or(0, |d| d.amount_cents as i64)),
-            Value::from(order.fulfilled_at.map(|at| at as i64)),
-        ]),
-    )
-    .await?;
-    Ok(())
+    let env = (tenant_id, order);
+    db.write(&env, |tx, (tenant_id, order)| {
+        Box::pin(async move {
+            execute(
+                tx,
+                "INSERT INTO orders_orders (tenant_id, id, reference, cart_id, status, email, name,
+                    country, item_count, total_cents, currency, placed_at, updated_at, payment_id,
+                    refunded_cents, discount_id, discount_code, discount_cents, fulfilled_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                    ?18, ?19)
+                 ON CONFLICT (tenant_id, id) DO UPDATE SET
+                    status = excluded.status, updated_at = excluded.updated_at,
+                    refunded_cents = excluded.refunded_cents, discount_id = excluded.discount_id,
+                    discount_code = excluded.discount_code, discount_cents = excluded.discount_cents,
+                    fulfilled_at = excluded.fulfilled_at",
+                params_from_iter([
+                    Value::from(*tenant_id),
+                    Value::from(order.id.as_str()),
+                    Value::from(order.reference.as_str()),
+                    Value::from(order.cart_id.as_str()),
+                    Value::from(order.status.as_str()),
+                    Value::from(order.email.as_str()),
+                    Value::from(order.shipping.name.as_str()),
+                    Value::from(order.shipping.country.as_str()),
+                    Value::from(i64::from(order.item_count())),
+                    Value::from(order.total_cents as i64),
+                    Value::from(order.currency.as_str()),
+                    Value::from(order.placed_at as i64),
+                    Value::from(order.updated_at as i64),
+                    Value::from(order.payment.payment_id.as_str()),
+                    Value::from(order.refunded_cents as i64),
+                    Value::from(order.discount.as_ref().map(|d| d.discount_id.as_str())),
+                    Value::from(order.discount.as_ref().map(|d| d.code.as_str())),
+                    Value::from(order.discount.as_ref().map_or(0, |d| d.amount_cents as i64)),
+                    Value::from(order.fulfilled_at.map(|at| at as i64)),
+                ]),
+            )
+            .await?;
+            // The lines of an order never change once placed; a repeat finds
+            // its rows there.
+            for line in &order.lines {
+                execute(
+                    tx,
+                    "INSERT OR IGNORE INTO orders_order_products (tenant_id, product_id, order_id)
+                     VALUES (?1, ?2, ?3)",
+                    (*tenant_id, line.product_id.as_str(), order.id.as_str()),
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    })
+    .await
 }

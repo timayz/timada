@@ -7,8 +7,8 @@ pub mod create;
 pub mod product_id;
 
 use timada_catalog::{
-    CatalogError, Command, MAX_NAME_LEN, ProductFilter, categories_of_tenant, count_products,
-    products_of_tenant,
+    CatalogError, Command, MAX_NAME_LEN, ProductFilter, ProductStatus, categories_of_tenant,
+    count_products, products_of_tenant,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
@@ -42,6 +42,9 @@ struct ProductsQuery {
     q: Option<String>,
     /// The id of a category to list only.
     category: Option<String>,
+    /// One of the stored status values, or `all` for every status; absent
+    /// (or anything else) lists the published products.
+    status: Option<String>,
     /// 1-based.
     page: Option<i64>,
     error: Option<String>,
@@ -55,7 +58,35 @@ struct ProductsLink<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     category: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     page: Option<i64>,
+}
+
+/// The value of the status filter that lists every product.
+const EVERY_STATUS: &str = "all";
+
+/// What the `status` query parameter asks for: `None` is every status; the
+/// default, absent or unknown, is the published products.
+fn status_filter(param: Option<&str>) -> Option<ProductStatus> {
+    match param.map(str::trim) {
+        Some(EVERY_STATUS) => None,
+        Some(value) => Some(ProductStatus::parse(value).unwrap_or(ProductStatus::Published)),
+        None => Some(ProductStatus::Published),
+    }
+}
+
+/// The empty-table line for what was asked.
+fn empty_text(filter: &ProductFilter<'_>) -> &'static str {
+    if filter.q.is_some() || filter.category.is_some() {
+        return "No product matches.";
+    }
+    match filter.status {
+        Some(ProductStatus::Published) => "No published product yet.",
+        Some(ProductStatus::Draft) => "No draft.",
+        Some(ProductStatus::Archived) => "No archived product.",
+        None => "No product yet.",
+    }
 }
 
 pub fn products_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
@@ -115,11 +146,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .as_deref()
         .map(str::trim)
         .filter(|c| !c.is_empty());
+    let status = status_filter(query.status.as_deref());
+    // What the links carry: the parameter as given, when it was.
+    let status_param = query.status.as_deref().map(str::trim);
     let page_number = query.page.unwrap_or(1).max(1);
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
     let pool = app_context::<Db>(cx);
-    let filter = ProductFilter::default().search(q).category(category);
+    let filter = ProductFilter::default()
+        .search(q)
+        .category(category)
+        .status(status);
     let total = count_products(pool, &tenant.id, &filter)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -144,6 +181,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 .query(ProductsLink {
                     q,
                     category,
+                    status: status_param,
                     page: Some(page),
                 })
                 .resolve(cx)
@@ -175,6 +213,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             }
                         )
                     }
+                    <label class="sr-only" for="products-status">"Status"</label>
+                    select(
+                        attrs: attributes! { id="products-status" name="status" class="w-44" },
+                        for option in ProductStatus::ALL {
+                            <option value=(option.as_str()) selected=(status == Some(option))>(status_label(option))</option>
+                        }
+                        <option value=(EVERY_STATUS) selected=(status.is_none())>"Every status"</option>
+                    )
                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Search")
                 )
                 table(
@@ -190,7 +236,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                     table_body(
                         if rows.is_empty() {
-                            empty_row(colspan: 6, text: "No product yet.")
+                            empty_row(colspan: 6, text: empty_text(&filter))
                         }
                         for row in &rows {
                             table_row(

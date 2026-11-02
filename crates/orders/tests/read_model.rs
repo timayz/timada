@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use timada_orders::{
     Command, OrderFilter, OrderStatus, count_orders, fulfilled_between, open_carts,
-    orders_of_email, orders_of_tenant, read_model_subscription,
+    orders_of_email, orders_of_tenant, product_ever_ordered, read_model_subscription,
 };
 
 #[tokio::test]
@@ -78,6 +78,22 @@ async fn orders_and_carts_are_listed() {
         "an empty or ordered cart is not left behind"
     );
     assert_eq!(carts[0].id, left);
+
+    // Which products were ever ordered: a cancelled order counts, a cart
+    // does not, and nothing crosses tenants.
+    assert!(product_ever_ordered(&pool, TENANT, &mug).await.unwrap());
+    assert!(!product_ever_ordered(&pool, "tenant-2", &mug).await.unwrap());
+    let in_a_cart_only = product(&catalog, "Plate", 500, "EUR").await;
+    cart_with(&orders, &in_a_cart_only, 1).await;
+    read_model_subscription::<evento::Turso>(pool.clone())
+        .run_once(&executor)
+        .await
+        .unwrap();
+    assert!(
+        !product_ever_ordered(&pool, TENANT, &in_a_cart_only)
+            .await
+            .unwrap()
+    );
     assert_eq!(carts[0].item_count, 3);
 }
 

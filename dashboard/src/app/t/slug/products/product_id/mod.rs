@@ -4,6 +4,7 @@
 pub mod archive;
 pub mod attributes;
 pub mod categorize;
+pub mod delete;
 pub mod describe;
 pub mod images;
 pub mod options;
@@ -340,6 +341,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         None => "No published review".to_owned(),
     };
     let editable = can_manage && !product.is_archived();
+    // A product somebody ordered stays on record: it can be archived, not
+    // deleted.
+    let deletable = can_manage
+        && !timada_orders::product_ever_ordered(pool, &access.tenant.id, &product.id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
     // The AliExpress item it was imported from, read from its own stream.
     let can_aliexpress = access
         .can(cx, timada_tenancy::PERMISSION_ALIEXPRESS_MANAGE)
@@ -1099,6 +1106,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             if product.is_archived() {
                 <p class="mb-6 text-sm text-muted-foreground">"An archived product cannot change any more."</p>
+            }
+
+            if deletable {
+                <form method="post" action=(href!(delete::delete, Slug(slug.clone()), ProductId(product.id.clone()))) class="mb-6 flex flex-wrap items-center gap-3">
+                    button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Delete product")
+                    <p class="text-sm text-muted-foreground">"For good: nobody has ordered it, so it can go as if it had never been. Its slug is free again and its pictures are deleted."</p>
+                </form>
             }
 
             if editable {

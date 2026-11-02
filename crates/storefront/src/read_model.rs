@@ -62,7 +62,39 @@ async fn on_product_event<E: Executor>(
     else {
         return Ok(());
     };
+    if product.deleted {
+        return delete_product_rows(&db, &product.id).await;
+    }
     upsert_product(&db, &product).await
+}
+
+/// Drops every row of a deleted product (its own, its options, its category
+/// memberships and its stock) and, when a category counted it, works the
+/// counts out again. Nothing to drop is fine: delivery may repeat.
+async fn delete_product_rows(db: &Db, product_id: &str) -> anyhow::Result<()> {
+    db.write(product_id, |tx, product_id| {
+        Box::pin(async move {
+            let was_counted: Option<(bool,)> = fetch_optional(
+                tx,
+                "SELECT status = 'published' FROM storefront_products WHERE id = ?1",
+                (product_id,),
+            )
+            .await?;
+            for statement in [
+                "DELETE FROM storefront_product_categories WHERE product_id = ?1",
+                "DELETE FROM storefront_product_options WHERE product_id = ?1",
+                "DELETE FROM storefront_stock WHERE product_id = ?1",
+                "DELETE FROM storefront_products WHERE id = ?1",
+            ] {
+                execute(tx, statement, (product_id,)).await?;
+            }
+            if was_counted.is_some_and(|(counted,)| counted) {
+                refresh_category_counts(tx).await?;
+            }
+            Ok(())
+        })
+    })
+    .await
 }
 
 #[evento::subscription_all]

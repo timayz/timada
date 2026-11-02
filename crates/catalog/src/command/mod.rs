@@ -40,11 +40,11 @@ use crate::aggregator::category::{
 };
 use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
-    Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Created, Described, ImageAdded,
-    ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionLabelled, OptionRemoved,
-    OptionRenamed, OptionValueLabelled, OptionValuesChanged, Priced, Published, Released, Renamed,
-    TaxCategorySet, Uncategorized, Unpublished, VariantDefined, VariantImaged, VariantPriced,
-    VariantRemoved, VariantSkuChanged,
+    Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Created, Deleted, Described,
+    ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionLabelled,
+    OptionRemoved, OptionRenamed, OptionValueLabelled, OptionValuesChanged, Priced, Published,
+    Released, Renamed, TaxCategorySet, Uncategorized, Unpublished, VariantDefined, VariantImaged,
+    VariantPriced, VariantRemoved, VariantSkuChanged,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
@@ -113,6 +113,9 @@ pub enum ProductStatus {
 }
 
 impl ProductStatus {
+    /// Every status, in the order a filter lists them.
+    pub const ALL: [Self; 3] = [Self::Published, Self::Draft, Self::Archived];
+
     /// The value stored in the read models.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -245,6 +248,10 @@ pub struct ProductState {
     pub description: String,
     pub price: Option<Price>,
     pub status: ProductStatus,
+    /// Gone for good: archived, and its rows dropped from every listing. The
+    /// state still says what it was (its pictures, for one), for whoever
+    /// cleans up after it.
+    pub deleted: bool,
     /// The categories it belongs to, by id.
     pub categories: BTreeSet<String>,
     /// Its pictures, in the order they are shown; the first is the one a
@@ -277,8 +284,14 @@ impl ProductState {
         self.status == ProductStatus::Published
     }
 
+    /// Whether it takes no more edits: archived, or deleted (which archives
+    /// it too).
     pub fn is_archived(&self) -> bool {
         self.status == ProductStatus::Archived
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        self.deleted
     }
 
     /// The currency everything about this product is priced in, once
@@ -349,6 +362,7 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_published())
         .handler(on_unpublished())
         .handler(on_archived())
+        .handler(on_deleted())
         .handler(on_categorized())
         .handler(on_uncategorized())
         .handler(on_image_added())
@@ -427,6 +441,17 @@ async fn on_unpublished(
 #[evento::handler]
 async fn on_archived(event: Event<Archived>, product: &mut ProductState) -> anyhow::Result<()> {
     product.status = ProductStatus::Archived;
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+/// A deleted product is archived too, so everything that asks whether it is
+/// still for sale or still editable gets the same answer as for an archived
+/// one; only the read models tell the two apart, dropping its rows.
+#[evento::handler]
+async fn on_deleted(event: Event<Deleted>, product: &mut ProductState) -> anyhow::Result<()> {
+    product.status = ProductStatus::Archived;
+    product.deleted = true;
     product.updated_at = event.timestamp;
     Ok(())
 }
@@ -1015,7 +1040,17 @@ async fn on_category_slug_released(
 // =============================================================================
 
 impl<E: Executor> Command<E> {
+    /// The product, unless it was deleted: a deleted one is gone from every
+    /// page.
     pub async fn load_product(&self, product_id: &str) -> anyhow::Result<Option<ProductState>> {
+        Ok(self
+            .load_product_any(product_id)
+            .await?
+            .filter(|product| !product.deleted))
+    }
+
+    /// The product, deleted or not.
+    pub async fn load_product_any(&self, product_id: &str) -> anyhow::Result<Option<ProductState>> {
         product_projection()
             .load(product_id)
             .tenant(&self.tenant)

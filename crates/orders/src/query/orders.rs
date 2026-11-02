@@ -156,6 +156,23 @@ pub async fn fulfilled_between(db: &Db, from: i64, to: i64) -> anyhow::Result<Ve
     .await
 }
 
+/// Whether any order of the tenant ever held the product, cancelled or
+/// refunded ones included: once sold, a product stays on record and may be
+/// archived but not deleted.
+pub async fn product_ever_ordered(
+    db: &Db,
+    tenant_id: &str,
+    product_id: &str,
+) -> anyhow::Result<bool> {
+    let count: i64 = db
+        .fetch_scalar(
+            "SELECT count(*) FROM orders_order_products WHERE tenant_id = ?1 AND product_id = ?2",
+            (tenant_id, product_id),
+        )
+        .await?;
+    Ok(count > 0)
+}
+
 /// One order of a tenant, by id.
 pub async fn order_by_id(db: &Db, tenant_id: &str, id: &str) -> anyhow::Result<Option<OrderRow>> {
     db.fetch_optional(

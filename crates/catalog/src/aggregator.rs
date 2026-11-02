@@ -38,6 +38,13 @@ pub enum Product {
     Archived {
         archived_by: String,
     },
+    /// Final too, and more: the product leaves every listing as if it had
+    /// never been. Only a product nobody ever ordered may be deleted (the
+    /// host checks, the catalog cannot see the orders); its slug and codes
+    /// are free again and its pictures' files are deleted.
+    Deleted {
+        deleted_by: String,
+    },
     /// The product joins a category of the tenant (see [`category`]).
     Categorized {
         category_id: String,

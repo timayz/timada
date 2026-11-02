@@ -57,6 +57,34 @@ async fn products_are_listed_searched_counted_and_stay_idempotent() {
         .await
         .unwrap();
     assert_eq!(found.len(), 1, "search is case-insensitive");
+    // The filter takes a status, on its own or with a search.
+    let published = all.clone().status(Some(ProductStatus::Published));
+    assert_eq!(count_products(&pool, TENANT, &published).await.unwrap(), 1);
+    assert_eq!(
+        products_of_tenant(&pool, TENANT, &published, 0, 50)
+            .await
+            .unwrap()[0]
+            .id,
+        mug.id
+    );
+    let drafts = all.clone().status(Some(ProductStatus::Draft));
+    assert_eq!(count_products(&pool, TENANT, &drafts).await.unwrap(), 1);
+    assert_eq!(
+        count_products(&pool, TENANT, &drafts.clone().search(Some("mug")))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        count_products(
+            &pool,
+            TENANT,
+            &all.clone().status(Some(ProductStatus::Archived))
+        )
+        .await
+        .unwrap(),
+        0
+    );
     assert_eq!(
         count_products(&pool, TENANT, &all.clone().search(Some("%")))
             .await
@@ -102,6 +130,48 @@ async fn an_archived_product_leaves_its_slug_to_the_next_one() {
     assert_eq!(rows[0].status(), ProductStatus::Draft);
     assert_eq!(rows[1].id, first.id);
     assert_eq!(rows[1].status(), ProductStatus::Archived);
+}
+
+#[tokio::test]
+async fn a_deleted_product_loses_its_rows_and_its_category_count() {
+    let (executor, pool) = executor_with_pool().await;
+    let cmd = Command::new(executor.clone(), TENANT);
+    let toys = create_category(&cmd, "Toys").await;
+    let ball = create_product(&cmd, "Ball").await;
+    cmd.categorize_product(ALICE, &ball.id, &toys.id)
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+    let count = |pool: Db, id: String| async move {
+        category_by_id(&pool, TENANT, &id)
+            .await
+            .unwrap()
+            .unwrap()
+            .product_count
+    };
+    assert_eq!(count(pool.clone(), toys.id.clone()).await, 1);
+
+    cmd.delete_product(ALICE, &ball.id).await.unwrap();
+    // Twice: delivery may repeat, with nothing left to drop.
+    catch_up(&executor, &pool).await;
+    catch_up(&executor, &pool).await;
+
+    assert!(
+        product_by_id(&pool, TENANT, &ball.id)
+            .await
+            .unwrap()
+            .is_none(),
+        "the row is gone, not archived"
+    );
+    assert!(
+        categories_of_product(&pool, TENANT, &ball.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(count(pool.clone(), toys.id.clone()).await, 0);
+    let every = ProductFilter::default();
+    assert_eq!(count_products(&pool, TENANT, &every).await.unwrap(), 0);
 }
 
 #[tokio::test]
