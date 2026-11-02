@@ -22,7 +22,7 @@ executor (`remote`), and a consensus-replicated executor (`evento-accord`, alpha
 
 ```toml
 [dependencies]
-evento = { version = "=2.0.0-alpha.37", features = ["turso"] }  # or "sqlite", "postgres", "mysql", "fjall", "remote"
+evento = { version = "=2.0.0-alpha.38", features = ["turso"] }  # or "sqlite", "postgres", "mysql", "fjall", "remote"
 bitcode = "0.6"
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
