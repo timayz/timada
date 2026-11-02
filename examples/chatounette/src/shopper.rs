@@ -99,7 +99,12 @@ pub fn remember_order(cx: &Cx, order_id: &str) -> topcoat::Result<()> {
 
 /// What the checkout form was last filled with, so a refused form or the
 /// next order starts from it.
+/// Every field has a default: the form posts only what it shows (a shop
+/// without businesses, methods or a billing fieldset posts none of theirs,
+/// and the number comes as `phone_code` + `phone_number`, `phone` whole
+/// only from a wallet).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CheckoutDraft {
     pub email: String,
     pub name: String,
@@ -411,6 +416,19 @@ pub fn safe_next(next: Option<&str>, fallback: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_form_posts_the_phone_in_two_fields_and_a_wallet_whole() {
+        let typed: CheckoutDraft = serde_urlencoded::from_str(
+            "email=ada%40example.org&name=Ada&line1=1+rue&postal_code=75002&city=Paris&country=FR&phone_code=33&phone_number=06+12+34+56+78&note=",
+        )
+        .unwrap();
+        assert_eq!(typed.phone_text(), "+33 6 12 34 56 78");
+        let wallet: CheckoutDraft =
+            serde_urlencoded::from_str("email=a%40b.c&name=Ada&phone=%2B33612345678&country=FR")
+                .unwrap();
+        assert_eq!(wallet.phone_text(), "+33612345678");
+    }
 
     #[test]
     fn a_phone_is_composed_from_its_code_and_split_back() {
