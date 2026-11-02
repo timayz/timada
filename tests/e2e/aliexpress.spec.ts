@@ -404,21 +404,24 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     await expect(page.getByRole("status")).toContainText("Stripe connected.");
     await app.start(request, await mintKey(page, slug, true), 1);
 
-    // By hand first: AliExpress delivers no further for free, so the order
-    // is not placed and says why.
+    // By hand first: only the seller delivers, so the order is not placed
+    // and says why, with what was offered.
     await page.goto(`/t/${slug}/aliexpress`);
     await expect(page.locator("[data-aliexpress-forwarding]")).toHaveAttribute("data-aliexpress-forwarding", "manual");
-    aliexpress.freight = [{ service_name: "CAINIAO_PREMIUM", cents: 990, tracking: true }];
+    aliexpress.freight = [{ service_name: "YANWEN_JYT", cents: 120, tracking: false }];
     const first = `/t/${slug}/orders/${await buyRoses(page, request, stripe, webhookUrl, 1)}`;
     await page.goto(first);
     await expect(page.locator("[data-order-aliexpress]")).toHaveAttribute("data-order-aliexpress", "none");
     await page.getByRole("button", { name: "Place on AliExpress" }).click();
     await expect(page.getByRole("status")).toContainText("The order is being placed on AliExpress.");
     await forwardIs(page, first, "failed");
-    await expect(page.locator("[data-order-aliexpress-error]")).toContainText("no free delivery of its own to FR");
+    await expect(page.locator("[data-order-aliexpress-error]")).toContainText(
+      "Only the seller delivers “Cat Tunnel Deluxe” to FR on AliExpress; offered: YANWEN_JYT (1.20 EUR).",
+    );
     expect(aliexpress.orders).toHaveLength(0);
 
-    // Free delivery again: placed, for the merchant to pay in AliExpress.
+    // Shipped by AliExpress again: placed, for the merchant to pay in
+    // AliExpress.
     aliexpress.freight = [
       { service_name: "CAINIAO_PREMIUM", cents: 990, tracking: true },
       { service_name: "CAINIAO_STANDARD", cents: 0, tracking: true },
