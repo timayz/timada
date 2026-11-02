@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { PASSWORD, enterCode, latestCode, mailCount, registerWithEmail, signInWithEmail, uniqueEmail } from "./email";
+import { expectSignedInAs, signOut } from "./shell";
 
 // The e-mail + password method end to end: the code at sign-up, the code at
 // every sign-in, a wrong code, the resend throttle, and a password reset that
@@ -13,13 +14,13 @@ test("register, sign in with a mailed code, then reset the password", async ({ b
   const page = await laptop.newPage();
 
   await registerWithEmail(page, email);
-  await expect(page.locator("header").getByText("Signed in as")).toContainText(email);
+  await expectSignedInAs(page, email);
   await page.goto("/auth/account");
   await expect(page.locator("section", { hasText: "E-mail and password" })).toContainText(email);
   const signIns = page.locator("section", { hasText: "Recent sign-ins" }).locator("li");
   await expect(signIns).toHaveCount(1);
   await expect(signIns.first()).toContainText("password");
-  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await signOut(page);
   await expect(page).toHaveURL(/\/auth\/login$/);
 
   // A wrong password: no mail, straight back to the form.
@@ -54,7 +55,7 @@ test("register, sign in with a mailed code, then reset the password", async ({ b
   const phone = await browser.newContext();
   const phonePage = await phone.newPage();
   await signInWithEmail(phonePage, email);
-  await expect(phonePage.locator("header").getByText("Signed in as")).toContainText(email);
+  await expectSignedInAs(phonePage, email);
 
   // Forgot password from the laptop: code plus new password, confirmed twice.
   const beforeReset = await mailCount(page.request, email);
@@ -75,7 +76,7 @@ test("register, sign in with a mailed code, then reset the password", async ({ b
   await page.getByRole("button", { name: "Change password" }).click();
   await expect(page).toHaveURL(/\/\?message=/);
   await expect(page.getByRole("status")).toContainText("Password changed");
-  await expect(page.locator("header").getByText("Signed in as")).toContainText(email);
+  await expectSignedInAs(page, email);
 
   // The phone was signed out; the old password is dead, the new one works.
   await phonePage.goto("/auth/account");
@@ -85,7 +86,7 @@ test("register, sign in with a mailed code, then reset the password", async ({ b
   await phonePage.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(phonePage).toHaveURL(/\/auth\/login\?error=invalid_credentials$/);
   await signInWithEmail(phonePage, email, NEW_PASSWORD);
-  await expect(phonePage.locator("header").getByText("Signed in as")).toContainText(email);
+  await expectSignedInAs(phonePage, email);
 
   await laptop.close();
   await phone.close();
@@ -94,7 +95,7 @@ test("register, sign in with a mailed code, then reset the password", async ({ b
 test("an address that already has an account cannot register again", async ({ page }) => {
   const email = uniqueEmail("dup");
   await registerWithEmail(page, email);
-  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await signOut(page);
 
   await page.goto("/auth/register");
   await page.getByLabel("E-mail address").fill(email.toUpperCase());
@@ -152,7 +153,7 @@ test("the password changes from the account page and signs other browsers out", 
   await phonePage.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(phonePage).toHaveURL(/\/auth\/login\?error=invalid_credentials$/);
   await signInWithEmail(phonePage, email, NEW_PASSWORD);
-  await expect(phonePage.locator("header").getByText("Signed in as")).toContainText(email);
+  await expectSignedInAs(phonePage, email);
 
   await laptop.close();
   await phone.close();

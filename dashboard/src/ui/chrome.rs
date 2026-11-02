@@ -30,7 +30,7 @@ use crate::components::avatar::{AvatarSize, avatar, avatar_fallback};
 use crate::components::badge::{BadgeVariant, badge};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::dropdown_menu::{
-    dropdown_menu, dropdown_menu_content, dropdown_menu_item, dropdown_menu_label,
+    dropdown_menu, dropdown_menu_content, dropdown_menu_item,
     dropdown_menu_separator, dropdown_menu_trigger,
 };
 use crate::components::floating::FloatingAlign;
@@ -467,27 +467,20 @@ async fn search_box(action: &str) -> Result<impl View> {
     })
 }
 
-/// The right end of the topbar: who is signed in, the sign-out button
-/// (outside the menu, so it works without scripts and the browser tests find
-/// it), and the account menu behind the avatar.
+/// The right end of the topbar: the account menu behind the avatar, which
+/// says who is signed in (its accessible name too, for the browser tests)
+/// and holds the account link and the sign-out button. A native popover, so
+/// it opens and signs out without scripts.
 #[component]
 async fn user_menu(cx: &Cx, user: Option<&UserState>) -> Result<impl View> {
     Ok(view! {
         if let Some(user) = user {
             let menu = element_id(cx);
-            <span class="hidden truncate text-sm text-muted-foreground sm:inline">"Signed in as " <strong class="font-medium text-foreground">(&user.label)</strong></span>
-            <form method="post" action=(href!(crate::app::auth::logout::logout))>
-                button(
-                    variant: ButtonVariant::Ghost,
-                    size: ButtonSize::Icon,
-                    attrs: attributes! { type="submit" aria-label="Sign out" title="Sign out" class="rounded-full text-muted-foreground hover:text-foreground" },
-                    icon(data: icons::LOG_OUT)
-                )
-            </form>
+            let signed_in_as = format!("Signed in as {}", user.label);
             dropdown_menu(
                 dropdown_menu_trigger(
                     target: &menu,
-                    attrs: attributes! { aria-label="Account menu" class="rounded-full" },
+                    attrs: attributes! { aria-label=(&signed_in_as) title=(&signed_in_as) class="rounded-full" },
                     <span class="relative inline-flex">
                         avatar(size: AvatarSize::Md, avatar_fallback(attrs: attributes! { class="bg-primary/15 text-primary" }, (initials(&user.label))))
                         <span class="absolute right-0 bottom-0 size-2.5 rounded-full border-2 border-background bg-success" aria-hidden="true"></span>
@@ -496,9 +489,17 @@ async fn user_menu(cx: &Cx, user: Option<&UserState>) -> Result<impl View> {
                 dropdown_menu_content(
                     id: &menu,
                     align: FloatingAlign::End,
-                    dropdown_menu_label((&user.label))
+                    attrs: attributes! { class="min-w-56" },
+                    <p class="px-2 py-1.5">
+                        <span class="block text-xs text-muted-foreground">"Signed in as"</span>
+                        <span class="block truncate text-sm font-medium">(&user.label)</span>
+                    </p>
                     dropdown_menu_separator()
-                    dropdown_menu_item(close: Some(&menu), <a href=(href!(crate::app::auth::account::account))>"Account"</a>)
+                    dropdown_menu_item(close: Some(&menu), <a class="flex items-center gap-2" href=(href!(crate::app::auth::account::account))>icon(data: icons::ACCOUNT) "Account"</a>)
+                    dropdown_menu_separator()
+                    <form method="post" action=(href!(crate::app::auth::logout::logout))>
+                        dropdown_menu_item(attrs: attributes! { type="submit" }, icon(data: icons::LOG_OUT) "Sign out")
+                    </form>
                 )
             )
         } else {
