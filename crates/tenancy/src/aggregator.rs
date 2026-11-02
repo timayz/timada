@@ -206,6 +206,12 @@ pub enum Tenant {
         time_zone: String,
         set_by: String,
     },
+    /// The shop's phone, given to AliExpress with an order whose shopper
+    /// gave none (AliExpress takes no order without one); `None` clears it.
+    AliexpressOrderPhoneSet {
+        phone: Option<String>,
+        set_by: String,
+    },
 }
 
 /// Index: `slug → tenant`. One stream per slug, id = [`tenant_slug_id`](crate::tenant_slug_id).

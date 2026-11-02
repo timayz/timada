@@ -129,6 +129,9 @@ pub struct AliexpressSettings {
     pub auto_forward: bool,
     /// AliExpress is asked to charge the account when an order is placed.
     pub try_to_pay: bool,
+    /// The shop's phone, given to AliExpress with an order whose shopper
+    /// gave none.
+    pub order_phone: Option<String>,
 }
 
 /// The tokens a company's AliExpress account gave the platform's app.
@@ -343,6 +346,7 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_aliexpress_configured())
         .handler(on_aliexpress_removed())
         .handler(on_aliexpress_forwarding_set())
+        .handler(on_aliexpress_order_phone_set())
         .handler(on_mail_languages_set())
         .handler(on_mail_template_saved())
         .handler(on_mail_template_text_saved())
@@ -551,10 +555,10 @@ async fn on_aliexpress_configured(
 ) -> anyhow::Result<()> {
     let data = &event.data;
     // Setting the market again keeps how orders go.
-    let (auto_forward, try_to_pay) = tenant
+    let (auto_forward, try_to_pay, order_phone) = tenant
         .aliexpress
         .take()
-        .map(|was| (was.auto_forward, was.try_to_pay))
+        .map(|was| (was.auto_forward, was.try_to_pay, was.order_phone))
         .unwrap_or_default();
     tenant.aliexpress = Some(AliexpressSettings {
         ship_to_country: data.ship_to_country.to_owned(),
@@ -565,6 +569,7 @@ async fn on_aliexpress_configured(
         configured_at: event.timestamp,
         auto_forward,
         try_to_pay,
+        order_phone,
     });
     Ok(())
 }
@@ -586,6 +591,17 @@ async fn on_aliexpress_forwarding_set(
     if let Some(settings) = tenant.aliexpress.as_mut() {
         settings.auto_forward = event.data.auto_forward;
         settings.try_to_pay = event.data.try_to_pay;
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_aliexpress_order_phone_set(
+    event: Event<crate::aggregator::AliexpressOrderPhoneSet>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    if let Some(settings) = tenant.aliexpress.as_mut() {
+        settings.order_phone = event.data.phone.to_owned();
     }
     Ok(())
 }

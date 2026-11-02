@@ -1,7 +1,9 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::company::{AliexpressAuthorized, AliexpressDisconnected};
-use crate::aggregator::{AliexpressConfigured, AliexpressForwardingSet, AliexpressRemoved};
+use crate::aggregator::{
+    AliexpressConfigured, AliexpressForwardingSet, AliexpressOrderPhoneSet, AliexpressRemoved,
+};
 use crate::command::CompanyState;
 use crate::error::TenancyError;
 use crate::value_object::{PERMISSION_ALIEXPRESS_MANAGE, Pricing};
@@ -162,6 +164,53 @@ impl<E: Executor> super::Command<E> {
             .event(&AliexpressForwardingSet {
                 auto_forward,
                 try_to_pay,
+                set_by: actor_user_id.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// The shop's phone for an order whose shopper gave none (AliExpress
+    /// takes no order without one); blank clears it, the same again is a
+    /// no-op. Needs `aliexpress:manage`.
+    pub async fn set_aliexpress_order_phone(
+        &self,
+        actor_user_id: &str,
+        tenant_id: &str,
+        phone: Option<&str>,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let tenant = self.require_active(tenant_id).await?;
+        if !tenant.can(actor_user_id, PERMISSION_ALIEXPRESS_MANAGE) {
+            return Err(TenancyError::Forbidden);
+        }
+        let Some(settings) = &tenant.aliexpress else {
+            return Err(TenancyError::AliexpressNotConfigured);
+        };
+        let phone = phone
+            .map(str::trim)
+            .filter(|phone| !phone.is_empty())
+            .map(|phone| {
+                let plain = phone
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || matches!(c, ' ' | '+' | '-' | '(' | ')' | '.'));
+                let digits = phone.chars().filter(char::is_ascii_digit).count();
+                if plain && (6..=32).contains(&phone.chars().count()) && digits >= 6 {
+                    Ok(phone.to_owned())
+                } else {
+                    Err(TenancyError::InvalidPhone)
+                }
+            })
+            .transpose()?;
+        if settings.order_phone == phone {
+            return Ok(());
+        }
+        tenant
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&AliexpressOrderPhoneSet {
+                phone,
                 set_by: actor_user_id.to_owned(),
             })
             .commit(&self.0)

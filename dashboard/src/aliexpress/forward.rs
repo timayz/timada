@@ -261,8 +261,19 @@ impl Aliexpress {
                 service_name: service.service_name.clone(),
             });
         }
+        let address = logistics_address(
+            &order.shipping,
+            order.language.as_deref(),
+            settings.order_phone.as_deref(),
+        );
+        if address.mobile_no.is_empty() {
+            return Err(Refusal(
+                "AliExpress needs a phone number: the shopper gave none and the shop has none set for its orders on the AliExpress page."
+                    .to_owned(),
+            ));
+        }
         let request = PlaceOrder {
-            address: logistics_address(&order.shipping, order.language.as_deref()),
+            address,
             items,
             try_to_pay: settings.try_to_pay,
             pay_currency: settings.currency.clone(),

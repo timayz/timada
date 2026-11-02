@@ -459,8 +459,10 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     await page.goto(`/t/${slug}/aliexpress`);
     await page.getByLabel("Place paid orders on AliExpress automatically").check();
     await page.getByLabel("Ask AliExpress to pay them with the account's saved payment method").check();
+    await page.getByLabel("Phone for orders whose shopper gave none").fill("01 89 76 02 12");
     await page.getByRole("button", { name: "Save orders settings" }).click();
     await expect(page.getByRole("status")).toContainText("Orders settings saved.");
+    await expect(page.getByLabel("Phone for orders whose shopper gave none")).toHaveValue("01 89 76 02 12");
     await expect(page.locator("[data-aliexpress-forwarding]")).toHaveAttribute("data-aliexpress-forwarding", "auto");
     const second = `/t/${slug}/orders/${await buyRoses(page, request, stripe, webhookUrl, 2)}`;
     await forwardIs(page, second, "placed");
