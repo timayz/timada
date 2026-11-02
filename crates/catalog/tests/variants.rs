@@ -265,6 +265,75 @@ async fn a_price_range_covers_what_a_shopper_may_pay() {
 }
 
 #[tokio::test]
+async fn a_variant_shows_a_label_instead_of_its_values_when_given_one() {
+    let cmd = command().await;
+    let (product_id, colour) = with_colours(&cmd).await;
+    let beige = cmd
+        .define_variant(ALICE, &product_id, sell(vec![pick(&colour, "Beige")], 2290))
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.variants[0].label, None);
+    assert_eq!(
+        state.variants[0].display_label(),
+        "Beige",
+        "without a label a variant reads as its values"
+    );
+
+    // The label is trimmed; the values it stands for do not move.
+    cmd.label_variant(ALICE, &product_id, &beige, Some("  Sable  "))
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.variants[0].label.as_deref(), Some("Sable"));
+    assert_eq!(state.variants[0].display_label(), "Sable");
+    assert_eq!(state.variants[0].value_of(&colour), Some("Beige"));
+    assert_eq!(
+        state
+            .variant_for(&[pick(&colour, "Beige")])
+            .map(|v| v.id.as_str()),
+        Some(beige.as_str()),
+        "the combination is still found by its values"
+    );
+
+    // The same label again writes nothing; one too long is refused.
+    let before = state.updated_at;
+    cmd.label_variant(ALICE, &product_id, &beige, Some("Sable"))
+        .await
+        .unwrap();
+    assert_eq!(
+        cmd.load_product(&product_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .updated_at,
+        before
+    );
+    let too_long = cmd
+        .label_variant(ALICE, &product_id, &beige, Some(&"x".repeat(81)))
+        .await;
+    assert!(
+        matches!(too_long, Err(CatalogError::InvalidVariantLabel)),
+        "{too_long:?}"
+    );
+    let unknown = cmd
+        .label_variant(ALICE, &product_id, "nope", Some("Sable"))
+        .await;
+    assert!(
+        matches!(unknown, Err(CatalogError::VariantNotFound)),
+        "{unknown:?}"
+    );
+
+    // An empty label goes back to the values.
+    cmd.label_variant(ALICE, &product_id, &beige, Some("   "))
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.variants[0].label, None);
+    assert_eq!(state.variants[0].display_label(), "Beige");
+}
+
+#[tokio::test]
 async fn a_product_with_variants_is_published_without_a_price_of_its_own() {
     let cmd = command().await;
     let (product_id, colour) = with_colours(&cmd).await;

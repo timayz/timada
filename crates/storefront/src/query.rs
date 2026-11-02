@@ -43,9 +43,27 @@ pub struct Variant {
     pub currency: String,
     /// One of the product's pictures, shown when this variant is picked.
     pub image_id: Option<String>,
+    /// What a shopper reads for it instead of its values, when the merchant
+    /// set one.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 impl Variant {
+    /// What a shopper reads for it: the merchant's label, else its values
+    /// (`Beige / Large`).
+    pub fn display_label(&self) -> String {
+        match &self.label {
+            Some(label) => label.clone(),
+            None => self
+                .selections
+                .iter()
+                .map(|selection| selection.value.as_str())
+                .collect::<Vec<_>>()
+                .join(" / "),
+        }
+    }
+
     /// The price as a person reads it (`22.90 €`).
     pub fn price(&self) -> String {
         self.price_with(&MoneyFormat::default())

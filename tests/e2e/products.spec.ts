@@ -220,6 +220,14 @@ test("an owner makes a product vary by colour and size, each combination priced"
   await expect(page.locator("[data-variants] tbody tr")).toHaveCount(3);
   await expect(page.locator("[data-variant]").first()).toContainText("Colour: Beige · Size: S");
 
+  // A label is what the shop shows for a combination; the values stay.
+  const first = page.locator("[data-variant]").first();
+  await first.getByLabel("Label of Colour: Beige · Size: S").fill("Sable S");
+  await first.getByRole("button", { name: "Save" }).first().click();
+  await expect(page.getByRole("status")).toContainText("Variant label saved.");
+  await expect(page.locator("[data-variant-label='Sable S']")).toHaveCount(1);
+  await expect(page.locator("[data-variant]").first()).toContainText("Colour: Beige · Size: S");
+
   // The same combination twice, and a code another variant holds, are both out.
   await addVariant("Beige", "S", "19.90");
   await expect(page).toHaveURL(/error=variant_exists/);

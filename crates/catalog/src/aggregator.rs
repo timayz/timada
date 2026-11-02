@@ -124,6 +124,14 @@ pub enum Product {
         sku: Option<String>,
         changed_by: String,
     },
+    /// What a shopper reads for the combination instead of its values
+    /// (`Rouge` for `Color: 01 Red-A`). The values stay as an import named
+    /// them, so a sync still matches them; `None` goes back to the values.
+    VariantLabelled {
+        variant_id: String,
+        label: Option<String>,
+        labelled_by: String,
+    },
     VariantImaged {
         variant_id: String,
         image_id: Option<String>,

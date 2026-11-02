@@ -5,11 +5,13 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{
-    VariantDefined, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged,
+    VariantDefined, VariantImaged, VariantLabelled, VariantPriced, VariantRemoved,
+    VariantSkuChanged,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
-    MAX_AMOUNT_CENTS, MAX_VARIANTS, OptionSelection, new_part_id, normalize_currency, normalize_sku,
+    MAX_AMOUNT_CENTS, MAX_VARIANTS, OptionSelection, new_part_id, normalize_currency,
+    normalize_sku, normalize_variant_label,
 };
 
 use super::ProductState;
@@ -165,6 +167,39 @@ impl<E: Executor> super::Command<E> {
         {
             tracing::warn!(sku = %previous, %release, "cannot give the old code back");
         }
+        Ok(())
+    }
+
+    /// Sets or clears what a shopper reads for a combination instead of its
+    /// values. The values themselves stay as they are, so an import that
+    /// named them still finds the combination; the same label is a no-op.
+    pub async fn label_variant(
+        &self,
+        actor: &str,
+        product_id: &str,
+        variant_id: &str,
+        label: Option<&str>,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let label = normalize_variant_label(label)?;
+        let product = self.require_editable(product_id).await?;
+        let variant = product
+            .variant(variant_id)
+            .ok_or(CatalogError::VariantNotFound)?;
+        if variant.label == label {
+            return Ok(());
+        }
+        product
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&VariantLabelled {
+                variant_id: variant_id.to_owned(),
+                label,
+                labelled_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await?;
         Ok(())
     }
 

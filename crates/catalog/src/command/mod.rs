@@ -42,7 +42,8 @@ use crate::aggregator::{
     Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Created, Described, ImageAdded,
     ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionRemoved, OptionRenamed,
     OptionValuesChanged, Priced, Published, Released, Renamed, TaxCategorySet, Uncategorized,
-    Unpublished, VariantDefined, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged,
+    Unpublished, VariantDefined, VariantImaged, VariantLabelled, VariantPriced, VariantRemoved,
+    VariantSkuChanged,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
@@ -176,9 +177,26 @@ pub struct ProductVariant {
     pub price: Price,
     /// One of the product's pictures, shown when this variant is picked.
     pub image_id: Option<String>,
+    /// What a shopper reads for it instead of its values, when the merchant
+    /// set one.
+    pub label: Option<String>,
 }
 
 impl ProductVariant {
+    /// What a shopper reads for it: the merchant's label, else its values
+    /// (`Beige / Large`).
+    pub fn display_label(&self) -> String {
+        match &self.label {
+            Some(label) => label.clone(),
+            None => self
+                .selections
+                .iter()
+                .map(|selection| selection.value.as_str())
+                .collect::<Vec<_>>()
+                .join(" / "),
+        }
+    }
+
     /// Whether this variant is the one those selections name, whatever
     /// order they come in.
     pub fn matches(&self, selections: &[OptionSelection]) -> bool {
@@ -326,6 +344,7 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_variant_defined())
         .handler(on_variant_priced())
         .handler(on_variant_sku_changed())
+        .handler(on_variant_labelled())
         .handler(on_variant_imaged())
         .handler(on_variant_removed())
         .handler(on_attribute_set())
@@ -596,6 +615,7 @@ async fn on_variant_defined(
             currency: event.data.currency.to_owned(),
         },
         image_id: event.data.image_id.to_owned(),
+        label: None,
     });
     product.updated_at = event.timestamp;
     Ok(())
@@ -631,6 +651,22 @@ async fn on_variant_sku_changed(
         .find(|variant| variant.id == event.data.variant_id)
     {
         variant.sku = event.data.sku.to_owned();
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_variant_labelled(
+    event: Event<VariantLabelled>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(variant) = product
+        .variants
+        .iter_mut()
+        .find(|variant| variant.id == event.data.variant_id)
+    {
+        variant.label = event.data.label.to_owned();
     }
     product.updated_at = event.timestamp;
     Ok(())

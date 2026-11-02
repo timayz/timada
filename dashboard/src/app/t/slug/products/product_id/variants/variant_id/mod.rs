@@ -1,6 +1,7 @@
 //! One combination a product sells.
 
 pub mod image;
+pub mod label;
 pub mod price;
 pub mod remove;
 pub mod sku;
@@ -19,6 +20,12 @@ pub struct PriceForm {
 pub struct SkuForm {
     #[serde(default)]
     pub sku: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct LabelForm {
+    #[serde(default)]
+    pub label: String,
 }
 
 #[derive(serde::Deserialize)]

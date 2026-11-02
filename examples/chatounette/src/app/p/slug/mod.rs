@@ -2,8 +2,8 @@
 //! it, what shoppers said, and what goes with it.
 
 use timada_storefront::{
-    categories, category_path, menu_of, product_categories, product_image, related_products,
-    require_product, reviews_of, stars,
+    Product, ProductOption, categories, category_path, menu_of, product_categories, product_image,
+    related_products, require_product, reviews_of, stars,
 };
 use topcoat::{
     Result,
@@ -32,6 +32,23 @@ struct ReviewsLink {
 
 /// How many products the "Produits similaires" row shows.
 const RELATED: u32 = 4;
+
+/// What a menu reads for a value: the label of the one variant it names,
+/// when the product varies in one way only and the merchant labelled that
+/// variant; the value itself otherwise. A label belongs to a combination,
+/// so with several menus the values stay. What the menu posts is always
+/// the value.
+fn menu_text<'a>(product: &'a Product, option: &ProductOption, value: &'a str) -> &'a str {
+    if product.options.len() != 1 {
+        return value;
+    }
+    product
+        .variants
+        .iter()
+        .find(|variant| variant.value_of(&option.id) == Some(value))
+        .and_then(|variant| variant.label.as_deref())
+        .unwrap_or(value)
+}
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
@@ -62,6 +79,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let varies = product.price_range().is_some_and(|range| range.varies());
     let sold_out = !product.in_stock;
+    // The price table names each combination once a label was set on any.
+    let labelled = product
+        .variants
+        .iter()
+        .any(|variant| variant.label.is_some());
     // A product without variants says how many are left once few are.
     let few_left = product
         .left(None)
@@ -134,7 +156,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     <label for=(format!("option-{}", option.id))>(&option.name)</label>
                                     <select id=(format!("option-{}", option.id)) name=(format!("{OPTION_FIELD_PREFIX}{}", option.id)) data-option=(&option.name)>
                                         for value in &option.values {
-                                            <option value=(value)>(value)</option>
+                                            <option value=(value)>(menu_text(&product, option, value))</option>
                                         }
                                     </select>
                                 </p>
@@ -157,6 +179,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <table class="variants" data-variants="">
                                     <thead>
                                         <tr>
+                                            if labelled {
+                                                <th scope="col">"Variante"</th>
+                                            }
                                             for option in &product.options {
                                                 <th scope="col">(&option.name)</th>
                                             }
@@ -167,6 +192,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     <tbody>
                                         for variant in &product.variants {
                                             <tr data-variant=(&variant.id) data-price=(variant.amount_cents) data-sold-out=(product.is_sold_out(Some(&variant.id)))>
+                                                if labelled {
+                                                    <td data-variant-label="">(variant.display_label())</td>
+                                                }
                                                 for option in &product.options {
                                                     <td>(variant.value_of(&option.id).unwrap_or("—"))</td>
                                                 }

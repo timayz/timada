@@ -479,6 +479,7 @@ fn variants_json(product: &ProductState) -> anyhow::Result<String> {
             amount_cents: variant.price.amount_cents as i64,
             currency: variant.price.currency.clone(),
             image_id: variant.image_id.clone(),
+            label: variant.label.clone(),
         })
         .collect();
     Ok(serde_json::to_string(&variants)?)

@@ -20,8 +20,8 @@ use std::sync::Arc;
 use timada_catalog::{
     CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_ATTRIBUTE_VALUE_LEN,
     MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN, MAX_OPTION_NAME_LEN, MAX_OPTIONS,
-    MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant, TAX_CATEGORIES,
-    format_money, tax_category_label,
+    MAX_SKU_LEN, MAX_VARIANT_LABEL_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant,
+    TAX_CATEGORIES, format_money, tax_category_label,
 };
 use timada_tenancy::{
     PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ, PERMISSION_REVIEWS_READ,
@@ -154,6 +154,8 @@ pub struct VariantRow {
     pub id: String,
     /// `Colour: Beige · Size: S`, in the product's own option order.
     pub selections: String,
+    /// What a shopper reads instead of the values; empty for the values.
+    pub label: String,
     pub sku: String,
     /// The amount as the form wants it typed, without the currency.
     pub amount: String,
@@ -246,6 +248,7 @@ impl VariantRow {
         Self {
             id: variant.id.clone(),
             selections,
+            label: variant.label.clone().unwrap_or_default(),
             sku: variant.sku.clone().unwrap_or_default(),
             amount: format!(
                 "{}.{:02}",
@@ -729,12 +732,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             if !options.is_empty() {
                 section_card(
                     title: Some("Variants"),
-                    description: Some("One combination a shopper buys, with its own price. A product with variants is published without a price of its own."),
+                    description: Some("One combination a shopper buys, with its own price. A product with variants is published without a price of its own. A label is what the shop shows instead of the values; an import that named the values still finds the variant."),
                     table(
                         attrs: attributes! { data-variants="" },
                         table_header(
                             table_row(
                                 table_head("Combination")
+                                table_head("Label")
                                 table_head("Price")
                                 table_head("Code")
                                 table_head("Stock")
@@ -744,12 +748,25 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                         table_body(
                             if variants.is_empty() {
-                                empty_row(colspan: 6, text: "No variant yet.")
+                                empty_row(colspan: 7, text: "No variant yet.")
                             }
                             for variant in &variants {
                                 table_row(
                                     attrs: attributes! { data-variant=(&variant.id) },
                                     table_cell(attrs: attributes! { data-variant-selections=(&variant.selections) }, (&variant.selections))
+                                    table_cell(
+                                        attrs: attributes! { data-variant-label=(&variant.label) },
+                                        if editable {
+                                            <form method="post" action=(href!(variants::variant_id::label::label, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex items-center gap-1">
+                                                <label class="sr-only" for=(format!("variant-label-{}", variant.id))>"Label of " (&variant.selections)</label>
+                                                input(attrs: attributes! {
+                                                    id=(format!("variant-label-{}", variant.id)) name="label" type="text" maxlength=(MAX_VARIANT_LABEL_LEN)
+                                                    class="h-8 w-32 px-2" value=(&variant.label) placeholder="Values"
+                                                })
+                                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Save")
+                                            </form>
+                                        } else if variant.label.is_empty() { "—" } else { (&variant.label) }
+                                    )
                                     table_cell(
                                         if editable {
                                             <form method="post" action=(href!(variants::variant_id::price::price, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex items-center gap-1">

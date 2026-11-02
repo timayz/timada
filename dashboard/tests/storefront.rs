@@ -1015,6 +1015,21 @@ async fn a_store_carries_the_variants_a_shopper_picks_from() {
         "the one combination they did not price is not sold"
     );
 
+    // A label is what the shop shows for a combination; its values stay as
+    // they were named, so what an import matches on does not move.
+    catalog
+        .label_variant("alice", &harness_id, &variant.id, Some(" Sable M "))
+        .await
+        .unwrap();
+    eventually("the label reaches the local copy", async || {
+        published_product_by_slug(&db, "cat-harness")
+            .await
+            .unwrap()
+            .and_then(|p| p.variants.iter().find(|v| v.id == variant.id).cloned())
+            .is_some_and(|v| v.display_label() == "Sable M" && v.value_of(&colour) == Some("Beige"))
+    })
+    .await;
+
     // Sorting goes by what a shopper would pay, not by the base price.
     let cheapest = published_products(&db, &ProductQuery::default().sort(ProductSort::PriceAsc))
         .await

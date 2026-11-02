@@ -74,6 +74,7 @@ event timada-catalog/Product::Uncategorized { category_id: String, uncategorized
 event timada-catalog/Product::Unpublished { unpublished_by: String }
 event timada-catalog/Product::VariantDefined { variant_id: String, selections: Vec<OptionSelection>, sku: Option<String>, amount_cents: u64, currency: String, image_id: Option<String>, defined_by: String }
 event timada-catalog/Product::VariantImaged { variant_id: String, image_id: Option<String>, imaged_by: String }
+event timada-catalog/Product::VariantLabelled { variant_id: String, label: Option<String>, labelled_by: String }
 event timada-catalog/Product::VariantPriced { variant_id: String, amount_cents: u64, currency: String, priced_by: String }
 event timada-catalog/Product::VariantRemoved { variant_id: String, removed_by: String }
 event timada-catalog/Product::VariantSkuChanged { variant_id: String, sku: Option<String>, changed_by: String }

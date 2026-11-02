@@ -136,7 +136,8 @@ pub struct QuotedOffer {
     pub variant_id: Option<String>,
     /// The product's name.
     pub name: String,
-    /// The variant's values (`Beige / Large`).
+    /// What a shopper reads for the variant: its label, else its values
+    /// (`Beige / Large`).
     pub variant_label: Option<String>,
     /// What the merchant titled it, if anything.
     pub title: Option<String>,
@@ -146,14 +147,10 @@ pub struct QuotedOffer {
     pub offer_amount_cents: u64,
 }
 
-/// `Beige / Large`: the values a variant takes.
+/// What a shopper reads for a variant: the merchant's label, else the
+/// values it takes (`Beige / Large`).
 fn variant_label(variant: &timada_catalog::ProductVariant) -> String {
-    variant
-        .selections
-        .iter()
-        .map(|selection| selection.value.as_str())
-        .collect::<Vec<_>>()
-        .join(" / ")
+    variant.display_label()
 }
 
 impl<E: Executor> super::Command<E> {
