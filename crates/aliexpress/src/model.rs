@@ -65,6 +65,8 @@ pub struct AeProduct {
     pub subject: String,
     /// HTML.
     pub detail: String,
+    /// The currency the seller lists it in (often CNY). Its prices are
+    /// quoted in the market's currency instead: see [`AeSku::currency`].
     pub currency: String,
     /// `onSelling` while it is sold.
     pub status: String,
@@ -80,6 +82,9 @@ pub struct AeSku {
     pub id: String,
     /// What it costs the shop, in minor units; `None` when unpriced.
     pub cost_cents: Option<u64>,
+    /// The currency `cost_cents` is quoted in, when AliExpress names it:
+    /// the market's, whatever the seller lists the product in.
+    pub currency: Option<String>,
     pub available: u32,
     /// The values it takes, in AliExpress's order.
     pub properties: Vec<AeSkuProperty>,
@@ -163,6 +168,10 @@ impl AeSku {
             .iter()
             .filter_map(|key| sku.get(*key).and_then(cents))
             .find(|cents| *cents > 0);
+        let currency = sku
+            .get("currency_code")
+            .map(text)
+            .filter(|currency| !currency.is_empty());
         let in_stock = sku
             .get("sku_stock")
             .and_then(Value::as_bool)
@@ -211,6 +220,7 @@ impl AeSku {
         Some(Self {
             id,
             cost_cents,
+            currency,
             available,
             properties,
             attr,
