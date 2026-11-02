@@ -19,7 +19,7 @@ use timada_tenancy::Pricing;
 use crate::aggregator::{NewSku, SkuLink};
 use crate::command::LinkState;
 use crate::map::{MappedSku, picture_url, selections_of, shop_price};
-use crate::model::AeProduct;
+use crate::model::{AeProduct, AeSku};
 
 /// What [`apply_sync`] did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -122,13 +122,29 @@ pub async fn apply_sync<E: Executor>(
         } else {
             read.map_or(0, |sku| sku.available)
         };
-        let cost_cents = read
-            .and_then(|sku| sku.cost_cents)
-            .unwrap_or(linked.cost_cents);
+        // A quote in another currency than the product's is no cost the
+        // shop can price from: the stock still counts, the cost and the
+        // price stay as they were.
+        let misquoted = read.and_then(|sku| quoted_elsewhere(sku, currency.as_deref()));
+        let cost_cents = if misquoted.is_some() {
+            linked.cost_cents
+        } else {
+            read.and_then(|sku| sku.cost_cents)
+                .unwrap_or(linked.cost_cents)
+        };
         if read.is_none() && !outcome.offline {
             outcome
                 .warnings
                 .push(format!("combination {} is no longer sold", linked.sku_id));
+        }
+        if let Some(quoted) = &misquoted
+            && !outcome.offline
+        {
+            outcome.warnings.push(format!(
+                "combination {} is quoted in {quoted}, not {}; its cost and price were left alone",
+                linked.sku_id,
+                currency.as_deref().unwrap_or_default()
+            ));
         }
         match catalog
             .set_stock(
@@ -157,6 +173,7 @@ pub async fn apply_sync<E: Executor>(
         if let (Some(pricing), Some(currency)) = (pricing, currency.as_deref())
             && !outcome.offline
             && read.is_some()
+            && misquoted.is_none()
         {
             let price = pricing.price(cost_cents);
             let current = match linked.variant_id.as_deref() {
@@ -194,7 +211,9 @@ pub async fn apply_sync<E: Executor>(
         });
     }
     outcome.found = match product {
-        Some(product) if !outcome.offline => found_in(product, &skus),
+        Some(product) if !outcome.offline => {
+            found_in(product, &skus, currency.as_deref(), &mut outcome.warnings)
+        }
         _ => Vec::new(),
     };
     outcome.skus = skus;
@@ -205,13 +224,34 @@ pub async fn apply_sync<E: Executor>(
     Ok(outcome)
 }
 
-/// The priced combinations of `product` that none of `linked` is.
-fn found_in(product: &AeProduct, linked: &[SkuLink]) -> Vec<NewSku> {
+/// The currency `sku` quotes its price in when that is not `currency`.
+fn quoted_elsewhere(sku: &AeSku, currency: Option<&str>) -> Option<String> {
+    let currency = currency?;
+    let quoted = sku.currency.as_deref()?.to_ascii_uppercase();
+    (!quoted.eq_ignore_ascii_case(currency)).then_some(quoted)
+}
+
+/// The priced combinations of `product` that none of `linked` is, quoted
+/// in `currency`; one quoted in another is told in `warnings` instead.
+fn found_in(
+    product: &AeProduct,
+    linked: &[SkuLink],
+    currency: Option<&str>,
+    warnings: &mut Vec<String>,
+) -> Vec<NewSku> {
     product
         .skus
         .iter()
         .filter(|sku| !linked.iter().any(|link| link.sku_id == sku.id))
         .filter_map(|sku| {
+            if let Some(quoted) = quoted_elsewhere(sku, currency) {
+                warnings.push(format!(
+                    "new combination {} is quoted in {quoted}, not {}",
+                    sku.id,
+                    currency.unwrap_or_default()
+                ));
+                return None;
+            }
             Some(NewSku {
                 sku_id: sku.id.clone(),
                 selections: selections_of(sku),
