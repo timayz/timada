@@ -798,7 +798,8 @@ test("the cart drawer: changed in place, with offers, a code and express pay", a
       expressCheckout: { buttonHeight: 44 },
       mounted: ["#drawer-express-checkout"],
     });
-    // The wallet is asked for a whole billing address.
+    // The wallet is asked for a whole billing address, and for the phone
+    // an order needs.
     const asked = await page.evaluate(
       () =>
         new Promise((resolve) =>
@@ -807,6 +808,7 @@ test("the cart drawer: changed in place, with offers, a code and express pay", a
     );
     expect(asked).toMatchObject({
       emailRequired: true,
+      phoneNumberRequired: true,
       shippingAddressRequired: true,
       billingAddressRequired: true,
     });
@@ -820,6 +822,7 @@ test("the cart drawer: changed in place, with offers, a code and express pay", a
         billingDetails: {
           email: "ada@example.com",
           name: "Analytical Engines GmbH",
+          phone: "+33 6 12 34 56 78",
           address: {
             line1: "Unter den Linden 1",
             postal_code: "10117",
@@ -842,6 +845,7 @@ test("the cart drawer: changed in place, with offers, a code and express pay", a
     const sent = new URLSearchParams((await started).postData() ?? "");
     expect(Object.fromEntries(sent)).toMatchObject({
       city: "Paris",
+      phone: "+33 6 12 34 56 78",
       billing_different: "1",
       billing_name: "Analytical Engines GmbH",
       billing_line1: "Unter den Linden 1",

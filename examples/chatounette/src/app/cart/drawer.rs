@@ -394,6 +394,9 @@ async function express() {
   const goods = () => Number(drawer.dataset.amount);
   button.on("click", (event) => event.resolve({
     emailRequired: true,
+    // An order needs the shopper's phone, for the carrier: asked here as the
+    // checkout page asks it.
+    phoneNumberRequired: true,
     shippingAddressRequired: true,
     // A whole address, else wallets hand only its country and postal code.
     billingAddressRequired: true,
