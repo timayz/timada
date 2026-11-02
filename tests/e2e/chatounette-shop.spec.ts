@@ -419,8 +419,22 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await page.getByRole("button", { name: "Un de moins : Blue Mug" }).click();
     await expect(page.locator("[data-checkout-total]")).toHaveText("25,00€");
 
-    // Placing the order opens the payment and confirms it with Stripe.
+    // The phone's calling code is picked from a searchable list of every
+    // country, ticked once chosen; France to start with.
     await fillCheckout(page, true);
+    const phoneCountry = page.getByRole("button", { name: /^Indicatif/ });
+    await expect(phoneCountry).toContainText("+33");
+    await phoneCountry.click();
+    await page.getByRole("combobox", { name: "Rechercher un pays" }).fill("belg");
+    await page.getByRole("option", { name: /Belgique|BE/ }).click();
+    await expect(phoneCountry).toContainText("+32");
+    await phoneCountry.click();
+    await expect(page.getByRole("option", { name: /Belgique|BE/ })).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("combobox", { name: "Rechercher un pays" }).fill("+33");
+    await page.keyboard.press("Enter");
+    await expect(phoneCountry).toContainText("+33");
+
+    // Placing the order opens the payment and confirms it with Stripe.
     await payButton(page).click();
     await expect(page).toHaveURL(
       /\/checkout\/complete\?.*redirect_status=succeeded/,

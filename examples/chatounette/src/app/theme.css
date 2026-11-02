@@ -295,6 +295,21 @@ form.checkout .phone:focus-within { outline: 2px solid var(--coral-dark); outlin
 form.checkout .phone select { width: auto; flex: none; border: 0; border-right: 1px solid var(--line); border-radius: .3rem 0 0 .3rem; background: transparent; padding-right: .5rem; }
 form.checkout .phone input { flex: 1; min-width: 0; border: 0; border-radius: 0 .3rem .3rem 0; }
 form.checkout .phone select:focus, form.checkout .phone input:focus { outline: none; }
+form.checkout .phone-picker { position: relative; display: flex; flex: none; }
+form.checkout .phone-country { display: flex; align-items: center; gap: .4rem; padding: 0 .65rem; border: 0; border-right: 1px solid var(--line); border-radius: .3rem 0 0 .3rem; background: transparent; font: inherit; cursor: pointer; }
+form.checkout .phone-country .phone-flag { font-size: 1.25rem; line-height: 1; }
+form.checkout .phone-arrow { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid var(--ink-soft); }
+form.checkout .phone-dialog { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; width: min(26rem, calc(100vw - 2rem)); background: #fff; border: 1px solid var(--line); border-radius: .4rem; box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
+form.checkout .phone-dialog[hidden] { display: none; }
+form.checkout .phone-search { width: 100%; border: 0; border-bottom: 1px solid var(--line); border-radius: .4rem .4rem 0 0; padding: .6rem .75rem; }
+form.checkout .phone-list { list-style: none; margin: 0; padding: .25rem 0; max-height: 14rem; overflow: auto; }
+form.checkout .phone-list li { display: flex; align-items: center; gap: .5rem; padding: .4rem .75rem; cursor: pointer; }
+form.checkout .phone-list li.highlight, form.checkout .phone-list li:hover { background: var(--coral-wash); }
+form.checkout .phone-list .phone-flag { font-size: 1.25rem; line-height: 1; }
+form.checkout .phone-list .phone-dial { color: var(--ink-soft); }
+form.checkout .phone-check { margin-left: auto; color: var(--coral-dark); visibility: hidden; }
+form.checkout .phone-list li[aria-selected="true"] .phone-check { visibility: visible; }
+form.checkout .phone-none { margin: 0; padding: .6rem .75rem; color: var(--ink-soft); }
 form.checkout details.more summary { color: var(--coral-dark); cursor: pointer; margin-top: .6rem; font-size: .9rem; }
 .hint { color: var(--muted); font-size: .875rem; }
 button.place { display: block; width: 100%; margin-top: 1.5rem; padding: 1rem; border: 0; border-radius: 2rem; background: var(--coral); color: #fff; font-size: 1.1rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; cursor: pointer; box-shadow: 0 6px 16px rgba(247,137,138,.35); }
