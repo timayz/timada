@@ -245,10 +245,11 @@ function phoneText() {
   return `+${code} ${national}`.trim();
 }
 
-// The select, kept for a page without script, becomes a button showing the
-// flag and code, opening a searchable list of every country: its flag, its
-// name in the shopper's language (the browser knows it from the code) and
-// its code, the one picked ticked.
+// The select, kept for a page without script and styled like the button
+// that takes its place (same text, width and chevron, so nothing moves),
+// becomes a button showing the flag and code, opening a searchable list
+// of every country: its flag, its name in the shopper's language (the
+// browser knows it from the code) and its code, the one picked ticked.
 const flagOf = (iso) => [...iso].map((c) => String.fromCodePoint(0x1f1e6 + c.charCodeAt(0) - 65)).join("");
 let regionName = (iso) => iso;
 try {
@@ -264,7 +265,7 @@ const picker = document.createElement("div");
 picker.className = "phone-picker";
 picker.innerHTML = `
   <button type="button" class="phone-country" aria-haspopup="dialog" aria-expanded="false" aria-label="Indicatif">
-    <span class="phone-flag"></span><span class="phone-dial"></span><span class="phone-arrow" aria-hidden="true"></span>
+    <span class="phone-flag"></span> <span class="phone-dial"></span>
   </button>
   <div class="phone-dialog" role="dialog" aria-modal="true" aria-label="Indicatif" hidden>
     <input type="search" class="phone-search" placeholder="Rechercher" aria-label="Rechercher un pays" role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls="phone-country-list" autocomplete="off">
@@ -711,7 +712,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <div class="phone" data-phone="">
                                 <select id="checkout-phone-code" name="phone_code" aria-label="Indicatif" autocomplete="tel-country-code">
                                     for (dial_country, dial) in countries::DIAL_CODES {
-                                        <option value=(dial) data-iso=(dial_country) selected=(*dial_country == phone_country)>(countries::flag(dial_country)) " " (dial_country) " +" (dial)</option>
+                                        <option value=(dial) data-iso=(dial_country) selected=(*dial_country == phone_country)>(countries::flag(dial_country)) " +" (dial)</option>
                                     }
                                 </select>
                                 <input id="checkout-phone" name="phone_number" type="tel" required="" autocomplete="tel-national" value=(&phone_number)>
