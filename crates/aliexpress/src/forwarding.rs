@@ -75,13 +75,36 @@ pub fn shipped_by_aliexpress(service_name: &str) -> bool {
     name.starts_with("CAINIAO") || name.starts_with("AE_") || name.starts_with("ALIEXPRESS")
 }
 
-/// The service an item ships with: free and shipped by AliExpress, tracked
-/// first; `None` when AliExpress offers no such delivery.
+/// The service an item ships with: one AliExpress itself ships ("Shipped by
+/// AliExpress"), free before paid, tracked before not, the cheapest paid one
+/// otherwise; `None` when only the seller delivers.
 pub fn choose_service(options: &[FreightOption]) -> Option<&FreightOption> {
     options
         .iter()
-        .filter(|option| option.cents == 0 && shipped_by_aliexpress(&option.service_name))
-        .min_by_key(|option| (!option.tracking, option.service_name.clone()))
+        .filter(|option| shipped_by_aliexpress(&option.service_name))
+        .min_by_key(|option| (option.cents, !option.tracking, option.service_name.clone()))
+}
+
+/// The delivery services offered, for the merchant to read:
+/// `CAINIAO_PREMIUM (9.90 EUR, tracked), YANWEN_JYT (free)`.
+pub fn describe_options(options: &[FreightOption], currency: &str) -> String {
+    options
+        .iter()
+        .map(|option| {
+            let fee = if option.cents == 0 {
+                "free".to_owned()
+            } else {
+                format!(
+                    "{}.{:02} {currency}",
+                    option.cents / 100,
+                    option.cents % 100
+                )
+            };
+            let tracked = if option.tracking { ", tracked" } else { "" };
+            format!("{} ({fee}{tracked})", option.service_name)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The address of an order as AliExpress takes it; `language` (`fr`) is the

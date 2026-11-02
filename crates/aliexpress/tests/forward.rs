@@ -3,7 +3,7 @@ use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem};
 use timada_aliexpress::{
     AeOrder, AeProduct, AliexpressError, ForwardStatus, FreightOption, LinkState, LogisticsAddress,
-    PlaceItem, PlaceOrder, Placement, PlannedItem, choose_service, forward_items,
+    PlaceItem, PlaceOrder, Placement, PlannedItem, choose_service, describe_options, forward_items,
     freight_from_response, logistics_address, placed_orders_from_response, split_phone,
 };
 use timada_orders::{OrderLine, ShippingAddress};
@@ -154,7 +154,7 @@ fn an_order_reads_its_status_and_parcels() {
 }
 
 #[test]
-fn only_free_delivery_by_aliexpress_itself_is_chosen() {
+fn delivery_by_aliexpress_itself_is_chosen_free_first_then_cheapest() {
     let option = |name: &str, cents, tracking| FreightOption {
         service_name: name.into(),
         cents,
@@ -176,12 +176,28 @@ fn only_free_delivery_by_aliexpress_itself_is_chosen() {
             .service_name,
         "CAINIAO_ECONOMY"
     );
-    assert!(
+    // Nothing free of AliExpress's own: the cheapest it ships itself, never
+    // the seller's, however cheap.
+    assert_eq!(
         choose_service(&[
             option("YANWEN_JYT", 0, true),
-            option("CAINIAO_PREMIUM", 900, true)
+            option("CAINIAO_PREMIUM", 900, true),
+            option("CAINIAO_FULFILLMENT_STD", 199, true),
         ])
-        .is_none()
+        .unwrap()
+        .service_name,
+        "CAINIAO_FULFILLMENT_STD"
+    );
+    assert!(choose_service(&[option("YANWEN_JYT", 0, true)]).is_none());
+    assert_eq!(
+        describe_options(
+            &[
+                option("CAINIAO_PREMIUM", 990, true),
+                option("YANWEN_JYT", 0, false)
+            ],
+            "EUR"
+        ),
+        "CAINIAO_PREMIUM (9.90 EUR, tracked), YANWEN_JYT (free)"
     );
 }
 
