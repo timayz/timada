@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { PASSWORD, registerWithEmail, uniqueEmail } from "./email";
 import { ADMIN_NAME, ADMIN_STATE } from "./fixtures";
+import { expectSignedInAs } from "./shell";
 
 // The administrator's pages. The admin is the first registered user, created
 // by admin.setup.ts on a fresh database (`make e2e`).
@@ -21,7 +22,7 @@ test("the administrator lists, signs out, promotes and deletes users", async ({ 
   const adminContext = await browser.newContext({ storageState: ADMIN_STATE });
   const admin = await adminContext.newPage();
   await admin.goto("/");
-  await expect(admin.locator("header").getByText("Signed in as")).toContainText(ADMIN_NAME);
+  await expectSignedInAs(admin, ADMIN_NAME);
   await admin.getByRole("link", { name: "Users" }).click();
   await expect(admin).toHaveURL(/\/admin\/users$/);
   await expect(admin.getByRole("cell", { name: "Administrator" }).first()).toBeVisible();

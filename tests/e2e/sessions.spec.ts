@@ -1,6 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { registerWithEmail, signInWithEmail, uniqueEmail } from "./email";
 import { virtualAuthenticator } from "./webauthn";
+import { accountMenu, expectSignedInAs, signOut } from "./shell";
 
 // Sessions across browsers: "sign out everywhere else" and switching accounts
 // by signing in with another user's passkey while signed in.
@@ -46,7 +47,7 @@ test("sign out everywhere else keeps this browser and ends the others", async ({
 
   await registerWithEmail(laptopPage, email);
   await signInWithEmail(phonePage, email);
-  await expect(phonePage.locator("header").getByText("Signed in as")).toBeVisible();
+  await expect(accountMenu(phonePage)).toBeVisible();
 
   await laptopPage.goto("/auth/account");
   await laptopPage.getByRole("button", { name: "Sign out everywhere else" }).click();
@@ -55,11 +56,11 @@ test("sign out everywhere else keeps this browser and ends the others", async ({
   await phonePage.goto("/auth/account");
   await expect(phonePage).toHaveURL(/\/auth\/login$/);
   await laptopPage.goto("/");
-  await expect(laptopPage.locator("header").getByText("Signed in as")).toBeVisible();
+  await expect(accountMenu(laptopPage)).toBeVisible();
 
   // The phone can sign in again right away.
   await signInWithEmail(phonePage, email);
-  await expect(phonePage.locator("header").getByText("Signed in as")).toBeVisible();
+  await expect(accountMenu(phonePage)).toBeVisible();
 
   await laptop.close();
   await phone.close();
@@ -71,22 +72,22 @@ test("signing in with another user's passkey switches accounts", async ({ page }
   await virtualAuthenticator(page);
   await registerWithEmail(page, alice);
   await addPasskey(page);
-  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await signOut(page);
 
   // Bob registers in the same browser; it is his now. He creates no passkey,
   // so the authenticator still only holds Alice's.
   await registerWithEmail(page, bob);
-  await expect(page.locator("header").getByText("Signed in as")).toContainText(bob);
+  await expectSignedInAs(page, bob);
 
   // Alice's passkey is used while Bob is signed in.
   const location = await passkeySignInViaApi(page);
   await page.goto(location);
   await expect(page.getByRole("status")).toContainText(`You are now signed in as ${alice}.`);
-  await expect(page.locator("header").getByText("Signed in as")).toContainText(alice);
+  await expectSignedInAs(page, alice);
 
   // Her own passkey again: no switch, no notice.
   const again = await passkeySignInViaApi(page);
   expect(again).not.toContain("message=");
   await page.goto(again);
-  await expect(page.locator("header").getByText("Signed in as")).toContainText(alice);
+  await expectSignedInAs(page, alice);
 });
