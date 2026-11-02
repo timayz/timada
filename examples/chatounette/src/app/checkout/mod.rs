@@ -192,7 +192,7 @@ if (key && window.Stripe) {
     const fill = (name, value) => { if (value) form.elements[name].value = value; };
     fill("email", billing.email);
     fill("name", shipping.name || billing.name);
-    fill("phone", billing.phone);
+    fillPhone(billing.phone);
     fill("line1", address.line1);
     fill("line2", address.line2);
     fill("postal_code", address.postal_code);
@@ -215,6 +215,148 @@ if (key && window.Stripe) {
   });
 }
 
+// The phone's two fields: the calling code picked and the national number.
+// A wallet hands a whole number (+33612345678): split on the code it
+// starts with; one it does not know is kept as typed.
+const phoneBox = form.querySelector("[data-phone]");
+const phoneCode = form.elements.phone_code;
+const phoneNumber = form.elements.phone_number;
+function fillPhone(whole) {
+  if (!whole) return;
+  const digits = whole.replace(/[^\d+]/g, "");
+  const codes = [...phoneCode.options].map((option) => option.value).sort((a, b) => b.length - a.length);
+  const code = digits.startsWith("+") ? codes.find((c) => digits.startsWith("+" + c)) : null;
+  if (code) {
+    phoneCode.value = code;
+    phoneNumber.value = digits.slice(code.length + 1);
+    showPhoneCountry();
+  } else {
+    phoneNumber.value = whole;
+  }
+}
+// The phone as the server composes it: "+33 6 12 34 56 78", the trunk 0
+// dropped (Italy keeps it), a number typed international kept whole.
+function phoneText() {
+  let national = phoneNumber.value.trim();
+  if (!national) return "";
+  if (national.startsWith("+") || national.startsWith("00")) return national;
+  const code = phoneCode.value;
+  if (national.startsWith("0") && code !== "39") national = national.slice(1).trim();
+  return `+${code} ${national}`.trim();
+}
+
+// The select, kept for a page without script and styled like the button
+// that takes its place (same text, width and chevron, so nothing moves),
+// becomes a button showing the flag and code, opening a searchable list
+// of every country: its flag, its name in the shopper's language (the
+// browser knows it from the code) and its code, the one picked ticked.
+const flagOf = (iso) => [...iso].map((c) => String.fromCodePoint(0x1f1e6 + c.charCodeAt(0) - 65)).join("");
+let regionName = (iso) => iso;
+try {
+  const names = new Intl.DisplayNames(["fr"], { type: "region" });
+  regionName = (iso) => names.of(iso) || iso;
+} catch {}
+const plain = (text) => text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const phoneCountries = [...phoneCode.options]
+  .map((option) => ({ option, iso: option.dataset.iso, dial: option.value, name: regionName(option.dataset.iso) }))
+  .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+const pickedCountry = () => phoneCode.selectedOptions[0]?.dataset.iso || "";
+const picker = document.createElement("div");
+picker.className = "phone-picker";
+picker.innerHTML = `
+  <button type="button" class="phone-country" aria-haspopup="dialog" aria-expanded="false" aria-label="Indicatif">
+    <span class="phone-flag"></span> <span class="phone-dial"></span>
+  </button>
+  <div class="phone-dialog" role="dialog" aria-modal="true" aria-label="Indicatif" hidden>
+    <input type="search" class="phone-search" placeholder="Rechercher" aria-label="Rechercher un pays" role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls="phone-country-list" autocomplete="off">
+    <p class="phone-none" hidden>Aucun pays trouvé</p>
+    <ul class="phone-list" id="phone-country-list" role="listbox" aria-label="Pays"></ul>
+  </div>`;
+const phoneButton = picker.querySelector(".phone-country");
+const phoneDialog = picker.querySelector(".phone-dialog");
+const phoneSearch = picker.querySelector(".phone-search");
+const phoneNone = picker.querySelector(".phone-none");
+const phoneList = picker.querySelector(".phone-list");
+let shown = [];
+let highlighted = -1;
+function showPhoneCountry() {
+  const iso = pickedCountry();
+  phoneButton.querySelector(".phone-flag").textContent = flagOf(iso);
+  phoneButton.querySelector(".phone-dial").textContent = `+${phoneCode.value}`;
+  phoneButton.setAttribute("aria-label", `Indicatif : ${regionName(iso)} +${phoneCode.value}`);
+}
+function highlight(index) {
+  const items = [...phoneList.children];
+  items.forEach((item, i) => item.classList.toggle("highlight", i === index));
+  highlighted = index;
+  const item = items[index];
+  if (item) {
+    phoneSearch.setAttribute("aria-activedescendant", item.id);
+    item.scrollIntoView({ block: "nearest" });
+  } else {
+    phoneSearch.removeAttribute("aria-activedescendant");
+  }
+}
+function renderPhoneList(query) {
+  const q = plain(query.trim());
+  const digits = q.replace(/^\+/, "");
+  shown = phoneCountries.filter(({ iso, dial, name }) =>
+    !q || plain(name).includes(q) || iso.toLowerCase() === q || (digits && dial.startsWith(digits)));
+  const picked = pickedCountry();
+  phoneList.replaceChildren(...shown.map(({ iso, dial, name }) => {
+    const item = document.createElement("li");
+    item.id = `phone-country-${iso.toLowerCase()}`;
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", String(iso === picked));
+    item.dataset.iso = iso;
+    item.innerHTML = `<span class="phone-flag"></span><span class="phone-name"></span><span class="phone-dial"></span><span class="phone-check" aria-hidden="true">✓</span>`;
+    item.querySelector(".phone-flag").textContent = flagOf(iso);
+    item.querySelector(".phone-name").textContent = name;
+    item.querySelector(".phone-dial").textContent = `(+${dial})`;
+    return item;
+  }));
+  phoneNone.hidden = shown.length > 0;
+  highlight(shown.length ? Math.max(0, shown.findIndex(({ iso }) => iso === picked && !q)) : -1);
+}
+function openPhonePicker() {
+  phoneSearch.value = "";
+  renderPhoneList("");
+  phoneDialog.hidden = false;
+  phoneButton.setAttribute("aria-expanded", "true");
+  phoneSearch.focus();
+}
+function closePhonePicker(refocus) {
+  phoneDialog.hidden = true;
+  phoneButton.setAttribute("aria-expanded", "false");
+  if (refocus) phoneButton.focus();
+}
+function choosePhoneCountry(iso) {
+  const country = phoneCountries.find((c) => c.iso === iso);
+  if (!country) return;
+  country.option.selected = true;
+  showPhoneCountry();
+  closePhonePicker(false);
+  phoneNumber.focus();
+}
+phoneButton.addEventListener("click", () => (phoneDialog.hidden ? openPhonePicker() : closePhonePicker(true)));
+phoneSearch.addEventListener("input", () => renderPhoneList(phoneSearch.value));
+phoneSearch.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") { event.preventDefault(); highlight(Math.min(highlighted + 1, shown.length - 1)); }
+  else if (event.key === "ArrowUp") { event.preventDefault(); highlight(Math.max(highlighted - 1, 0)); }
+  else if (event.key === "Enter") { event.preventDefault(); if (shown[highlighted]) choosePhoneCountry(shown[highlighted].iso); }
+  else if (event.key === "Escape") { event.preventDefault(); closePhonePicker(true); }
+});
+phoneList.addEventListener("click", (event) => {
+  const item = event.target.closest("[data-iso]");
+  if (item) choosePhoneCountry(item.dataset.iso);
+});
+document.addEventListener("click", (event) => {
+  if (!phoneDialog.hidden && !picker.contains(event.target)) closePhonePicker(false);
+});
+phoneCode.hidden = true;
+phoneBox.prepend(picker);
+showPhoneCountry();
+
 // What Stripe's form was told not to ask, from the form's own fields: every
 // one of them, as "never" requires.
 // The address is the billing one when the shopper gave one.
@@ -224,7 +366,7 @@ function billingDetails() {
   return {
     name: value(`${at}name`),
     email: value("email"),
-    phone: value("phone"),
+    phone: phoneText(),
     address: {
       line1: value(`${at}line1`),
       line2: value(`${at}line2`),
@@ -389,6 +531,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         draft.country.to_ascii_uppercase()
     };
+    let (phone_code, phone_number) = draft.phone_parts();
+    let phone_country =
+        countries::country_of_dial(&phone_code, &country).unwrap_or(DEFAULT_COUNTRY);
     let billing_country = if draft.billing_country.is_empty() {
         country.clone()
     } else {
@@ -564,7 +709,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <label for="checkout-name">"Nom complet"</label>
                             <input id="checkout-name" name="name" required="" autocomplete="name" value=(&draft.name)>
                             <label for="checkout-phone">"Téléphone"</label>
-                            <input id="checkout-phone" name="phone" type="tel" required="" autocomplete="tel" value=(&draft.phone)>
+                            <div class="phone" data-phone="">
+                                <select id="checkout-phone-code" name="phone_code" aria-label="Indicatif" autocomplete="tel-country-code">
+                                    for (dial_country, dial) in countries::DIAL_CODES {
+                                        <option value=(dial) data-iso=(dial_country) selected=(*dial_country == phone_country)>(countries::flag(dial_country)) " +" (dial)</option>
+                                    }
+                                </select>
+                                <input id="checkout-phone" name="phone_number" type="tel" required="" autocomplete="tel-national" value=(&phone_number)>
+                            </div>
                         </section>
                         <section class="card">
                             <h2>"Adresse de livraison"</h2>
