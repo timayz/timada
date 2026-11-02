@@ -100,6 +100,23 @@ pub enum Product {
         option_id: String,
         removed_by: String,
     },
+    /// What a shopper reads for the option instead of its name (`Couleur`
+    /// for `Color`). The name stays as an import gave it, so a sync still
+    /// matches it; `None` goes back to the name.
+    OptionLabelled {
+        option_id: String,
+        label: Option<String>,
+        labelled_by: String,
+    },
+    /// What a shopper reads for one value of the option instead of the
+    /// value itself (`Rouge` for `01 Red-A`); `None` goes back to the
+    /// value. A value that leaves the option takes its label with it.
+    OptionValueLabelled {
+        option_id: String,
+        value: String,
+        label: Option<String>,
+        labelled_by: String,
+    },
     /// One combination of the options, with its own price: what a shopper
     /// actually buys. `selections` names a value for every option, once.
     VariantDefined {

@@ -1015,6 +1015,37 @@ async fn a_store_carries_the_variants_a_shopper_picks_from() {
         "the one combination they did not price is not sold"
     );
 
+    // Labels are what the shop shows for an option and its values; the
+    // name and values stay as given, so what an import matches on does not
+    // move.
+    catalog
+        .label_option(
+            "alice",
+            &harness_id,
+            &colour,
+            timada_catalog::OptionLabels {
+                label: Some("Couleur".into()),
+                values: vec![("Beige".into(), Some("Sable".into()))],
+            },
+        )
+        .await
+        .unwrap();
+    eventually("the labels reach the local copy", async || {
+        published_product_by_slug(&db, "cat-harness")
+            .await
+            .unwrap()
+            .is_some_and(|p| {
+                let option = p.options.iter().find(|o| o.id == colour).unwrap();
+                option.name == "Colour"
+                    && option.display_name() == "Couleur"
+                    && option.display_value("Beige") == "Sable"
+                    && option.display_value("Blue") == "Blue"
+                    && p.variant(&picked)
+                        .is_some_and(|v| p.variant_label(v) == "Sable / M")
+            })
+    })
+    .await;
+
     // Sorting goes by what a shopper would pay, not by the base price.
     let cheapest = published_products(&db, &ProductQuery::default().sort(ProductSort::PriceAsc))
         .await

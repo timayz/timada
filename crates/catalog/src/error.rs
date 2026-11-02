@@ -68,6 +68,10 @@ pub enum CatalogError {
     InvalidSku,
     #[error("another variant already uses this code")]
     SkuTaken,
+    #[error("a label is at most 40 characters")]
+    InvalidOptionLabel,
+    #[error("the option does not take this value")]
+    OptionValueNotFound,
     #[error("a fact needs a name of at most 40 characters and a value of at most 400")]
     InvalidAttribute,
     #[error("a product's table holds at most thirty facts")]
@@ -138,6 +142,8 @@ impl CatalogError {
             Self::CurrencyMismatch => "currency_mismatch",
             Self::InvalidSku => "invalid_sku",
             Self::SkuTaken => "sku_taken",
+            Self::InvalidOptionLabel => "invalid_option_label",
+            Self::OptionValueNotFound => "option_value_not_found",
             Self::InvalidAttribute => "invalid_attribute",
             Self::TooManyAttributes => "too_many_attributes",
             Self::InvalidTaxCategory => "invalid_tax_category",

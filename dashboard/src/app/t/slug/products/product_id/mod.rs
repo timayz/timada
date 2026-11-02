@@ -19,9 +19,9 @@ pub mod variants;
 use std::sync::Arc;
 use timada_catalog::{
     CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_ATTRIBUTE_VALUE_LEN,
-    MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN, MAX_OPTION_NAME_LEN, MAX_OPTIONS,
-    MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant, TAX_CATEGORIES,
-    format_money, tax_category_label,
+    MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN, MAX_OPTION_LABEL_LEN,
+    MAX_OPTION_NAME_LEN, MAX_OPTIONS, MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState,
+    ProductVariant, TAX_CATEGORIES, format_money, tax_category_label,
 };
 use timada_tenancy::{
     PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ, PERMISSION_REVIEWS_READ,
@@ -137,6 +137,11 @@ pub struct OptionRow {
     pub id: String,
     pub name: String,
     pub values: String,
+    /// What the shop shows instead of the name; empty for the name.
+    pub label: String,
+    /// Each value with what the shop shows instead of it; empty for the
+    /// value.
+    pub value_labels: Vec<(String, String)>,
 }
 
 impl OptionRow {
@@ -145,6 +150,17 @@ impl OptionRow {
             id: option.id.clone(),
             name: option.name.clone(),
             values: option.values.join("\n"),
+            label: option.label.clone().unwrap_or_default(),
+            value_labels: option
+                .values
+                .iter()
+                .map(|value| {
+                    (
+                        value.clone(),
+                        option.value_labels.get(value).cloned().unwrap_or_default(),
+                    )
+                })
+                .collect(),
         }
     }
 }
@@ -670,7 +686,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             section_card(
                 title: Some("Options"),
-                description: Some("A product that comes in several colours or sizes varies by them. Settle the options first: once it sells variants they cannot change."),
+                description: Some("A product that comes in several colours or sizes varies by them. Settle the options first: once it sells variants they cannot change. A label is what the shop shows instead of a name or a value, and can change at any time; an import that named them still finds them."),
                 if options.is_empty() {
                     <p class="text-sm text-muted-foreground">"This product does not vary. It sells at the price above."</p>
                 }
@@ -700,6 +716,29 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             } else {
                                 <p class="text-sm"><strong>(&option.name)</strong></p>
                                 <p class="whitespace-pre-line text-sm text-muted-foreground">(&option.values)</p>
+                            }
+                            if editable {
+                                <form method="post" action=(href!(options::option_id::labels::labels, Slug(slug.clone()), ProductId(product.id.clone()), options::option_id::OptionId(option.id.clone()))) class="mt-3 flex flex-col gap-2 border-t border-border pt-3" data-option-labels="">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <label class="text-sm" for=(format!("option-label-{}", option.id))>"Label of " (&option.name)</label>
+                                        input(attrs: attributes! {
+                                            id=(format!("option-label-{}", option.id)) name="label" type="text" maxlength=(MAX_OPTION_LABEL_LEN)
+                                            class="h-8 w-40 px-2" value=(&option.label) placeholder=(&option.name)
+                                        })
+                                    </div>
+                                    for (value, label) in &option.value_labels {
+                                        <div class="flex flex-wrap items-center gap-2" data-value-label=(value)>
+                                            <label class="text-sm text-muted-foreground" for=(format!("value-label-{}-{}", option.id, value))>"Label of " (value) " (" (&option.name) ")"</label>
+                                            input(attrs: attributes! {
+                                                id=(format!("value-label-{}-{}", option.id, value)) name=(format!("{}{}", options::option_id::labels::VALUE_FIELD, value)) type="text" maxlength=(MAX_OPTION_LABEL_LEN)
+                                                class="h-8 w-40 px-2" value=(label) placeholder=(value)
+                                            })
+                                        </div>
+                                    }
+                                    <div>
+                                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save labels")
+                                    </div>
+                                </form>
                             }
                         </li>
                     }

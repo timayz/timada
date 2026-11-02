@@ -1,5 +1,6 @@
 //! One way a product varies.
 
+pub mod labels;
 pub mod remove;
 pub mod rename;
 pub mod values;
