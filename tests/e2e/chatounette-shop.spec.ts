@@ -168,17 +168,22 @@ test("the shop browses the categories its products are filed under", async ({
   );
   await expect(menu.locator("[data-category=toys]")).toBeVisible();
 
-  // The shop and the back office agree on every one of those numbers.
-  await page.goto(`/t/${slug}/categories`);
-  for (const [category, count] of [
-    ["bedding", "2"],
-    ["mats", "2"],
-    ["toys", "1"],
-  ]) {
-    await expect(
-      page.locator(`[data-category=${category}] [data-category-count]`),
-    ).toHaveText(count);
-  }
+  // The shop and the back office agree on every one of those numbers. The
+  // back office reads its own read model, which trails the store by a
+  // second or so after a burst of writes (the shop above read the store
+  // itself), so the page is loaded again until it has caught up.
+  await expect(async () => {
+    await page.goto(`/t/${slug}/categories`);
+    for (const [category, count] of [
+      ["bedding", "2"],
+      ["mats", "2"],
+      ["toys", "1"],
+    ]) {
+      await expect(
+        page.locator(`[data-category=${category}] [data-category-count]`),
+      ).toHaveText(count, { timeout: 1000 });
+    }
+  }).toPass({ timeout: 15_000 });
   await expect(
     page.locator("[data-category=bedding] [data-category-direct]"),
   ).toHaveAttribute("data-category-direct", "0");
