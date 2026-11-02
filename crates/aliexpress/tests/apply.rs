@@ -222,6 +222,33 @@ async fn a_quote_in_another_currency_counts_the_stock_but_leaves_the_price() {
     assert_eq!(stock.on_hand, 7);
 }
 
+#[tokio::test]
+async fn an_archived_product_frees_its_item_for_a_new_import() {
+    let executor = executor().await;
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let (link_id, product_id) = imported(&executor).await;
+
+    // While the product stands, the item is imported already.
+    assert!(matches!(
+        links.request_import(ALICE, "1005006123456789").await,
+        Err(timada_aliexpress::AliexpressError::AlreadyLinked)
+    ));
+
+    // Archived, the link is over: asking again unlinks it and starts anew.
+    catalog.archive_product(ALICE, &product_id).await.unwrap();
+    let again = links
+        .request_import(ALICE, "1005006123456789")
+        .await
+        .unwrap();
+    assert_eq!(again, link_id);
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    assert_eq!(link.status, LinkStatus::Importing);
+    assert_eq!(link.product_id, None);
+    assert!(link.skus.is_empty());
+    assert!(links.start_import("node-a", &link_id).await.unwrap());
+}
+
 async fn imported(executor: &evento::Turso) -> (String, String) {
     let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
     let links = timada_aliexpress::Command::new(executor.clone(), TENANT);

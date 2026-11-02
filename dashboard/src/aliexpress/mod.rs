@@ -273,6 +273,9 @@ pub enum SyncResult {
     Skipped,
     /// Nothing to read: not linked, or the shop is not connected.
     NotLinked,
+    /// The product is archived or gone from the catalog: the link is over,
+    /// nothing read.
+    Unlinked,
     /// AliExpress refused or did not answer; recorded on the link.
     Failed(String),
 }
@@ -299,6 +302,18 @@ impl Aliexpress {
         let (Some(settings), Some(client)) = (&tenant.aliexpress, self.client_of(company)?) else {
             return Ok(SyncResult::NotLinked);
         };
+        let catalog = timada_catalog::Command::new(store.clone(), &tenant.id);
+        let retired = match link.product_id.as_deref() {
+            Some(product_id) => catalog
+                .load_product(product_id)
+                .await?
+                .is_none_or(|product| product.is_archived()),
+            None => true,
+        };
+        if retired {
+            links.unlink(ALIEXPRESS_ACTOR, link_id).await?;
+            return Ok(SyncResult::Unlinked);
+        }
         let product = match client
             .product(&link.ae_product_id, &Self::market_of(settings))
             .await
@@ -317,7 +332,6 @@ impl Aliexpress {
                 return Ok(SyncResult::Failed(reason));
             }
         };
-        let catalog = timada_catalog::Command::new(store.clone(), &tenant.id);
         let pricing = link.pricing.as_ref().or(settings.pricing.as_ref());
         let outcome = timada_aliexpress::apply_sync(
             &catalog,

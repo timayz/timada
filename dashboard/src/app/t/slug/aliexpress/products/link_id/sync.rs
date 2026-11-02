@@ -47,6 +47,13 @@ pub async fn sync(cx: &Cx, Form(form): Form<Back>) -> Result<SeeOther> {
             None,
             Some("Read again from AliExpress."),
         ),
+        SyncResult::Unlinked => back_to(
+            cx,
+            &access,
+            &form.back,
+            None,
+            Some("The product is archived: no longer kept in step with AliExpress."),
+        ),
         SyncResult::NotLinked => back_to(
             cx,
             &access,
