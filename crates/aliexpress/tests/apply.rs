@@ -179,6 +179,49 @@ async fn one_node_renews_a_token() {
 }
 
 /// Imports the fixture as a draft; the link's id and the product's.
+#[tokio::test]
+async fn a_quote_in_another_currency_counts_the_stock_but_leaves_the_price() {
+    let executor = executor().await;
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let (link_id, product_id) = imported(&executor).await;
+    let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+    let rose = product.variants[0].id.clone();
+    let price_before = product.variant(&rose).unwrap().price.amount_cents;
+
+    // AliExpress answers the rose in dollars, and offers a new colour in
+    // dollars too.
+    let mut read = fixture();
+    read.skus[0].available = 7;
+    read.skus[0].cost_cents = Some(500);
+    read.skus[0].currency = Some("usd".into());
+    let mut green = sku("12000037009", 700, 3, &[("Color", "Green"), ("Size", "S")]);
+    green.currency = Some("USD".into());
+    read.skus.push(green);
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+        .await
+        .unwrap();
+    assert_eq!(outcome.repriced, 0);
+    assert!(outcome.found.is_empty());
+    assert_eq!(outcome.warnings.len(), 2, "{:?}", outcome.warnings);
+    assert!(outcome.warnings[0].contains("12000037001 is quoted in USD, not EUR"));
+    assert!(outcome.warnings[1].contains("new combination 12000037009 is quoted in USD"));
+    assert_eq!(outcome.skus[0].cost_cents, 431);
+    assert_eq!(outcome.skus[0].available, 7);
+    let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(
+        product.variant(&rose).unwrap().price.amount_cents,
+        price_before
+    );
+    let stock = catalog
+        .load_stock(&product_id, Some(&rose))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stock.on_hand, 7);
+}
+
 async fn imported(executor: &evento::Turso) -> (String, String) {
     let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
     let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
