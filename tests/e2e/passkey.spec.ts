@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { virtualAuthenticator } from "./webauthn";
+import { expectSignedInAs, signOut } from "./shell";
 
 // Passkeys are added to an existing account (here one registered with an
 // address) and then sign in on their own, without a mailed code.
@@ -12,7 +13,7 @@ test("add passkeys to an account, sign out, sign in without a username", async (
   await page.goto("/");
   await expect(page).toHaveURL(/\/auth\/login$/);
   await registerWithEmail(page, email);
-  await expect(page.getByText("Signed in as")).toContainText(email);
+  await expectSignedInAs(page, email);
 
   await page.getByRole("link", { name: "Account" }).click();
   await expect(page.getByRole("heading", { name: "Passkeys" })).toBeVisible();
@@ -56,7 +57,7 @@ test("add passkeys to an account, sign out, sign in without a username", async (
   await expect(page.getByRole("status")).toContainText("Passkey renamed.");
   await expect(passkeyRows.first().getByLabel("Passkey name")).toHaveValue("Laptop");
 
-  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await signOut(page);
   await expect(page).toHaveURL(/\/auth\/login$/);
   await page.goto("/auth/account");
   await expect(page).toHaveURL(/\/auth\/login$/);
@@ -65,7 +66,7 @@ test("add passkeys to an account, sign out, sign in without a username", async (
   // and no code is needed.
   await page.getByRole("button", { name: "Sign in with a passkey" }).click();
   await expect(page).toHaveURL(/\/$/, ceremony);
-  await expect(page.getByText("Signed in as")).toContainText(email);
+  await expectSignedInAs(page, email);
 
   await page.goto("/auth/account");
   await expect(page.locator("section", { hasText: "Recent sign-ins" }).locator("li")).toHaveCount(2);

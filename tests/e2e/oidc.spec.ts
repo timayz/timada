@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { PASSWORD, enterCode, latestCode, mailCount, registerWithEmail, signInWithEmail, uniqueEmail } from "./email";
+import { expectSignedInAs, signOut } from "./shell";
 
 // The OpenID Connect flow against the dex container from compose.yml
 // (config/e2e.toml registers it as the "Dex" provider). Skipped when the
@@ -24,7 +25,7 @@ test.beforeEach(async ({ page }) => {
 test("register and sign in through the provider", async ({ page }) => {
   await page.getByRole("button", { name: "Continue with Dex" }).click();
   await signInAtDex(page);
-  await expect(page.locator("header").getByText("Signed in as")).toContainText(DEX_USER);
+  await expectSignedInAs(page, DEX_USER);
 
   await page.goto("/auth/account");
   await expect(page.locator("section", { hasText: "Sign-in providers" })).toContainText("Dex");
@@ -33,7 +34,7 @@ test("register and sign in through the provider", async ({ page }) => {
   const before = await signIns.count();
 
   // Again: the identity is known now, so this is a sign-in, not a registration.
-  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await signOut(page);
   await expect(page).toHaveURL(/\/auth\/login$/);
   await page.getByRole("button", { name: "Continue with Dex" }).click();
   await signInAtDex(page);
@@ -71,7 +72,7 @@ test("signing in through the provider while signed in switches accounts", async 
   });
   await signInAtDex(page);
   await expect(page.getByRole("status")).toContainText(`You are now signed in as ${DEX_USER}.`);
-  await expect(page.locator("header").getByText("Signed in as")).toContainText(DEX_USER);
+  await expectSignedInAs(page, DEX_USER);
 });
 
 test("a provider user adds an e-mail address and a password, once", async ({ page }) => {
@@ -111,7 +112,7 @@ test("a provider user adds an e-mail address and a password, once", async ({ pag
   await expect(section.getByRole("button", { name: "Change password" })).toBeVisible();
 
   // The address now signs in, as the same user.
-  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await signOut(page);
   await signInWithEmail(page, email);
-  await expect(page.locator("header").getByText("Signed in as")).toContainText(DEX_USER);
+  await expectSignedInAs(page, DEX_USER);
 });

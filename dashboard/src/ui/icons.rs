@@ -40,6 +40,8 @@ pub const MONITOR: IconData = iconify_icon!("lucide:monitor");
 pub const LOG_OUT: IconData = iconify_icon!("lucide:log-out");
 pub const LOG_IN: IconData = iconify_icon!("lucide:log-in");
 pub const CLOSE: IconData = iconify_icon!("lucide:x");
+pub const SEARCH: IconData = iconify_icon!("lucide:search");
+pub const CHEVRON_LEFT: IconData = iconify_icon!("lucide:chevron-left");
 pub const PLUS: IconData = iconify_icon!("lucide:plus");
 
 // Notices and states.

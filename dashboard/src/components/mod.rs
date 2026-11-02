@@ -5,8 +5,9 @@
 //!
 //! - `alert.rs`, `badge.rs`: `Success`, `Warning` and `Info` tones.
 //! - `card.rs`: `CARD` is public, for `<section>` cards.
-//! - `sidebar.rs`: the Katalyst pill (`rounded-full`) menu buttons, the
-//!   small-caps group labels, `h-10` medium buttons, and `data-variant`
+//! - `sidebar.rs`: the Katalyst rail (`18rem` wide, `3.5rem` folded), its
+//!   `rounded-xl` menu buttons with a border on the active one, the
+//!   small-caps group labels, `h-11` medium buttons, and `data-variant`
 //!   renamed `data-sidebar-variant` (the product page's variants carry
 //!   `data-variant`, and the browser tests look them up by it).
 //!
