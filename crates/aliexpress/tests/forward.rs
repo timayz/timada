@@ -4,7 +4,7 @@ use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem};
 use timada_aliexpress::{
     AeOrder, AeProduct, AliexpressError, ForwardStatus, FreightOption, LinkState, LogisticsAddress,
     PlaceItem, PlaceOrder, Placement, PlannedItem, choose_service, describe_options, forward_items,
-    freight_from_response, french_region, logistics_address, placed_orders_from_response,
+    freight_from_response, french_department, logistics_address, placed_orders_from_response,
     province_of, split_phone,
 };
 use timada_orders::{OrderLine, ShippingAddress};
@@ -240,7 +240,7 @@ fn an_address_and_its_phone_read_as_aliexpress_wants() {
             address: "12 rue de la Paix".into(),
             address2: "Bât. B".into(),
             city: "Paris".into(),
-            province: "Ile-de-France".into(),
+            province: "Paris".into(),
             zip: "75002".into(),
             country: "FR".into(),
             phone_country: "+33".into(),
@@ -263,16 +263,19 @@ fn an_address_and_its_phone_read_as_aliexpress_wants() {
 }
 
 #[test]
-fn a_french_postal_code_names_its_region_and_the_city_stands_in_elsewhere() {
-    assert_eq!(french_region("75002"), Some("Ile-de-France"));
-    assert_eq!(french_region("13 001"), Some("Provence-Alpes-Cote d'Azur"));
-    assert_eq!(french_region("20200"), Some("Corse"));
-    assert_eq!(french_region("69003"), Some("Rhone-Alpes"));
-    assert_eq!(french_region("97400"), Some("Reunion"));
-    assert_eq!(french_region("99999"), None);
-    assert_eq!(french_region("SW1A 1AA"), None);
-    assert_eq!(province_of("FR", "59000", "Lille"), "Nord-Pas-de-Calais");
-    assert_eq!(province_of("FR", "00000", "Nulle-part"), "Nulle-part");
+fn a_french_postal_code_names_its_department_and_the_city_stands_in_elsewhere() {
+    assert_eq!(french_department("75002"), Some("Paris"));
+    assert_eq!(french_department("69003"), Some("Rhone"));
+    assert_eq!(french_department("13 001"), Some("Bouches-du-Rhone"));
+    assert_eq!(french_department("20000"), Some("Corse-du-Sud"));
+    assert_eq!(french_department("20200"), Some("Haute-Corse"));
+    assert_eq!(french_department("21000"), Some("Cote-d'Or"));
+    assert_eq!(french_department("90000"), Some("Territoire de Belfort"));
+    assert_eq!(french_department("95000"), Some("Val-d'Oise"));
+    assert_eq!(french_department("97400"), None);
+    assert_eq!(french_department("SW1A 1AA"), None);
+    assert_eq!(province_of("FR", "59000", "Lille"), "Nord");
+    assert_eq!(province_of("FR", "97400", "Saint-Denis"), "Other");
     assert_eq!(province_of("BE", "1000", " Bruxelles "), "Bruxelles");
 }
 
