@@ -149,63 +149,127 @@ pub fn logistics_address(
 }
 
 /// The region AliExpress files an address under, which it will not do
-/// without: the French region of a French postal code, the city otherwise
+/// without: for France the department of the postal code, as AliExpress
+/// lists them, or its "Other" for one it does not list; the city elsewhere
 /// (the shop's addresses carry no region of their own).
 pub fn province_of(country: &str, postal_code: &str, city: &str) -> String {
-    let region = match country {
-        "FR" => french_region(postal_code),
-        _ => None,
-    };
-    region.map_or_else(|| city.trim().to_owned(), str::to_owned)
+    match country {
+        "FR" => french_department(postal_code).unwrap_or("Other").to_owned(),
+        _ => city.trim().to_owned(),
+    }
 }
 
-/// The region of a French postal code, named as AliExpress lists the
-/// regions of France (the 22 of before 2016, unaccented), by its department;
-/// `None` for a postal code that is not French.
-pub fn french_region(postal_code: &str) -> Option<&'static str> {
+/// The department of a French postal code, named as AliExpress lists the
+/// departments of France (unaccented, metropolitan only: an overseas one is
+/// not listed); `None` for a postal code that names none.
+pub fn french_department(postal_code: &str) -> Option<&'static str> {
     let digits: String = postal_code.chars().filter(char::is_ascii_digit).collect();
     if digits.len() != 5 {
         return None;
     }
-    if let Some(overseas) = match &digits[..3] {
-        "971" => Some("Guadeloupe"),
-        "972" => Some("Martinique"),
-        "973" => Some("Guyane"),
-        "974" => Some("Reunion"),
-        "975" => Some("Saint-Pierre-et-Miquelon"),
-        "976" => Some("Mayotte"),
-        "977" => Some("Saint-Barthelemy"),
-        "978" => Some("Saint-Martin"),
-        "986" => Some("Wallis-et-Futuna"),
-        "987" => Some("Polynesie Francaise"),
-        "988" => Some("Nouvelle-Caledonie"),
+    // Corsica: 200xx-201xx is Corse-du-Sud, 202xx-206xx Haute-Corse.
+    if let Some(corsica) = match &digits[..3] {
+        "200" | "201" => Some("Corse-du-Sud"),
+        "202" | "203" | "204" | "205" | "206" => Some("Haute-Corse"),
         _ => None,
     } {
-        return Some(overseas);
+        return Some(corsica);
     }
     Some(match &digits[..2] {
-        "67" | "68" => "Alsace",
-        "24" | "33" | "40" | "47" | "64" => "Aquitaine",
-        "03" | "15" | "43" | "63" => "Auvergne",
-        "14" | "50" | "61" => "Basse-Normandie",
-        "21" | "58" | "71" | "89" => "Bourgogne",
-        "22" | "29" | "35" | "56" => "Bretagne",
-        "18" | "28" | "36" | "37" | "41" | "45" => "Centre",
-        "08" | "10" | "51" | "52" => "Champagne-Ardenne",
-        "20" => "Corse",
-        "25" | "39" | "70" | "90" => "Franche-Comte",
-        "27" | "76" => "Haute-Normandie",
-        "75" | "77" | "78" | "91" | "92" | "93" | "94" | "95" => "Ile-de-France",
-        "11" | "30" | "34" | "48" | "66" => "Languedoc-Roussillon",
-        "19" | "23" | "87" => "Limousin",
-        "54" | "55" | "57" | "88" => "Lorraine",
-        "09" | "12" | "31" | "32" | "46" | "65" | "81" | "82" => "Midi-Pyrenees",
-        "59" | "62" => "Nord-Pas-de-Calais",
-        "44" | "49" | "53" | "72" | "85" => "Pays de la Loire",
-        "02" | "60" | "80" => "Picardie",
-        "16" | "17" | "79" | "86" => "Poitou-Charentes",
-        "04" | "05" | "06" | "13" | "83" | "84" => "Provence-Alpes-Cote d'Azur",
-        "01" | "07" | "26" | "38" | "42" | "69" | "73" | "74" => "Rhone-Alpes",
+        "01" => "Ain",
+        "02" => "Aisne",
+        "03" => "Allier",
+        "04" => "Alpes-de-Haute-Provence",
+        "05" => "Hautes-Alpes",
+        "06" => "Alpes-Maritimes",
+        "07" => "Ardeche",
+        "08" => "Ardennes",
+        "09" => "Ariege",
+        "10" => "Aube",
+        "11" => "Aude",
+        "12" => "Aveyron",
+        "13" => "Bouches-du-Rhone",
+        "14" => "Calvados",
+        "15" => "Cantal",
+        "16" => "Charente",
+        "17" => "Charente-Maritime",
+        "18" => "Cher",
+        "19" => "Correze",
+        "21" => "Cote-d'Or",
+        "22" => "Cotes-d'Armor",
+        "23" => "Creuse",
+        "24" => "Dordogne",
+        "25" => "Doubs",
+        "26" => "Drome",
+        "27" => "Eure",
+        "28" => "Eure-et-Loir",
+        "29" => "Finistere",
+        "30" => "Gard",
+        "31" => "Haute-Garonne",
+        "32" => "Gers",
+        "33" => "Gironde",
+        "34" => "Herault",
+        "35" => "Ille-et-Vilaine",
+        "36" => "Indre",
+        "37" => "Indre-et-Loire",
+        "38" => "Isere",
+        "39" => "Jura",
+        "40" => "Landes",
+        "41" => "Loir-et-Cher",
+        "42" => "Loire",
+        "43" => "Haute-Loire",
+        "44" => "Loire-Atlantique",
+        "45" => "Loiret",
+        "46" => "Lot",
+        "47" => "Lot-et-Garonne",
+        "48" => "Lozere",
+        "49" => "Maine-et-Loire",
+        "50" => "Manche",
+        "51" => "Marne",
+        "52" => "Haute-Marne",
+        "53" => "Mayenne",
+        "54" => "Meurthe-et-Moselle",
+        "55" => "Meuse",
+        "56" => "Morbihan",
+        "57" => "Moselle",
+        "58" => "Nievre",
+        "59" => "Nord",
+        "60" => "Oise",
+        "61" => "Orne",
+        "62" => "Pas-de-Calais",
+        "63" => "Puy-de-Dome",
+        "64" => "Pyrenees-Atlantiques",
+        "65" => "Hautes-Pyrenees",
+        "66" => "Pyrenees-Orientales",
+        "67" => "Bas-Rhin",
+        "68" => "Haut-Rhin",
+        "69" => "Rhone",
+        "70" => "Haute-Saone",
+        "71" => "Saone-et-Loire",
+        "72" => "Sarthe",
+        "73" => "Savoie",
+        "74" => "Haute-Savoie",
+        "75" => "Paris",
+        "76" => "Seine-Maritime",
+        "77" => "Seine-et-Marne",
+        "78" => "Yvelines",
+        "79" => "Deux-Sevres",
+        "80" => "Somme",
+        "81" => "Tarn",
+        "82" => "Tarn-et-Garonne",
+        "83" => "Var",
+        "84" => "Vaucluse",
+        "85" => "Vendee",
+        "86" => "Vienne",
+        "87" => "Haute-Vienne",
+        "88" => "Vosges",
+        "89" => "Yonne",
+        "90" => "Territoire de Belfort",
+        "91" => "Essonne",
+        "92" => "Hauts-de-Seine",
+        "93" => "Seine-Saint-Denis",
+        "94" => "Val-de-Marne",
+        "95" => "Val-d'Oise",
         _ => return None,
     })
 }
