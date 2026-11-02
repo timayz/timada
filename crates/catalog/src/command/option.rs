@@ -4,11 +4,24 @@
 
 use evento::{Executor, ProjectionAggregate};
 
-use crate::aggregator::{OptionDefined, OptionRemoved, OptionRenamed, OptionValuesChanged};
+use crate::aggregator::{
+    OptionDefined, OptionLabelled, OptionRemoved, OptionRenamed, OptionValueLabelled,
+    OptionValuesChanged,
+};
 use crate::error::CatalogError;
 use crate::value_object::{
-    MAX_OPTIONS, new_part_id, normalize_option_name, normalize_option_values,
+    MAX_OPTIONS, new_part_id, normalize_option_label, normalize_option_name,
+    normalize_option_values,
 };
+
+/// What shoppers read for an option and its values: the option's label and
+/// one per value named, `None` going back to the name or value itself. A
+/// value left out keeps the label it has.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OptionLabels {
+    pub label: Option<String>,
+    pub values: Vec<(String, Option<String>)>,
+}
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
@@ -129,6 +142,66 @@ impl<E: Executor> super::Command<E> {
             .tenant(&self.tenant)
             .commit(&self.executor)
             .await?;
+        Ok(())
+    }
+
+    /// Sets what shoppers read for an option and its values, in one write.
+    /// The name and the values themselves do not move, so an import that
+    /// named them still finds the option and its combinations: labels are
+    /// the one thing about an option that changes while variants are sold.
+    /// Labels already as asked write nothing.
+    pub async fn label_option(
+        &self,
+        actor: &str,
+        product_id: &str,
+        option_id: &str,
+        labels: OptionLabels,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let label = normalize_option_label(labels.label.as_deref())?;
+        let mut values = Vec::with_capacity(labels.values.len());
+        for (value, value_label) in &labels.values {
+            values.push((
+                value.trim(),
+                normalize_option_label(value_label.as_deref())?,
+            ));
+        }
+        let product = self.require_editable(product_id).await?;
+        let option = product
+            .option(option_id)
+            .ok_or(CatalogError::OptionNotFound)?;
+        let mut write = product.write()?;
+        write.routing_key_opt(routing_key);
+        let mut changed = false;
+        if option.label != label {
+            write.event(&OptionLabelled {
+                option_id: option_id.to_owned(),
+                label,
+                labelled_by: actor.to_owned(),
+            });
+            changed = true;
+        }
+        for (value, value_label) in values {
+            let value = option
+                .values
+                .iter()
+                .find(|known| known.as_str() == value)
+                .ok_or(CatalogError::OptionValueNotFound)?;
+            if option.value_labels.get(value) == value_label.as_ref() {
+                continue;
+            }
+            write.event(&OptionValueLabelled {
+                option_id: option_id.to_owned(),
+                value: value.clone(),
+                label: value_label,
+                labelled_by: actor.to_owned(),
+            });
+            changed = true;
+        }
+        if !changed {
+            return Ok(());
+        }
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(())
     }
 

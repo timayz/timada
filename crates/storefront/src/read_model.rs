@@ -455,6 +455,8 @@ fn options_json(product: &ProductState) -> anyhow::Result<String> {
             id: option.id.clone(),
             name: option.name.clone(),
             values: option.values.clone(),
+            label: option.label.clone(),
+            value_labels: option.value_labels.clone(),
         })
         .collect();
     Ok(serde_json::to_string(&options)?)

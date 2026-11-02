@@ -131,10 +131,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <input type="hidden" name="slug" value=(&product.slug)>
                             for option in &product.options {
                                 <p>
-                                    <label for=(format!("option-{}", option.id))>(&option.name)</label>
+                                    <label for=(format!("option-{}", option.id))>(option.display_name())</label>
                                     <select id=(format!("option-{}", option.id)) name=(format!("{OPTION_FIELD_PREFIX}{}", option.id)) data-option=(&option.name)>
                                         for value in &option.values {
-                                            <option value=(value)>(value)</option>
+                                            <option value=(value)>(option.display_value(value))</option>
                                         }
                                     </select>
                                 </p>
@@ -158,7 +158,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     <thead>
                                         <tr>
                                             for option in &product.options {
-                                                <th scope="col">(&option.name)</th>
+                                                <th scope="col">(option.display_name())</th>
                                             }
                                             <th scope="col">"Prix"</th>
                                             <th scope="col">"Stock"</th>
@@ -168,7 +168,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         for variant in &product.variants {
                                             <tr data-variant=(&variant.id) data-price=(variant.amount_cents) data-sold-out=(product.is_sold_out(Some(&variant.id)))>
                                                 for option in &product.options {
-                                                    <td>(variant.value_of(&option.id).unwrap_or("—"))</td>
+                                                    <td>(variant.value_of(&option.id).map_or("—", |value| option.display_value(value)))</td>
                                                 }
                                                 <td class="price">(money(variant.amount_cents, &currency))</td>
                                                 <td>

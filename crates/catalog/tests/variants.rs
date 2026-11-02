@@ -2,7 +2,8 @@ mod common;
 
 use common::*;
 use timada_catalog::{
-    AddImage, CatalogError, DefineVariant, MAX_OPTION_VALUES, MAX_OPTIONS, OptionSelection,
+    AddImage, CatalogError, DefineVariant, MAX_OPTION_VALUES, MAX_OPTIONS, OptionLabels,
+    OptionSelection,
 };
 
 fn pick(option_id: &str, value: &str) -> OptionSelection {
@@ -262,6 +263,153 @@ async fn a_price_range_covers_what_a_shopper_may_pay() {
     assert_eq!(state.price_range(), Some((1990, 2290, "EUR")));
     assert_eq!(state.currency(), Some("EUR"));
     assert!(state.is_priced());
+}
+
+#[tokio::test]
+async fn an_option_and_its_values_show_labels_without_moving() {
+    let cmd = command().await;
+    let (product_id, colour) = with_colours(&cmd).await;
+    let beige = cmd
+        .define_variant(ALICE, &product_id, sell(vec![pick(&colour, "Beige")], 2290))
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.options[0].display_name(), "Colour");
+    assert_eq!(state.options[0].display_value("Beige"), "Beige");
+    assert_eq!(state.variant_label(&state.variants[0]), "Beige");
+
+    // Labels are the one thing about an option that changes once variants
+    // are sold; they are trimmed, and the name and values do not move.
+    cmd.label_option(
+        ALICE,
+        &product_id,
+        &colour,
+        OptionLabels {
+            label: Some(" Couleur ".into()),
+            values: vec![("Beige".into(), Some(" Sable ".into()))],
+        },
+    )
+    .await
+    .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    let option = &state.options[0];
+    assert_eq!(option.name, "Colour");
+    assert_eq!(option.values, ["Beige", "Blue"]);
+    assert_eq!(option.label.as_deref(), Some("Couleur"));
+    assert_eq!(option.display_name(), "Couleur");
+    assert_eq!(option.display_value("Beige"), "Sable");
+    assert_eq!(option.display_value("Blue"), "Blue");
+    assert_eq!(state.variant_label(&state.variants[0]), "Sable");
+    assert_eq!(
+        state
+            .variant_for(&[pick(&colour, "Beige")])
+            .map(|v| v.id.as_str()),
+        Some(beige.as_str()),
+        "the combination is still found by its value"
+    );
+
+    // Labels already as asked write nothing; a value left out keeps its.
+    let before = state.updated_at;
+    cmd.label_option(
+        ALICE,
+        &product_id,
+        &colour,
+        OptionLabels {
+            label: Some("Couleur".into()),
+            values: vec![],
+        },
+    )
+    .await
+    .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.updated_at, before);
+    assert_eq!(state.options[0].display_value("Beige"), "Sable");
+
+    // Too long, an unknown value, an unknown option: refused.
+    let too_long = cmd
+        .label_option(
+            ALICE,
+            &product_id,
+            &colour,
+            OptionLabels {
+                label: Some("x".repeat(41)),
+                values: vec![],
+            },
+        )
+        .await;
+    assert!(
+        matches!(too_long, Err(CatalogError::InvalidOptionLabel)),
+        "{too_long:?}"
+    );
+    let unknown_value = cmd
+        .label_option(
+            ALICE,
+            &product_id,
+            &colour,
+            OptionLabels {
+                label: None,
+                values: vec![("Pink".into(), Some("Rose".into()))],
+            },
+        )
+        .await;
+    assert!(
+        matches!(unknown_value, Err(CatalogError::OptionValueNotFound)),
+        "{unknown_value:?}"
+    );
+    let unknown_option = cmd
+        .label_option(ALICE, &product_id, "nope", OptionLabels::default())
+        .await;
+    assert!(
+        matches!(unknown_option, Err(CatalogError::OptionNotFound)),
+        "{unknown_option:?}"
+    );
+
+    // Empty labels go back to the name and the value.
+    cmd.label_option(
+        ALICE,
+        &product_id,
+        &colour,
+        OptionLabels {
+            label: Some("  ".into()),
+            values: vec![("Beige".into(), None)],
+        },
+    )
+    .await
+    .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.options[0].label, None);
+    assert!(state.options[0].value_labels.is_empty());
+    assert_eq!(state.variant_label(&state.variants[0]), "Beige");
+}
+
+#[tokio::test]
+async fn a_value_that_leaves_an_option_takes_its_label_with_it() {
+    let cmd = command().await;
+    let (product_id, colour) = with_colours(&cmd).await;
+    cmd.label_option(
+        ALICE,
+        &product_id,
+        &colour,
+        OptionLabels {
+            label: None,
+            values: vec![
+                ("Beige".into(), Some("Sable".into())),
+                ("Blue".into(), Some("Bleu".into())),
+            ],
+        },
+    )
+    .await
+    .unwrap();
+    cmd.change_option_values(ALICE, &product_id, &colour, vec!["Blue".into()])
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(
+        state.options[0].value_labels,
+        [("Blue".to_owned(), "Bleu".to_owned())]
+            .into_iter()
+            .collect()
+    );
 }
 
 #[tokio::test]

@@ -73,7 +73,8 @@ pub struct OrderLine {
     pub variant_id: Option<String>,
     /// The product's name when it was sold.
     pub name: String,
-    /// The variant's values when it was sold (`Beige / Large`).
+    /// The variant's values when it was sold, as the shop showed them
+    /// (`Sable / Large`).
     pub variant_label: Option<String>,
     /// The merchant's code for what was sold, if it had one.
     pub sku: Option<String>,
