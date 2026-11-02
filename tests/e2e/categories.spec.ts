@@ -131,6 +131,8 @@ test("an owner builds a category tree and files a product under it", async ({ pa
     await page.goto(`/t/${slug}/products`);
     await expect(page.getByLabel("Category")).toContainText("Cat mats", { timeout: 1000 });
   }).toPass({ timeout: 15_000 });
+  // A draft: the list shows the published products unless told otherwise.
+  await selectByText(page, "Status", "Every status");
   await selectByText(page, "Category", "Cat mats");
   await page.getByRole("button", { name: "Search" }).click();
   await expect(page.locator("[data-product=cooling-mat]")).toBeVisible();
