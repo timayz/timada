@@ -1,6 +1,6 @@
 //! Places a shop's paid orders on AliExpress with the company's account: every
 //! item of the order imported from AliExpress is bought there, shipped
-//! straight to the shopper by AliExpress's own free delivery. The
+//! straight to the shopper by AliExpress's own delivery. The
 //! subscription below places the orders the shop wants placed as they come
 //! (`auto_forward`) and the ones the merchant asked for; the sweep
 //! ([`super::sync`]) reads them again until AliExpress gives their parcel
@@ -18,7 +18,7 @@ use evento::{
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem, Requested};
 use timada_aliexpress::{
     AeError, AliexpressError, ForwardStatus, LinkState, PlaceItem, PlaceOrder, Placement,
-    choose_service, forward_items, link_of_product, logistics_address,
+    choose_service, describe_options, forward_items, link_of_product, logistics_address,
 };
 use timada_orders::{OrderError, OrderState, OrderStatus};
 use timada_tenancy::{CompanyState, TenantState};
@@ -226,11 +226,27 @@ impl Aliexpress {
                 )
                 .await?;
             let Some(service) = choose_service(&options) else {
-                return Err(Refusal(format!(
-                    "AliExpress offers no free delivery of its own to {country} for “{}”.",
-                    product.subject
-                )));
+                return Err(Refusal(if options.is_empty() {
+                    format!(
+                        "AliExpress offers no delivery to {country} for “{}”.",
+                        product.subject
+                    )
+                } else {
+                    format!(
+                        "Only the seller delivers “{}” to {country} on AliExpress; offered: {}.",
+                        product.subject,
+                        describe_options(&options, &market.currency)
+                    )
+                }));
             };
+            tracing::info!(
+                tenant = %tenant_id,
+                order = %order_id,
+                ae_product_id = %item.ae_product_id,
+                service = %service.service_name,
+                fee_cents = service.cents,
+                "AliExpress delivery chosen"
+            );
             items.push(PlaceItem {
                 product_id: item.ae_product_id.clone(),
                 sku_attr: attr,
