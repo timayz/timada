@@ -311,15 +311,20 @@ fn lost(err: AliexpressError) -> AliexpressError {
 #[evento::command]
 impl<E: Executor> Command<E> {
     /// Asks for `ae_product_id` to be imported; the link's id. An item
-    /// imported already is `AlreadyLinked`, one importing `Importing`
-    /// (unless that import stalled); a failed or unlinked one is asked for
-    /// again.
+    /// imported already is `AlreadyLinked`, unless the product it filled is
+    /// archived or gone from the catalog: that link is over (`Unlinked`,
+    /// written with the request) and the item is imported anew. One
+    /// importing is `Importing` (unless that import stalled); a failed or
+    /// unlinked one is asked for again.
     pub async fn request_import(
         &self,
         actor: &str,
         ae_product_id: &str,
         routing_key: Option<String>,
-    ) -> Result<String, AliexpressError> {
+    ) -> Result<String, AliexpressError>
+    where
+        E: Clone,
+    {
         let requested = ImportRequested {
             ae_product_id: ae_product_id.to_owned(),
             requested_by: actor.to_owned(),
@@ -337,7 +342,9 @@ impl<E: Executor> Command<E> {
                     .map_err(|err| lost(err.into()))?;
             }
             Some(link) => {
+                let mut retired = false;
                 match link.status {
+                    LinkStatus::Linked if self.product_retired(&link).await? => retired = true,
                     LinkStatus::Linked => return Err(AliexpressError::AlreadyLinked),
                     LinkStatus::Importing
                         if unix_now().saturating_sub(link.updated_at) < IMPORT_STALE_SECS =>
@@ -346,8 +353,14 @@ impl<E: Executor> Command<E> {
                     }
                     _ => {}
                 }
-                link.write()?
-                    .routing_key_opt(routing_key)
+                let mut write = link.write()?;
+                write.routing_key_opt(routing_key);
+                if retired {
+                    write.event(&Unlinked {
+                        unlinked_by: actor.to_owned(),
+                    });
+                }
+                write
                     .event(&requested)
                     .tenant(&self.tenant)
                     .commit(&self.executor)
@@ -356,6 +369,22 @@ impl<E: Executor> Command<E> {
             }
         }
         Ok(id)
+    }
+
+    /// Whether the catalog product `link` filled is archived or gone: a
+    /// link with nothing left to keep in step.
+    async fn product_retired(&self, link: &LinkState) -> anyhow::Result<bool>
+    where
+        E: Clone,
+    {
+        let Some(product_id) = link.product_id.as_deref() else {
+            return Ok(true);
+        };
+        let catalog = timada_catalog::Command::new(self.executor.clone(), &self.tenant);
+        Ok(catalog
+            .load_product(product_id)
+            .await?
+            .is_none_or(|product| product.is_archived()))
     }
 
     /// Takes the import of a requested item on; `false` when another node

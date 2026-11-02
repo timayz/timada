@@ -67,7 +67,9 @@ product in the background, on the first node to take it on. It then fills a **dr
   *Stock* in `docs/architecture.md`).
 
 The merchant checks the draft and publishes it. The same item can be imported once per
-shop; one whose import failed, or that was unlinked, can be imported again.
+shop; one whose import failed, or that was unlinked, can be imported again. So can one
+whose product was archived: archiving unlinks it (a read that finds the product
+archived or gone does too), and an import asked for anyway unlinks it first.
 
 ## Keeping in step
 

@@ -93,6 +93,7 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     // rule: rose costs 4.31, in the band; blue 5.50, above it.
     await row.getByRole("link", { name: "Open" }).click();
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Cat Tunnel Deluxe");
+    const productUrl = page.url();
     await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "draft");
     await expect(page.locator("[data-image]")).toHaveCount(4);
     const rose = page.locator("[data-variant]", { hasText: "Colour: Rose" });
@@ -133,6 +134,33 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     await page.getByLabel("AliExpress product").fill(PRODUCT_ID);
     await page.getByRole("button", { name: "Import", exact: true }).click();
     await expect(page).toHaveURL(/error=aliexpress_already_linked/);
+
+    // Archived, the product is no longer kept in step, and the item can be
+    // imported again: a fresh draft.
+    await page.goto(productUrl);
+    await page.getByRole("button", { name: "Archive" }).click();
+    await expect(page.getByRole("status")).toContainText("Product archived.");
+    await expect(async () => {
+      await page.reload();
+      await expect(page.locator("[data-product-aliexpress]")).toHaveCount(0, { timeout: 1000 });
+    }).toPass({ timeout: 10_000 });
+    await page.goto(`/t/${slug}/aliexpress`);
+    await expect(async () => {
+      await page.reload();
+      await expect(row).toHaveAttribute("data-link-status", "unlinked", { timeout: 1000 });
+    }).toPass({ timeout: 10_000 });
+    aliexpress.offline = false;
+    await page.getByLabel("AliExpress product").fill(PRODUCT_ID);
+    await page.getByRole("button", { name: "Import", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("Import started");
+    await expect(async () => {
+      await page.reload();
+      await expect(row).toHaveAttribute("data-link-status", "linked", { timeout: 1000 });
+    }).toPass({ timeout: 20_000 });
+    await row.getByRole("link", { name: "Open" }).click();
+    await expect(page.getByRole("heading", { level: 1 })).toContainText("Cat Tunnel Deluxe");
+    await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "draft");
+    expect(page.url()).not.toBe(productUrl);
     expect(aliexpress.badSignatures).toBe(0);
     expect(aliexpress.calls).toContain("/auth/token/create");
     expect(aliexpress.calls.filter((call) => call === "aliexpress.ds.product.get").length).toBeGreaterThanOrEqual(4);
