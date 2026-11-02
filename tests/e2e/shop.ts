@@ -67,6 +67,7 @@ export async function fillAddress(
 ) {
   await emailField(page).fill(email);
   await page.getByLabel("Nom complet").fill("Ada Lovelace");
+  await page.getByLabel("Téléphone").fill("06 12 34 56 78");
   await page.getByLabel("Adresse", { exact: true }).fill(line1);
   await page.getByLabel("Code postal", { exact: true }).fill("75002");
   await page.getByLabel("Ville", { exact: true }).fill("Paris");

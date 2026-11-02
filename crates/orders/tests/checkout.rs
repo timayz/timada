@@ -260,6 +260,24 @@ async fn an_empty_cart_or_a_bad_address_cannot_ask_to_pay() {
         matches!(refused, Err(OrderError::InvalidAddress)),
         "{refused:?}"
     );
+    // The courier needs a phone; a blank one is none.
+    let refused = orders
+        .request_checkout(
+            SHOPPER,
+            &cart_id,
+            Checkout {
+                shipping: ShippingAddress {
+                    phone: Some(" ".into()),
+                    ..checkout().shipping
+                },
+                ..checkout()
+            },
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(OrderError::MissingPhone)),
+        "{refused:?}"
+    );
     let refused = orders
         .request_checkout(SHOPPER, "no-such-cart", checkout())
         .await;

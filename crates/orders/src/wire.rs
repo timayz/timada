@@ -130,6 +130,7 @@ impl Refusal {
             "invalid_address" => OrderError::InvalidAddress,
             "invalid_country" => OrderError::InvalidCountry,
             "invalid_phone" => OrderError::InvalidPhone,
+            "missing_phone" => OrderError::MissingPhone,
             "invalid_note" => OrderError::InvalidNote,
             "order_not_found" => OrderError::OrderNotFound,
             "shipping_method_not_found" => OrderError::ShippingMethodNotFound,

@@ -297,6 +297,7 @@ fn checkout(expected_total_cents: Option<u64>) -> Checkout {
             postal_code: "75002".into(),
             city: "Paris".into(),
             country: "FR".into(),
+            phone: Some("06 12 34 56 78".into()),
             ..Default::default()
         },
         note: None,
@@ -761,6 +762,7 @@ async fn a_distance_sale_in_another_currency_counts_at_the_euro_rate() {
             postal_code: "10117".into(),
             city: "Berlin".into(),
             country: "DE".into(),
+            phone: Some("+49 30 123456".into()),
             ..Default::default()
         },
         ..checkout(Some(3000))

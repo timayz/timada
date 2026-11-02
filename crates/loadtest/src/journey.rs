@@ -296,7 +296,16 @@ impl Shopper<'_> {
             ("expected_total_cents", expected.to_string()),
             ("email", format!("shopper{n}@example.org")),
             ("name", format!("Shopper {n}")),
-            ("phone", String::new()),
+            (
+                "phone",
+                format!(
+                    "06 {:02} {:02} {:02} {:02}",
+                    n % 100,
+                    n / 100 % 100,
+                    n / 10_000 % 100,
+                    n % 97
+                ),
+            ),
             ("line1", format!("{} rue de la Paix", n % 200 + 1)),
             ("line2", String::new()),
             ("city", "Paris".into()),

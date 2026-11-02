@@ -48,6 +48,8 @@ pub enum OrderError {
     InvalidCountry,
     #[error("the phone number is at most 30 characters")]
     InvalidPhone,
+    #[error("give a phone number for the delivery")]
+    MissingPhone,
     #[error("the note is at most 1000 characters")]
     InvalidNote,
     #[error("order not found")]
@@ -155,6 +157,7 @@ impl OrderError {
             Self::InvalidAddress => "invalid_address",
             Self::InvalidCountry => "invalid_country",
             Self::InvalidPhone => "invalid_phone",
+            Self::MissingPhone => "missing_phone",
             Self::InvalidNote => "invalid_note",
             Self::OrderNotFound => "order_not_found",
             Self::OrderCancelled => "order_cancelled",

@@ -563,6 +563,9 @@ pub fn say(code: &str) -> &'static str {
         "invalid_address" => "Saisissez la rue, le code postal et la ville.",
         "invalid_country" => "Saisissez le pays sous forme de code à deux lettres, par exemple FR.",
         "invalid_phone" => "Le numéro de téléphone est trop long.",
+        "missing_phone" => {
+            "Indiquez un numéro de téléphone : le transporteur peut avoir à vous joindre."
+        }
         "invalid_note" => "La remarque est trop longue.",
         "cart_not_found" | "cart_checked_out" => "Ce panier a déjà été commandé.",
         "discount_unknown" => "Ce code promo n'est pas valable.",

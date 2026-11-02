@@ -486,6 +486,7 @@ async function checkoutTo(
   await expect(page.locator("[data-import-notice]")).toBeVisible();
   await emailField(page).fill("ada@example.org");
   await page.getByLabel("Nom complet").fill("Ada Lovelace");
+  await page.getByLabel("Téléphone").fill("06 12 34 56 78");
   await page.getByLabel("Adresse", { exact: true }).fill("1 Main Street");
   await page.getByLabel("Code postal", { exact: true }).fill(postalCode);
   await page.getByLabel("Ville", { exact: true }).fill("Somewhere");
@@ -571,6 +572,7 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({
     await page.getByRole("link", { name: "Commander" }).click();
     await emailField(page).fill("ada@example.org");
     await page.getByLabel("Nom complet").fill("Ada Lovelace");
+    await page.getByLabel("Téléphone").fill("06 12 34 56 78");
     await page.getByLabel("Adresse", { exact: true }).fill("1 Main Street");
     await page.getByLabel("Code postal", { exact: true }).fill("10115");
     await page.getByLabel("Ville", { exact: true }).fill("Berlin");
@@ -621,6 +623,7 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({
     await expect(billing).toBeHidden();
     await emailField(page).fill("ada@example.org");
     await page.getByLabel("Nom complet").fill("Ada Lovelace");
+    await page.getByLabel("Téléphone").fill("06 12 34 56 78");
     await page.getByLabel("Adresse", { exact: true }).fill("350 Fifth Avenue");
     await page.getByLabel("Code postal", { exact: true }).fill("10118");
     await page.getByLabel("Ville", { exact: true }).fill("New York");
@@ -1246,6 +1249,7 @@ test.describe("a French-speaking shopper", () => {
       await addToCart(page);
       await page.goto(`${SHOP}/checkout`);
       await page.getByLabel("Nom complet").fill("Ada Lovelace");
+      await page.getByLabel("Téléphone").fill("06 12 34 56 78");
       await page
         .getByLabel("Adresse", { exact: true })
         .fill("1 rue de la Paix");
