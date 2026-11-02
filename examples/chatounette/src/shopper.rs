@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 use timada_storefront::{SavedAddress, ShippingAddress, Shopper, order, shopper, store};
+
+use crate::app::checkout::countries;
 use topcoat::{
     context::{Cx, memoize},
     cookie::{Cookies, SameSite, UnparsedCookieStore, cookie_store, private_cookies, time},
@@ -106,7 +108,14 @@ pub struct CheckoutDraft {
     pub postal_code: String,
     pub city: String,
     pub country: String,
+    /// The phone as ordered (`+33 6 12 34 56 78`): what the form's two
+    /// fields compose, or what a wallet handed over whole.
     pub phone: String,
+    /// The form's calling code (`33`) and national number, as typed.
+    #[serde(default)]
+    pub phone_code: String,
+    #[serde(default)]
+    pub phone_number: String,
     pub note: String,
     /// A business buyer's EU VAT number. The form has no such field in a
     /// shop that does not sell to businesses.
@@ -146,7 +155,37 @@ impl CheckoutDraft {
         self.city = address.city.clone();
         self.country = address.country.clone();
         self.phone = address.phone.clone().unwrap_or_default();
+        self.phone_code.clear();
+        self.phone_number.clear();
         self
+    }
+
+    /// The phone as ordered: the form's two fields composed when the
+    /// shopper typed a number, else the one handed over whole.
+    pub fn phone_text(&self) -> String {
+        if self.phone_number.trim().is_empty() {
+            self.phone.trim().to_owned()
+        } else {
+            compose_phone(&self.phone_code, &self.phone_number)
+        }
+    }
+
+    /// What the form's two phone fields show: the calling code and the
+    /// national number, from the fields as typed or from a whole phone;
+    /// the delivery country's code, or France's, before any.
+    pub fn phone_parts(&self) -> (String, String) {
+        if !self.phone_number.trim().is_empty() && !self.phone_code.is_empty() {
+            return (self.phone_code.clone(), self.phone_number.clone());
+        }
+        let fallback = || {
+            countries::dial_code_of(&self.country.to_ascii_uppercase())
+                .unwrap_or("33")
+                .to_owned()
+        };
+        match split_phone(&self.phone) {
+            (Some(code), national) => (code.to_owned(), national),
+            (None, national) => (fallback(), national),
+        }
     }
 
     /// The draft billed at a saved address.
@@ -171,7 +210,7 @@ impl CheckoutDraft {
             postal_code: self.postal_code.clone(),
             city: self.city.clone(),
             country: self.country.clone(),
-            phone: optional(&self.phone),
+            phone: optional(&self.phone_text()),
         }
     }
 
@@ -192,6 +231,45 @@ impl CheckoutDraft {
             country: self.billing_country.clone(),
             phone: None,
         })
+    }
+}
+
+/// A calling code and a national number as one phone: `+33 6 12 34 56 78`.
+/// The trunk `0` most countries dial at home goes (Italy keeps it); a
+/// number typed international already is kept whole.
+pub fn compose_phone(code: &str, national: &str) -> String {
+    let national = national.trim();
+    if national.is_empty() {
+        return String::new();
+    }
+    if national.starts_with('+') || national.starts_with("00") {
+        return national.to_owned();
+    }
+    let code = code.trim().trim_start_matches('+');
+    let national = match national.strip_prefix('0') {
+        Some(rest) if code != "39" => rest.trim_start(),
+        _ => national,
+    };
+    format!("+{code} {national}").trim_end().to_owned()
+}
+
+/// A phone split into the calling code it starts with (`+33`, `0033`), when
+/// it is one of the shop's countries', and the rest.
+pub fn split_phone(phone: &str) -> (Option<&'static str>, String) {
+    let phone = phone.trim();
+    let Some(international) = phone.strip_prefix('+').or_else(|| phone.strip_prefix("00")) else {
+        return (None, phone.to_owned());
+    };
+    let mut codes: Vec<&'static str> = countries::DIAL_CODES
+        .iter()
+        .map(|(_, code)| *code)
+        .collect();
+    codes.sort_by_key(|code| std::cmp::Reverse(code.len()));
+    codes.dedup();
+    let international = international.trim_start();
+    match codes.iter().find(|code| international.starts_with(*code)) {
+        Some(code) => (Some(code), international[code.len()..].trim().to_owned()),
+        None => (None, phone.to_owned()),
     }
 }
 
@@ -327,5 +405,53 @@ pub fn safe_next(next: Option<&str>, fallback: String) -> String {
             next.to_owned()
         }
         _ => fallback,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_phone_is_composed_from_its_code_and_split_back() {
+        assert_eq!(compose_phone("33", "06 12 34 56 78"), "+33 6 12 34 56 78");
+        assert_eq!(compose_phone("39", "06 1234 5678"), "+39 06 1234 5678");
+        assert_eq!(compose_phone("33", "+32 470 12 34 56"), "+32 470 12 34 56");
+        assert_eq!(compose_phone("33", "  "), "");
+        assert_eq!(
+            split_phone("+33 6 12 34 56 78"),
+            (Some("33"), "6 12 34 56 78".into())
+        );
+        assert_eq!(
+            split_phone("0032470123456"),
+            (Some("32"), "470123456".into())
+        );
+        assert_eq!(split_phone("+359 2 123"), (Some("359"), "2 123".into()));
+        assert_eq!(
+            split_phone("06 12 34 56 78"),
+            (None, "06 12 34 56 78".into())
+        );
+        assert_eq!(split_phone("+999 1"), (None, "+999 1".into()));
+
+        let draft = CheckoutDraft {
+            country: "be".into(),
+            phone: "+33 6 12 34 56 78".into(),
+            ..Default::default()
+        };
+        assert_eq!(draft.phone_parts(), ("33".into(), "6 12 34 56 78".into()));
+        assert_eq!(draft.phone_text(), "+33 6 12 34 56 78");
+        let typed = CheckoutDraft {
+            phone_code: "32".into(),
+            phone_number: "0470 12 34 56".into(),
+            ..draft.clone()
+        };
+        assert_eq!(typed.phone_parts(), ("32".into(), "0470 12 34 56".into()));
+        assert_eq!(typed.phone_text(), "+32 470 12 34 56");
+        let blank = CheckoutDraft {
+            country: "be".into(),
+            ..Default::default()
+        };
+        assert_eq!(blank.phone_parts(), ("32".into(), String::new()));
+        assert_eq!(blank.phone_text(), "");
     }
 }

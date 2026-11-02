@@ -290,6 +290,11 @@ form.checkout { margin: 0; }
 form.checkout label { display: block; margin-top: .75rem; font-size: .9rem; color: var(--ink-soft); }
 form.checkout input, form.checkout textarea, form.checkout select { width: 100%; max-width: none; padding: .65rem .75rem; border: 1px solid var(--line); border-radius: .3rem; font: inherit; box-sizing: border-box; background: #fff; }
 form.checkout .row { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); }
+form.checkout .phone { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: .3rem; background: #fff; }
+form.checkout .phone:focus-within { outline: 2px solid var(--coral-dark); outline-offset: 1px; }
+form.checkout .phone select { width: auto; flex: none; border: 0; border-right: 1px solid var(--line); border-radius: .3rem 0 0 .3rem; background: transparent; padding-right: .5rem; }
+form.checkout .phone input { flex: 1; min-width: 0; border: 0; border-radius: 0 .3rem .3rem 0; }
+form.checkout .phone select:focus, form.checkout .phone input:focus { outline: none; }
 form.checkout details.more summary { color: var(--coral-dark); cursor: pointer; margin-top: .6rem; font-size: .9rem; }
 .hint { color: var(--muted); font-size: .875rem; }
 button.place { display: block; width: 100%; margin-top: 1.5rem; padding: 1rem; border: 0; border-radius: 2rem; background: var(--coral); color: #fff; font-size: 1.1rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; cursor: pointer; box-shadow: 0 6px 16px rgba(247,137,138,.35); }

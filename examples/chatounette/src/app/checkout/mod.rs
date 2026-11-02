@@ -192,7 +192,7 @@ if (key && window.Stripe) {
     const fill = (name, value) => { if (value) form.elements[name].value = value; };
     fill("email", billing.email);
     fill("name", shipping.name || billing.name);
-    fill("phone", billing.phone);
+    fillPhone(billing.phone);
     fill("line1", address.line1);
     fill("line2", address.line2);
     fill("postal_code", address.postal_code);
@@ -215,6 +215,34 @@ if (key && window.Stripe) {
   });
 }
 
+// The phone's two fields: the calling code picked and the national number.
+// A wallet hands a whole number (+33612345678): split on the code it
+// starts with; one it does not know is kept as typed.
+const phoneCode = form.elements.phone_code;
+const phoneNumber = form.elements.phone_number;
+function fillPhone(whole) {
+  if (!whole) return;
+  const digits = whole.replace(/[^\d+]/g, "");
+  const codes = [...phoneCode.options].map((option) => option.value).sort((a, b) => b.length - a.length);
+  const code = digits.startsWith("+") ? codes.find((c) => digits.startsWith("+" + c)) : null;
+  if (code) {
+    phoneCode.value = code;
+    phoneNumber.value = digits.slice(code.length + 1);
+  } else {
+    phoneNumber.value = whole;
+  }
+}
+// The phone as the server composes it: "+33 6 12 34 56 78", the trunk 0
+// dropped (Italy keeps it), a number typed international kept whole.
+function phoneText() {
+  let national = phoneNumber.value.trim();
+  if (!national) return "";
+  if (national.startsWith("+") || national.startsWith("00")) return national;
+  const code = phoneCode.value;
+  if (national.startsWith("0") && code !== "39") national = national.slice(1).trim();
+  return `+${code} ${national}`.trim();
+}
+
 // What Stripe's form was told not to ask, from the form's own fields: every
 // one of them, as "never" requires.
 // The address is the billing one when the shopper gave one.
@@ -224,7 +252,7 @@ function billingDetails() {
   return {
     name: value(`${at}name`),
     email: value("email"),
-    phone: value("phone"),
+    phone: phoneText(),
     address: {
       line1: value(`${at}line1`),
       line2: value(`${at}line2`),
@@ -389,6 +417,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         draft.country.to_ascii_uppercase()
     };
+    let (phone_code, phone_number) = draft.phone_parts();
+    let phone_country =
+        countries::country_of_dial(&phone_code, &country).unwrap_or(DEFAULT_COUNTRY);
     let billing_country = if draft.billing_country.is_empty() {
         country.clone()
     } else {
@@ -564,7 +595,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <label for="checkout-name">"Nom complet"</label>
                             <input id="checkout-name" name="name" required="" autocomplete="name" value=(&draft.name)>
                             <label for="checkout-phone">"Téléphone"</label>
-                            <input id="checkout-phone" name="phone" type="tel" required="" autocomplete="tel" value=(&draft.phone)>
+                            <div class="phone" data-phone="">
+                                <select id="checkout-phone-code" name="phone_code" aria-label="Indicatif" autocomplete="tel-country-code">
+                                    for (dial_country, dial) in countries::DIAL_CODES {
+                                        <option value=(dial) selected=(*dial_country == phone_country)>(countries::flag(dial_country)) " +" (dial)</option>
+                                    }
+                                </select>
+                                <input id="checkout-phone" name="phone_number" type="tel" required="" autocomplete="tel-national" value=(&phone_number)>
+                            </div>
                         </section>
                         <section class="card">
                             <h2>"Adresse de livraison"</h2>
