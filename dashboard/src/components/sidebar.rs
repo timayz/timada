@@ -101,7 +101,7 @@ pub async fn sidebar_provider(
         <div
             data-sidebar="provider"
             class=(class!(
-                "flex min-h-svh w-full md:h-svh md:overflow-hidden [--sidebar-width:16rem] [--sidebar-width-mobile:18rem] [--sidebar-width-icon:3rem] md:has-[[data-sidebar-variant=inset]]:bg-sidebar",
+                "flex min-h-svh w-full md:h-svh md:overflow-hidden [--sidebar-width:18rem] [--sidebar-width-mobile:18rem] [--sidebar-width-icon:3.5rem] md:has-[[data-sidebar-variant=inset]]:bg-sidebar",
                 attrs.remove("class"),
             ))
             (attrs)
@@ -516,14 +516,14 @@ impl SidebarMenuButtonSize {
     fn classes(self) -> StaticClass {
         match self {
             Self::Sm => class!("h-7 text-xs"),
-            Self::Md => class!("h-10 text-sm"),
+            Self::Md => class!("h-11 text-sm"),
             Self::Lg => class!("h-12 text-sm"),
         }
     }
 }
 
 const MENU_BUTTON: StaticClass = class!(
-    "flex w-full min-w-0 items-center gap-3 overflow-hidden rounded-full border px-3 text-left outline-none transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground active:bg-sidebar-accent active:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground data-[active=true]:font-medium has-[+[data-sidebar=menu-action]]:pr-8 has-[+[data-sidebar=menu-badge]]:pr-8 [&>svg]:size-4 [&>svg]:shrink-0 [&>span:last-child]:truncate md:group-data-[collapsible=icon]/sidebar:size-8 md:group-data-[collapsible=icon]/sidebar:justify-center md:group-data-[collapsible=icon]/sidebar:p-0 md:group-data-[collapsible=icon]/sidebar:[&>span:last-child]:sr-only",
+    "flex w-full min-w-0 items-center gap-3 overflow-hidden rounded-xl border px-3 text-left outline-none transition-colors hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground active:bg-sidebar-accent active:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:border-sidebar-border data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground data-[active=true]:font-medium has-[+[data-sidebar=menu-action]]:pr-8 has-[+[data-sidebar=menu-badge]]:pr-8 [&>svg]:size-4 [&>svg]:shrink-0 [&>span:last-child]:truncate md:group-data-[collapsible=icon]/sidebar:size-10 md:group-data-[collapsible=icon]/sidebar:justify-center md:group-data-[collapsible=icon]/sidebar:p-0 md:group-data-[collapsible=icon]/sidebar:[&>span:last-child]:sr-only",
 );
 
 /// Classes for styling another element as a sidebar menu button.

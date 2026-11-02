@@ -1,7 +1,7 @@
-//! The document every page renders into: the dark rail on the left with the
-//! sections the visitor may open, the topbar with the signed-in user, and
-//! the page below. Signed-out pages (sign-in, invitations) get the centred
-//! [`auth_document`] instead.
+//! The document every page renders into: the rail on the left with the
+//! sections the visitor may open, the topbar with the product search and the
+//! signed-in user, and the page below, edge to edge like Katalyst's. Signed-out
+//! pages (sign-in, invitations) get the centred [`auth_document`] instead.
 //!
 //! The rail folds to icons on wide screens and slides over the page below
 //! `md`; both states are runtime signals whose initial values come from the
@@ -67,27 +67,6 @@ impl<'a> Shell<'a> {
         }
     }
 
-    /// The line in the topbar: the tenant and the section, or the page.
-    fn crumb(&self) -> String {
-        if let Some((tenant, _)) = self.tenant {
-            return match section(self.current) {
-                Some(section) => format!("{} / {}", tenant.name, section.label),
-                None if self.current == "home" => tenant.name.clone(),
-                None => format!("{} /", tenant.name),
-            };
-        }
-        match self.current {
-            "dashboard" => "Dashboard",
-            "companies" => "Companies",
-            "account" => "Account",
-            "admin_tenants" => "Platform / Tenants",
-            "admin_users" => "Platform / Users",
-            "admin_companies" => "Platform / Companies",
-            "admin_cluster" => "Platform / This node",
-            _ => "",
-        }
-        .to_owned()
-    }
 }
 
 /// The groups of a tenant's rail.
@@ -258,10 +237,6 @@ static SECTIONS: [Section; 21] = [
     },
 ];
 
-fn section(key: &str) -> Option<&'static Section> {
-    SECTIONS.iter().find(|section| section.key == key)
-}
-
 /// Whether the member may see a section.
 fn allowed(nav: &TenantNav, key: &str) -> bool {
     match key {
@@ -331,6 +306,7 @@ async fn head(title: &str) -> Result<impl View> {
             <link rel="stylesheet" href=(tailwind::stylesheet!())>
             topcoat::runtime::script()
             <script type="module" src=(asset!("../app/auth/auth.js"))></script>
+            <script type="module" src=(asset!("../app/ui/search.js"))></script>
             topcoat::dev::script()
         </head>
     })
@@ -350,7 +326,7 @@ async fn nav_item(
                 href: Some(href.as_str()),
                 active: active,
                 tooltip: Some(label),
-                <span class="flex size-7 shrink-0 items-center justify-center rounded-md bg-sidebar-icon/10 text-sidebar-icon [&>svg]:size-4">
+                <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-sidebar-icon/10 text-sidebar-icon in-data-[active=true]:text-sidebar-icon-active [&>svg]:size-[18px]">
                     icon(data: symbol)
                 </span>
                 <span>(label)</span>
@@ -366,7 +342,7 @@ async fn rail_groups(cx: &Cx, user: Option<&UserState>, shell: Shell<'_>) -> Res
     let current = shell.current;
     Ok(view! {
         if let Some((tenant, nav)) = shell.tenant {
-            <div class="px-3 pt-3 md:group-data-[collapsible=icon]/sidebar:hidden">
+            <div class="px-4 pt-1 md:group-data-[collapsible=icon]/sidebar:hidden">
                 <a
                     href=(href!(crate::app::t::slug::index, Slug(tenant.slug.clone())))
                     class="block truncate text-sm font-semibold text-sidebar-foreground hover:underline"
@@ -467,20 +443,55 @@ pub fn initials(label: &str) -> String {
     letters.to_uppercase()
 }
 
-/// The right end of the topbar: who is signed in, the account menu, and the
-/// sign-out button (outside the menu, so it works without scripts and the
-/// browser tests find it).
+/// The topbar's search: a plain GET form onto the tenant's product list,
+/// which Ctrl+K focuses (`search.js`). Its accessible name avoids the word
+/// "Search" so a page's own search field stays the only one by that label.
+#[component]
+async fn search_box(action: &str) -> Result<impl View> {
+    Ok(view! {
+        <form role="search" method="get" action=(action) class="relative min-w-0 flex-1">
+            <span class="pointer-events-none absolute inset-y-0 left-4 flex items-center text-muted-foreground [&>svg]:size-4">
+                icon(data: icons::SEARCH)
+            </span>
+            <input
+                id="topbar-search"
+                name="q"
+                type="search"
+                aria-label="Find a product"
+                placeholder="Search products…"
+                autocomplete="off"
+                class="h-11 w-full rounded-full border border-border bg-card pr-4 pl-11 text-sm text-foreground shadow-xs outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring sm:pr-16"
+            >
+            <kbd class="pointer-events-none absolute inset-y-0 right-3 my-auto hidden h-6 items-center rounded-md border border-border bg-muted px-1.5 font-sans text-[11px] text-muted-foreground sm:flex" aria-hidden="true">"Ctrl K"</kbd>
+        </form>
+    })
+}
+
+/// The right end of the topbar: who is signed in, the sign-out button
+/// (outside the menu, so it works without scripts and the browser tests find
+/// it), and the account menu behind the avatar.
 #[component]
 async fn user_menu(cx: &Cx, user: Option<&UserState>) -> Result<impl View> {
     Ok(view! {
         if let Some(user) = user {
             let menu = element_id(cx);
-            <span class="hidden truncate text-sm sm:inline">"Signed in as " <strong>(&user.label)</strong></span>
+            <span class="hidden truncate text-sm text-muted-foreground sm:inline">"Signed in as " <strong class="font-medium text-foreground">(&user.label)</strong></span>
+            <form method="post" action=(href!(crate::app::auth::logout::logout))>
+                button(
+                    variant: ButtonVariant::Ghost,
+                    size: ButtonSize::Icon,
+                    attrs: attributes! { type="submit" aria-label="Sign out" title="Sign out" class="rounded-full text-muted-foreground hover:text-foreground" },
+                    icon(data: icons::LOG_OUT)
+                )
+            </form>
             dropdown_menu(
                 dropdown_menu_trigger(
                     target: &menu,
                     attrs: attributes! { aria-label="Account menu" class="rounded-full" },
-                    avatar(size: AvatarSize::Sm, avatar_fallback(attrs: attributes! { class="bg-primary/10 text-primary" }, (initials(&user.label))))
+                    <span class="relative inline-flex">
+                        avatar(size: AvatarSize::Md, avatar_fallback(attrs: attributes! { class="bg-primary/15 text-primary" }, (initials(&user.label))))
+                        <span class="absolute right-0 bottom-0 size-2.5 rounded-full border-2 border-background bg-success" aria-hidden="true"></span>
+                    </span>
                 )
                 dropdown_menu_content(
                     id: &menu,
@@ -490,15 +501,6 @@ async fn user_menu(cx: &Cx, user: Option<&UserState>) -> Result<impl View> {
                     dropdown_menu_item(close: Some(&menu), <a href=(href!(crate::app::auth::account::account))>"Account"</a>)
                 )
             )
-            <form method="post" action=(href!(crate::app::auth::logout::logout))>
-                button(
-                    variant: ButtonVariant::Ghost,
-                    size: ButtonSize::Sm,
-                    attrs: attributes! { type="submit" },
-                    icon(data: icons::LOG_OUT)
-                    <span>"Sign out"</span>
-                )
-            </form>
         } else {
             <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(crate::app::auth::login::login))>
                 icon(data: icons::LOG_IN)
@@ -521,7 +523,10 @@ pub async fn document(
     let open = signal(cx, || theme::rail_open(cx));
     let mobile_open = signal(cx, || false);
     let here = uri(cx).path().to_owned();
-    let crumb = shell.crumb();
+    let search = shell
+        .tenant
+        .filter(|(_, nav)| nav.products)
+        .map(|(tenant, _)| section_url(cx, &tenant.slug, "products"));
     Ok(view! {
         <!DOCTYPE html>
         <html lang="en" class=(scheme.html_class())>
@@ -533,13 +538,33 @@ pub async fn document(
                         mobile_open: $(mobile_open.get()),
                         collapsible: SidebarCollapsible::Icon,
                         sheet_attrs: attributes! { id="app-sidebar" },
-                        <div class="flex h-14 shrink-0 items-center justify-between border-b border-sidebar-border px-3">
-                            <a href=(href!(crate::app::home)) class="flex min-w-0 items-center gap-2 font-semibold" aria-label="Timada">
-                                <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground [&>svg]:size-4">
+                        <div class="flex h-16 shrink-0 items-center justify-between gap-2 px-4 md:group-data-[collapsible=icon]/sidebar:h-auto md:group-data-[collapsible=icon]/sidebar:flex-col md:group-data-[collapsible=icon]/sidebar:px-0 md:group-data-[collapsible=icon]/sidebar:py-3">
+                            <a href=(href!(crate::app::home)) class="flex min-w-0 items-center gap-2.5 text-lg font-semibold" aria-label="Timada">
+                                <span class="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground [&>svg]:size-5">
                                     icon(data: icons::TENANTS)
                                 </span>
                                 <span class="truncate md:group-data-[collapsible=icon]/sidebar:hidden">"Timada"</span>
                             </a>
+                            <span class="hidden md:contents">
+                                <button
+                                    type="button"
+                                    data-sidebar="trigger"
+                                    aria-label="Toggle sidebar"
+                                    :aria-expanded=$(if open.get() { "true" } else { "false" })
+                                    class="flex size-8 shrink-0 items-center justify-center rounded-full border border-sidebar-border text-sidebar-muted transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-none [&>svg]:size-4 md:group-data-[collapsible=icon]/sidebar:[&>svg]:rotate-180"
+                                    @click=$(|_e: Event| {
+                                        if open.get() {
+                                            open.set(false);
+                                            raw!("document.cookie = 'timada_rail=closed; Path=/; Max-Age=31536000; SameSite=Lax'")
+                                        } else {
+                                            open.set(true);
+                                            raw!("document.cookie = 'timada_rail=open; Path=/; Max-Age=31536000; SameSite=Lax'")
+                                        }
+                                    })
+                                >
+                                    icon(data: icons::CHEVRON_LEFT)
+                                </button>
+                            </span>
                             button(
                                 variant: ButtonVariant::Ghost,
                                 size: ButtonSize::Icon,
@@ -561,23 +586,7 @@ pub async fn document(
                         )
                     )
                     sidebar_inset(
-                        <header class="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-topbar-border bg-topbar px-4 text-topbar-foreground">
-                            <span class="hidden md:contents">
-                            sidebar_trigger(
-                                open: $(open.get()),
-                                attrs: attributes! {
-                                    @click=$(|_e: Event| {
-                                        if open.get() {
-                                            open.set(false);
-                                            raw!("document.cookie = 'timada_rail=closed; Path=/; Max-Age=31536000; SameSite=Lax'")
-                                        } else {
-                                            open.set(true);
-                                            raw!("document.cookie = 'timada_rail=open; Path=/; Max-Age=31536000; SameSite=Lax'")
-                                        }
-                                    })
-                                },
-                            )
-                            </span>
+                        <header class="sticky top-0 z-20 flex h-18 shrink-0 items-center gap-3 bg-background/90 px-4 text-foreground backdrop-blur">
                             sidebar_trigger(
                                 open: $(mobile_open.get()),
                                 attrs: attributes! {
@@ -586,12 +595,16 @@ pub async fn document(
                                     @click=$(|_e: Event| mobile_open.set(true))
                                 },
                             )
-                            <p class="min-w-0 flex-1 truncate text-sm text-muted-foreground">(crumb)</p>
-                            <div class="flex shrink-0 items-center gap-2">
+                            if let Some(action) = &search {
+                                search_box(action: action)
+                            } else {
+                                <div class="min-w-0 flex-1"></div>
+                            }
+                            <div class="flex shrink-0 items-center gap-1 sm:gap-2">
                                 user_menu(user: user)
                             </div>
                         </header>
-                        <div class="mx-auto w-full max-w-6xl p-4 md:p-8">
+                        <div class="w-full p-4 md:p-5">
                             (child)
                         </div>
                     )
