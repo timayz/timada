@@ -203,7 +203,7 @@ impl AliexpressSync {
             {
                 Ok(SyncResult::Synced { .. }) => synced += 1,
                 Ok(SyncResult::NotLinked) => break,
-                Ok(SyncResult::Skipped | SyncResult::Failed(_)) => {}
+                Ok(SyncResult::Skipped | SyncResult::Unlinked | SyncResult::Failed(_)) => {}
                 Err(err) => {
                     tracing::warn!(tenant = %tenant_id, link = %link.id, error = %err, "AliExpress product not read")
                 }

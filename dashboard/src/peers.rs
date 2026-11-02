@@ -5,7 +5,6 @@
 //! so it survives whatever the events survive. The rate limits ask the same
 //! nodes what they let through ([`crate::rate_limit`]).
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use openidconnect::reqwest;
@@ -153,6 +152,8 @@ pub fn is_id(id: &str) -> bool {
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    use std::sync::Arc;
+
     use super::*;
 
     /// The secret the peers built by [`Peers::for_test`] share.
