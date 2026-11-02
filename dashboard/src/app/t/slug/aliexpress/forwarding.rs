@@ -18,6 +18,7 @@ use crate::app::tenants::{error_code, tenancy};
 pub struct ForwardingForm {
     auto_forward: Option<String>,
     try_to_pay: Option<String>,
+    order_phone: Option<String>,
 }
 
 /// What happens to the shop's paid orders with AliExpress items: placed
@@ -29,7 +30,8 @@ pub async fn forwarding(cx: &Cx, Form(form): Form<ForwardingForm>) -> Result<See
         .require_permission(cx, PERMISSION_ALIEXPRESS_MANAGE)
         .await?;
     let slug = access.tenant.slug.as_str();
-    match tenancy(cx)
+    let tenancy = tenancy(cx);
+    let saved = match tenancy
         .set_aliexpress_forwarding(
             &access.user_id,
             &access.tenant.id,
@@ -38,6 +40,18 @@ pub async fn forwarding(cx: &Cx, Form(form): Form<ForwardingForm>) -> Result<See
         )
         .await
     {
+        Ok(()) => {
+            tenancy
+                .set_aliexpress_order_phone(
+                    &access.user_id,
+                    &access.tenant.id,
+                    form.order_phone.as_deref(),
+                )
+                .await
+        }
+        Err(err) => Err(err),
+    };
+    match saved {
         Ok(()) => Ok(see_other(aliexpress_url(
             cx,
             slug,

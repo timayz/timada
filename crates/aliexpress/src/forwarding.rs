@@ -108,12 +108,19 @@ pub fn describe_options(options: &[FreightOption], currency: &str) -> String {
 }
 
 /// The address of an order as AliExpress takes it; `language` (`fr`) is the
-/// shopper's, for the courier's messages.
-pub fn logistics_address(address: &ShippingAddress, language: Option<&str>) -> LogisticsAddress {
+/// shopper's, for the courier's messages. AliExpress wants a phone: the
+/// shopper's, or `shop_phone` when they gave none.
+pub fn logistics_address(
+    address: &ShippingAddress,
+    language: Option<&str>,
+    shop_phone: Option<&str>,
+) -> LogisticsAddress {
     let country = address.country.trim().to_ascii_uppercase();
     let (phone_country, mobile_no) = address
         .phone
         .as_deref()
+        .filter(|phone| !phone.trim().is_empty())
+        .or(shop_phone)
         .map(|phone| split_phone(phone, &country))
         .unwrap_or_default();
     let locale = language

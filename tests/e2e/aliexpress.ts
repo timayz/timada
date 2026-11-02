@@ -171,7 +171,7 @@ export class FakeAliexpress {
         json({ aliexpress_trade_buy_placeorder_response: { result: { is_success: false, error_code: "ERROR_WHEN_BUILD_FOR_PLACE_ORDER", error_msg: "unknown item" } } });
         return;
       }
-      if (!address.address || !address.country || !address.full_name || !address.province) {
+      if (!address.address || !address.country || !address.full_name || !address.province || !address.mobile_no) {
         json({ aliexpress_trade_buy_placeorder_response: { result: { is_success: false, error_code: "B_DROPSHIPPER_DELIVERY_ADDRESS_VALIDATE_FAIL", error_msg: "address" } } });
         return;
       }

@@ -474,7 +474,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             if let Some(settings) = settings.as_ref().filter(|_| state == State::Connected) {
                 section_card(
                     title: Some("Orders"),
-                    description: Some("A paid order's AliExpress items are bought there for the shopper, delivered free by AliExpress itself; its tracking fulfils the order once every item ships."),
+                    description: Some("A paid order's AliExpress items are bought there for the shopper, delivered by AliExpress itself; its tracking fulfils the order once every item ships."),
                     <form method="post" action=(href!(forwarding::forwarding, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-3" data-aliexpress-forwarding=(if settings.auto_forward { "auto" } else { "manual" })>
                         <label class="flex items-center gap-2 text-sm">
                             checkbox(attrs: attributes! { id="aliexpress-auto-forward" name="auto_forward" value="on" checked=(settings.auto_forward) })
@@ -485,6 +485,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             " Ask AliExpress to pay them with the account's saved payment method"
                         </label>
                         <p class="text-sm text-muted-foreground">"Otherwise each order waits on the order page for the merchant to place it, and is paid in AliExpress."</p>
+                        <div class="flex flex-col gap-1">
+                            field_label(attrs: attributes! { for="aliexpress-order-phone" }, "Phone for orders whose shopper gave none")
+                            input(attrs: attributes! { id="aliexpress-order-phone" name="order_phone" type="tel" autocomplete="off" class="max-w-xs" value=(settings.order_phone.as_deref().unwrap_or_default()) placeholder="01 89 76 02 12" })
+                            <p class="text-sm text-muted-foreground">"AliExpress takes no order without a phone. The shopper's is used when they gave one."</p>
+                        </div>
                         <div>
                             button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save orders settings")
                         </div>

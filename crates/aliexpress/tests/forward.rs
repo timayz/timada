@@ -233,7 +233,7 @@ fn an_address_and_its_phone_read_as_aliexpress_wants() {
         phone: Some("06 12 34 56 78".into()),
     };
     assert_eq!(
-        logistics_address(&address, Some("fr")),
+        logistics_address(&address, Some("fr"), Some("01 89 76 02 12")),
         LogisticsAddress {
             full_name: "Ada Lovelace".into(),
             contact_person: "Ada Lovelace".into(),
@@ -248,6 +248,18 @@ fn an_address_and_its_phone_read_as_aliexpress_wants() {
             locale: "fr_FR".into(),
         }
     );
+    // Without a phone of the shopper's, the shop's; without either, none.
+    let silent = ShippingAddress {
+        phone: Some(" ".into()),
+        ..address.clone()
+    };
+    let mapped = logistics_address(&silent, None, Some("01 89 76 02 12"));
+    assert_eq!(
+        (mapped.phone_country.as_str(), mapped.mobile_no.as_str()),
+        ("+33", "189760212")
+    );
+    let mapped = logistics_address(&silent, None, None);
+    assert!(mapped.mobile_no.is_empty());
 }
 
 #[test]
