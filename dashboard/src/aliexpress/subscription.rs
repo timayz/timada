@@ -133,8 +133,12 @@ async fn import<E: Executor>(
                 format!("AliExpress refused: {}", err.message)
             }
         })?;
-    let mapped = map_product(&product, &settings.currency, settings.pricing.as_ref())
-        .map_err(|err| err.to_string())?;
+    let mapped = map_product(
+        &product,
+        &settings.currency,
+        merchant.aliexpress_pricing.as_ref(),
+    )
+    .map_err(|err| err.to_string())?;
     let images = Arc::new(aliexpress.images(media, tenant_id));
     let imported = import_one(
         catalog,

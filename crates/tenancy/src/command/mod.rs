@@ -108,6 +108,9 @@ pub struct TenantState {
     pub mail_branding: Option<MailBranding>,
     /// What the shop buys on AliExpress, once set up.
     pub aliexpress: Option<AliexpressSettings>,
+    /// How the shop prices what it imports, by cost band, from its creation
+    /// (`None`: by hand).
+    pub aliexpress_pricing: Option<crate::value_object::Pricing>,
     /// Where the shop lives, once set. Read it through
     /// [`TenantState::shop_time_zone`].
     pub time_zone: Option<String>,
@@ -120,8 +123,6 @@ pub struct AliexpressSettings {
     pub ship_to_country: String,
     pub currency: String,
     pub language: String,
-    /// How imports are priced, by cost band (`None`: by hand).
-    pub pricing: Option<crate::value_object::Pricing>,
     pub configured_by: String,
     /// Unix seconds.
     pub configured_at: u64,
@@ -344,6 +345,7 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_mail_server_deleted())
         .handler(on_mail_servers_picked())
         .handler(on_aliexpress_configured())
+        .handler(on_aliexpress_pricing_set())
         .handler(on_aliexpress_removed())
         .handler(on_aliexpress_forwarding_set())
         .handler(on_aliexpress_order_phone_set())
@@ -564,13 +566,21 @@ async fn on_aliexpress_configured(
         ship_to_country: data.ship_to_country.to_owned(),
         currency: data.currency.to_owned(),
         language: data.language.to_owned(),
-        pricing: data.pricing.clone(),
         configured_by: data.configured_by.to_owned(),
         configured_at: event.timestamp,
         auto_forward,
         try_to_pay,
         order_phone,
     });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_aliexpress_pricing_set(
+    event: Event<crate::aggregator::AliexpressPricingSet>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.aliexpress_pricing = event.data.pricing.clone();
     Ok(())
 }
 

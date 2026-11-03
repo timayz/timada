@@ -42,20 +42,30 @@ On `/t/{slug}/aliexpress`, for members with `aliexpress:manage`:
    - the country goods ship to;
    - the currency, one the shop sells in;
    - the language products are worded in.
-3. Optionally set a **price rule**: multiply the cost, add an amount, and round to the
-   cent, up to the next .99, or up to a whole amount. A rule never goes below cost.
-   Without one, the import uses the cost as the starting price and later reads leave
-   prices alone.
+3. Keep or change the **price rule**: multiply the cost, add an amount, and round to
+   the cent, up to the next .90, up to the next .99, or up to a whole amount. A rule
+   never goes below cost, and what it gives is the catalog price, VAT included. Blanking
+   every row prices by hand: the import uses the cost as the starting price and later
+   reads leave prices alone.
 
    Cheap items usually bear a higher rate than dear ones, so the rule can go by
    **cost band**: each row prices costs up to its amount (inclusive) that no lower
-   band took, and the last row prices any higher cost — say ×2.5 up to 30.00, ×2 up to
-   100.00, ×1.5 above. Up to ten bands; each has its own multiplier, amount added and
-   rounding. A blank row is dropped, and two bands ending at the same amount are
-   refused. A product's own rule (on its page) is one rate for every cost.
+   band took, and the last row prices any higher cost. Up to ten bands; each has its
+   own multiplier, amount added and rounding. A blank row is dropped, and two bands
+   ending at the same amount are refused. A product's own rule (on its page) is one
+   rate for every cost.
 
-*Stop importing* forgets the shop's settings; the imported products stay as they are,
-and so does the company's account.
+   A price never falls below the price at the end of a lower band, so a supplier's
+   one-cent rise cannot cut it at the next read. With ×2.5 up to 25.00 and ×2.2 above,
+   a cost of 25.01 stays at 62.50 until ×2.2 catches up, at about 28.41. A price held
+   this way still takes its own band's rounding.
+
+   A tenant is created with the usual rates for dropshipping as its rule, each rounded
+   up to the next .90: ×3 up to 10.00, ×2.5 up to 25.00, ×2.2 up to 50.00, ×1.8 up to
+   100.00, ×1.5 up to 250.00, ×1.3 above.
+
+*Stop importing* forgets what the shop buys and how its orders go. The imported
+products stay as they are, and so do the price rule and the company's account.
 
 ## Importing
 
@@ -178,7 +188,7 @@ fulfilled with, whether AliExpress answers or not.
 - **Platform store (`timada-tenancy`).** On the company, the sealed tokens of its
   buyer account: `Company::AliexpressAuthorized`, `Company::AliexpressDisconnected`.
   On the tenant, the market, the shop's rule and how orders go:
-  `AliexpressConfigured`, `AliexpressRemoved`,
+  `AliexpressConfigured`, `AliexpressPricingSet`, `AliexpressRemoved`,
   `AliexpressForwardingSet`. The tokens
   are sealed under `secrets.key` with the purpose `aliexpress`; the app's key and
   secret are host configuration.

@@ -176,15 +176,19 @@ pub enum Tenant {
     /// The shop imports products from AliExpress through the platform's
     /// app, acting for the AliExpress account of the company it sells as.
     /// Products are fetched as shipped to `ship_to_country`, priced in
-    /// `currency` and worded in `language`; `pricing` turns what AliExpress
-    /// charges into the shop's price, by cost band (`None`: the merchant
-    /// prices by hand).
+    /// `currency` and worded in `language`.
     AliexpressConfigured {
         ship_to_country: String,
         currency: String,
         language: String,
-        pricing: Option<Pricing>,
         configured_by: String,
+    },
+    /// How the shop turns what AliExpress charges into its price, by cost
+    /// band (`None`: the merchant prices by hand). A tenant is created with
+    /// [`Pricing::default`].
+    AliexpressPricingSet {
+        pricing: Option<Pricing>,
+        set_by: String,
     },
     /// The shop no longer imports from AliExpress.
     AliexpressRemoved {
