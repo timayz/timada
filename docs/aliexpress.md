@@ -87,17 +87,27 @@ archived or gone does too), and an import asked for anyway unlinks it first.
 ## Keeping in step
 
 Every node sweeps the imported products on a timer (`[aliexpress] sync_check_secs`,
-an hour by default) and reads again each one last read longer ago than
-`sync_every_secs` (six hours). Reads are paced and go one shop after another; a read
-another node recorded in the meantime wins. Before reading, the same sweep renews
-every connected company's access a day before it lapses, whether or not its shops
-have anything imported: the platform keeps which companies are connected and until
-when (`tenancy_aliexpress_accounts`), and one node per token renews it (a
+an hour by default) and asks for each one last tried longer ago than `sync_every_secs`
+(six hours) to be read again: a `SyncRequested` on the item's stream, which says who
+asked. Requests are paced and go one shop after another. A read that failed, or a shop
+that cannot read for now (suspended, or no account connected), waits for the next
+period like one that worked, so it takes no turn from the others. Before asking, the
+same sweep renews every connected company's access a day before it lapses, whether or
+not its shops have anything imported: the platform keeps which companies are connected
+and until when (`tenancy_aliexpress_accounts`), and one node per token renews it (a
 `timada-aliexpress/TokenRefresh` claim, keyed by company and token). An access
 AliExpress no longer renews means an owner connects again.
 
-*Sync now*, on the AliExpress page or on the product page, reads the item at once.
-A read does three things:
+Each imported product belongs to one of the nodes up, by a hash of its stream's id
+over the nodes heard from in the last 30 seconds, so one node sweeps it and one node
+answers a request for it, and the app's quota is spent once. A node that stops is left
+out once it has been silent that long: what it held and had not read yet is shared out
+to the others, and the sweep finds it still due. Two nodes that disagree for a moment
+read a product twice or leave it for later, neither of which harms it.
+
+*Sync now*, on the AliExpress page or on the product page, asks the same way, naming
+the member, and waits up to ten seconds so the page can say what the read found.
+Past that, the page says the read is on its way. A read does three things:
 
 - each variant's stock becomes what AliExpress has;
 - with a rule (the product's own, else the shop's), each price follows the cost;
@@ -107,6 +117,18 @@ A read does three things:
 A combination AliExpress dropped goes to 0. A read that fails is shown on the link;
 the product keeps what it had. Unlinking stops the reads and leaves the product as it
 is.
+
+### What a read writes
+
+A product read often must not grow its stream with every read, so a read writes to
+the item's stream (`Synced`, `SyncFailed`) only when it has something to say: a cost,
+a combination or whether AliExpress sells it changed, a failure for a new reason, or a
+problem that is over. A read a member asked for always records how it went, since they
+wait for it. Otherwise only this node's read model notes the time (`last_synced_at`
+for a read that worked, `last_tried_at` for any read asked for or made), which other
+nodes learn from the next request or record. What AliExpress has left goes to the
+variant's stock in the catalog and nowhere else: it moves with every sale, and the
+stock streams are made for that.
 
 ### New combinations
 
@@ -193,8 +215,9 @@ fulfilled with, whether AliExpress answers or not.
   are sealed under `secrets.key` with the purpose `aliexpress`; the app's key and
   secret are host configuration.
 - **Tenant store (`timada-aliexpress/Product`).** One stream per item: the import's
-  steps, the catalog product, each sku's variant, cost and last stock, the reads and
-  the product's own rule. The `aliexpress_products` read model lists them.
+  steps, the catalog product, each sku's variant and cost, the reads asked for, those
+  that found something, and the product's own rule. The `aliexpress_products` read
+  model lists them.
 - **Tenant store (`timada-aliexpress/Forward`).** One stream per order placed on
   AliExpress: the request, the claim, what was bought and the AliExpress orders, each
   read that changed something, and the end. The `aliexpress_forwards` read model

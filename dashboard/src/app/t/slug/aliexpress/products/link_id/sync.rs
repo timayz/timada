@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+use timada_aliexpress::{AliexpressError, Command, LinkState};
 use timada_tenancy::PERMISSION_ALIEXPRESS_MANAGE;
 use topcoat::{
     Result,
@@ -8,10 +10,18 @@ use topcoat::{
 };
 
 use super::{Back, LinkId, back_to};
-use crate::aliexpress::{Aliexpress, SyncResult};
+use crate::aliexpress::Aliexpress;
 use crate::app::t::slug::require_tenant;
+use crate::cluster::Executor;
 
-/// Reads the product again from AliExpress now.
+/// How long the page waits for the read it asked for, which any node may
+/// make; past that, the merchant is told it is on its way.
+const READ_WAIT: Duration = Duration::from_secs(10);
+/// A write to the store wakes the wait; this covers a missed one.
+const READ_POLL: Duration = Duration::from_millis(250);
+
+/// Asks for the product to be read again from AliExpress now, and waits for
+/// the read so the page shows what it found.
 #[route(POST)]
 pub async fn sync(cx: &Cx, Form(form): Form<Back>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
@@ -19,54 +29,70 @@ pub async fn sync(cx: &Cx, Form(form): Form<Back>) -> Result<SeeOther> {
         .require_permission(cx, PERMISSION_ALIEXPRESS_MANAGE)
         .await?;
     let link_id = path_param::<LinkId>(cx).to_owned();
-    let aliexpress = app_context::<Arc<Aliexpress>>(cx);
-    let store = access.executor()?.clone();
-    let company = aliexpress
-        .company_of(&access.tenant)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?;
-    let result = match company {
-        Some(company) => aliexpress
-            .sync_link(&store, &access.tenant, &company, &link_id)
-            .await
-            .map_err(topcoat::Error::from_anyhow)?,
-        None => SyncResult::NotLinked,
-    };
-    Ok(match result {
-        SyncResult::Synced { offline: true, .. } => back_to(
-            cx,
-            &access,
-            &form.back,
-            None,
-            Some("AliExpress no longer sells it: taken off sale."),
-        ),
-        SyncResult::Synced { .. } | SyncResult::Skipped => back_to(
-            cx,
-            &access,
-            &form.back,
-            None,
-            Some("Read again from AliExpress."),
-        ),
-        SyncResult::Unlinked => back_to(
-            cx,
-            &access,
-            &form.back,
-            None,
-            Some("The product is archived: no longer kept in step with AliExpress."),
-        ),
-        SyncResult::NotLinked => back_to(
+    let not_connected = |cx: &Cx| {
+        back_to(
             cx,
             &access,
             &form.back,
             Some("aliexpress_not_connected"),
             None,
-        ),
-        SyncResult::Failed(_) => back_to(
-            cx,
-            &access,
-            &form.back,
-            Some("aliexpress_sync_failed"),
+        )
+    };
+    let connected = app_context::<Arc<Aliexpress>>(cx)
+        .connected(&access.tenant)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    if !connected {
+        return Ok(not_connected(cx));
+    }
+    let links = Command::new(access.executor()?.clone(), &access.tenant.id);
+    let asked = match links.request_sync(&access.user_id, &link_id).await {
+        Ok(asked) => asked,
+        Err(AliexpressError::NotFound) => return Ok(not_connected(cx)),
+        Err(err) => return Err(topcoat::Error::from_anyhow(err.into())),
+    };
+    let read = read_after(&links, &link_id, asked)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let (error, message) = match &read {
+        None => (None, Some("Reading it again from AliExpress.")),
+        Some(link) if !link.is_linked() => (
             None,
+            Some("The product is archived: no longer kept in step with AliExpress."),
         ),
-    })
+        Some(link) if link.last_error.is_some() => (Some("aliexpress_sync_failed"), None),
+        Some(link) if link.offline => {
+            (None, Some("AliExpress no longer sells it: taken off sale."))
+        }
+        Some(_) => (None, Some("Read again from AliExpress.")),
+    };
+    Ok(back_to(cx, &access, &form.back, error, message))
+}
+
+/// The link once something came after the request at version `asked`: a read
+/// a member asked for always records its outcome. `None` when nothing did in
+/// time.
+async fn read_after(
+    links: &Command<Executor>,
+    link_id: &str,
+    asked: u16,
+) -> anyhow::Result<Option<LinkState>> {
+    let mut watch = evento::Executor::write_watch(links.executor());
+    let deadline = tokio::time::Instant::now() + READ_WAIT;
+    loop {
+        if let Some((link, version)) = links.load_link_versioned(link_id).await?
+            && version > asked
+        {
+            return Ok(Some(link));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(None);
+        }
+        match watch.as_mut() {
+            Some(watch) => {
+                let _ = tokio::time::timeout(READ_POLL, watch.changed()).await;
+            }
+            None => tokio::time::sleep(READ_POLL).await,
+        }
+    }
 }

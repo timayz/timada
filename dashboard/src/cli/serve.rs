@@ -65,11 +65,16 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         crate::seal::mail_sealer(&config),
         config.mail.allow_private_hosts,
     );
+    let live = cluster.clone();
     let aliexpress = crate::aliexpress::Aliexpress::new(
         crate::seal::aliexpress_sealer(&config),
         &config.aliexpress,
         config.mail.allow_private_hosts,
         executor.clone(),
+        Arc::new(move || {
+            let (index, of) = live.live_nodes(crate::aliexpress::LIVE_WITHIN);
+            timada_aliexpress::Share { index, of }
+        }),
     )?;
     // The order confirmations and the notices of contact messages are
     // mailed from the subscriptions, outside any request: they get their
@@ -334,6 +339,14 @@ fn subscriptions(
             crate::aliexpress::subscription::subscription(
                 aliexpress.clone(),
                 media.clone(),
+                store.clone(),
+            ),
+        ),
+        (
+            "AliExpress reads",
+            crate::aliexpress::subscription::reads_subscription(
+                aliexpress.clone(),
+                db.clone(),
                 store.clone(),
             ),
         ),

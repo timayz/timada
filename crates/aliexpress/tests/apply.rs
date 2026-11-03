@@ -2,8 +2,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use timada_aliexpress::{
-    AeProduct, AeSku, AeSkuProperty, Fit, LinkStatus, SyncRead, add_combinations, apply_sync, fit,
-    map_product, track_imported,
+    AeProduct, AeSku, AeSkuProperty, Fit, LinkState, LinkStatus, SyncRead, add_combinations,
+    apply_sync, fit, map_product, track_imported,
 };
 use timada_catalog_import::{ImportOptions, NoImages, import_one};
 use timada_tenancy::{Pricing, PricingRule, Rounding};
@@ -208,7 +208,6 @@ async fn a_quote_in_another_currency_counts_the_stock_but_leaves_the_price() {
     assert!(outcome.warnings[0].contains("12000037001 is quoted in USD, not EUR"));
     assert!(outcome.warnings[1].contains("new combination 12000037009 is quoted in USD"));
     assert_eq!(outcome.skus[0].cost_cents, 431);
-    assert_eq!(outcome.skus[0].available, 7);
     let product = catalog.load_product(&product_id).await.unwrap().unwrap();
     assert_eq!(
         product.variant(&rose).unwrap().price.amount_cents,
@@ -220,6 +219,124 @@ async fn a_quote_in_another_currency_counts_the_stock_but_leaves_the_price() {
         .unwrap()
         .unwrap();
     assert_eq!(stock.on_hand, 7);
+}
+
+#[tokio::test]
+async fn a_read_is_worth_a_record_only_when_the_link_holds_something_else() {
+    let executor = executor().await;
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let (link_id, product_id) = imported(&executor).await;
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+
+    // The same as the import: nothing to say.
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&fixture()), Some(&PRICING))
+        .await
+        .unwrap();
+    assert!(!outcome.differs_from(&link));
+
+    // AliExpress sold some: the catalog counts them, the link holds no count.
+    let mut read = fixture();
+    read.skus[0].available = 7;
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+        .await
+        .unwrap();
+    assert!(!outcome.differs_from(&link));
+    let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+    let stock = catalog
+        .load_stock(&product_id, Some(&product.variants[0].id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stock.on_hand, 7);
+
+    // A new combination is; how many of it there are, once known, is not.
+    let mut read = fixture();
+    read.skus
+        .push(sku("12000037009", 700, 3, &[("Color", "Green")]));
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+        .await
+        .unwrap();
+    assert!(outcome.found_differs_from(&link));
+    assert!(outcome.differs_from(&link));
+    let found = LinkState {
+        found: outcome.found.clone(),
+        ..link.clone()
+    };
+    let mut read = fixture();
+    read.skus
+        .push(sku("12000037009", 700, 1, &[("Color", "Green")]));
+    let outcome = apply_sync(&catalog, "sync", &found, Some(&read), Some(&PRICING))
+        .await
+        .unwrap();
+    assert!(!outcome.differs_from(&found));
+    let mut read = fixture();
+    read.skus
+        .push(sku("12000037009", 800, 1, &[("Color", "Green")]));
+    let outcome = apply_sync(&catalog, "sync", &found, Some(&read), Some(&PRICING))
+        .await
+        .unwrap();
+    assert!(
+        outcome.found_differs_from(&found),
+        "it costs something else"
+    );
+
+    // The cost moved: the link holds what it cost.
+    let mut read = fixture();
+    read.skus[0].cost_cents = Some(500);
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+        .await
+        .unwrap();
+    assert!(outcome.differs_from(&link));
+
+    // AliExpress stopped selling it.
+    let mut read = fixture();
+    read.status = "offline".into();
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+        .await
+        .unwrap();
+    assert!(outcome.differs_from(&link));
+}
+
+#[tokio::test]
+async fn asking_for_a_read_takes_a_version_of_a_linked_item() {
+    let executor = executor().await;
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
+
+    // Nothing to read: unknown, or still importing.
+    assert!(matches!(
+        links.request_sync(ALICE, "no-such-link").await,
+        Err(timada_aliexpress::AliexpressError::NotFound)
+    ));
+    let importing = links
+        .request_import(ALICE, "1005000000000009")
+        .await
+        .unwrap();
+    assert!(matches!(
+        links.request_sync(ALICE, &importing).await,
+        Err(timada_aliexpress::AliexpressError::NotFound)
+    ));
+
+    let (link_id, _) = imported(&executor).await;
+    let (_, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
+    let asked = links.request_sync(ALICE, &link_id).await.unwrap();
+    assert_eq!(asked, version + 1);
+    let (link, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
+    assert_eq!(version, asked);
+    assert!(link.last_requested_at.is_some());
+    // A read that started before the request lost its record to it.
+    assert!(
+        links
+            .record_sync("sync", &link_id, asked - 1, SyncRead::default())
+            .await
+            .is_err()
+    );
+
+    links.unlink(ALICE, &link_id).await.unwrap();
+    assert!(matches!(
+        links.request_sync(ALICE, &link_id).await,
+        Err(timada_aliexpress::AliexpressError::NotFound)
+    ));
 }
 
 #[tokio::test]

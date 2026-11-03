@@ -5,22 +5,28 @@
 pub mod forward;
 pub mod subscription;
 pub mod sync;
+#[cfg(test)]
+mod tests;
 pub mod webhook;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use timada_aliexpress::{Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL, Market};
+use timada_aliexpress::{Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL, Market, Share};
 use timada_tenancy::{AliexpressSettings, CompanyState, TenantState};
 
 use crate::cluster::Executor;
 use crate::config::AliexpressConfig;
+use crate::db::Db;
 use crate::media::Media;
 use crate::media_images::MediaImages;
 use crate::seal::Sealer;
 
 /// Who the dashboard says did what it does on its own.
 pub const ALIEXPRESS_ACTOR: &str = timada_aliexpress::ALIEXPRESS_ACTOR;
+
+/// How long a node may go unheard before the others share out what it reads.
+pub const LIVE_WITHIN: Duration = Duration::from_secs(30);
 
 pub struct Aliexpress {
     sealer: Option<Sealer>,
@@ -39,6 +45,8 @@ pub struct Aliexpress {
     platform: Executor,
     /// How long a product goes before it is read again, in seconds.
     sync_every_secs: u64,
+    /// Which of the nodes up this one is, at the moment of asking.
+    share: Arc<dyn Fn() -> Share + Send + Sync>,
 }
 
 impl Aliexpress {
@@ -47,6 +55,7 @@ impl Aliexpress {
         config: &AliexpressConfig,
         allow_private_hosts: bool,
         platform: Executor,
+        share: Arc<dyn Fn() -> Share + Send + Sync>,
     ) -> anyhow::Result<Arc<Self>> {
         // reqwest's rustls needs the process-wide crypto provider named.
         let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -81,12 +90,18 @@ impl Aliexpress {
             allow_private_hosts,
             platform,
             sync_every_secs: config.sync_every_secs.max(1),
+            share,
         }))
     }
 
     /// How long a product goes before it is read again, in seconds.
     pub fn sync_every_secs(&self) -> u64 {
         self.sync_every_secs
+    }
+
+    /// Which of the nodes up this one is: what it reads of the imported items.
+    pub fn share(&self) -> Share {
+        (self.share)()
     }
 
     /// Whether companies can connect here: the platform has an app and can
@@ -288,12 +303,23 @@ impl Aliexpress {
     }
 }
 
+/// What a read is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMode {
+    /// The dashboard's own: it writes only what changed, and the link's
+    /// stream stays short however often the item is read.
+    Routine,
+    /// A member waits for it: it records its outcome whatever that is.
+    Asked,
+}
+
 /// How a read of one item went.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncResult {
     /// Brought in step (`offline` once AliExpress no longer sells it).
     Synced { offline: bool, repriced: usize },
-    /// Another node read it in between: nothing written.
+    /// Another write to the link came in between: the catalog is in step, the
+    /// link's record of the read is not written.
     Skipped,
     /// Nothing to read: not linked, or the shop is not connected.
     NotLinked,
@@ -307,14 +333,18 @@ pub enum SyncResult {
 impl Aliexpress {
     /// Reads one linked item again and brings its product in step: stock,
     /// price (by the item's rule, else the shop's) and availability, acting
-    /// for `company`'s account. `store` is the store. A read another node
-    /// made in between wins.
+    /// for `company`'s account. `store` is the store, `db` the read models,
+    /// which keep when the read was. Another write to the link in between wins
+    /// over this read's record. Nothing goes on the link's stream unless `mode`
+    /// asks for it or the read found something it does not hold.
     pub async fn sync_link<E: evento::Executor + Clone>(
         &self,
+        db: &Db,
         store: &E,
         tenant: &TenantState,
         company: &CompanyState,
         link_id: &str,
+        mode: SyncMode,
     ) -> anyhow::Result<SyncResult> {
         let links = timada_aliexpress::Command::new(store.clone(), &tenant.id);
         let Some((link, version)) = links.load_link_versioned(link_id).await? else {
@@ -350,9 +380,12 @@ impl Aliexpress {
                 } else {
                     format!("AliExpress refused: {}", err.message)
                 };
-                links
-                    .record_sync_failure(ALIEXPRESS_ACTOR, link_id, &reason)
-                    .await?;
+                if mode == SyncMode::Asked || link.last_error.as_deref() != Some(reason.as_str()) {
+                    links
+                        .record_sync_failure(ALIEXPRESS_ACTOR, link_id, &reason)
+                        .await?;
+                }
+                timada_aliexpress::note_tried(db, &tenant.id, link_id, crate::auth::now()).await?;
                 return Ok(SyncResult::Failed(reason));
             }
         };
@@ -368,29 +401,38 @@ impl Aliexpress {
         for warning in &outcome.warnings {
             tracing::info!(tenant = %tenant.id, ae_product_id = %link.ae_product_id, %warning, "AliExpress read");
         }
-        let found = (outcome.found != link.found).then_some(outcome.found);
-        match links
-            .record_sync(
-                ALIEXPRESS_ACTOR,
-                link_id,
-                version,
-                timada_aliexpress::SyncRead {
-                    skus: outcome.skus,
-                    offline: outcome.offline,
-                    found,
-                },
-            )
-            .await
-        {
-            Ok(()) => Ok(SyncResult::Synced {
-                offline: outcome.offline,
-                repriced: outcome.repriced,
-            }),
-            Err(timada_aliexpress::AliexpressError::Write(
-                evento::WriteError::InvalidOriginalVersion,
-            )) => Ok(SyncResult::Skipped),
-            Err(err) => Err(err.into()),
-        }
+        let synced = SyncResult::Synced {
+            offline: outcome.offline,
+            repriced: outcome.repriced,
+        };
+        let worth_a_record =
+            mode == SyncMode::Asked || link.last_error.is_some() || outcome.differs_from(&link);
+        let result = if worth_a_record {
+            let found = outcome.found_differs_from(&link).then_some(outcome.found);
+            match links
+                .record_sync(
+                    ALIEXPRESS_ACTOR,
+                    link_id,
+                    version,
+                    timada_aliexpress::SyncRead {
+                        skus: outcome.skus,
+                        offline: outcome.offline,
+                        found,
+                    },
+                )
+                .await
+            {
+                Ok(()) => synced,
+                Err(timada_aliexpress::AliexpressError::Write(
+                    evento::WriteError::InvalidOriginalVersion,
+                )) => SyncResult::Skipped,
+                Err(err) => return Err(err.into()),
+            }
+        } else {
+            synced
+        };
+        timada_aliexpress::note_read(db, &tenant.id, link_id, crate::auth::now()).await?;
+        Ok(result)
     }
 }
 

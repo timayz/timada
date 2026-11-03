@@ -1,8 +1,8 @@
 //! The consensus node on three nodes in one process: a tenant's write lands
 //! on every node in that tenant's streams only, a node that missed writes
 //! catches up on its own, a node away longer than its peers wait for it is
-//! told so and copies the store back at its next start, and a node at its
-//! write backlog refuses writes.
+//! told so and copies the store back at its next start, a node at its write
+//! backlog refuses writes, and the nodes up know who they are.
 //!
 //! The dashboard is a binary crate, so the runtime is reached through the
 //! binary's own test harness (`#[path]` includes of the modules under test),
@@ -419,6 +419,39 @@ async fn a_node_at_its_write_backlog_refuses_writes() {
     assert_eq!(limit, 3);
     assert!(kept >= 3, "{kept}");
     for node in [n0, n1] {
+        node.stop().await;
+    }
+}
+
+/// Work spread over the nodes goes by who is up: idle nodes still hear from
+/// each other, so each has its place among all three; one that stops is left
+/// out once it has been silent long enough.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_nodes_up_share_out_what_they_do() {
+    let root = temp_root("live");
+    let addrs = free_addrs().await;
+    let [n0, n1, n2] = start_all(&root, &addrs, Tuning::default()).await;
+    let within = Duration::from_secs(2);
+
+    // Nothing is written: gossip alone keeps them in sight of each other.
+    tokio::time::sleep(within * 2).await;
+    assert_eq!(n0.cluster.live_nodes(within), (0, 3));
+    assert_eq!(n1.cluster.live_nodes(within), (1, 3));
+    assert_eq!(n2.cluster.live_nodes(within), (2, 3));
+
+    n1.stop().await;
+    let deadline = tokio::time::Instant::now() + within * 5;
+    while n2.cluster.live_nodes(within) != (1, 2) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{:?}",
+            n2.cluster.live_nodes(within)
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(n0.cluster.live_nodes(within), (0, 2));
+
+    for node in [n0, n2] {
         node.stop().await;
     }
 }
