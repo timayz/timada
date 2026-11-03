@@ -178,6 +178,7 @@ fn rule_text(rule: &PricingRule, currency: &str) -> String {
         Rounding::Cent => "",
         Rounding::Ninety9 => ", up to .99",
         Rounding::Whole => ", up to a whole amount",
+        Rounding::Ninety => ", up to .90",
     });
     label
 }
@@ -300,8 +301,9 @@ fn status_of(row: &LinkRow) -> (&'static str, Tone) {
 }
 
 /// The rounding choices of a rule form.
-pub const ROUNDINGS: [(&str, &str); 3] = [
+pub const ROUNDINGS: [(&str, &str); 4] = [
     ("cent", "To the cent"),
+    ("90", "Up to .90"),
     ("99", "Up to .99"),
     ("whole", "Up to a whole amount"),
 ];
@@ -379,8 +381,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .and_then(|settings| settings.pricing.as_ref());
     let pricing_text = pricing_label(pricing, &currency);
-    let fields = RuleFields::of(pricing.map(|pricing| &pricing.above));
-    let bands = BandFields::of(pricing);
+    // A shop with nothing set up starts from the usual rates; one that chose
+    // to price by hand keeps a blank form.
+    let starting = Pricing::default();
+    let form_pricing = if settings.is_some() {
+        pricing
+    } else {
+        Some(&starting)
+    };
+    let fields = RuleFields::of(form_pricing.map(|pricing| &pricing.above));
+    let bands = BandFields::of(form_pricing);
     let country = settings
         .as_ref()
         .map(|settings| settings.ship_to_country.clone())
@@ -588,7 +598,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </div>
                     <fieldset>
                         <legend class="mb-2 text-sm font-medium">"Price rule (blank: price by hand)"</legend>
-                        <p class="mb-3 text-sm text-muted-foreground">"One rule for every cost, or one per cost band: a cost takes the first band reaching it, and any higher cost takes the last row. A blank band is dropped."</p>
+                        <p class="mb-3 text-sm text-muted-foreground">"One rule for every cost, or one per cost band: a cost takes the first band reaching it, and any higher cost takes the last row. A price never falls below the one at the end of a lower band. A blank band is dropped."</p>
+                        if settings.is_none() {
+                            <p class="mb-3 text-sm text-muted-foreground">"A new shop starts from the usual rates for dropshipping. Keep them or change them, then save."</p>
+                        }
                         table(
                             attrs: attributes! { data-aliexpress-bands="" },
                             table_header(

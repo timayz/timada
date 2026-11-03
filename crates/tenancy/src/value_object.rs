@@ -666,16 +666,25 @@ pub enum Rounding {
     Ninety9,
     /// Up to the next whole unit (`12.31` → `13.00`).
     Whole,
+    /// Up to the next price ending in .90 (`12.31` → `12.90`, `12.91` →
+    /// `13.90`).
+    Ninety,
 }
 
 impl Rounding {
-    pub const ALL: [Rounding; 3] = [Rounding::Cent, Rounding::Ninety9, Rounding::Whole];
+    pub const ALL: [Rounding; 4] = [
+        Rounding::Cent,
+        Rounding::Ninety9,
+        Rounding::Whole,
+        Rounding::Ninety,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Cent => "cent",
             Self::Ninety9 => "99",
             Self::Whole => "whole",
+            Self::Ninety => "90",
         }
     }
 
@@ -683,6 +692,16 @@ impl Rounding {
         Self::ALL
             .into_iter()
             .find(|rounding| rounding.as_str() == value)
+    }
+
+    /// The first price this rounding allows at or above `cents`.
+    fn round(self, cents: u64) -> u64 {
+        match self {
+            Self::Cent => cents,
+            Self::Ninety9 => cents / 100 * 100 + 99,
+            Self::Whole => cents.div_ceil(100) * 100,
+            Self::Ninety => (cents + 9) / 100 * 100 + 90,
+        }
     }
 }
 
@@ -710,16 +729,17 @@ impl PricingRule {
 
     /// The shop's price for something that costs `cost_cents`.
     pub fn price(&self, cost_cents: u64) -> u64 {
+        self.price_from(cost_cents, 0)
+    }
+
+    /// Like [`price`](Self::price), marked up to `floor` when it would come
+    /// to less.
+    fn price_from(&self, cost_cents: u64, floor: u64) -> u64 {
         let marked = (u128::from(cost_cents) * u128::from(self.multiplier_bps)).div_ceil(10_000);
         let cents = u64::try_from(marked)
             .unwrap_or(u64::MAX)
             .saturating_add(self.plus_cents);
-        match self.rounding {
-            Rounding::Cent => cents,
-            // The first price ending in .99 at or above the mark-up.
-            Rounding::Ninety9 => cents / 100 * 100 + 99,
-            Rounding::Whole => cents.div_ceil(100) * 100,
-        }
+        self.rounding.round(cents.max(floor))
     }
 }
 
@@ -773,9 +793,47 @@ impl Pricing {
             .map_or(&self.above, |band| &band.rule)
     }
 
-    /// The shop's price for something that costs `cost_cents`.
+    /// The shop's price for something that costs `cost_cents`: by the rule
+    /// of its band, and never below the price at the end of a lower band,
+    /// so a dearer cost never sells for less. A price held that way still
+    /// takes its own band's rounding.
     pub fn price(&self, cost_cents: u64) -> u64 {
-        self.rule_for(cost_cents).price(cost_cents)
+        let floor = self
+            .bands
+            .iter()
+            .take_while(|band| band.up_to_cents < cost_cents)
+            .fold(0, |floor, band| {
+                band.rule.price_from(band.up_to_cents, floor)
+            });
+        self.rule_for(cost_cents).price_from(cost_cents, floor)
+    }
+}
+
+impl Default for Pricing {
+    /// What a new shop starts from: the usual degressive rates for
+    /// dropshipping, rounded up to .90. Cheap items bear a high rate because
+    /// ads, payment fees and returns cost about the same whatever the price.
+    fn default() -> Self {
+        let rule = |multiplier_bps| PricingRule {
+            multiplier_bps,
+            plus_cents: 0,
+            rounding: Rounding::Ninety,
+        };
+        Self {
+            bands: [
+                (1_000, 30_000),
+                (2_500, 25_000),
+                (5_000, 22_000),
+                (10_000, 18_000),
+                (25_000, 15_000),
+            ]
+            .map(|(up_to_cents, multiplier_bps)| PriceBand {
+                up_to_cents,
+                rule: rule(multiplier_bps),
+            })
+            .to_vec(),
+            above: rule(13_000),
+        }
     }
 }
 
@@ -800,6 +858,18 @@ mod pricing_tests {
         assert_eq!(rule(10_000, 0, Rounding::Ninety9).price(1299), 1299);
         assert_eq!(rule(10_000, 0, Rounding::Whole).price(1201), 1300);
         assert_eq!(rule(10_000, 0, Rounding::Whole).price(1200), 1200);
+        assert_eq!(rule(10_000, 0, Rounding::Ninety).price(1231), 1290);
+        assert_eq!(rule(10_000, 0, Rounding::Ninety).price(1290), 1290);
+        assert_eq!(rule(10_000, 0, Rounding::Ninety).price(1291), 1390);
+        assert_eq!(rule(10_000, 0, Rounding::Ninety).price(1300), 1390);
+        assert_eq!(rule(30_000, 0, Rounding::Ninety).price(800), 2490);
+    }
+
+    #[test]
+    fn every_rounding_reads_back_from_its_form_value() {
+        for rounding in Rounding::ALL {
+            assert_eq!(Rounding::parse(rounding.as_str()), Some(rounding));
+        }
     }
 
     fn banded() -> Pricing {
@@ -824,13 +894,86 @@ mod pricing_tests {
         assert_eq!(pricing.price(1_000), 2_500);
         // A band's end belongs to it.
         assert_eq!(pricing.price(3_000), 7_500);
-        assert_eq!(pricing.price(3_001), 6_002);
+        assert_eq!(pricing.price(5_000), 10_000);
         assert_eq!(pricing.price(10_000), 20_000);
-        assert_eq!(pricing.price(10_001), 15_099);
+        assert_eq!(pricing.price(20_000), 30_099);
         assert_eq!(
             Pricing::flat(rule(20_000, 0, Rounding::Cent)).price(431),
             862
         );
+    }
+
+    #[test]
+    fn a_price_holds_at_a_band_edge_until_the_next_rate_catches_up() {
+        let pricing = Pricing {
+            bands: vec![PriceBand {
+                up_to_cents: 2_500,
+                rule: rule(25_000, 0, Rounding::Cent),
+            }],
+            above: rule(22_000, 0, Rounding::Cent),
+        };
+        assert_eq!(pricing.price(2_500), 6_250);
+        assert_eq!(pricing.price(2_501), 6_250);
+        assert_eq!(pricing.price(2_840), 6_250);
+        assert_eq!(pricing.price(2_841), 6_251);
+    }
+
+    #[test]
+    fn a_price_held_at_a_band_edge_takes_its_own_bands_rounding() {
+        let pricing = banded();
+        assert_eq!(pricing.price(10_000), 20_000);
+        assert_eq!(pricing.price(10_001), 20_099);
+        assert_eq!(pricing.price(13_399), 20_099);
+        assert_eq!(pricing.price(13_400), 20_199);
+    }
+
+    #[test]
+    fn a_dearer_cost_never_sells_for_less() {
+        // A band that sells for less than the one below it, then a rounding
+        // that lifts the price it holds: the next band must hold that too.
+        let lifted = Pricing {
+            bands: vec![
+                PriceBand {
+                    up_to_cents: 1_000,
+                    rule: rule(30_000, 0, Rounding::Cent),
+                },
+                PriceBand {
+                    up_to_cents: 2_000,
+                    rule: rule(10_000, 0, Rounding::Ninety9),
+                },
+                PriceBand {
+                    up_to_cents: 3_000,
+                    rule: rule(10_000, 500, Rounding::Whole),
+                },
+            ],
+            above: rule(10_000, 0, Rounding::Cent),
+        };
+        assert_eq!(lifted.price(2_000), 3_099);
+        assert_eq!(lifted.price(2_001), 3_100);
+        assert_eq!(lifted.price(3_001), 3_500);
+        for pricing in [banded(), lifted, Pricing::default()] {
+            let mut price = 0;
+            for cost in 0..=40_000 {
+                let next = pricing.price(cost);
+                assert!(next >= price, "{cost} sells for {next}, below {price}");
+                price = next;
+            }
+        }
+    }
+
+    #[test]
+    fn a_new_shop_starts_from_degressive_rates_rounded_up_to_90() {
+        let pricing = Pricing::default();
+        assert!(pricing.is_valid());
+        assert_eq!(pricing.price(800), 2_490);
+        assert_eq!(pricing.price(1_000), 3_090);
+        assert_eq!(pricing.price(1_001), 3_090);
+        assert_eq!(pricing.price(2_500), 6_290);
+        assert_eq!(pricing.price(5_000), 11_090);
+        assert_eq!(pricing.price(10_000), 18_090);
+        assert_eq!(pricing.price(25_000), 37_590);
+        assert_eq!(pricing.price(25_001), 37_590);
+        assert_eq!(pricing.price(30_000), 39_090);
     }
 
     #[test]

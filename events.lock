@@ -322,4 +322,4 @@ type timada_reviews::value_object::ReviewPhoto { id: String, ext: String, mime: 
 type timada_tenancy::value_object::PriceBand { up_to_cents: u64, rule: PricingRule }
 type timada_tenancy::value_object::Pricing { bands: Vec<PriceBand>, above: PricingRule }
 type timada_tenancy::value_object::PricingRule { multiplier_bps: u32, plus_cents: u64, rounding: Rounding }
-type timada_tenancy::value_object::Rounding enum { Cent, Ninety9, Whole }
+type timada_tenancy::value_object::Rounding enum { Cent, Ninety9, Whole, Ninety }
