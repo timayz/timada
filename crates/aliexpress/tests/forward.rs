@@ -483,10 +483,19 @@ async fn an_order_is_placed_once_and_read_until_it_ships() {
         logistics_status: "SELLER_SEND_GOODS".into(),
         tracking: vec![tracking.into()],
     };
-    forwards
+    let after = forwards
         .record_checked(&id, version, vec![checked("81", "LP1")], None)
         .await
         .unwrap();
+    assert_eq!(after, version + 1);
+    // Nothing to record leaves it where it is.
+    assert_eq!(
+        forwards
+            .record_checked(&id, after, Vec::new(), None)
+            .await
+            .unwrap(),
+        after
+    );
     // A read from the version before loses to the one recorded.
     assert!(matches!(
         forwards
@@ -497,7 +506,8 @@ async fn an_order_is_placed_once_and_read_until_it_ships() {
         ))
     ));
     let (_, version) = forwards.load_forward_versioned(&id).await.unwrap().unwrap();
-    forwards
+    assert_eq!(version, after);
+    let after = forwards
         .record_checked(
             &id,
             version,
@@ -509,6 +519,9 @@ async fn an_order_is_placed_once_and_read_until_it_ships() {
         )
         .await
         .unwrap();
+    assert_eq!(after, version + 2);
+    let (_, version) = forwards.load_forward_versioned(&id).await.unwrap().unwrap();
+    assert_eq!(version, after);
     let done = forwards.load_forward("order-1").await.unwrap().unwrap();
     assert_eq!(done.status, ForwardStatus::Done);
     assert!(done.all_shipped());
