@@ -233,14 +233,26 @@ pub async fn link_of_product(
     .await
 }
 
-/// The linked items of every shop last read before `before` (unix seconds),
-/// oldest first, grouped by tenant: what a sweep reads again.
+/// The linked items of every shop last read before `before` (unix seconds):
+/// what a sweep reads again. The shops take turns, each its oldest first, so
+/// a backlog never crowds another shop out. A read that fails leaves its
+/// item due, so going by age alone would let a shop that no longer answers
+/// fill every sweep. Grouped by tenant, as the sweep paces one shop's reads.
 pub async fn links_due(db: &Db, before: i64, limit: i64) -> anyhow::Result<Vec<LinkRow>> {
     db.fetch_all(
         concat!(
             columns!(),
-            "WHERE status = 'linked' AND (last_synced_at IS NULL OR last_synced_at < ?1)
-         ORDER BY tenant_id, last_synced_at LIMIT ?2"
+            "WHERE (tenant_id, id) IN (
+                SELECT tenant_id, id FROM (
+                    SELECT tenant_id, id, last_synced_at, ROW_NUMBER() OVER (
+                        PARTITION BY tenant_id ORDER BY last_synced_at, id
+                    ) AS turn
+                    FROM aliexpress_products
+                    WHERE status = 'linked'
+                        AND (last_synced_at IS NULL OR last_synced_at < ?1)
+                ) ORDER BY turn, last_synced_at, tenant_id LIMIT ?2
+            )
+            ORDER BY tenant_id, last_synced_at, id"
         ),
         (before, limit),
     )
