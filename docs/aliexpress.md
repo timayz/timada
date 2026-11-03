@@ -167,6 +167,12 @@ cancelled, or placed more than 60 days ago is no longer read. The request and
 response shapes follow ae_sdk, like the rest: the real-app smoke test (#253) covers
 these calls too.
 
+The order and the forward are two streams, so this is three writes: what was read, the
+order's `Fulfilled`, then the forward's `Done`. A node that stops in between loses
+nothing. The next read, at the latest the sweep a node runs when it starts, fulfils the
+order from the reads recorded, or closes the forward with the tracking the order was
+fulfilled with, whether AliExpress answers or not.
+
 ## Where things live
 
 - **Platform store (`timada-tenancy`).** On the company, the sealed tokens of its

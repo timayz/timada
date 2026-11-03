@@ -723,6 +723,10 @@ pub struct OrderState {
     /// Unix seconds of `Placed`.
     pub placed_at: u64,
     pub fulfilled_at: Option<u64>,
+    /// Who fulfilled it: a member, or what did it on its own. Not a
+    /// storefront's business, so left out of what the store API answers.
+    #[serde(skip)]
+    pub fulfilled_by: Option<String>,
     pub cancelled_at: Option<u64>,
     /// Unix seconds of the last event.
     pub updated_at: u64,
@@ -878,6 +882,7 @@ async fn on_fulfilled(event: Event<Fulfilled>, order: &mut OrderState) -> anyhow
     order.status = OrderStatus::Fulfilled;
     order.tracking = event.data.tracking.to_owned();
     order.fulfilled_at = Some(event.timestamp);
+    order.fulfilled_by = Some(event.data.fulfilled_by.to_owned());
     order.updated_at = event.timestamp;
     Ok(())
 }

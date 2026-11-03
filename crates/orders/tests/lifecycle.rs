@@ -24,6 +24,11 @@ async fn a_paid_order_is_fulfilled() {
     assert_eq!(order.status, OrderStatus::Fulfilled);
     assert_eq!(order.tracking.as_deref(), Some("6A123"));
     assert!(order.fulfilled_at.is_some());
+    assert_eq!(order.fulfilled_by.as_deref(), Some(ALICE));
+    // The store API answers with this state: a member's id stays out of it.
+    let answered = serde_json::to_value(&order).unwrap();
+    assert!(answered.get("fulfilled_at").is_some());
+    assert!(answered.get("fulfilled_by").is_none());
 
     let late = orders
         .cancel_order(ALICE, &order_id, "changed my mind".into())

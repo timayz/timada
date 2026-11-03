@@ -301,6 +301,12 @@ impl Aliexpress {
     /// fulfils the shop's order with them. An order settled otherwise
     /// (fulfilled by hand, cancelled) or watched long enough is no longer
     /// read.
+    ///
+    /// Written in three steps, as the shop's order is another stream: what
+    /// was read, the shop's order, then `Done`. A node stopping in between
+    /// leaves the next read what it needs, whether AliExpress answers or
+    /// not: the reads to fulfil from, or an order fulfilled from here whose
+    /// forward only has to be closed.
     pub async fn check_forward<E: evento::Executor + Clone>(
         &self,
         store: &E,
@@ -336,13 +342,21 @@ impl Aliexpress {
                 .record_checked(forward_id, version, Vec::new(), Some(done))
                 .await
             {
-                Ok(()) => Ok(CheckResult::Done),
+                Ok(_) => Ok(CheckResult::Done),
                 Err(AliexpressError::Write(evento::WriteError::InvalidOriginalVersion)) => {
                     Ok(CheckResult::Skipped)
                 }
                 Err(err) => Err(anyhow::Error::from(err)),
             }
         };
+        // Fulfilled by a read that stopped before closing the forward, or by
+        // another node's that is about to: closed as that read would have.
+        if let Some(order) =
+            order.filter(|order| order.fulfilled_by.as_deref() == Some(ALIEXPRESS_ACTOR))
+        {
+            tracing::info!(tenant = %tenant.id, order = %forward.order_id, "order already fulfilled from AliExpress, closing its forward");
+            return finish(done(true, order.tracking)).await;
+        }
         if settled || stale {
             return finish(done(false, None)).await;
         }
@@ -374,26 +388,34 @@ impl Aliexpress {
                 tracking: read.tracking,
             });
         }
-        let mut finished = None;
-        if after.complete && after.all_shipped() {
-            let tracking = fit_tracking(&after.tracking());
-            match orders
-                .fulfil_order(ALIEXPRESS_ACTOR, &forward.order_id, Some(tracking.clone()))
-                .await
-            {
-                Ok(()) => finished = Some(done(true, Some(tracking))),
-                Err(OrderError::OrderCancelled | OrderError::OrderNotFound) => {
-                    finished = Some(done(false, None))
-                }
-                Err(err) => return Err(err.into()),
-            }
-        }
-        let fulfilled = finished.as_ref().is_some_and(|done| done.fulfilled);
-        match forwards
-            .record_checked(forward_id, version, checked, finished)
+        let version = match forwards
+            .record_checked(forward_id, version, checked, None)
             .await
         {
-            Ok(()) => {
+            Ok(version) => version,
+            Err(AliexpressError::Write(evento::WriteError::InvalidOriginalVersion)) => {
+                return Ok(CheckResult::Skipped);
+            }
+            Err(err) => return Err(err.into()),
+        };
+        if !after.complete || !after.all_shipped() {
+            return Ok(CheckResult::Checked { fulfilled: false });
+        }
+        let tracking = fit_tracking(&after.tracking());
+        let finished = match orders
+            .fulfil_order(ALIEXPRESS_ACTOR, &forward.order_id, Some(tracking.clone()))
+            .await
+        {
+            Ok(()) => done(true, Some(tracking)),
+            Err(OrderError::OrderCancelled | OrderError::OrderNotFound) => done(false, None),
+            Err(err) => return Err(err.into()),
+        };
+        let fulfilled = finished.fulfilled;
+        match forwards
+            .record_checked(forward_id, version, Vec::new(), Some(finished))
+            .await
+        {
+            Ok(_) => {
                 if fulfilled {
                     tracing::info!(tenant = %tenant.id, order = %forward.order_id, "order fulfilled from AliExpress");
                 }
@@ -531,12 +553,553 @@ async fn on_forward_requested<E: Executor>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use evento::cursor::{Args, ReadResult, Value};
+    use evento::{EventFilter, RoutingKey, SubscriberStatus, TenantFilter, WriteError};
+    use timada_aliexpress::{ForwardState, Placement};
+    use timada_orders::{Payment, ShippingAddress};
+    use timada_tenancy::AliexpressAuthorization;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use ulid::Ulid;
+
     use super::*;
+    use crate::config::AliexpressConfig;
+    use crate::seal::Sealer;
+
+    const TENANT: &str = "tenant-1";
+    const ORDER: &str = "order-1";
 
     #[test]
     fn tracking_keeps_what_fits() {
         assert_eq!(fit_tracking(&["A1".into(), "B2".into()]), "A1, B2");
         let long = "X".repeat(150);
         assert_eq!(fit_tracking(&[long.clone(), long.clone()]), long);
+    }
+
+    /// The store of a node that stops the moment it would write `event`: what
+    /// it wrote before is there, that write and anything after it is not.
+    #[derive(Clone)]
+    struct StopsAt {
+        store: evento::Turso,
+        event: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl Executor for StopsAt {
+        async fn write(&self, events: Vec<evento::Event>) -> Result<(), WriteError> {
+            if events.iter().any(|event| event.name == self.event) {
+                return Err(WriteError::Unknown(anyhow::anyhow!(
+                    "stopped at {}",
+                    self.event
+                )));
+            }
+            self.store.write(events).await
+        }
+
+        async fn read(
+            &self,
+            aggregators: Option<Arc<[EventFilter]>>,
+            routing_key: Option<RoutingKey>,
+            tenant: TenantFilter,
+            args: Args,
+            to_micros: Option<u64>,
+        ) -> anyhow::Result<ReadResult<evento::Event>> {
+            self.store
+                .read(aggregators, routing_key, tenant, args, to_micros)
+                .await
+        }
+
+        async fn latest_timestamp(
+            &self,
+            aggregators: Option<Arc<[EventFilter]>>,
+            routing_key: Option<RoutingKey>,
+            tenant: TenantFilter,
+        ) -> anyhow::Result<u64> {
+            self.store
+                .latest_timestamp(aggregators, routing_key, tenant)
+                .await
+        }
+
+        async fn get_subscriber_cursor(&self, key: String) -> anyhow::Result<Option<Value>> {
+            self.store.get_subscriber_cursor(key).await
+        }
+
+        async fn is_subscriber_running(
+            &self,
+            key: String,
+            worker_id: Ulid,
+        ) -> anyhow::Result<bool> {
+            self.store.is_subscriber_running(key, worker_id).await
+        }
+
+        async fn subscriber_status(
+            &self,
+            key: String,
+            worker_id: Ulid,
+        ) -> anyhow::Result<SubscriberStatus> {
+            self.store.subscriber_status(key, worker_id).await
+        }
+
+        async fn latest_version(
+            &self,
+            tenant: String,
+            aggregate_type: String,
+            aggregate_id: String,
+        ) -> anyhow::Result<u16> {
+            self.store
+                .latest_version(tenant, aggregate_type, aggregate_id)
+                .await
+        }
+
+        async fn stream_routing_key(
+            &self,
+            tenant: String,
+            aggregate_type: String,
+            aggregate_id: String,
+        ) -> anyhow::Result<Option<Option<String>>> {
+            self.store
+                .stream_routing_key(tenant, aggregate_type, aggregate_id)
+                .await
+        }
+
+        async fn upsert_subscriber(&self, key: String, worker_id: Ulid) -> anyhow::Result<()> {
+            self.store.upsert_subscriber(key, worker_id).await
+        }
+
+        async fn acknowledge(
+            &self,
+            key: String,
+            worker_id: Ulid,
+            cursor: Value,
+            lag: u64,
+        ) -> anyhow::Result<bool> {
+            self.store.acknowledge(key, worker_id, cursor, lag).await
+        }
+
+        async fn get_snapshot(
+            &self,
+            tenant: String,
+            aggregate_type: String,
+            projection: String,
+            aggregate_revision: String,
+            id: String,
+        ) -> anyhow::Result<Option<(Vec<u8>, Value)>> {
+            self.store
+                .get_snapshot(tenant, aggregate_type, projection, aggregate_revision, id)
+                .await
+        }
+
+        async fn save_snapshot(
+            &self,
+            tenant: String,
+            aggregate_type: String,
+            projection: String,
+            aggregate_revision: String,
+            id: String,
+            data: Vec<u8>,
+            cursor: Value,
+        ) -> anyhow::Result<()> {
+            self.store
+                .save_snapshot(
+                    tenant,
+                    aggregate_type,
+                    projection,
+                    aggregate_revision,
+                    id,
+                    data,
+                    cursor,
+                )
+                .await
+        }
+
+        async fn delete_snapshot(
+            &self,
+            tenant: String,
+            aggregate_type: String,
+            projection: String,
+            id: String,
+        ) -> anyhow::Result<()> {
+            self.store
+                .delete_snapshot(tenant, aggregate_type, projection, id)
+                .await
+        }
+    }
+
+    /// A stand-in for AliExpress: answers `aliexpress.trade.ds.order.get`.
+    #[derive(Default)]
+    struct StandIn {
+        /// The parcel number of each order that shipped.
+        shipped: Mutex<HashMap<String, String>>,
+        /// Answers 503 to everything.
+        down: AtomicBool,
+        reads: AtomicUsize,
+    }
+
+    impl StandIn {
+        /// Listens on a port of its own; its address.
+        async fn start(self: Arc<Self>) -> String {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let answer = self.answer(&request_of(&mut socket).await);
+                    socket.write_all(answer.as_bytes()).await.unwrap();
+                }
+            });
+            url
+        }
+
+        fn answer(&self, request: &str) -> String {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            if self.down.load(Ordering::SeqCst) {
+                return "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned();
+            }
+            let path = request.split(' ').nth(1).unwrap_or_default();
+            let url = reqwest::Url::parse(&format!("http://stand-in{path}")).unwrap();
+            let id = url
+                .query_pairs()
+                .find(|(name, _)| name == "order_id")
+                .map(|(_, id)| id.into_owned())
+                .unwrap_or_default();
+            let result = match self.shipped.lock().unwrap().get(&id) {
+                Some(parcel) => serde_json::json!({
+                    "order_status": "WAIT_BUYER_ACCEPT_GOODS",
+                    "logistics_status": "SELLER_SEND_GOODS",
+                    "logistics_info_list": {
+                        "ae_order_logistics_info": [{
+                            "logistics_no": parcel,
+                            "logistics_service": "CAINIAO_STANDARD",
+                        }],
+                    },
+                }),
+                None => serde_json::json!({
+                    "order_status": "WAIT_SELLER_SEND_GOODS",
+                    "logistics_status": "NO_LOGISTICS",
+                }),
+            };
+            let body = serde_json::json!({
+                "aliexpress_trade_ds_order_get_response": { "rsp_code": "200", "result": result },
+            })
+            .to_string();
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        }
+    }
+
+    async fn request_of(socket: &mut tokio::net::TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut chunk = [0; 4096];
+        while !request.windows(4).any(|end| end == b"\r\n\r\n") {
+            match socket.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(read) => request.extend_from_slice(&chunk[..read]),
+            }
+        }
+        String::from_utf8_lossy(&request).into_owned()
+    }
+
+    /// A shop connected to AliExpress, on a store of its own.
+    struct Shop {
+        store: evento::Turso,
+        aliexpress: Arc<Aliexpress>,
+        stand_in: Arc<StandIn>,
+        tenant: TenantState,
+        company: CompanyState,
+    }
+
+    impl Shop {
+        async fn new() -> Self {
+            let store = evento::Turso::in_memory_concurrent().await.unwrap();
+            let stand_in = Arc::new(StandIn::default());
+            let config = AliexpressConfig {
+                app_key: Some("key".to_owned()),
+                app_secret: Some("secret".to_owned()),
+                api_url: Some(stand_in.clone().start().await),
+                authorize_url: None,
+                sync_check_secs: 1,
+                sync_every_secs: 1,
+            };
+            let aliexpress = Aliexpress::new(
+                Some(Sealer::new("aliexpress-test", "secret")),
+                &config,
+                false,
+                Evento::new(store.clone()),
+            )
+            .unwrap();
+            let company = CompanyState {
+                id: "company-1".to_owned(),
+                aliexpress: Some(AliexpressAuthorization {
+                    access_token_sealed: aliexpress.seal("company-1", "token").unwrap(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let tenant = TenantState {
+                id: TENANT.to_owned(),
+                ..Default::default()
+            };
+            Self {
+                store,
+                aliexpress,
+                stand_in,
+                tenant,
+                company,
+            }
+        }
+
+        /// A paid order placed on AliExpress as `ae_order_ids`; its forward.
+        async fn placed(&self, ae_order_ids: &[&str]) -> String {
+            evento::append(ORDER)
+                .tenant(TENANT)
+                .original_version(0)
+                .event(&timada_orders::aggregator::Placed {
+                    reference: "K7Q4-MZP2".to_owned(),
+                    cart_id: "cart-1".to_owned(),
+                    email: "ada@example.com".to_owned(),
+                    shipping: ShippingAddress::default(),
+                    note: None,
+                    lines: Vec::new(),
+                    currency: "EUR".to_owned(),
+                    total_cents: 1000,
+                    payment: Payment::default(),
+                    placed_by: "storefront".to_owned(),
+                })
+                .commit(&self.store)
+                .await
+                .unwrap();
+            let forwards = timada_aliexpress::Command::new(self.store.clone(), TENANT);
+            let id = forwards
+                .request_forward(ALIEXPRESS_ACTOR, ORDER, false)
+                .await
+                .unwrap();
+            assert!(forwards.start_forward(ALIEXPRESS_ACTOR, &id).await.unwrap());
+            forwards
+                .record_placed(
+                    ALIEXPRESS_ACTOR,
+                    &id,
+                    Placement {
+                        ae_order_ids: ae_order_ids.iter().map(|id| (*id).to_owned()).collect(),
+                        items: Vec::new(),
+                        pay_requested: true,
+                        complete: true,
+                    },
+                )
+                .await
+                .unwrap();
+            id
+        }
+
+        fn ships(&self, ae_order_id: &str, parcel: &str) {
+            self.stand_in
+                .shipped
+                .lock()
+                .unwrap()
+                .insert(ae_order_id.to_owned(), parcel.to_owned());
+        }
+
+        fn goes_down(&self) {
+            self.stand_in.down.store(true, Ordering::SeqCst);
+        }
+
+        fn reads(&self) -> usize {
+            self.stand_in.reads.load(Ordering::SeqCst)
+        }
+
+        /// One read on a node whose store is `store`.
+        async fn check_on<E: Executor + Clone>(
+            &self,
+            store: &E,
+            forward_id: &str,
+            now: u64,
+        ) -> anyhow::Result<CheckResult> {
+            self.aliexpress
+                .check_forward(store, &self.tenant, &self.company, forward_id, now)
+                .await
+        }
+
+        /// One read by a node that does not stop.
+        async fn check(&self, forward_id: &str) -> CheckResult {
+            self.check_on(&self.store, forward_id, crate::auth::now())
+                .await
+                .unwrap()
+        }
+
+        fn stopping_at(&self, event: &'static str) -> StopsAt {
+            StopsAt {
+                store: self.store.clone(),
+                event,
+            }
+        }
+
+        fn orders(&self) -> timada_orders::Command<evento::Turso> {
+            timada_orders::Command::new(self.store.clone(), TENANT)
+        }
+
+        async fn order(&self) -> OrderState {
+            self.orders().load_order(ORDER).await.unwrap().unwrap()
+        }
+
+        async fn forward(&self, forward_id: &str) -> ForwardState {
+            timada_aliexpress::Command::new(self.store.clone(), TENANT)
+                .load_forward_by_id(forward_id)
+                .await
+                .unwrap()
+                .unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_order_is_fulfilled_once_every_parcel_is_known() {
+        let shop = Shop::new().await;
+        let id = shop.placed(&["81", "82"]).await;
+
+        shop.ships("81", "LP1");
+        assert_eq!(
+            shop.check(&id).await,
+            CheckResult::Checked { fulfilled: false }
+        );
+        assert_eq!(shop.order().await.status, OrderStatus::Paid);
+        let forward = shop.forward(&id).await;
+        assert_eq!(forward.status, ForwardStatus::Placed);
+        assert_eq!(forward.tracking(), vec!["LP1"]);
+
+        shop.ships("82", "LP2");
+        assert_eq!(
+            shop.check(&id).await,
+            CheckResult::Checked { fulfilled: true }
+        );
+        let order = shop.order().await;
+        assert_eq!(order.status, OrderStatus::Fulfilled);
+        assert_eq!(order.tracking.as_deref(), Some("LP1, LP2"));
+        let forward = shop.forward(&id).await;
+        assert_eq!(forward.status, ForwardStatus::Done);
+        assert_eq!(forward.tracking(), vec!["LP1", "LP2"]);
+        assert_eq!(forward.fulfilled_tracking.as_deref(), Some("LP1, LP2"));
+
+        assert_eq!(shop.check(&id).await, CheckResult::Skipped);
+    }
+
+    /// Issue #375: stopped between the order's `Fulfilled` and the forward's
+    /// `Done`. The forward is closed as the lost run would have closed it,
+    /// without AliExpress and however much later.
+    #[tokio::test]
+    async fn a_node_stopping_after_fulfilling_leaves_the_forward_to_be_closed() {
+        let shop = Shop::new().await;
+        let id = shop.placed(&["81", "82"]).await;
+        shop.ships("81", "LP1");
+        shop.ships("82", "LP2");
+        let now = crate::auth::now();
+
+        let stopping = shop.stopping_at("Done");
+        assert!(shop.check_on(&stopping, &id, now).await.is_err());
+        let order = shop.order().await;
+        assert_eq!(order.status, OrderStatus::Fulfilled);
+        assert_eq!(order.tracking.as_deref(), Some("LP1, LP2"));
+        assert_eq!(shop.forward(&id).await.status, ForwardStatus::Placed);
+
+        shop.goes_down();
+        let reads = shop.reads();
+        let later = now + timada_aliexpress::FORWARD_WATCH_SECS + 1;
+        assert_eq!(
+            shop.check_on(&shop.store, &id, later).await.unwrap(),
+            CheckResult::Done
+        );
+        assert_eq!(shop.reads(), reads, "nothing left to ask AliExpress");
+        let forward = shop.forward(&id).await;
+        assert_eq!(forward.status, ForwardStatus::Done);
+        assert_eq!(forward.fulfilled_tracking.as_deref(), Some("LP1, LP2"));
+        assert_eq!(forward.tracking(), vec!["LP1", "LP2"]);
+        for order in &forward.ae_orders {
+            assert_eq!(order.status, "WAIT_BUYER_ACCEPT_GOODS");
+            assert_eq!(order.logistics_status, "SELLER_SEND_GOODS");
+        }
+    }
+
+    /// Stopped between the reads and the order's `Fulfilled`: the next read
+    /// fulfils it from the reads recorded, whether AliExpress answers or not.
+    #[tokio::test]
+    async fn a_node_stopping_before_fulfilling_leaves_the_order_to_be_fulfilled() {
+        let shop = Shop::new().await;
+        let id = shop.placed(&["81"]).await;
+        shop.ships("81", "LP1");
+
+        let stopping = shop.stopping_at("Fulfilled");
+        assert!(
+            shop.check_on(&stopping, &id, crate::auth::now())
+                .await
+                .is_err()
+        );
+        assert_eq!(shop.order().await.status, OrderStatus::Paid);
+        assert_eq!(shop.forward(&id).await.tracking(), vec!["LP1"]);
+
+        shop.goes_down();
+        assert_eq!(
+            shop.check(&id).await,
+            CheckResult::Checked { fulfilled: true }
+        );
+        assert_eq!(shop.order().await.tracking.as_deref(), Some("LP1"));
+        let forward = shop.forward(&id).await;
+        assert_eq!(forward.status, ForwardStatus::Done);
+        assert_eq!(forward.fulfilled_tracking.as_deref(), Some("LP1"));
+    }
+
+    /// The merchant fulfilled it with their own parcel: nothing says it came
+    /// from AliExpress.
+    #[tokio::test]
+    async fn an_order_fulfilled_by_hand_closes_the_forward_without_a_tracking() {
+        let shop = Shop::new().await;
+        let id = shop.placed(&["81"]).await;
+        shop.ships("81", "LP1");
+        shop.orders()
+            .fulfil_order("user-alice", ORDER, Some("HAND1".to_owned()))
+            .await
+            .unwrap();
+
+        let reads = shop.reads();
+        assert_eq!(shop.check(&id).await, CheckResult::Done);
+        assert_eq!(shop.reads(), reads);
+        let forward = shop.forward(&id).await;
+        assert_eq!(forward.status, ForwardStatus::Done);
+        assert_eq!(forward.fulfilled_tracking, None);
+        assert_eq!(shop.order().await.tracking.as_deref(), Some("HAND1"));
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_order_closes_the_forward_without_a_tracking() {
+        let shop = Shop::new().await;
+        let id = shop.placed(&["81"]).await;
+        shop.orders()
+            .cancel_order("user-alice", ORDER, "changed my mind".to_owned())
+            .await
+            .unwrap();
+
+        assert_eq!(shop.check(&id).await, CheckResult::Done);
+        let forward = shop.forward(&id).await;
+        assert_eq!(forward.status, ForwardStatus::Done);
+        assert_eq!(forward.fulfilled_tracking, None);
+    }
+
+    #[tokio::test]
+    async fn an_order_watched_long_enough_is_no_longer_read() {
+        let shop = Shop::new().await;
+        let id = shop.placed(&["81"]).await;
+
+        let reads = shop.reads();
+        let later = crate::auth::now() + timada_aliexpress::FORWARD_WATCH_SECS + 1;
+        assert_eq!(
+            shop.check_on(&shop.store, &id, later).await.unwrap(),
+            CheckResult::Done
+        );
+        assert_eq!(shop.reads(), reads);
+        assert_eq!(shop.order().await.status, OrderStatus::Paid);
+        let forward = shop.forward(&id).await;
+        assert_eq!(forward.status, ForwardStatus::Done);
+        assert_eq!(forward.fulfilled_tracking, None);
     }
 }
