@@ -329,6 +329,7 @@ impl<E: Executor> super::Command<E> {
     /// (`checked`: one per order read), then `done` when it is no longer to
     /// read; written against `version`, the one the read started from, so
     /// another node's read in between wins (`Write(InvalidOriginalVersion)`).
+    /// Returns the version the forward is at afterwards.
     pub async fn record_checked(
         &self,
         forward_id: &str,
@@ -336,9 +337,9 @@ impl<E: Executor> super::Command<E> {
         checked: Vec<Checked>,
         done: Option<Done>,
         routing_key: Option<String>,
-    ) -> Result<(), AliexpressError> {
+    ) -> Result<u16, AliexpressError> {
         if checked.is_empty() && done.is_none() {
-            return Ok(());
+            return Ok(version);
         }
         let mut write = evento::append(forward_id);
         write.original_version(version).routing_key_opt(routing_key);
@@ -349,7 +350,7 @@ impl<E: Executor> super::Command<E> {
             write.event(done);
         }
         write.tenant(&self.tenant).commit(&self.executor).await?;
-        Ok(())
+        Ok(version + checked.len() as u16 + u16::from(done.is_some()))
     }
 }
 
