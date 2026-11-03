@@ -114,15 +114,25 @@ pub struct ForwardRow {
     pub updated_at: i64,
 }
 
-/// The orders of every shop placed on AliExpress and not settled yet, the
-/// longest unchanged first, grouped by tenant: what a sweep reads again.
+/// The orders of every shop placed on AliExpress and not settled yet: what a
+/// sweep reads again. The shops take turns, each its longest unchanged first,
+/// so one shop's open orders never crowd another shop out. Grouped by tenant,
+/// as the sweep paces one shop's reads.
 pub async fn forwards_due(db: &Db, limit: i64) -> anyhow::Result<Vec<ForwardRow>> {
     db.fetch_all(
         "SELECT tenant_id, id, order_id, status, ae_order_ids, tracking, last_error,
             placed_at, updated_at
          FROM aliexpress_forwards
-         WHERE status = 'placed'
-         ORDER BY tenant_id, updated_at LIMIT ?1",
+         WHERE (tenant_id, id) IN (
+            SELECT tenant_id, id FROM (
+                SELECT tenant_id, id, updated_at, ROW_NUMBER() OVER (
+                    PARTITION BY tenant_id ORDER BY updated_at, id
+                ) AS turn
+                FROM aliexpress_forwards
+                WHERE status = 'placed'
+            ) ORDER BY turn, updated_at, tenant_id LIMIT ?1
+         )
+         ORDER BY tenant_id, updated_at, id",
         (limit,),
     )
     .await
