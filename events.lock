@@ -267,9 +267,10 @@ event timada-tenancy/CompanySiren::Released { released_by: String }
 event timada-tenancy/Invitation::Accepted { user_id: String, accepted_at: u64 }
 event timada-tenancy/Invitation::Revoked { revoked_by: String }
 event timada-tenancy/Invitation::Sent { tenant_id: String, email: String, role: String, invited_by: String, sent_at: u64, expires_at: u64 }
-event timada-tenancy/Tenant::AliexpressConfigured { ship_to_country: String, currency: String, language: String, pricing: Option<Pricing>, configured_by: String }
+event timada-tenancy/Tenant::AliexpressConfigured { ship_to_country: String, currency: String, language: String, configured_by: String }
 event timada-tenancy/Tenant::AliexpressForwardingSet { auto_forward: bool, try_to_pay: bool, set_by: String }
 event timada-tenancy/Tenant::AliexpressOrderPhoneSet { phone: Option<String>, set_by: String }
+event timada-tenancy/Tenant::AliexpressPricingSet { pricing: Option<Pricing>, set_by: String }
 event timada-tenancy/Tenant::AliexpressRemoved { removed_by: String }
 event timada-tenancy/Tenant::CompanyLinked { company_id: String, series_code: String, linked_by: String }
 event timada-tenancy/Tenant::CompanyUnlinked { unlinked_by: String }
@@ -322,4 +323,4 @@ type timada_reviews::value_object::ReviewPhoto { id: String, ext: String, mime: 
 type timada_tenancy::value_object::PriceBand { up_to_cents: u64, rule: PricingRule }
 type timada_tenancy::value_object::Pricing { bands: Vec<PriceBand>, above: PricingRule }
 type timada_tenancy::value_object::PricingRule { multiplier_bps: u32, plus_cents: u64, rounding: Rounding }
-type timada_tenancy::value_object::Rounding enum { Cent, Ninety9, Whole }
+type timada_tenancy::value_object::Rounding enum { Cent, Ninety, Ninety9, Whole }

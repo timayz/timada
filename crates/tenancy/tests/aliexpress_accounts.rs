@@ -4,8 +4,8 @@ use timada_core::db::Db;
 
 use common::*;
 use timada_tenancy::{
-    AuthorizeAliexpress, Command, ConfigureAliexpress, LegalIdentity, TenancyError,
-    aliexpress_accounts_due, aliexpress_accounts_subscription,
+    AuthorizeAliexpress, Command, ConfigureAliexpress, LegalIdentity, Pricing, PricingRule,
+    Rounding, TenancyError, aliexpress_accounts_due, aliexpress_accounts_subscription,
 };
 
 const NOW: i64 = 1_800_000_000;
@@ -184,6 +184,52 @@ async fn started_on_an_existing_log_it_finds_the_companies_connected_before() {
 }
 
 #[tokio::test]
+async fn a_tenant_is_created_with_the_usual_rates_and_keeps_its_rule_when_it_stops_importing() {
+    let (executor, _pool) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let owner = new_id();
+    let tenant = create_tenant(&cmd, "Ali Rates", &owner).await;
+    assert_eq!(tenant.aliexpress_pricing, Some(Pricing::default()));
+    assert!(
+        tenant.aliexpress.is_none(),
+        "the rule does not set the shop up"
+    );
+
+    let rule = |multiplier_bps| {
+        Pricing::flat(PricingRule {
+            multiplier_bps,
+            plus_cents: 0,
+            rounding: Rounding::Ninety,
+        })
+    };
+    let with = |pricing| ConfigureAliexpress {
+        pricing,
+        ..market()
+    };
+    assert!(matches!(
+        cmd.configure_aliexpress(&owner, &tenant.id, with(Some(rule(9_999))))
+            .await,
+        Err(TenancyError::InvalidPricingRule)
+    ));
+    cmd.configure_aliexpress(&owner, &tenant.id, with(Some(rule(20_000))))
+        .await
+        .unwrap();
+    let load = async || cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(load().await.aliexpress_pricing, Some(rule(20_000)));
+
+    cmd.remove_aliexpress(&owner, &tenant.id).await.unwrap();
+    let stopped = load().await;
+    assert!(stopped.aliexpress.is_none());
+    assert_eq!(stopped.aliexpress_pricing, Some(rule(20_000)));
+
+    // A blank form prices by hand.
+    cmd.configure_aliexpress(&owner, &tenant.id, market())
+        .await
+        .unwrap();
+    assert_eq!(load().await.aliexpress_pricing, None);
+}
+
+#[tokio::test]
 async fn the_market_is_the_shops_and_how_orders_go_is_kept_across_it() {
     let (executor, _pool) = executor_with_pool().await;
     let cmd = Command(executor.clone());
@@ -245,7 +291,7 @@ async fn the_market_is_the_shops_and_how_orders_go_is_kept_across_it() {
     let phone = |state: timada_tenancy::TenantState| state.aliexpress.unwrap().order_phone;
     assert_eq!(phone(load().await).as_deref(), Some("01 89 76 02 12"));
 
-    // The market set again keeps them; stopping forgets everything.
+    // The market set again keeps them; stopping forgets them.
     cmd.configure_aliexpress(&owner, &tenant.id, market())
         .await
         .unwrap();

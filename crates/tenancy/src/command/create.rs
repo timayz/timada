@@ -1,9 +1,9 @@
 use evento::Executor;
 use ulid::Ulid;
 
-use crate::aggregator::{Created, MemberGranted};
+use crate::aggregator::{AliexpressPricingSet, Created, MemberGranted};
 use crate::error::TenancyError;
-use crate::value_object::{ROLE_OWNER, normalize_name, slugify, suffixed_slug};
+use crate::value_object::{Pricing, ROLE_OWNER, normalize_name, slugify, suffixed_slug};
 
 use super::{Command, TenantState};
 
@@ -22,9 +22,9 @@ pub struct CreateTenant {
 impl<E: Executor> super::Command<E> {
     /// Derives the slug from the name (`Acme Shop` → `acme-shop`; a taken one
     /// gets a short random suffix, `acme-shop-k3x9p`), claims it, then creates
-    /// the tenant with its owner in one commit. A tenant stream that cannot be
-    /// created after the claim gives the slug back (best effort: a failure
-    /// there only leaves the slug reserved).
+    /// the tenant with its owner and the default price rule in one commit. A
+    /// tenant stream that cannot be created after the claim gives the slug back
+    /// (best effort: a failure there only leaves the slug reserved).
     pub async fn create_tenant(
         &self,
         cmd: CreateTenant,
@@ -58,8 +58,12 @@ impl<E: Executor> super::Command<E> {
                 created_by: cmd.owner_user_id.clone(),
             })
             .event(&MemberGranted {
-                user_id: cmd.owner_user_id,
+                user_id: cmd.owner_user_id.clone(),
                 role: ROLE_OWNER.to_owned(),
+            })
+            .event(&AliexpressPricingSet {
+                pricing: Some(Pricing::default()),
+                set_by: cmd.owner_user_id,
             })
             .commit(&self.0)
             .await;

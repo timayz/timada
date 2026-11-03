@@ -12,6 +12,21 @@ import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
 // shop's rule), then reads it again: stock and price follow AliExpress, and a
 // product AliExpress stops selling is taken off sale.
 
+/// The rule a tenant is created with, as the page reads it.
+const USUAL_RATES =
+  "Up to 10.00 €: cost ×3.00, up to .90 · Up to 25.00 €: cost ×2.50, up to .90 · Up to 50.00 €: cost ×2.20, up to .90 · Up to 100.00 €: cost ×1.80, up to .90 · Up to 250.00 €: cost ×1.50, up to .90 · above: cost ×1.30, up to .90";
+
+/// One rule for every cost in place of the rates a tenant is created with:
+/// their rows left blank are dropped.
+async function oneRule(page: Page, multiplier: string, rounding: string) {
+  for (const band of [1, 2, 3, 4, 5]) {
+    await page.getByLabel(`Band ${band}: costs up to`).fill("");
+    await page.getByLabel(`Band ${band}: multiplier`).fill("");
+  }
+  await page.getByLabel("Multiply the cost by").fill(multiplier);
+  await page.getByLabel("Round", { exact: true }).selectOption(rounding);
+}
+
 test("a merchant imports an AliExpress product and keeps it in step", async ({ page }) => {
   const aliexpress = new FakeAliexpress();
   await aliexpress.start();
@@ -24,6 +39,7 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     await expect(page).toHaveURL(new RegExp(`/t/${slug}/aliexpress$`));
     await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "none");
     await expect(page.locator("[data-aliexpress-company]")).toContainText("Not linked");
+    await expect(page.locator("[data-aliexpress-rule]")).toHaveText(USUAL_RATES);
     await expect(page.getByLabel("AliExpress product")).toHaveCount(0);
 
     // The shop sells as a company; its owner connects the company's buyer
@@ -45,11 +61,25 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     await page.getByLabel("Multiply the cost by").fill("0.5");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page).toHaveURL(/error=invalid_pricing_rule/);
-    await page.getByLabel("Multiply the cost by").fill("2");
-    await page.getByLabel("Round", { exact: true }).selectOption("99");
+
+    // The form shows the rates the tenant was created with; saved as they
+    // are, they stay the shop's rule.
+    await expect(page.getByLabel("Band 1: costs up to")).toHaveValue("10.00");
+    await expect(page.getByLabel("Band 1: multiplier")).toHaveValue("3.00");
+    await expect(page.getByLabel("Band 1: rounding")).toHaveValue("90");
+    await expect(page.getByLabel("Band 5: costs up to")).toHaveValue("250.00");
+    await expect(page.getByLabel("Band 5: multiplier")).toHaveValue("1.50");
+    await expect(page.getByLabel("Multiply the cost by")).toHaveValue("1.30");
+    await expect(page.getByLabel("Round", { exact: true })).toHaveValue("90");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByRole("status")).toContainText("AliExpress settings saved.");
     await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "connected");
+    await expect(page.locator("[data-aliexpress-rule]")).toHaveText(USUAL_RATES);
+
+    // One rule for every cost, in their place.
+    await oneRule(page, "2", "99");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("AliExpress settings saved.");
     await expect(page.locator("[data-aliexpress-rule]")).toHaveText("Cost ×2.00, up to .99");
 
     // Cheap items take a higher rate: a band up to 5.00 at ×3, the rest as
@@ -90,7 +120,8 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     }).toPass({ timeout: 20_000 });
 
     // A draft with both colours, their pictures and stock, priced by the
-    // rule: rose costs 4.31, in the band; blue 5.50, above it.
+    // rule: rose costs 4.31, in the band; blue 5.50, above it, holds the 15.00
+    // the band ends at, up to .99.
     await row.getByRole("link", { name: "Open" }).click();
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Cat Tunnel Deluxe");
     const productUrl = page.url();
@@ -101,7 +132,7 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "120");
     await expect(blue.locator("[data-stock]")).toHaveAttribute("data-stock", "0");
     await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("12.93");
-    await expect(blue.getByLabel("Price of Colour: Blue")).toHaveValue("11.99");
+    await expect(blue.getByLabel("Price of Colour: Blue")).toHaveValue("15.99");
     await expect(page.locator("[data-product-aliexpress]")).toHaveAttribute("data-product-aliexpress", PRODUCT_ID);
     await page.getByRole("button", { name: "Publish" }).click();
     await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
@@ -112,7 +143,7 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     await page.getByRole("button", { name: "Sync now" }).click();
     await expect(page.getByRole("status")).toContainText("Read again from AliExpress.");
     await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "7");
-    await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("12.99");
+    await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("15.99");
 
     // Its own rule, from the product page, applies at the next read.
     await page.getByLabel("Its own rule: multiply the cost by").fill("3");
@@ -240,7 +271,7 @@ async function connectedShop(page: Page, tenant: string): Promise<string> {
   await page.getByRole("button", { name: "Connect the AliExpress account" }).click();
   await expect(page.locator("[data-company-aliexpress]")).toHaveAttribute("data-company-aliexpress", "connected");
   await page.goto(`/t/${slug}/aliexpress`);
-  await page.getByLabel("Multiply the cost by").fill("2");
+  await oneRule(page, "2", "cent");
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("status")).toContainText("AliExpress settings saved.");
   await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "connected");
@@ -270,7 +301,6 @@ test("two shops of one company buy through the same AliExpress account", async (
     await page.goto(`/t/${pro.slug}/aliexpress`);
     await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "none");
     await expect(page.locator("[data-aliexpress-account]")).toHaveText("shop@example.org");
-    await page.getByLabel("Multiply the cost by").fill("3");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.locator("[data-aliexpress]")).toHaveAttribute("data-aliexpress", "connected");
     await expect(page.getByLabel("AliExpress product")).toBeVisible();
