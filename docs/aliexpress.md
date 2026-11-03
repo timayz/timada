@@ -64,6 +64,13 @@ On `/t/{slug}/aliexpress`, for members with `aliexpress:manage`:
    up to the next .90: ×3 up to 10.00, ×2.5 up to 25.00, ×2.2 up to 50.00, ×1.8 up to
    100.00, ×1.5 up to 250.00, ×1.3 above.
 
+   The **price tolerance** (up to 20 %, blank by default) leaves a price alone while
+   what the rule gives is within that much of it, so a small move in the cost neither
+   changes the price nor stops a shopper at checkout. It is measured from the price as
+   it stands, so small moves that add up are not each let through. The shop absorbs
+   the difference until the rule's price leaves the tolerance. *Sync now* always gives
+   the rule's price.
+
 *Stop importing* forgets what the shop buys and how its orders go. The imported
 products stay as they are, and so do the price rule and the company's account.
 
@@ -129,6 +136,46 @@ for a read that worked, `last_tried_at` for any read asked for or made), which o
 nodes learn from the next request or record. What AliExpress has left goes to the
 variant's stock in the catalog and nowhere else: it moves with every sale, and the
 stock streams are made for that.
+
+### Before a payment
+
+A shopper must not be charged at a cost the shop's price no longer covers, and goods
+must not be sold after AliExpress ran out. So when a shopper asks to pay, the payments
+subscription first reads every imported product in the cart, at once, and only then
+prices it. The checks that were already there do the refusing:
+
+- The rule moved the price, so the total is not the one the shopper saw:
+  `price_changed`. The checkout shows the new total, and the second request finds the
+  product read a moment ago.
+- AliExpress ran out: `out_of_stock`, before any payment is opened, so no refund is
+  owed later (`PaymentReturned` remains for a hold that lapsed during the payment).
+- AliExpress stopped selling it: the product is off sale.
+
+A product read in the last minute (`[aliexpress] read_fresh_secs`) is not read again,
+so a popular product costs one call a minute per node however many shoppers pay.
+
+AliExpress unreadable does not stop a sale. A failed read logs and the payment goes by
+the last read: an unknown price is not a price that moved. Payments of every shop are
+answered one at a time, so the wait is short (three seconds), and when AliExpress does
+not answer in that time, payments on that node go by the last reads for a minute
+without asking. The reads already under way finish on their own, and the next payment
+finds them done.
+
+A product priced by hand has no rule to move its price: the read updates its stock and
+its cost, and a cost that rises above the price still sells. That is the merchant's
+choice.
+
+Each node answers a request to pay, so on a cluster each reads the cart unless its
+last read is under a minute old.
+
+### When a shopper adds to a cart
+
+When a shopper puts an imported product in a cart, the node it belongs to asks for a
+read (`SyncRequested`), unless the product was tried in the last hour. The read lands
+well before the pay click, so what the checkout shows is usually already what
+AliExpress asks and the read before the payment finds nothing to refuse. The hour keeps
+the stream of a product selling around the clock from growing: a stream's versions run
+out at 65,535.
 
 ### New combinations
 

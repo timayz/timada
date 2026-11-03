@@ -12,7 +12,7 @@ use topcoat::{
     },
 };
 
-use super::{aliexpress_url, pricing_of_form};
+use super::{aliexpress_url, price_tolerance_of_form, pricing_of_form};
 use crate::aliexpress::Aliexpress;
 use crate::app::t::slug::require_tenant;
 use crate::app::tenants::{error_code, tenancy};
@@ -35,6 +35,10 @@ pub async fn configure(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Re
         Ok(pricing) => pricing,
         Err(code) => return refused(code),
     };
+    let price_tolerance_bps = match price_tolerance_of_form(&form) {
+        Ok(tolerance) => tolerance,
+        Err(code) => return refused(code),
+    };
     let sent = |name: &str| form.get(name).cloned().unwrap_or_default();
     let configured = tenancy(cx)
         .configure_aliexpress(
@@ -45,6 +49,7 @@ pub async fn configure(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Re
                 currency: sent("currency"),
                 language: sent("language"),
                 pricing,
+                price_tolerance_bps,
             },
         )
         .await;

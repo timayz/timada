@@ -365,7 +365,16 @@ fn subscriptions(
         ),
         (
             "payments",
-            crate::payments::subscription(payments.clone(), euro_rates.clone(), store.clone()),
+            crate::payments::subscription(
+                payments.clone(),
+                euro_rates.clone(),
+                Arc::new(crate::aliexpress::payment_reads::AliexpressGoods::new(
+                    aliexpress.clone(),
+                    db.clone(),
+                    store.clone(),
+                )),
+                store.clone(),
+            ),
         ),
         (
             "discount usage",

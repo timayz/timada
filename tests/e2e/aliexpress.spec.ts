@@ -392,9 +392,9 @@ const app = new ExampleApp("chatounette", Number(process.env.E2E_ALIEXPRESS_SHOP
 
 test.afterEach(() => app.stop());
 
-/// A shopper buys `quantity` roses on the Chatounette example and pays: the
-/// order's id.
-async function buyRoses(page: Page, request: APIRequestContext, stripe: FakeStripe, webhookUrl: string, quantity: number) {
+/// A shopper fills the Chatounette example's checkout for `quantity` roses,
+/// stopping short of paying.
+async function fillCheckout(page: Page, quantity: number) {
   await page.goto(`${app.url}/p/cat-tunnel-deluxe`);
   await page.getByLabel("Colour").selectOption("Rose");
   await page.getByLabel("Quantité").fill(String(quantity));
@@ -409,6 +409,12 @@ async function buyRoses(page: Page, request: APIRequestContext, stripe: FakeStri
   await page.getByLabel("Ville", { exact: true }).fill("Paris");
   await page.getByLabel("Pays", { exact: true }).selectOption("FR");
   await page.getByLabel("Téléphone").fill("06 12 34 56 78");
+}
+
+/// A shopper buys `quantity` roses on the Chatounette example and pays: the
+/// order's id.
+async function buyRoses(page: Page, request: APIRequestContext, stripe: FakeStripe, webhookUrl: string, quantity: number) {
+  await fillCheckout(page, quantity);
   await page.getByRole("button", { name: /^Payer ma commande/ }).click();
   await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
   const intent = stripe.lastIntent()!;
@@ -559,6 +565,106 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     expect(aliexpress.badSignatures).toBe(0);
   } finally {
     await stripe.stop();
+    await aliexpress.stop();
+  }
+});
+
+test("a shopper pays what AliExpress asks at the moment of paying", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  await fakeStripeJs(page);
+  const aliexpress = new FakeAliexpress();
+  const stripe = new FakeStripe();
+  await aliexpress.start();
+  await stripe.start();
+  try {
+    const productUrl = await importedShop(page, aliexpress);
+    const slug = new URL(productUrl).pathname.split("/")[2];
+    await page.getByRole("button", { name: "Publish" }).click();
+    await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
+    await page.goto(`/t/${slug}/payments`);
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await app.start(request, await mintKey(page, slug, true), 1);
+
+    await fillCheckout(page, 1);
+    const pay = page.getByRole("button", { name: /^Payer ma commande/ });
+    const total = page.locator("[data-place-total]");
+    await expect(total).toContainText("8,62");
+
+    // AliExpress ran out while the shopper filled the form: nothing is opened
+    // with Stripe, so nothing has to be refunded later.
+    aliexpress.sku("12000037001").stock = 0;
+    await pay.click();
+    await expect(page.getByText("il n'en reste pas assez")).toBeVisible();
+    expect(stripe.lastIntent()).toBeUndefined();
+
+    // It has some again, dearer; the checkout says so once read.
+    aliexpress.sku("12000037001").stock = 120;
+    aliexpress.sku("12000037001").price = "5.00";
+    await expect(async () => {
+      await page.goto(`${app.url}/checkout`);
+      await expect(total).toContainText("10,00", { timeout: 1000 });
+    }).toPass({ timeout: 20_000 });
+
+    // The price moves again before the shopper pays: refused, with the new
+    // total to confirm, and the payment opens at that total.
+    aliexpress.sku("12000037001").price = "6.00";
+    await pay.click();
+    await expect(page.getByText("Un prix a changé")).toBeVisible();
+    await expect(total).toContainText("12,00");
+    expect(stripe.lastIntent()).toBeUndefined();
+    await pay.click();
+    await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
+    expect(stripe.lastIntent()!.amount).toBe(1200);
+    expect(aliexpress.badSignatures).toBe(0);
+  } finally {
+    await stripe.stop();
+    await aliexpress.stop();
+  }
+});
+
+test("a small move in what AliExpress asks leaves a price alone, by the shop's tolerance", async ({ page }) => {
+  const aliexpress = new FakeAliexpress();
+  await aliexpress.start();
+  try {
+    const productUrl = await importedShop(page, aliexpress);
+    const slug = new URL(productUrl).pathname.split("/")[2];
+    const reads = () => aliexpress.calls.filter((call) => call === "aliexpress.ds.product.get").length;
+
+    await page.goto(`/t/${slug}/aliexpress`);
+    await page.getByLabel("Price tolerance (%)").fill("21");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page).toHaveURL(/error=invalid_price_tolerance/);
+    await page.getByLabel("Price tolerance (%)").fill("5");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("AliExpress settings saved.");
+    await expect(page.getByLabel("Price tolerance (%)")).toHaveValue("5.00");
+
+    // 4.40 gives 8.80, within 5 % of 8.62: the sweep reads it and leaves it.
+    await page.goto(productUrl);
+    const price = page.getByLabel("Price of Colour: Rose");
+    await expect(price).toHaveValue("8.62");
+    aliexpress.sku("12000037001").price = "4.40";
+    const before = reads();
+    await expect.poll(reads, { timeout: 20_000 }).toBeGreaterThan(before + 1);
+    await page.reload();
+    await expect(price).toHaveValue("8.62");
+
+    // A member asking gets the rule's price to the cent.
+    await page.getByRole("button", { name: "Sync now" }).click();
+    await expect(page.getByRole("status")).toContainText("Read again from AliExpress.");
+    await expect(price).toHaveValue("8.80");
+
+    // Past the tolerance, the sweep follows on its own.
+    aliexpress.sku("12000037001").price = "5.00";
+    await expect(async () => {
+      await page.goto(productUrl);
+      await expect(price).toHaveValue("10.00", { timeout: 1000 });
+    }).toPass({ timeout: 20_000 });
+  } finally {
     await aliexpress.stop();
   }
 });

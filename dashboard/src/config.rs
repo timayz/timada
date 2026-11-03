@@ -540,6 +540,10 @@ pub struct AliexpressConfig {
     /// stock are read again.
     #[serde(default = "default_aliexpress_every_secs")]
     pub sync_every_secs: u64,
+    /// How recent, in seconds, a read of an imported product must be for a
+    /// payment to go by it instead of reading the product again.
+    #[serde(default = "default_aliexpress_read_fresh_secs")]
+    pub read_fresh_secs: u64,
 }
 
 fn default_aliexpress_check_secs() -> u64 {
@@ -548,6 +552,10 @@ fn default_aliexpress_check_secs() -> u64 {
 
 fn default_aliexpress_every_secs() -> u64 {
     6 * 60 * 60
+}
+
+fn default_aliexpress_read_fresh_secs() -> u64 {
+    60
 }
 
 impl Default for AliexpressConfig {
@@ -559,6 +567,7 @@ impl Default for AliexpressConfig {
             authorize_url: None,
             sync_check_secs: default_aliexpress_check_secs(),
             sync_every_secs: default_aliexpress_every_secs(),
+            read_fresh_secs: default_aliexpress_read_fresh_secs(),
         }
     }
 }

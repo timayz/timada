@@ -220,6 +220,10 @@ dir = "data/shopper-keys"
 # # How long, in seconds, a product goes before its price and stock are read
 # # again.
 # sync_every_secs = 21600
+# # How recent, in seconds, a read of a product must be for a payment to go by
+# # it instead of reading the product again. Longer spends fewer calls on what
+# # sells a lot; a shopper may then pay a price AliExpress changed that long ago.
+# read_fresh_secs = 60
 # # AliExpress's own addresses, changed only for tests.
 # api_url = "https://api-sg.aliexpress.com"
 # authorize_url = "https://api-sg.aliexpress.com/oauth/authorize"

@@ -43,7 +43,7 @@ use cluster::Cluster;
 use payments::webhook::{Outcome, receive};
 use payments::{
     Cancellation, DASHBOARD_ACTOR, LapsedCheckouts, NewPayment, OpenPayment, PaymentGateway,
-    PaymentStatus, Payments, RECHECK_SECS, RefundRecord, signature,
+    PaymentStatus, Payments, RECHECK_SECS, RefundRecord, SuppliedGoods, signature,
 };
 
 const WEBHOOK_SECRET: &str = "whsec_test";
@@ -191,6 +191,46 @@ impl PaymentGateway for FakeStripe {
     }
 }
 
+/// A supplier, as far as these tests need it: each read does what a test set.
+#[derive(Default)]
+struct FakeGoods {
+    /// What the next read does, once.
+    next_read: Mutex<Option<GoodsMove>>,
+    /// The products of each read, in order.
+    reads: Mutex<Vec<Vec<String>>>,
+    /// The store the reads write to, once the harness has one.
+    store: Mutex<Option<cluster::Executor>>,
+}
+
+/// What a read finds.
+enum GoodsMove {
+    /// The product now costs this much.
+    Price(String, u64),
+    /// The supplier has none left of a product it now counts.
+    SoldOut(String),
+}
+
+#[async_trait::async_trait]
+impl SuppliedGoods for FakeGoods {
+    async fn read_again(&self, tenant_id: &str, product_ids: &[String]) {
+        self.reads.lock().unwrap().push(product_ids.to_vec());
+        let found = self.next_read.lock().unwrap().take();
+        let store = self.store.lock().unwrap().clone().unwrap();
+        let catalog = timada_catalog::Command::new(store, tenant_id);
+        match found {
+            Some(GoodsMove::Price(product, cents)) => catalog
+                .price_product("supplier", &product, cents, "EUR")
+                .await
+                .unwrap(),
+            Some(GoodsMove::SoldOut(product)) => catalog
+                .set_stock("supplier", &product, None, 0)
+                .await
+                .unwrap(),
+            None => {}
+        }
+    }
+}
+
 /// VIES, as far as these tests need it: numbers starting `DE1` exist.
 struct FakeVies;
 
@@ -229,6 +269,7 @@ struct Harness<G = FakeStripe> {
     platform: Command<cluster::Executor>,
     payments: Arc<Payments>,
     stripe: Arc<G>,
+    goods: Arc<FakeGoods>,
     /// What [`Harness::connect_stripe`] saves as the tenant's secret key.
     secret_key: String,
     /// The read models in the store's database.
@@ -260,11 +301,18 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
     ));
     let subscribed = payments.clone();
     let invoicing_platform = platform.clone();
+    let goods = Arc::new(FakeGoods::default());
+    *goods.store.lock().unwrap() = Some(platform.clone());
     // The subscriptions the dashboard runs on the store, each following
     // every tenant.
     let mut subscriptions = Vec::new();
     for builder in [
-        payments::subscription(subscribed.clone(), fake_rates(), platform.clone()),
+        payments::subscription(
+            subscribed.clone(),
+            fake_rates(),
+            goods.clone(),
+            platform.clone(),
+        ),
         timada_orders::discount_usage_subscription(platform.clone()),
         timada_orders::stock_usage_subscription(platform.clone()),
         invoicing::subscription(
@@ -282,6 +330,7 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
         platform: Command(platform),
         payments,
         stripe,
+        goods,
         secret_key: secret_key.to_owned(),
         db: store_db,
         dir,
@@ -703,6 +752,69 @@ async fn requests_that_cannot_go_ahead_are_refused() {
         PaymentAnswer::Refused("price_changed".into())
     );
     assert_eq!(h.stripe.opened_count(), 0, "nothing was opened with Stripe");
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_price_the_supplier_moved_is_found_before_the_payment_and_confirmed_at_the_new_total() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let (cart_id, mug) = h.cart(&acme).await;
+
+    // The shopper saw 25.00; the read before the payment finds 13.00 each.
+    *h.goods.next_read.lock().unwrap() = Some(GoodsMove::Price(mug.clone(), 1300));
+    assert_eq!(
+        h.ask(&acme, &cart_id, Some(2500)).await,
+        PaymentAnswer::Refused("price_changed".into())
+    );
+    assert_eq!(h.stripe.opened_count(), 0, "nothing was opened with Stripe");
+    assert_eq!(
+        h.goods.reads.lock().unwrap().as_slice(),
+        [vec![mug.clone()]]
+    );
+
+    // Confirmed at the new total, it is charged.
+    let PaymentAnswer::Requested(payment) = h.ask(&acme, &cart_id, Some(2600)).await else {
+        panic!("a payment is opened");
+    };
+    assert_eq!(payment.total_cents, 2600);
+    assert_eq!(h.goods.reads.lock().unwrap().len(), 2);
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn goods_the_supplier_ran_out_of_are_found_before_the_payment() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let (cart_id, mug) = h.cart(&acme).await;
+    timada_catalog::Command::new(h.store(&acme), &acme.id)
+        .set_stock("alice", &mug, None, 10)
+        .await
+        .unwrap();
+
+    *h.goods.next_read.lock().unwrap() = Some(GoodsMove::SoldOut(mug.clone()));
+    assert_eq!(
+        h.ask(&acme, &cart_id, Some(2500)).await,
+        PaymentAnswer::Refused("out_of_stock".into())
+    );
+    assert_eq!(h.stripe.opened_count(), 0, "nothing was opened with Stripe");
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_read_that_finds_nothing_lets_the_payment_go_at_the_price_the_shopper_saw() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let (cart_id, _) = h.cart(&acme).await;
+
+    assert!(matches!(
+        h.ask(&acme, &cart_id, Some(2500)).await,
+        PaymentAnswer::Requested(_)
+    ));
+    assert_eq!(h.goods.reads.lock().unwrap().len(), 1);
     h.finish().await;
 }
 
