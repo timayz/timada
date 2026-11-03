@@ -1,17 +1,22 @@
-//! Asks for the shops' imported AliExpress products to be read again on a
-//! timer: stock, price by rule and availability follow AliExpress. Nothing in
-//! the event store fires later, so every node sweeps the links due in the read
-//! model, each its own share of them, and asks for each with a `SyncRequested`
-//! (see [`super::subscription`] for the read). The same sweep first renews every
-//! connected company's access a day before it lapses, whether or not its
-//! shops have anything imported, and then reads the orders placed on
-//! AliExpress again until they ship (see [`super::forward`]).
+//! Keeps the shops' imported AliExpress products in step without a timer per
+//! product: nothing in the event store fires later, and a platform with more
+//! products than its app may read in a day has to choose. So each node goes
+//! through the links due of its own share in the read model, the most useful
+//! first, and asks for each with a `SyncRequested` (see [`super::subscription`]
+//! for the read) as fast as the day's budget of calls allows ([`super::budget`]).
+//! What sales spend comes out of it, so the sweep gets what they leave.
+//!
+//! On a timer of its own, the sweep renews every connected company's access a
+//! day before it lapses, whether or not its shops have anything imported, and
+//! reads the orders placed on AliExpress again until they ship (see
+//! [`super::forward`]).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::db::Db;
-use timada_aliexpress::{ForwardRow, LinkRow, forwards_due, links_due, note_tried};
+use timada_aliexpress::{ForwardRow, forwards_due, links_due, note_tried};
 use tokio::task::JoinHandle;
 
 use super::forward::CheckResult;
@@ -19,12 +24,20 @@ use super::forward::CheckResult;
 use super::{ALIEXPRESS_ACTOR, Aliexpress};
 use crate::cluster::Executor;
 
-/// The most links one sweep asks for, over every shop.
+/// The most accounts or orders one sweep goes through, over every shop.
 const SWEEP_LIMIT: i64 = 500;
 
-/// A pause between two reads of one shop, so a sweep never bursts against
-/// AliExpress's limits.
+/// A pause between two reads of one shop's orders, so a sweep never bursts
+/// against AliExpress's limits.
 const PACE: Duration = Duration::from_millis(200);
+
+/// How long what a shopper wanted makes a product come first: a cart left for a
+/// while may still be paid for, and what sold lately is likely to sell again.
+const WANTED_SECS: u64 = 30 * 24 * 60 * 60;
+
+/// The longest the drip sleeps when nothing is due: a product may become due
+/// at any time, and looking for that costs one query.
+const LONGEST_IDLE: Duration = Duration::from_secs(60);
 
 pub struct AliexpressSync {
     /// The read models: the imports, the forwards, the companies' access.
@@ -43,44 +56,93 @@ impl AliexpressSync {
         })
     }
 
-    /// Sweeps every `every`, the first time right away.
+    /// Sweeps every `every`, the first time right away, and meanwhile asks for
+    /// the products due as the budget allows.
     pub fn start(self: Arc<Self>, every: Duration) -> JoinHandle<()> {
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(every);
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tick.tick().await;
-                if let Err(err) = self.sweep(crate::auth::now()).await {
-                    tracing::error!(error = %err, "AliExpress products not swept");
-                }
-            }
+            tokio::join!(self.sweep_every(every), self.drip(every.min(LONGEST_IDLE)));
         })
     }
 
-    /// Renews the access that lapses within a day, then asks for every link
-    /// of this node's share last tried longer ago than the configured period
-    /// to be read again, shop by shop. A shop that fails is logged and the
-    /// others still go. Returns how many reads were asked for.
-    pub async fn sweep(&self, now: u64) -> anyhow::Result<usize> {
-        if !self.aliexpress.enabled() {
-            return Ok(0);
+    async fn sweep_every(&self, every: Duration) {
+        let mut tick = tokio::time::interval(every);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            if let Err(err) = self.sweep(crate::auth::now()).await {
+                tracing::error!(error = %err, "AliExpress accounts and orders not swept");
+            }
         }
-        self.renew_due(now).await?;
-        let every = self.aliexpress.sync_every_secs();
-        let before = now.saturating_sub(every) as i64;
-        let due = links_due(&self.db, before, self.aliexpress.share(), SWEEP_LIMIT).await?;
-        let mut asked = 0;
-        for shop in due.chunk_by(|a, b| a.tenant_id == b.tenant_id) {
-            let tenant_id = &shop[0].tenant_id;
-            match self.sweep_tenant(tenant_id, shop, now).await {
-                Ok(count) => asked += count,
+    }
+
+    async fn drip(&self, idle: Duration) {
+        if !self.aliexpress.enabled() || !self.aliexpress.budget().spends() {
+            return;
+        }
+        loop {
+            match self.ask_due(crate::auth::now()).await {
+                Ok(0) => tokio::time::sleep(idle).await,
+                Ok(_) => {}
                 Err(err) => {
-                    tracing::error!(tenant = %tenant_id, error = %err, "AliExpress products not read")
+                    tracing::error!(error = %err, "AliExpress products not asked for");
+                    tokio::time::sleep(idle).await;
                 }
             }
         }
+    }
+
+    /// Goes through the links of this node's share due at `now`, the budget
+    /// giving the pace, and asks for each to be read; how many it went through.
+    /// A shop that cannot read now is passed over until the next period, like
+    /// one read, or its products would take every turn it gets.
+    pub async fn ask_due(&self, now: u64) -> anyhow::Result<usize> {
+        let share = self.aliexpress.share();
+        let budget = self.aliexpress.budget();
+        let due = links_due(
+            &self.db,
+            now.saturating_sub(self.aliexpress.sync_every_secs()) as i64,
+            now.saturating_sub(WANTED_SECS) as i64,
+            share,
+            budget.batch(share),
+        )
+        .await?;
+        let mut connected: HashMap<&str, bool> = HashMap::new();
+        for link in &due {
+            let tenant_id = link.tenant_id.as_str();
+            let can_read = match connected.get(tenant_id) {
+                Some(can_read) => *can_read,
+                None => {
+                    let can_read = self
+                        .aliexpress
+                        .connected_shop(tenant_id, now)
+                        .await?
+                        .is_some();
+                    connected.insert(tenant_id, can_read);
+                    can_read
+                }
+            };
+            if can_read {
+                budget.ready(|| self.aliexpress.share()).await;
+                let links = timada_aliexpress::Command::new(self.store.clone(), tenant_id);
+                if let Err(err) = links.request_sync(ALIEXPRESS_ACTOR, &link.id).await {
+                    tracing::warn!(tenant = %tenant_id, link = %link.id, error = %err, "AliExpress product not asked for");
+                    continue;
+                }
+            }
+            note_tried(&self.db, tenant_id, &link.id, now).await?;
+        }
+        Ok(due.len())
+    }
+
+    /// Renews the access that lapses within a day, then reads the open orders
+    /// again.
+    pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
+        if !self.aliexpress.enabled() {
+            return Ok(());
+        }
+        self.renew_due(now).await?;
         self.check_forwards(now).await?;
-        Ok(asked)
+        Ok(())
     }
 
     /// Reads the orders placed on AliExpress again, shop by shop; returns
@@ -155,43 +217,5 @@ impl AliexpressSync {
         };
         self.aliexpress.refresh_if_due(company, now).await?;
         Ok(())
-    }
-
-    async fn sweep_tenant(
-        &self,
-        tenant_id: &str,
-        due: &[LinkRow],
-        now: u64,
-    ) -> anyhow::Result<usize> {
-        // A shop that cannot read is passed over until the next period, like
-        // one read, or its items would take every turn it gets.
-        if self
-            .aliexpress
-            .connected_shop(tenant_id, now)
-            .await?
-            .is_none()
-        {
-            for link in due {
-                note_tried(&self.db, tenant_id, &link.id, now).await?;
-            }
-            return Ok(0);
-        }
-        let links = timada_aliexpress::Command::new(self.store.clone(), tenant_id);
-        let mut asked = 0;
-        for (index, link) in due.iter().enumerate() {
-            if index > 0 {
-                tokio::time::sleep(PACE).await;
-            }
-            match links.request_sync(ALIEXPRESS_ACTOR, &link.id).await {
-                Ok(_) => {
-                    note_tried(&self.db, tenant_id, &link.id, now).await?;
-                    asked += 1;
-                }
-                Err(err) => {
-                    tracing::warn!(tenant = %tenant_id, link = %link.id, error = %err, "AliExpress product not asked for")
-                }
-            }
-        }
-        Ok(asked)
     }
 }

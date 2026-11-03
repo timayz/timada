@@ -17,8 +17,9 @@ sells it.
 3. Put the app's key and secret in `[aliexpress]` (`app_key`, `app_secret`), with
    `secrets.key` set so the tokens can be sealed. Without both, nobody can connect.
 
-AliExpress counts every call against the one app, whichever company it acts for: the
-sweep paces its reads, and the intervals may need to grow with the number of shops.
+AliExpress counts every call against the one app, whichever company it acts for. Read
+the app's daily quota in the open platform's console and set `calls_per_day` from it,
+leaving a margin (see *The day's calls*).
 
 ## Connecting the account (company owner)
 
@@ -93,15 +94,22 @@ archived or gone does too), and an import asked for anyway unlinks it first.
 
 ## Keeping in step
 
-Every node sweeps the imported products on a timer (`[aliexpress] sync_check_secs`,
-an hour by default) and asks for each one last tried longer ago than `sync_every_secs`
-(six hours) to be read again: a `SyncRequested` on the item's stream, which says who
-asked. Requests are paced and go one shop after another. A read that failed, or a shop
-that cannot read for now (suspended, or no account connected), waits for the next
-period like one that worked, so it takes no turn from the others. Before asking, the
-same sweep renews every connected company's access a day before it lapses, whether or
-not its shops have anything imported: the platform keeps which companies are connected
-and until when (`tenancy_aliexpress_accounts`), and one node per token renews it (a
+A read of AliExpress is one call per product. Dropshippers have no call that reads
+several products, and no push when one changes (checked in the open platform's API
+list), so what keeps a catalogue in step is reads, and the app's calls are limited
+while catalogues are not.
+
+Each node goes through the imported products due, its own share, and asks for each to
+be read again: a `SyncRequested` on the item's stream, which says who asked. A product
+is due when it was last tried longer ago than `[aliexpress] sync_every_secs` (a day).
+A read that failed, or a shop that cannot read for now (suspended, or no account
+connected), waits for the next period like one that worked, so it takes no turn from
+the others.
+
+On a timer of its own (`sync_check_secs`, an hour by default), a node renews every
+connected company's access a day before it lapses, whether or not its shops have
+anything imported: the platform keeps which companies are connected and until when
+(`tenancy_aliexpress_accounts`), and one node per token renews it (a
 `timada-aliexpress/TokenRefresh` claim, keyed by company and token). An access
 AliExpress no longer renews means an owner connects again.
 
@@ -124,6 +132,32 @@ Past that, the page says the read is on its way. A read does three things:
 A combination AliExpress dropped goes to 0. A read that fails is shown on the link;
 the product keeps what it had. Unlinking stops the reads and leaves the product as it
 is.
+
+### The day's calls
+
+`[aliexpress] calls_per_day` (12,000 by default) is what the app may spend in a day,
+over every shop and node. Each node holds its part, and spends it evenly over the day:
+at 12,000 alone, one call every 7.2 seconds, never a burst. A node that idled keeps a
+minute of calls at most.
+
+Every call this node makes counts: a read for a sale, a member or a cart, an import, an
+order placed or read again, a renewal. Those never wait, since a sale cannot. The sweep
+spends what they leave, so a busy day reads fewer of the other products, not more calls
+in all. A burst of sales costs the sweep at most a day's calls. The budget is per node,
+each counting its own calls, so it holds as long as the nodes are about as busy.
+
+The sweep spends the calls by priority:
+
+1. What shoppers wanted in the last 30 days: put in a cart, or bought.
+2. What is on sale.
+3. The rest: drafts, and what was taken off sale.
+
+Within each of those the shops take turns, each its oldest first, so one huge catalogue
+cannot starve the others. When the budget does not cover a period, the last rank waits:
+a draft may be stale when a merchant publishes it, and the read at payment protects the
+sale. Pressing *Sync now* brings it up to date.
+
+`calls_per_day = 0` leaves only what sales and members ask for.
 
 ### What a read writes
 

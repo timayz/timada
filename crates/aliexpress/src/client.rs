@@ -6,6 +6,8 @@
 //! `method`; path methods (`/auth/token/create`) go to `<api>/rest<path>`.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
@@ -80,6 +82,8 @@ pub struct Client {
     app_key: String,
     app_secret: String,
     session: Option<String>,
+    /// Counts every call made, when the host keeps count.
+    calls: Option<Arc<AtomicU64>>,
 }
 
 impl std::fmt::Debug for Client {
@@ -330,7 +334,15 @@ impl Client {
             app_key: app_key.into(),
             app_secret: app_secret.into(),
             session: None,
+            calls: None,
         }
+    }
+
+    /// The same client counting each call it makes on `calls`: AliExpress
+    /// counts them against the app, whichever account they act for.
+    pub fn counting(mut self, calls: Arc<AtomicU64>) -> Self {
+        self.calls = Some(calls);
+        self
     }
 
     /// The same client acting for the account `access_token` stands for.
@@ -445,6 +457,9 @@ impl Client {
 
     /// Signs and sends one call; the answer's body, or why there is none.
     async fn call(&self, method: &str, params: Vec<(&str, String)>) -> Result<Value, AeError> {
+        if let Some(calls) = &self.calls {
+            calls.fetch_add(1, Ordering::Relaxed);
+        }
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|elapsed| elapsed.as_millis())

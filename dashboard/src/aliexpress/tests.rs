@@ -178,6 +178,7 @@ impl Shop {
                 authorize_url: None,
                 sync_check_secs: 3600,
                 sync_every_secs: 3600,
+                calls_per_day: 86_400_000,
                 read_fresh_secs: 60,
             },
             false,
@@ -685,19 +686,19 @@ async fn the_sweep_asks_once_a_period_for_what_is_due() {
     let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
     let now = crate::auth::now();
 
-    assert_eq!(sweep.sweep(now).await.unwrap(), 0, "just imported");
+    assert_eq!(sweep.ask_due(now).await.unwrap(), 0, "just imported");
 
     let later = now + shop.aliexpress.sync_every_secs() + 1;
     let version = shop.version().await;
-    assert_eq!(sweep.sweep(later).await.unwrap(), 1);
+    assert_eq!(sweep.ask_due(later).await.unwrap(), 1);
     assert_eq!(shop.version().await, version + 1);
-    assert_eq!(sweep.sweep(later).await.unwrap(), 0, "asked already");
+    assert_eq!(sweep.ask_due(later).await.unwrap(), 0, "asked already");
     assert_eq!(shop.version().await, version + 1);
 
     // A node holding another share leaves it alone.
     *shop.share.lock().unwrap() = shop.elsewhere();
     let after = later + shop.aliexpress.sync_every_secs() + 1;
-    assert_eq!(sweep.sweep(after).await.unwrap(), 0);
+    assert_eq!(sweep.ask_due(after).await.unwrap(), 0);
 }
 
 #[tokio::test]
@@ -712,11 +713,107 @@ async fn a_shop_that_cannot_read_is_passed_over_without_a_request() {
     let later = crate::auth::now() + shop.aliexpress.sync_every_secs() + 1;
     let version = shop.version().await;
 
-    assert_eq!(sweep.sweep(later).await.unwrap(), 0);
+    assert_eq!(sweep.ask_due(later).await.unwrap(), 1);
 
     assert_eq!(shop.version().await, version, "no request");
     assert_eq!(shop.row().await.last_tried_at, Some(later as i64));
     assert_eq!(shop.stand_in.reads(), 0);
+    assert_eq!(sweep.ask_due(later).await.unwrap(), 0, "passed over");
+}
+
+#[tokio::test]
+async fn the_read_model_hears_what_makes_a_product_matter() {
+    let shop = Shop::new().await;
+    let matters = async || -> (bool, Option<i64>) {
+        shop.follow_read_models().await;
+        shop.db
+            .fetch_one("SELECT published, wanted_at FROM aliexpress_products", ())
+            .await
+            .unwrap()
+    };
+    assert_eq!(matters().await, (false, None), "a draft nobody wants");
+
+    // On sale, and in a cart.
+    shop.add_to_cart().await;
+    let (published, wanted_at) = matters().await;
+    assert!(published);
+    let in_cart = wanted_at.unwrap();
+
+    // Bought: an order names its lines.
+    evento::append("an-order")
+        .tenant(&shop.tenant.id)
+        .original_version(0)
+        .event(&timada_orders::aggregator::Placed {
+            reference: "K7Q4-MZP2".to_owned(),
+            cart_id: "a-cart".to_owned(),
+            email: "ada@example.com".to_owned(),
+            shipping: Default::default(),
+            note: None,
+            lines: vec![timada_orders::OrderLine {
+                product_id: shop.product_id.clone(),
+                quantity: 1,
+                ..Default::default()
+            }],
+            currency: "EUR".to_owned(),
+            total_cents: 862,
+            payment: Default::default(),
+            placed_by: "storefront".to_owned(),
+        })
+        .commit(&shop.store)
+        .await
+        .unwrap();
+    assert!(matters().await.1.unwrap() >= in_cart);
+    shop.db
+        .execute("UPDATE aliexpress_products SET wanted_at = 100", ())
+        .await
+        .unwrap();
+    timada_aliexpress::note_wanted(&shop.db, &shop.tenant.id, &shop.product_id, 50)
+        .await
+        .unwrap();
+    assert_eq!(matters().await.1, Some(100), "it only moves forward");
+
+    // Off sale.
+    timada_catalog::Command::new(shop.store.clone(), &shop.tenant.id)
+        .unpublish_product(ALICE, &shop.product_id)
+        .await
+        .unwrap();
+    assert!(!matters().await.0);
+}
+
+#[tokio::test]
+async fn the_sweep_spends_the_day_on_what_shoppers_want_first() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    // Another shop's product on sale, tried long before this one.
+    let on_sale = timada_aliexpress::LinkState {
+        id: "other-item".to_owned(),
+        product_id: Some("other-product".to_owned()),
+        status: timada_aliexpress::LinkStatus::Linked,
+        last_synced_at: Some(100),
+        ..Default::default()
+    };
+    timada_aliexpress::upsert_link(&shop.db, "other-shop", &on_sale)
+        .await
+        .unwrap();
+    timada_aliexpress::note_published(&shop.db, "other-shop", "other-product", true)
+        .await
+        .unwrap();
+    shop.add_to_cart().await;
+    shop.follow_read_models().await;
+
+    let now = crate::auth::now();
+    let later = now + shop.aliexpress.sync_every_secs() + 1;
+    let due =
+        timada_aliexpress::links_due(&shop.db, later as i64, now as i64 - 60, Share::ALONE, 10)
+            .await
+            .unwrap();
+    let ids: Vec<&str> = due.iter().map(|link| link.id.as_str()).collect();
+    assert_eq!(ids, [shop.link_id.as_str(), "other-item"]);
+
+    // The other shop is not connected, so only this one's is asked for.
+    let version = shop.version().await;
+    assert_eq!(sweep.ask_due(later).await.unwrap(), 2);
+    assert_eq!(shop.version().await, version + 1);
 }
 
 #[tokio::test]
