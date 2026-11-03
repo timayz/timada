@@ -2,7 +2,8 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::company::{AliexpressAuthorized, AliexpressDisconnected};
 use crate::aggregator::{
-    AliexpressConfigured, AliexpressForwardingSet, AliexpressOrderPhoneSet, AliexpressRemoved,
+    AliexpressConfigured, AliexpressForwardingSet, AliexpressOrderPhoneSet, AliexpressPricingSet,
+    AliexpressRemoved,
 };
 use crate::command::CompanyState;
 use crate::error::TenancyError;
@@ -38,8 +39,8 @@ fn is_code(value: &str, len: usize) -> bool {
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Sets (or replaces) what the shop buys on AliExpress. Needs
-    /// `aliexpress:manage`.
+    /// Sets (or replaces) what the shop buys on AliExpress and how it prices
+    /// it. Needs `aliexpress:manage`.
     pub async fn configure_aliexpress(
         &self,
         actor_user_id: &str,
@@ -71,8 +72,11 @@ impl<E: Executor> super::Command<E> {
                 ship_to_country: country,
                 currency,
                 language,
-                pricing: cmd.pricing,
                 configured_by: actor_user_id.to_owned(),
+            })
+            .event(&AliexpressPricingSet {
+                pricing: cmd.pricing,
+                set_by: actor_user_id.to_owned(),
             })
             .commit(&self.0)
             .await?;

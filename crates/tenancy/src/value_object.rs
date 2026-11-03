@@ -661,30 +661,30 @@ pub enum Rounding {
     /// To the cent.
     #[default]
     Cent,
+    /// Up to the next price ending in .90 (`12.31` → `12.90`, `12.91` →
+    /// `13.90`).
+    Ninety,
     /// Up to the next price ending in .99 (`12.31` → `12.99`, `13.00` →
     /// `13.99`).
     Ninety9,
     /// Up to the next whole unit (`12.31` → `13.00`).
     Whole,
-    /// Up to the next price ending in .90 (`12.31` → `12.90`, `12.91` →
-    /// `13.90`).
-    Ninety,
 }
 
 impl Rounding {
     pub const ALL: [Rounding; 4] = [
         Rounding::Cent,
+        Rounding::Ninety,
         Rounding::Ninety9,
         Rounding::Whole,
-        Rounding::Ninety,
     ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Cent => "cent",
+            Self::Ninety => "90",
             Self::Ninety9 => "99",
             Self::Whole => "whole",
-            Self::Ninety => "90",
         }
     }
 
@@ -698,9 +698,9 @@ impl Rounding {
     fn round(self, cents: u64) -> u64 {
         match self {
             Self::Cent => cents,
+            Self::Ninety => (cents + 9) / 100 * 100 + 90,
             Self::Ninety9 => cents / 100 * 100 + 99,
             Self::Whole => cents.div_ceil(100) * 100,
-            Self::Ninety => (cents + 9) / 100 * 100 + 90,
         }
     }
 }
@@ -810,7 +810,7 @@ impl Pricing {
 }
 
 impl Default for Pricing {
-    /// What a new shop starts from: the usual degressive rates for
+    /// The rule a tenant is created with: the usual degressive rates for
     /// dropshipping, rounded up to .90. Cheap items bear a high rate because
     /// ads, payment fees and returns cost about the same whatever the price.
     fn default() -> Self {

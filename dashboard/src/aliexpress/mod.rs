@@ -356,7 +356,7 @@ impl Aliexpress {
                 return Ok(SyncResult::Failed(reason));
             }
         };
-        let pricing = link.pricing.as_ref().or(settings.pricing.as_ref());
+        let pricing = link.pricing.as_ref().or(tenant.aliexpress_pricing.as_ref());
         let outcome = timada_aliexpress::apply_sync(
             &catalog,
             ALIEXPRESS_ACTOR,
@@ -422,9 +422,9 @@ impl Aliexpress {
         let Some((link, version)) = links.load_link_versioned(link_id).await? else {
             return Ok(AddResult::NotLinked);
         };
-        let Some(settings) = tenant.aliexpress.as_ref().filter(|_| link.is_linked()) else {
+        if tenant.aliexpress.is_none() || !link.is_linked() {
             return Ok(AddResult::NotLinked);
-        };
+        }
         let catalog = timada_catalog::Command::new(store.clone(), &tenant.id);
         let images = self.images(media, &tenant.id);
         let outcome = timada_aliexpress::add_combinations(
@@ -432,7 +432,7 @@ impl Aliexpress {
             actor,
             &link,
             sku_ids,
-            link.pricing.as_ref().or(settings.pricing.as_ref()),
+            link.pricing.as_ref().or(tenant.aliexpress_pricing.as_ref()),
             &images,
         )
         .await?;

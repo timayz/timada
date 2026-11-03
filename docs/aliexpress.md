@@ -42,10 +42,11 @@ On `/t/{slug}/aliexpress`, for members with `aliexpress:manage`:
    - the country goods ship to;
    - the currency, one the shop sells in;
    - the language products are worded in.
-3. Optionally set a **price rule**: multiply the cost, add an amount, and round to the
-   cent, up to the next .90, up to the next .99, or up to a whole amount. A rule never
-   goes below cost, and what it gives is the catalog price, VAT included. Without one,
-   the import uses the cost as the starting price and later reads leave prices alone.
+3. Keep or change the **price rule**: multiply the cost, add an amount, and round to
+   the cent, up to the next .90, up to the next .99, or up to a whole amount. A rule
+   never goes below cost, and what it gives is the catalog price, VAT included. Blanking
+   every row prices by hand: the import uses the cost as the starting price and later
+   reads leave prices alone.
 
    Cheap items usually bear a higher rate than dear ones, so the rule can go by
    **cost band**: each row prices costs up to its amount (inclusive) that no lower
@@ -59,13 +60,12 @@ On `/t/{slug}/aliexpress`, for members with `aliexpress:manage`:
    a cost of 25.01 stays at 62.50 until ×2.2 catches up, at about 28.41. A price held
    this way still takes its own band's rounding.
 
-   A shop with nothing set up finds the form filled in with the usual rates for
-   dropshipping, each rounded up to the next .90: ×3 up to 10.00, ×2.5 up to 25.00,
-   ×2.2 up to 50.00, ×1.8 up to 100.00, ×1.5 up to 250.00, ×1.3 above. They apply once
-   saved; blanking every row prices by hand instead.
+   A tenant is created with the usual rates for dropshipping as its rule, each rounded
+   up to the next .90: ×3 up to 10.00, ×2.5 up to 25.00, ×2.2 up to 50.00, ×1.8 up to
+   100.00, ×1.5 up to 250.00, ×1.3 above.
 
-*Stop importing* forgets the shop's settings; the imported products stay as they are,
-and so does the company's account.
+*Stop importing* forgets what the shop buys and how its orders go. The imported
+products stay as they are, and so do the price rule and the company's account.
 
 ## Importing
 
@@ -188,7 +188,7 @@ fulfilled with, whether AliExpress answers or not.
 - **Platform store (`timada-tenancy`).** On the company, the sealed tokens of its
   buyer account: `Company::AliexpressAuthorized`, `Company::AliexpressDisconnected`.
   On the tenant, the market, the shop's rule and how orders go:
-  `AliexpressConfigured`, `AliexpressRemoved`,
+  `AliexpressConfigured`, `AliexpressPricingSet`, `AliexpressRemoved`,
   `AliexpressForwardingSet`. The tokens
   are sealed under `secrets.key` with the purpose `aliexpress`; the app's key and
   secret are host configuration.

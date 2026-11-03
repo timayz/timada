@@ -377,20 +377,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .map(|settings| settings.currency.clone())
         .unwrap_or_else(|| CURRENCIES[0].to_owned());
-    let pricing = settings
-        .as_ref()
-        .and_then(|settings| settings.pricing.as_ref());
+    let pricing = tenant.aliexpress_pricing.as_ref();
     let pricing_text = pricing_label(pricing, &currency);
-    // A shop with nothing set up starts from the usual rates; one that chose
-    // to price by hand keeps a blank form.
-    let starting = Pricing::default();
-    let form_pricing = if settings.is_some() {
-        pricing
-    } else {
-        Some(&starting)
-    };
-    let fields = RuleFields::of(form_pricing.map(|pricing| &pricing.above));
-    let bands = BandFields::of(form_pricing);
+    let fields = RuleFields::of(pricing.map(|pricing| &pricing.above));
+    let bands = BandFields::of(pricing);
     let country = settings
         .as_ref()
         .map(|settings| settings.ship_to_country.clone())
@@ -451,10 +441,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                         if let Some(settings) = &settings {
                             fact(term: "Buys for", (&settings.ship_to_country) " · " (&settings.currency) " · " (&settings.language))
-                            fact(term: "Price rule", attrs: attributes! { data-aliexpress-rule="" }, (&pricing_text))
                         } else {
                             fact(term: "Buys for", status_badge(tone: Tone::Neutral, "Not set") " " <span class="text-muted-foreground">"Choose below what the shop buys in."</span>)
                         }
+                        fact(term: "Price rule", attrs: attributes! { data-aliexpress-rule="" }, (&pricing_text))
                     )
                 </div>
                 if settings.is_some() {
@@ -599,9 +589,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <fieldset>
                         <legend class="mb-2 text-sm font-medium">"Price rule (blank: price by hand)"</legend>
                         <p class="mb-3 text-sm text-muted-foreground">"One rule for every cost, or one per cost band: a cost takes the first band reaching it, and any higher cost takes the last row. A price never falls below the one at the end of a lower band. A blank band is dropped."</p>
-                        if settings.is_none() {
-                            <p class="mb-3 text-sm text-muted-foreground">"A new shop starts from the usual rates for dropshipping. Keep them or change them, then save."</p>
-                        }
                         table(
                             attrs: attributes! { data-aliexpress-bands="" },
                             table_header(
