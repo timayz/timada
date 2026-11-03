@@ -8,8 +8,8 @@
 //!
 //! On a timer of its own, the sweep renews every connected company's access a
 //! day before it lapses, whether or not its shops have anything imported, and
-//! reads the orders placed on AliExpress again until they ship (see
-//! [`super::forward`]).
+//! reads the orders of this node's share placed on AliExpress again until they
+//! ship (see [`super::forward`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -135,7 +135,7 @@ impl AliexpressSync {
     }
 
     /// Renews the access that lapses within a day, then reads the open orders
-    /// again.
+    /// of this node's share again.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
         if !self.aliexpress.enabled() {
             return Ok(());
@@ -145,10 +145,10 @@ impl AliexpressSync {
         Ok(())
     }
 
-    /// Reads the orders placed on AliExpress again, shop by shop; returns
-    /// how many shop orders were fulfilled from them.
+    /// Reads the orders of this node's share placed on AliExpress again, shop
+    /// by shop; returns how many shop orders were fulfilled from them.
     pub async fn check_forwards(&self, now: u64) -> anyhow::Result<usize> {
-        let due = forwards_due(&self.db, SWEEP_LIMIT).await?;
+        let due = forwards_due(&self.db, self.aliexpress.share(), SWEEP_LIMIT).await?;
         let mut fulfilled = 0;
         for shop in due.chunk_by(|a, b| a.tenant_id == b.tenant_id) {
             let tenant_id = &shop[0].tenant_id;

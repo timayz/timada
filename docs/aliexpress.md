@@ -113,12 +113,13 @@ anything imported: the platform keeps which companies are connected and until wh
 `timada-aliexpress/TokenRefresh` claim, keyed by company and token). An access
 AliExpress no longer renews means an owner connects again.
 
-Each imported product belongs to one of the nodes up, by a hash of its stream's id
-over the nodes heard from in the last 30 seconds, so one node sweeps it and one node
-answers a request for it, and the app's quota is spent once. A node that stops is left
-out once it has been silent that long: what it held and had not read yet is shared out
-to the others, and the sweep finds it still due. Two nodes that disagree for a moment
-read a product twice or leave it for later, neither of which harms it.
+Each imported product, and each order placed on AliExpress, belongs to one of the
+nodes up, by a hash of its stream's id over the nodes heard from in the last 30
+seconds, so one node sweeps it and one node answers a request for it, and the app's
+quota is spent once. A node that stops is left out once it has been silent that long:
+what it held and had not read yet is shared out to the others, and the sweep finds it
+still due. Two nodes that disagree for a moment read one twice or leave it for later,
+neither of which harms it.
 
 *Sync now*, on the AliExpress page or on the product page, asks the same way, naming
 the member, and waits up to ten seconds so the page can say what the read found.
@@ -145,6 +146,10 @@ order placed or read again, a renewal. Those never wait, since a sale cannot. Th
 spends what they leave, so a busy day reads fewer of the other products, not more calls
 in all. A burst of sales costs the sweep at most a day's calls. The budget is per node,
 each counting its own calls, so it holds as long as the nodes are about as busy.
+
+Open orders are the thing to size for. Each is read once per `sync_check_secs` until it
+ships, a call per AliExpress order: at the hourly default, 500 open orders alone spend
+12,000 calls a day.
 
 The sweep spends the calls by priority:
 
@@ -266,9 +271,9 @@ A failure is shown on the card with *Place again*. One node takes each order on
 recording the outcome, the order may be on AliExpress anyway. It is then never placed
 again on its own: the merchant checks the account's orders on AliExpress first.
 
-Until each AliExpress order has a parcel number, the sweep reads it again on every
-pass (`aliexpress.trade.ds.order.get`). AliExpress also pushes each status change of
-an order to `/aliexpress/webhook` (message type 53, the body signed with the app's key
+Until each AliExpress order has a parcel number, the node it belongs to reads it again
+on every sweep (`aliexpress.trade.ds.order.get`). AliExpress also pushes each status
+change of an order to `/aliexpress/webhook` (message type 53, the body signed with the app's key
 and secret in `Authorization`): the order is read again at once, and the sweep stays
 the fallback the push's twelve retries do not cover. A push is answered before the
 read, within the half second AliExpress allows, and may come twice: the read records

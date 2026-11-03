@@ -156,8 +156,8 @@ pub async fn upsert_forward(
         .join(" ");
     db.execute(
         "INSERT INTO aliexpress_forwards (tenant_id, id, order_id, status, ae_order_ids,
-            tracking, last_error, placed_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            tracking, last_error, placed_at, updated_at, shard)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             status = excluded.status, ae_order_ids = excluded.ae_order_ids,
             tracking = excluded.tracking, last_error = excluded.last_error,
@@ -172,6 +172,7 @@ pub async fn upsert_forward(
             forward.last_error.as_deref(),
             forward.placed_at.map(|at| at as i64),
             forward.updated_at as i64,
+            i64::from(shard_of(&forward.id)),
         ),
     )
     .await?;
@@ -195,11 +196,11 @@ pub struct ForwardRow {
     pub updated_at: i64,
 }
 
-/// The orders of every shop placed on AliExpress and not settled yet: what a
-/// sweep reads again. The shops take turns, each its longest unchanged first,
-/// so one shop's open orders never crowd another shop out. Grouped by tenant,
-/// as the sweep paces one shop's reads.
-pub async fn forwards_due(db: &Db, limit: i64) -> anyhow::Result<Vec<ForwardRow>> {
+/// The orders of every shop placed on AliExpress and not settled yet that
+/// `share` holds: what a sweep reads again. The shops take turns, each its longest
+/// unchanged first, so one shop's open orders never crowd another shop out.
+/// Grouped by tenant, as the sweep paces one shop's reads.
+pub async fn forwards_due(db: &Db, share: Share, limit: i64) -> anyhow::Result<Vec<ForwardRow>> {
     db.fetch_all(
         "SELECT tenant_id, id, order_id, status, ae_order_ids, tracking, last_error,
             placed_at, updated_at
@@ -210,11 +211,11 @@ pub async fn forwards_due(db: &Db, limit: i64) -> anyhow::Result<Vec<ForwardRow>
                     PARTITION BY tenant_id ORDER BY updated_at, id
                 ) AS turn
                 FROM aliexpress_forwards
-                WHERE status = 'placed'
+                WHERE status = 'placed' AND shard % ?2 = ?3
             ) ORDER BY turn, updated_at, tenant_id LIMIT ?1
          )
          ORDER BY tenant_id, updated_at, id",
-        (limit,),
+        (limit, share.of as i64, share.index as i64),
     )
     .await
 }

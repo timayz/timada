@@ -124,7 +124,8 @@ impl Aliexpress {
         &self.budget
     }
 
-    /// Which of the nodes up this one is: what it reads of the imported items.
+    /// Which of the nodes up this one is: which imported items and open orders
+    /// it reads.
     pub fn share(&self) -> Share {
         (self.share)()
     }

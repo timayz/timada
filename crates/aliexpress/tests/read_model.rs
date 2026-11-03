@@ -331,7 +331,7 @@ async fn open_orders_leave_the_other_shops_their_turn() {
     seed_forwards(&db, "b-small", 3, 200).await;
     seed_forwards(&db, "c-small", 3, 300).await;
 
-    let due = forwards_due(&db, 10).await.unwrap();
+    let due = forwards_due(&db, Share::ALONE, 10).await.unwrap();
 
     assert_eq!(due.len(), 10);
     assert_eq!(forwards_of(&due, "b-small"), 3);
@@ -351,7 +351,7 @@ async fn a_shop_alone_fills_the_check_longest_unchanged_first() {
     };
     upsert_forward(&db, "acme", &oldest).await.unwrap();
 
-    let due = forwards_due(&db, 2).await.unwrap();
+    let due = forwards_due(&db, Share::ALONE, 2).await.unwrap();
 
     assert_eq!(due[0].id, "oldest");
     assert_eq!(due.len(), 2);
@@ -371,11 +371,35 @@ async fn the_due_forwards_of_a_shop_come_together() {
         upsert_forward(&db, tenant, &forward).await.unwrap();
     }
 
-    let due = forwards_due(&db, 6).await.unwrap();
+    let due = forwards_due(&db, Share::ALONE, 6).await.unwrap();
 
     // The check paces its reads within one run of a shop's forwards.
     let runs = due.chunk_by(|a, b| a.tenant_id == b.tenant_id).count();
     assert_eq!(runs, 2);
+}
+
+#[tokio::test]
+async fn each_open_order_goes_to_one_node() {
+    let db = database().await;
+    seed_forwards(&db, "acme", 40, 100).await;
+    seed_forwards(&db, "other", 40, 100).await;
+
+    let mut seen = Vec::new();
+    for index in 0..3 {
+        let share = Share { index, of: 3 };
+        let due = forwards_due(&db, share, 100).await.unwrap();
+        assert!(!due.is_empty(), "node {index} has its part");
+        for forward in &due {
+            assert!(share.owns(&forward.id));
+            seen.push(format!("{}/{}", forward.tenant_id, forward.id));
+        }
+    }
+
+    let mut unique = seen.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), seen.len(), "no order goes to two nodes");
+    assert_eq!(seen.len(), 80, "every order goes to a node");
 }
 
 #[tokio::test]
@@ -396,7 +420,7 @@ async fn only_placed_orders_are_due() {
         upsert_forward(&db, "acme", &forward).await.unwrap();
     }
 
-    let due = forwards_due(&db, 10).await.unwrap();
+    let due = forwards_due(&db, Share::ALONE, 10).await.unwrap();
 
     assert_eq!(due.len(), 2);
 }

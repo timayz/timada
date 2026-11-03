@@ -425,13 +425,18 @@ impl Shop {
 
     /// A node of two that does not hold the item.
     fn elsewhere(&self) -> Share {
-        let holder = (0..2)
-            .find(|&index| Share { index, of: 2 }.owns(&self.link_id))
-            .unwrap();
-        Share {
-            index: 1 - holder,
-            of: 2,
-        }
+        share_without(&self.link_id)
+    }
+}
+
+/// A node of two that does not hold the item or order `id`.
+fn share_without(id: &str) -> Share {
+    let holder = (0..2)
+        .find(|&index| Share { index, of: 2 }.owns(id))
+        .unwrap();
+    Share {
+        index: 1 - holder,
+        of: 2,
     }
 }
 
@@ -814,6 +819,66 @@ async fn the_sweep_spends_the_day_on_what_shoppers_want_first() {
     let version = shop.version().await;
     assert_eq!(sweep.ask_due(later).await.unwrap(), 2);
     assert_eq!(shop.version().await, version + 1);
+}
+
+#[tokio::test]
+async fn an_open_order_is_read_by_the_node_it_belongs_to() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    evento::append("an-order")
+        .tenant(&shop.tenant.id)
+        .original_version(0)
+        .event(&timada_orders::aggregator::Placed {
+            reference: "K7Q4-MZP2".to_owned(),
+            cart_id: "a-cart".to_owned(),
+            email: "ada@example.com".to_owned(),
+            shipping: Default::default(),
+            note: None,
+            lines: Vec::new(),
+            currency: "EUR".to_owned(),
+            total_cents: 862,
+            payment: Default::default(),
+            placed_by: "storefront".to_owned(),
+        })
+        .commit(&shop.store)
+        .await
+        .unwrap();
+    let forwards = timada_aliexpress::Command::new(shop.store.clone(), &shop.tenant.id);
+    let forward_id = forwards
+        .request_forward(ALIEXPRESS_ACTOR, "an-order", false)
+        .await
+        .unwrap();
+    assert!(
+        forwards
+            .start_forward(ALIEXPRESS_ACTOR, &forward_id)
+            .await
+            .unwrap()
+    );
+    forwards
+        .record_placed(
+            ALIEXPRESS_ACTOR,
+            &forward_id,
+            timada_aliexpress::Placement {
+                ae_order_ids: vec!["8100000000000001".to_owned()],
+                items: Vec::new(),
+                pay_requested: true,
+                complete: true,
+            },
+        )
+        .await
+        .unwrap();
+    shop.follow_read_models().await;
+    let now = crate::auth::now();
+
+    // Not this node's: left to the other.
+    *shop.share.lock().unwrap() = share_without(&forward_id);
+    sweep.check_forwards(now).await.unwrap();
+    assert_eq!(shop.stand_in.reads(), 0);
+
+    // This node's: read, once.
+    *shop.share.lock().unwrap() = Share::ALONE;
+    sweep.check_forwards(now).await.unwrap();
+    assert_eq!(shop.stand_in.reads(), 1);
 }
 
 #[tokio::test]

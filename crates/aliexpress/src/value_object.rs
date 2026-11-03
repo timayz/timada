@@ -31,10 +31,10 @@ pub const ALIEXPRESS_ACTOR: &str = "timada-aliexpress";
 /// that took it on and stopped leaves it there.
 pub const IMPORT_STALE_SECS: u64 = 10 * 60;
 
-/// Which of the nodes up at the moment this one is. Every linked item belongs
-/// to one of them, so one node reads it and the app's quota is spent once. Two
-/// nodes that disagree for a moment on who is up read an item twice or leave
-/// it for later, neither of which harms it.
+/// Which of the nodes up at the moment this one is. Every linked item, and every
+/// order placed on AliExpress, belongs to one of them, so one node reads it and
+/// the app's quota is spent once. Two nodes that disagree for a moment on who is
+/// up read one twice or leave it for later, neither of which harms it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Share {
     /// This node's place among them, from 0.
@@ -44,19 +44,19 @@ pub struct Share {
 }
 
 impl Share {
-    /// A node on its own: every item is its.
+    /// A node on its own: everything is its.
     pub const ALONE: Self = Self { index: 0, of: 1 };
 
-    /// Whether the item `link_id` belongs to this node.
-    pub fn owns(&self, link_id: &str) -> bool {
-        u64::from(shard_of(link_id)) % self.of == self.index
+    /// Whether the item or order `id` names belongs to this node.
+    pub fn owns(&self, id: &str) -> bool {
+        u64::from(shard_of(id)) % self.of == self.index
     }
 }
 
-/// Where an item falls among the nodes (FNV-1a of its id): the same on every
-/// node and in every build, which the standard hasher does not promise.
-pub fn shard_of(link_id: &str) -> u32 {
-    link_id.bytes().fold(0x811c_9dc5, |hash: u32, byte| {
+/// Where an item or order falls among the nodes (FNV-1a of its id): the same on
+/// every node and in every build, which the standard hasher does not promise.
+pub fn shard_of(id: &str) -> u32 {
+    id.bytes().fold(0x811c_9dc5, |hash: u32, byte| {
         (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
     })
 }
