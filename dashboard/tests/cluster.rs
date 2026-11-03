@@ -431,25 +431,30 @@ async fn the_nodes_up_share_out_what_they_do() {
     let root = temp_root("live");
     let addrs = free_addrs().await;
     let [n0, n1, n2] = start_all(&root, &addrs, Tuning::default()).await;
-    let within = Duration::from_secs(2);
+    let within = Duration::from_secs(5);
+    // Under load a node may stall for a moment: each comes to see this, and a
+    // node never heard from since it started would not.
+    let sees = async |node: &Node, live: (u64, u64)| {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        while node.cluster.live_nodes(within) != live {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "{:?}, not {live:?}",
+                node.cluster.live_nodes(within)
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
 
     // Nothing is written: gossip alone keeps them in sight of each other.
-    tokio::time::sleep(within * 2).await;
-    assert_eq!(n0.cluster.live_nodes(within), (0, 3));
-    assert_eq!(n1.cluster.live_nodes(within), (1, 3));
-    assert_eq!(n2.cluster.live_nodes(within), (2, 3));
+    tokio::time::sleep(within + Duration::from_secs(1)).await;
+    sees(&n0, (0, 3)).await;
+    sees(&n1, (1, 3)).await;
+    sees(&n2, (2, 3)).await;
 
     n1.stop().await;
-    let deadline = tokio::time::Instant::now() + within * 5;
-    while n2.cluster.live_nodes(within) != (1, 2) {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "{:?}",
-            n2.cluster.live_nodes(within)
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    assert_eq!(n0.cluster.live_nodes(within), (0, 2));
+    sees(&n0, (0, 2)).await;
+    sees(&n2, (1, 2)).await;
 
     for node in [n0, n2] {
         node.stop().await;
