@@ -17,7 +17,7 @@ use crate::aggregator::{
     SyncRequested, Synced, Unlinked,
 };
 use crate::error::AliexpressError;
-use crate::value_object::{IMPORT_STALE_SECS, aliexpress_product_id};
+use crate::value_object::{ALIEXPRESS_ACTOR, IMPORT_STALE_SECS, aliexpress_product_id};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor> {
@@ -67,9 +67,9 @@ impl<E: Executor> Deref for Command<E> {
 
 pub(crate) use timada_core::unix_now;
 
-/// How many times a request to read is tried when another write to the link
-/// (a read's own record, say) came in between.
-const REQUEST_ATTEMPTS: usize = 3;
+/// How many times a request to read, or a read's failure, is tried when another
+/// write to the link came in between.
+const WRITE_ATTEMPTS: usize = 3;
 
 /// What a read of a linked item recorded.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -133,6 +133,8 @@ pub struct LinkState {
     pub last_synced_at: Option<u64>,
     /// Unix seconds of the last `SyncRequested`.
     pub last_requested_at: Option<u64>,
+    /// The version of the last read recorded for a member, who waits for it.
+    pub answered_version: u16,
     /// Why the last import or read failed; cleared by one that worked.
     pub last_error: Option<String>,
     pub requested_by: String,
@@ -237,6 +239,9 @@ async fn on_synced(event: Event<Synced>, link: &mut LinkState) -> anyhow::Result
     link.last_synced_at = Some(event.timestamp);
     link.last_error = None;
     link.updated_at = event.timestamp;
+    if event.data.synced_by != ALIEXPRESS_ACTOR {
+        link.answered_version = event.version;
+    }
     Ok(())
 }
 
@@ -244,6 +249,9 @@ async fn on_synced(event: Event<Synced>, link: &mut LinkState) -> anyhow::Result
 async fn on_sync_failed(event: Event<SyncFailed>, link: &mut LinkState) -> anyhow::Result<()> {
     link.last_error = Some(event.data.reason.to_owned());
     link.updated_at = event.timestamp;
+    if event.data.failed_by != ALIEXPRESS_ACTOR {
+        link.answered_version = event.version;
+    }
     Ok(())
 }
 
@@ -488,7 +496,7 @@ impl<E: Executor> Command<E> {
         link_id: &str,
         routing_key: Option<String>,
     ) -> Result<u16, AliexpressError> {
-        for attempt in 1..=REQUEST_ATTEMPTS {
+        for attempt in 1..=WRITE_ATTEMPTS {
             let link = self.require_link(link_id).await?;
             if !link.is_linked() {
                 return Err(AliexpressError::NotFound);
@@ -505,7 +513,7 @@ impl<E: Executor> Command<E> {
                 .await;
             match written {
                 Ok(_) => return Ok(version + 1),
-                Err(WriteError::InvalidOriginalVersion) if attempt < REQUEST_ATTEMPTS => {}
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
                 Err(err) => return Err(err.into()),
             }
         }
@@ -624,17 +632,25 @@ impl<E: Executor> Command<E> {
         reason: &str,
         routing_key: Option<String>,
     ) -> Result<(), AliexpressError> {
-        let link = self.require_link(link_id).await?;
-        link.write()?
-            .routing_key_opt(routing_key)
-            .event(&SyncFailed {
-                reason: reason.chars().take(500).collect(),
-                failed_by: actor.to_owned(),
-            })
-            .tenant(&self.tenant)
-            .commit(&self.executor)
-            .await?;
-        Ok(())
+        for attempt in 1..=WRITE_ATTEMPTS {
+            let link = self.require_link(link_id).await?;
+            let written = link
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&SyncFailed {
+                    reason: reason.chars().take(500).collect(),
+                    failed_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(WriteError::InvalidOriginalVersion.into())
     }
 
     /// The product's own pricing; `None` follows the shop's.

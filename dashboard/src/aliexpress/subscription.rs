@@ -135,7 +135,9 @@ async fn on_sync_requested<E: Executor>(
     let mode = if event.data.requested_by == ALIEXPRESS_ACTOR {
         SyncMode::Routine
     } else {
-        SyncMode::Asked
+        SyncMode::Asked {
+            by: &event.data.requested_by,
+        }
     };
     // A store that fails here fails this read alone, or it would stop the
     // requests behind it: the merchant asks again, the sweep comes back.

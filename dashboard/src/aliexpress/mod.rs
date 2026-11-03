@@ -12,7 +12,10 @@ pub mod webhook;
 use std::sync::Arc;
 use std::time::Duration;
 
-use timada_aliexpress::{Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL, Market, Share};
+use timada_aliexpress::{
+    AliexpressError, Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL, LinkState, Market, Share,
+    SyncRead,
+};
 use timada_tenancy::{AliexpressSettings, CompanyState, TenantState};
 
 use crate::cluster::Executor;
@@ -27,6 +30,9 @@ pub const ALIEXPRESS_ACTOR: &str = timada_aliexpress::ALIEXPRESS_ACTOR;
 
 /// How long a node may go unheard before the others share out what it reads.
 pub const LIVE_WITHIN: Duration = Duration::from_secs(30);
+
+/// How many times a read's record is tried when a request came in between.
+const RECORD_ATTEMPTS: usize = 3;
 
 pub struct Aliexpress {
     sealer: Option<Sealer>,
@@ -305,12 +311,26 @@ impl Aliexpress {
 
 /// What a read is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SyncMode {
+pub enum SyncMode<'a> {
     /// The dashboard's own: it writes only what changed, and the link's
     /// stream stays short however often the item is read.
     Routine,
-    /// A member waits for it: it records its outcome whatever that is.
-    Asked,
+    /// The member `by` waits for it: its outcome is recorded in their name,
+    /// whatever that is.
+    Asked { by: &'a str },
+}
+
+impl SyncMode<'_> {
+    fn actor(&self) -> &str {
+        match self {
+            Self::Routine => ALIEXPRESS_ACTOR,
+            Self::Asked { by } => by,
+        }
+    }
+
+    fn records_everything(&self) -> bool {
+        matches!(self, Self::Asked { .. })
+    }
 }
 
 /// How a read of one item went.
@@ -344,7 +364,7 @@ impl Aliexpress {
         tenant: &TenantState,
         company: &CompanyState,
         link_id: &str,
-        mode: SyncMode,
+        mode: SyncMode<'_>,
     ) -> anyhow::Result<SyncResult> {
         let links = timada_aliexpress::Command::new(store.clone(), &tenant.id);
         let Some((link, version)) = links.load_link_versioned(link_id).await? else {
@@ -380,9 +400,10 @@ impl Aliexpress {
                 } else {
                     format!("AliExpress refused: {}", err.message)
                 };
-                if mode == SyncMode::Asked || link.last_error.as_deref() != Some(reason.as_str()) {
+                if mode.records_everything() || link.last_error.as_deref() != Some(reason.as_str())
+                {
                     links
-                        .record_sync_failure(ALIEXPRESS_ACTOR, link_id, &reason)
+                        .record_sync_failure(mode.actor(), link_id, &reason)
                         .await?;
                 }
                 timada_aliexpress::note_tried(db, &tenant.id, link_id, crate::auth::now()).await?;
@@ -406,27 +427,18 @@ impl Aliexpress {
             repriced: outcome.repriced,
         };
         let worth_a_record =
-            mode == SyncMode::Asked || link.last_error.is_some() || outcome.differs_from(&link);
+            mode.records_everything() || link.last_error.is_some() || outcome.differs_from(&link);
         let result = if worth_a_record {
             let found = outcome.found_differs_from(&link).then_some(outcome.found);
-            match links
-                .record_sync(
-                    ALIEXPRESS_ACTOR,
-                    link_id,
-                    version,
-                    timada_aliexpress::SyncRead {
-                        skus: outcome.skus,
-                        offline: outcome.offline,
-                        found,
-                    },
-                )
-                .await
-            {
-                Ok(()) => synced,
-                Err(timada_aliexpress::AliexpressError::Write(
-                    evento::WriteError::InvalidOriginalVersion,
-                )) => SyncResult::Skipped,
-                Err(err) => return Err(err.into()),
+            let read = SyncRead {
+                skus: outcome.skus,
+                offline: outcome.offline,
+                found,
+            };
+            if record_read(&links, mode.actor(), &link, version, read).await? {
+                synced
+            } else {
+                SyncResult::Skipped
             }
         } else {
             synced
@@ -434,6 +446,40 @@ impl Aliexpress {
         timada_aliexpress::note_read(db, &tenant.id, link_id, crate::auth::now()).await?;
         Ok(result)
     }
+}
+
+/// Records a read against the version it started from; whether it was. A
+/// request that came in between changes nothing the read knew of, so the record
+/// goes on top of it. Anything else wins: another read's record, a combination
+/// added (the read does not know it), the link being over.
+async fn record_read<E: evento::Executor>(
+    links: &timada_aliexpress::Command<E>,
+    actor: &str,
+    started: &LinkState,
+    mut version: u16,
+    read: SyncRead,
+) -> anyhow::Result<bool> {
+    for _ in 0..RECORD_ATTEMPTS {
+        match links
+            .record_sync(actor, &started.id, version, read.clone())
+            .await
+        {
+            Ok(()) => return Ok(true),
+            Err(AliexpressError::Write(evento::WriteError::InvalidOriginalVersion)) => {}
+            Err(err) => return Err(err.into()),
+        }
+        let Some((link, current)) = links.load_link_versioned(&started.id).await? else {
+            return Ok(false);
+        };
+        if link.status != started.status
+            || link.skus != started.skus
+            || link.last_synced_at != started.last_synced_at
+        {
+            return Ok(false);
+        }
+        version = current;
+    }
+    Ok(false)
 }
 
 /// How adding combinations found went.

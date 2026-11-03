@@ -69,9 +69,10 @@ pub async fn sync(cx: &Cx, Form(form): Form<Back>) -> Result<SeeOther> {
     Ok(back_to(cx, &access, &form.back, error, message))
 }
 
-/// The link once something came after the request at version `asked`: a read
-/// a member asked for always records its outcome. `None` when nothing did in
-/// time.
+/// The link once a read asked for by a member came after the request at
+/// version `asked`, or the link is over. Any member's will do: it read the same
+/// thing. The dashboard's own reads and requests do not count, since this one
+/// may still be on its way. `None` when nothing came in time.
 async fn read_after(
     links: &Command<Executor>,
     link_id: &str,
@@ -80,8 +81,8 @@ async fn read_after(
     let mut watch = evento::Executor::write_watch(links.executor());
     let deadline = tokio::time::Instant::now() + READ_WAIT;
     loop {
-        if let Some((link, version)) = links.load_link_versioned(link_id).await?
-            && version > asked
+        if let Some(link) = links.load_link_by_id(link_id).await?
+            && (link.answered_version > asked || !link.is_linked())
         {
             return Ok(Some(link));
         }

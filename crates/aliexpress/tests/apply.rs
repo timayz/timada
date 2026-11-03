@@ -332,6 +332,31 @@ async fn asking_for_a_read_takes_a_version_of_a_linked_item() {
             .is_err()
     );
 
+    // What a member waits for is told apart from what the dashboard reads.
+    links
+        .record_sync(
+            timada_aliexpress::ALIEXPRESS_ACTOR,
+            &link_id,
+            asked,
+            SyncRead::default(),
+        )
+        .await
+        .unwrap();
+    let (link, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
+    assert_eq!(link.answered_version, 0);
+    links
+        .record_sync(ALICE, &link_id, version, SyncRead::default())
+        .await
+        .unwrap();
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    assert_eq!(link.answered_version, version + 1);
+    links
+        .record_sync_failure(ALICE, &link_id, "no")
+        .await
+        .unwrap();
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    assert_eq!(link.answered_version, version + 2);
+
     links.unlink(ALICE, &link_id).await.unwrap();
     assert!(matches!(
         links.request_sync(ALICE, &link_id).await,

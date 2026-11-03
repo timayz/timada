@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use evento::Evento;
+use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::{AeProduct, Share, map_product, track_imported};
 use timada_catalog_import::{ImportOptions, NoImages, import_one};
 use timada_tenancy::{
@@ -13,6 +14,7 @@ use timada_tenancy::{
     Rounding, TenantState,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Notify;
 
 use super::subscription::reads_subscription;
 use super::sync::AliexpressSync;
@@ -33,6 +35,12 @@ struct StandIn {
     offline: AtomicBool,
     /// Answers 503 to everything.
     down: AtomicBool,
+    /// Holds each answer until told to go.
+    held: AtomicBool,
+    /// Told when an answer is being held.
+    holding: Notify,
+    /// Lets a held answer go.
+    answer: Notify,
     reads: AtomicUsize,
 }
 
@@ -43,6 +51,9 @@ impl StandIn {
             stock: AtomicU32::new(120),
             offline: AtomicBool::new(false),
             down: AtomicBool::new(false),
+            held: AtomicBool::new(false),
+            holding: Notify::new(),
+            answer: Notify::new(),
             reads: AtomicUsize::new(0),
         })
     }
@@ -58,25 +69,32 @@ impl StandIn {
         tokio::spawn(async move {
             loop {
                 let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = Vec::new();
-                let mut chunk = [0; 4096];
-                while !request.windows(4).any(|end| end == b"\r\n\r\n") {
-                    match socket.read(&mut chunk).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(read) => request.extend_from_slice(&chunk[..read]),
+                let stand_in = self.clone();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut chunk = [0; 4096];
+                    while !request.windows(4).any(|end| end == b"\r\n\r\n") {
+                        match socket.read(&mut chunk).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(read) => request.extend_from_slice(&chunk[..read]),
+                        }
                     }
-                }
-                self.reads.fetch_add(1, Ordering::SeqCst);
-                let answer = if self.down.load(Ordering::SeqCst) {
-                    "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned()
-                } else {
-                    let body = self.product().to_string();
-                    format!(
-                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                        body.len()
-                    )
-                };
-                socket.write_all(answer.as_bytes()).await.unwrap();
+                    stand_in.reads.fetch_add(1, Ordering::SeqCst);
+                    if stand_in.held.load(Ordering::SeqCst) {
+                        stand_in.holding.notify_one();
+                        stand_in.answer.notified().await;
+                    }
+                    let answer = if stand_in.down.load(Ordering::SeqCst) {
+                        "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_owned()
+                    } else {
+                        let body = stand_in.product().to_string();
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    };
+                    socket.write_all(answer.as_bytes()).await.unwrap();
+                });
             }
         });
         url
@@ -284,7 +302,7 @@ impl Shop {
     }
 
     /// Reads the item now.
-    async fn sync(&self, mode: SyncMode) -> SyncResult {
+    async fn sync(&self, mode: SyncMode<'_>) -> SyncResult {
         let company = self
             .aliexpress
             .company_of(&self.tenant)
@@ -434,9 +452,96 @@ async fn a_read_a_member_waits_for_records_its_outcome_even_when_nothing_changed
     let shop = Shop::new().await;
     let version = shop.version().await;
 
-    shop.sync(SyncMode::Asked).await;
+    shop.sync(SyncMode::Asked { by: ALICE }).await;
 
     assert_eq!(shop.version().await, version + 1);
+    let link = shop
+        .links()
+        .load_link_by_id(&shop.link_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(link.answered_version, version + 1);
+}
+
+#[tokio::test]
+async fn a_request_during_a_read_leaves_the_read_its_record() {
+    let shop = Arc::new(Shop::new().await);
+    *shop.stand_in.cost.lock().unwrap() = "5.00".to_owned();
+    shop.stand_in.held.store(true, Ordering::SeqCst);
+    let read = tokio::spawn({
+        let shop = shop.clone();
+        async move { shop.sync(SyncMode::Asked { by: ALICE }).await }
+    });
+    shop.stand_in.holding.notified().await;
+
+    // The sweep asks while the member's read is out: it changes nothing the
+    // read knew of.
+    let asked = shop
+        .links()
+        .request_sync(ALIEXPRESS_ACTOR, &shop.link_id)
+        .await
+        .unwrap();
+    shop.stand_in.answer.notify_one();
+
+    assert_eq!(
+        read.await.unwrap(),
+        SyncResult::Synced {
+            offline: false,
+            repriced: 1
+        }
+    );
+    let link = shop
+        .links()
+        .load_link_by_id(&shop.link_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        link.answered_version,
+        asked + 1,
+        "the member has their answer"
+    );
+    assert_eq!(link.skus[0].cost_cents, 500);
+}
+
+#[tokio::test]
+async fn a_combination_added_during_a_read_wins_over_the_reads_record() {
+    let shop = Arc::new(Shop::new().await);
+    *shop.stand_in.cost.lock().unwrap() = "5.00".to_owned();
+    shop.stand_in.held.store(true, Ordering::SeqCst);
+    let read = tokio::spawn({
+        let shop = shop.clone();
+        async move { shop.sync(SyncMode::Routine).await }
+    });
+    shop.stand_in.holding.notified().await;
+
+    // The read does not know this one: recorded, it would forget it.
+    let version = shop.version().await;
+    let added = SkuLink {
+        sku_id: "12000037009".to_owned(),
+        variant_id: Some("green".to_owned()),
+        cost_cents: 300,
+    };
+    shop.links()
+        .record_combinations_added(ALICE, &shop.link_id, version, vec![added.clone()])
+        .await
+        .unwrap();
+    shop.stand_in.answer.notify_one();
+
+    assert_eq!(read.await.unwrap(), SyncResult::Skipped);
+    let link = shop
+        .links()
+        .load_link_by_id(&shop.link_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(link.skus.contains(&added));
+    assert_eq!(
+        shop.rose().await.0,
+        1000,
+        "the catalog is in step all the same"
+    );
 }
 
 #[tokio::test]
@@ -459,7 +564,7 @@ async fn the_same_failure_is_recorded_once_and_the_next_read_clears_it() {
     assert!(row.last_error.is_some());
 
     // A member asked: they read what became of their read.
-    shop.sync(SyncMode::Asked).await;
+    shop.sync(SyncMode::Asked { by: ALICE }).await;
     assert_eq!(shop.version().await, version + 2);
 
     // Back: nothing changed, but the problem is no more.
