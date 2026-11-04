@@ -37,16 +37,16 @@ towns. A country without a list answers `ret: false`, code 801,
 | Tchéquie (CZ) | 14 regions + `Other` |
 | Lettonie (LV) | 46 municipalities + `Other` |
 
-**Not solved: a list without `Other`.** These still send the city, which
-AliExpress should refuse with `Please select a State/Province/County`:
+**The town decides.** A list without `Other`, and no postal code that names the
+entry. These send the city unless the lookup below finds the town:
 
-| Country | AliExpress lists | Postal code |
-|---|---|---|
-| États-Unis (US) | 50 states + DC | ZIP's first three digits |
-| Pologne (PL) | 16 voivodeships | approximately |
-| Suisse (CH) | 26 cantons | postal codes cross cantons |
-| Estonie (EE) | 15 counties | unknown |
-| Lituanie (LT) | 10 counties | unknown |
+| Country | AliExpress lists |
+|---|---|
+| États-Unis (US) | 50 states + DC |
+| Pologne (PL) | 16 voivodeships |
+| Suisse (CH) | 26 cantons |
+| Estonie (EE) | 15 counties |
+| Lituanie (LT) | 10 counties |
 
 **No list:** the city, as a free text. Bulgarie, Chypre, Croatie, Danemark,
 Finlande, Grèce, Hongrie, Irlande, Luxembourg, Malte, Monaco, Norvège, Roumanie,
@@ -61,14 +61,31 @@ La Réunion (RE) and Mayotte (YT) answer as it does. Saint-Barthélemy,
 Saint-Martin, Saint-Pierre-et-Miquelon and the Pacific territories stay `FR` +
 `Other`.
 
+## The city, and the town lookup
+
+AliExpress checks `city` as well: a real Italian order with `Aci Castello` was
+refused with `Please enter a City`, although that town is on the list, under
+Sicilia → Catania. So the forwarder reads the country's tree when it places an
+order, kept for a day, and `AddressTree::apply` puts the address in its words:
+
+- The town is looked for in the province the postal code named, or in every
+  province where the postal code names none.
+- A city by that name is sent as it is. A town sends its parent as the city, and
+  stays in `address2` for the courier, since the order has no field for a town.
+- A town on the list in several provinces, with no province named, stays as it
+  was: `Freiburg` is in two Länder.
+- In a named province without the town, its `Other` city takes it, if it has one.
+  Italy's provinces have none, so that address goes as typed.
+
+Delivery is asked with the province too. The docs say it is for local-to-local
+products, and an item shipped from Germany answered
+`DELIVERY_NOT_AVAILABLE_TO_YOUR_ADDRESS` without one, on the site's own address.
+
 ## Not proven by a real order
 
-- That AliExpress takes `Other` outside France.
-- That it does not check `city` against the tree: the shopper's spelling is sent
-  as typed. The tree's second level is not always a city: for Belgium it holds
-  mostly provinces (`Anvers`), while the site's form goes on to `Turnhout`, which
-  the API does not list. For Italy it holds provinces (`Chieti`), with towns
-  (`Altino`) below, and the order has no field for a town.
+- That `Catania` passes where `Aci Castello` was refused.
+- That the province cures the German item's refusal.
+- That AliExpress takes `Other`, as a province outside France or as a city.
 - That an address needs what the site's form asks: a street of at least 5
   characters and a separate house number. The order has `address` and `address2`
   only, and the shopper's whole line goes in `address`.

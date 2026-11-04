@@ -265,8 +265,10 @@ What is bought:
   Spain, Canada and Italy work the same way. Other countries with a list send its `Other`,
   and those without one send the city. A French overseas department goes as the
   country AliExpress lists it under (`MQ`, `GP`, `GF`, `RE`, `YT`), for the delivery
-  as well. [aliexpress-provinces.md](aliexpress-provinces.md) has every country,
-  including five whose list has no `Other` and are not solved yet.
+  as well. The town then finds AliExpress's city, and the province where the postal
+  code named none, in the country's list; a town the list files under a city stays in
+  the address's second line. [aliexpress-provinces.md](aliexpress-provinces.md) has
+  every country.
 
 A failure is shown on the card with *Place again*. One node takes each order on
 (`Started`, like an import). If AliExpress did not answer, or a node stopped before

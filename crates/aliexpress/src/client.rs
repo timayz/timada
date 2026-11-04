@@ -14,6 +14,7 @@ use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha2::Sha256;
 
+use crate::address::AddressTree;
 use crate::model::{AeOrder, AeProduct, FreightOption, Market, Tokens};
 
 /// AliExpress's own gateway.
@@ -35,7 +36,7 @@ pub struct AeError {
 }
 
 impl AeError {
-    fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         let code = code.into();
         let message = message.into();
         let lowered = format!("{code} {message}").to_ascii_lowercase();
@@ -397,17 +398,29 @@ impl Client {
         AeProduct::from_response(product_id, &body)
     }
 
+    /// AliExpress's places in `country`, `None` for a country without a list.
+    pub async fn address_tree(&self, country: &str) -> Result<Option<AddressTree>, AeError> {
+        let body = self
+            .call(
+                "aliexpress.ds.address.get",
+                vec![("countryCode", country.to_owned())],
+            )
+            .await?;
+        AddressTree::from_response(&body)
+    }
+
     /// How AliExpress can deliver `quantity` of one combination to
-    /// `country`.
+    /// `country`. An item from a warehouse in that country needs `province`.
     pub async fn freight(
         &self,
         product_id: &str,
         sku_id: &str,
         quantity: u32,
         country: &str,
+        province: Option<&str>,
         market: &Market,
     ) -> Result<Vec<FreightOption>, AeError> {
-        let query = serde_json::json!({
+        let mut query = serde_json::json!({
             "productId": product_id,
             "selectedSkuId": sku_id,
             "quantity": quantity,
@@ -416,6 +429,9 @@ impl Client {
             "language": market.language,
             "locale": format!("{}_{country}", market.language),
         });
+        if let Some(province) = province {
+            query["province"] = Value::from(province);
+        }
         let answer = self
             .call(
                 "aliexpress.ds.freight.query",

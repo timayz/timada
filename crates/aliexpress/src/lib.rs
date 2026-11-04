@@ -11,6 +11,7 @@
 //! the tenant, so a shop imports an item once and the dashboard knows
 //! what each variant is on AliExpress.
 
+mod address;
 pub mod aggregator;
 mod apply;
 mod client;
@@ -23,6 +24,7 @@ mod query;
 mod value_object;
 mod webhook;
 
+pub use address::*;
 pub use apply::*;
 pub use client::*;
 pub use command::*;

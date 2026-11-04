@@ -2,10 +2,10 @@ use serde_json::json;
 use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem};
 use timada_aliexpress::{
-    AeOrder, AeProduct, AliexpressError, ForwardStatus, FreightOption, LinkState, LogisticsAddress,
-    PlaceItem, PlaceOrder, Placement, PlannedItem, choose_service, delivery_country,
-    describe_options, forward_items, freight_from_response, french_department, logistics_address,
-    placed_orders_from_response, province_of, split_phone,
+    AddressTree, AeOrder, AeProduct, AliexpressError, ForwardStatus, FreightOption, LinkState,
+    LogisticsAddress, PlaceItem, PlaceOrder, Placement, PlannedItem, choose_service,
+    delivery_country, describe_options, forward_items, freight_from_response, french_department,
+    logistics_address, placed_orders_from_response, province_of, split_phone,
 };
 use timada_orders::{OrderLine, ShippingAddress};
 
@@ -387,6 +387,158 @@ fn a_martinique_address_goes_as_martinique_with_its_city_and_calling_code() {
     assert_eq!(
         split_phone("+33 6 12 34 56 78", &mapped.country),
         ("+33".to_owned(), "612345678".to_owned())
+    );
+}
+
+/// Part of AliExpress's places, in the shape it answers with.
+fn places(children: serde_json::Value) -> AddressTree {
+    let body = json!({
+        "aliexpress_ds_address_get_response": {
+            "result": {
+                "ret": true,
+                "data": { "country": "XX", "type": "COUNTRY", "children": children.to_string() }
+            }
+        }
+    });
+    AddressTree::from_response(&body).unwrap().unwrap()
+}
+
+fn town(name: &str) -> serde_json::Value {
+    json!({ "hasChildren": false, "name": name, "type": "TOWN" })
+}
+
+fn place(places: &AddressTree, country: &str, province: &str, city: &str) -> LogisticsAddress {
+    let mut address = LogisticsAddress {
+        country: country.into(),
+        province: province.into(),
+        city: city.into(),
+        ..Default::default()
+    };
+    places.apply(&mut address);
+    address
+}
+
+#[test]
+fn a_country_without_a_list_has_no_places_and_a_failure_says_why() {
+    let none = json!({
+        "aliexpress_ds_address_get_response": {
+            "result": { "ret": false, "code": "801", "msg": "Address Exception" }
+        }
+    });
+    assert_eq!(AddressTree::from_response(&none).unwrap(), None);
+    let failed = json!({
+        "aliexpress_ds_address_get_response": {
+            "result": { "ret": false, "code": "500", "msg": "busy" }
+        }
+    });
+    assert_eq!(
+        AddressTree::from_response(&failed).unwrap_err().message,
+        "busy"
+    );
+}
+
+#[test]
+fn a_town_goes_under_its_city_and_stays_in_the_address() {
+    let italy = places(json!([
+        { "name": "Sicilia", "children": [
+            { "name": "Catania", "children": [town("Aci Castello"), town("Catania")] }
+        ] },
+        { "name": "Emilia-Romagna", "children": [
+            { "name": "Forli-Cesena", "children": [town("Forli")] }
+        ] }
+    ]));
+    let address = place(&italy, "IT", "Sicilia", " aci-castello ");
+    assert_eq!(address.province, "Sicilia");
+    assert_eq!(address.city, "Catania");
+    assert_eq!(address.address2, "aci-castello");
+    // The second line the shopper gave is kept.
+    let mut address = LogisticsAddress {
+        country: "IT".into(),
+        province: "Sicilia".into(),
+        city: "Aci Castello".into(),
+        address2: "Scala B".into(),
+        ..Default::default()
+    };
+    italy.apply(&mut address);
+    assert_eq!(address.address2, "Scala B, Aci Castello");
+    // A city by that name needs no town, and accents do not matter.
+    let address = place(&italy, "IT", "Sicilia", "CATANIA");
+    assert_eq!(
+        (address.city.as_str(), address.address2.as_str()),
+        ("Catania", "")
+    );
+    let address = place(&italy, "IT", "Emilia-Romagna", "Forlì");
+    assert_eq!(address.city, "Forli-Cesena");
+    // Not on the list, and Italy has no "Other": it goes as given.
+    let address = place(&italy, "IT", "Sicilia", "Nulle part");
+    assert_eq!(
+        (address.city.as_str(), address.address2.as_str()),
+        ("Nulle part", "")
+    );
+}
+
+#[test]
+fn a_town_names_the_province_a_postal_code_could_not() {
+    let germany = places(json!([
+        { "name": "Baden-Wuerttemberg", "children": [
+            { "name": "Loerrach", "children": [town("Rheinfelden")] },
+            { "name": "Other" }
+        ] },
+        { "name": "Bayern", "children": [
+            { "name": "Muenchen", "children": [town("Muenchen")] },
+            { "name": "Freising", "children": [town("Neufahrn")] },
+            { "name": "Other" }
+        ] },
+        { "name": "Sachsen", "children": [
+            { "name": "Bautzen", "children": [town("Neufahrn")] },
+            { "name": "Other" }
+        ] },
+        { "name": "Other" }
+    ]));
+    let address = place(&germany, "DE", "Other", "Rheinfelden");
+    assert_eq!(address.province, "Baden-Wuerttemberg");
+    assert_eq!(address.city, "Loerrach");
+    assert_eq!(address.address2, "Rheinfelden");
+    assert!(germany.names_province(&address.province));
+    // Umlauts are spelled out on the list.
+    let address = place(&germany, "DE", "Other", "München");
+    assert_eq!(
+        (address.province.as_str(), address.city.as_str()),
+        ("Bayern", "Muenchen")
+    );
+    // Two provinces have that town, or none does: nothing says which.
+    for unknown in ["Neufahrn", "Nirgendwo"] {
+        let address = place(&germany, "DE", "Other", unknown);
+        assert_eq!(
+            (address.province.as_str(), address.city.as_str()),
+            ("Other", unknown)
+        );
+        assert!(!germany.names_province(&address.province));
+    }
+    // A named province with an "Other" takes a town it does not list.
+    let address = place(&germany, "DE", "Sachsen", "Nirgendwo");
+    assert_eq!(
+        (address.city.as_str(), address.address2.as_str()),
+        ("Other", "Nirgendwo")
+    );
+}
+
+#[test]
+fn a_postal_code_naming_no_province_is_not_overruled_by_a_town_elsewhere() {
+    let france = places(json!([
+        { "name": "Aude", "children": [{ "name": "Saint-denis" }, { "name": "Other" }] },
+        { "name": "Other" }
+    ]));
+    // Saint-Denis de La Réunion is not the one in the Aude.
+    let address = place(&france, "FR", "Other", "Saint-Denis");
+    assert_eq!(
+        (address.province.as_str(), address.city.as_str()),
+        ("Other", "Saint-Denis")
+    );
+    let address = place(&france, "FR", "Aude", "Saint Denis");
+    assert_eq!(
+        (address.province.as_str(), address.city.as_str()),
+        ("Aude", "Saint-denis")
     );
 }
 

@@ -163,6 +163,10 @@ export class FakeAliexpress {
       json(this.product());
       return;
     }
+    if (method === "aliexpress.ds.address.get") {
+      json({ aliexpress_ds_address_get_response: { result: { ret: false, code: "801", msg: "Address Exception" } } });
+      return;
+    }
     if (method === "aliexpress.ds.freight.query") {
       const query = JSON.parse(url.searchParams.get("queryDeliveryReq") ?? "{}");
       if (!query.productId || !query.selectedSkuId || !query.shipToCountry || !query.quantity || !query.currency || !query.language || !query.locale) {

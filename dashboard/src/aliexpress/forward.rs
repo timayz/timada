@@ -168,6 +168,19 @@ impl Aliexpress {
         let country = delivery_country(&order.shipping.country, &order.shipping.postal_code);
         let mut market = Aliexpress::market_of(settings);
         market.ship_to_country = country.clone();
+        let mut address = logistics_address(
+            &order.shipping,
+            order.language.as_deref(),
+            settings.order_phone.as_deref(),
+        );
+        let places = self.address_tree(&client, &country).await;
+        if let Some(places) = &places {
+            places.apply(&mut address);
+        }
+        let province = places
+            .as_ref()
+            .filter(|places| places.names_province(&address.province))
+            .map(|_| address.province.clone());
         let mut products = BTreeMap::new();
         let mut items = Vec::new();
         let mut bought = Vec::new();
@@ -224,6 +237,7 @@ impl Aliexpress {
                     &item.sku_id,
                     item.quantity,
                     &country,
+                    province.as_deref(),
                     &market,
                 )
                 .await?;
@@ -263,11 +277,6 @@ impl Aliexpress {
                 service_name: service.service_name.clone(),
             });
         }
-        let address = logistics_address(
-            &order.shipping,
-            order.language.as_deref(),
-            settings.order_phone.as_deref(),
-        );
         if address.mobile_no.is_empty() {
             return Err(Refusal(
                 "AliExpress needs a phone number: the shopper gave none and the shop has none set for its orders on the AliExpress page."
