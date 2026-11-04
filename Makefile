@@ -33,7 +33,8 @@ migrate:
 # Fills the "Chatounette" tenant with the snapshot in seeds/chatounette
 # (taken by `make snapshot.chatounette`, pictures included), owned by the
 # registered user OWNER names, links it to a test company unless it already
-# has a company, and prints the STORE_* settings for the
+# has a company, connects it to the Stripe account of config/stripe.local.toml
+# when there is one (see docs/payments.md), and prints the STORE_* settings for the
 # example storefront. Runs with the server stopped; LIMIT loads only the
 # first products of the snapshot, and the back office's lists catch up when
 # the server next starts, so `make chatounette` can follow at once:
@@ -44,6 +45,7 @@ seed.chatounette:
 		--snapshot seeds/chatounette --tenant Chatounette --owner "$${OWNER:?set OWNER to the owner's e-mail}" \
 		$${LIMIT:+--limit "$$LIMIT"} --no-catch-up --test-company \
 		--storefront-url "$${STOREFRONT_URL-https://chatounette.localhost}" \
+		$(if $(wildcard config/stripe.local.toml),--stripe-file config/stripe.local.toml) \
 		--pages examples/chatounette/pages --env-file data/seed.chatounette.env
 
 # Keeps the platform as `make seed.chatounette` left it in DEV_SNAPSHOT (the
