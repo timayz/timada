@@ -118,7 +118,12 @@ pub async fn deliver(
         .await;
     match sent {
         Ok(response) => status_delivery(response.status().as_u16()),
-        Err(err) => Delivery::Again(format!("The endpoint could not be reached: {err}")),
+        // Without its address, the hook's key: the reason goes in the run's
+        // events, which every store key of the shop reads.
+        Err(err) => Delivery::Again(format!(
+            "The endpoint could not be reached: {}",
+            err.without_url()
+        )),
     }
 }
 
@@ -156,6 +161,22 @@ mod tests {
         );
         assert_eq!(open_url(&keys, "t1", "sc1", "s2", &sealed), None);
         assert_eq!(open_url(&keys, "t2", "sc1", "s1", &sealed), None);
+    }
+
+    #[tokio::test]
+    async fn a_failed_call_does_not_say_the_address() {
+        // Nothing listens on the port the listener was given and dropped.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let url = format!("http://127.0.0.1:{port}/hooks/the-only-key");
+        let client = crate::net::public_client(true).build().unwrap();
+        let delivery = deliver(&client, &url, b"{}".to_vec(), String::new(), "k", true).await;
+        let Delivery::Again(reason) = delivery else {
+            panic!("a call nobody answered is tried again");
+        };
+        assert!(reason.starts_with("The endpoint could not be reached"));
+        assert!(!reason.contains("the-only-key"), "{reason}");
     }
 
     #[test]
