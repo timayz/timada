@@ -32,13 +32,16 @@ fn a_combination_says_how_an_order_names_it() {
 #[test]
 fn delivery_options_read_wrapped_or_refused() {
     let body = json!({
-        "aliexpress_logistics_buyer_freight_calculate_response": {
+        "aliexpress_ds_freight_query_response": {
             "result": {
+                "code": 200,
                 "success": true,
-                "aeop_freight_calculate_result_for_buyer_d_t_o_list": {
-                    "aeop_freight_calculate_result_for_buyer_dto": [
-                        { "service_name": "CAINIAO_STANDARD", "freight": { "cent": 0, "amount": 0, "currency_code": "EUR" }, "tracking_available": "true" },
-                        { "service_name": "YANWEN_JYT", "freight": { "amount": "1.20", "currency_code": "EUR" }, "tracking_available": "false" }
+                "delivery_options": {
+                    "delivery_option_d_t_o": [
+                        { "code": "CAINIAO_STANDARD", "free_shipping": true, "shipping_fee_cent": "450", "tracking": true, "ship_from_country": "DE" },
+                        { "code": "YANWEN_JYT", "free_shipping": false, "shipping_fee_cent": "120", "tracking": false },
+                        { "code": "CAINIAO_PREMIUM", "free_shipping": "false", "shipping_fee_cent": "9.90", "tracking": "true" },
+                        { "company": "Without a code" }
                     ]
                 }
             }
@@ -57,15 +60,27 @@ fn delivery_options_read_wrapped_or_refused() {
                 cents: 120,
                 tracking: false,
             },
+            FreightOption {
+                service_name: "CAINIAO_PREMIUM".into(),
+                cents: 990,
+                tracking: true,
+            },
         ]
     );
     let refused = json!({
-        "aliexpress_logistics_buyer_freight_calculate_response": {
-            "result": { "success": false, "error_desc": "no delivery to this country" }
+        "aliexpress_ds_freight_query_response": {
+            "result": { "success": false, "code": 500, "msg": "DELIVERY_INFO_EMPTY" }
         }
     });
     let err = freight_from_response(&refused).unwrap_err();
-    assert_eq!(err.message, "no delivery to this country");
+    assert_eq!(err.message, "DELIVERY_INFO_EMPTY");
+    // Not delivering there is an answer: no way to deliver, not a failure.
+    let nowhere = json!({
+        "aliexpress_ds_freight_query_response": {
+            "result": { "success": false, "code": 500, "msg": "DELIVERY_NOT_AVAILABLE_TO_YOUR_ADDRESS" }
+        }
+    });
+    assert_eq!(freight_from_response(&nowhere).unwrap(), Vec::new());
 }
 
 #[test]

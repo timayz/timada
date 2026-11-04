@@ -274,11 +274,15 @@ pub fn placed_orders_from_response(body: &Value) -> Result<Vec<String>, AeError>
     Ok(orders)
 }
 
+/// AliExpress's way of saying it delivers nowhere near the address, which is
+/// an answer rather than a failure.
+const NO_DELIVERY: &str = "DELIVERY_NOT_AVAILABLE_TO_YOUR_ADDRESS";
+
 /// The ways AliExpress delivers in the answer to
-/// `aliexpress.logistics.buyer.freight.calculate`, or why there are none.
+/// `aliexpress.ds.freight.query`, or why there are none.
 pub fn freight_from_response(body: &Value) -> Result<Vec<FreightOption>, AeError> {
     let response = body
-        .get("aliexpress_logistics_buyer_freight_calculate_response")
+        .get("aliexpress_ds_freight_query_response")
         .unwrap_or(body);
     let result = response.get("result").unwrap_or(response);
     let success = result
@@ -286,10 +290,11 @@ pub fn freight_from_response(body: &Value) -> Result<Vec<FreightOption>, AeError
         .map(crate::model::text)
         .is_none_or(|flag| flag.eq_ignore_ascii_case("true"));
     if !success {
-        let message = result
-            .get("error_desc")
-            .map(crate::model::text)
-            .unwrap_or_default();
+        let read = |name| result.get(name).map(crate::model::text).unwrap_or_default();
+        let (code, message) = (read("code"), read("msg"));
+        if code.contains(NO_DELIVERY) || message.contains(NO_DELIVERY) {
+            return Ok(Vec::new());
+        }
         return Err(AeError::new("freight", message));
     }
     Ok(FreightOption::list_from_json(result))
@@ -403,23 +408,27 @@ impl Client {
         market: &Market,
     ) -> Result<Vec<FreightOption>, AeError> {
         let query = serde_json::json!({
-            "product_id": product_id.parse::<u64>().map(Value::from).unwrap_or_else(|_| Value::from(product_id)),
-            "sku_id": sku_id,
-            "product_num": quantity,
-            "country_code": country,
-            "send_goods_country_code": "CN",
-            "price_currency": market.currency,
+            "productId": product_id,
+            "selectedSkuId": sku_id,
+            "quantity": quantity,
+            "shipToCountry": country,
+            "currency": market.currency,
+            "language": market.language,
+            "locale": format!("{}_{country}", market.language),
         });
-        let body = self
+        let answer = self
             .call(
-                "aliexpress.logistics.buyer.freight.calculate",
-                vec![(
-                    "param_aeop_freight_calculate_for_buyer_d_t_o",
-                    query.to_string(),
-                )],
+                "aliexpress.ds.freight.query",
+                vec![("queryDeliveryReq", query.to_string())],
             )
-            .await?;
-        freight_from_response(&body)
+            .await;
+        match answer {
+            Ok(body) => freight_from_response(&body),
+            Err(err) if err.code.contains(NO_DELIVERY) || err.message.contains(NO_DELIVERY) => {
+                Ok(Vec::new())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Places an order for the account: the AliExpress order numbers, one
