@@ -65,6 +65,7 @@ struct Refusal(String);
 impl From<AeError> for Refusal {
     fn from(err: AeError) -> Self {
         Refusal(if err.retryable {
+            tracing::warn!(reason = %describe(&err), "AliExpress call to retry");
             "AliExpress did not answer; try again in a moment.".to_owned()
         } else {
             format!("AliExpress refused: {}", describe(&err))
