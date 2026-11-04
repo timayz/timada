@@ -11,12 +11,13 @@ pub mod sync;
 mod tests;
 pub mod webhook;
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use timada_aliexpress::{
-    AliexpressError, Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL, LinkState, Market, Share,
-    SyncRead,
+    AddressTree, AeError, AliexpressError, Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL,
+    LinkState, Market, Share, SyncRead,
 };
 use timada_tenancy::{AliexpressSettings, CompanyState, TenantState};
 
@@ -33,6 +34,10 @@ pub const ALIEXPRESS_ACTOR: &str = timada_aliexpress::ALIEXPRESS_ACTOR;
 
 /// How long a node may go unheard before the others share out what it reads.
 pub const LIVE_WITHIN: Duration = Duration::from_secs(30);
+
+/// How long AliExpress's places for a country are kept: they rarely change,
+/// and France's weigh over 2 MB.
+const ADDRESS_TREE_KEPT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// How many times a read's record is tried when a request came in between.
 const RECORD_ATTEMPTS: usize = 3;
@@ -60,6 +65,8 @@ pub struct Aliexpress {
     order_read_every_secs: u64,
     /// What the app may spend, and what this node spent.
     budget: CallBudget,
+    /// AliExpress's places by country, `None` where it has no list.
+    address_trees: Mutex<HashMap<String, (Instant, Option<Arc<AddressTree>>)>>,
     /// Which of the nodes up this one is, at the moment of asking.
     share: Arc<dyn Fn() -> Share + Send + Sync>,
 }
@@ -108,8 +115,34 @@ impl Aliexpress {
             read_fresh_secs: config.read_fresh_secs,
             order_read_every_secs: config.order_read_every_secs.max(1),
             budget: CallBudget::new(config.calls_per_day),
+            address_trees: Mutex::default(),
             share,
         }))
+    }
+
+    /// AliExpress's places in `country`, read at most once a day; `None`
+    /// without a list.
+    pub async fn address_tree(
+        &self,
+        client: &Client,
+        country: &str,
+    ) -> Result<Option<Arc<AddressTree>>, AeError> {
+        let kept = self
+            .address_trees
+            .lock()
+            .expect("nothing panics while holding the address trees")
+            .get(country)
+            .filter(|(read_at, _)| read_at.elapsed() < ADDRESS_TREE_KEPT)
+            .map(|(_, tree)| tree.clone());
+        if let Some(tree) = kept {
+            return Ok(tree);
+        }
+        let tree = client.address_tree(country).await?.map(Arc::new);
+        self.address_trees
+            .lock()
+            .expect("nothing panics while holding the address trees")
+            .insert(country.to_owned(), (Instant::now(), tree.clone()));
+        Ok(tree)
     }
 
     /// How long a product goes before it is read again, in seconds.
