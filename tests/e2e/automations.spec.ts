@@ -74,6 +74,15 @@ async function scenarioWithNotice(page: Page) {
   await page.locator("[data-inspector]").getByLabel("Subject").fill("A visitor wrote");
 }
 
+/// The requests the page posts from now on.
+function postsOf(page: Page) {
+  const posts: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST") posts.push(request.url());
+  });
+  return posts;
+}
+
 /// Picks the trigger in the inspector.
 async function chooseTrigger(page: Page, label: string) {
   await page.locator("[data-trigger] button").click();
@@ -179,30 +188,147 @@ test("a double click adds one block", async ({ page }) => {
   await expect(step(page, "s1")).toHaveCount(1);
   await expect(page.locator("[data-scenario-editor]")).not.toHaveAttribute("aria-busy", "true");
   await expect(page.locator("[data-step]")).toHaveCount(1);
+  await expect(page.locator("[data-press-alert]:visible")).toHaveCount(0);
 });
 
-test("a button pressed after typing does not go without what was typed", async ({ page }) => {
+test("a button pressed after typing goes with what was typed", async ({ page }) => {
   await scenarioWithNotice(page);
-  await page.getByRole("button", { name: "Apply" }).click();
-  await expect(page.locator("[data-to-set-up]")).toHaveAttribute("data-to-set-up", "0");
-  // Long enough for both presses to land before the answer.
   await slowEditor(page, 1000);
   await page.getByRole("button", { name: "Apply" }).click();
   await page.locator("[data-inspector]").getByLabel("Subject").fill("Typed meanwhile");
   await page.getByRole("button", { name: "Publish", exact: true }).click();
-  await expect(page.locator("[data-scenario-editor]")).toHaveAttribute("aria-busy", "true");
-  await expect(page.locator("[data-scenario-editor]")).not.toHaveAttribute("aria-busy", "true");
+  await expect(page.getByRole("status")).toContainText("Published as version 1");
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText("“Typed meanwhile”");
+});
+
+test("the same button pressed after typing goes again", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 1000);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await page.locator("[data-inspector]").getByLabel("Subject").fill("Typed meanwhile");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText("“Typed meanwhile”");
+});
+
+test("what is typed while an answer is on its way stays, with the cursor", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 1000);
+  const editor = page.locator("[data-scenario-editor]");
+  const subject = page.locator("[data-inspector]").getByLabel("Subject");
+  // Enter in a field applies the settings.
+  await subject.press("Enter");
+  await expect(editor).toHaveAttribute("aria-busy", "true");
+  await page.keyboard.press("Home");
+  await page.keyboard.type("Urgent: ");
+  await expect(editor).not.toHaveAttribute("aria-busy", "true");
+  await expect(subject).toHaveValue("Urgent: A visitor wrote");
+  await expect(subject).toBeFocused();
+  await page.keyboard.type("really ");
+  await expect(subject).toHaveValue("Urgent: really A visitor wrote");
+});
+
+test("what is typed meanwhile still counts as unsaved", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await page.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  const editor = page.locator("[data-scenario-editor]");
+  await expect(editor).not.toHaveAttribute("data-dirty", "");
+  await page.locator('button[value="select:s1"]').click();
+  const subject = page.locator("[data-inspector]").getByLabel("Subject");
+  await expect(subject).toHaveValue("A visitor wrote");
+  await slowEditor(page, 1000);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await subject.fill("Typed meanwhile");
+  await expect(editor).not.toHaveAttribute("aria-busy", "true");
+  await expect(subject).toHaveValue("Typed meanwhile");
+  await expect(editor).toHaveAttribute("data-dirty", "");
+});
+
+test("what is typed during a save stays, and its block opens back", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 1000);
+  const subject = page.locator("[data-inspector]").getByLabel("Subject");
+  await page.getByRole("button", { name: "Save draft" }).click();
+  await subject.fill("Typed meanwhile");
+  await expect(subject).toHaveValue("Typed meanwhile");
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText("“Typed meanwhile”");
+  await expect(subject).toBeFocused();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  // Saved as it was: the rest is still to save, and the page knows it.
+  await expect(page.locator("[data-scenario-editor]")).toHaveAttribute("data-dirty", "");
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Published as version 1");
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText("“Typed meanwhile”");
+});
+
+test("what is typed in a block left meanwhile goes to that block", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slot(page, "root.1").getByRole("button", { name: "Add a step here" }).click();
+  await page.locator('[id="add-root.1"]').getByRole("button", { name: "Wait", exact: true }).click();
+  await expect(step(page, "s2")).toHaveCount(1);
+  await page.locator('button[value="select:s1"]').click();
+  const subject = page.locator("[data-inspector]").getByLabel("Subject");
+  await expect(subject).toHaveValue("A visitor wrote");
+  await slowEditor(page, 1000);
+  await page.locator('button[value="select:s2"]').click();
+  await subject.fill("Typed meanwhile");
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText("“Typed meanwhile”");
+  await expect(subject).toHaveValue("Typed meanwhile");
+  // None of the other block's settings went along.
+  const definition = JSON.parse(await page.locator('input[name="definition"]').inputValue());
+  expect(definition.steps[0].settings.subject).toBe("Typed meanwhile");
+  expect(definition.steps[0].settings).not.toHaveProperty("amount");
+});
+
+test("a place pressed on a flow that changed is refused, and stops what follows", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slot(page, "root.1").getByRole("button", { name: "Add a step here" }).click();
+  await page.locator('[id="add-root.1"]').getByRole("button", { name: "Wait", exact: true }).click();
+  await expect(step(page, "s2")).toHaveCount(1);
+  await slowEditor(page, 1000);
+  const posts = postsOf(page);
+  await step(page, "s1").getByRole("button", { name: /^Remove/ }).click();
+  await slot(page, "root.1").getByRole("button", { name: "Add a step here" }).click();
+  await page.locator('[id="add-root.1"]').getByRole("button", { name: "Create a discount code", exact: true }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.locator('[data-press-alert="place"]')).toBeVisible();
+  await expect(page.locator('[data-press-alert="place"]')).toContainText("That place is not in the scenario any more.");
+  await expect(page.locator("[data-step]")).toHaveCount(1);
+  await expect(step(page, "s2")).toHaveAttribute("data-step-kind", "wait");
+  expect(posts).toHaveLength(1);
   await expect(page.locator("[data-scenario-state]")).toHaveAttribute("data-scenario-state", "draft");
-  await expect(page.getByRole("status")).toHaveCount(0);
+});
+
+test("a place pressed on the same flow still goes", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 1000);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await slot(page, "root.1").getByRole("button", { name: "Add a step here" }).click();
+  await page.locator('[id="add-root.1"]').getByRole("button", { name: "Wait", exact: true }).click();
+  await expect(step(page, "s2")).toHaveAttribute("data-step-kind", "wait");
+  await expect(page.locator("[data-press-alert]:visible")).toHaveCount(0);
+  const kinds = await page.locator("[data-step]").evaluateAll((all) => all.map((one) => (one as HTMLElement).dataset.stepKind));
+  expect(kinds).toEqual(["notify", "wait"]);
+});
+
+test("an answer that refuses something stops what was pressed after it", async ({ page }) => {
+  await scenarioWithNotice(page);
+  // Not ready to publish: the notice has no subject.
+  await page.locator("[data-inspector]").getByLabel("Subject").fill("");
+  await slowEditor(page, 1000);
+  const posts = postsOf(page);
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await page.locator("[data-trigger] button").click();
+  await expect(page.getByRole("alert")).toContainText("not ready to publish");
+  await expect(page.locator("[data-scenario-editor]")).not.toHaveAttribute("aria-busy", "true");
+  expect(posts).toHaveLength(1);
+  await expect(page.locator("#inspector-heading")).toHaveText("Notify the team");
 });
 
 test("a button pressed during a save does not go after it", async ({ page }) => {
   await scenarioWithNotice(page);
   await slowEditor(page, 400);
-  const posts: string[] = [];
-  page.on("request", (request) => {
-    if (request.method() === "POST") posts.push(request.url());
-  });
+  const posts = postsOf(page);
   await page.getByRole("button", { name: "Save draft" }).click();
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   await expect(page.getByRole("status")).toContainText("Draft saved.");
@@ -212,7 +338,7 @@ test("a button pressed during a save does not go after it", async ({ page }) => 
 
 test("a change that could not be sent says so", async ({ page }) => {
   await scenarioWithNotice(page);
-  const failed = page.locator("[data-send-failed]");
+  const failed = page.locator('[data-press-alert="failed"]');
   await expect(failed).toBeHidden();
   const offline = /\/automations\/[0-9A-Z]{26}$/;
   await page.route(offline, (route) => route.abort());

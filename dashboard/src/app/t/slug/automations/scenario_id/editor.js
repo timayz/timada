@@ -19,11 +19,13 @@ const live = document.getElementById("editor-live");
 let busy = false;
 let leaving = false;
 let drag = null;
-// The button on its way, those pressed since, and whether anything was typed
-// since: see `hold`.
+// The button on its way, the form as it left with it, and the buttons pressed
+// since.
 let sending = null;
+let sent = null;
 let waiting = [];
-let typed = false;
+// Where the cursor goes back to once a block's settings are open again.
+let cursor = null;
 
 if (root) enhance();
 
@@ -71,13 +73,65 @@ function enhance() {
   store();
 }
 
+// The control of `form` named `name`.
+function fieldOf(form, name) {
+  return form.querySelector(`input[name="${name}"], textarea[name="${name}"], select[name="${name}"]`);
+}
+
+// What was typed since the form left, by field.
+function typedSince() {
+  const typed = new Map();
+  for (const [name, value] of new FormData(root)) {
+    if (value !== sent.get(name)) typed.set(name, value);
+  }
+  return typed;
+}
+
+// The flow's shape. A button that names a place in the flow (`add:root.1:…`)
+// means that place on this shape only.
+function flowOf(form) {
+  return [...form.querySelectorAll("[data-step], [data-drop-slot]")]
+    .map((node) => node.dataset.step ?? node.dataset.dropSlot)
+    .join();
+}
+
+// Shows the editor's alert that says `what`, or none.
+function say(what) {
+  for (const alert of root.querySelectorAll("[data-press-alert]")) {
+    alert.hidden = alert.dataset.pressAlert !== what;
+  }
+}
+
+// Whether the editor says something went wrong.
+function refused() {
+  return [...root.querySelectorAll("[role=alert]"), ...noticesBeside(root)].some(
+    (notice) => notice.matches("[role=alert]") && notice.checkVisibility(),
+  );
+}
+
 // A button pressed while an answer is on its way goes once that answer is in,
-// on the editor it brings. Not the same button again (a double click), and not
-// one pressed after typing: the answer replaces what was typed, and the press
-// would go without it.
+// on the editor it brings. Not the same button again with nothing typed in
+// between: that is a double click.
 function hold(press) {
-  const again = press.op === sending || waiting.some((other) => other.op === press.op);
-  if (!again && !typed) waiting.push(press);
+  const again =
+    waiting.some((other) => other.press.op === press.op) ||
+    (press.op === sending && !typedSince().size);
+  if (!again) waiting.push({ press, flow: flowOf(root) });
+}
+
+// What was pressed goes on, unless the page is being left or the editor says
+// something went wrong (to be read first: the next answer would replace it).
+// A button that names a place in a flow that has changed meanwhile is refused.
+function goOn() {
+  const next = leaving || refused() ? null : waiting.shift();
+  if (!next) {
+    waiting = [];
+  } else if (/^(add|move|drop):/.test(next.press.op) && next.flow !== flowOf(root)) {
+    waiting = [];
+    say("place");
+  } else {
+    send(null, next.press);
+  }
 }
 
 async function send(submitter, extra) {
@@ -89,15 +143,20 @@ async function send(submitter, extra) {
   }
   busy = true;
   sending = press.op;
-  typed = false;
+  sent = new FormData(root);
   root.setAttribute("aria-busy", "true");
-  root.querySelector("[data-send-failed]").hidden = true;
+  say(null);
   const form = new FormData(root);
+  // A block's settings sent again are all of them: none of the open block's go.
+  if (press.settings_for) {
+    for (const name of [...form.keys()]) if (name.startsWith("settings.")) form.delete(name);
+  }
   for (const [key, value] of Object.entries(press)) form.set(key, value);
   try {
     // URL-encoded, as a plain form posts it.
     const response = await fetch(root.action, { method: "POST", body: new URLSearchParams(form) });
-    if (response.redirected) {
+    // The redirect reloads the page: not over what was typed meanwhile.
+    if (response.redirected && !typedSince().size) {
       leaving = true;
       try {
         sessionStorage.removeItem(storageKey());
@@ -117,16 +176,17 @@ async function send(submitter, extra) {
       return;
     }
     const notices = noticesBeside(next).map((notice) => document.importNode(notice, true));
-    for (const old of noticesBeside(root)) old.remove();
+    // Settings sent again have nothing to say of their own: what the page says
+    // stays.
+    if (!press.settings_for) for (const old of noticesBeside(root)) old.remove();
     swap(document.importNode(next, true));
     for (const notice of notices) root.before(notice);
   } catch {
-    waiting = [];
-    root.querySelector("[data-send-failed]").hidden = false;
+    say("failed");
   } finally {
     busy = false;
     root?.removeAttribute("aria-busy");
-    if (!leaving && waiting.length) send(null, waiting.shift());
+    goOn();
   }
 }
 
@@ -138,12 +198,53 @@ function noticesBeside(form) {
   );
 }
 
+// A block's settings as the form holds them, to send again and open it back.
+function settingsOf(block) {
+  const press = { op: "apply", selected: block, settings_for: block };
+  for (const [name, value] of new FormData(root)) {
+    if (name.startsWith("settings.")) press[name] = value;
+  }
+  return press;
+}
+
 function swap(next) {
+  // The answer was made without what was typed meanwhile, which stays. Settings
+  // of a block the answer closed (a save closes it) are sent again to open it
+  // back; those of a block that is gone go with it.
+  const typed = typedSince();
+  const block = fieldOf(root, "settings_for")?.value;
+  const same = block === fieldOf(next, "settings_for")?.value;
+  const kept = (name) => (same || !name.startsWith("settings.") ? fieldOf(next, name) : null);
+  for (const [name, value] of typed) {
+    const field = kept(name);
+    if (field) field.value = value;
+  }
+  if (typed.size) next.setAttribute("data-dirty", "");
+  // The field with the focus keeps it, and its cursor. What the answer wants
+  // focused goes first, unless the merchant is typing.
+  const active = document.activeElement;
+  const back = cursor;
+  cursor = null;
+  const at =
+    back ??
+    (root.contains(active) && active.name
+      ? { name: active.name, start: active.selectionStart, end: active.selectionEnd, scroll: active.scrollTop }
+      : null);
+  const field = at && (back ? fieldOf(next, at.name) : kept(at.name));
+  const closed = !same && [...typed.keys()].some((name) => name.startsWith("settings."));
+  if (closed && next.querySelector(`[data-step="${block}"]`)) {
+    waiting.unshift({ press: settingsOf(block), flow: flowOf(next) });
+    cursor = at;
+  }
   root.replaceWith(next);
   root = next;
   enhance();
-  const focus = root.querySelector("[autofocus]");
+  const focus = (at && typed.has(at.name) && field) || root.querySelector("[autofocus]") || field;
   if (focus) focus.focus();
+  if (focus && focus === field && at.start != null) {
+    field.setSelectionRange(at.start, at.end);
+    field.scrollTop = at.scroll;
+  }
   if (live) live.textContent = root.dataset.announce || "";
 }
 
@@ -162,10 +263,7 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("input", (event) => {
-  if (root && root.contains(event.target)) {
-    root.setAttribute("data-dirty", "");
-    if (busy) typed = true;
-  }
+  if (root && root.contains(event.target)) root.setAttribute("data-dirty", "");
 });
 
 document.addEventListener("click", (event) => {
