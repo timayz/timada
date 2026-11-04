@@ -3,9 +3,9 @@ use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem};
 use timada_aliexpress::{
     AeOrder, AeProduct, AliexpressError, ForwardStatus, FreightOption, LinkState, LogisticsAddress,
-    PlaceItem, PlaceOrder, Placement, PlannedItem, choose_service, describe_options, forward_items,
-    freight_from_response, french_department, logistics_address, placed_orders_from_response,
-    province_of, split_phone,
+    PlaceItem, PlaceOrder, Placement, PlannedItem, choose_service, delivery_country,
+    describe_options, forward_items, freight_from_response, french_department, logistics_address,
+    placed_orders_from_response, province_of, split_phone,
 };
 use timada_orders::{OrderLine, ShippingAddress};
 
@@ -275,8 +275,59 @@ fn a_french_postal_code_names_its_department_and_the_city_stands_in_elsewhere() 
     assert_eq!(french_department("97400"), None);
     assert_eq!(french_department("SW1A 1AA"), None);
     assert_eq!(province_of("FR", "59000", "Lille"), "Nord");
-    assert_eq!(province_of("FR", "97400", "Saint-Denis"), "Other");
+    assert_eq!(province_of("FR", "98800", "Nouméa"), "Other");
     assert_eq!(province_of("BE", "1000", " Bruxelles "), "Bruxelles");
+}
+
+#[test]
+fn a_french_overseas_department_is_a_country_of_its_own_for_aliexpress() {
+    assert_eq!(delivery_country("FR", "97200"), "MQ");
+    assert_eq!(delivery_country(" fr ", "972 00"), "MQ");
+    assert_eq!(delivery_country("FR", "97100"), "GP");
+    assert_eq!(delivery_country("FR", "97300"), "GF");
+    assert_eq!(delivery_country("FR", "97400"), "RE");
+    assert_eq!(delivery_country("FR", "97600"), "YT");
+    // Not part of Guadeloupe, and not departments.
+    assert_eq!(delivery_country("FR", "97133"), "FR");
+    assert_eq!(delivery_country("FR", "97150"), "FR");
+    assert_eq!(delivery_country("FR", "98800"), "FR");
+    assert_eq!(delivery_country("FR", "75002"), "FR");
+    assert_eq!(delivery_country("FR", ""), "FR");
+    // A postal code means nothing of the kind elsewhere.
+    assert_eq!(delivery_country("DE", "97200"), "DE");
+    assert_eq!(delivery_country("MQ", "97200"), "MQ");
+}
+
+#[test]
+fn a_martinique_address_goes_as_martinique_with_its_city_and_calling_code() {
+    let address = ShippingAddress {
+        name: "Ada Lovelace".into(),
+        line1: "1 rue Victor Hugo".into(),
+        line2: None,
+        postal_code: "97200".into(),
+        city: "Fort-de-France".into(),
+        country: "FR".into(),
+        phone: Some("+596 696 12 34 56".into()),
+    };
+    let mapped = logistics_address(&address, Some("fr"), None);
+    assert_eq!(mapped.country, "MQ");
+    assert_eq!(mapped.province, "Fort-de-France");
+    assert_eq!(mapped.zip, "97200");
+    assert_eq!(mapped.locale, "fr_FR");
+    assert_eq!(
+        (mapped.phone_country.as_str(), mapped.mobile_no.as_str()),
+        ("+596", "696123456")
+    );
+    // A number given the national way takes the department's code, one given
+    // for the mainland keeps its own.
+    assert_eq!(
+        split_phone("0696 12 34 56", &mapped.country),
+        ("+596".to_owned(), "696123456".to_owned())
+    );
+    assert_eq!(
+        split_phone("+33 6 12 34 56 78", &mapped.country),
+        ("+33".to_owned(), "612345678".to_owned())
+    );
 }
 
 #[test]
