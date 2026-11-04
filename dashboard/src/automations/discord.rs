@@ -231,6 +231,7 @@ mod tests {
                 name: "Ada Lovelace".into(),
                 line1: "1 rue de la Paix".into(),
                 city: "Paris".into(),
+                region: None,
                 country: "FR".into(),
                 ..Default::default()
             },

@@ -11,6 +11,7 @@
 
 pub mod complete;
 pub mod countries;
+pub mod places;
 pub mod start;
 
 use timada_storefront::{
@@ -101,6 +102,53 @@ function showShipping() {
   showVat();
 }
 country.addEventListener("change", showShipping);
+
+// In a shop that forwards to AliExpress, the country's provinces and the
+// towns of the one picked, from AliExpress's own lists; elsewhere, and without
+// this script, the row stays hidden and its list sends nothing. The postal
+// code picks the province until the shopper does.
+const provinceRow = form.querySelector("[data-province]");
+const province = form.elements.region;
+const cityList = form.querySelector("#checkout-places");
+const postalCode = form.elements.postal_code;
+let provincePicked = form.dataset.region || "";
+let placesAsked = 0;
+function hideProvince() {
+  provinceRow.hidden = true;
+  province.disabled = true;
+}
+async function showPlaces() {
+  const asked = ++placesAsked;
+  let places = { provinces: [], province: null, cities: [] };
+  try {
+    const query = new URLSearchParams({ country: country.value, postal_code: postalCode.value, province: provincePicked });
+    const answer = await fetch(`${form.dataset.placesPath}?${query}`);
+    if (answer.ok) places = await answer.json();
+  } catch {}
+  if (asked !== placesAsked) return;
+  cityList.replaceChildren(...places.cities.map((city) => new Option(city, city)));
+  if (!places.provinces.length) return hideProvince();
+  const current = provincePicked || places.province || "";
+  province.replaceChildren(
+    new Option("Choisir…", ""),
+    ...places.provinces.map((name) => new Option(name === "Other" ? "Autre" : name, name)),
+  );
+  province.value = places.provinces.includes(current) ? current : "";
+  province.disabled = false;
+  provinceRow.hidden = false;
+}
+province.addEventListener("change", () => {
+  provincePicked = province.value;
+  showPlaces();
+});
+country.addEventListener("change", () => {
+  provincePicked = "";
+  hideProvince();
+  showPlaces();
+});
+postalCode.addEventListener("change", showPlaces);
+showPlaces();
+
 methods.forEach((method) => method.addEventListener("change", showShipping));
 vatNumber?.addEventListener("input", showVat);
 
@@ -198,6 +246,9 @@ if (key && window.Stripe) {
     fill("postal_code", address.postal_code);
     fill("city", address.city);
     fill("country", address.country);
+    // A wallet's address has no province picked from the list.
+    placesAsked++;
+    hideProvince();
     // Billed elsewhere when the wallet says so; else at the delivery address.
     const other = walletBilling(billing, shipping);
     billingDifferent.checked = !!other;
@@ -700,7 +751,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         data-start-path=(href!(start::start)) data-return-path=(href!(complete::index))
                         data-publishable-key=(&publishable_key) data-amount=(total_cents)
                         data-goods=(cart.total_cents) data-goods-total=(&goods_total) data-shipping=(&rates)
-                        data-currency=(currency.to_lowercase())>
+                        data-currency=(currency.to_lowercase())
+                        data-places-path=(href!(places::places)) data-region=(&draft.region)>
                         <input type="hidden" name="expected_total_cents" value=(total_cents)>
                         <section class="card">
                             <h2>"Vos coordonnées"</h2>
@@ -743,7 +795,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <div class="row">
                                 <span>
                                     <label for="checkout-city">"Ville"</label>
-                                    <input id="checkout-city" name="city" required="" autocomplete="address-level2" value=(&draft.city)>
+                                    <input id="checkout-city" name="city" required="" autocomplete="address-level2" list="checkout-places" value=(&draft.city)>
+                                    <datalist id="checkout-places"></datalist>
                                 </span>
                                 <span>
                                     <label for="checkout-postal-code">"Code postal"</label>
@@ -756,6 +809,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                             <option value=(*code) selected=(*code == country) data-vat=(text)>(*name)</option>
                                         }
                                     </select>
+                                </span>
+                            </div>
+                            <div class="row" data-province="" hidden=(true)>
+                                <span>
+                                    <label for="checkout-region">"Région / Province"</label>
+                                    <select id="checkout-region" name="region" required="" autocomplete="address-level1" disabled=(true)></select>
                                 </span>
                             </div>
                             if !cart.shipping_options.is_empty() || cart.shipping_required {

@@ -84,6 +84,17 @@ products: an item shipped from Germany answered
 not know every name the address form lists (`Gard` answered
 `INVALID_PROVINCE_NAME`), so it is asked again without a name it refuses.
 
+## The checkout's province list
+
+In a shop connected to AliExpress, the Chatounette checkout asks for the province
+when the country has a list, and suggests that province's towns for the city
+(`GET /store/places`, then `timada_storefront::places`). The postal code picks the
+province until the shopper does, the pick is `ShippingAddress::region`, and it wins
+over the postal code when the order is forwarded. The city stays free text, and the
+shopper's spelling stays on the order and its documents. No list, no script or no
+answer: the field stays hidden and the lookup above does what it can. So does an
+express payment, whose address comes from the wallet.
+
 ## Not proven by a real order
 
 - That `Catania` passes where `Aci Castello` was refused.

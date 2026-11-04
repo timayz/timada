@@ -55,6 +55,10 @@ export class FakeAliexpress {
     { service_name: "CAINIAO_PREMIUM", cents: 990, tracking: true },
     { service_name: "CAINIAO_STANDARD", cents: 0, tracking: true },
   ];
+  /// The places of the countries with a list, as `aliexpress.ds.address.get`
+  /// gives them. The dashboard keeps them for a day, so a spec names a country
+  /// no other spec of the run ships to.
+  places: Record<string, unknown[]> = {};
   /// The orders placed, in order.
   readonly orders: PlacedOrder[] = [];
   private nextOrder = 8_100_000_000_000_001;
@@ -164,7 +168,14 @@ export class FakeAliexpress {
       return;
     }
     if (method === "aliexpress.ds.address.get") {
-      json({ aliexpress_ds_address_get_response: { result: { ret: false, code: "801", msg: "Address Exception" } } });
+      const children = this.places[url.searchParams.get("countryCode") ?? ""];
+      json({
+        aliexpress_ds_address_get_response: {
+          result: children
+            ? { ret: true, code: "", msg: "", data: { type: "COUNTRY", children: JSON.stringify(children) } }
+            : { ret: false, code: "801", msg: "Address Exception" },
+        },
+      });
       return;
     }
     if (method === "aliexpress.ds.freight.query") {

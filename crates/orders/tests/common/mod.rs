@@ -118,6 +118,7 @@ pub fn checkout() -> Checkout {
             line2: None,
             postal_code: "75002".into(),
             city: "Paris".into(),
+            region: None,
             country: "FR".into(),
             phone: Some("06 12 34 56 78".into()),
         },
@@ -140,6 +141,7 @@ pub fn billing() -> ShippingAddress {
         line2: Some(" ".into()),
         postal_code: "10117".into(),
         city: "Berlin".into(),
+        region: None,
         country: "de".into(),
         phone: Some("+49 30 123456".into()),
     }

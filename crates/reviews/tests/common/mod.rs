@@ -52,6 +52,7 @@ pub async fn paid_order(executor: &evento::Turso, order_id: &str) {
                 line1: "1 rue de la Paix".to_owned(),
                 postal_code: "75002".to_owned(),
                 city: "Paris".to_owned(),
+                region: None,
                 country: "FR".to_owned(),
                 ..Default::default()
             },

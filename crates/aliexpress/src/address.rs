@@ -63,6 +63,28 @@ impl AddressTree {
         province != OTHER && self.0.iter().any(|node| node.name == province)
     }
 
+    /// The provinces, as an address form lists them.
+    pub fn provinces(&self) -> Vec<&str> {
+        self.0.iter().map(|node| node.name.as_str()).collect()
+    }
+
+    /// What a shopper may call the place they live in `province`, to suggest:
+    /// its cities and towns, sorted and without "Other".
+    pub fn places_in(&self, province: &str) -> Vec<&str> {
+        let mut places: Vec<&str> = self
+            .0
+            .iter()
+            .filter(|node| node.name == province)
+            .flat_map(|node| &node.children)
+            .flat_map(|city| std::iter::once(city).chain(&city.children))
+            .map(|place| place.name.as_str())
+            .filter(|name| *name != OTHER)
+            .collect();
+        places.sort_unstable();
+        places.dedup();
+        places
+    }
+
     /// Puts an address in AliExpress's words: its city, and its province
     /// when the postal code did not name one, with the shopper's town kept
     /// in `address2` for the courier when the city does not say it. An

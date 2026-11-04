@@ -413,8 +413,16 @@ async function fillCheckout(page: Page, quantity: number) {
 
 /// A shopper buys `quantity` roses on the Chatounette example and pays: the
 /// order's id.
-async function buyRoses(page: Page, request: APIRequestContext, stripe: FakeStripe, webhookUrl: string, quantity: number) {
+async function buyRoses(
+  page: Page,
+  request: APIRequestContext,
+  stripe: FakeStripe,
+  webhookUrl: string,
+  quantity: number,
+  address?: () => Promise<void>,
+) {
   await fillCheckout(page, quantity);
+  await address?.();
   await page.getByRole("button", { name: /^Payer ma commande/ }).click();
   await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
   const intent = stripe.lastIntent()!;
@@ -447,6 +455,76 @@ async function forwardIs(page: Page, url: string, status: string) {
     });
   }).toPass({ timeout: 20_000 });
 }
+
+test("a shopper picks AliExpress's province and the order goes in its words", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  await fakeStripeJs(page);
+  const aliexpress = new FakeAliexpress();
+  const stripe = new FakeStripe();
+  aliexpress.places.IT = [
+    {
+      name: "Sicilia",
+      type: "PROVINCE",
+      children: [{ name: "Catania", type: "CITY", children: [{ name: "Aci Castello", type: "TOWN" }] }],
+    },
+    {
+      name: "Lazio",
+      type: "PROVINCE",
+      children: [{ name: "Roma", type: "CITY", children: [{ name: "Albano Laziale", type: "TOWN" }] }],
+    },
+  ];
+  await aliexpress.start();
+  await stripe.start();
+  try {
+    const productUrl = await importedShop(page, aliexpress);
+    const slug = new URL(productUrl).pathname.split("/")[2];
+    await page.getByRole("button", { name: "Publish" }).click();
+    await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await app.start(request, await mintKey(page, slug, true), 1);
+
+    const url = `/t/${slug}/orders/${await buyRoses(page, request, stripe, webhookUrl, 1, async () => {
+      const province = page.getByLabel("Région / Province");
+      // France has no list here: nothing to pick.
+      await expect(province).toBeHidden();
+      await page.getByLabel("Pays", { exact: true }).selectOption("IT");
+      await page.getByLabel("Code postal", { exact: true }).fill("95021");
+      await page.getByLabel("Code postal", { exact: true }).blur();
+      // The postal code picks the province, and its towns are suggested.
+      await expect(province).toHaveValue("Sicilia");
+      await expect(page.locator("#checkout-places option[value='Aci Castello']")).toHaveCount(1);
+      // The shopper's pick stays when the postal code changes, and then
+      // suggests that province's towns.
+      await province.selectOption("Lazio");
+      await expect(page.locator("#checkout-places option[value='Albano Laziale']")).toHaveCount(1);
+      await page.getByLabel("Code postal", { exact: true }).fill("95022");
+      await page.getByLabel("Code postal", { exact: true }).blur();
+      await expect(province).toHaveValue("Lazio");
+      await page.getByLabel("Ville", { exact: true }).fill("Albano Laziale");
+    })}`;
+    await page.goto(url);
+    await page.getByRole("button", { name: "Place on AliExpress" }).click();
+    await forwardIs(page, url, "placed");
+    // In AliExpress's words, the shopper's pick over the postal code's, with
+    // their town kept for the courier.
+    expect(aliexpress.orders[0].address).toMatchObject({
+      province: "Lazio",
+      city: "Roma",
+      address2: "Albano Laziale",
+      zip: "95022",
+      country: "IT",
+    });
+  } finally {
+    await stripe.stop();
+    await aliexpress.stop();
+  }
+});
 
 test("a shop places its paid orders on AliExpress and fulfils them with the tracking", async ({ page, request }) => {
   test.setTimeout(150_000);
