@@ -183,7 +183,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.automations.check_secs.max(1),
     ));
 
-    // The products imported from AliExpress are read again on a timer.
+    // The products imported from AliExpress are read again as the day's calls
+    // allow, and the accounts and open orders on a timer.
     let aliexpress_sync = crate::aliexpress::sync::AliexpressSync::new(
         db.clone(),
         executor.clone(),

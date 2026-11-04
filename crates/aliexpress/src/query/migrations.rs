@@ -26,6 +26,8 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 new_combinations INTEGER NOT NULL,
                 last_tried_at INTEGER,
                 shard INTEGER NOT NULL,
+                wanted_at INTEGER,
+                published INTEGER NOT NULL DEFAULT 0,
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX aliexpress_products_product ON aliexpress_products (tenant_id, product_id);

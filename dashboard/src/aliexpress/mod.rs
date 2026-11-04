@@ -2,6 +2,7 @@
 //! (their sealed tokens), the client that calls AliExpress for a shop, and
 //! the import that fills a draft from an item (see [`subscription`]).
 
+pub mod budget;
 pub mod forward;
 pub mod payment_reads;
 pub mod subscription;
@@ -19,6 +20,7 @@ use timada_aliexpress::{
 };
 use timada_tenancy::{AliexpressSettings, CompanyState, TenantState};
 
+use self::budget::CallBudget;
 use crate::cluster::Executor;
 use crate::config::AliexpressConfig;
 use crate::db::Db;
@@ -54,6 +56,8 @@ pub struct Aliexpress {
     sync_every_secs: u64,
     /// How recent a read must be for a payment to go by it, in seconds.
     read_fresh_secs: u64,
+    /// What the app may spend, and what this node spent.
+    budget: CallBudget,
     /// Which of the nodes up this one is, at the moment of asking.
     share: Arc<dyn Fn() -> Share + Send + Sync>,
 }
@@ -100,6 +104,7 @@ impl Aliexpress {
             platform,
             sync_every_secs: config.sync_every_secs.max(1),
             read_fresh_secs: config.read_fresh_secs,
+            budget: CallBudget::new(config.calls_per_day),
             share,
         }))
     }
@@ -112,6 +117,11 @@ impl Aliexpress {
     /// How recent a read must be for a payment to go by it, in seconds.
     pub fn read_fresh_secs(&self) -> u64 {
         self.read_fresh_secs
+    }
+
+    /// What the app may spend, and what this node spent.
+    pub fn budget(&self) -> &CallBudget {
+        &self.budget
     }
 
     /// Which of the nodes up this one is: what it reads of the imported items.
@@ -152,7 +162,8 @@ impl Aliexpress {
             &self.api_url,
             key.clone(),
             secret.clone(),
-        ))
+        )
+        .counting(self.budget.calls()))
     }
 
     /// The client acting for the company's account; `None` before one said

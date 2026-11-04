@@ -824,6 +824,7 @@ mod tests {
                 authorize_url: None,
                 sync_check_secs: 1,
                 sync_every_secs: 1,
+                calls_per_day: 86_400,
                 read_fresh_secs: 60,
             };
             let aliexpress = Aliexpress::new(

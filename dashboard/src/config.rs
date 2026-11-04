@@ -532,14 +532,20 @@ pub struct AliexpressConfig {
     /// AliExpress's own page when unset.
     #[serde(default)]
     pub authorize_url: Option<String>,
-    /// How often, in seconds, a node looks for imported products due to be
-    /// read again.
+    /// How often, in seconds, a node renews the access about to lapse and reads
+    /// the open orders again.
     #[serde(default = "default_aliexpress_check_secs")]
     pub sync_check_secs: u64,
     /// How long, in seconds, an imported product goes before its price and
-    /// stock are read again.
+    /// stock are read again, if the day's calls reach it.
     #[serde(default = "default_aliexpress_every_secs")]
     pub sync_every_secs: u64,
+    /// How many calls a day the app may make, over every shop and node: read it
+    /// on AliExpress's open platform. A sale always reads what it sells; the
+    /// nodes spend what is left on the other products, the most useful first.
+    /// 0: nothing but what sales and members ask for.
+    #[serde(default = "default_aliexpress_calls_per_day")]
+    pub calls_per_day: u64,
     /// How recent, in seconds, a read of an imported product must be for a
     /// payment to go by it instead of reading the product again.
     #[serde(default = "default_aliexpress_read_fresh_secs")]
@@ -551,7 +557,11 @@ fn default_aliexpress_check_secs() -> u64 {
 }
 
 fn default_aliexpress_every_secs() -> u64 {
-    6 * 60 * 60
+    24 * 60 * 60
+}
+
+fn default_aliexpress_calls_per_day() -> u64 {
+    12_000
 }
 
 fn default_aliexpress_read_fresh_secs() -> u64 {
@@ -567,6 +577,7 @@ impl Default for AliexpressConfig {
             authorize_url: None,
             sync_check_secs: default_aliexpress_check_secs(),
             sync_every_secs: default_aliexpress_every_secs(),
+            calls_per_day: default_aliexpress_calls_per_day(),
             read_fresh_secs: default_aliexpress_read_fresh_secs(),
         }
     }
