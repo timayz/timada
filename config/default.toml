@@ -215,11 +215,18 @@ dir = "data/shopper-keys"
 # # callback and `/aliexpress/webhook` as its message push callback.
 # app_key = ""
 # app_secret = ""
-# # How often, in seconds, this node looks for products due to be read again.
+# # How often, in seconds, this node renews the access about to lapse and reads
+# # the open orders again.
 # sync_check_secs = 3600
 # # How long, in seconds, a product goes before its price and stock are read
-# # again.
-# sync_every_secs = 21600
+# # again, if the day's calls reach it.
+# sync_every_secs = 86400
+# # How many calls a day the app may make, over every shop and node: read it on
+# # AliExpress's open platform. A sale always reads what it sells; the nodes
+# # spend what is left on the other products: first what shoppers wanted in the
+# # last 30 days, then what is on sale, then the rest. 0: nothing but what sales
+# # and members ask for.
+# calls_per_day = 12000
 # # How recent, in seconds, a read of a product must be for a payment to go by
 # # it instead of reading the product again. Longer spends fewer calls on what
 # # sells a lot; a shopper may then pay a price AliExpress changed that long ago.
