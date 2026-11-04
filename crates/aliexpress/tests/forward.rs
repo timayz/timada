@@ -276,7 +276,52 @@ fn a_french_postal_code_names_its_department_and_the_city_stands_in_elsewhere() 
     assert_eq!(french_department("SW1A 1AA"), None);
     assert_eq!(province_of("FR", "59000", "Lille"), "Nord");
     assert_eq!(province_of("FR", "98800", "Nouméa"), "Other");
-    assert_eq!(province_of("BE", "1000", " Bruxelles "), "Bruxelles");
+    assert_eq!(province_of("LU", "1009", " Luxembourg "), "Luxembourg");
+}
+
+#[test]
+fn a_postal_code_names_the_province_aliexpress_lists() {
+    assert_eq!(
+        province_of("BE", "1000", "Bruxelles"),
+        "Region Bruxelles-Capitale"
+    );
+    assert_eq!(province_of("BE", "1300", "Wavre"), "Region Wallonne");
+    assert_eq!(province_of("BE", "1500", "Halle"), "Region Flamande");
+    assert_eq!(province_of("BE", "2000", "Antwerpen"), "Region Flamande");
+    assert_eq!(province_of("BE", "4000", "Liège"), "Region Wallonne");
+    assert_eq!(province_of("BE", "9000", "Gent"), "Region Flamande");
+    assert_eq!(province_of("BE", "0999", "Nulle part"), "Other");
+    assert_eq!(province_of("ES", "28001", "Madrid"), "Madrid");
+    assert_eq!(province_of("ES", "03001", "Alicante"), "Alacant");
+    assert_eq!(province_of("ES", "48001", "Bilbao"), "Vizcaya");
+    assert_eq!(province_of("ES", "99999", "Nulle part"), "Other");
+    assert_eq!(province_of("CA", "h2x 1y4", "Montréal"), "Quebec");
+    assert_eq!(province_of("CA", "M5V 2T6", "Toronto"), "Ontario");
+    assert_eq!(province_of("CA", "X0A 0H0", "Iqaluit"), "Other");
+    assert_eq!(province_of("IT", "66010", "Altino"), "Abruzzo");
+    assert_eq!(province_of("IT", "00184", "Roma"), "Lazio");
+    assert_eq!(province_of("IT", "20121", "Milano"), "Lombardia");
+    assert_eq!(province_of("IT", "11100", "Aosta"), "Valle d'Aosta");
+    // No "Other" on Italy's list: a postal code naming no region keeps the city.
+    assert_eq!(province_of("IT", "99000", "Nulle part"), "Nulle part");
+}
+
+#[test]
+fn other_is_sent_where_the_list_has_it_and_the_city_where_it_cannot_help() {
+    for country in ["AT", "CZ", "DE", "GB", "LV", "NL", "PT"] {
+        assert_eq!(
+            province_of(country, "1010", "Somewhere"),
+            "Other",
+            "{country}"
+        );
+    }
+    // A list without "Other" and no mapping yet, then no list at all.
+    assert_eq!(province_of("US", "10001", "New York"), "New York");
+    assert_eq!(province_of("SE", "11120", "Stockholm"), "Stockholm");
+    assert_eq!(
+        province_of("MQ", "97200", "Fort-de-France"),
+        "Fort-de-France"
+    );
 }
 
 #[test]
