@@ -175,14 +175,120 @@ pub fn delivery_country(country: &str, postal_code: &str) -> String {
 
 /// The region AliExpress files an address under, which it will not do
 /// without: for France the department of the postal code, as AliExpress
-/// lists them, or its "Other" for one it does not list; the city elsewhere
-/// (the shop's addresses carry no region of their own, and Martinique's is a
-/// free text there).
+/// lists them, or its "Other" for one it does not list; likewise for Belgium,
+/// Spain and Canada, whose postal codes name theirs. "Other" where the list
+/// has it and a postal code does not say; the city elsewhere (the shop's
+/// addresses carry no region of their own, and a country without a list takes
+/// a free text). docs/aliexpress-provinces.md has the lists.
 pub fn province_of(country: &str, postal_code: &str, city: &str) -> String {
     match country {
-        "FR" => french_department(postal_code).unwrap_or("Other").to_owned(),
-        _ => city.trim().to_owned(),
+        "FR" => french_department(postal_code).unwrap_or("Other"),
+        "BE" => belgian_region(postal_code).unwrap_or("Other"),
+        "ES" => spanish_province(postal_code).unwrap_or("Other"),
+        "CA" => canadian_province(postal_code).unwrap_or("Other"),
+        "AT" | "CZ" | "DE" | "GB" | "LV" | "NL" | "PT" => "Other",
+        _ => return city.trim().to_owned(),
     }
+    .to_owned()
+}
+
+/// The region of a Belgian postal code, as AliExpress lists them.
+pub fn belgian_region(postal_code: &str) -> Option<&'static str> {
+    let digits: String = postal_code.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() != 4 {
+        return None;
+    }
+    Some(match digits.parse::<u16>().ok()? {
+        1000..=1299 => "Region Bruxelles-Capitale",
+        1300..=1499 | 4000..=7999 => "Region Wallonne",
+        1500..=3999 | 8000..=9999 => "Region Flamande",
+        _ => return None,
+    })
+}
+
+/// The province of a Spanish postal code, as AliExpress lists them.
+pub fn spanish_province(postal_code: &str) -> Option<&'static str> {
+    let digits: String = postal_code.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() != 5 {
+        return None;
+    }
+    Some(match &digits[..2] {
+        "01" => "Alava",
+        "02" => "Albacete",
+        "03" => "Alacant",
+        "04" => "Almeria",
+        "05" => "Avila",
+        "06" => "Badajoz",
+        "07" => "Balearic Islands",
+        "08" => "Barcelona",
+        "09" => "Burgos",
+        "10" => "Caceres",
+        "11" => "Cadiz",
+        "12" => "Castello",
+        "13" => "Ciudad Real",
+        "14" => "Cordoba",
+        "15" => "A Coruna",
+        "16" => "Cuenca",
+        "17" => "Girona",
+        "18" => "Granada",
+        "19" => "Guadalajara",
+        "20" => "Guipuzcoa",
+        "21" => "Huelva",
+        "22" => "Huesca",
+        "23" => "Jaen",
+        "24" => "Leon",
+        "25" => "Lleida",
+        "26" => "La Rioja",
+        "27" => "Lugo",
+        "28" => "Madrid",
+        "29" => "Malaga",
+        "30" => "Murcia",
+        "31" => "Navarra",
+        "32" => "Ourense",
+        "33" => "Asturias",
+        "34" => "Palencia",
+        "35" => "Las Palmas",
+        "36" => "Pontevedra",
+        "37" => "Salamanca",
+        "38" => "Santa Cruz de Tenerife",
+        "39" => "Cantabria",
+        "40" => "Segovia",
+        "41" => "Sevilla",
+        "42" => "Soria",
+        "43" => "Tarragona",
+        "44" => "Teruel",
+        "45" => "Toledo",
+        "46" => "Valencia",
+        "47" => "Valladolid",
+        "48" => "Vizcaya",
+        "49" => "Zamora",
+        "50" => "Zaragoza",
+        "51" => "Ceuta",
+        "52" => "Melilla",
+        _ => return None,
+    })
+}
+
+/// The province of a Canadian postal code, by its first letter, as AliExpress
+/// lists them. `X` is both Nunavut and the Northwest Territories, so it names
+/// neither.
+pub fn canadian_province(postal_code: &str) -> Option<&'static str> {
+    Some(
+        match postal_code.trim().chars().next()?.to_ascii_uppercase() {
+            'A' => "Newfoundland and Labrador",
+            'B' => "Nova Scotia",
+            'C' => "Prince Edward Island",
+            'E' => "New Brunswick",
+            'G' | 'H' | 'J' => "Quebec",
+            'K' | 'L' | 'M' | 'N' | 'P' => "Ontario",
+            'R' => "Manitoba",
+            'S' => "Saskatchewan",
+            'T' => "Alberta",
+            'V' => "British Columbia",
+            'Y' => "Yukon",
+            _ => return None,
+        },
+    )
 }
 
 /// The department of a French postal code, named as AliExpress lists the
