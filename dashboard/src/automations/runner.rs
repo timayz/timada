@@ -17,7 +17,7 @@ use std::time::Duration;
 use crate::db::Db;
 use timada_automations::{
     AUTOMATION_ACTOR, ListenerState, RUN_HISTORY_SECS, RunState, Step, Transition,
-    catalog::{self, CodeValue, DISCOUNT, EMAIL, NOTIFY, Subject, WEBHOOK},
+    catalog::{self, CodeValue, DISCORD, DISCOUNT, EMAIL, NOTIFY, Subject, WEBHOOK},
     due_runs,
     interpreter::{self, Next, STUCK_SETTINGS, STUCK_UNKNOWN},
     left_checkouts, listener_of, normalize_email, opt_out_token, prune_checkouts, prune_runs,
@@ -394,6 +394,7 @@ impl<E: Store> Runner<E> {
             EMAIL => self.email(tenant, run, subject, step).await,
             DISCOUNT => self.discount(tenant, run, step).await,
             WEBHOOK => self.webhook(tenant, run, step).await,
+            DISCORD => self.discord(tenant, run, subject, step).await,
             _ => Ok(Acted::Failed(STUCK_UNKNOWN.into())),
         };
         acted.unwrap_or_else(|err| Acted::Failed(err.to_string()))
@@ -774,6 +775,64 @@ impl<E: Store> Runner<E> {
             )
             .await
             {
+                super::webhook::Delivery::Taken(status) => {
+                    Acted::Done(serde_json::json!({ "status": status }).to_string())
+                }
+                super::webhook::Delivery::Again(reason) => Acted::Retry(reason),
+                super::webhook::Delivery::Refused(reason) => Acted::Failed(reason),
+            },
+        )
+    }
+}
+
+impl<E: Store> Runner<E> {
+    /// Posts the merchant's message, its variables read from the subject as
+    /// it is now, and a link to the subject to the step's Discord channel. A call that got no answer is tried again
+    /// later, even if that may post it twice (see `discord.rs`).
+    async fn discord(
+        &self,
+        tenant: &TenantState,
+        run: &RunState,
+        subject: Option<Subject>,
+        step: &Step,
+    ) -> anyhow::Result<Acted> {
+        let (Some(subject), Ok(settings)) = (subject, catalog::parse_discord(&step.settings))
+        else {
+            return Ok(Acted::Failed(STUCK_SETTINGS.into()));
+        };
+        let Some(keys) = &self.webhooks else {
+            return Ok(Acted::Failed(
+                "The dashboard has no secret to open the channel's address with.".into(),
+            ));
+        };
+        let Some(url) = super::webhook::open_url(
+            keys,
+            &tenant.id,
+            &run.scenario_id,
+            &step.id,
+            &settings.url_sealed,
+        ) else {
+            return Ok(Acted::Failed("The channel's address does not open.".into()));
+        };
+        let link = subject_link(&self.base_url, &tenant.slug, subject, &run.subject_id);
+        let Some(vars) = super::discord::vars_of(
+            &self.store,
+            &tenant.id,
+            &tenant.name,
+            subject,
+            &run.subject_id,
+        )
+        .await?
+        else {
+            return Ok(Acted::Skipped("What started the run is gone.".into()));
+        };
+        let message = match timada_tenancy::render_message(&settings.message, &vars) {
+            Ok(message) => message,
+            Err(err) => return Ok(Acted::Failed(err.to_string())),
+        };
+        let content = super::discord::content(&message, &link);
+        Ok(
+            match super::discord::post(&self.http, &url, &content, self.allow_private_hosts).await {
                 super::webhook::Delivery::Taken(status) => {
                     Acted::Done(serde_json::json!({ "status": status }).to_string())
                 }

@@ -58,9 +58,10 @@ use crate::ui::{Shell, Tone, document, empty_state, icons, notice, status_badge}
 pub struct OptOutLinks(pub Option<crate::seal::OptOutKey>);
 
 /// What the scenarios' webhook steps are sealed and signed with, when the
-/// operator gave a secret ([`crate::seal::webhook_keys`]).
+/// operator gave a secret ([`crate::seal::webhook_keys`]), and whether a step
+/// may name a host of this machine (`mail.allow_private_hosts`).
 #[derive(Clone, Debug)]
-pub struct WebhookSealing(pub Option<crate::seal::WebhookKeys>);
+pub struct WebhookSealing(pub Option<crate::seal::WebhookKeys>, pub bool);
 
 /// Everything the pages reach through the app context.
 pub struct Services {
@@ -175,7 +176,10 @@ pub fn router(services: Services) -> Router {
         .app_context(OptOutLinks(crate::seal::opt_out_key(&config)))
         // Seals the addresses of the scenarios' webhooks and derives their
         // signing secrets; none without `secrets.key`.
-        .app_context(WebhookSealing(crate::seal::webhook_keys(&config)))
+        .app_context(WebhookSealing(
+            crate::seal::webhook_keys(&config),
+            config.mail.allow_private_hosts,
+        ))
         .app_context(config)
         .assets(assets)
         .runtime()

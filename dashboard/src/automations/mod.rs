@@ -5,6 +5,7 @@
 //! run's version, so the node that writes it first is the one that acts.
 
 pub mod definitions;
+pub mod discord;
 pub mod facts;
 pub mod runner;
 pub mod triggers;
