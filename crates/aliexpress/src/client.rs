@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
 use serde_json::Value;
@@ -275,6 +275,23 @@ pub fn placed_orders_from_response(body: &Value) -> Result<Vec<String>, AeError>
     Ok(orders)
 }
 
+/// How long a country's places may take: France's weigh over 2 MB, and the
+/// client's usual 20 seconds count the whole answer.
+const ADDRESS_TREE_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// An error and what caused it: reqwest's own says only "error decoding
+/// response body", whether the body was cut off, timed out or malformed.
+fn with_causes(err: &dyn std::error::Error) -> String {
+    let mut text = err.to_string();
+    let mut cause = err.source();
+    while let Some(err) = cause {
+        text.push_str(": ");
+        text.push_str(&err.to_string());
+        cause = err.source();
+    }
+    text
+}
+
 /// AliExpress's way of saying it delivers nowhere near the address, which is
 /// an answer rather than a failure.
 const NO_DELIVERY: &str = "DELIVERY_NOT_AVAILABLE_TO_YOUR_ADDRESS";
@@ -401,9 +418,10 @@ impl Client {
     /// AliExpress's places in `country`, `None` for a country without a list.
     pub async fn address_tree(&self, country: &str) -> Result<Option<AddressTree>, AeError> {
         let body = self
-            .call(
+            .call_within(
                 "aliexpress.ds.address.get",
                 vec![("countryCode", country.to_owned())],
+                Some(ADDRESS_TREE_TIMEOUT),
             )
             .await?;
         AddressTree::from_response(&body)
@@ -491,6 +509,16 @@ impl Client {
 
     /// Signs and sends one call; the answer's body, or why there is none.
     async fn call(&self, method: &str, params: Vec<(&str, String)>) -> Result<Value, AeError> {
+        self.call_within(method, params, None).await
+    }
+
+    /// [`Self::call`], with longer than the client's usual time to answer.
+    async fn call_within(
+        &self,
+        method: &str,
+        params: Vec<(&str, String)>,
+        timeout: Option<Duration>,
+    ) -> Result<Value, AeError> {
         if let Some(calls) = &self.calls {
             calls.fetch_add(1, Ordering::Relaxed);
         }
@@ -518,13 +546,14 @@ impl Client {
         };
         let signature = sign(&self.app_secret, path, &all);
         all.insert("sign".into(), signature);
-        let response = self
-            .http
-            .post(&url)
-            .query(&all)
+        let mut request = self.http.post(&url).query(&all);
+        if let Some(timeout) = timeout {
+            request = request.timeout(timeout);
+        }
+        let response = request
             .send()
             .await
-            .map_err(|err| AeError::transient("network", err.to_string()))?;
+            .map_err(|err| AeError::transient("network", with_causes(&err)))?;
         let status = response.status();
         if status.is_server_error() || status.as_u16() == 429 {
             return Err(AeError::transient(
@@ -541,7 +570,7 @@ impl Client {
         let body: Value = response
             .json()
             .await
-            .map_err(|err| AeError::transient("response", err.to_string()))?;
+            .map_err(|err| AeError::transient("response", with_causes(&err)))?;
         if let Some(error) = body.get("error_response") {
             let code = error
                 .get("code")

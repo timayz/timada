@@ -174,7 +174,9 @@ impl Aliexpress {
             order.language.as_deref(),
             settings.order_phone.as_deref(),
         );
-        let places = self.address_tree(&client, &country).await;
+        // Without the places the address would go unchecked, to be refused
+        // for a spelling: better to say AliExpress did not answer.
+        let places = self.address_tree(&client, &country).await?;
         if let Some(places) = &places {
             places.apply(&mut address);
         }

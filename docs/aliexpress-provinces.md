@@ -65,8 +65,9 @@ Saint-Martin, Saint-Pierre-et-Miquelon and the Pacific territories stay `FR` +
 
 AliExpress checks `city` as well: a real Italian order with `Aci Castello` was
 refused with `Please enter a City`, although that town is on the list, under
-Sicilia → Catania. So the forwarder reads the country's tree when it places an
-order, kept for a day, and `AddressTree::apply` puts the address in its words:
+Sicilia → Catania, and so was a French one with `Alès`, listed as `Ales`. So the forwarder reads the country's tree when it places an
+order, kept for a day, and `AddressTree::apply` puts the address in its words (if
+the tree cannot be read, nothing is placed and the order page says to try again):
 
 - The town is looked for in the province the postal code named, or in every
   province where the postal code names none.

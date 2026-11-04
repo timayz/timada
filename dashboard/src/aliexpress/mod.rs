@@ -16,8 +16,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use timada_aliexpress::{
-    AddressTree, AliexpressError, Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL, LinkState,
-    Market, Share, SyncRead,
+    AddressTree, AeError, AliexpressError, Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL,
+    LinkState, Market, Share, SyncRead,
 };
 use timada_tenancy::{AliexpressSettings, CompanyState, TenantState};
 
@@ -121,9 +121,12 @@ impl Aliexpress {
     }
 
     /// AliExpress's places in `country`, read at most once a day; `None`
-    /// without a list, or when they could not be read: the address then goes
-    /// as given, for AliExpress to refuse with its reason.
-    pub async fn address_tree(&self, client: &Client, country: &str) -> Option<Arc<AddressTree>> {
+    /// without a list.
+    pub async fn address_tree(
+        &self,
+        client: &Client,
+        country: &str,
+    ) -> Result<Option<Arc<AddressTree>>, AeError> {
         let kept = self
             .address_trees
             .lock()
@@ -132,20 +135,14 @@ impl Aliexpress {
             .filter(|(read_at, _)| read_at.elapsed() < ADDRESS_TREE_KEPT)
             .map(|(_, tree)| tree.clone());
         if let Some(tree) = kept {
-            return tree;
+            return Ok(tree);
         }
-        let tree = match client.address_tree(country).await {
-            Ok(tree) => tree.map(Arc::new),
-            Err(err) => {
-                tracing::warn!(country, %err, "AliExpress's places not read");
-                return None;
-            }
-        };
+        let tree = client.address_tree(country).await?.map(Arc::new);
         self.address_trees
             .lock()
             .expect("nothing panics while holding the address trees")
             .insert(country.to_owned(), (Instant::now(), tree.clone()));
-        tree
+        Ok(tree)
     }
 
     /// How long a product goes before it is read again, in seconds.
