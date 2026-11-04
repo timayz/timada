@@ -102,6 +102,17 @@ CLI and an internet connection.
    - the `whsec_…` printed by `stripe listen`, not one from an endpoint registered in
      the Stripe dashboard.
 
+   To skip this after each `make seed.chatounette`, put them in
+   `config/stripe.local.toml`, which git ignores. The seed then connects the shop from
+   that file, over any account it has, and logs the tenant id for step 2. It checks
+   the keys' prefixes only, so a key Stripe refuses shows up at the first payment:
+
+   ```toml
+   publishable_key = "pk_test_…"
+   secret_key = "sk_test_…"
+   webhook_secret = "whsec_…"
+   ```
+
 4. **Give the shop a key that can sell.** Tick `store:checkout` on its key on the
    API keys page, or mint a new one. If the key changes, remove the replica first:
    `rm chatounette.db*`, then `make chatounette.migrate`.
