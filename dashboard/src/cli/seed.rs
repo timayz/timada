@@ -66,10 +66,20 @@ pub struct SeedArgs {
     /// load test's), never a real one
     #[arg(long)]
     pub owner_password: Option<String>,
-    /// Makes the shop sell for pretend: a test company and the Stripe test
-    /// keys of `TEST_PAYMENTS`, for a stand-in for Stripe (the load test's)
+    /// Links the shop to a test company, registered once, unless it already
+    /// sells as one: what its invoices and AliExpress connection need, for a
+    /// development platform, never a real one
     #[arg(long)]
+    pub test_company: bool,
+    /// Makes the shop sell for pretend: the test company and the Stripe test
+    /// keys of `TEST_PAYMENTS`, for a stand-in for Stripe (the load test's)
+    #[arg(long, conflicts_with = "stripe_file")]
     pub test_payments: bool,
+    /// Connects the shop to the Stripe account of this TOML file, over any
+    /// it has: `publishable_key`, `secret_key` and `webhook_secret`. Keep the
+    /// file out of git, as `*.local.toml` is
+    #[arg(long)]
+    pub stripe_file: Option<PathBuf>,
     /// Also write the storefront's settings it prints to this file, for a
     /// script, or a snapshot to keep (`snapshot save --also`)
     #[arg(long)]
@@ -94,6 +104,23 @@ const TEST_WEBHOOK_SECRET: &str = "whsec_load";
 
 pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     super::refuse_if_serving(&config).await?;
+    // Before the long part: a catalogue takes a while to find out about these.
+    let stripe = if args.test_payments {
+        Some(StripeKeys {
+            publishable_key: TEST_PUBLISHABLE_KEY.into(),
+            secret_key: TEST_SECRET_KEY.into(),
+            webhook_secret: TEST_WEBHOOK_SECRET.into(),
+        })
+    } else {
+        args.stripe_file
+            .as_deref()
+            .map(StripeKeys::read)
+            .transpose()?
+    };
+    if stripe.is_some() {
+        crate::seal::payments_sealer(&config)
+            .context("connecting Stripe needs payments enabled (a [payments] section)")?;
+    }
     let snapshot = Snapshot::read(&args.snapshot)?;
     let pictures = snapshot.images().count();
     tracing::info!(
@@ -187,7 +214,10 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
             tenant
         }
     };
-    // So the back office lists it right away.
+    if args.test_company || args.test_payments {
+        test_company(&tenancy, &tenant, &owner.id).await?;
+    }
+    // So the back office lists them right away.
     timada_tenancy::read_model_subscription::<Executor>(store_db.clone())
         .run_once(&platform)
         .await?;
@@ -250,8 +280,8 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
             .await?;
     }
 
-    if args.test_payments {
-        test_payments(&config, &tenancy, &executor, &tenant.id, &owner.id).await?;
+    if let Some(stripe) = &stripe {
+        connect_stripe(&config, &tenancy, &executor, &tenant.id, &owner.id, stripe).await?;
     }
 
     if let Some(dir) = &args.pages {
@@ -336,20 +366,18 @@ async fn register_owner(
     Ok(())
 }
 
-/// The test company the shop sells as, registered once, and the Stripe test
-/// keys, sealed as the payments page seals them; then the setup the
-/// storefront reads, as the payments subscription would write it.
-async fn test_payments(
-    config: &Config,
+/// The test company the shop sells as, registered once. A shop that already
+/// sells as a company keeps it.
+async fn test_company(
     tenancy: &timada_tenancy::Command<Executor>,
-    executor: &Executor,
-    tenant_id: &str,
+    tenant: &timada_tenancy::TenantState,
     owner_id: &str,
 ) -> Result<()> {
-    let sealer = crate::seal::payments_sealer(config)
-        .context("--test-payments needs payments enabled (a [payments] section)")?;
+    if tenant.company.is_some() {
+        return Ok(());
+    }
     let identity = timada_tenancy::LegalIdentity {
-        legal_name: "Load Test SAS".into(),
+        legal_name: "Test Shop SAS".into(),
         legal_form: "SAS".into(),
         siret: "12002701600092".into(),
         line1: "1 rue de la Paix".into(),
@@ -360,29 +388,79 @@ async fn test_payments(
         vat_number: Some("FR85120027016".into()),
         ..Default::default()
     };
-    let tenant = tenancy
-        .load_tenant(tenant_id)
-        .await?
-        .context("the tenant vanished")?;
-    if tenant.company.is_none() {
-        let company_id = match tenancy.load_company_siren(identity.siren()).await? {
-            Some(siren) if !siren.released => siren.company_id,
-            _ => tenancy.create_company(owner_id, identity).await?.id,
-        };
-        tenancy
-            .link_tenant(owner_id, &company_id, tenant_id, None)
-            .await?;
-        tracing::info!(%company_id, "test company linked");
+    let company_id = match tenancy.load_company_siren(identity.siren()).await? {
+        Some(siren) if !siren.released => siren.company_id,
+        _ => tenancy.create_company(owner_id, identity).await?.id,
+    };
+    tenancy
+        .link_tenant(owner_id, &company_id, &tenant.id, None)
+        .await?;
+    tracing::info!(%company_id, "test company linked");
+    Ok(())
+}
+
+/// A Stripe account's keys, deliberately not `Debug`: they stay out of logs.
+#[derive(serde::Deserialize)]
+struct StripeKeys {
+    publishable_key: String,
+    secret_key: String,
+    webhook_secret: String,
+}
+
+impl StripeKeys {
+    /// Reads and checks a `--stripe-file`, as the payments page checks what
+    /// is pasted in, without asking Stripe.
+    fn read(path: &std::path::Path) -> Result<Self> {
+        let keys: Self = config::Config::builder()
+            .add_source(config::File::from(path))
+            .build()
+            .and_then(config::Config::try_deserialize)
+            .with_context(|| format!("cannot read {}", path.display()))?;
+        keys.check()
+            .with_context(|| format!("{} is not a Stripe account's keys", path.display()))?;
+        Ok(keys)
     }
+
+    fn check(&self) -> Result<()> {
+        ensure!(
+            self.publishable_key.trim().starts_with("pk_"),
+            "publishable_key must start with pk_"
+        );
+        let secret_key = self.secret_key.trim();
+        ensure!(
+            secret_key.starts_with("sk_") || secret_key.starts_with("rk_"),
+            "secret_key must start with sk_ or rk_"
+        );
+        ensure!(
+            self.webhook_secret.trim().starts_with("whsec_"),
+            "webhook_secret must start with whsec_"
+        );
+        Ok(())
+    }
+}
+
+/// The keys, sealed as the payments page seals them; then the setup the
+/// storefront reads, as the payments subscription would write it.
+async fn connect_stripe(
+    config: &Config,
+    tenancy: &timada_tenancy::Command<Executor>,
+    executor: &Executor,
+    tenant_id: &str,
+    owner_id: &str,
+    keys: &StripeKeys,
+) -> Result<()> {
+    let sealer = crate::seal::payments_sealer(config)
+        .context("connecting Stripe needs payments enabled (a [payments] section)")?;
+    let publishable_key = keys.publishable_key.trim();
     tenancy
         .configure_payments(
             owner_id,
             tenant_id,
             timada_tenancy::ConfigurePayments {
                 provider: timada_orders::PROVIDER_STRIPE.into(),
-                publishable_key: TEST_PUBLISHABLE_KEY.into(),
-                secret_key_sealed: sealer.seal_for(tenant_id, TEST_SECRET_KEY)?,
-                webhook_secret_sealed: sealer.seal_for(tenant_id, TEST_WEBHOOK_SECRET)?,
+                publishable_key: publishable_key.into(),
+                secret_key_sealed: sealer.seal_for(tenant_id, keys.secret_key.trim())?,
+                webhook_secret_sealed: sealer.seal_for(tenant_id, keys.webhook_secret.trim())?,
             },
         )
         .await?;
@@ -391,11 +469,12 @@ async fn test_payments(
             crate::payments::DASHBOARD_ACTOR,
             Some(timada_orders::PaymentSetup {
                 provider: timada_orders::PROVIDER_STRIPE.into(),
-                publishable_key: TEST_PUBLISHABLE_KEY.into(),
+                publishable_key: publishable_key.into(),
             }),
         )
         .await?;
-    tracing::info!("test payments connected");
+    // The address `stripe listen` forwards to ends with this id.
+    tracing::info!(%tenant_id, "Stripe connected");
     Ok(())
 }
 
@@ -550,6 +629,20 @@ async fn seed_pages(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stripe_file_is_checked_as_the_payments_page_checks_the_form() {
+        let keys = |publishable_key: &str, secret_key: &str, webhook_secret: &str| StripeKeys {
+            publishable_key: publishable_key.into(),
+            secret_key: secret_key.into(),
+            webhook_secret: webhook_secret.into(),
+        };
+        assert!(keys("pk_test_a", " sk_test_b\n", "whsec_c").check().is_ok());
+        assert!(keys("pk_test_a", "rk_test_b", "whsec_c").check().is_ok());
+        assert!(keys("sk_test_b", "sk_test_b", "whsec_c").check().is_err());
+        assert!(keys("pk_test_a", "pk_test_a", "whsec_c").check().is_err());
+        assert!(keys("pk_test_a", "sk_test_b", "sk_test_b").check().is_err());
+    }
 
     #[test]
     fn a_page_file_is_a_header_and_markdown() {
