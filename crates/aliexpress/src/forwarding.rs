@@ -77,12 +77,18 @@ pub fn shipped_by_aliexpress(service_name: &str) -> bool {
 
 /// The service an item ships with: one AliExpress itself ships ("Shipped by
 /// AliExpress"), free before paid, tracked before not, the cheapest paid one
-/// otherwise; `None` when only the seller delivers.
+/// otherwise. Without one, the cheapest the seller ships with a parcel number,
+/// as an item in a local warehouse has only that and an order fulfils itself
+/// from the numbers; `None` when nothing can be followed.
 pub fn choose_service(options: &[FreightOption]) -> Option<&FreightOption> {
-    options
-        .iter()
-        .filter(|option| shipped_by_aliexpress(&option.service_name))
-        .min_by_key(|option| (option.cents, !option.tracking, option.service_name.clone()))
+    let cheapest = |keep: &dyn Fn(&FreightOption) -> bool| {
+        options
+            .iter()
+            .filter(|option| keep(option))
+            .min_by_key(|option| (option.cents, !option.tracking, option.service_name.clone()))
+    };
+    cheapest(&|option| shipped_by_aliexpress(&option.service_name))
+        .or_else(|| cheapest(&|option| option.tracking))
 }
 
 /// The delivery services offered, for the merchant to read:

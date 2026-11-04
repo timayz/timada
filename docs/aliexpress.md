@@ -255,9 +255,10 @@ What is bought:
 - How AliExpress orders the combination (`sku_attr`) is read again from the product
   when the order is placed, and so is its stock.
 - Each item ships with **a delivery AliExpress runs itself** (a Cainiao service):
-  free before paid, tracked first, the cheapest paid one otherwise. When only the
-  seller delivers to that country, nothing is placed and the card says what was
-  offered.
+  free before paid, tracked first, the cheapest paid one otherwise. Without one, the
+  cheapest **tracked service of the seller's**, as an item in a local warehouse often
+  has only that (`SELLER_SHIPPING_DE`). When nothing offered can be followed, nothing
+  is placed and the card says what was offered.
 - The address goes as given, with the phone split into its calling code and national
   number: the shopper's, or the shop's phone from the AliExpress page when they gave
   none. AliExpress also wants a `province`, from its own list where the country has one: a

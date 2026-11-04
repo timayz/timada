@@ -249,7 +249,7 @@ impl Aliexpress {
                     )
                 } else {
                     format!(
-                        "Only the seller delivers “{}” to {country} on AliExpress; offered: {}.",
+                        "No delivery of “{}” to {country} on AliExpress can be followed; offered: {}.",
                         product.subject,
                         describe_options(&options, &market.currency)
                     )

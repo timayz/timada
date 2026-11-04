@@ -204,7 +204,20 @@ fn delivery_by_aliexpress_itself_is_chosen_free_first_then_cheapest() {
         .service_name,
         "CAINIAO_FULFILLMENT_STD"
     );
-    assert!(choose_service(&[option("YANWEN_JYT", 0, true)]).is_none());
+    // Only the seller's: the cheapest that can be followed, never one that
+    // cannot, however cheap.
+    assert_eq!(
+        choose_service(&[
+            option("SELLER_SHIPPING_DE", 0, true),
+            option("YANWEN_JYT", 0, false),
+            option("DHL_DE", 500, true),
+        ])
+        .unwrap()
+        .service_name,
+        "SELLER_SHIPPING_DE"
+    );
+    assert!(choose_service(&[option("YANWEN_JYT", 0, false)]).is_none());
+    assert!(choose_service(&[]).is_none());
     assert_eq!(
         describe_options(
             &[
