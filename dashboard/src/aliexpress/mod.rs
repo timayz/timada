@@ -56,6 +56,8 @@ pub struct Aliexpress {
     sync_every_secs: u64,
     /// How recent a read must be for a payment to go by it, in seconds.
     read_fresh_secs: u64,
+    /// How long an open order goes unread before it is read again, in seconds.
+    order_read_every_secs: u64,
     /// What the app may spend, and what this node spent.
     budget: CallBudget,
     /// Which of the nodes up this one is, at the moment of asking.
@@ -104,6 +106,7 @@ impl Aliexpress {
             platform,
             sync_every_secs: config.sync_every_secs.max(1),
             read_fresh_secs: config.read_fresh_secs,
+            order_read_every_secs: config.order_read_every_secs.max(1),
             budget: CallBudget::new(config.calls_per_day),
             share,
         }))
@@ -119,12 +122,18 @@ impl Aliexpress {
         self.read_fresh_secs
     }
 
+    /// How long an open order goes unread before it is read again, in seconds.
+    pub fn order_read_every_secs(&self) -> u64 {
+        self.order_read_every_secs
+    }
+
     /// What the app may spend, and what this node spent.
     pub fn budget(&self) -> &CallBudget {
         &self.budget
     }
 
-    /// Which of the nodes up this one is: what it reads of the imported items.
+    /// Which of the nodes up this one is: which imported items and open orders
+    /// it reads.
     pub fn share(&self) -> Share {
         (self.share)()
     }

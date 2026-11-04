@@ -178,6 +178,7 @@ impl Shop {
                 authorize_url: None,
                 sync_check_secs: 3600,
                 sync_every_secs: 3600,
+                order_read_every_secs: 86_400,
                 calls_per_day: 86_400_000,
                 read_fresh_secs: 60,
             },
@@ -425,13 +426,18 @@ impl Shop {
 
     /// A node of two that does not hold the item.
     fn elsewhere(&self) -> Share {
-        let holder = (0..2)
-            .find(|&index| Share { index, of: 2 }.owns(&self.link_id))
-            .unwrap();
-        Share {
-            index: 1 - holder,
-            of: 2,
-        }
+        share_without(&self.link_id)
+    }
+}
+
+/// A node of two that does not hold the item or order `id`.
+fn share_without(id: &str) -> Share {
+    let holder = (0..2)
+        .find(|&index| Share { index, of: 2 }.owns(id))
+        .unwrap();
+    Share {
+        index: 1 - holder,
+        of: 2,
     }
 }
 
@@ -814,6 +820,208 @@ async fn the_sweep_spends_the_day_on_what_shoppers_want_first() {
     let version = shop.version().await;
     assert_eq!(sweep.ask_due(later).await.unwrap(), 2);
     assert_eq!(shop.version().await, version + 1);
+}
+
+impl Shop {
+    /// A paid order placed on AliExpress: its forward, in the read model.
+    async fn placed_on_aliexpress(&self) -> String {
+        evento::append("an-order")
+            .tenant(&self.tenant.id)
+            .original_version(0)
+            .event(&timada_orders::aggregator::Placed {
+                reference: "K7Q4-MZP2".to_owned(),
+                cart_id: "a-cart".to_owned(),
+                email: "ada@example.com".to_owned(),
+                shipping: Default::default(),
+                note: None,
+                lines: Vec::new(),
+                currency: "EUR".to_owned(),
+                total_cents: 862,
+                payment: Default::default(),
+                placed_by: "storefront".to_owned(),
+            })
+            .commit(&self.store)
+            .await
+            .unwrap();
+        let forwards = timada_aliexpress::Command::new(self.store.clone(), &self.tenant.id);
+        let forward_id = forwards
+            .request_forward(ALIEXPRESS_ACTOR, "an-order", false)
+            .await
+            .unwrap();
+        assert!(
+            forwards
+                .start_forward(ALIEXPRESS_ACTOR, &forward_id)
+                .await
+                .unwrap()
+        );
+        forwards
+            .record_placed(
+                ALIEXPRESS_ACTOR,
+                &forward_id,
+                timada_aliexpress::Placement {
+                    ae_order_ids: vec!["8100000000000001".to_owned()],
+                    items: Vec::new(),
+                    pay_requested: true,
+                    complete: true,
+                },
+            )
+            .await
+            .unwrap();
+        self.follow_read_models().await;
+        forward_id
+    }
+
+    /// The sweep's next pass over the open orders, a period after `at`.
+    fn period_after(&self, at: u64) -> u64 {
+        at + self.aliexpress.order_read_every_secs() + 1
+    }
+}
+
+#[tokio::test]
+async fn an_open_order_is_read_by_the_node_it_belongs_to() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let forward_id = shop.placed_on_aliexpress().await;
+    let later = shop.period_after(crate::auth::now());
+
+    // Not this node's: left to the other.
+    *shop.share.lock().unwrap() = share_without(&forward_id);
+    sweep.check_forwards(later).await.unwrap();
+    assert_eq!(shop.stand_in.reads(), 0);
+
+    // This node's: read, once.
+    *shop.share.lock().unwrap() = Share::ALONE;
+    sweep.check_forwards(later).await.unwrap();
+    assert_eq!(shop.stand_in.reads(), 1);
+}
+
+#[tokio::test]
+async fn an_open_order_is_read_once_a_period_when_no_push_comes() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    shop.placed_on_aliexpress().await;
+    let now = crate::auth::now();
+
+    // Just placed: however often the sweep passes, nothing to ask.
+    sweep.check_forwards(now).await.unwrap();
+    sweep.check_forwards(now + 3_600).await.unwrap();
+    assert_eq!(shop.stand_in.reads(), 0);
+
+    let later = shop.period_after(now);
+    sweep.check_forwards(later).await.unwrap();
+    assert_eq!(shop.stand_in.reads(), 1);
+    sweep.check_forwards(later + 3_600).await.unwrap();
+    assert_eq!(shop.stand_in.reads(), 1, "read: a period to go");
+
+    sweep
+        .check_forwards(shop.period_after(later))
+        .await
+        .unwrap();
+    assert_eq!(shop.stand_in.reads(), 2);
+}
+
+#[tokio::test]
+async fn a_push_saves_the_sweep_its_read() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let forward_id = shop.placed_on_aliexpress().await;
+    let now = crate::auth::now();
+    let pushed_at = shop.period_after(now) - 10;
+
+    super::webhook::check(
+        shop.aliexpress.clone(),
+        &shop.db,
+        shop.store.clone(),
+        &shop.tenant.id,
+        &forward_id,
+        pushed_at,
+    )
+    .await
+    .unwrap();
+    assert_eq!(shop.stand_in.reads(), 1, "read at once");
+
+    // The period it would have been read at comes and goes.
+    sweep.check_forwards(shop.period_after(now)).await.unwrap();
+    assert_eq!(shop.stand_in.reads(), 1);
+
+    // A period after the push, it is read in case another one was lost.
+    sweep
+        .check_forwards(shop.period_after(pushed_at))
+        .await
+        .unwrap();
+    assert_eq!(shop.stand_in.reads(), 2);
+}
+
+#[tokio::test]
+async fn a_node_that_stopped_with_the_parcels_known_leaves_the_order_to_the_next_sweep() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let forward_id = shop.placed_on_aliexpress().await;
+    let forwards = timada_aliexpress::Command::new(shop.store.clone(), &shop.tenant.id);
+
+    // A read recorded the parcel, then its node stopped before fulfilling.
+    let (_, version) = forwards
+        .load_forward_versioned(&forward_id)
+        .await
+        .unwrap()
+        .unwrap();
+    forwards
+        .record_checked(
+            &forward_id,
+            version,
+            vec![timada_aliexpress::aggregator::forward::Checked {
+                ae_order_id: "8100000000000001".to_owned(),
+                status: "WAIT_BUYER_ACCEPT_GOODS".to_owned(),
+                logistics_status: "SELLER_SEND_GOODS".to_owned(),
+                tracking: vec!["LP00123456FR".to_owned()],
+            }],
+            None,
+        )
+        .await
+        .unwrap();
+    shop.follow_read_models().await;
+
+    // A minute later, not a day: the shopper is not left waiting.
+    let fulfilled = sweep.check_forwards(crate::auth::now() + 60).await.unwrap();
+
+    assert_eq!(fulfilled, 1);
+    let forward = forwards
+        .load_forward_versioned(&forward_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    assert_eq!(forward.status, timada_aliexpress::ForwardStatus::Done);
+    let order = timada_orders::Command::new(shop.store.clone(), &shop.tenant.id)
+        .load_order("an-order")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(order.tracking.as_deref(), Some("LP00123456FR"));
+}
+
+#[tokio::test]
+async fn a_shop_that_cannot_read_takes_no_turn_with_its_open_orders() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let forward_id = shop.placed_on_aliexpress().await;
+    let later = shop.period_after(crate::auth::now());
+    timada_tenancy::Command(shop.store.clone())
+        .remove_aliexpress(ALICE, &shop.tenant.id)
+        .await
+        .unwrap();
+
+    sweep.check_forwards(later).await.unwrap();
+
+    assert_eq!(shop.stand_in.reads(), 0);
+    let before = later as i64 - 1;
+    let due = timada_aliexpress::forwards_due(&shop.db, before, Share::ALONE, 10)
+        .await
+        .unwrap();
+    assert!(
+        due.iter().all(|forward| forward.id != forward_id),
+        "passed over until the next period"
+    );
 }
 
 #[tokio::test]

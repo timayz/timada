@@ -2,9 +2,10 @@
 //! item of the order imported from AliExpress is bought there, shipped
 //! straight to the shopper by AliExpress's own delivery. The
 //! subscription below places the orders the shop wants placed as they come
-//! (`auto_forward`) and the ones the merchant asked for; the sweep
-//! ([`super::sync`]) reads them again until AliExpress gives their parcel
-//! numbers, and fulfils the shop's order with them.
+//! (`auto_forward`) and the ones the merchant asked for. Each push from
+//! AliExpress ([`super::webhook`]) reads them again, the sweep ([`super::sync`])
+//! when no push came for a while, until AliExpress gives their parcel numbers,
+//! and the shop's order is fulfilled with them.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -824,6 +825,7 @@ mod tests {
                 authorize_url: None,
                 sync_check_secs: 1,
                 sync_every_secs: 1,
+                order_read_every_secs: 86_400,
                 calls_per_day: 86_400,
                 read_fresh_secs: 60,
             };
