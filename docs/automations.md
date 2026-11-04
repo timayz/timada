@@ -118,7 +118,18 @@ without dragging is picked up the same way.
   Escape cancels.
 - **Sending without leaving the page:** the form is posted with `fetch`
   (URL-encoded, as a plain form posts it) and the editor the server sends back
-  replaces the old one; a save's redirect is followed.
+  replaces the old one; a save's redirect is followed. A change that could not be
+  sent says so.
+- **While an answer is on its way:** a button pressed goes once the answer is in,
+  on the editor it brings. It does not go when it is the same button again with
+  nothing typed in between (a double click), when the answer says something went
+  wrong (to be read first), or during a save or a publication (the page reloads).
+  One that names a place in a flow the answer changed (`add:root.1:…`) is refused
+  and says so: that place is no longer the one the merchant pressed.
+- **What is typed meanwhile stays,** and the field keeps the focus and the cursor.
+  Settings of a block the answer closed (a save closes it) are sent again to open
+  it back, and a save's redirect is then not followed; the page's heading catches
+  up at the next reload. Settings of a block that is gone go with it.
 - **Unsaved work:** a warning before leaving while the copy holds unsaved
   changes, and a copy in the browser's session storage, offered back on the
   next visit.
