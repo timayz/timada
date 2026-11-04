@@ -5,7 +5,7 @@
 
 use timada_automations::{
     ProblemAt, Step,
-    catalog::{self, CONDITION, DISCOUNT, EMAIL, NOTIFY, Op, Unit, WAIT, WEBHOOK},
+    catalog::{self, CONDITION, DISCORD, DISCOUNT, EMAIL, NOTIFY, Op, Unit, WAIT, WEBHOOK},
 };
 use topcoat::{
     Result,
@@ -143,6 +143,8 @@ async fn step_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
             discount_settings(canvas: canvas, step: step)
         } else if step.kind == WEBHOOK {
             webhook_settings(canvas: canvas, step: step)
+        } else if step.kind == DISCORD {
+            discord_settings(canvas: canvas, step: step)
         } else {
             <p class="text-sm text-muted-foreground">"This block was made with a newer version of Timada. It is kept as it is; remove it to publish the scenario."</p>
         }
@@ -470,6 +472,43 @@ async fn webhook_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View>
                 input(attrs: attributes! { id="webhook-secret" value=(secret) readonly="" class="font-mono text-xs" data-webhook-secret="" })
                 field_description("Check each call's Timada-Signature (t=…,v1=…, HMAC-SHA256 of \"{t}.{body}\") with it.")
             )
+        }
+    })
+}
+
+#[component]
+async fn discord_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+    let sealed = step.settings.get("url_sealed").cloned().unwrap_or_default();
+    let message = step.settings.get("message").cloned().unwrap_or_default();
+    let placeholder = if sealed.is_empty() {
+        "https://discord.com/api/webhooks/…"
+    } else {
+        "Saved: type a new address to replace it"
+    };
+    let subject = canvas.editor.definition.subject();
+    let about = subject.map_or("what started the run", subject_label);
+    let variables = crate::automations::discord::variables(subject);
+    Ok(view! {
+        field(
+            label_of(attrs: attributes! { for="discord-url" }, "Channel's webhook address")
+            input(attrs: attributes! { id="discord-url" name="settings.url" type="url" placeholder=(placeholder) autocomplete="off" })
+            field_description("In Discord: the channel's settings, Integrations, Webhooks, Copy Webhook URL. The address is kept sealed.")
+            issue_list(texts: issues_of(canvas, &step.id, "url"))
+        )
+        <input type="hidden" name="settings.url_sealed" value=(&sealed)>
+        field(
+            label_of(attrs: attributes! { for="discord-message" }, "Message")
+            textarea(attrs: attributes! { id="discord-message" name="settings.message" rows="5" maxlength="1800" }, (&message))
+            field_description((format!("You can write {variables}. A link to {about} in the dashboard goes under it. Nothing personal and nothing a customer wrote goes to Discord.")))
+            issue_list(texts: issues_of(canvas, &step.id, "message"))
+        )
+        if let Some(preview) = &canvas.discord_preview {
+            if let Ok(rendered) = preview {
+                <p class="text-sm whitespace-pre-wrap"><span class="text-muted-foreground">"Preview: "</span><span data-discord-preview="">(rendered)</span></p>
+            }
+            if let Err(err) = preview {
+                <p class="text-sm text-destructive" role="alert" data-template-error="">(err.to_string())</p>
+            }
         }
     })
 }

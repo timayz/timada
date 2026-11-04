@@ -42,6 +42,9 @@ pub struct Canvas<'a> {
     /// The open mail step, rendered with made-up variables, or why it does
     /// not read.
     pub preview: Option<Result<timada_tenancy::RenderedMail, timada_tenancy::MailTemplateError>>,
+    /// The open Discord step's message, rendered with made-up variables, or
+    /// why it does not read.
+    pub discord_preview: Option<Result<String, timada_tenancy::MailTemplateError>>,
     /// The open webhook step's signing secret.
     pub webhook_secret: Option<String>,
 }

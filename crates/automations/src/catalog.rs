@@ -145,6 +145,8 @@ pub const EMAIL: &str = "email";
 pub const DISCOUNT: &str = "discount";
 /// Posts what started the run to an address of the merchant's, signed.
 pub const WEBHOOK: &str = "webhook";
+/// Posts a message the merchant wrote to a channel of the merchant's Discord.
+pub const DISCORD: &str = "discord";
 
 /// A kind of step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,6 +180,10 @@ pub const STEPS: &[StepKind] = &[
     },
     StepKind {
         key: WEBHOOK,
+        branches: 0,
+    },
+    StepKind {
+        key: DISCORD,
         branches: 0,
     },
 ];
@@ -883,6 +889,40 @@ pub fn parse_webhook(settings: &BTreeMap<String, String>) -> Result<WebhookSetti
     })
 }
 
+/// The longest message a Discord step posts, in characters: Discord takes
+/// 2000, and the link to what started the run goes under it.
+pub const MAX_DISCORD_MESSAGE_LEN: usize = 1800;
+
+/// A Discord step, read. The channel's webhook address is its only key, so
+/// it is kept sealed by the host, as a webhook step's is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscordSettings {
+    pub url_sealed: String,
+    pub message: String,
+}
+
+pub fn parse_discord(settings: &BTreeMap<String, String>) -> Result<DiscordSettings, Vec<Issue>> {
+    let mut issues = Vec::new();
+    let url_sealed = setting(settings, "url_sealed");
+    if url_sealed.is_empty() {
+        issues.push(issue("url", ISSUE_MISSING));
+    }
+    let message = setting(settings, "message");
+    if message.is_empty() {
+        issues.push(issue("message", ISSUE_MISSING));
+    } else if message.chars().count() > MAX_DISCORD_MESSAGE_LEN {
+        issues.push(issue("message", ISSUE_INVALID));
+    }
+    if issues.is_empty() {
+        Ok(DiscordSettings {
+            url_sealed: url_sealed.to_owned(),
+            message: message.to_owned(),
+        })
+    } else {
+        Err(issues)
+    }
+}
+
 /// What a new step of `kind` starts with, for a run about `subject`.
 pub fn default_settings(kind: &str, subject: Option<Subject>) -> BTreeMap<String, String> {
     let pairs: Vec<(String, String)> = match kind {
@@ -925,6 +965,7 @@ pub fn step_issues(
         EMAIL => parse_email(settings).map(|_| ()),
         DISCOUNT => parse_discount(settings).map(|_| ()),
         WEBHOOK => parse_webhook(settings).map(|_| ()),
+        DISCORD => parse_discord(settings).map(|_| ()),
         _ => Ok(()),
     };
     result.err().unwrap_or_default()
@@ -1096,6 +1137,24 @@ mod tests {
         ]))
         .unwrap_err();
         assert_eq!(issues.len(), 3);
+    }
+
+    #[test]
+    fn a_discord_step_needs_its_address_and_a_message() {
+        let read = parse_discord(&map(&[("url_sealed", "abc"), ("message", " New order ")]));
+        assert_eq!(read.unwrap().message, "New order");
+        let issues = parse_discord(&map(&[])).unwrap_err();
+        assert_eq!(issues.len(), 2);
+        assert_eq!(
+            (issues[0].key.as_str(), issues[0].code),
+            ("url", ISSUE_MISSING)
+        );
+        let long = "x".repeat(MAX_DISCORD_MESSAGE_LEN + 1);
+        let issues = parse_discord(&map(&[("url_sealed", "abc"), ("message", &long)])).unwrap_err();
+        assert_eq!(
+            (issues[0].key.as_str(), issues[0].code),
+            ("message", ISSUE_INVALID)
+        );
     }
 
     #[test]
