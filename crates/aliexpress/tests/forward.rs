@@ -298,6 +298,12 @@ fn a_postal_code_names_the_province_aliexpress_lists() {
     assert_eq!(province_of("CA", "h2x 1y4", "Montréal"), "Quebec");
     assert_eq!(province_of("CA", "M5V 2T6", "Toronto"), "Ontario");
     assert_eq!(province_of("CA", "X0A 0H0", "Iqaluit"), "Other");
+    assert_eq!(province_of("IT", "66010", "Altino"), "Abruzzo");
+    assert_eq!(province_of("IT", "00184", "Roma"), "Lazio");
+    assert_eq!(province_of("IT", "20121", "Milano"), "Lombardia");
+    assert_eq!(province_of("IT", "11100", "Aosta"), "Valle d'Aosta");
+    // No "Other" on Italy's list: a postal code naming no region keeps the city.
+    assert_eq!(province_of("IT", "99000", "Nulle part"), "Nulle part");
 }
 
 #[test]

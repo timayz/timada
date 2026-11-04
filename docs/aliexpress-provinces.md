@@ -23,6 +23,7 @@ towns. A country without a list answers `ret: false`, code 801,
 | Belgique (BE) | `Region Bruxelles-Capitale`, `Region Flamande`, `Region Wallonne` + `Other` |
 | Espagne (ES) | 52 provinces + `Other`, some in their own spelling (`Alacant`, `Castello`, `Guipuzcoa`, `Vizcaya`) |
 | Canada (CA) | 13 provinces and territories + `Other`; `X…` sends `Other` |
+| Italie (IT) | 20 regions, no `Other`; a postal code naming none sends the city |
 
 **`Other`**, as a postal code does not reliably name the entry:
 
@@ -42,7 +43,6 @@ AliExpress should refuse with `Please select a State/Province/County`:
 | Country | AliExpress lists | Postal code |
 |---|---|---|
 | États-Unis (US) | 50 states + DC | ZIP's first three digits |
-| Italie (IT) | 20 regions | mostly, through the province |
 | Pologne (PL) | 16 voivodeships | approximately |
 | Suisse (CH) | 26 cantons | postal codes cross cantons |
 | Estonie (EE) | 15 counties | unknown |
@@ -65,4 +65,10 @@ Saint-Martin, Saint-Pierre-et-Miquelon and the Pacific territories stay `FR` +
 
 - That AliExpress takes `Other` outside France.
 - That it does not check `city` against the tree: the shopper's spelling is sent
-  as typed, and the tree has only 14 cities for Belgium.
+  as typed. The tree's second level is not always a city: for Belgium it holds
+  mostly provinces (`Anvers`), while the site's form goes on to `Turnhout`, which
+  the API does not list. For Italy it holds provinces (`Chieti`), with towns
+  (`Altino`) below, and the order has no field for a town.
+- That an address needs what the site's form asks: a street of at least 5
+  characters and a separate house number. The order has `address` and `address2`
+  only, and the shopper's whole line goes in `address`.

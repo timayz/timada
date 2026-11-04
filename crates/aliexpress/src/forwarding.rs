@@ -176,8 +176,9 @@ pub fn delivery_country(country: &str, postal_code: &str) -> String {
 /// The region AliExpress files an address under, which it will not do
 /// without: for France the department of the postal code, as AliExpress
 /// lists them, or its "Other" for one it does not list; likewise for Belgium,
-/// Spain and Canada, whose postal codes name theirs. "Other" where the list
-/// has it and a postal code does not say; the city elsewhere (the shop's
+/// Spain and Canada, whose postal codes name theirs, and for Italy, whose list
+/// has no "Other". "Other" where the list has it and a postal code does not
+/// say; the city elsewhere (the shop's
 /// addresses carry no region of their own, and a country without a list takes
 /// a free text). docs/aliexpress-provinces.md has the lists.
 pub fn province_of(country: &str, postal_code: &str, city: &str) -> String {
@@ -186,6 +187,10 @@ pub fn province_of(country: &str, postal_code: &str, city: &str) -> String {
         "BE" => belgian_region(postal_code).unwrap_or("Other"),
         "ES" => spanish_province(postal_code).unwrap_or("Other"),
         "CA" => canadian_province(postal_code).unwrap_or("Other"),
+        "IT" => match italian_region(postal_code) {
+            Some(region) => region,
+            None => return city.trim().to_owned(),
+        },
         "AT" | "CZ" | "DE" | "GB" | "LV" | "NL" | "PT" => "Other",
         _ => return city.trim().to_owned(),
     }
@@ -265,6 +270,38 @@ pub fn spanish_province(postal_code: &str) -> Option<&'static str> {
         "50" => "Zaragoza",
         "51" => "Ceuta",
         "52" => "Melilla",
+        _ => return None,
+    })
+}
+
+/// The region of an Italian postal code, by its first two digits, as
+/// AliExpress lists them: its "province" is the region.
+pub fn italian_region(postal_code: &str) -> Option<&'static str> {
+    let digits: String = postal_code.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() != 5 {
+        return None;
+    }
+    Some(match digits[..2].parse::<u8>().ok()? {
+        0..=4 => "Lazio",
+        5 | 6 => "Umbria",
+        7..=9 => "Sardegna",
+        10 | 12..=15 | 28 => "Piemonte",
+        11 => "Valle d'Aosta",
+        16..=19 => "Liguria",
+        20..=27 | 46 => "Lombardia",
+        29 | 40..=44 | 47 | 48 => "Emilia-Romagna",
+        30..=32 | 35..=37 | 45 => "Veneto",
+        33 | 34 => "Friuli-Venezia Giulia",
+        38 | 39 => "Trentino-Alto Adige",
+        50..=59 => "Toscana",
+        60..=63 => "Marche",
+        64..=67 => "Abruzzo",
+        70..=74 | 76 => "Puglia",
+        75 | 85 => "Basilicata",
+        80..=84 => "Campania",
+        86 => "Molise",
+        87..=89 => "Calabria",
+        90..=98 => "Sicilia",
         _ => return None,
     })
 }

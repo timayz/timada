@@ -262,11 +262,11 @@ What is bought:
   number: the shopper's, or the shop's phone from the AliExpress page when they gave
   none. AliExpress also wants a `province`, from its own list where the country has one: a
   French address names the postal code's department (`Rhone`, `Paris`…), and Belgium,
-  Spain and Canada work the same way. Other countries with a list send its `Other`,
+  Spain, Canada and Italy work the same way. Other countries with a list send its `Other`,
   and those without one send the city. A French overseas department goes as the
   country AliExpress lists it under (`MQ`, `GP`, `GF`, `RE`, `YT`), for the delivery
   as well. [aliexpress-provinces.md](aliexpress-provinces.md) has every country,
-  including six whose list has no `Other` and are not solved yet.
+  including five whose list has no `Other` and are not solved yet.
 
 A failure is shown on the card with *Place again*. One node takes each order on
 (`Started`, like an import). If AliExpress did not answer, or a node stopped before
