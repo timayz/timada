@@ -117,7 +117,11 @@ without dragging is picked up the same way.
   Escape cancels.
 - **Sending without leaving the page:** the form is posted with `fetch`
   (URL-encoded, as a plain form posts it) and the editor the server sends back
-  replaces the old one; a save's redirect is followed.
+  replaces the old one; a save's redirect is followed. A button pressed while an
+  answer is on its way goes once it is in, on the editor it brings, except the
+  same button again (a double click), one pressed after typing (the answer
+  replaces what was typed) and one pressed during a save or a publication (the
+  page reloads). A change that could not be sent says so.
 - **Unsaved work:** a warning before leaving while the copy holds unsaved
   changes, and a copy in the browser's session storage, offered back on the
   next visit.

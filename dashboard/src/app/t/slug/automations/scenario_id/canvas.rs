@@ -176,6 +176,12 @@ pub async fn editor_view(canvas: &Canvas<'_>, action: &str) -> Result<impl View>
                 button(attrs: attributes! { type="submit" name="op" value="publish" }, "Publish")
             </div>
 
+            alert(
+                variant: AlertVariant::Destructive,
+                attrs: attributes! { role="alert" hidden="" data-send-failed="" },
+                icon(data: icons::ERROR)
+                alert_description("The change could not be sent. Check the connection and try again.")
+            )
             if let Some(refusal) = editor.refusal {
                 alert(
                     variant: AlertVariant::Destructive,

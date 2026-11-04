@@ -19,6 +19,11 @@ const live = document.getElementById("editor-live");
 let busy = false;
 let leaving = false;
 let drag = null;
+// The button on its way, those pressed since, and whether anything was typed
+// since: see `hold`.
+let sending = null;
+let waiting = [];
+let typed = false;
 
 if (root) enhance();
 
@@ -66,12 +71,29 @@ function enhance() {
   store();
 }
 
+// A button pressed while an answer is on its way goes once that answer is in,
+// on the editor it brings. Not the same button again (a double click), and not
+// one pressed after typing: the answer replaces what was typed, and the press
+// would go without it.
+function hold(press) {
+  const again = press.op === sending || waiting.some((other) => other.op === press.op);
+  if (!again && !typed) waiting.push(press);
+}
+
 async function send(submitter, extra) {
-  if (busy) return;
+  const press = { ...extra };
+  if (submitter?.name) press[submitter.name] = submitter.value;
+  if (busy) {
+    hold(press);
+    return;
+  }
   busy = true;
+  sending = press.op;
+  typed = false;
   root.setAttribute("aria-busy", "true");
-  const form = new FormData(root, submitter || undefined);
-  for (const [key, value] of Object.entries(extra || {})) form.set(key, value);
+  root.querySelector("[data-send-failed]").hidden = true;
+  const form = new FormData(root);
+  for (const [key, value] of Object.entries(press)) form.set(key, value);
   try {
     // URL-encoded, as a plain form posts it.
     const response = await fetch(root.action, { method: "POST", body: new URLSearchParams(form) });
@@ -99,10 +121,12 @@ async function send(submitter, extra) {
     swap(document.importNode(next, true));
     for (const notice of notices) root.before(notice);
   } catch {
-    if (live) live.textContent = "The change could not be sent. Check the connection and try again.";
+    waiting = [];
+    root.querySelector("[data-send-failed]").hidden = false;
   } finally {
     busy = false;
     root?.removeAttribute("aria-busy");
+    if (!leaving && waiting.length) send(null, waiting.shift());
   }
 }
 
@@ -138,7 +162,10 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("input", (event) => {
-  if (root && root.contains(event.target)) root.setAttribute("data-dirty", "");
+  if (root && root.contains(event.target)) {
+    root.setAttribute("data-dirty", "");
+    if (busy) typed = true;
+  }
 });
 
 document.addEventListener("click", (event) => {

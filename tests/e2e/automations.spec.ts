@@ -50,6 +50,30 @@ const slot = (page: Page, at: string) =>
   page.locator(`[data-drop-slot="${at}"]`);
 const step = (page: Page, id: string) => page.locator(`[data-step="${id}"]`);
 
+/// Holds the editor's requests back, as a slow connection does.
+async function slowEditor(page: Page, ms: number) {
+  await page.route(/\/automations\/[0-9A-Z]{26}$/, async (route) => {
+    if (route.request().method() === "POST") await new Promise((done) => setTimeout(done, ms));
+    await route.continue();
+  });
+}
+
+/// A new scenario on contact messages, a notice set up in it, its settings open.
+async function scenarioWithNotice(page: Page) {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name } = uniqueTenant("Quick Shop");
+  await createTenant(page, name);
+  await newScenario(page, "Quick presses");
+  await enhanced(page);
+  await chooseTrigger(page, "When a contact message arrives");
+  await slot(page, "root.0").getByRole("button", { name: "Add a step here" }).click();
+  await page
+    .locator('[id="add-root.0"]')
+    .getByRole("button", { name: "Notify the team", exact: true })
+    .click();
+  await page.locator("[data-inspector]").getByLabel("Subject").fill("A visitor wrote");
+}
+
 /// Picks the trigger in the inspector.
 async function chooseTrigger(page: Page, label: string) {
   await page.locator("[data-trigger] button").click();
@@ -128,6 +152,79 @@ test("a scenario is drawn by dragging blocks, then saved", async ({ page }) => {
     await expect(row).toContainText("When an order is placed", { timeout: 500 });
   }).toPass();
   await expect(row).toContainText("Draft");
+});
+
+test("a button pressed while an answer is on its way still goes", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 400);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Published as version 1");
+  await expect(page.locator("[data-scenario-state]")).toHaveAttribute("data-scenario-state", "active");
+});
+
+test("a double click adds one block", async ({ page }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name } = uniqueTenant("Double Shop");
+  await createTenant(page, name);
+  await newScenario(page, "Double click");
+  await enhanced(page);
+  await chooseTrigger(page, "When a contact message arrives");
+  await slowEditor(page, 400);
+  await slot(page, "root.0").getByRole("button", { name: "Add a step here" }).click();
+  await page
+    .locator('[id="add-root.0"]')
+    .getByRole("button", { name: "Notify the team", exact: true })
+    .dblclick();
+  await expect(step(page, "s1")).toHaveCount(1);
+  await expect(page.locator("[data-scenario-editor]")).not.toHaveAttribute("aria-busy", "true");
+  await expect(page.locator("[data-step]")).toHaveCount(1);
+});
+
+test("a button pressed after typing does not go without what was typed", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(page.locator("[data-to-set-up]")).toHaveAttribute("data-to-set-up", "0");
+  // Long enough for both presses to land before the answer.
+  await slowEditor(page, 1000);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await page.locator("[data-inspector]").getByLabel("Subject").fill("Typed meanwhile");
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.locator("[data-scenario-editor]")).toHaveAttribute("aria-busy", "true");
+  await expect(page.locator("[data-scenario-editor]")).not.toHaveAttribute("aria-busy", "true");
+  await expect(page.locator("[data-scenario-state]")).toHaveAttribute("data-scenario-state", "draft");
+  await expect(page.getByRole("status")).toHaveCount(0);
+});
+
+test("a button pressed during a save does not go after it", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 400);
+  const posts: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST") posts.push(request.url());
+  });
+  await page.getByRole("button", { name: "Save draft" }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  expect(posts).toHaveLength(1);
+  await expect(page.locator("[data-scenario-state]")).toHaveAttribute("data-scenario-state", "draft");
+});
+
+test("a change that could not be sent says so", async ({ page }) => {
+  await scenarioWithNotice(page);
+  const failed = page.locator("[data-send-failed]");
+  await expect(failed).toBeHidden();
+  const offline = /\/automations\/[0-9A-Z]{26}$/;
+  await page.route(offline, (route) => route.abort());
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(failed).toBeVisible();
+  await expect(failed).toContainText("could not be sent");
+  // What was typed is still there, and goes once the connection is back.
+  await expect(page.locator("[data-inspector]").getByLabel("Subject")).toHaveValue("A visitor wrote");
+  await page.unroute(offline);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText("“A visitor wrote”");
+  await expect(failed).toBeHidden();
 });
 
 test("a scenario is drawn with buttons only, without JavaScript", async ({ browser }) => {
