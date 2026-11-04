@@ -292,6 +292,9 @@ fn with_causes(err: &dyn std::error::Error) -> String {
     text
 }
 
+/// AliExpress's way of saying the delivery lookup does not know a province.
+const INVALID_PROVINCE: &str = "INVALID_PROVINCE_NAME";
+
 /// AliExpress's way of saying it delivers nowhere near the address, which is
 /// an answer rather than a failure.
 const NO_DELIVERY: &str = "DELIVERY_NOT_AVAILABLE_TO_YOUR_ADDRESS";
@@ -428,8 +431,36 @@ impl Client {
     }
 
     /// How AliExpress can deliver `quantity` of one combination to
-    /// `country`. An item from a warehouse in that country needs `province`.
+    /// `country`. An item from a warehouse in that country needs `province`,
+    /// but this call does not know every name the address form lists (`Gard`,
+    /// in France), so one it refuses is left out.
     pub async fn freight(
+        &self,
+        product_id: &str,
+        sku_id: &str,
+        quantity: u32,
+        country: &str,
+        province: Option<&str>,
+        market: &Market,
+    ) -> Result<Vec<FreightOption>, AeError> {
+        let answer = self
+            .freight_to(product_id, sku_id, quantity, country, province, market)
+            .await;
+        match answer {
+            Err(err) if province.is_some() && err.code.contains(INVALID_PROVINCE) => {
+                tracing::info!(
+                    country,
+                    ?province,
+                    "delivery asked again without the province"
+                );
+                self.freight_to(product_id, sku_id, quantity, country, None, market)
+                    .await
+            }
+            answer => answer,
+        }
+    }
+
+    async fn freight_to(
         &self,
         product_id: &str,
         sku_id: &str,

@@ -79,8 +79,10 @@ the tree cannot be read, nothing is placed and the order page says to try again)
   Italy's provinces have none, so that address goes as typed.
 
 Delivery is asked with the province too. The docs say it is for local-to-local
-products, and an item shipped from Germany answered
-`DELIVERY_NOT_AVAILABLE_TO_YOUR_ADDRESS` without one, on the site's own address.
+products: an item shipped from Germany answered
+`DELIVERY_NOT_AVAILABLE_TO_YOUR_ADDRESS` to Germany without one. The lookup does
+not know every name the address form lists (`Gard` answered
+`INVALID_PROVINCE_NAME`), so it is asked again without a name it refuses.
 
 ## Not proven by a real order
 
