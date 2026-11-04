@@ -219,6 +219,7 @@ pub fn describe_error(code: &str) -> &'static str {
         "automation_discord_address" => {
             "That is not a Discord webhook address: copy it from the channel's settings, under Integrations (https://discord.com/api/webhooks/…)."
         }
+        "automation_discord_invalid" => "A Discord message does not read: see what its step says.",
         "automation_discount_permission" => {
             "A scenario that makes discount codes is published by members who may manage the discounts."
         }

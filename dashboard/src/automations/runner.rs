@@ -786,8 +786,8 @@ impl<E: Store> Runner<E> {
 }
 
 impl<E: Store> Runner<E> {
-    /// Posts the merchant's message and a link to the run's subject to the
-    /// step's Discord channel. A call that got no answer is tried again
+    /// Posts the merchant's message, its variables read from the subject as
+    /// it is now, and a link to the subject to the step's Discord channel. A call that got no answer is tried again
     /// later, even if that may post it twice (see `discord.rs`).
     async fn discord(
         &self,
@@ -815,7 +815,22 @@ impl<E: Store> Runner<E> {
             return Ok(Acted::Failed("The channel's address does not open.".into()));
         };
         let link = subject_link(&self.base_url, &tenant.slug, subject, &run.subject_id);
-        let content = super::discord::content(&settings.message, &link);
+        let Some(vars) = super::discord::vars_of(
+            &self.store,
+            &tenant.id,
+            &tenant.name,
+            subject,
+            &run.subject_id,
+        )
+        .await?
+        else {
+            return Ok(Acted::Skipped("What started the run is gone.".into()));
+        };
+        let message = match timada_tenancy::render_message(&settings.message, &vars) {
+            Ok(message) => message,
+            Err(err) => return Ok(Acted::Failed(err.to_string())),
+        };
+        let content = super::discord::content(&message, &link);
         Ok(
             match super::discord::post(&self.http, &url, &content, self.allow_private_hosts).await {
                 super::webhook::Delivery::Taken(status) => {

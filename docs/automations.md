@@ -273,8 +273,17 @@ own `https://…/api/webhooks/…` addresses are taken (and, with
 the channel's only key, so it is sealed as a webhook step's is, with no host in
 clear; the name and picture the posts show are the ones set on Discord's side.
 
-Nothing a shopper wrote travels, so the message may mention people as the merchant
-likes (`@here`, a role). A 2xx is done; no answer, 408, 429 or a 5xx is tried
+The message is a template, checked and previewed in the editor, and a scenario
+whose message does not read is not published. It prints values read when the run
+gets to the step, from a fixed list (`discord.rs`): `shop.name` always;
+`order.reference`, `order.total`, `order.items` and `order.country` for an order or
+a review; `review.rating` for a review; `cart.total` (an amount without its
+currency) and `cart.items` for a left checkout. Nothing personal and nothing a
+shopper wrote is on the list, so the message may mention people as the merchant
+likes (`@here`, a role) with no shopper able to add a mention. A long message is cut
+to Discord's 2000 characters, the link kept. A subject gone by then skips the step.
+
+A 2xx is done; no answer, 408, 429 or a 5xx is tried
 again (as for the codes); another answer, such as the webhook deleted on Discord's
 side, fails the step. Discord takes no idempotency key, so a call that reached it
 and got no answer may post the message twice: a line said twice is better than a

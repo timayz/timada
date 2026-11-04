@@ -301,6 +301,9 @@ async fn publish_blocked(
             return Ok(Some("automation_secret_required"));
         }
     }
+    if !crate::automations::discord::messages_read(&access.tenant.name, definition) {
+        return Ok(Some("automation_discord_invalid"));
+    }
     if !mail::sends_mail(definition) {
         return Ok(None);
     }
@@ -381,6 +384,16 @@ async fn scenario_page(
         .and_then(|id| editor.definition.find(id))
         .filter(|step| step.kind == timada_automations::catalog::EMAIL)
         .map(|step| mail::preview(cx, tenant, &editor.definition, step));
+    let discord_preview = editor
+        .selected
+        .as_deref()
+        .and_then(|id| editor.definition.find(id))
+        .filter(|step| step.kind == timada_automations::catalog::DISCORD)
+        .and_then(|step| step.settings.get("message"))
+        .filter(|message| !message.trim().is_empty())
+        .map(|message| {
+            crate::automations::discord::preview(&tenant.name, editor.definition.subject(), message)
+        });
     let webhook_secret = editor
         .selected
         .as_deref()
@@ -405,6 +418,7 @@ async fn scenario_page(
         problems,
         manage,
         preview,
+        discord_preview,
         webhook_secret,
     };
     let subtitle = match (scenario.status, scenario.version) {

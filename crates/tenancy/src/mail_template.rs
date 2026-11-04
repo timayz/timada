@@ -779,6 +779,15 @@ pub fn render_text(text: &str, vars: &MailVars) -> Result<String, MailTemplateEr
         .map_err(|err| describe("Plain text", &err))
 }
 
+/// Renders a short text that is no mail (a message to a chat) with `vars`,
+/// in the same sandbox, its variables printed as they are.
+pub fn render_message(text: &str, vars: &impl Serialize) -> Result<String, MailTemplateError> {
+    environment()
+        .template_from_named_str("message.txt", text)
+        .and_then(|template| template.render(Value::from(Serde(vars))))
+        .map_err(|err| describe("Message", &err))
+}
+
 /// What a markup check looks at: the template as the merchant wrote it, or
 /// a mail rendered from it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

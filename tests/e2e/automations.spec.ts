@@ -620,7 +620,7 @@ test("a scenario posts to a Discord channel", async ({ page, request }) => {
 
     // Any other address is refused, and nothing is kept of it.
     await inspector.getByLabel("Channel's webhook address").fill("https://example.com/hook");
-    await inspector.getByLabel("Message").fill("A customer wrote to us");
+    await inspector.getByLabel("Message").fill("{{ shop.name }}: a customer wrote to us");
     await page.getByRole("button", { name: "Apply" }).click();
     await expect(page.getByText("That is not a Discord webhook address")).toBeVisible();
     await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText(
@@ -636,6 +636,18 @@ test("a scenario posts to a Discord channel", async ({ page, request }) => {
       "Posts to the saved channel",
     );
     await expect(page.locator("[data-scenario-editor]")).not.toContainText("channel-token");
+    await expect(page.locator("[data-discord-preview]")).toHaveText(`${name}: a customer wrote to us`);
+
+    // A contact message has no order: said in the step, and not published.
+    await inspector.getByLabel("Message").fill("Total {{ order.total }}");
+    await page.getByRole("button", { name: "Apply" }).click();
+    await expect(page.locator("[data-template-error]")).toBeVisible();
+    await page.getByRole("button", { name: "Publish", exact: true }).click();
+    await expect(page.getByText("A Discord message does not read")).toBeVisible();
+
+    await inspector.getByLabel("Message").fill("{{ shop.name }}: a customer wrote to us");
+    await page.getByRole("button", { name: "Apply" }).click();
+    await expect(page.locator("[data-discord-preview]")).toHaveText(`${name}: a customer wrote to us`);
     await page.getByRole("button", { name: "Publish", exact: true }).click();
     await expect(page.getByRole("status")).toContainText("Published as version 1");
 
@@ -648,7 +660,7 @@ test("a scenario posts to a Discord channel", async ({ page, request }) => {
     await expect.poll(() => received.length, { timeout: 15_000 }).toBe(1);
     expect(received[0].path).toBe("/api/webhooks/1/channel-token");
     const { content } = JSON.parse(received[0].body);
-    expect(content).toContain("A customer wrote to us");
+    expect(content).toContain(`${name}: a customer wrote to us`);
     expect(content).toContain(`/t/${slug}/messages>`);
     // Nothing the visitor wrote.
     expect(received[0].body).not.toContain("call me back");

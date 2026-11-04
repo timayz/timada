@@ -485,11 +485,9 @@ async fn discord_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View>
     } else {
         "Saved: type a new address to replace it"
     };
-    let about = canvas
-        .editor
-        .definition
-        .subject()
-        .map_or("what started the run", subject_label);
+    let subject = canvas.editor.definition.subject();
+    let about = subject.map_or("what started the run", subject_label);
+    let variables = crate::automations::discord::variables(subject);
     Ok(view! {
         field(
             label_of(attrs: attributes! { for="discord-url" }, "Channel's webhook address")
@@ -501,8 +499,16 @@ async fn discord_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View>
         field(
             label_of(attrs: attributes! { for="discord-message" }, "Message")
             textarea(attrs: attributes! { id="discord-message" name="settings.message" rows="5" maxlength="1800" }, (&message))
-            field_description((format!("Posted as you write it, with a link to {about} in the dashboard under it. Nothing a customer wrote goes to Discord.")))
+            field_description((format!("You can write {variables}. A link to {about} in the dashboard goes under it. Nothing personal and nothing a customer wrote goes to Discord.")))
             issue_list(texts: issues_of(canvas, &step.id, "message"))
         )
+        if let Some(preview) = &canvas.discord_preview {
+            if let Ok(rendered) = preview {
+                <p class="text-sm whitespace-pre-wrap"><span class="text-muted-foreground">"Preview: "</span><span data-discord-preview="">(rendered)</span></p>
+            }
+            if let Err(err) = preview {
+                <p class="text-sm text-destructive" role="alert" data-template-error="">(err.to_string())</p>
+            }
+        }
     })
 }
