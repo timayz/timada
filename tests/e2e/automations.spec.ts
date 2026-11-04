@@ -50,6 +50,39 @@ const slot = (page: Page, at: string) =>
   page.locator(`[data-drop-slot="${at}"]`);
 const step = (page: Page, id: string) => page.locator(`[data-step="${id}"]`);
 
+/// Holds the editor's requests back, as a slow connection does.
+async function slowEditor(page: Page, ms: number) {
+  await page.route(/\/automations\/[0-9A-Z]{26}$/, async (route) => {
+    if (route.request().method() === "POST") await new Promise((done) => setTimeout(done, ms));
+    await route.continue();
+  });
+}
+
+/// A new scenario on contact messages, a notice set up in it, its settings open.
+async function scenarioWithNotice(page: Page) {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name } = uniqueTenant("Quick Shop");
+  await createTenant(page, name);
+  await newScenario(page, "Quick presses");
+  await enhanced(page);
+  await chooseTrigger(page, "When a contact message arrives");
+  await slot(page, "root.0").getByRole("button", { name: "Add a step here" }).click();
+  await page
+    .locator('[id="add-root.0"]')
+    .getByRole("button", { name: "Notify the team", exact: true })
+    .click();
+  await page.locator("[data-inspector]").getByLabel("Subject").fill("A visitor wrote");
+}
+
+/// The requests the page posts from now on.
+function postsOf(page: Page) {
+  const posts: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST") posts.push(request.url());
+  });
+  return posts;
+}
+
 /// Picks the trigger in the inspector.
 async function chooseTrigger(page: Page, label: string) {
   await page.locator("[data-trigger] button").click();
@@ -128,6 +161,196 @@ test("a scenario is drawn by dragging blocks, then saved", async ({ page }) => {
     await expect(row).toContainText("When an order is placed", { timeout: 500 });
   }).toPass();
   await expect(row).toContainText("Draft");
+});
+
+test("a button pressed while an answer is on its way still goes", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 400);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Published as version 1");
+  await expect(page.locator("[data-scenario-state]")).toHaveAttribute("data-scenario-state", "active");
+});
+
+test("a double click adds one block", async ({ page }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name } = uniqueTenant("Double Shop");
+  await createTenant(page, name);
+  await newScenario(page, "Double click");
+  await enhanced(page);
+  await chooseTrigger(page, "When a contact message arrives");
+  await slowEditor(page, 400);
+  await slot(page, "root.0").getByRole("button", { name: "Add a step here" }).click();
+  await page
+    .locator('[id="add-root.0"]')
+    .getByRole("button", { name: "Notify the team", exact: true })
+    .dblclick();
+  await expect(step(page, "s1")).toHaveCount(1);
+  await expect(page.locator("[data-scenario-editor]")).not.toHaveAttribute("aria-busy", "true");
+  await expect(page.locator("[data-step]")).toHaveCount(1);
+  await expect(page.locator("[data-press-alert]:visible")).toHaveCount(0);
+});
+
+test("a button pressed after typing goes with what was typed", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 1000);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await page.locator("[data-inspector]").getByLabel("Subject").fill("Typed meanwhile");
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Published as version 1");
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText("“Typed meanwhile”");
+});
+
+test("the same button pressed after typing goes again", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 1000);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await page.locator("[data-inspector]").getByLabel("Subject").fill("Typed meanwhile");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText("“Typed meanwhile”");
+});
+
+test("what is typed while an answer is on its way stays, with the cursor", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 1000);
+  const editor = page.locator("[data-scenario-editor]");
+  const subject = page.locator("[data-inspector]").getByLabel("Subject");
+  // Enter in a field applies the settings.
+  await subject.press("Enter");
+  await expect(editor).toHaveAttribute("aria-busy", "true");
+  await page.keyboard.press("Home");
+  await page.keyboard.type("Urgent: ");
+  await expect(editor).not.toHaveAttribute("aria-busy", "true");
+  await expect(subject).toHaveValue("Urgent: A visitor wrote");
+  await expect(subject).toBeFocused();
+  await page.keyboard.type("really ");
+  await expect(subject).toHaveValue("Urgent: really A visitor wrote");
+});
+
+test("what is typed meanwhile still counts as unsaved", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await page.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  const editor = page.locator("[data-scenario-editor]");
+  await expect(editor).not.toHaveAttribute("data-dirty", "");
+  await page.locator('button[value="select:s1"]').click();
+  const subject = page.locator("[data-inspector]").getByLabel("Subject");
+  await expect(subject).toHaveValue("A visitor wrote");
+  await slowEditor(page, 1000);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await subject.fill("Typed meanwhile");
+  await expect(editor).not.toHaveAttribute("aria-busy", "true");
+  await expect(subject).toHaveValue("Typed meanwhile");
+  await expect(editor).toHaveAttribute("data-dirty", "");
+});
+
+test("what is typed during a save stays, and its block opens back", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 1000);
+  const subject = page.locator("[data-inspector]").getByLabel("Subject");
+  await page.getByRole("button", { name: "Save draft" }).click();
+  await subject.fill("Typed meanwhile");
+  await expect(subject).toHaveValue("Typed meanwhile");
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText("“Typed meanwhile”");
+  await expect(subject).toBeFocused();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  // Saved as it was: the rest is still to save, and the page knows it.
+  await expect(page.locator("[data-scenario-editor]")).toHaveAttribute("data-dirty", "");
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Published as version 1");
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText("“Typed meanwhile”");
+});
+
+test("what is typed in a block left meanwhile goes to that block", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slot(page, "root.1").getByRole("button", { name: "Add a step here" }).click();
+  await page.locator('[id="add-root.1"]').getByRole("button", { name: "Wait", exact: true }).click();
+  await expect(step(page, "s2")).toHaveCount(1);
+  await page.locator('button[value="select:s1"]').click();
+  const subject = page.locator("[data-inspector]").getByLabel("Subject");
+  await expect(subject).toHaveValue("A visitor wrote");
+  await slowEditor(page, 1000);
+  await page.locator('button[value="select:s2"]').click();
+  await subject.fill("Typed meanwhile");
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText("“Typed meanwhile”");
+  await expect(subject).toHaveValue("Typed meanwhile");
+  // None of the other block's settings went along.
+  const definition = JSON.parse(await page.locator('input[name="definition"]').inputValue());
+  expect(definition.steps[0].settings.subject).toBe("Typed meanwhile");
+  expect(definition.steps[0].settings).not.toHaveProperty("amount");
+});
+
+test("a place pressed on a flow that changed is refused, and stops what follows", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slot(page, "root.1").getByRole("button", { name: "Add a step here" }).click();
+  await page.locator('[id="add-root.1"]').getByRole("button", { name: "Wait", exact: true }).click();
+  await expect(step(page, "s2")).toHaveCount(1);
+  await slowEditor(page, 1000);
+  const posts = postsOf(page);
+  await step(page, "s1").getByRole("button", { name: /^Remove/ }).click();
+  await slot(page, "root.1").getByRole("button", { name: "Add a step here" }).click();
+  await page.locator('[id="add-root.1"]').getByRole("button", { name: "Create a discount code", exact: true }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.locator('[data-press-alert="place"]')).toBeVisible();
+  await expect(page.locator('[data-press-alert="place"]')).toContainText("That place is not in the scenario any more.");
+  await expect(page.locator("[data-step]")).toHaveCount(1);
+  await expect(step(page, "s2")).toHaveAttribute("data-step-kind", "wait");
+  expect(posts).toHaveLength(1);
+  await expect(page.locator("[data-scenario-state]")).toHaveAttribute("data-scenario-state", "draft");
+});
+
+test("a place pressed on the same flow still goes", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 1000);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await slot(page, "root.1").getByRole("button", { name: "Add a step here" }).click();
+  await page.locator('[id="add-root.1"]').getByRole("button", { name: "Wait", exact: true }).click();
+  await expect(step(page, "s2")).toHaveAttribute("data-step-kind", "wait");
+  await expect(page.locator("[data-press-alert]:visible")).toHaveCount(0);
+  const kinds = await page.locator("[data-step]").evaluateAll((all) => all.map((one) => (one as HTMLElement).dataset.stepKind));
+  expect(kinds).toEqual(["notify", "wait"]);
+});
+
+test("an answer that refuses something stops what was pressed after it", async ({ page }) => {
+  await scenarioWithNotice(page);
+  // Not ready to publish: the notice has no subject.
+  await page.locator("[data-inspector]").getByLabel("Subject").fill("");
+  await slowEditor(page, 1000);
+  const posts = postsOf(page);
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await page.locator("[data-trigger] button").click();
+  await expect(page.getByRole("alert")).toContainText("not ready to publish");
+  await expect(page.locator("[data-scenario-editor]")).not.toHaveAttribute("aria-busy", "true");
+  expect(posts).toHaveLength(1);
+  await expect(page.locator("#inspector-heading")).toHaveText("Notify the team");
+});
+
+test("a button pressed during a save does not go after it", async ({ page }) => {
+  await scenarioWithNotice(page);
+  await slowEditor(page, 400);
+  const posts = postsOf(page);
+  await page.getByRole("button", { name: "Save draft" }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  expect(posts).toHaveLength(1);
+  await expect(page.locator("[data-scenario-state]")).toHaveAttribute("data-scenario-state", "draft");
+});
+
+test("a change that could not be sent says so", async ({ page }) => {
+  await scenarioWithNotice(page);
+  const failed = page.locator('[data-press-alert="failed"]');
+  await expect(failed).toBeHidden();
+  const offline = /\/automations\/[0-9A-Z]{26}$/;
+  await page.route(offline, (route) => route.abort());
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(failed).toBeVisible();
+  await expect(failed).toContainText("could not be sent");
+  // What was typed is still there, and goes once the connection is back.
+  await expect(page.locator("[data-inspector]").getByLabel("Subject")).toHaveValue("A visitor wrote");
+  await page.unroute(offline);
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText("“A visitor wrote”");
+  await expect(failed).toBeHidden();
 });
 
 test("a scenario is drawn with buttons only, without JavaScript", async ({ browser }) => {
