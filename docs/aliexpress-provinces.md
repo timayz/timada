@@ -6,8 +6,12 @@ code, city, country, phone), so the forwarder derives one:
 
 - **France:** the postal code's department, named as AliExpress lists them
   (`Rhone`, `Paris`, `Cote-d'Or`, `Corse-du-Sud`…), `Other` for a postal code
-  the list lacks (overseas). Done, `french_department` in
+  the list lacks. Done, `french_department` in
   `crates/aliexpress/src/forwarding.rs`.
+- **French overseas departments:** the checkout files them under France,
+  AliExpress lists them as countries, so `delivery_country` turns the postal
+  code into one for the address and the delivery. Martinique's State/Province
+  is a mandatory free text there, and takes the city.
 - **Every other country:** the city, a stand-in. It passes only where
   AliExpress has no list; elsewhere the order is refused with
   `Please select a State/Province/County`.
@@ -127,6 +131,18 @@ are.
 - [ ] **Lituanie (LT)** — AliExpress list: unknown (counties?) · postal code → approx
   - [ ] dropdown pasted
   - [ ] forwarder mapped
+
+## French overseas departments
+
+Not in the checkout's list, a shopper picks France. Saint-Barthélemy,
+Saint-Martin, Saint-Pierre-et-Miquelon and the Pacific territories stay `FR` +
+`Other`.
+
+- [x] **Martinique (MQ)** — 972xx · country on AliExpress, State/Province free text and mandatory
+- [ ] **Guadeloupe (GP)** — 971xx · mapped like Martinique, not confirmed on AliExpress
+- [ ] **Guyane (GF)** — 973xx · mapped like Martinique, not confirmed on AliExpress
+- [ ] **La Réunion (RE)** — 974xx · mapped like Martinique, not confirmed on AliExpress
+- [ ] **Mayotte (YT)** — 976xx · mapped like Martinique, not confirmed on AliExpress
 
 ## When a country is mapped
 
