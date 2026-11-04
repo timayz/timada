@@ -19,7 +19,8 @@ use evento::{
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem, Requested};
 use timada_aliexpress::{
     AeError, AliexpressError, ForwardStatus, LinkState, PlaceItem, PlaceOrder, Placement,
-    choose_service, describe_options, forward_items, link_of_product, logistics_address,
+    choose_service, delivery_country, describe_options, forward_items, link_of_product,
+    logistics_address,
 };
 use timada_orders::{OrderError, OrderState, OrderStatus};
 use timada_tenancy::{CompanyState, TenantState};
@@ -164,7 +165,7 @@ impl Aliexpress {
                 "No item of this order comes from AliExpress.".into(),
             ));
         }
-        let country = order.shipping.country.clone();
+        let country = delivery_country(&order.shipping.country, &order.shipping.postal_code);
         let mut market = Aliexpress::market_of(settings);
         market.ship_to_country = country.clone();
         let mut products = BTreeMap::new();

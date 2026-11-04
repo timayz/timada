@@ -261,8 +261,10 @@ What is bought:
 - The address goes as given, with the phone split into its calling code and national
   number: the shopper's, or the shop's phone from the AliExpress page when they gave
   none. AliExpress also wants a `province` from its own list for the country: a
-  French address names the postal code's department (`Rhone`, `Paris`…), any other
-  country sends the city, a stand-in tracked per country in
+  French address names the postal code's department (`Rhone`, `Paris`…). A French
+  overseas department goes as the country AliExpress lists it under (`MQ`, `GP`,
+  `GF`, `RE`, `YT`), for the delivery as well. Any other country sends the city, a
+  stand-in tracked per country in
   [aliexpress-provinces.md](aliexpress-provinces.md).
 
 A failure is shown on the card with *Place again*. One node takes each order on

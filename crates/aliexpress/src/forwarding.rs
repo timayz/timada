@@ -115,7 +115,8 @@ pub fn logistics_address(
     language: Option<&str>,
     shop_phone: Option<&str>,
 ) -> LogisticsAddress {
-    let country = address.country.trim().to_ascii_uppercase();
+    let shop_country = address.country.trim().to_ascii_uppercase();
+    let country = delivery_country(&shop_country, &address.postal_code);
     let (phone_country, mobile_no) = address
         .phone
         .as_deref()
@@ -126,7 +127,7 @@ pub fn logistics_address(
     let locale = language
         .map(str::trim)
         .filter(|language| language.len() == 2)
-        .map(|language| format!("{}_{country}", language.to_ascii_lowercase()))
+        .map(|language| format!("{}_{shop_country}", language.to_ascii_lowercase()))
         .unwrap_or_default();
     LogisticsAddress {
         full_name: address.name.trim().to_owned(),
@@ -148,10 +149,35 @@ pub fn logistics_address(
     }
 }
 
+/// The country AliExpress delivers an address to. The shop's checkout files a
+/// French overseas department under France, AliExpress lists it as a country
+/// of its own. Saint-Barthélemy (97133) and Saint-Martin (97150) share
+/// Guadeloupe's prefix but are not part of it, so they stay French.
+pub fn delivery_country(country: &str, postal_code: &str) -> String {
+    let country = country.trim().to_ascii_uppercase();
+    if country != "FR" {
+        return country;
+    }
+    let digits: String = postal_code.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() != 5 {
+        return country;
+    }
+    match &digits[..3] {
+        "971" if !matches!(digits.as_str(), "97133" | "97150") => "GP",
+        "972" => "MQ",
+        "973" => "GF",
+        "974" => "RE",
+        "976" => "YT",
+        _ => "FR",
+    }
+    .to_owned()
+}
+
 /// The region AliExpress files an address under, which it will not do
 /// without: for France the department of the postal code, as AliExpress
 /// lists them, or its "Other" for one it does not list; the city elsewhere
-/// (the shop's addresses carry no region of their own).
+/// (the shop's addresses carry no region of their own, and Martinique's is a
+/// free text there).
 pub fn province_of(country: &str, postal_code: &str, city: &str) -> String {
     match country {
         "FR" => french_department(postal_code).unwrap_or("Other").to_owned(),
@@ -345,6 +371,8 @@ const CALLING_CODES: &[(&str, &str)] = &[
     ("FI", "358"),
     ("FR", "33"),
     ("GB", "44"),
+    ("GF", "594"),
+    ("GP", "590"),
     ("GR", "30"),
     ("HR", "385"),
     ("HU", "36"),
@@ -360,6 +388,7 @@ const CALLING_CODES: &[(&str, &str)] = &[
     ("LV", "371"),
     ("MA", "212"),
     ("MC", "377"),
+    ("MQ", "596"),
     ("MT", "356"),
     ("MX", "52"),
     ("NL", "31"),
@@ -367,6 +396,7 @@ const CALLING_CODES: &[(&str, &str)] = &[
     ("NZ", "64"),
     ("PL", "48"),
     ("PT", "351"),
+    ("RE", "262"),
     ("RO", "40"),
     ("SA", "966"),
     ("SE", "46"),
@@ -377,4 +407,5 @@ const CALLING_CODES: &[(&str, &str)] = &[
     ("TR", "90"),
     ("UA", "380"),
     ("US", "1"),
+    ("YT", "262"),
 ];
