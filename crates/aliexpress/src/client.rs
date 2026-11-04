@@ -422,9 +422,18 @@ impl Client {
                 vec![("queryDeliveryReq", query.to_string())],
             )
             .await;
+        // "No way to deliver" reads the same whether AliExpress said so or its
+        // answer could not be read, so the answer itself goes in the log.
         match answer {
-            Ok(body) => freight_from_response(&body),
+            Ok(body) => {
+                let options = freight_from_response(&body)?;
+                if options.is_empty() {
+                    tracing::warn!(product_id, sku_id, country, answer = %body, "no delivery offered");
+                }
+                Ok(options)
+            }
             Err(err) if err.code.contains(NO_DELIVERY) || err.message.contains(NO_DELIVERY) => {
+                tracing::warn!(product_id, sku_id, country, %err, "no delivery offered");
                 Ok(Vec::new())
             }
             Err(err) => Err(err),
