@@ -8,7 +8,7 @@ import { PNG } from "./storefront";
 // `aliexpress.ds.product.get` answers with one product in two colours whose
 // stock, cost and availability a spec changes. Orders placed with
 // `aliexpress.ds.order.create` are kept, delivered by the services
-// `aliexpress.logistics.buyer.freight.calculate` offers, and read back with
+// `aliexpress.ds.freight.query` offers, and read back with
 // `aliexpress.trade.ds.order.get` once a spec ships them, or pushed to the
 // dashboard's webhook as AliExpress would. Every call is checked against
 // the platform app's secret the way AliExpress signs (HMAC-SHA256 over the
@@ -163,22 +163,25 @@ export class FakeAliexpress {
       json(this.product());
       return;
     }
-    if (method === "aliexpress.logistics.buyer.freight.calculate") {
-      const query = JSON.parse(url.searchParams.get("param_aeop_freight_calculate_for_buyer_d_t_o") ?? "{}");
-      if (!query.product_id || !query.sku_id || !query.country_code) {
-        json({ aliexpress_logistics_buyer_freight_calculate_response: { result: { success: false, error_desc: "missing parameters" } } });
+    if (method === "aliexpress.ds.freight.query") {
+      const query = JSON.parse(url.searchParams.get("queryDeliveryReq") ?? "{}");
+      if (!query.productId || !query.selectedSkuId || !query.shipToCountry || !query.quantity || !query.currency || !query.language || !query.locale) {
+        json({ aliexpress_ds_freight_query_response: { result: { success: false, code: 500, msg: "missing parameters" } } });
         return;
       }
       json({
-        aliexpress_logistics_buyer_freight_calculate_response: {
+        aliexpress_ds_freight_query_response: {
           result: {
             success: true,
-            aeop_freight_calculate_result_for_buyer_d_t_o_list: {
-              aeop_freight_calculate_result_for_buyer_dto: this.freight.map((option) => ({
-                service_name: option.service_name,
-                freight: { cent: option.cents, amount: (option.cents / 100).toFixed(2), currency_code: "EUR" },
-                tracking_available: String(option.tracking),
-                estimated_delivery_time: "15-25",
+            code: 200,
+            delivery_options: {
+              delivery_option_d_t_o: this.freight.map((option) => ({
+                code: option.service_name,
+                free_shipping: option.cents === 0,
+                shipping_fee_cent: String(option.cents),
+                shipping_fee_currency: "EUR",
+                tracking: option.tracking,
+                ship_from_country: "CN",
               })),
             },
           },

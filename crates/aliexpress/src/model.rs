@@ -241,29 +241,36 @@ pub struct FreightOption {
 
 impl FreightOption {
     pub(crate) fn list_from_json(result: &Value) -> Vec<Self> {
-        let options = result
-            .get("aeop_freight_calculate_result_for_buyer_d_t_o_list")
-            .or_else(|| result.get("aeop_freight_calculate_result_for_buyer_dtolist"));
-        list(options)
+        let is_true = |option: &Value, name: &str| {
+            option
+                .get(name)
+                .map(text)
+                .is_some_and(|flag| flag.eq_ignore_ascii_case("true"))
+        };
+        list(result.get("delivery_options"))
             .iter()
             .filter_map(|option| {
-                let service_name = option.get("service_name").map(text)?;
+                let service_name = option.get("code").map(text)?;
                 if service_name.is_empty() {
                     return None;
                 }
-                let freight = option.get("freight");
-                let cents = freight
-                    .and_then(|freight| {
-                        freight
-                            .get("cent")
-                            .and_then(number)
-                            .or_else(|| freight.get("amount").and_then(cents))
-                    })
-                    .unwrap_or(0);
-                let tracking = option
-                    .get("tracking_available")
-                    .map(text)
-                    .is_some_and(|flag| flag.eq_ignore_ascii_case("true"));
+                // Documented as cents; an amount with a decimal point is read
+                // as one, as the documentation gives no sample.
+                let cents = if is_true(option, "free_shipping") {
+                    0
+                } else {
+                    option
+                        .get("shipping_fee_cent")
+                        .and_then(|fee| {
+                            if text(fee).contains('.') {
+                                cents(fee)
+                            } else {
+                                number(fee)
+                            }
+                        })
+                        .unwrap_or(0)
+                };
+                let tracking = is_true(option, "tracking");
                 Some(Self {
                     service_name,
                     cents,
