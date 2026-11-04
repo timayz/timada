@@ -1,7 +1,9 @@
 //! The persisted shapes. Every variant is frozen once merged (`events.lock`).
 
 /// One AliExpress combination a catalog product (or one of its variants)
-/// sells, with what it cost and how many AliExpress had when last read.
+/// sells, and what it cost when last read. What AliExpress has of it is the
+/// variant's stock in the catalog, whose streams are made for a count that
+/// moves with every sale.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
 pub struct SkuLink {
     pub sku_id: String,
@@ -9,7 +11,6 @@ pub struct SkuLink {
     pub variant_id: Option<String>,
     /// In minor units of the product's currency.
     pub cost_cents: u64,
-    pub available: u32,
 }
 
 /// A combination AliExpress sells that the shop does not: one a read found
@@ -47,13 +48,16 @@ pub enum AliexpressProduct {
     },
     /// Nothing was imported; `reason` says why, for the merchant.
     ImportFailed { reason: String, failed_by: String },
-    /// Read again from AliExpress; `offline` once it no longer sells it.
+    /// A read found something the link did not hold, or a member waits for
+    /// its outcome; `offline` once AliExpress no longer sells it. A read that
+    /// changes nothing else writes nothing: the read model keeps when it was.
     Synced {
         skus: Vec<SkuLink>,
         offline: bool,
         synced_by: String,
     },
-    /// The read failed; the product kept what it had.
+    /// The read failed, for another reason than the last one; the product
+    /// kept what it had.
     SyncFailed { reason: String, failed_by: String },
     /// The product's own pricing, by cost band; `None` follows the shop's.
     PricingSet {
@@ -74,6 +78,10 @@ pub enum AliexpressProduct {
     CombinationIgnored { sku_id: String, ignored_by: String },
     /// Offered again after being ignored.
     CombinationRestored { sku_id: String, restored_by: String },
+    /// A read of AliExpress was asked for: by a member, who waits for its
+    /// outcome, or by the dashboard on its own ([`ALIEXPRESS_ACTOR`](crate::ALIEXPRESS_ACTOR)).
+    /// One node reads it ([`Share`](crate::Share)).
+    SyncRequested { requested_by: String },
 }
 
 /// One renewal of an account's tokens: one stream per token, with the

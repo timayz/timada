@@ -24,10 +24,12 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 requested_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 new_combinations INTEGER NOT NULL,
+                last_tried_at INTEGER,
+                shard INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX aliexpress_products_product ON aliexpress_products (tenant_id, product_id);
-        CREATE INDEX aliexpress_products_due ON aliexpress_products (status, last_synced_at);
+        CREATE INDEX aliexpress_products_due ON aliexpress_products (status, last_tried_at);
         CREATE TABLE aliexpress_forwards (
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,

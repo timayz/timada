@@ -352,11 +352,12 @@ test("the dashboard reads imported products again on its own, and renews the acc
     // Nobody presses anything: the sweep follows AliExpress.
     aliexpress.sku("12000037001").stock = 3;
     aliexpress.sku("12000037001").price = "5.00";
+    // (A read counts the stock before it prices: wait for both on one page.)
     await expect(async () => {
       await page.goto(productUrl);
       await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "3", { timeout: 1000 });
+      await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("10.00", { timeout: 1000 });
     }).toPass({ timeout: 30_000 });
-    await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("10.00");
     await expect(async () => {
       expect(aliexpress.calls).toContain("/auth/token/refresh");
     }).toPass({ timeout: 15_000 });

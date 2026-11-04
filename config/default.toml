@@ -205,10 +205,10 @@ dir = "data/shopper-keys"
 # account to the app from its page, and every shop selling as the company
 # buys through that account. The tokens are kept encrypted under
 # `secrets.key`; without it, or without the app, no company can connect.
-# Every node reads the imported products again on its own; a product
-# another node read in the meantime is skipped, and one node per token
-# renews a company's access before it lapses. AliExpress counts every
-# call against the one app, whichever company it acts for.
+# The nodes share the imported products out among those up, each reading
+# its own; one node per token renews a company's access before it lapses.
+# AliExpress counts every call against the one app, whichever company it
+# acts for.
 # [aliexpress]
 # # The app's key and secret, from AliExpress's open platform; both or
 # # neither. Register `/aliexpress/callback` under server.url as the app's

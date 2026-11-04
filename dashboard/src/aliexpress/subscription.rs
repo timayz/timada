@@ -3,6 +3,10 @@
 //! options, variants, their stock) and records which combination each
 //! variant is. Every node runs it; the first to take
 //! an import on does it, the others leave it.
+//!
+//! The items already linked are read again the same way, on a cursor of their
+//! own so a long import does not hold them up ([`reads_subscription`]): a
+//! request names no node, and the one the item belongs to reads it.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -12,19 +16,23 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use timada_aliexpress::aggregator::ImportRequested;
+use timada_aliexpress::aggregator::{ImportRequested, SyncRequested};
 use timada_aliexpress::{LinkStatus, map_product, track_imported};
 use timada_catalog_import::{ImportOptions, import_one};
 
-use super::{ALIEXPRESS_ACTOR, Aliexpress};
+use super::{ALIEXPRESS_ACTOR, Aliexpress, SyncMode};
+use crate::db::Db;
 use crate::media::Media;
 
 /// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/aliexpress-import";
 
+/// The cursor identity of [`reads_subscription`], in the store.
+pub const READS_SUBSCRIPTION: &str = "timada-dashboard/aliexpress-reads";
+
 /// A request older than this is history being replayed (a node catching
-/// up): left alone, the merchant may ask again.
-const IMPORT_WINDOW_SECS: u64 = 10 * 60;
+/// up): left alone, the merchant may ask again and the sweep comes back.
+const REQUEST_WINDOW_SECS: u64 = 10 * 60;
 
 /// The store, to write with.
 #[derive(Clone)]
@@ -53,7 +61,7 @@ async fn on_import_requested<E: Executor>(
     let media: Arc<Media> = context.extract();
     let store: Store = context.extract();
     let now = crate::auth::now();
-    if now.saturating_sub(event.timestamp) > IMPORT_WINDOW_SECS {
+    if now.saturating_sub(event.timestamp) > REQUEST_WINDOW_SECS {
         return Ok(());
     }
     let links = timada_aliexpress::Command::new(store.0.clone(), &event.tenant);
@@ -90,6 +98,60 @@ async fn on_import_requested<E: Executor>(
                 .record_import_failure(ALIEXPRESS_ACTOR, &link_id, &reason)
                 .await?;
         }
+    }
+    Ok(())
+}
+
+/// Reads the linked items asked for. `db` is the read-model database, which
+/// must be allowed to write (it keeps when each item was read).
+pub fn reads_subscription<E: Executor>(
+    aliexpress: Arc<Aliexpress>,
+    db: Db,
+    store: Evento,
+) -> SubscriptionBuilder<E> {
+    SubscriptionBuilder::new(READS_SUBSCRIPTION)
+        .data(aliexpress)
+        .data(db)
+        .data(Store(store))
+        .handler(on_sync_requested())
+        .any_routing_key()
+        .retry(5)
+}
+
+#[evento::subscription]
+async fn on_sync_requested<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<SyncRequested>,
+) -> anyhow::Result<()> {
+    let aliexpress: Arc<Aliexpress> = context.extract();
+    let now = crate::auth::now();
+    if now.saturating_sub(event.timestamp) > REQUEST_WINDOW_SECS
+        || !aliexpress.share().owns(&event.aggregate_id)
+    {
+        return Ok(());
+    }
+    let db: Db = context.extract();
+    let store: Store = context.extract();
+    let mode = if event.data.requested_by == ALIEXPRESS_ACTOR {
+        SyncMode::Routine
+    } else {
+        SyncMode::Asked {
+            by: &event.data.requested_by,
+        }
+    };
+    // A store that fails here fails this read alone, or it would stop the
+    // requests behind it: the merchant asks again, the sweep comes back.
+    let read = async {
+        let Some((tenant, company)) = aliexpress.connected_shop(&event.tenant, now).await? else {
+            return Ok(());
+        };
+        aliexpress
+            .sync_link(&db, &store.0, &tenant, &company, &event.aggregate_id, mode)
+            .await
+            .map(|_| ())
+    };
+    if let Err(err) = read.await {
+        tracing::warn!(tenant = %event.tenant, link = %event.aggregate_id, error = %err, "AliExpress product not read");
     }
     Ok(())
 }

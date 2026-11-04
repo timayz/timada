@@ -1,8 +1,8 @@
-//! Reads the shops' imported AliExpress products again on a timer: stock,
-//! price by rule and availability follow AliExpress. Nothing in the event
-//! store fires later, so every node sweeps the links due in the shared read
-//! model; a read another node recorded in between wins (`record_sync` writes
-//! against the version it started from). The same sweep first renews every
+//! Asks for the shops' imported AliExpress products to be read again on a
+//! timer: stock, price by rule and availability follow AliExpress. Nothing in
+//! the event store fires later, so every node sweeps the links due in the read
+//! model, each its own share of them, and asks for each with a `SyncRequested`
+//! (see [`super::subscription`] for the read). The same sweep first renews every
 //! connected company's access a day before it lapses, whether or not its
 //! shops have anything imported, and then reads the orders placed on
 //! AliExpress again until they ship (see [`super::forward`]).
@@ -11,15 +11,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::db::Db;
-use timada_aliexpress::{ForwardRow, LinkRow, forwards_due, links_due};
+use timada_aliexpress::{ForwardRow, LinkRow, forwards_due, links_due, note_tried};
 use tokio::task::JoinHandle;
 
 use super::forward::CheckResult;
 
-use super::{Aliexpress, SyncResult};
+use super::{ALIEXPRESS_ACTOR, Aliexpress};
 use crate::cluster::Executor;
 
-/// The most links one sweep reads, over every shop.
+/// The most links one sweep asks for, over every shop.
 const SWEEP_LIMIT: i64 = 500;
 
 /// A pause between two reads of one shop, so a sweep never bursts against
@@ -57,10 +57,10 @@ impl AliexpressSync {
         })
     }
 
-    /// Renews the access that lapses within a day, then reads again every
-    /// link last read longer ago than the configured period, shop by shop. A
-    /// shop that fails is logged and the others still go. Returns how many
-    /// links were brought in step.
+    /// Renews the access that lapses within a day, then asks for every link
+    /// of this node's share last tried longer ago than the configured period
+    /// to be read again, shop by shop. A shop that fails is logged and the
+    /// others still go. Returns how many reads were asked for.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<usize> {
         if !self.aliexpress.enabled() {
             return Ok(0);
@@ -68,19 +68,19 @@ impl AliexpressSync {
         self.renew_due(now).await?;
         let every = self.aliexpress.sync_every_secs();
         let before = now.saturating_sub(every) as i64;
-        let due = links_due(&self.db, before, SWEEP_LIMIT).await?;
-        let mut synced = 0;
+        let due = links_due(&self.db, before, self.aliexpress.share(), SWEEP_LIMIT).await?;
+        let mut asked = 0;
         for shop in due.chunk_by(|a, b| a.tenant_id == b.tenant_id) {
             let tenant_id = &shop[0].tenant_id;
             match self.sweep_tenant(tenant_id, shop, now).await {
-                Ok(count) => synced += count,
+                Ok(count) => asked += count,
                 Err(err) => {
                     tracing::error!(tenant = %tenant_id, error = %err, "AliExpress products not read")
                 }
             }
         }
         self.check_forwards(now).await?;
-        Ok(synced)
+        Ok(asked)
     }
 
     /// Reads the orders placed on AliExpress again, shop by shop; returns
@@ -160,31 +160,38 @@ impl AliexpressSync {
     async fn sweep_tenant(
         &self,
         tenant_id: &str,
-        links: &[LinkRow],
+        due: &[LinkRow],
         now: u64,
     ) -> anyhow::Result<usize> {
-        let Some((tenant, company)) = self.aliexpress.connected_shop(tenant_id, now).await? else {
+        // A shop that cannot read is passed over until the next period, like
+        // one read, or its items would take every turn it gets.
+        if self
+            .aliexpress
+            .connected_shop(tenant_id, now)
+            .await?
+            .is_none()
+        {
+            for link in due {
+                note_tried(&self.db, tenant_id, &link.id, now).await?;
+            }
             return Ok(0);
-        };
-        let store = self.store.clone();
-        let mut synced = 0;
-        for (index, link) in links.iter().enumerate() {
+        }
+        let links = timada_aliexpress::Command::new(self.store.clone(), tenant_id);
+        let mut asked = 0;
+        for (index, link) in due.iter().enumerate() {
             if index > 0 {
                 tokio::time::sleep(PACE).await;
             }
-            match self
-                .aliexpress
-                .sync_link(&store, &tenant, &company, &link.id)
-                .await
-            {
-                Ok(SyncResult::Synced { .. }) => synced += 1,
-                Ok(SyncResult::NotLinked) => break,
-                Ok(SyncResult::Skipped | SyncResult::Unlinked | SyncResult::Failed(_)) => {}
+            match links.request_sync(ALIEXPRESS_ACTOR, &link.id).await {
+                Ok(_) => {
+                    note_tried(&self.db, tenant_id, &link.id, now).await?;
+                    asked += 1;
+                }
                 Err(err) => {
-                    tracing::warn!(tenant = %tenant_id, link = %link.id, error = %err, "AliExpress product not read")
+                    tracing::warn!(tenant = %tenant_id, link = %link.id, error = %err, "AliExpress product not asked for")
                 }
             }
         }
-        Ok(synced)
+        Ok(asked)
     }
 }

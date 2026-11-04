@@ -364,7 +364,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         }
         None => None,
     };
-    let link_costs: Vec<(String, String, u32)> = link
+    let link_costs: Vec<(String, String)> = link
         .as_ref()
         .map(|link| {
             link.skus
@@ -380,7 +380,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         .unwrap_or_else(|| product.name.clone());
                     let cost =
                         format_money(sku.cost_cents, product.currency().unwrap_or(CURRENCIES[0]));
-                    (label, cost, sku.available)
+                    (label, cost)
                 })
                 .collect()
         })
@@ -957,8 +957,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             fact(term: "Price rule", attrs: attributes! { data-product-aliexpress-rule="" }, (&link_rule_label))
                         )
                         <ul class="mt-3 text-sm" data-aliexpress-costs="">
-                            for (label, cost, available) in &link_costs {
-                                <li>(label) " · costs " (cost) " · " (available) " on AliExpress"</li>
+                            for (label, cost) in &link_costs {
+                                <li>(label) " · costs " (cost)</li>
                             }
                         </ul>
                     </div>

@@ -320,7 +320,6 @@ async fn links(executor: &evento::Turso) -> Vec<LinkState> {
         sku_id: sku_id.into(),
         variant_id: variant_id.map(Into::into),
         cost_cents: 100,
-        available: 10,
     };
     let mut all = Vec::new();
     for (ae_id, product_id, skus) in [
