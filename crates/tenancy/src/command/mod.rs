@@ -111,6 +111,9 @@ pub struct TenantState {
     /// How the shop prices what it imports, by cost band, from its creation
     /// (`None`: by hand).
     pub aliexpress_pricing: Option<crate::value_object::Pricing>,
+    /// How far from a price, in hundredths of a percent, the rule's price may
+    /// go before a read of AliExpress changes it.
+    pub aliexpress_price_tolerance_bps: u32,
     /// Where the shop lives, once set. Read it through
     /// [`TenantState::shop_time_zone`].
     pub time_zone: Option<String>,
@@ -349,6 +352,7 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_aliexpress_removed())
         .handler(on_aliexpress_forwarding_set())
         .handler(on_aliexpress_order_phone_set())
+        .handler(on_aliexpress_price_tolerance_set())
         .handler(on_mail_languages_set())
         .handler(on_mail_template_saved())
         .handler(on_mail_template_text_saved())
@@ -581,6 +585,15 @@ async fn on_aliexpress_pricing_set(
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     tenant.aliexpress_pricing = event.data.pricing.clone();
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_aliexpress_price_tolerance_set(
+    event: Event<crate::aggregator::AliexpressPriceToleranceSet>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.aliexpress_price_tolerance_bps = event.data.tolerance_bps;
     Ok(())
 }
 

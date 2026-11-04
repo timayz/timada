@@ -1,9 +1,10 @@
 //! Card payments, on each tenant's own Stripe account.
 //!
 //! A storefront asks to pay (`Cart::CheckoutRequested`); [`subscription`]
-//! prices the cart from the store, opens a payment with Stripe under the
-//! tenant's secret key and records it (`Cart::PaymentRequested`) for the
-//! storefront's card form. Stripe tells the webhook (`app/stripe`) when the
+//! has the cart's supplied goods read again ([`SuppliedGoods`]), prices the
+//! cart from the store, opens a payment with Stripe under the tenant's secret
+//! key and records it (`Cart::PaymentRequested`) for the storefront's card
+//! form. Stripe tells the webhook (`app/stripe`) when the
 //! payment went through, and only then does the order exist. Cancelling an
 //! order gives the money back through Stripe first. A card form left open
 //! past the time its goods were held for is closed by [`lapsed`]'s sweep
@@ -14,6 +15,7 @@
 //! `[payments]` section no tenant takes payments.
 
 mod gateway;
+mod goods;
 mod lapsed;
 mod setup;
 pub mod signature;
@@ -23,6 +25,7 @@ pub mod webhook;
 use std::sync::Arc;
 
 pub use gateway::*;
+pub use goods::*;
 pub use lapsed::*;
 pub use setup::*;
 pub use subscription::*;

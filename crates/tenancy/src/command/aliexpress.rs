@@ -2,12 +2,12 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::company::{AliexpressAuthorized, AliexpressDisconnected};
 use crate::aggregator::{
-    AliexpressConfigured, AliexpressForwardingSet, AliexpressOrderPhoneSet, AliexpressPricingSet,
-    AliexpressRemoved,
+    AliexpressConfigured, AliexpressForwardingSet, AliexpressOrderPhoneSet,
+    AliexpressPriceToleranceSet, AliexpressPricingSet, AliexpressRemoved,
 };
 use crate::command::CompanyState;
 use crate::error::TenancyError;
-use crate::value_object::{PERMISSION_ALIEXPRESS_MANAGE, Pricing};
+use crate::value_object::{MAX_PRICE_TOLERANCE_BPS, PERMISSION_ALIEXPRESS_MANAGE, Pricing};
 
 /// What the shop buys on AliExpress.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +20,9 @@ pub struct ConfigureAliexpress {
     pub language: String,
     /// How imports are priced, by cost band (`None`: by hand).
     pub pricing: Option<Pricing>,
+    /// How far from a price, in hundredths of a percent, the rule's price may
+    /// go before a read changes it.
+    pub price_tolerance_bps: u32,
 }
 
 /// The tokens an AliExpress account gave the platform's app, sealed by the
@@ -61,6 +64,9 @@ impl<E: Executor> super::Command<E> {
         {
             return Err(TenancyError::InvalidPricingRule);
         }
+        if cmd.price_tolerance_bps > MAX_PRICE_TOLERANCE_BPS {
+            return Err(TenancyError::InvalidPriceTolerance);
+        }
         let tenant = self.require_active(tenant_id).await?;
         if !tenant.can(actor_user_id, PERMISSION_ALIEXPRESS_MANAGE) {
             return Err(TenancyError::Forbidden);
@@ -76,6 +82,10 @@ impl<E: Executor> super::Command<E> {
             })
             .event(&AliexpressPricingSet {
                 pricing: cmd.pricing,
+                set_by: actor_user_id.to_owned(),
+            })
+            .event(&AliexpressPriceToleranceSet {
+                tolerance_bps: cmd.price_tolerance_bps,
                 set_by: actor_user_id.to_owned(),
             })
             .commit(&self.0)

@@ -44,6 +44,7 @@ fn market() -> ConfigureAliexpress {
         currency: "eur".to_owned(),
         language: "FR".to_owned(),
         pricing: None,
+        price_tolerance_bps: 0,
     }
 }
 
@@ -227,6 +228,38 @@ async fn a_tenant_is_created_with_the_usual_rates_and_keeps_its_rule_when_it_sto
         .await
         .unwrap();
     assert_eq!(load().await.aliexpress_pricing, None);
+}
+
+#[tokio::test]
+async fn a_shop_may_let_small_moves_in_the_rule_leave_its_prices_alone() {
+    let (executor, _pool) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let owner = new_id();
+    let tenant = create_tenant(&cmd, "Ali Tolerance", &owner).await;
+    let load = async || cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(
+        load().await.aliexpress_price_tolerance_bps,
+        0,
+        "every price follows its rule at first"
+    );
+
+    let with = |price_tolerance_bps| ConfigureAliexpress {
+        price_tolerance_bps,
+        ..market()
+    };
+    assert!(matches!(
+        cmd.configure_aliexpress(&owner, &tenant.id, with(2_001))
+            .await,
+        Err(TenancyError::InvalidPriceTolerance)
+    ));
+    cmd.configure_aliexpress(&owner, &tenant.id, with(150))
+        .await
+        .unwrap();
+    assert_eq!(load().await.aliexpress_price_tolerance_bps, 150);
+
+    // It goes with the rule: stopping keeps it.
+    cmd.remove_aliexpress(&owner, &tenant.id).await.unwrap();
+    assert_eq!(load().await.aliexpress_price_tolerance_bps, 150);
 }
 
 #[tokio::test]

@@ -16,11 +16,13 @@ use timada_tenancy::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Notify;
 
+use super::payment_reads::AliexpressGoods;
 use super::subscription::reads_subscription;
 use super::sync::AliexpressSync;
 use super::{ALIEXPRESS_ACTOR, Aliexpress, SyncMode, SyncResult};
 use crate::config::AliexpressConfig;
 use crate::db::Db;
+use crate::payments::SuppliedGoods;
 use crate::seal::Sealer;
 
 const AE_PRODUCT: &str = "1005006123456789";
@@ -35,6 +37,8 @@ struct StandIn {
     offline: AtomicBool,
     /// Answers 503 to everything.
     down: AtomicBool,
+    /// Keeps every caller waiting.
+    hung: AtomicBool,
     /// Holds each answer until told to go.
     held: AtomicBool,
     /// Told when an answer is being held.
@@ -51,6 +55,7 @@ impl StandIn {
             stock: AtomicU32::new(120),
             offline: AtomicBool::new(false),
             down: AtomicBool::new(false),
+            hung: AtomicBool::new(false),
             held: AtomicBool::new(false),
             holding: Notify::new(),
             answer: Notify::new(),
@@ -80,6 +85,9 @@ impl StandIn {
                         }
                     }
                     stand_in.reads.fetch_add(1, Ordering::SeqCst);
+                    if stand_in.hung.load(Ordering::SeqCst) {
+                        return std::future::pending::<()>().await;
+                    }
                     if stand_in.held.load(Ordering::SeqCst) {
                         stand_in.holding.notify_one();
                         stand_in.answer.notified().await;
@@ -170,6 +178,7 @@ impl Shop {
                 authorize_url: None,
                 sync_check_secs: 3600,
                 sync_every_secs: 3600,
+                read_fresh_secs: 60,
             },
             false,
             store.clone(),
@@ -234,6 +243,7 @@ impl Shop {
                     currency: "EUR".into(),
                     language: "fr".into(),
                     pricing: Some(pricing.clone()),
+                    price_tolerance_bps: 0,
                 },
             )
             .await
@@ -359,6 +369,55 @@ impl Shop {
     async fn follow_requests(&self) {
         reads_subscription::<Evento>(self.aliexpress.clone(), self.db.clone(), self.store.clone())
             .run_once(&self.store)
+            .await
+            .unwrap();
+    }
+
+    /// What a payment asks for its cart holding the item.
+    fn goods(&self) -> AliexpressGoods {
+        AliexpressGoods::new(self.aliexpress.clone(), self.db.clone(), self.store.clone())
+    }
+
+    /// Sets when the item was last read, in this node's read model.
+    async fn read_at(&self, at: u64) {
+        self.db
+            .execute(
+                "UPDATE aliexpress_products SET last_synced_at = ?1, last_tried_at = ?1",
+                (at as i64,),
+            )
+            .await
+            .unwrap();
+    }
+
+    /// A shopper puts the first combination in a cart. The item is on sale.
+    async fn add_to_cart(&self) {
+        let catalog = timada_catalog::Command::new(self.store.clone(), &self.tenant.id);
+        let product = catalog
+            .load_product(&self.product_id)
+            .await
+            .unwrap()
+            .unwrap();
+        if !product.is_published() {
+            catalog
+                .publish_product(ALICE, &self.product_id)
+                .await
+                .unwrap();
+        }
+        let orders = timada_orders::Command::new(self.store.clone(), &self.tenant.id);
+        let cart_id = orders
+            .create_cart(timada_orders::STOREFRONT_ACTOR)
+            .await
+            .unwrap();
+        orders
+            .add_to_cart(
+                timada_orders::STOREFRONT_ACTOR,
+                &cart_id,
+                timada_orders::CartItem {
+                    product_id: self.product_id.clone(),
+                    variant_id: Some(product.variants[0].id.clone()),
+                    quantity: 1,
+                },
+            )
             .await
             .unwrap();
     }
@@ -658,4 +717,228 @@ async fn a_shop_that_cannot_read_is_passed_over_without_a_request() {
     assert_eq!(shop.version().await, version, "no request");
     assert_eq!(shop.row().await.last_tried_at, Some(later as i64));
     assert_eq!(shop.stand_in.reads(), 0);
+}
+
+#[tokio::test]
+async fn a_payment_reads_the_items_of_its_cart_and_the_price_follows() {
+    let shop = Shop::new().await;
+    shop.read_at(100).await;
+    *shop.stand_in.cost.lock().unwrap() = "5.00".to_owned();
+
+    // Twice the same product (two of its variants), and one not imported.
+    shop.goods()
+        .read_again(
+            &shop.tenant.id,
+            &[
+                shop.product_id.clone(),
+                "not-imported".to_owned(),
+                shop.product_id.clone(),
+            ],
+        )
+        .await;
+
+    assert_eq!(shop.stand_in.reads(), 1);
+    assert_eq!(shop.rose().await.0, 1000);
+}
+
+#[tokio::test]
+async fn a_payment_does_not_read_an_item_read_a_moment_ago() {
+    let shop = Shop::new().await;
+    let now = crate::auth::now();
+    shop.read_at(now - 30).await;
+
+    shop.goods()
+        .read_again(&shop.tenant.id, std::slice::from_ref(&shop.product_id))
+        .await;
+    assert_eq!(shop.stand_in.reads(), 0);
+
+    // A read that changed nothing leaves its time, so the next one holds off.
+    shop.read_at(now - 61).await;
+    let goods = shop.goods();
+    goods
+        .read_again(&shop.tenant.id, std::slice::from_ref(&shop.product_id))
+        .await;
+    assert_eq!(shop.stand_in.reads(), 1);
+    goods
+        .read_again(&shop.tenant.id, std::slice::from_ref(&shop.product_id))
+        .await;
+    assert_eq!(shop.stand_in.reads(), 1);
+}
+
+#[tokio::test]
+async fn a_payment_goes_by_the_last_read_when_aliexpress_refuses() {
+    let shop = Shop::new().await;
+    shop.read_at(100).await;
+    shop.stand_in.down.store(true, Ordering::SeqCst);
+
+    shop.goods()
+        .read_again(&shop.tenant.id, std::slice::from_ref(&shop.product_id))
+        .await;
+
+    assert_eq!(shop.stand_in.reads(), 1);
+    assert_eq!(shop.rose().await.0, 862, "the price stays");
+    let row = timada_aliexpress::link_of_product(&shop.db, &shop.tenant.id, &shop.product_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.last_synced_at,
+        Some(100),
+        "a read that failed is no read"
+    );
+    assert!(row.last_tried_at > Some(100), "it was tried, though");
+    assert!(
+        shop.row().await.last_error.is_some(),
+        "the merchant can read why"
+    );
+}
+
+#[tokio::test]
+async fn a_payment_waits_a_moment_for_aliexpress_and_the_next_ones_do_not_wait_at_all() {
+    let shop = Shop::new().await;
+    shop.read_at(100).await;
+    shop.stand_in.hung.store(true, Ordering::SeqCst);
+    let goods = shop.goods().waiting(std::time::Duration::from_millis(100));
+
+    let started = std::time::Instant::now();
+    goods
+        .read_again(&shop.tenant.id, std::slice::from_ref(&shop.product_id))
+        .await;
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert_eq!(shop.stand_in.reads(), 1, "it asked, and got no answer");
+
+    // AliExpress does not answer: the next payments go by the last read.
+    goods
+        .read_again(&shop.tenant.id, std::slice::from_ref(&shop.product_id))
+        .await;
+    assert_eq!(shop.stand_in.reads(), 1, "they do not even ask");
+}
+
+#[tokio::test]
+async fn a_shop_without_its_account_goes_by_the_last_read() {
+    let shop = Shop::new().await;
+    shop.read_at(100).await;
+    timada_tenancy::Command(shop.store.clone())
+        .remove_aliexpress(ALICE, &shop.tenant.id)
+        .await
+        .unwrap();
+
+    shop.goods()
+        .read_again(&shop.tenant.id, std::slice::from_ref(&shop.product_id))
+        .await;
+
+    assert_eq!(shop.stand_in.reads(), 0);
+}
+
+#[tokio::test]
+async fn a_cart_add_asks_for_an_item_not_tried_lately_once() {
+    let shop = Shop::new().await;
+    shop.follow_requests().await;
+    shop.read_at(100).await;
+    let version = shop.version().await;
+
+    // Not this node's: left to the other.
+    *shop.share.lock().unwrap() = shop.elsewhere();
+    shop.add_to_cart().await;
+    shop.follow_requests().await;
+    assert_eq!(shop.version().await, version);
+    assert_eq!(shop.stand_in.reads(), 0);
+
+    // This node's: asked for, and the request read in turn.
+    *shop.share.lock().unwrap() = Share::ALONE;
+    shop.add_to_cart().await;
+    shop.follow_requests().await;
+    assert_eq!(shop.version().await, version + 1);
+    let link = shop
+        .links()
+        .load_link_by_id(&shop.link_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(link.last_requested_at.is_some());
+    shop.follow_requests().await;
+    assert_eq!(shop.stand_in.reads(), 1);
+
+    // Tried a moment ago: the next carts ask for nothing.
+    shop.add_to_cart().await;
+    shop.follow_requests().await;
+    assert_eq!(shop.version().await, version + 1);
+    assert_eq!(shop.stand_in.reads(), 1);
+}
+
+#[tokio::test]
+async fn a_cart_add_of_a_product_not_imported_asks_for_nothing() {
+    let shop = Shop::new().await;
+    shop.follow_requests().await;
+    let catalog = timada_catalog::Command::new(shop.store.clone(), &shop.tenant.id);
+    let mug = catalog
+        .create_product(
+            ALICE,
+            timada_catalog::CreateProduct {
+                name: "Mug".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .price_product(ALICE, &mug.id, 1250, "EUR")
+        .await
+        .unwrap();
+    catalog.publish_product(ALICE, &mug.id).await.unwrap();
+    let orders = timada_orders::Command::new(shop.store.clone(), &shop.tenant.id);
+    let cart_id = orders
+        .create_cart(timada_orders::STOREFRONT_ACTOR)
+        .await
+        .unwrap();
+    orders
+        .add_to_cart(
+            timada_orders::STOREFRONT_ACTOR,
+            &cart_id,
+            timada_orders::CartItem {
+                product_id: mug.id.clone(),
+                variant_id: None,
+                quantity: 1,
+            },
+        )
+        .await
+        .unwrap();
+    let version = shop.version().await;
+
+    shop.follow_requests().await;
+
+    assert_eq!(shop.version().await, version);
+    assert_eq!(shop.stand_in.reads(), 0);
+}
+
+#[tokio::test]
+async fn a_price_stays_within_the_tolerance_unless_a_member_asks() {
+    let shop = Shop::new().await;
+    let tenancy = timada_tenancy::Command(shop.store.clone());
+    tenancy
+        .configure_aliexpress(
+            ALICE,
+            &shop.tenant.id,
+            ConfigureAliexpress {
+                ship_to_country: "FR".into(),
+                currency: "EUR".into(),
+                language: "fr".into(),
+                pricing: shop.tenant.aliexpress_pricing.clone(),
+                price_tolerance_bps: 500,
+            },
+        )
+        .await
+        .unwrap();
+    let shop = Shop {
+        tenant: tenancy.load_tenant(&shop.tenant.id).await.unwrap().unwrap(),
+        ..shop
+    };
+    // 4.40 gives 8.80, about 2 % above 8.62.
+    *shop.stand_in.cost.lock().unwrap() = "4.40".to_owned();
+
+    shop.sync(SyncMode::Routine).await;
+    assert_eq!(shop.rose().await.0, 862);
+
+    shop.sync(SyncMode::Asked { by: ALICE }).await;
+    assert_eq!(shop.rose().await.0, 880);
 }
