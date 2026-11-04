@@ -142,7 +142,9 @@ pub async fn note_published(
     Ok(())
 }
 
-/// Writes the row of a forward as the write model sees it.
+/// Writes the row of a forward as the write model sees it. When it was read
+/// only moves forward: a read that changed nothing records no event, so this node
+/// may know of a later one than the forward does ([`note_forward_read`]).
 pub async fn upsert_forward(
     db: &Db,
     tenant_id: &str,
@@ -156,12 +158,14 @@ pub async fn upsert_forward(
         .join(" ");
     db.execute(
         "INSERT INTO aliexpress_forwards (tenant_id, id, order_id, status, ae_order_ids,
-            tracking, last_error, placed_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            tracking, last_error, placed_at, updated_at, shard, last_read_at, settling)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?9, ?11)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             status = excluded.status, ae_order_ids = excluded.ae_order_ids,
             tracking = excluded.tracking, last_error = excluded.last_error,
-            placed_at = excluded.placed_at, updated_at = excluded.updated_at",
+            placed_at = excluded.placed_at, updated_at = excluded.updated_at,
+            last_read_at = MAX(last_read_at, excluded.last_read_at),
+            settling = excluded.settling",
         (
             tenant_id,
             forward.id.as_str(),
@@ -172,7 +176,26 @@ pub async fn upsert_forward(
             forward.last_error.as_deref(),
             forward.placed_at.map(|at| at as i64),
             forward.updated_at as i64,
+            i64::from(shard_of(&forward.id)),
+            forward.complete && forward.all_shipped(),
         ),
+    )
+    .await?;
+    Ok(())
+}
+
+/// The forward's orders were read at `at` (unix seconds), whether or not the read
+/// worked or found anything: it waits for the next period.
+pub async fn note_forward_read(
+    db: &Db,
+    tenant_id: &str,
+    forward_id: &str,
+    at: u64,
+) -> anyhow::Result<()> {
+    db.execute(
+        "UPDATE aliexpress_forwards SET last_read_at = MAX(last_read_at, ?3)
+         WHERE tenant_id = ?1 AND id = ?2",
+        (tenant_id, forward_id, at as i64),
     )
     .await?;
     Ok(())
@@ -195,26 +218,36 @@ pub struct ForwardRow {
     pub updated_at: i64,
 }
 
-/// The orders of every shop placed on AliExpress and not settled yet: what a
-/// sweep reads again. The shops take turns, each its longest unchanged first,
-/// so one shop's open orders never crowd another shop out. Grouped by tenant,
-/// as the sweep paces one shop's reads.
-pub async fn forwards_due(db: &Db, limit: i64) -> anyhow::Result<Vec<ForwardRow>> {
+/// The orders of every shop placed on AliExpress and not settled yet that
+/// `share` holds, last read or changed before `before` (unix seconds): what a sweep
+/// reads, in case a push from AliExpress never came. One whose parcels are all
+/// known is due whenever: a read settles such an order in one go, so only a node
+/// that stopped half-way leaves it so. The shops take turns, each its longest
+/// unread first, so one shop's open orders never crowd another shop out. Grouped
+/// by tenant, as the sweep paces one shop's reads.
+pub async fn forwards_due(
+    db: &Db,
+    before: i64,
+    share: Share,
+    limit: i64,
+) -> anyhow::Result<Vec<ForwardRow>> {
     db.fetch_all(
         "SELECT tenant_id, id, order_id, status, ae_order_ids, tracking, last_error,
             placed_at, updated_at
          FROM aliexpress_forwards
          WHERE (tenant_id, id) IN (
             SELECT tenant_id, id FROM (
-                SELECT tenant_id, id, updated_at, ROW_NUMBER() OVER (
-                    PARTITION BY tenant_id ORDER BY updated_at, id
+                SELECT tenant_id, id, last_read_at, ROW_NUMBER() OVER (
+                    PARTITION BY tenant_id ORDER BY last_read_at, id
                 ) AS turn
                 FROM aliexpress_forwards
                 WHERE status = 'placed'
-            ) ORDER BY turn, updated_at, tenant_id LIMIT ?1
+                    AND (last_read_at < ?1 OR settling = 1)
+                    AND shard % ?3 = ?4
+            ) ORDER BY turn, last_read_at, tenant_id LIMIT ?2
          )
-         ORDER BY tenant_id, updated_at, id",
-        (limit,),
+         ORDER BY tenant_id, last_read_at, id",
+        (before, limit, share.of as i64, share.index as i64),
     )
     .await
 }

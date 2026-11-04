@@ -205,8 +205,9 @@ dir = "data/shopper-keys"
 # account to the app from its page, and every shop selling as the company
 # buys through that account. The tokens are kept encrypted under
 # `secrets.key`; without it, or without the app, no company can connect.
-# The nodes share the imported products out among those up, each reading
-# its own; one node per token renews a company's access before it lapses.
+# The nodes share the imported products and the open orders out among those
+# up, each reading its own; one node per token renews a company's access before
+# it lapses.
 # AliExpress counts every call against the one app, whichever company it
 # acts for.
 # [aliexpress]
@@ -215,12 +216,17 @@ dir = "data/shopper-keys"
 # # callback and `/aliexpress/webhook` as its message push callback.
 # app_key = ""
 # app_secret = ""
-# # How often, in seconds, this node renews the access about to lapse and reads
-# # the open orders again.
+# # How often, in seconds, this node renews the access about to lapse and looks
+# # for the open orders due to be read.
 # sync_check_secs = 3600
 # # How long, in seconds, a product goes before its price and stock are read
 # # again, if the day's calls reach it.
 # sync_every_secs = 86400
+# # How long, in seconds, an order placed on AliExpress goes unread before it is
+# # read again. AliExpress pushes each change of its status to
+# # `/aliexpress/webhook`, so this only catches a push that never came. Without
+# # that callback registered, tracking arrives this late: lower it.
+# order_read_every_secs = 86400
 # # How many calls a day the app may make, over every shop and node: read it on
 # # AliExpress's open platform. A sale always reads what it sells; the nodes
 # # spend what is left on the other products: first what shoppers wanted in the

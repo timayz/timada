@@ -1,14 +1,15 @@
 //! What a push from AliExpress does once it reached the platform: check the
 //! signature, find the shop order that bought the AliExpress order, and read
-//! that order again right away instead of waiting for the sweep. Kept apart
-//! from the HTTP route so it is tested without one.
+//! that order again right away. The sweep then has no reason to read it for a
+//! while, so the app's calls go by what happens to the orders, not by how many
+//! are open. Kept apart from the HTTP route so it is tested without one.
 //!
 //! AliExpress wants its 200 within half a second and delivers at least once,
 //! so the route answers as soon as the push checks out and the forward is
 //! found; the read runs behind it, and a second push for the same order
 //! finds nothing left to record (`record_checked` writes against the
 //! version it started from). A push for an order the read model does not
-//! know yet is let go: the sweep reads every placed order anyway.
+//! know yet is let go: the next one reads it, or the sweep at the latest.
 
 use std::sync::Arc;
 
@@ -71,17 +72,21 @@ pub async fn receive(
         tenant_id: forward.tenant_id.clone(),
         forward_id: forward.id.clone(),
     };
+    let db = db.clone();
     tokio::spawn(async move {
-        if let Err(err) = check(aliexpress, store, &forward.tenant_id, &forward.id, now).await {
+        if let Err(err) = check(aliexpress, &db, store, &forward.tenant_id, &forward.id, now).await
+        {
             tracing::warn!(tenant = %forward.tenant_id, forward = %forward.id, error = %err, "AliExpress order not read after its push");
         }
     });
     Ok(outcome)
 }
 
-/// Reads the forward's AliExpress orders again, as the sweep would.
-async fn check(
+/// Reads the forward's AliExpress orders again, as the sweep would, which then
+/// has no reason to for a while.
+pub(super) async fn check(
     aliexpress: Arc<Aliexpress>,
+    db: &Db,
     store: Executor,
     tenant_id: &str,
     forward_id: &str,
@@ -90,8 +95,10 @@ async fn check(
     let Some((tenant, company)) = aliexpress.connected_shop(tenant_id, now).await? else {
         return Ok(());
     };
-    aliexpress
+    let read = aliexpress
         .check_forward(&store, &tenant, &company, forward_id, now)
-        .await?;
+        .await;
+    timada_aliexpress::note_forward_read(db, tenant_id, forward_id, now).await?;
+    read?;
     Ok(())
 }

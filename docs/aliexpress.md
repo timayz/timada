@@ -113,12 +113,13 @@ anything imported: the platform keeps which companies are connected and until wh
 `timada-aliexpress/TokenRefresh` claim, keyed by company and token). An access
 AliExpress no longer renews means an owner connects again.
 
-Each imported product belongs to one of the nodes up, by a hash of its stream's id
-over the nodes heard from in the last 30 seconds, so one node sweeps it and one node
-answers a request for it, and the app's quota is spent once. A node that stops is left
-out once it has been silent that long: what it held and had not read yet is shared out
-to the others, and the sweep finds it still due. Two nodes that disagree for a moment
-read a product twice or leave it for later, neither of which harms it.
+Each imported product, and each order placed on AliExpress, belongs to one of the
+nodes up, by a hash of its stream's id over the nodes heard from in the last 30
+seconds, so one node sweeps it and one node answers a request for it, and the app's
+quota is spent once. A node that stops is left out once it has been silent that long:
+what it held and had not read yet is shared out to the others, and the sweep finds it
+still due. Two nodes that disagree for a moment read one twice or leave it for later,
+neither of which harms it.
 
 *Sync now*, on the AliExpress page or on the product page, asks the same way, naming
 the member, and waits up to ten seconds so the page can say what the read found.
@@ -145,6 +146,9 @@ order placed or read again, a renewal. Those never wait, since a sale cannot. Th
 spends what they leave, so a busy day reads fewer of the other products, not more calls
 in all. A burst of sales costs the sweep at most a day's calls. The budget is per node,
 each counting its own calls, so it holds as long as the nodes are about as busy.
+
+An open order costs a call per AliExpress order for each push, and for each day it went
+without one: 500 open orders with no push at all spend about 500 calls a day.
 
 The sweep spends the calls by priority:
 
@@ -266,15 +270,20 @@ A failure is shown on the card with *Place again*. One node takes each order on
 recording the outcome, the order may be on AliExpress anyway. It is then never placed
 again on its own: the merchant checks the account's orders on AliExpress first.
 
-Until each AliExpress order has a parcel number, the sweep reads it again on every
-pass (`aliexpress.trade.ds.order.get`). AliExpress also pushes each status change of
-an order to `/aliexpress/webhook` (message type 53, the body signed with the app's key
-and secret in `Authorization`): the order is read again at once, and the sweep stays
-the fallback the push's twelve retries do not cover. A push is answered before the
-read, within the half second AliExpress allows, and may come twice: the read records
-against the version it started from, so a second push changes nothing. Once each
-order has its parcel number, and every line of the shop's
-order was bought there, the order is fulfilled with those numbers as its tracking. A
+AliExpress pushes each status change of an order to `/aliexpress/webhook` (message type
+53, the body signed with the app's key and secret in `Authorization`), and the order is
+read at once (`aliexpress.trade.ds.order.get`). A push is answered before the read,
+within the half second AliExpress allows, and may come twice: the read records against
+the version it started from, so a second push changes nothing.
+
+A push can still be lost, past its twelve retries half an hour apart, or arrive before
+the order is in the read model. So the node an order belongs to also reads it once it
+has gone unread for `[aliexpress] order_read_every_secs` (a day), the shops taking
+turns, oldest read first. Without the callback registered, tracking arrives that late:
+lower the setting.
+
+Once each order has its parcel number, and every line of the shop's order was bought
+there, the order is fulfilled with those numbers as its tracking. A
 mixed order only shows them, for the merchant to fulfil. An order fulfilled by hand,
 cancelled, or placed more than 60 days ago is no longer read. The request and
 response shapes follow ae_sdk, like the rest: the real-app smoke test (#253) covers
@@ -282,8 +291,9 @@ these calls too.
 
 The order and the forward are two streams, so this is three writes: what was read, the
 order's `Fulfilled`, then the forward's `Done`. A node that stops in between loses
-nothing. The next read, at the latest the sweep a node runs when it starts, fulfils the
-order from the reads recorded, or closes the forward with the tracking the order was
+nothing. Only that leaves an order open with every parcel known, so such an order is
+due on every sweep (`sync_check_secs`) rather than once a day. The next read fulfils
+it from the reads recorded, or closes the forward with the tracking the order was
 fulfilled with, whether AliExpress answers or not.
 
 ## Where things live
