@@ -2,7 +2,7 @@
 //! problem is called. The crate names kinds by key; here they read.
 
 use timada_automations::catalog::{
-    self, CONDITION, CodeValue, DISCOUNT, EMAIL, FieldType, ISSUE_INVALID, ISSUE_MISSING,
+    self, CONDITION, CodeValue, DISCORD, DISCOUNT, EMAIL, FieldType, ISSUE_INVALID, ISSUE_MISSING,
     ISSUE_NO_RULES, ISSUE_NO_SUBJECT, ISSUE_TOO_MANY_RULES, ISSUE_UNKNOWN_FIELD, NOTIFY, Op,
     RuleValue, Subject, Unit, WAIT, WEBHOOK,
 };
@@ -173,6 +173,7 @@ pub fn step_label(kind: &str) -> &'static str {
         EMAIL => "E-mail the customer",
         DISCOUNT => "Create a discount code",
         WEBHOOK => "Call a webhook",
+        DISCORD => "Post to Discord",
         _ => "Unknown block",
     }
 }
@@ -187,6 +188,7 @@ pub fn step_description(kind: &str) -> &'static str {
         }
         DISCOUNT => "Make a single-use code that a mail after it can quote.",
         WEBHOOK => "Post what started the run to your own app or another service, signed.",
+        DISCORD => "Post a message you write to a channel of your Discord server.",
         _ => "Made with a newer version: it is kept as it is.",
     }
 }
@@ -199,6 +201,7 @@ pub fn step_icon(kind: &str) -> IconData {
         EMAIL => icons::MAIL,
         DISCOUNT => icons::DISCOUNTS,
         WEBHOOK => icons::WEBHOOK,
+        DISCORD => icons::DISCORD,
         _ => icons::BLOCK,
     }
 }
@@ -353,6 +356,10 @@ pub fn step_summary(step: &Step, subject: Option<Subject>) -> String {
             Ok(hook) if !hook.host.is_empty() => format!("Calls {}", hook.host),
             Ok(_) => "Calls the saved address".to_owned(),
             Err(_) => "Give the address to call".to_owned(),
+        },
+        DISCORD => match catalog::parse_discord(&step.settings) {
+            Ok(_) => "Posts to the saved channel".to_owned(),
+            Err(_) => "Give the channel and the message".to_owned(),
         },
         _ => "Kept as it is".to_owned(),
     }

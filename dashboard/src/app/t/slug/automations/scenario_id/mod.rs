@@ -200,18 +200,21 @@ pub async fn edit(cx: &Cx, Form(form): Form<EditorForm>) -> Result<impl View> {
     })
 }
 
-/// Seals the address typed in the open webhook step's settings: the
-/// definition only ever holds it sealed (with its host in clear, to show).
-/// An address that is not one, or no secret to seal it with, is refused.
+/// Seals the address typed in the open webhook or Discord step's settings:
+/// the definition only ever holds it sealed (a webhook's with its host in
+/// clear, to show). An address that is not one, or no secret to seal it
+/// with, is refused.
 fn seal_webhook_url(
     cx: &Cx,
     access: &TenantAccess,
     scenario_id: &str,
     editor: &mut Editor,
 ) -> Option<&'static str> {
+    use timada_automations::catalog::{DISCORD, WEBHOOK};
     let id = editor.selected.clone()?;
     let step = editor.definition.find(&id)?;
-    if step.kind != timada_automations::catalog::WEBHOOK {
+    let discord = step.kind == DISCORD;
+    if !discord && step.kind != WEBHOOK {
         return None;
     }
     let mut settings = step.settings.clone();
@@ -219,11 +222,17 @@ fn seal_webhook_url(
         .remove("url")
         .map(|url| url.trim().to_owned())
         .filter(|url| !url.is_empty());
+    let sealing = topcoat::context::app_context::<crate::app::WebhookSealing>(cx);
     let mut refused = None;
     if let Some(url) = typed {
         match reqwest::Url::parse(&url) {
+            Ok(parsed)
+                if discord && !crate::automations::discord::is_webhook_url(&parsed, sealing.1) =>
+            {
+                refused = Some("automation_discord_address")
+            }
             Ok(parsed) if matches!(parsed.scheme(), "https" | "http") => {
-                let keys = &topcoat::context::app_context::<crate::app::WebhookSealing>(cx).0;
+                let keys = &sealing.0;
                 match keys.as_ref().map(|keys| {
                     crate::automations::webhook::seal_url(
                         keys,
@@ -235,14 +244,17 @@ fn seal_webhook_url(
                 }) {
                     Some(Ok(sealed)) => {
                         settings.insert("url_sealed".into(), sealed);
-                        settings.insert(
-                            "host".into(),
-                            parsed.host_str().unwrap_or_default().to_owned(),
-                        );
+                        if !discord {
+                            settings.insert(
+                                "host".into(),
+                                parsed.host_str().unwrap_or_default().to_owned(),
+                            );
+                        }
                     }
                     _ => refused = Some("automation_secret_required"),
                 }
             }
+            _ if discord => refused = Some("automation_discord_address"),
             _ => refused = Some("automation_webhook_address"),
         }
     }
@@ -269,10 +281,12 @@ async fn publish_blocked(
     {
         return Ok(Some("automation_discount_permission"));
     }
-    let calls_webhooks = definition
-        .walk()
-        .iter()
-        .any(|step| step.kind == timada_automations::catalog::WEBHOOK);
+    let calls_webhooks = definition.walk().iter().any(|step| {
+        matches!(
+            step.kind.as_str(),
+            timada_automations::catalog::WEBHOOK | timada_automations::catalog::DISCORD
+        )
+    });
     if calls_webhooks {
         if !access
             .can(cx, timada_tenancy::PERMISSION_API_KEYS_MANAGE)

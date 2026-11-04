@@ -46,8 +46,9 @@ the scenario's name and its `Definition`, kept whole as JSON in the events:
   order followed within `[automations]`'s delay). Today's steps: `wait`,
   `condition` (two lanes), `notify` (a note to the shop's members), `email`
   (a message the merchant wrote, to the customer the run is about), `discount`
-  (a single-use code a later mail may quote) and `webhook` (what started the
-  run, posted signed to an address of the merchant's).
+  (a single-use code a later mail may quote), `webhook` (what started the
+  run, posted signed to an address of the merchant's) and `discord` (a message
+  the merchant wrote, posted to a channel of their Discord server).
 - **Settings are kept as typed.** A step's settings are strings by key, read
   into typed settings by the catalog's `parse_*` functions. A draft never loses
   what was written, even when it does not read yet; the editor shows it next to
@@ -261,6 +262,24 @@ A 2xx is done; no answer, 408, 429
 or a 5xx is tried again (as for the codes); another answer fails the step.
 Publishing a scenario that calls webhooks needs `api-keys:manage`: like a key, it
 hands the shop's events to another system.
+
+## Discord
+
+**Post to Discord** posts the merchant's message to a channel, with a link to the
+run's subject in the dashboard under it. The merchant creates a webhook in the
+channel's settings (Integrations, Webhooks) and pastes its address; only Discord's
+own `https://…/api/webhooks/…` addresses are taken (and, with
+`mail.allow_private_hosts`, a stand-in on `127.0.0.1`, for tests). That address is
+the channel's only key, so it is sealed as a webhook step's is, with no host in
+clear; the name and picture the posts show are the ones set on Discord's side.
+
+Nothing a shopper wrote travels, so the message may mention people as the merchant
+likes (`@here`, a role). A 2xx is done; no answer, 408, 429 or a 5xx is tried
+again (as for the codes); another answer, such as the webhook deleted on Discord's
+side, fails the step. Discord takes no idempotency key, so a call that reached it
+and got no answer may post the message twice: a line said twice is better than a
+new order not said at all. Publishing needs `api-keys:manage` and `[secrets] key`,
+as for the webhooks.
 
 ## Abandoned checkouts
 

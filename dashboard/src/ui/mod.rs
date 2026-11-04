@@ -213,9 +213,12 @@ pub fn describe_error(code: &str) -> &'static str {
         "run_not_found" => "There is no such run.",
         "automation_invalid_email" => "That does not look like an e-mail address.",
         "automation_webhook_permission" => {
-            "A scenario that calls webhooks is published by members who may manage the API keys: it hands the shop's events to another system."
+            "A scenario that calls webhooks or posts to Discord is published by members who may manage the API keys: it hands the shop's events to another system."
         }
         "automation_webhook_address" => "A webhook's address is a web address (https://…).",
+        "automation_discord_address" => {
+            "That is not a Discord webhook address: copy it from the channel's settings, under Integrations (https://discord.com/api/webhooks/…)."
+        }
         "automation_discount_permission" => {
             "A scenario that makes discount codes is published by members who may manage the discounts."
         }

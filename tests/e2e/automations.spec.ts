@@ -585,3 +585,74 @@ test("a scenario calls a webhook, signed with the step's secret", async ({ page,
     server.close();
   }
 });
+
+test("a scenario posts to a Discord channel", async ({ page, request }) => {
+  // Discord: a server on this machine answering as a channel's webhook does.
+  const received: { path: string; body: string }[] = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      received.push({ path: req.url ?? "", body });
+      res.writeHead(204);
+      res.end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(12118, "127.0.0.1", resolve));
+  try {
+    await registerWithEmail(page, uniqueEmail("owner"));
+    const { name, slug } = uniqueTenant("Discord Shop");
+    await createTenant(page, name);
+    await page.goto(`/t/${slug}/api-keys`);
+    await page.getByLabel("Label").fill("Storefront");
+    await page.getByLabel(/Fill carts and place orders/).check();
+    await page.getByRole("button", { name: "Create key" }).click();
+    const key = (await page.locator("[data-api-key-token]").textContent())?.trim() ?? "";
+
+    await newScenario(page, "Tell the channel");
+    await chooseTrigger(page, "When a contact message arrives");
+    await slot(page, "root.0").getByRole("button", { name: "Add a step here" }).click();
+    await page
+      .locator('[id="add-root.0"]')
+      .getByRole("button", { name: "Post to Discord", exact: true })
+      .click();
+    const inspector = page.locator("[data-inspector]");
+
+    // Any other address is refused, and nothing is kept of it.
+    await inspector.getByLabel("Channel's webhook address").fill("https://example.com/hook");
+    await inspector.getByLabel("Message").fill("A customer wrote to us");
+    await page.getByRole("button", { name: "Apply" }).click();
+    await expect(page.getByText("That is not a Discord webhook address")).toBeVisible();
+    await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText(
+      "Give the channel and the message",
+    );
+
+    await inspector
+      .getByLabel("Channel's webhook address")
+      .fill("http://127.0.0.1:12118/api/webhooks/1/channel-token");
+    await page.getByRole("button", { name: "Apply" }).click();
+    // Sealed once applied: the address, which is the channel's key, is gone.
+    await expect(step(page, "s1").locator("[data-step-summary]").first()).toHaveText(
+      "Posts to the saved channel",
+    );
+    await expect(page.locator("[data-scenario-editor]")).not.toContainText("channel-token");
+    await page.getByRole("button", { name: "Publish", exact: true }).click();
+    await expect(page.getByRole("status")).toContainText("Published as version 1");
+
+    const sent = await request.post("/store/contact", {
+      headers: { Authorization: `Bearer ${key}` },
+      form: { first_name: "Ada", last_name: "Lovelace", email: uniqueEmail("visitor"), body: "Please call me back." },
+    });
+    expect(sent.status()).toBe(201);
+
+    await expect.poll(() => received.length, { timeout: 15_000 }).toBe(1);
+    expect(received[0].path).toBe("/api/webhooks/1/channel-token");
+    const { content } = JSON.parse(received[0].body);
+    expect(content).toContain("A customer wrote to us");
+    expect(content).toContain(`/t/${slug}/messages>`);
+    // Nothing the visitor wrote.
+    expect(received[0].body).not.toContain("call me back");
+  } finally {
+    server.close();
+  }
+});
