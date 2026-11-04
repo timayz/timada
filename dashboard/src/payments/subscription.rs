@@ -20,7 +20,7 @@ use timada_orders::{
 };
 
 use super::webhook::OUT_OF_STOCK;
-use super::{DASHBOARD_ACTOR, NewPayment, Payments};
+use super::{DASHBOARD_ACTOR, NewPayment, Payments, SuppliedGoods};
 use crate::ecb::{EuroRates, RateAnswer};
 
 /// The cursor identity of the subscription, in the store.
@@ -41,11 +41,13 @@ struct Store(Evento);
 pub fn subscription<E: Executor>(
     payments: Arc<Payments>,
     euro_rates: Arc<dyn EuroRates>,
+    goods: Arc<dyn SuppliedGoods>,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(payments)
         .data(euro_rates)
+        .data(goods)
         .data(Store(store))
         .handler(on_checkout_requested())
         .any_routing_key()
@@ -67,6 +69,28 @@ async fn on_checkout_requested<E: Executor>(
             .refuse_payment_request(DASHBOARD_ACTOR, &cart_id, &request_id, code)
             .await
     };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+
+    // What the shop buys as it sells is read first, so the checks below go by
+    // what the supplier asks now: a price that moved is `price_changed`, goods
+    // it ran out of are `out_of_stock`. Only for a request someone waits for.
+    if now.saturating_sub(event.timestamp) <= ANSWER_WINDOW_SECS
+        && let Some(cart) = orders.load_cart(&cart_id).await?
+        && !cart.is_checked_out()
+        && cart
+            .request(&request_id)
+            .is_some_and(|request| request.answer.is_none())
+    {
+        let goods: Arc<dyn SuppliedGoods> = context.extract();
+        let products: Vec<String> = cart
+            .lines
+            .iter()
+            .map(|line| line.product_id.clone())
+            .collect();
+        goods.read_again(&event.tenant, &products).await;
+    }
 
     let pending = match orders.pending_payment(&cart_id, &request_id).await {
         Ok(Some(pending)) => pending,
@@ -79,9 +103,6 @@ async fn on_checkout_requested<E: Executor>(
             None => return Err(err.into()),
         },
     };
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs());
     if now.saturating_sub(event.timestamp) > ANSWER_WINDOW_SECS {
         refuse(PAYMENTS_UNAVAILABLE).await?;
         return Ok(());

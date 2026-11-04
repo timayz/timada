@@ -292,6 +292,7 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_pricing_rule" => {
             "A price rule multiplies the cost by 1 to 100 (2.5) and adds at most 10,000 (1.00)."
         }
+        "invalid_price_tolerance" => "A price tolerance is a percentage from 0 to 20 (1.5).",
         "invalid_phone" => "A phone number has 6 to 32 characters: digits, spaces, +, -, ( and ).",
         "aliexpress_not_configured" => "Set what the shop buys on AliExpress first.",
         "aliexpress_not_connected" => "Connect the company's AliExpress account first.",

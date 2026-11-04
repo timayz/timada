@@ -3,6 +3,7 @@
 //! the import that fills a draft from an item (see [`subscription`]).
 
 pub mod forward;
+pub mod payment_reads;
 pub mod subscription;
 pub mod sync;
 #[cfg(test)]
@@ -51,6 +52,8 @@ pub struct Aliexpress {
     platform: Executor,
     /// How long a product goes before it is read again, in seconds.
     sync_every_secs: u64,
+    /// How recent a read must be for a payment to go by it, in seconds.
+    read_fresh_secs: u64,
     /// Which of the nodes up this one is, at the moment of asking.
     share: Arc<dyn Fn() -> Share + Send + Sync>,
 }
@@ -96,6 +99,7 @@ impl Aliexpress {
             allow_private_hosts,
             platform,
             sync_every_secs: config.sync_every_secs.max(1),
+            read_fresh_secs: config.read_fresh_secs,
             share,
         }))
     }
@@ -103,6 +107,11 @@ impl Aliexpress {
     /// How long a product goes before it is read again, in seconds.
     pub fn sync_every_secs(&self) -> u64 {
         self.sync_every_secs
+    }
+
+    /// How recent a read must be for a payment to go by it, in seconds.
+    pub fn read_fresh_secs(&self) -> u64 {
+        self.read_fresh_secs
     }
 
     /// Which of the nodes up this one is: what it reads of the imported items.
@@ -313,10 +322,11 @@ impl Aliexpress {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncMode<'a> {
     /// The dashboard's own: it writes only what changed, and the link's
-    /// stream stays short however often the item is read.
+    /// stream stays short however often the item is read; a price the rule's
+    /// stays close to, by the shop's tolerance, stays as it is.
     Routine,
     /// The member `by` waits for it: its outcome is recorded in their name,
-    /// whatever that is.
+    /// whatever that is, and every price follows its rule exactly.
     Asked { by: &'a str },
 }
 
@@ -411,12 +421,17 @@ impl Aliexpress {
             }
         };
         let pricing = link.pricing.as_ref().or(tenant.aliexpress_pricing.as_ref());
+        let tolerance_bps = match mode {
+            SyncMode::Routine => tenant.aliexpress_price_tolerance_bps,
+            SyncMode::Asked { .. } => 0,
+        };
         let outcome = timada_aliexpress::apply_sync(
             &catalog,
             ALIEXPRESS_ACTOR,
             &link,
             product.as_ref(),
             pricing,
+            tolerance_bps,
         )
         .await?;
         for warning in &outcome.warnings {

@@ -271,6 +271,7 @@ event timada-tenancy/Invitation::Sent { tenant_id: String, email: String, role: 
 event timada-tenancy/Tenant::AliexpressConfigured { ship_to_country: String, currency: String, language: String, configured_by: String }
 event timada-tenancy/Tenant::AliexpressForwardingSet { auto_forward: bool, try_to_pay: bool, set_by: String }
 event timada-tenancy/Tenant::AliexpressOrderPhoneSet { phone: Option<String>, set_by: String }
+event timada-tenancy/Tenant::AliexpressPriceToleranceSet { tolerance_bps: u32, set_by: String }
 event timada-tenancy/Tenant::AliexpressPricingSet { pricing: Option<Pricing>, set_by: String }
 event timada-tenancy/Tenant::AliexpressRemoved { removed_by: String }
 event timada-tenancy/Tenant::CompanyLinked { company_id: String, series_code: String, linked_by: String }

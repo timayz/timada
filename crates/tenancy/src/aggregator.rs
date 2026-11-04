@@ -216,6 +216,14 @@ pub enum Tenant {
         phone: Option<String>,
         set_by: String,
     },
+    /// A read of AliExpress leaves a price alone while the rule's price is
+    /// within this many hundredths of a percent of it, so a small move in the
+    /// cost neither changes the price nor stops a shopper at checkout. A
+    /// tenant starts at 0: every price follows its rule.
+    AliexpressPriceToleranceSet {
+        tolerance_bps: u32,
+        set_by: String,
+    },
 }
 
 /// Index: `slug → tenant`. One stream per slug, id = [`tenant_slug_id`](crate::tenant_slug_id).

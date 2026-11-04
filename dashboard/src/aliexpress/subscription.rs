@@ -6,7 +6,9 @@
 //!
 //! The items already linked are read again the same way, on a cursor of their
 //! own so a long import does not hold them up ([`reads_subscription`]): a
-//! request names no node, and the one the item belongs to reads it.
+//! request names no node, and the one the item belongs to reads it. The same
+//! node asks when a shopper puts an item in a cart, so what the checkout shows
+//! is already what AliExpress asks.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -17,8 +19,9 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use timada_aliexpress::aggregator::{ImportRequested, SyncRequested};
-use timada_aliexpress::{LinkStatus, map_product, track_imported};
+use timada_aliexpress::{LinkStatus, link_of_product, map_product, note_tried, track_imported};
 use timada_catalog_import::{ImportOptions, import_one};
+use timada_orders::aggregator::ItemAdded;
 
 use super::{ALIEXPRESS_ACTOR, Aliexpress, SyncMode};
 use crate::db::Db;
@@ -33,6 +36,12 @@ pub const READS_SUBSCRIPTION: &str = "timada-dashboard/aliexpress-reads";
 /// A request older than this is history being replayed (a node catching
 /// up): left alone, the merchant may ask again and the sweep comes back.
 const REQUEST_WINDOW_SECS: u64 = 10 * 60;
+
+/// A cart add asks for no read when the item was tried this recently. Each
+/// request takes a version of the item's stream, whose versions run out at
+/// 65,535: at most one an hour leaves a product selling around the clock years
+/// of them, and the payment reads it anyway.
+const CART_ADD_FRESH_SECS: u64 = 60 * 60;
 
 /// The store, to write with.
 #[derive(Clone)]
@@ -114,6 +123,7 @@ pub fn reads_subscription<E: Executor>(
         .data(db)
         .data(Store(store))
         .handler(on_sync_requested())
+        .handler(on_item_added())
         .any_routing_key()
         .retry(5)
 }
@@ -152,6 +162,42 @@ async fn on_sync_requested<E: Executor>(
     };
     if let Err(err) = read.await {
         tracing::warn!(tenant = %event.tenant, link = %event.aggregate_id, error = %err, "AliExpress product not read");
+    }
+    Ok(())
+}
+
+/// A shopper put something in a cart: an imported item not read lately is
+/// asked for, by the node it belongs to.
+#[evento::subscription]
+async fn on_item_added<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<ItemAdded>,
+) -> anyhow::Result<()> {
+    let aliexpress: Arc<Aliexpress> = context.extract();
+    let now = crate::auth::now();
+    if !aliexpress.enabled() || now.saturating_sub(event.timestamp) > REQUEST_WINDOW_SECS {
+        return Ok(());
+    }
+    let db: Db = context.extract();
+    let store: Store = context.extract();
+    let asked: anyhow::Result<()> = async {
+        let Some(link) = link_of_product(&db, &event.tenant, &event.data.product_id).await? else {
+            return Ok(());
+        };
+        let tried_lately = link
+            .last_tried_at
+            .is_some_and(|at| now.saturating_sub(at as u64) < CART_ADD_FRESH_SECS);
+        if tried_lately || !aliexpress.share().owns(&link.id) {
+            return Ok(());
+        }
+        timada_aliexpress::Command::new(store.0.clone(), &event.tenant)
+            .request_sync(ALIEXPRESS_ACTOR, &link.id)
+            .await?;
+        note_tried(&db, &event.tenant, &link.id, now).await
+    }
+    .await;
+    if let Err(err) = asked {
+        tracing::warn!(tenant = %event.tenant, product = %event.data.product_id, error = %err, "AliExpress product not asked for after a cart add");
     }
     Ok(())
 }

@@ -760,6 +760,10 @@ pub struct Pricing {
     pub above: PricingRule,
 }
 
+/// The most a shop's price tolerance can be, in hundredths of a percent. Past
+/// that a price says little about what the rule asks.
+pub const MAX_PRICE_TOLERANCE_BPS: u32 = 2_000;
+
 /// How many cost bands a pricing keeps at most, `above` aside.
 pub const MAX_PRICE_BANDS: usize = 10;
 

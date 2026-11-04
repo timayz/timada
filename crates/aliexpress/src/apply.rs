@@ -111,13 +111,15 @@ fn link_of(sku: &MappedSku, variant_id: Option<String>) -> SkuLink {
 
 /// Brings the linked product in step with `product` as just read (`None`:
 /// AliExpress no longer has it). `pricing` is what applies, the link's own
-/// or the shop's; without one prices are left alone.
+/// or the shop's; without one prices are left alone, and so is a price the
+/// rule's stays within `tolerance_bps` of (hundredths of a percent).
 pub async fn apply_sync<E: Executor>(
     catalog: &timada_catalog::Command<E>,
     actor: &str,
     link: &LinkState,
     product: Option<&AeProduct>,
     pricing: Option<&Pricing>,
+    tolerance_bps: u32,
 ) -> Result<SyncOutcome, CatalogError> {
     let mut outcome = SyncOutcome {
         skus: link.skus.clone(),
@@ -206,7 +208,7 @@ pub async fn apply_sync<E: Executor>(
                     .map(|variant| variant.price.amount_cents),
                 None => state.price.as_ref().map(|price| price.amount_cents),
             };
-            if current != Some(price) {
+            if !current.is_some_and(|current| within(current, price, tolerance_bps)) {
                 let priced = match linked.variant_id.as_deref() {
                     Some(variant_id) => {
                         catalog
@@ -245,6 +247,13 @@ pub async fn apply_sync<E: Executor>(
         outcome.unpublished = true;
     }
     Ok(outcome)
+}
+
+/// Whether `price` is within `tolerance_bps` of `current`, in hundredths of a
+/// percent of `current`: the price as it stands, so moves that add up are not
+/// each let through on their own.
+fn within(current: u64, price: u64, tolerance_bps: u32) -> bool {
+    u128::from(current.abs_diff(price)) * 10_000 <= u128::from(current) * u128::from(tolerance_bps)
 }
 
 /// The currency `sku` quotes its price in when that is not `currency`.

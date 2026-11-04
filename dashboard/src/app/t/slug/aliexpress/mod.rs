@@ -113,6 +113,23 @@ impl PricingForm {
     }
 }
 
+/// The price tolerance the shop's form sends, a percentage (`1.5`), in
+/// hundredths of a percent; blank is none.
+pub fn price_tolerance_of_form(
+    form: &HashMap<String, String>,
+) -> std::result::Result<u32, &'static str> {
+    let sent = form
+        .get("price_tolerance")
+        .map_or("", |value| value.trim())
+        .replace(',', ".");
+    if sent.is_empty() {
+        return Ok(0);
+    }
+    timada_aliexpress::parse_amount(&sent)
+        .and_then(|hundredths| u32::try_from(hundredths).ok())
+        .ok_or("invalid_price_tolerance")
+}
+
 /// The form field of band `n`'s `part`: `band_<n>_<part>`.
 fn band_field(n: usize, part: &str) -> String {
     format!("band_{n}_{part}")
@@ -381,6 +398,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let pricing_text = pricing_label(pricing, &currency);
     let fields = RuleFields::of(pricing.map(|pricing| &pricing.above));
     let bands = BandFields::of(pricing);
+    let price_tolerance = match tenant.aliexpress_price_tolerance_bps {
+        0 => String::new(),
+        bps => timada_core::format_amount(u64::from(bps)),
+    };
     let country = settings
         .as_ref()
         .map(|settings| settings.ship_to_country.clone())
@@ -647,6 +668,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             )
                         )
                     </fieldset>
+                    field(
+                        field_label(attrs: attributes! { for="aliexpress-tolerance" }, "Price tolerance (%)")
+                        input(attrs: attributes! { id="aliexpress-tolerance" name="price_tolerance" inputmode="decimal" placeholder="0" class="w-24" value=(&price_tolerance) aria-describedby="aliexpress-tolerance-help" })
+                        <p class="text-sm text-muted-foreground" id="aliexpress-tolerance-help">"A read leaves a price alone while what the rule gives is within this much of it, so a small move in the cost neither changes the price nor stops a shopper at checkout. Blank: every price follows its rule. Sync now always follows it."</p>
+                    )
                     <div>
                         button(attrs: attributes! { type="submit" }, "Save")
                     </div>

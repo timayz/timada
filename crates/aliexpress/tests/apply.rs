@@ -107,7 +107,7 @@ async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
     read.skus[0].cost_cents = Some(500);
     let (link, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
     assert_eq!(link.status, LinkStatus::Linked);
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING), 0)
         .await
         .unwrap();
     assert!(!outcome.offline);
@@ -145,7 +145,7 @@ async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
     // Withdrawn: nothing left to sell, and off sale.
     let mut read = fixture();
     read.status = "offline".into();
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING), 0)
         .await
         .unwrap();
     assert!(outcome.offline);
@@ -199,7 +199,7 @@ async fn a_quote_in_another_currency_counts_the_stock_but_leaves_the_price() {
     green.currency = Some("USD".into());
     read.skus.push(green);
     let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING), 0)
         .await
         .unwrap();
     assert_eq!(outcome.repriced, 0);
@@ -230,7 +230,7 @@ async fn a_read_is_worth_a_record_only_when_the_link_holds_something_else() {
     let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
 
     // The same as the import: nothing to say.
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&fixture()), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&fixture()), Some(&PRICING), 0)
         .await
         .unwrap();
     assert!(!outcome.differs_from(&link));
@@ -238,7 +238,7 @@ async fn a_read_is_worth_a_record_only_when_the_link_holds_something_else() {
     // AliExpress sold some: the catalog counts them, the link holds no count.
     let mut read = fixture();
     read.skus[0].available = 7;
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING), 0)
         .await
         .unwrap();
     assert!(!outcome.differs_from(&link));
@@ -254,7 +254,7 @@ async fn a_read_is_worth_a_record_only_when_the_link_holds_something_else() {
     let mut read = fixture();
     read.skus
         .push(sku("12000037009", 700, 3, &[("Color", "Green")]));
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING), 0)
         .await
         .unwrap();
     assert!(outcome.found_differs_from(&link));
@@ -266,14 +266,14 @@ async fn a_read_is_worth_a_record_only_when_the_link_holds_something_else() {
     let mut read = fixture();
     read.skus
         .push(sku("12000037009", 700, 1, &[("Color", "Green")]));
-    let outcome = apply_sync(&catalog, "sync", &found, Some(&read), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &found, Some(&read), Some(&PRICING), 0)
         .await
         .unwrap();
     assert!(!outcome.differs_from(&found));
     let mut read = fixture();
     read.skus
         .push(sku("12000037009", 800, 1, &[("Color", "Green")]));
-    let outcome = apply_sync(&catalog, "sync", &found, Some(&read), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &found, Some(&read), Some(&PRICING), 0)
         .await
         .unwrap();
     assert!(
@@ -284,7 +284,7 @@ async fn a_read_is_worth_a_record_only_when_the_link_holds_something_else() {
     // The cost moved: the link holds what it cost.
     let mut read = fixture();
     read.skus[0].cost_cents = Some(500);
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING), 0)
         .await
         .unwrap();
     assert!(outcome.differs_from(&link));
@@ -292,10 +292,112 @@ async fn a_read_is_worth_a_record_only_when_the_link_holds_something_else() {
     // AliExpress stopped selling it.
     let mut read = fixture();
     read.status = "offline".into();
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING), 0)
         .await
         .unwrap();
     assert!(outcome.differs_from(&link));
+}
+
+#[tokio::test]
+async fn a_price_stays_while_the_rule_is_within_the_tolerance() {
+    let executor = executor().await;
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let (link_id, product_id) = imported(&executor).await;
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    let rose = catalog
+        .load_product(&product_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .variants[0]
+        .id
+        .clone();
+    let price = async || {
+        let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+        product.variant(&rose).unwrap().price.amount_cents
+    };
+    // The rule gives twice the cost: 4.31 is 8.62.
+    assert_eq!(price().await, 862);
+    let read_at = |cost: u64| {
+        let mut read = fixture();
+        read.skus[0].cost_cents = Some(cost);
+        read
+    };
+    // 2 % of 8.62 is 17 cents.
+
+    // 8.70 is 8 cents off, up: the price stays, the cost is still recorded.
+    let outcome = apply_sync(
+        &catalog,
+        "sync",
+        &link,
+        Some(&read_at(435)),
+        Some(&PRICING),
+        200,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.repriced, 0);
+    assert_eq!(outcome.skus[0].cost_cents, 435);
+    assert!(outcome.differs_from(&link));
+    assert_eq!(price().await, 862);
+
+    // 8.46 is 16 cents off, down: it stays too.
+    let outcome = apply_sync(
+        &catalog,
+        "sync",
+        &link,
+        Some(&read_at(423)),
+        Some(&PRICING),
+        200,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.repriced, 0);
+    assert_eq!(price().await, 862);
+
+    // 8.80 is 18 cents off: past it, the price follows the rule.
+    let outcome = apply_sync(
+        &catalog,
+        "sync",
+        &link,
+        Some(&read_at(440)),
+        Some(&PRICING),
+        200,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.repriced, 1);
+    assert_eq!(price().await, 880);
+
+    // Measured from the price as it stands, small moves that add up do not
+    // slip through one by one: from 8.80, 8.97 is within it, 8.98 is not.
+    let outcome = apply_sync(
+        &catalog,
+        "sync",
+        &link,
+        Some(&read_at(449)),
+        Some(&PRICING),
+        200,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.repriced, 1);
+    assert_eq!(price().await, 898);
+
+    // Without a tolerance, every move follows.
+    let outcome = apply_sync(
+        &catalog,
+        "sync",
+        &link,
+        Some(&read_at(450)),
+        Some(&PRICING),
+        0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.repriced, 1);
+    assert_eq!(price().await, 900);
 }
 
 #[tokio::test]
@@ -474,7 +576,7 @@ async fn a_read_finds_new_combinations_the_merchant_adds_or_ignores() {
         &[("Color", "Rose"), ("Size", "S"), ("Pack", "2")],
     ));
     let (link, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING), 0)
         .await
         .unwrap();
     let found: Vec<_> = outcome
@@ -573,7 +675,7 @@ async fn a_read_finds_new_combinations_the_merchant_adds_or_ignores() {
     assert_eq!(link.offered().count(), 2);
 
     // The next read counts green, and no longer finds it.
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING), 0)
         .await
         .unwrap();
     assert_eq!(outcome.skus.len(), 3);
@@ -581,7 +683,7 @@ async fn a_read_finds_new_combinations_the_merchant_adds_or_ignores() {
 
     // Offline: nothing is offered.
     read.status = "offline".into();
-    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING))
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING), 0)
         .await
         .unwrap();
     assert!(outcome.found.is_empty());
