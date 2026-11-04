@@ -69,7 +69,11 @@ export class FakeAliexpress {
   }
 
   async stop() {
-    await new Promise<void>((resolve) => this.server?.close(() => resolve()));
+    const closed = new Promise<void>((resolve) => this.server?.close(() => resolve()));
+    // The sweeps of other specs' shops keep a pooled connection busy, and a
+    // connection in use never counts as closed.
+    this.server?.closeAllConnections();
+    await closed;
   }
 
   sku(id: string): Sku {

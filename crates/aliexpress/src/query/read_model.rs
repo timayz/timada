@@ -13,6 +13,7 @@ use timada_core::db::{Db, FromRow};
 use crate::aggregator::AliexpressProduct;
 use crate::aggregator::forward::Forward;
 use crate::command::{ForwardState, LinkState, forward_projection, link_projection};
+use crate::value_object::{Share, shard_of};
 
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-aliexpress/read-models";
@@ -152,19 +153,26 @@ pub async fn forward_of_ae_order(db: &Db, ae_order_id: &str) -> anyhow::Result<O
     .await
 }
 
-/// Writes the row of a link as the write model sees it.
+/// Writes the row of a link as the write model sees it. The times of the reads
+/// only move forward: a read that changed nothing records no event, so this
+/// node may know of a later one than the link does ([`note_read`]).
 pub async fn upsert_link(db: &Db, tenant_id: &str, link: &LinkState) -> anyhow::Result<()> {
+    let tried = link.last_requested_at.max(link.last_synced_at);
     db.execute(
         "INSERT INTO aliexpress_products (tenant_id, id, ae_product_id, product_id, status,
             offline, own_pricing, last_synced_at, last_error, requested_at, updated_at,
-            new_combinations)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            new_combinations, last_tried_at, shard)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             product_id = excluded.product_id, status = excluded.status,
             offline = excluded.offline, own_pricing = excluded.own_pricing,
-            last_synced_at = excluded.last_synced_at, last_error = excluded.last_error,
+            last_synced_at = NULLIF(MAX(COALESCE(last_synced_at, 0),
+                COALESCE(excluded.last_synced_at, 0)), 0),
+            last_error = excluded.last_error,
             requested_at = excluded.requested_at, updated_at = excluded.updated_at,
-            new_combinations = excluded.new_combinations",
+            new_combinations = excluded.new_combinations,
+            last_tried_at = NULLIF(MAX(COALESCE(last_tried_at, 0),
+                COALESCE(excluded.last_tried_at, 0)), 0)",
         (
             tenant_id,
             link.id.as_str(),
@@ -178,7 +186,36 @@ pub async fn upsert_link(db: &Db, tenant_id: &str, link: &LinkState) -> anyhow::
             link.requested_at as i64,
             link.updated_at as i64,
             link.offered().count() as i64,
+            tried.map(|at| at as i64),
+            i64::from(shard_of(&link.id)),
         ),
+    )
+    .await?;
+    Ok(())
+}
+
+/// A read of the link worked at `at` (unix seconds), whether or not it found
+/// anything to record.
+pub async fn note_read(db: &Db, tenant_id: &str, link_id: &str, at: u64) -> anyhow::Result<()> {
+    db.execute(
+        "UPDATE aliexpress_products SET
+            last_synced_at = MAX(COALESCE(last_synced_at, 0), ?3),
+            last_tried_at = MAX(COALESCE(last_tried_at, 0), ?3)
+         WHERE tenant_id = ?1 AND id = ?2",
+        (tenant_id, link_id, at as i64),
+    )
+    .await?;
+    Ok(())
+}
+
+/// A read of the link was asked for or made at `at` (unix seconds), which is
+/// what makes it due again a period later: one that failed, or a shop that
+/// cannot read for now, takes no turn away from the others meanwhile.
+pub async fn note_tried(db: &Db, tenant_id: &str, link_id: &str, at: u64) -> anyhow::Result<()> {
+    db.execute(
+        "UPDATE aliexpress_products SET last_tried_at = MAX(COALESCE(last_tried_at, 0), ?3)
+         WHERE tenant_id = ?1 AND id = ?2",
+        (tenant_id, link_id, at as i64),
     )
     .await?;
     Ok(())
@@ -196,20 +233,24 @@ pub struct LinkRow {
     pub offline: bool,
     /// Whether the product has its own price rule.
     pub own_pricing: bool,
-    /// Unix seconds.
+    /// Unix seconds of the last read that worked, as far as this node knows.
     pub last_synced_at: Option<i64>,
     pub last_error: Option<String>,
     pub requested_at: i64,
     pub updated_at: i64,
     /// Combinations a read found that the shop could add (ignored aside).
     pub new_combinations: i64,
+    /// Unix seconds of the last read asked for or made, as far as this node
+    /// knows, whether or not it worked.
+    pub last_tried_at: Option<i64>,
 }
 
 /// The columns of a [`LinkRow`], shared by the queries below.
 macro_rules! columns {
     () => {
         "SELECT tenant_id, id, ae_product_id, product_id, status, offline, own_pricing,
-            last_synced_at, last_error, requested_at, updated_at, new_combinations
+            last_synced_at, last_error, requested_at, updated_at, new_combinations,
+            last_tried_at
             FROM aliexpress_products "
     };
 }
@@ -243,28 +284,33 @@ pub async fn link_of_product(
     .await
 }
 
-/// The linked items of every shop last read before `before` (unix seconds):
-/// what a sweep reads again. The shops take turns, each its oldest first, so
-/// a backlog never crowds another shop out. A read that fails leaves its
-/// item due, so going by age alone would let a shop that no longer answers
-/// fill every sweep. Grouped by tenant, as the sweep paces one shop's reads.
-pub async fn links_due(db: &Db, before: i64, limit: i64) -> anyhow::Result<Vec<LinkRow>> {
+/// The linked items of every shop that `share` holds, last tried before
+/// `before` (unix seconds): what a sweep asks to read again. The shops take
+/// turns, each its oldest first, so a backlog never crowds another shop out.
+/// Grouped by tenant, as the sweep paces one shop's requests.
+pub async fn links_due(
+    db: &Db,
+    before: i64,
+    share: Share,
+    limit: i64,
+) -> anyhow::Result<Vec<LinkRow>> {
     db.fetch_all(
         concat!(
             columns!(),
             "WHERE (tenant_id, id) IN (
                 SELECT tenant_id, id FROM (
-                    SELECT tenant_id, id, last_synced_at, ROW_NUMBER() OVER (
-                        PARTITION BY tenant_id ORDER BY last_synced_at, id
+                    SELECT tenant_id, id, last_tried_at, ROW_NUMBER() OVER (
+                        PARTITION BY tenant_id ORDER BY last_tried_at, id
                     ) AS turn
                     FROM aliexpress_products
                     WHERE status = 'linked'
-                        AND (last_synced_at IS NULL OR last_synced_at < ?1)
-                ) ORDER BY turn, last_synced_at, tenant_id LIMIT ?2
+                        AND (last_tried_at IS NULL OR last_tried_at < ?1)
+                        AND shard % ?3 = ?4
+                ) ORDER BY turn, last_tried_at, tenant_id LIMIT ?2
             )
-            ORDER BY tenant_id, last_synced_at, id"
+            ORDER BY tenant_id, last_tried_at, id"
         ),
-        (before, limit),
+        (before, limit, share.of as i64, share.index as i64),
     )
     .await
 }

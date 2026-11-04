@@ -301,6 +301,26 @@ impl Cluster {
         Ok(())
     }
 
+    /// This node's place among the nodes heard from within `within` (it
+    /// counts itself), and how many they are: what work spread over the nodes
+    /// goes by, so a node that stops is covered for once it has been silent
+    /// that long. Idle nodes gossip many times a second.
+    pub fn live_nodes(&self, within: Duration) -> (u64, u64) {
+        let me = self.node.id();
+        let absent = self.node.absent_peers();
+        let mut index = 0;
+        let mut of = 0;
+        for &id in &self.ids {
+            if id == me {
+                index = of;
+                of += 1;
+            } else if self.node.silent_for(id) < within && !absent.contains(&id) {
+                of += 1;
+            }
+        }
+        (index, of)
+    }
+
     /// This node, as the pages show it.
     pub fn health(&self) -> NodeHealth {
         let absent = self.node.absent_peers();

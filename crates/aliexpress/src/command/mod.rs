@@ -13,11 +13,11 @@ use timada_tenancy::Pricing;
 
 use crate::aggregator::{
     CombinationIgnored, CombinationRestored, CombinationsAdded, CombinationsFound, ImportFailed,
-    ImportRequested, ImportStarted, Imported, NewSku, PricingSet, SkuLink, SyncFailed, Synced,
-    Unlinked,
+    ImportRequested, ImportStarted, Imported, NewSku, PricingSet, SkuLink, SyncFailed,
+    SyncRequested, Synced, Unlinked,
 };
 use crate::error::AliexpressError;
-use crate::value_object::{IMPORT_STALE_SECS, aliexpress_product_id};
+use crate::value_object::{ALIEXPRESS_ACTOR, IMPORT_STALE_SECS, aliexpress_product_id};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor> {
@@ -66,6 +66,10 @@ impl<E: Executor> Deref for Command<E> {
 }
 
 pub(crate) use timada_core::unix_now;
+
+/// How many times a request to read, or a read's failure, is tried when another
+/// write to the link came in between.
+const WRITE_ATTEMPTS: usize = 3;
 
 /// What a read of a linked item recorded.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -124,8 +128,13 @@ pub struct LinkState {
     pub pricing: Option<Pricing>,
     /// AliExpress no longer sells it (as of the last read).
     pub offline: bool,
-    /// Unix seconds of the last read that worked (the import counts).
+    /// Unix seconds of the last read recorded (the import counts). One that
+    /// changed nothing is not: the read model has its time.
     pub last_synced_at: Option<u64>,
+    /// Unix seconds of the last `SyncRequested`.
+    pub last_requested_at: Option<u64>,
+    /// The version of the last read recorded for a member, who waits for it.
+    pub answered_version: u16,
     /// Why the last import or read failed; cleared by one that worked.
     pub last_error: Option<String>,
     pub requested_by: String,
@@ -169,6 +178,7 @@ pub fn link_projection<E: Executor>() -> Projection<E, LinkState> {
         .handler(on_combinations_added())
         .handler(on_combination_ignored())
         .handler(on_combination_restored())
+        .handler(on_sync_requested())
         .strict()
 }
 
@@ -229,6 +239,9 @@ async fn on_synced(event: Event<Synced>, link: &mut LinkState) -> anyhow::Result
     link.last_synced_at = Some(event.timestamp);
     link.last_error = None;
     link.updated_at = event.timestamp;
+    if event.data.synced_by != ALIEXPRESS_ACTOR {
+        link.answered_version = event.version;
+    }
     Ok(())
 }
 
@@ -236,6 +249,9 @@ async fn on_synced(event: Event<Synced>, link: &mut LinkState) -> anyhow::Result
 async fn on_sync_failed(event: Event<SyncFailed>, link: &mut LinkState) -> anyhow::Result<()> {
     link.last_error = Some(event.data.reason.to_owned());
     link.updated_at = event.timestamp;
+    if event.data.failed_by != ALIEXPRESS_ACTOR {
+        link.answered_version = event.version;
+    }
     Ok(())
 }
 
@@ -296,6 +312,16 @@ async fn on_combination_restored(
     link: &mut LinkState,
 ) -> anyhow::Result<()> {
     link.ignored.retain(|sku_id| sku_id != &event.data.sku_id);
+    link.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_sync_requested(
+    event: Event<SyncRequested>,
+    link: &mut LinkState,
+) -> anyhow::Result<()> {
+    link.last_requested_at = Some(event.timestamp);
     link.updated_at = event.timestamp;
     Ok(())
 }
@@ -461,6 +487,39 @@ impl<E: Executor> Command<E> {
         Ok(())
     }
 
+    /// Asks for a linked item to be read again; the version the request
+    /// took, which what the read records comes after. `NotFound` when the item
+    /// is not linked (any more).
+    pub async fn request_sync(
+        &self,
+        actor: &str,
+        link_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<u16, AliexpressError> {
+        for attempt in 1..=WRITE_ATTEMPTS {
+            let link = self.require_link(link_id).await?;
+            if !link.is_linked() {
+                return Err(AliexpressError::NotFound);
+            }
+            let version = link.aggregate_version()?;
+            let written = link
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&SyncRequested {
+                    requested_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(version + 1),
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(WriteError::InvalidOriginalVersion.into())
+    }
+
     /// Records a read of a linked item, written against `version` (the one
     /// the read started from): another node's read in between wins and this
     /// one is `Write(InvalidOriginalVersion)`.
@@ -573,17 +632,25 @@ impl<E: Executor> Command<E> {
         reason: &str,
         routing_key: Option<String>,
     ) -> Result<(), AliexpressError> {
-        let link = self.require_link(link_id).await?;
-        link.write()?
-            .routing_key_opt(routing_key)
-            .event(&SyncFailed {
-                reason: reason.chars().take(500).collect(),
-                failed_by: actor.to_owned(),
-            })
-            .tenant(&self.tenant)
-            .commit(&self.executor)
-            .await?;
-        Ok(())
+        for attempt in 1..=WRITE_ATTEMPTS {
+            let link = self.require_link(link_id).await?;
+            let written = link
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&SyncFailed {
+                    reason: reason.chars().take(500).collect(),
+                    failed_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(WriteError::InvalidOriginalVersion.into())
     }
 
     /// The product's own pricing; `None` follows the shop's.

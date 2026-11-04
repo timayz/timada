@@ -37,6 +37,32 @@ pub struct SyncOutcome {
     pub warnings: Vec<String>,
 }
 
+impl SyncOutcome {
+    /// Whether the link holds something else than this read found. What
+    /// AliExpress has left is not part of it: it goes to the catalog's stock,
+    /// and moves too often to be worth a record here.
+    pub fn differs_from(&self, link: &LinkState) -> bool {
+        self.offline != link.offline || self.skus != link.skus || self.found_differs_from(link)
+    }
+
+    /// Whether the combinations this read found are others, or cost something
+    /// else, than the ones the link holds.
+    pub fn found_differs_from(&self, link: &LinkState) -> bool {
+        let same = |read: &NewSku, known: &NewSku| {
+            read.sku_id == known.sku_id
+                && read.selections == known.selections
+                && read.cost_cents == known.cost_cents
+                && read.image == known.image
+        };
+        self.found.len() != link.found.len()
+            || !self
+                .found
+                .iter()
+                .zip(&link.found)
+                .all(|(read, known)| same(read, known))
+    }
+}
+
 /// Counts what AliExpress has of each combination an import created: the
 /// links the import records. `variant_ids` are the seed's, in its order
 /// (`None` for one the catalog refused); empty for a product that does not
@@ -80,7 +106,6 @@ fn link_of(sku: &MappedSku, variant_id: Option<String>) -> SkuLink {
         sku_id: sku.sku_id.clone(),
         variant_id,
         cost_cents: sku.cost_cents,
-        available: sku.available,
     }
 }
 
@@ -162,7 +187,6 @@ pub async fn apply_sync<E: Executor>(
                     linked.sku_id
                 ));
                 skus.push(SkuLink {
-                    available,
                     cost_cents,
                     ..linked.clone()
                 });
@@ -205,7 +229,6 @@ pub async fn apply_sync<E: Executor>(
             }
         }
         skus.push(SkuLink {
-            available,
             cost_cents,
             ..linked.clone()
         });
@@ -461,7 +484,6 @@ pub async fn add_combinations<E: Executor>(
             sku_id: found.sku_id.clone(),
             variant_id: Some(variant_id),
             cost_cents: found.cost_cents,
-            available: found.available,
         });
     }
     Ok(outcome)
