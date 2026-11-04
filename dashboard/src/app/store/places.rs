@@ -1,10 +1,11 @@
 //! `GET /store/places?country=FR&postal_code=30100&province=Gard`: what a
 //! storefront's address form offers in a shop that forwards to AliExpress,
 //! which refuses an address not in its own words: the country's provinces,
-//! the one the postal code names, and the places of the province asked for
-//! (else of that one), to suggest.
+//! the one the postal code names, and the cities of the province asked for
+//! (else of that one) with their towns.
 //!
-//! 200 `{"provinces": […], "province": "Gard", "cities": […]}`, all empty for
+//! 200 `{"provinces": […], "province": "Gard", "cities": [{"name": "Ales",
+//! "towns": []}, …]}`, all empty for
 //! a shop not connected to AliExpress, a country without a list, one
 //! AliExpress lists apart (Martinique, under France here), or lists that
 //! could not be read: the form then asks for no province. 401, 403 and 503
@@ -73,12 +74,17 @@ pub async fn places(cx: &Cx) -> Result<(StatusCode, Json<Value>)> {
     let named = places.names_province(&named).then_some(named);
     let asked = query.province.as_deref().filter(|p| !p.is_empty());
     let province = asked.or(named.as_deref()).unwrap_or_default();
+    let cities: Vec<Value> = places
+        .cities_in(province)
+        .into_iter()
+        .map(|(name, towns)| json!({ "name": name, "towns": towns }))
+        .collect();
     Ok((
         StatusCode::OK,
         Json(json!({
             "provinces": places.provinces(),
             "province": named,
-            "cities": places.places_in(province),
+            "cities": cities,
         })),
     ))
 }

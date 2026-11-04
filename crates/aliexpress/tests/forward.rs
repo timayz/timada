@@ -587,18 +587,28 @@ fn the_shoppers_pick_settles_what_a_town_cannot() {
 }
 
 #[test]
-fn a_form_lists_the_provinces_and_suggests_each_ones_places() {
+fn a_form_lists_the_provinces_then_each_ones_cities_and_their_towns() {
     let germany = places(json!([
         { "name": "Bayern", "children": [
+            { "name": "Other" },
             { "name": "Muenchen", "children": [town("Muenchen"), town("Aschheim")] },
-            { "name": "Other" }
+            { "name": "Dachau", "children": [town("Karlsfeld")] },
+            { "name": "Augsburg" }
         ] },
         { "name": "Other" }
     ]));
     assert_eq!(germany.provinces(), ["Bayern", "Other"]);
-    assert_eq!(germany.places_in("Bayern"), ["Aschheim", "Muenchen"]);
-    assert!(germany.places_in("Other").is_empty());
-    assert!(germany.places_in("Nirgendwo").is_empty());
+    assert_eq!(
+        germany.cities_in("Bayern"),
+        [
+            ("Augsburg", vec![]),
+            ("Dachau", vec!["Dachau", "Karlsfeld"]),
+            ("Muenchen", vec!["Aschheim", "Muenchen"]),
+            ("Other", vec![]),
+        ]
+    );
+    assert!(germany.cities_in("Other").is_empty());
+    assert!(germany.cities_in("Nirgendwo").is_empty());
 }
 
 #[test]

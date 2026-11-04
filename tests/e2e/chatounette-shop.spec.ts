@@ -1054,7 +1054,7 @@ test("a shopper picks a delivery method that ships to their country, and pays fo
       await page.evaluate(() => (window as any).__stripe.elements.amount),
     ).toBe(2990);
 
-    // VIP costs more; Belgium has only the tracked parcel; the US nothing.
+    // VIP costs more; Belgium has only the tracked parcel; the US is not offered.
     await vip.check();
     await expect(page.locator("[data-checkout-shipping]")).toHaveText(
       "6,90€",
@@ -1067,10 +1067,9 @@ test("a shopper picks a delivery method that ships to their country, and pays fo
     await expect(vip).toBeHidden();
     await expect(tracked).toBeChecked();
     await expect(page.locator("[data-checkout-total]")).toHaveText("29,90€");
-    await page.getByLabel("Pays", { exact: true }).selectOption("US");
-    await expect(tracked).toBeHidden();
-    await expect(page.locator("[data-no-shipping]")).toBeVisible();
-    await expect(page.locator("[data-checkout-total]")).toHaveText("25,00€");
+    await expect(
+      page.getByLabel("Pays", { exact: true }).locator("option"),
+    ).toHaveText(["Belgique", "France"]);
 
     // Back to France with VIP: charged on top, on the order and its invoice.
     await fillCheckout(page, true);

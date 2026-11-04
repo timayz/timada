@@ -86,14 +86,17 @@ not know every name the address form lists (`Gard` answered
 
 ## The checkout's province list
 
-In a shop connected to AliExpress, the Chatounette checkout asks for the province
-when the country has a list, and suggests that province's towns for the city
-(`GET /store/places`, then `timada_storefront::places`). The postal code picks the
-province until the shopper does, the pick is `ShippingAddress::region`, and it wins
-over the postal code when the order is forwarded. The city stays free text, and the
-shopper's spelling stays on the order and its documents. No list, no script or no
-answer: the field stays hidden and the lookup above does what it can. So does an
-express payment, whose address comes from the wallet.
+In a shop connected to AliExpress, the Chatounette checkout asks as AliExpress's own
+form does when the country has a list: the province, its city, then that city's town
+if it has any (`GET /store/places`, then `timada_storefront::places`). The postal code
+picks the province until the shopper does, the pick is `ShippingAddress::region`, and
+it wins over the postal code when the order is forwarded. The order's city is the
+last place picked, in AliExpress's spelling, on its documents too. The city is typed
+only for a province without cities, or under the list's `Other`, which the lookup
+above then files. Where a province has no `Other` (the US, Poland, Switzerland,
+Estonia, Lithuania, Italy), a town off the list cannot be picked. No list, no script
+or no answer: the city is typed and the lookup does what it can. So does an express
+payment, whose address comes from the wallet.
 
 ## Not proven by a real order
 

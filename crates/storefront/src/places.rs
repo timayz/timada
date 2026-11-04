@@ -1,6 +1,6 @@
 //! What an address form offers in a shop that forwards to AliExpress: the
-//! dashboard answers from AliExpress's own lists, so that the province picked
-//! and the town typed go through when the order is placed there.
+//! dashboard answers from AliExpress's own lists, so that the province and the
+//! town picked go through when the order is placed there.
 
 use std::time::Duration;
 
@@ -22,8 +22,18 @@ pub struct Places {
     pub provinces: Vec<String>,
     /// The one the postal code names.
     pub province: Option<String>,
-    /// The towns of the province asked for, else of that one, to suggest.
-    pub cities: Vec<String>,
+    /// The cities of the province asked for, else of that one. None for a
+    /// province without a list, whose town is typed.
+    pub cities: Vec<PlaceCity>,
+}
+
+/// A city a form lists.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaceCity {
+    /// `Other` for a town the list does not have, to type.
+    pub name: String,
+    /// The towns to pick from once this city is picked, if it has any.
+    pub towns: Vec<String>,
 }
 
 impl Store {

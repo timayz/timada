@@ -465,7 +465,10 @@ test("a shopper picks AliExpress's province and the order goes in its words", as
     {
       name: "Sicilia",
       type: "PROVINCE",
-      children: [{ name: "Catania", type: "CITY", children: [{ name: "Aci Castello", type: "TOWN" }] }],
+      children: [
+        { name: "Catania", type: "CITY", children: [{ name: "Aci Castello", type: "TOWN" }] },
+        { name: "Other", type: "CITY" },
+      ],
     },
     {
       name: "Lazio",
@@ -496,17 +499,29 @@ test("a shopper picks AliExpress's province and the order goes in its words", as
       await page.getByLabel("Pays", { exact: true }).selectOption("IT");
       await page.getByLabel("Code postal", { exact: true }).fill("95021");
       await page.getByLabel("Code postal", { exact: true }).blur();
-      // The postal code picks the province, and its towns are suggested.
+      // The postal code picks the province, and the city is picked from its
+      // list. A town the list lacks, like the one typed for France, is typed
+      // only under its "Other".
       await expect(province).toHaveValue("Sicilia");
-      await expect(page.locator("#checkout-places option[value='Aci Castello']")).toHaveCount(1);
-      // The shopper's pick stays when the postal code changes, and then
-      // suggests that province's towns.
+      const city = page.getByLabel("Ville", { exact: true });
+      const town = page.getByLabel("Commune", { exact: true });
+      await expect(city.locator("option[value=Catania]")).toHaveCount(1);
+      await expect(city).toHaveValue("Other");
+      await expect(page.getByLabel("Votre ville")).toHaveValue("Paris");
+      await expect(town).toBeHidden();
+      // A city with towns has them picked from, and nothing is typed.
+      await city.selectOption("Catania");
+      await expect(page.getByLabel("Votre ville")).toHaveCount(0);
+      await expect(page.getByRole("textbox", { name: "Ville" })).toHaveCount(0);
+      await expect(town.locator("option[value='Aci Castello']")).toHaveCount(1);
+      // The shopper's pick stays when the postal code changes.
       await province.selectOption("Lazio");
-      await expect(page.locator("#checkout-places option[value='Albano Laziale']")).toHaveCount(1);
+      await expect(city.locator("option[value=Roma]")).toHaveCount(1);
       await page.getByLabel("Code postal", { exact: true }).fill("95022");
       await page.getByLabel("Code postal", { exact: true }).blur();
       await expect(province).toHaveValue("Lazio");
-      await page.getByLabel("Ville", { exact: true }).fill("Albano Laziale");
+      await city.selectOption("Roma");
+      await town.selectOption("Albano Laziale");
     })}`;
     await page.goto(url);
     await page.getByRole("button", { name: "Place on AliExpress" }).click();
