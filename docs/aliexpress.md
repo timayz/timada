@@ -255,9 +255,10 @@ What is bought:
 - How AliExpress orders the combination (`sku_attr`) is read again from the product
   when the order is placed, and so is its stock.
 - Each item ships with **a delivery AliExpress runs itself** (a Cainiao service):
-  free before paid, tracked first, the cheapest paid one otherwise. When only the
-  seller delivers to that country, nothing is placed and the card says what was
-  offered.
+  free before paid, tracked first, the cheapest paid one otherwise. Without one, the
+  cheapest **tracked service of the seller's**, as an item in a local warehouse often
+  has only that (`SELLER_SHIPPING_DE`). When nothing offered can be followed, nothing
+  is placed and the card says what was offered.
 - The address goes as given, with the phone split into its calling code and national
   number: the shopper's, or the shop's phone from the AliExpress page when they gave
   none. AliExpress also wants a `province`, from its own list where the country has one: a
@@ -265,8 +266,10 @@ What is bought:
   Spain, Canada and Italy work the same way. Other countries with a list send its `Other`,
   and those without one send the city. A French overseas department goes as the
   country AliExpress lists it under (`MQ`, `GP`, `GF`, `RE`, `YT`), for the delivery
-  as well. [aliexpress-provinces.md](aliexpress-provinces.md) has every country,
-  including five whose list has no `Other` and are not solved yet.
+  as well. The town then finds AliExpress's city, and the province where the postal
+  code named none, in the country's list; a town the list files under a city stays in
+  the address's second line. [aliexpress-provinces.md](aliexpress-provinces.md) has
+  every country.
 
 A failure is shown on the card with *Place again*. One node takes each order on
 (`Started`, like an import). If AliExpress did not answer, or a node stopped before

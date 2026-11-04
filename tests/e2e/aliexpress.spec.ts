@@ -469,7 +469,7 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     await expect(page.getByRole("status")).toContainText("Stripe connected.");
     await app.start(request, await mintKey(page, slug, true), 1);
 
-    // By hand first: only the seller delivers, so the order is not placed
+    // By hand first: only the seller delivers, untracked, so the order is not placed
     // and says why, with what was offered.
     await page.goto(`/t/${slug}/aliexpress`);
     await expect(page.locator("[data-aliexpress-forwarding]")).toHaveAttribute("data-aliexpress-forwarding", "manual");
@@ -481,7 +481,7 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     await expect(page.getByRole("status")).toContainText("The order is being placed on AliExpress.");
     await forwardIs(page, first, "failed");
     await expect(page.locator("[data-order-aliexpress-error]")).toContainText(
-      "Only the seller delivers “Cat Tunnel Deluxe” to FR on AliExpress; offered: YANWEN_JYT (1.20 EUR).",
+      "No delivery of “Cat Tunnel Deluxe” to FR on AliExpress can be followed; offered: YANWEN_JYT (1.20 EUR).",
     );
     expect(aliexpress.orders).toHaveLength(0);
 
