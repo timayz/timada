@@ -6,7 +6,7 @@
 //! same buttons, so the page works the same without it.
 
 use timada_automations::{
-    Definition, Lane, MAX_DEPTH, Problem, ProblemAt, ScenarioStatus, Slot, Step,
+    Definition, EditError, Lane, MAX_DEPTH, Problem, ProblemAt, ScenarioStatus, Slot, Step,
     catalog::{self, Subject},
 };
 use topcoat::{
@@ -16,8 +16,8 @@ use topcoat::{
 };
 
 use super::super::labels::{
-    branch_label, problem_label, status_label, status_tone, step_description, step_icon,
-    step_label, step_summary, trigger_label,
+    branch_label, edit_error_label, problem_label, status_label, status_tone, step_description,
+    step_icon, step_label, step_summary, trigger_label,
 };
 use super::editor::{Editor, Moving, TRIGGER};
 use super::inspector::inspector;
@@ -42,6 +42,9 @@ pub struct Canvas<'a> {
     /// The open mail step, rendered with made-up variables, or why it does
     /// not read.
     pub preview: Option<Result<timada_tenancy::RenderedMail, timada_tenancy::MailTemplateError>>,
+    /// The open Discord step's message, rendered with made-up variables, or
+    /// why it does not read.
+    pub discord_preview: Option<Result<String, timada_tenancy::MailTemplateError>>,
     /// The open webhook step's signing secret.
     pub webhook_secret: Option<String>,
 }
@@ -176,6 +179,18 @@ pub async fn editor_view(canvas: &Canvas<'_>, action: &str) -> Result<impl View>
                 button(attrs: attributes! { type="submit" name="op" value="publish" }, "Publish")
             </div>
 
+            alert(
+                variant: AlertVariant::Destructive,
+                attrs: attributes! { role="alert" hidden="" data-press-alert="failed" },
+                icon(data: icons::ERROR)
+                alert_description("The change could not be sent. Check the connection and try again.")
+            )
+            alert(
+                variant: AlertVariant::Destructive,
+                attrs: attributes! { role="alert" hidden="" data-press-alert="place" },
+                icon(data: icons::ERROR)
+                alert_description((edit_error_label(EditError::NoSuchSlot)))
+            )
             if let Some(refusal) = editor.refusal {
                 alert(
                     variant: AlertVariant::Destructive,

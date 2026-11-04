@@ -46,8 +46,9 @@ the scenario's name and its `Definition`, kept whole as JSON in the events:
   order followed within `[automations]`'s delay). Today's steps: `wait`,
   `condition` (two lanes), `notify` (a note to the shop's members), `email`
   (a message the merchant wrote, to the customer the run is about), `discount`
-  (a single-use code a later mail may quote) and `webhook` (what started the
-  run, posted signed to an address of the merchant's).
+  (a single-use code a later mail may quote), `webhook` (what started the
+  run, posted signed to an address of the merchant's) and `discord` (a message
+  the merchant wrote, posted to a channel of their Discord server).
 - **Settings are kept as typed.** A step's settings are strings by key, read
   into typed settings by the catalog's `parse_*` functions. A draft never loses
   what was written, even when it does not read yet; the editor shows it next to
@@ -117,7 +118,18 @@ without dragging is picked up the same way.
   Escape cancels.
 - **Sending without leaving the page:** the form is posted with `fetch`
   (URL-encoded, as a plain form posts it) and the editor the server sends back
-  replaces the old one; a save's redirect is followed.
+  replaces the old one; a save's redirect is followed. A change that could not be
+  sent says so.
+- **While an answer is on its way:** a button pressed goes once the answer is in,
+  on the editor it brings. It does not go when it is the same button again with
+  nothing typed in between (a double click), when the answer says something went
+  wrong (to be read first), or during a save or a publication (the page reloads).
+  One that names a place in a flow the answer changed (`add:root.1:…`) is refused
+  and says so: that place is no longer the one the merchant pressed.
+- **What is typed meanwhile stays,** and the field keeps the focus and the cursor.
+  Settings of a block the answer closed (a save closes it) are sent again to open
+  it back, and a save's redirect is then not followed; the page's heading catches
+  up at the next reload. Settings of a block that is gone go with it.
 - **Unsaved work:** a warning before leaving while the copy holds unsaved
   changes, and a copy in the browser's session storage, offered back on the
   next visit.
@@ -261,6 +273,33 @@ A 2xx is done; no answer, 408, 429
 or a 5xx is tried again (as for the codes); another answer fails the step.
 Publishing a scenario that calls webhooks needs `api-keys:manage`: like a key, it
 hands the shop's events to another system.
+
+## Discord
+
+**Post to Discord** posts the merchant's message to a channel, with a link to the
+run's subject in the dashboard under it. The merchant creates a webhook in the
+channel's settings (Integrations, Webhooks) and pastes its address; only Discord's
+own `https://…/api/webhooks/…` addresses are taken (and, with
+`mail.allow_private_hosts`, a stand-in on `127.0.0.1`, for tests). That address is
+the channel's only key, so it is sealed as a webhook step's is, with no host in
+clear; the name and picture the posts show are the ones set on Discord's side.
+
+The message is a template, checked and previewed in the editor, and a scenario
+whose message does not read is not published. It prints values read when the run
+gets to the step, from a fixed list (`discord.rs`): `shop.name` always;
+`order.reference`, `order.total`, `order.items` and `order.country` for an order or
+a review; `review.rating` for a review; `cart.total` (an amount without its
+currency) and `cart.items` for a left checkout. Nothing personal and nothing a
+shopper wrote is on the list, so the message may mention people as the merchant
+likes (`@here`, a role) with no shopper able to add a mention. A long message is cut
+to Discord's 2000 characters, the link kept. A subject gone by then skips the step.
+
+A 2xx is done; no answer, 408, 429 or a 5xx is tried
+again (as for the codes); another answer, such as the webhook deleted on Discord's
+side, fails the step. Discord takes no idempotency key, so a call that reached it
+and got no answer may post the message twice: a line said twice is better than a
+new order not said at all. Publishing needs `api-keys:manage` and `[secrets] key`,
+as for the webhooks.
 
 ## Abandoned checkouts
 

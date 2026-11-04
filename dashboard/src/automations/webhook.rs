@@ -117,22 +117,22 @@ pub async fn deliver(
         .send()
         .await;
     match sent {
-        Ok(response) => {
-            let status = response.status().as_u16();
-            match status {
-                200..=299 => Delivery::Taken(status),
-                408 | 429 | 500..=599 => {
-                    Delivery::Again(format!("The endpoint answered {status}."))
-                }
-                _ => Delivery::Refused(format!("The endpoint answered {status}.")),
-            }
-        }
+        Ok(response) => status_delivery(response.status().as_u16()),
         // Without its address, the hook's key: the reason goes in the run's
         // events, which every store key of the shop reads.
         Err(err) => Delivery::Again(format!(
             "The endpoint could not be reached: {}",
             err.without_url()
         )),
+    }
+}
+
+/// How a call went, from the status it was answered.
+pub fn status_delivery(status: u16) -> Delivery {
+    match status {
+        200..=299 => Delivery::Taken(status),
+        408 | 429 | 500..=599 => Delivery::Again(format!("The endpoint answered {status}.")),
+        _ => Delivery::Refused(format!("The endpoint answered {status}.")),
     }
 }
 
