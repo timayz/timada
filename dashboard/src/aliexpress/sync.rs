@@ -8,15 +8,15 @@
 //!
 //! On a timer of its own, the sweep renews every connected company's access a
 //! day before it lapses, whether or not its shops have anything imported, and
-//! reads the orders of this node's share placed on AliExpress again until they
-//! ship (see [`super::forward`]).
+//! reads the orders of this node's share placed on AliExpress that no push came
+//! for in a while (see [`super::forward`], [`super::webhook`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::db::Db;
-use timada_aliexpress::{ForwardRow, forwards_due, links_due, note_tried};
+use timada_aliexpress::{ForwardRow, forwards_due, links_due, note_forward_read, note_tried};
 use tokio::task::JoinHandle;
 
 use super::forward::CheckResult;
@@ -135,7 +135,7 @@ impl AliexpressSync {
     }
 
     /// Renews the access that lapses within a day, then reads the open orders
-    /// of this node's share again.
+    /// of this node's share that are due.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
         if !self.aliexpress.enabled() {
             return Ok(());
@@ -145,10 +145,11 @@ impl AliexpressSync {
         Ok(())
     }
 
-    /// Reads the orders of this node's share placed on AliExpress again, shop
-    /// by shop; returns how many shop orders were fulfilled from them.
+    /// Reads the orders of this node's share placed on AliExpress that are due,
+    /// shop by shop; returns how many shop orders were fulfilled from them.
     pub async fn check_forwards(&self, now: u64) -> anyhow::Result<usize> {
-        let due = forwards_due(&self.db, self.aliexpress.share(), SWEEP_LIMIT).await?;
+        let before = now.saturating_sub(self.aliexpress.order_read_every_secs()) as i64;
+        let due = forwards_due(&self.db, before, self.aliexpress.share(), SWEEP_LIMIT).await?;
         let mut fulfilled = 0;
         for shop in due.chunk_by(|a, b| a.tenant_id == b.tenant_id) {
             let tenant_id = &shop[0].tenant_id;
@@ -168,7 +169,12 @@ impl AliexpressSync {
         forwards: &[ForwardRow],
         now: u64,
     ) -> anyhow::Result<usize> {
+        // A shop that cannot read is passed over until the next period, like one
+        // read, or its orders would take every turn it gets.
         let Some((tenant, company)) = self.aliexpress.connected_shop(tenant_id, now).await? else {
+            for forward in forwards {
+                note_forward_read(&self.db, tenant_id, &forward.id, now).await?;
+            }
             return Ok(0);
         };
         let store = self.store.clone();
@@ -188,6 +194,7 @@ impl AliexpressSync {
                     tracing::warn!(tenant = %tenant_id, forward = %forward.id, error = %err, "AliExpress order not read")
                 }
             }
+            note_forward_read(&self.db, tenant_id, &forward.id, now).await?;
         }
         Ok(fulfilled)
     }

@@ -1,7 +1,7 @@
 use timada_aliexpress::{
-    ForwardRow, ForwardState, ForwardStatus, LinkRow, LinkState, LinkStatus, MIGRATIONS, Share,
-    forwards_due, link_of_product, links_due, note_published, note_read, note_tried, note_wanted,
-    upsert_forward, upsert_link,
+    AeOrderState, ForwardRow, ForwardState, ForwardStatus, LinkRow, LinkState, LinkStatus,
+    MIGRATIONS, Share, forwards_due, link_of_product, links_due, note_forward_read, note_published,
+    note_read, note_tried, note_wanted, upsert_forward, upsert_link,
 };
 use timada_core::db::{Db, Turso};
 
@@ -331,7 +331,7 @@ async fn open_orders_leave_the_other_shops_their_turn() {
     seed_forwards(&db, "b-small", 3, 200).await;
     seed_forwards(&db, "c-small", 3, 300).await;
 
-    let due = forwards_due(&db, Share::ALONE, 10).await.unwrap();
+    let due = forwards_due(&db, 1_000, Share::ALONE, 10).await.unwrap();
 
     assert_eq!(due.len(), 10);
     assert_eq!(forwards_of(&due, "b-small"), 3);
@@ -351,7 +351,7 @@ async fn a_shop_alone_fills_the_check_longest_unchanged_first() {
     };
     upsert_forward(&db, "acme", &oldest).await.unwrap();
 
-    let due = forwards_due(&db, Share::ALONE, 2).await.unwrap();
+    let due = forwards_due(&db, 1_000, Share::ALONE, 2).await.unwrap();
 
     assert_eq!(due[0].id, "oldest");
     assert_eq!(due.len(), 2);
@@ -371,7 +371,7 @@ async fn the_due_forwards_of_a_shop_come_together() {
         upsert_forward(&db, tenant, &forward).await.unwrap();
     }
 
-    let due = forwards_due(&db, Share::ALONE, 6).await.unwrap();
+    let due = forwards_due(&db, 1_000, Share::ALONE, 6).await.unwrap();
 
     // The check paces its reads within one run of a shop's forwards.
     let runs = due.chunk_by(|a, b| a.tenant_id == b.tenant_id).count();
@@ -387,7 +387,7 @@ async fn each_open_order_goes_to_one_node() {
     let mut seen = Vec::new();
     for index in 0..3 {
         let share = Share { index, of: 3 };
-        let due = forwards_due(&db, share, 100).await.unwrap();
+        let due = forwards_due(&db, 1_000, share, 100).await.unwrap();
         assert!(!due.is_empty(), "node {index} has its part");
         for forward in &due {
             assert!(share.owns(&forward.id));
@@ -400,6 +400,109 @@ async fn each_open_order_goes_to_one_node() {
     unique.dedup();
     assert_eq!(unique.len(), seen.len(), "no order goes to two nodes");
     assert_eq!(seen.len(), 80, "every order goes to a node");
+}
+
+#[tokio::test]
+async fn an_order_read_or_changed_lately_is_not_due() {
+    let db = database().await;
+    seed_forwards(&db, "acme", 2, 100).await;
+    seed_forwards(&db, "changed", 1, 950).await;
+    assert_eq!(
+        forwards_due(&db, 1_000, Share::ALONE, 10)
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        forwards_due(&db, 900, Share::ALONE, 10)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // Read, by a push or by the sweep: a period to go, whatever it found.
+    note_forward_read(&db, "acme", "acme-0000", 950)
+        .await
+        .unwrap();
+    let due = forwards_due(&db, 900, Share::ALONE, 10).await.unwrap();
+    let ids: Vec<&str> = due.iter().map(|forward| forward.id.as_str()).collect();
+    assert_eq!(ids, ["acme-0001"]);
+
+    // A later change of the row does not bring it back, nor an older read.
+    let changed = ForwardState {
+        id: "acme-0000".to_owned(),
+        status: ForwardStatus::Placed,
+        updated_at: 120,
+        ..Default::default()
+    };
+    upsert_forward(&db, "acme", &changed).await.unwrap();
+    note_forward_read(&db, "acme", "acme-0000", 500)
+        .await
+        .unwrap();
+    let due = forwards_due(&db, 900, Share::ALONE, 10).await.unwrap();
+    assert_eq!(due.len(), 1);
+}
+
+#[tokio::test]
+async fn the_longest_unread_goes_first_so_a_big_backlog_comes_round() {
+    let db = database().await;
+    seed_forwards(&db, "acme", 3, 100).await;
+
+    // Reading two a sweep gets through all three.
+    let mut read = Vec::new();
+    for at in [800, 801] {
+        for forward in forwards_due(&db, 900, Share::ALONE, 2).await.unwrap() {
+            note_forward_read(&db, "acme", &forward.id, at)
+                .await
+                .unwrap();
+            read.push(forward.id);
+        }
+    }
+    read.sort();
+    read.dedup();
+    assert_eq!(read.len(), 3);
+}
+
+#[tokio::test]
+async fn an_order_with_every_parcel_known_stays_due_until_it_is_settled() {
+    let db = database().await;
+    let order = |id: &str, tracking: &[&str]| AeOrderState {
+        id: id.to_owned(),
+        tracking: tracking.iter().map(|number| (*number).to_owned()).collect(),
+        ..Default::default()
+    };
+    let forward = |id: &str, complete: bool, ae_orders: Vec<AeOrderState>| ForwardState {
+        id: id.to_owned(),
+        status: ForwardStatus::Placed,
+        complete,
+        ae_orders,
+        updated_at: 950,
+        ..Default::default()
+    };
+    // Read just now, and each with its reason not to wait, or to.
+    for row in [
+        forward(
+            "stopped",
+            true,
+            vec![order("1", &["LP1"]), order("2", &["LP2"])],
+        ),
+        forward(
+            "one-to-go",
+            true,
+            vec![order("1", &["LP1"]), order("2", &[])],
+        ),
+        forward("mixed", false, vec![order("1", &["LP1"])]),
+        forward("none-yet", true, vec![order("1", &[])]),
+    ] {
+        upsert_forward(&db, "acme", &row).await.unwrap();
+    }
+
+    let due = forwards_due(&db, 900, Share::ALONE, 10).await.unwrap();
+
+    let ids: Vec<&str> = due.iter().map(|forward| forward.id.as_str()).collect();
+    assert_eq!(ids, ["stopped"]);
 }
 
 #[tokio::test]
@@ -420,7 +523,7 @@ async fn only_placed_orders_are_due() {
         upsert_forward(&db, "acme", &forward).await.unwrap();
     }
 
-    let due = forwards_due(&db, Share::ALONE, 10).await.unwrap();
+    let due = forwards_due(&db, 1_000, Share::ALONE, 10).await.unwrap();
 
     assert_eq!(due.len(), 2);
 }

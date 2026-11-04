@@ -62,7 +62,8 @@ newsletter_signups_per_ip = 1000
 newsletter_signups_per_key = 10000
 
 # AliExpress is the stand-in the spec starts (tests/e2e/aliexpress.ts); the
-# imported products are read again every few seconds, and at every payment.
+# imported products are read again every few seconds, and at every payment. An
+# open order keeps the day's wait, so only its push reads it.
 [aliexpress]
 app_key = "34567"
 app_secret = "ae-e2e-s3cret"
