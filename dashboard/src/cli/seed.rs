@@ -66,7 +66,12 @@ pub struct SeedArgs {
     /// load test's), never a real one
     #[arg(long)]
     pub owner_password: Option<String>,
-    /// Makes the shop sell for pretend: a test company and the Stripe test
+    /// Links the shop to a test company, registered once, unless it already
+    /// sells as one: what its invoices and AliExpress connection need, for a
+    /// development platform, never a real one
+    #[arg(long)]
+    pub test_company: bool,
+    /// Makes the shop sell for pretend: the test company and the Stripe test
     /// keys of `TEST_PAYMENTS`, for a stand-in for Stripe (the load test's)
     #[arg(long)]
     pub test_payments: bool,
@@ -187,7 +192,10 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
             tenant
         }
     };
-    // So the back office lists it right away.
+    if args.test_company || args.test_payments {
+        test_company(&tenancy, &tenant, &owner.id).await?;
+    }
+    // So the back office lists them right away.
     timada_tenancy::read_model_subscription::<Executor>(store_db.clone())
         .run_once(&platform)
         .await?;
@@ -336,20 +344,18 @@ async fn register_owner(
     Ok(())
 }
 
-/// The test company the shop sells as, registered once, and the Stripe test
-/// keys, sealed as the payments page seals them; then the setup the
-/// storefront reads, as the payments subscription would write it.
-async fn test_payments(
-    config: &Config,
+/// The test company the shop sells as, registered once. A shop that already
+/// sells as a company keeps it.
+async fn test_company(
     tenancy: &timada_tenancy::Command<Executor>,
-    executor: &Executor,
-    tenant_id: &str,
+    tenant: &timada_tenancy::TenantState,
     owner_id: &str,
 ) -> Result<()> {
-    let sealer = crate::seal::payments_sealer(config)
-        .context("--test-payments needs payments enabled (a [payments] section)")?;
+    if tenant.company.is_some() {
+        return Ok(());
+    }
     let identity = timada_tenancy::LegalIdentity {
-        legal_name: "Load Test SAS".into(),
+        legal_name: "Test Shop SAS".into(),
         legal_form: "SAS".into(),
         siret: "12002701600092".into(),
         line1: "1 rue de la Paix".into(),
@@ -360,20 +366,28 @@ async fn test_payments(
         vat_number: Some("FR85120027016".into()),
         ..Default::default()
     };
-    let tenant = tenancy
-        .load_tenant(tenant_id)
-        .await?
-        .context("the tenant vanished")?;
-    if tenant.company.is_none() {
-        let company_id = match tenancy.load_company_siren(identity.siren()).await? {
-            Some(siren) if !siren.released => siren.company_id,
-            _ => tenancy.create_company(owner_id, identity).await?.id,
-        };
-        tenancy
-            .link_tenant(owner_id, &company_id, tenant_id, None)
-            .await?;
-        tracing::info!(%company_id, "test company linked");
-    }
+    let company_id = match tenancy.load_company_siren(identity.siren()).await? {
+        Some(siren) if !siren.released => siren.company_id,
+        _ => tenancy.create_company(owner_id, identity).await?.id,
+    };
+    tenancy
+        .link_tenant(owner_id, &company_id, &tenant.id, None)
+        .await?;
+    tracing::info!(%company_id, "test company linked");
+    Ok(())
+}
+
+/// The Stripe test keys, sealed as the payments page seals them; then the
+/// setup the storefront reads, as the payments subscription would write it.
+async fn test_payments(
+    config: &Config,
+    tenancy: &timada_tenancy::Command<Executor>,
+    executor: &Executor,
+    tenant_id: &str,
+    owner_id: &str,
+) -> Result<()> {
+    let sealer = crate::seal::payments_sealer(config)
+        .context("--test-payments needs payments enabled (a [payments] section)")?;
     tenancy
         .configure_payments(
             owner_id,

@@ -32,7 +32,8 @@ migrate:
 
 # Fills the "Chatounette" tenant with the snapshot in seeds/chatounette
 # (taken by `make snapshot.chatounette`, pictures included), owned by the
-# registered user OWNER names, and prints the STORE_* settings for the
+# registered user OWNER names, links it to a test company unless it already
+# has a company, and prints the STORE_* settings for the
 # example storefront. Runs with the server stopped; LIMIT loads only the
 # first products of the snapshot, and the back office's lists catch up when
 # the server next starts, so `make chatounette` can follow at once:
@@ -41,7 +42,7 @@ migrate:
 seed.chatounette:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml seed \
 		--snapshot seeds/chatounette --tenant Chatounette --owner "$${OWNER:?set OWNER to the owner's e-mail}" \
-		$${LIMIT:+--limit "$$LIMIT"} --no-catch-up \
+		$${LIMIT:+--limit "$$LIMIT"} --no-catch-up --test-company \
 		--storefront-url "$${STOREFRONT_URL-https://chatounette.localhost}" \
 		--pages examples/chatounette/pages --env-file data/seed.chatounette.env
 
