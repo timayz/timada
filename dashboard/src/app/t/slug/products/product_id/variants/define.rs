@@ -8,7 +8,7 @@ use topcoat::{
 };
 
 use super::OPTION_FIELD;
-use crate::app::t::slug::products::product_id::act;
+use crate::app::t::slug::products::product_id::{Tab, act};
 
 /// Everything the form posts: the fixed fields, plus one `option:<id>` a
 /// menu. `BTreeMap` because the set of menus is the product's, not the
@@ -35,22 +35,27 @@ fn selections(form: &DefineForm) -> Vec<OptionSelection> {
 
 #[route(POST)]
 pub async fn define(cx: &Cx, Form(form): Form<DefineForm>) -> Result<SeeOther> {
-    act(cx, "Variant added.", async |catalog, actor, id| {
-        let amount = parse_amount(field(&form, "amount").unwrap_or_default())?;
-        catalog
-            .define_variant(
-                actor,
-                id,
-                DefineVariant {
-                    selections: selections(&form),
-                    sku: field(&form, "sku").map(str::to_owned),
-                    amount_cents: amount,
-                    currency: field(&form, "currency").unwrap_or("EUR").to_owned(),
-                    image_id: field(&form, "image_id").map(str::to_owned),
-                },
-            )
-            .await
-            .map(|_| ())
-    })
+    act(
+        cx,
+        Tab::Variants,
+        "Variant added.",
+        async |catalog, actor, id| {
+            let amount = parse_amount(field(&form, "amount").unwrap_or_default())?;
+            catalog
+                .define_variant(
+                    actor,
+                    id,
+                    DefineVariant {
+                        selections: selections(&form),
+                        sku: field(&form, "sku").map(str::to_owned),
+                        amount_cents: amount,
+                        currency: field(&form, "currency").unwrap_or("EUR").to_owned(),
+                        image_id: field(&form, "image_id").map(str::to_owned),
+                    },
+                )
+                .await
+                .map(|_| ())
+        },
+    )
     .await
 }

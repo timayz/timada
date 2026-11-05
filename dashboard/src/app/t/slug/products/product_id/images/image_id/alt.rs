@@ -5,13 +5,14 @@ use topcoat::{
 };
 
 use super::{AltForm, ImageId};
-use crate::app::t::slug::products::product_id::act;
+use crate::app::t::slug::products::product_id::{Tab, act};
 
 #[route(POST)]
 pub async fn alt(cx: &Cx, Form(form): Form<AltForm>) -> Result<SeeOther> {
     let image_id = path_param::<ImageId>(cx).to_owned();
     act(
         cx,
+        Tab::Pictures,
         "Picture description saved.",
         async |catalog, actor, id| {
             catalog

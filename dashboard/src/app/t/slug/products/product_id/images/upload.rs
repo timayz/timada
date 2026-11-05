@@ -12,7 +12,7 @@ use topcoat::{
     },
 };
 
-use super::super::{ProductId, act, product_url};
+use super::super::{ProductId, Tab, act, product_tab_url};
 use crate::app::t::slug::require_tenant;
 use crate::media::Media;
 
@@ -29,10 +29,11 @@ pub async fn upload(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
     let tenant_slug = access.tenant.slug.clone();
     let product_id = path_param::<ProductId>(cx).to_owned();
     let refuse = |code: &str| {
-        Ok(see_other(product_url(
+        Ok(see_other(product_tab_url(
             cx,
             &tenant_slug,
             &product_id,
+            Tab::Pictures,
             Some(code),
             None,
         )))
@@ -63,35 +64,40 @@ pub async fn upload(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
     let media = app_context::<Arc<Media>>(cx).clone();
     let image_id = new_image_id();
     let file = format!("{image_id}.{}", sniffed.ext);
-    act(cx, "Picture added.", async |catalog, actor, id| {
-        media
-            .store(&tenant_id, &image_id, sniffed.ext, &bytes)
-            .await
-            .map_err(timada_catalog::CatalogError::Other)?;
-        // On a majority of nodes before it is recorded, like the event that
-        // records it: a node going down takes no picture with it.
-        if let Err(err) = media.replicate(&tenant_id, &file, bytes.clone()).await {
-            media.remove(&tenant_id, &file).await;
-            return Err(timada_catalog::CatalogError::Other(err));
-        }
-        let added = catalog
-            .add_image(
-                actor,
-                id,
-                AddImage {
-                    image_id: image_id.clone(),
-                    ext: sniffed.ext.to_owned(),
-                    size: bytes.len() as u64,
-                    width: sniffed.width,
-                    height: sniffed.height,
-                    alt: alt.clone(),
-                },
-            )
-            .await;
-        if added.is_err() {
-            media.remove(&tenant_id, &file).await;
-        }
-        added
-    })
+    act(
+        cx,
+        Tab::Pictures,
+        "Picture added.",
+        async |catalog, actor, id| {
+            media
+                .store(&tenant_id, &image_id, sniffed.ext, &bytes)
+                .await
+                .map_err(timada_catalog::CatalogError::Other)?;
+            // On a majority of nodes before it is recorded, like the event that
+            // records it: a node going down takes no picture with it.
+            if let Err(err) = media.replicate(&tenant_id, &file, bytes.clone()).await {
+                media.remove(&tenant_id, &file).await;
+                return Err(timada_catalog::CatalogError::Other(err));
+            }
+            let added = catalog
+                .add_image(
+                    actor,
+                    id,
+                    AddImage {
+                        image_id: image_id.clone(),
+                        ext: sniffed.ext.to_owned(),
+                        size: bytes.len() as u64,
+                        width: sniffed.width,
+                        height: sniffed.height,
+                        alt: alt.clone(),
+                    },
+                )
+                .await;
+            if added.is_err() {
+                media.remove(&tenant_id, &file).await;
+            }
+            added
+        },
+    )
     .await
 }

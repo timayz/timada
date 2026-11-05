@@ -45,8 +45,14 @@ pub fn back_to(
 ) -> SeeOther {
     let slug = access.tenant.slug.as_str();
     if !back.is_empty() && back.bytes().all(|b| b.is_ascii_alphanumeric()) {
-        return see_other(crate::app::t::slug::products::product_id::product_url(
-            cx, slug, back, error, message,
+        use crate::app::t::slug::products::product_id::{Tab, product_tab_url};
+        return see_other(product_tab_url(
+            cx,
+            slug,
+            back,
+            Tab::AliExpress,
+            error,
+            message,
         ));
     }
     see_other(super::super::aliexpress_url(cx, slug, error, message))

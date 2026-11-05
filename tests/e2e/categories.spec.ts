@@ -96,7 +96,7 @@ test("an owner builds a category tree and files a product under it", async ({ pa
   await expect(page.getByRole("status")).toContainText("Product created.");
   const productUrl = page.url().split("?")[0];
   await expect(async () => {
-    await page.goto(productUrl);
+    await page.goto(`${productUrl}?tab=categories`);
     await expect(page.getByLabel("Category")).toContainText("Cat mats", { timeout: 1000 });
   }).toPass({ timeout: 15_000 });
   await selectByText(page, "Category", "Cat mats");
@@ -138,7 +138,7 @@ test("an owner builds a category tree and files a product under it", async ({ pa
   await expect(page.locator("[data-product=cooling-mat]")).toBeVisible();
 
   // Leaving the category is immediate on the product page.
-  await page.goto(productUrl);
+  await page.goto(`${productUrl}?tab=categories`);
   await page.getByRole("button", { name: "Remove" }).click();
   await expect(page.getByRole("status")).toContainText("Removed from the category.");
   await expect(page.locator("[data-membership=mats]")).toHaveCount(0);

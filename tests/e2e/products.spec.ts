@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
-import { selectByText } from "./forms";
+import { productTab, selectByText } from "./forms";
 import { invite, inviteLink } from "./invitations";
 import { createTenant, uniqueTenant } from "./tenants";
 
@@ -142,7 +142,10 @@ test("an owner uploads, describes, reorders and removes a product's pictures", a
   await page.getByRole("button", { name: "Create product" }).click();
   await expect(page.getByRole("status")).toContainText("Product created.");
   const productUrl = page.url().split("?")[0];
+  await productTab(page, "Pictures");
   await expect(page.getByText("No picture yet.")).toBeVisible();
+  // The other tabs' forms are not on this one.
+  await expect(page.getByRole("button", { name: "Rename" })).toHaveCount(0);
 
   // Anything that is not a picture is refused, whatever it is called.
   await page.getByLabel("Add a picture").setInputFiles({
@@ -152,6 +155,7 @@ test("an owner uploads, describes, reorders and removes a product's pictures", a
   });
   await page.getByRole("button", { name: "Upload" }).click();
   await expect(page).toHaveURL(/error=unsupported_image/);
+  await expect(page).toHaveURL(/tab=pictures/);
   await expect(page.getByRole("alert")).toContainText("JPEG, PNG, WebP or GIF");
 
   // A real one is taken, shown, and served from the picture address.
@@ -159,6 +163,9 @@ test("an owner uploads, describes, reorders and removes a product's pictures", a
   await page.getByLabel("What it shows (optional)").fill("A blue mug, seen from the front");
   await page.getByRole("button", { name: "Upload" }).click();
   await expect(page.getByRole("status")).toContainText("Picture added.");
+  // An action comes back to the tab it was sent from.
+  await expect(page).toHaveURL(/tab=pictures/);
+  await expect(page.getByRole("link", { name: "Pictures 1" })).toHaveAttribute("aria-current", "page");
   const first = page.locator("[data-image]").first();
   await expect(first.locator("img")).toHaveAttribute("alt", "A blue mug, seen from the front");
   await expect(first.locator("[data-image-first]")).toBeVisible();
@@ -198,6 +205,7 @@ test("an owner uploads, describes, reorders and removes a product's pictures", a
   await page.goto(productUrl);
   await page.getByRole("button", { name: "Archive" }).click();
   await expect(page.getByRole("status")).toContainText("Product archived.");
+  await productTab(page, "Pictures");
   await expect(page.locator("[data-image]")).toHaveCount(1);
   await expect(page.getByLabel("Add a picture")).toHaveCount(0);
   await expect(page.locator("[data-image]").first().getByRole("button", { name: "Remove" })).toHaveCount(0);
@@ -213,6 +221,7 @@ test("an owner makes a product vary by colour and size, each combination priced"
   await page.getByRole("button", { name: "Create product" }).click();
   await expect(page.getByRole("status")).toContainText("Product created.");
   const productUrl = page.url().split("?")[0];
+  await productTab(page, "Options & variants");
   await expect(page.getByText("This product does not vary.")).toBeVisible();
 
   // Two options, then the combinations they make.
@@ -230,7 +239,7 @@ test("an owner makes a product vary by colour and size, each combination priced"
   await expect(page).toHaveURL(/error=product_not_priced/);
 
   const addVariant = async (colour: string, size: string, amount: string, sku?: string) => {
-    await page.goto(productUrl);
+    await page.goto(`${productUrl}?tab=variants`);
     await page.getByLabel("Colour", { exact: true }).selectOption(colour);
     await page.getByLabel("Size", { exact: true }).selectOption(size);
     await page.getByLabel("Variant price").fill(amount);
@@ -255,6 +264,7 @@ test("an owner makes a product vary by colour and size, each combination priced"
   await expect(page.locator("[data-product-price]")).toContainText("22.90–24.90 €");
 
   // The options are settled now: no way to add one, and no way to edit one.
+  await productTab(page, "Options & variants");
   await expect(page.getByLabel("Add an option")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Save option" })).toHaveCount(0);
   await expect(page.getByText("Remove every variant before changing the options.")).toBeVisible();
@@ -272,6 +282,7 @@ test("an owner makes a product vary by colour and size, each combination priced"
   await expect(page.locator("[data-variant]").first()).toContainText("Colour: Beige · Size: S");
 
   // Facts go in the table beside the description.
+  await productTab(page, "Facts");
   await page.getByLabel("Fact name").fill("Material");
   await page.getByLabel("Fact value").fill("Nylon");
   await page.getByRole("button", { name: "Set fact" }).click();

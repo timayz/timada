@@ -1,6 +1,6 @@
 //! The furniture a page is built from, over the vendored components: the
 //! title row, section cards, stat tiles, status badges, empty states, the
-//! pager, filter bars, fact lists and the two-column settings layout.
+//! pager, filter bars, fact lists, page tabs and the two-column settings layout.
 
 use topcoat::{
     Result,
@@ -276,6 +276,43 @@ pub async fn fact(
     Ok(view! {
         <dt class="text-muted-foreground">(term)</dt>
         <dd class=(class!("min-w-0 break-words", attrs.remove("class"))) (attrs)>(child)</dd>
+    })
+}
+
+/// One tab of `page_tabs`; `count` is how many things it holds.
+pub struct PageTab {
+    pub label: &'static str,
+    pub href: String,
+    pub count: Option<usize>,
+    pub current: bool,
+}
+
+/// A row of tabs over one page's parts. Each is a link the server answers, so
+/// a tab has its own address and needs no script.
+#[component]
+pub async fn page_tabs(label: &str, tabs: &[PageTab]) -> Result<impl View> {
+    Ok(view! {
+        <nav aria-label=(label) class="mb-6 border-b border-border" data-page-tabs="">
+            <ul class="flex flex-wrap gap-1">
+                for tab in tabs {
+                    <li>
+                        <a
+                            class=(class!(
+                                "-mb-px flex items-center gap-2 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+                                if tab.current { "border-primary text-foreground" } else { "border-transparent text-muted-foreground hover:border-border hover:text-foreground" }
+                            ))
+                            href=(&tab.href)
+                            aria-current=(tab.current.then_some("page"))
+                        >
+                            (tab.label)
+                            if let Some(count) = tab.count {
+                                badge(variant: BadgeVariant::Secondary, (count))
+                            }
+                        </a>
+                    </li>
+                }
+            </ul>
+        </nav>
     })
 }
 
