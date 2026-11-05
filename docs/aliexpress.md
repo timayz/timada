@@ -87,6 +87,14 @@ product in the background, on the first node to take it on. It then fills a **dr
 - each variant's stock from AliExpress, with stock counted from then on (see
   *Stock* in `docs/architecture.md`).
 
+Some items vary by a property that is not the shopper's to choose, such as where they
+ship from or to. On the product's *Options & variants* tab the merchant hides that
+option at the value the shop buys (*Shoppers see Ships From*: *No, always France*). Only
+the combinations taking that value are then on sale, shown without the option, and an
+order is placed for the combination the shopper's choices resolve to, so it names that
+value. The other combinations stay linked and keep being read, so the merchant can
+change the value later.
+
 The merchant checks the draft and publishes it. The same item can be imported once per
 shop; one whose import failed, or that was unlinked, can be imported again. So can one
 whose product was archived: archiving unlinks it (a read that finds the product
@@ -231,6 +239,8 @@ catalog until the merchant acts:
 - A combination that does not fit is listed with the reason. That is one that varies
   by an option the product lacks, or one of a product that does not vary. The catalog
   takes no new option once variants exist, so the merchant imports the item again.
+- A combination taking another value of a hidden option is listed the same way: it would
+  not be on sale. Showing the option again makes it fit.
 
 ## Orders
 

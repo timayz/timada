@@ -42,9 +42,10 @@ pub async fn add(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Result<S
                 .map(|option| (option.to_owned(), value.clone()))
         })
         .collect();
-    // A product without options sells itself; otherwise the menus name
-    // one variant, or none the shop sells (refused by the store).
-    let variant_id = if product.options.is_empty() {
+    // A product that does not vary sells itself; otherwise the menus name
+    // one variant, or none the shop sells (refused by the store). With every
+    // option hidden there are no menus, and they name the one on sale.
+    let variant_id = if product.options.is_empty() && product.variants.is_empty() {
         None
     } else if !field("variant_id").is_empty() {
         Some(field("variant_id").to_owned())

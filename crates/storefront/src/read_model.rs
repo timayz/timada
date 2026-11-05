@@ -172,7 +172,7 @@ async fn refresh_stock(tx: &Connection, product: &ProductState) -> anyhow::Resul
             counted.insert(String::new(), left);
         }
     } else {
-        for variant in &product.variants {
+        for variant in product.sold_variants() {
             if let Some(left) = on_hand(Some(&variant.id)) {
                 counted.insert(variant.id.clone(), left);
             }
@@ -478,15 +478,15 @@ fn images_json(product: &ProductState) -> anyhow::Result<String> {
     Ok(serde_json::to_string(&images)?)
 }
 
-/// The ways it varies, as the local rows carry them.
+/// The ways it varies that shoppers choose, with the values on sale, as the
+/// local rows carry them: an option the merchant hid is not there at all.
 fn options_json(product: &ProductState) -> anyhow::Result<String> {
     let options: Vec<crate::ProductOption> = product
-        .options
-        .iter()
+        .shown_options()
         .map(|option| crate::ProductOption {
             id: option.id.clone(),
             name: option.name.clone(),
-            values: option.values.clone(),
+            values: product.values_on_sale(option).cloned().collect(),
             label: option.label.clone(),
             value_labels: option.value_labels.clone(),
         })
@@ -494,16 +494,15 @@ fn options_json(product: &ProductState) -> anyhow::Result<String> {
     Ok(serde_json::to_string(&options)?)
 }
 
-/// The combinations it sells, as the local rows carry them.
+/// The combinations on sale, naming the options shoppers choose, as the local
+/// rows carry them.
 fn variants_json(product: &ProductState) -> anyhow::Result<String> {
     let variants: Vec<crate::Variant> = product
-        .variants
-        .iter()
+        .sold_variants()
         .map(|variant| crate::Variant {
             id: variant.id.clone(),
-            selections: variant
-                .selections
-                .iter()
+            selections: product
+                .shown_selections(variant)
                 .map(|selection| crate::Selection {
                     option_id: selection.option_id.clone(),
                     value: selection.value.clone(),

@@ -304,6 +304,16 @@ product with variants is published without a price of its own, and what a listin
 shows is the range across them. Every price on one product is in one currency, so a
 range always means something.
 
+An option can be *hidden* from shoppers at one of its values (`OptionHidden`), which
+can change at any time, like labels: an imported product may vary by where it ships
+from, and the merchant picks that instead of the shopper. Only the variants taking the
+value are on sale (`ProductState::sold_variants`). The others stay as they are, so an
+import still finds them, but a cart refuses them and every shopper-facing number leaves
+them out: the price range, the stock summary, the storefront's rows and filters. A
+line's label leaves the option out too, and a shop's copy of the product does not know
+it exists. The value must leave something on sale; with every option hidden, that is
+one variant, which the shop sells with nothing to pick.
+
 Codes are unique across a tenant through the same index-aggregate pattern as slugs
 (`timada-catalog/ProductSku`), compared without regard to case. A variant that goes,
 and an archived product, give their codes back.

@@ -72,6 +72,10 @@ pub enum CatalogError {
     InvalidOptionLabel,
     #[error("the option does not take this value")]
     OptionValueNotFound,
+    #[error("no variant would be on sale at this value")]
+    OptionValueNotSold,
+    #[error("the option is hidden from shoppers at a value being dropped")]
+    OptionHiddenAtValue,
     #[error("a fact needs a name of at most 40 characters and a value of at most 400")]
     InvalidAttribute,
     #[error("a product's table holds at most thirty facts")]
@@ -144,6 +148,8 @@ impl CatalogError {
             Self::SkuTaken => "sku_taken",
             Self::InvalidOptionLabel => "invalid_option_label",
             Self::OptionValueNotFound => "option_value_not_found",
+            Self::OptionValueNotSold => "option_value_not_sold",
+            Self::OptionHiddenAtValue => "option_hidden_at_value",
             Self::InvalidAttribute => "invalid_attribute",
             Self::TooManyAttributes => "too_many_attributes",
             Self::InvalidTaxCategory => "invalid_tax_category",

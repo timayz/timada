@@ -678,6 +678,112 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
   }
 });
 
+test("a merchant picks the warehouse a product ships from, and shoppers never see it", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  await fakeStripeJs(page);
+  const aliexpress = new FakeAliexpress();
+  const stripe = new FakeStripe();
+  // Roses from China and France, blue from China only; France costs more.
+  aliexpress.skus.splice(
+    0,
+    aliexpress.skus.length,
+    { id: "12000037001", colour: "Rose", shipsFrom: "China", price: "4.31", stock: 120 },
+    { id: "12000037002", colour: "Blue", shipsFrom: "China", price: "5.50", stock: 30 },
+    { id: "12000037003", colour: "Rose", shipsFrom: "France", price: "6.00", stock: 8 },
+  );
+  await aliexpress.start();
+  await stripe.start();
+  try {
+    const productUrl = await importedShop(page, aliexpress);
+    const slug = new URL(productUrl).pathname.split("/")[2];
+    await productTab(page, "Options & variants");
+    await expect(page.locator("[data-variant]")).toHaveCount(3);
+    await expect(page.getByText("Not on sale")).toHaveCount(0);
+
+    // France it is: the others stay on the page, off sale.
+    const visibility = (name: string) => page.getByLabel(`Shoppers see ${name}`, { exact: true });
+    const saveVisibility = (name: string) =>
+      page.locator("[data-option]", { hasText: name }).getByRole("button", { name: "Save visibility" }).click();
+    await expect(visibility("Ships From").locator("option")).toHaveText([
+      "Yes, they choose",
+      "No, always China",
+      "No, always France",
+    ]);
+    await visibility("Ships From").selectOption("France");
+    await saveVisibility("Ships From");
+    await expect(page.getByRole("status")).toContainText("Option hidden from shoppers.");
+    await expect(visibility("Ships From")).toHaveValue("France");
+    await expect(page.locator("[data-option-hidden]")).toHaveAttribute("data-option-hidden", "France");
+    await expect(page.locator("[data-variant]")).toHaveCount(3);
+    await expect(page.locator("[data-variant]", { hasText: "Not on sale" })).toHaveCount(2);
+    await expect(page.locator("[data-variant]", { hasText: "Ships From: France" })).not.toContainText("Not on sale");
+    // Only what France has can be hidden on top of it.
+    await expect(visibility("Colour").locator("option")).toHaveText(["Yes, they choose", "No, always Rose"]);
+
+    await page.getByRole("button", { name: "Publish" }).click();
+    await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await app.start(request, await mintKey(page, slug, true), 1);
+
+    // The shop asks for a colour, and only France's, at France's price.
+    await page.goto(`${app.url}/p/cat-tunnel-deluxe`);
+    await expect(page.getByLabel("Ships From")).toHaveCount(0);
+    await expect(page.getByLabel("Colour").locator("option")).toHaveText(["Rose"]);
+    await expect(page.locator("[data-variants] tbody tr")).toHaveCount(1);
+    await expect(page.locator("[data-variants] tbody tr")).toHaveAttribute("data-price", "1200");
+    await expect(page.locator("[data-variants] thead")).not.toContainText("Ships From");
+
+    // Bought and placed: the order names the rose, and AliExpress gets the
+    // French one.
+    const order = `/t/${slug}/orders/${await buyRoses(page, request, stripe, webhookUrl, 1)}`;
+    await page.goto(order);
+    const line = page.locator('[data-order-line="Cat Tunnel Deluxe"]');
+    await expect(line).toContainText("Rose");
+    await expect(line).not.toContainText("France");
+    await page.getByRole("button", { name: "Place on AliExpress" }).click();
+    await forwardIs(page, order, "placed");
+    expect(aliexpress.orders[0].items[0].sku_attr).toBe(aliexpress.skuAttr(aliexpress.sku("12000037003")));
+
+    // Every option hidden, the shop has nothing to ask.
+    await page.goto(`${productUrl}?tab=variants`);
+    await visibility("Colour").selectOption("Rose");
+    await saveVisibility("Colour");
+    await expect(page.getByRole("status")).toContainText("Option hidden from shoppers.");
+    await expect(async () => {
+      await page.goto(`${app.url}/p/cat-tunnel-deluxe`);
+      await expect(page.getByLabel("Colour")).toHaveCount(0, { timeout: 1000 });
+    }).toPass({ timeout: 20_000 });
+    await expect(page.locator("[data-variants]")).toHaveCount(0);
+    await page.getByRole("button", { name: "Ajouter au panier" }).click();
+    await expect(page.locator("[data-cart-drawer].open .drawer-panel")).toContainText("Cat Tunnel Deluxe");
+
+    // Shown again, shoppers choose everything.
+    await page.goto(`${productUrl}?tab=variants`);
+    for (const option of ["Colour", "Ships From"]) {
+      await visibility(option).selectOption({ label: "Yes, they choose" });
+      await saveVisibility(option);
+      await expect(page.getByRole("status")).toContainText("Shoppers choose this option again.");
+    }
+    await expect(page.locator("[data-option-hidden]")).toHaveCount(0);
+    await expect(page.getByText("Not on sale")).toHaveCount(0);
+    await expect(async () => {
+      await page.goto(`${app.url}/p/cat-tunnel-deluxe`);
+      await expect(page.getByLabel("Ships From")).toHaveCount(1, { timeout: 1000 });
+    }).toPass({ timeout: 20_000 });
+    await expect(page.locator("[data-variants] tbody tr")).toHaveCount(3);
+    expect(aliexpress.badSignatures).toBe(0);
+  } finally {
+    await stripe.stop();
+    await aliexpress.stop();
+  }
+});
+
 test("a shopper pays what AliExpress asks at the moment of paying", async ({ page, request }) => {
   test.setTimeout(150_000);
   await fakeStripeJs(page);

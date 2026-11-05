@@ -357,7 +357,7 @@ impl<E: Executor> super::Command<E> {
             .filter(|id| !id.is_empty());
         let price = match (&variant_id, product.variants.is_empty()) {
             (None, true) => product.price.as_ref(),
-            (Some(id), false) => product.variant(id).map(|variant| &variant.price),
+            (Some(id), false) => product.sold_variant(id).map(|variant| &variant.price),
             _ => None,
         }
         .ok_or(DiscountError::OfferVariant)?;

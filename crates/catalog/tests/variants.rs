@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use timada_catalog::{
     AddImage, CatalogError, DefineVariant, MAX_OPTION_VALUES, MAX_OPTIONS, OptionLabels,
-    OptionSelection,
+    OptionSelection, StockSummary,
 };
 
 fn pick(option_id: &str, value: &str) -> OptionSelection {
@@ -276,7 +276,10 @@ async fn an_option_and_its_values_show_labels_without_moving() {
     let state = cmd.load_product(&product_id).await.unwrap().unwrap();
     assert_eq!(state.options[0].display_name(), "Colour");
     assert_eq!(state.options[0].display_value("Beige"), "Beige");
-    assert_eq!(state.variant_label(&state.variants[0]), "Beige");
+    assert_eq!(
+        state.variant_label(&state.variants[0]).as_deref(),
+        Some("Beige")
+    );
 
     // Labels are the one thing about an option that changes once variants
     // are sold; they are trimmed, and the name and values do not move.
@@ -299,7 +302,10 @@ async fn an_option_and_its_values_show_labels_without_moving() {
     assert_eq!(option.display_name(), "Couleur");
     assert_eq!(option.display_value("Beige"), "Sable");
     assert_eq!(option.display_value("Blue"), "Blue");
-    assert_eq!(state.variant_label(&state.variants[0]), "Sable");
+    assert_eq!(
+        state.variant_label(&state.variants[0]).as_deref(),
+        Some("Sable")
+    );
     assert_eq!(
         state
             .variant_for(&[pick(&colour, "Beige")])
@@ -379,7 +385,268 @@ async fn an_option_and_its_values_show_labels_without_moving() {
     let state = cmd.load_product(&product_id).await.unwrap().unwrap();
     assert_eq!(state.options[0].label, None);
     assert!(state.options[0].value_labels.is_empty());
-    assert_eq!(state.variant_label(&state.variants[0]), "Beige");
+    assert_eq!(
+        state.variant_label(&state.variants[0]).as_deref(),
+        Some("Beige")
+    );
+}
+
+/// A product shipping from China in two colours and from France in one: the
+/// product and both options.
+async fn with_warehouses(cmd: &timada_catalog::Command<evento::Turso>) -> (String, String, String) {
+    let product = create_product(cmd, "Cat Tunnel").await;
+    let from = cmd
+        .define_option(
+            ALICE,
+            &product.id,
+            "Ships From",
+            vec!["China".into(), "France".into()],
+        )
+        .await
+        .unwrap();
+    let colour = cmd
+        .define_option(
+            ALICE,
+            &product.id,
+            "Colour",
+            vec!["Rose".into(), "Blue".into()],
+        )
+        .await
+        .unwrap();
+    for (warehouse, shade, amount_cents) in [
+        ("China", "Rose", 1000),
+        ("China", "Blue", 1100),
+        ("France", "Rose", 1500),
+    ] {
+        cmd.define_variant(
+            ALICE,
+            &product.id,
+            sell(
+                vec![pick(&from, warehouse), pick(&colour, shade)],
+                amount_cents,
+            ),
+        )
+        .await
+        .unwrap();
+    }
+    (product.id, from, colour)
+}
+
+#[tokio::test]
+async fn a_hidden_option_leaves_one_of_its_values_on_sale() {
+    let cmd = command().await;
+    let (product_id, from, colour) = with_warehouses(&cmd).await;
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.sold_variants().count(), 3);
+    assert_eq!(state.price_range(), Some((1000, 1500, "EUR")));
+    assert_eq!(
+        state.variant_label(&state.variants[0]).as_deref(),
+        Some("China / Rose")
+    );
+
+    cmd.hide_option(ALICE, &product_id, &from, " France ")
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(
+        state.option(&from).unwrap().fixed_value.as_deref(),
+        Some("France")
+    );
+
+    // A shopper finds the French combination alone, and reads nothing of
+    // where it ships from.
+    let sold: Vec<_> = state.sold_variants().collect();
+    assert_eq!(sold.len(), 1);
+    assert_eq!(sold[0].value_of(&from), Some("France"));
+    assert_eq!(state.price_range(), Some((1500, 1500, "EUR")));
+    assert_eq!(state.variant_label(sold[0]).as_deref(), Some("Rose"));
+    assert_eq!(
+        state
+            .shown_options()
+            .map(|option| option.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Colour"]
+    );
+    assert_eq!(
+        state
+            .values_on_sale(state.option(&colour).unwrap())
+            .collect::<Vec<_>>(),
+        ["Rose"],
+        "no blue ships from France"
+    );
+
+    // The others stay, off sale: an import still finds them, by every value.
+    assert_eq!(state.variants.len(), 3);
+    let china = state
+        .variant_for(&[pick(&from, "China"), pick(&colour, "Rose")])
+        .unwrap();
+    assert!(!state.sells(china));
+    assert!(state.variant(&china.id).is_some());
+    assert!(state.sold_variant(&china.id).is_none());
+    assert!(state.sold_variant(&sold[0].id).is_some());
+
+    // The same value again writes nothing; another moves what is on sale.
+    let version = state.aggregate_version;
+    cmd.hide_option(ALICE, &product_id, &from, "France")
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.aggregate_version, version);
+    cmd.hide_option(ALICE, &product_id, &from, "China")
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.price_range(), Some((1000, 1100, "EUR")));
+    assert_eq!(
+        state
+            .values_on_sale(state.option(&colour).unwrap())
+            .collect::<Vec<_>>(),
+        ["Rose", "Blue"]
+    );
+
+    // Shown again, every combination is back; twice writes nothing.
+    cmd.show_option(ALICE, &product_id, &from).await.unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.option(&from).unwrap().fixed_value, None);
+    assert_eq!(state.sold_variants().count(), 3);
+    let version = state.aggregate_version;
+    cmd.show_option(ALICE, &product_id, &from).await.unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.aggregate_version, version);
+}
+
+#[tokio::test]
+async fn an_option_is_hidden_only_where_something_stays_on_sale() {
+    let cmd = command().await;
+    let (product_id, from, colour) = with_warehouses(&cmd).await;
+    cmd.change_option_values(
+        ALICE,
+        &product_id,
+        &from,
+        vec!["China".into(), "France".into(), "Spain".into()],
+    )
+    .await
+    .unwrap();
+
+    let unknown = cmd.hide_option(ALICE, &product_id, "nope", "France").await;
+    assert!(
+        matches!(unknown, Err(CatalogError::OptionNotFound)),
+        "{unknown:?}"
+    );
+    let not_a_value = cmd.hide_option(ALICE, &product_id, &from, "Italy").await;
+    assert!(
+        matches!(not_a_value, Err(CatalogError::OptionValueNotFound)),
+        "{not_a_value:?}"
+    );
+    let no_variant = cmd.hide_option(ALICE, &product_id, &from, "Spain").await;
+    assert!(
+        matches!(no_variant, Err(CatalogError::OptionValueNotSold)),
+        "{no_variant:?}"
+    );
+
+    // Blue is sold, but not from France: the two together sell nothing.
+    cmd.hide_option(ALICE, &product_id, &from, "France")
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert!(state.can_hide_at(&colour, "Rose"));
+    assert!(!state.can_hide_at(&colour, "Blue"));
+    assert!(state.can_hide_at(&from, "China"), "its own value moves");
+    let nothing_left = cmd.hide_option(ALICE, &product_id, &colour, "Blue").await;
+    assert!(
+        matches!(nothing_left, Err(CatalogError::OptionValueNotSold)),
+        "{nothing_left:?}"
+    );
+
+    cmd.archive_product(ALICE, &product_id).await.unwrap();
+    let archived = cmd.show_option(ALICE, &product_id, &from).await;
+    assert!(
+        matches!(archived, Err(CatalogError::Archived)),
+        "{archived:?}"
+    );
+}
+
+#[tokio::test]
+async fn every_option_hidden_leaves_one_variant_with_nothing_to_read() {
+    let cmd = command().await;
+    let (product_id, from, colour) = with_warehouses(&cmd).await;
+    cmd.hide_option(ALICE, &product_id, &from, "China")
+        .await
+        .unwrap();
+    cmd.hide_option(ALICE, &product_id, &colour, "Blue")
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.shown_options().count(), 0);
+    let sold: Vec<_> = state.sold_variants().collect();
+    assert_eq!(sold.len(), 1);
+    assert_eq!(state.price_range(), Some((1100, 1100, "EUR")));
+    assert_eq!(state.shown_selections(sold[0]).count(), 0);
+    assert_eq!(state.variant_label(sold[0]), None);
+}
+
+#[tokio::test]
+async fn nothing_on_sale_cannot_be_published() {
+    let cmd = command().await;
+    let (product_id, from, _) = with_warehouses(&cmd).await;
+    cmd.hide_option(ALICE, &product_id, &from, "France")
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert!(state.is_priced());
+    let french = state.sold_variants().next().unwrap().id.clone();
+
+    // The only French combination goes, though others remain: the product
+    // has a price for none a shopper can buy.
+    cmd.remove_variant(ALICE, &product_id, &french)
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(state.variants.len(), 2);
+    assert!(!state.is_priced());
+    assert_eq!(state.price_range(), None);
+    let refused = cmd.publish_product(ALICE, &product_id).await;
+    assert!(
+        matches!(refused, Err(CatalogError::NotPriced)),
+        "{refused:?}"
+    );
+
+    // The value stays while the option is hidden at it.
+    let dropped = cmd
+        .change_option_values(ALICE, &product_id, &from, vec!["China".into()])
+        .await;
+    assert!(
+        matches!(dropped, Err(CatalogError::OptionHiddenAtValue)),
+        "{dropped:?}"
+    );
+    cmd.show_option(ALICE, &product_id, &from).await.unwrap();
+    cmd.change_option_values(ALICE, &product_id, &from, vec!["China".into()])
+        .await
+        .unwrap();
+    cmd.publish_product(ALICE, &product_id).await.unwrap();
+}
+
+#[tokio::test]
+async fn what_is_off_sale_does_not_count_as_in_stock() {
+    let cmd = command().await;
+    let (product_id, from, _) = with_warehouses(&cmd).await;
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    let french = state
+        .variants
+        .iter()
+        .find(|variant| variant.value_of(&from) == Some("France"))
+        .unwrap()
+        .id
+        .clone();
+    // Plenty in China, none left in France.
+    let on_hand = |variant_id: Option<&str>| Some(if variant_id == Some(&french) { 0 } else { 5 });
+    assert_eq!(StockSummary::of(&state, on_hand), StockSummary::InStock);
+
+    cmd.hide_option(ALICE, &product_id, &from, "France")
+        .await
+        .unwrap();
+    let state = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(StockSummary::of(&state, on_hand), StockSummary::SoldOut);
 }
 
 #[tokio::test]

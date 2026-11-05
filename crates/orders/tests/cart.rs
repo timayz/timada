@@ -64,6 +64,48 @@ async fn variants_are_required_exactly_when_the_product_sells_them() {
 }
 
 #[tokio::test]
+async fn a_variant_a_hidden_option_leaves_off_sale_cannot_be_bought() {
+    let (orders, catalog) = store().await;
+    let (mat, beige, blue) = varied_product(&catalog, "Mat").await;
+    let colour = catalog.load_product(&mat).await.unwrap().unwrap().options[0]
+        .id
+        .clone();
+    let cart_id = orders.create_cart(SHOPPER).await.unwrap();
+    orders
+        .add_to_cart(SHOPPER, &cart_id, item(&mat, Some(&blue), 1))
+        .await
+        .unwrap();
+
+    catalog
+        .hide_option(ALICE, &mat, &colour, "Beige")
+        .await
+        .unwrap();
+
+    // Blue, already in the cart, no longer sells; nor can more of it go in.
+    let quote = orders.quote_cart(&cart_id).await.unwrap();
+    assert!(quote.lines.is_empty());
+    assert_eq!(quote.unavailable.len(), 1);
+    let refused = orders
+        .add_to_cart(SHOPPER, &cart_id, item(&mat, Some(&blue), 1))
+        .await;
+    assert!(
+        matches!(refused, Err(OrderError::VariantNotFound)),
+        "{refused:?}"
+    );
+
+    // Beige does, with nothing to read: the shopper chose no value.
+    orders
+        .add_to_cart(SHOPPER, &cart_id, item(&mat, Some(&beige), 1))
+        .await
+        .unwrap();
+    let quote = orders.quote_cart(&cart_id).await.unwrap();
+    assert_eq!(quote.lines.len(), 1);
+    assert_eq!(quote.lines[0].variant_id.as_deref(), Some(beige.as_str()));
+    assert_eq!(quote.lines[0].unit_amount_cents, 1000);
+    assert_eq!(quote.lines[0].variant_label, None);
+}
+
+#[tokio::test]
 async fn only_products_on_sale_go_in() {
     let (orders, catalog) = store().await;
     let mug = product(&catalog, "Mug", 1250, "EUR").await;

@@ -1004,7 +1004,7 @@ impl StockSummary {
     /// The summary of `product` from what is on the shelf of each thing it
     /// sells: `on_hand` gives the count of a tracked thing (`variant_id`
     /// `None` for a product without variants), `None` for an untracked one.
-    /// Streams of variants since removed are ignored.
+    /// Streams of variants since removed, and of those off sale, are ignored.
     pub fn of(
         product: &super::ProductState,
         on_hand: impl Fn(Option<&str>) -> Option<u32>,
@@ -1013,8 +1013,7 @@ impl StockSummary {
             vec![on_hand(None)]
         } else {
             product
-                .variants
-                .iter()
+                .sold_variants()
                 .map(|variant| on_hand(Some(&variant.id)))
                 .collect()
         };

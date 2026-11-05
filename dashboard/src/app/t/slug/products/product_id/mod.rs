@@ -207,10 +207,14 @@ pub struct OptionRow {
     /// Each value with what the shop shows instead of it; empty for the
     /// value.
     pub value_labels: Vec<(String, String)>,
+    /// The value it is hidden from shoppers at; empty when they choose.
+    pub fixed_value: String,
+    /// The values it can be hidden at: something stays on sale at each.
+    pub hide_at: Vec<String>,
 }
 
 impl OptionRow {
-    fn of(option: &ProductOption) -> Self {
+    fn of(option: &ProductOption, product: &ProductState) -> Self {
         Self {
             id: option.id.clone(),
             name: option.name.clone(),
@@ -225,6 +229,16 @@ impl OptionRow {
                         option.value_labels.get(value).cloned().unwrap_or_default(),
                     )
                 })
+                .collect(),
+            fixed_value: option.fixed_value.clone().unwrap_or_default(),
+            hide_at: option
+                .values
+                .iter()
+                .filter(|value| {
+                    option.fixed_value.as_ref() == Some(*value)
+                        || product.can_hide_at(&option.id, value)
+                })
+                .cloned()
                 .collect(),
         }
     }
@@ -241,6 +255,8 @@ pub struct VariantRow {
     pub currency: String,
     pub image_id: String,
     pub stock: StockView,
+    /// Whether shoppers can buy it: a hidden option may leave it off sale.
+    pub on_sale: bool,
 }
 
 /// The stock of one thing, ready to render.
@@ -336,6 +352,7 @@ impl VariantRow {
             currency: variant.price.currency.clone(),
             image_id: variant.image_id.clone().unwrap_or_default(),
             stock,
+            on_sale: product.sells(variant),
         }
     }
 }
@@ -489,7 +506,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let last = gallery.len().saturating_sub(1);
     // The view takes what it renders, so the menus and rows are built as
     // owned values first.
-    let options: Vec<OptionRow> = product.options.iter().map(OptionRow::of).collect();
+    let options: Vec<OptionRow> = product
+        .options
+        .iter()
+        .map(|option| OptionRow::of(option, &product))
+        .collect();
     let stocks = stocks_of(&access, &product).await?;
     let variants: Vec<VariantRow> = product
         .variants
@@ -866,7 +887,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             if tab == Tab::Variants {
                 section_card(
                     title: Some("Options"),
-                    description: Some("A product that comes in several colours or sizes varies by them. Settle the options first: once it sells variants they cannot change. A label is what the shop shows instead of a name or a value, and can change at any time; an import that named them still finds them."),
+                    description: Some("A product that comes in several colours or sizes varies by them. Settle the options first: once it sells variants they cannot change. A label is what the shop shows instead of a name or a value, and can change at any time; an import that named them still finds them. An option shoppers should not choose, like where an imported product ships from or to, can be hidden at one value: only the variants taking it stay on sale."),
                     if options.is_empty() {
                         <p class="text-sm text-muted-foreground">"This product does not vary. It sells at the price in its overview."</p>
                     }
@@ -896,6 +917,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 } else {
                                     <p class="text-sm"><strong>(&option.name)</strong></p>
                                     <p class="whitespace-pre-line text-sm text-muted-foreground">(&option.values)</p>
+                                }
+                                if !option.fixed_value.is_empty() {
+                                    <p class="mt-2 text-sm text-muted-foreground" data-option-hidden=(&option.fixed_value)>"Hidden from shoppers: only the variants with " (&option.fixed_value) " are on sale."</p>
+                                }
+                                if editable && (has_variants || !option.fixed_value.is_empty()) {
+                                    <form method="post" action=(href!(options::option_id::visibility::visibility, Slug(slug.clone()), ProductId(product.id.clone()), options::option_id::OptionId(option.id.clone()))) class="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3" data-option-visibility="">
+                                        <label class="text-sm" for=(format!("option-visibility-{}", option.id))>"Shoppers see " (&option.name)</label>
+                                        select(
+                                            attrs: attributes! { id=(format!("option-visibility-{}", option.id)) name="value" class="w-56" },
+                                            <option value="" selected=(option.fixed_value.is_empty())>"Yes, they choose"</option>
+                                            for value in &option.hide_at {
+                                                <option value=(value) selected=(&option.fixed_value == value)>"No, always " (value)</option>
+                                            }
+                                        )
+                                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save visibility")
+                                    </form>
                                 }
                                 if editable {
                                     <form method="post" action=(href!(options::option_id::labels::labels, Slug(slug.clone()), ProductId(product.id.clone()), options::option_id::OptionId(option.id.clone()))) class="mt-3 flex flex-col gap-2 border-t border-border pt-3" data-option-labels="">
@@ -967,8 +1004,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 }
                                 for variant in &variants {
                                     table_row(
-                                        attrs: attributes! { data-variant=(&variant.id) },
-                                        table_cell(attrs: attributes! { data-variant-selections=(&variant.selections) }, (&variant.selections))
+                                        attrs: attributes! { data-variant=(&variant.id) data-variant-on-sale=(variant.on_sale) },
+                                        table_cell(
+                                            attrs: attributes! { data-variant-selections=(&variant.selections) },
+                                            (&variant.selections)
+                                            if !variant.on_sale {
+                                                <p class="text-xs text-muted-foreground">"Not on sale"</p>
+                                            }
+                                        )
                                         table_cell(
                                             if editable {
                                                 <form method="post" action=(href!(variants::variant_id::price::price, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex items-center gap-1">
