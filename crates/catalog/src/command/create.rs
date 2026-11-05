@@ -3,12 +3,9 @@ use ulid::Ulid;
 
 use crate::aggregator::Created;
 use crate::error::CatalogError;
-use crate::value_object::{normalize_name, normalize_slug, slugify, suffixed_slug};
+use crate::value_object::{normalize_name, normalize_slug, slugify};
 
 use super::ProductState;
-
-/// Tries at the derived slug, then with fresh random suffixes.
-const SLUG_ATTEMPTS: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateProduct {
@@ -41,21 +38,8 @@ impl<E: Executor> super::Command<E> {
                 slug
             }
             None => {
-                let base = slugify(&name);
-                let mut slug = base.clone();
-                for attempt in 0..SLUG_ATTEMPTS {
-                    match self
-                        .claim_slug(&slug, &product_id, routing_key.clone())
-                        .await
-                    {
-                        Ok(()) => break,
-                        Err(CatalogError::SlugTaken) if attempt + 1 < SLUG_ATTEMPTS => {
-                            slug = suffixed_slug(&base);
-                        }
-                        Err(err) => return Err(err),
-                    }
-                }
-                slug
+                self.claim_derived_slug(slugify(&name), &product_id, routing_key.clone())
+                    .await?
             }
         };
 

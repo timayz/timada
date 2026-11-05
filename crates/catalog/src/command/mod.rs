@@ -400,6 +400,7 @@ async fn on_created(event: Event<Created>, product: &mut ProductState) -> anyhow
 #[evento::handler]
 async fn on_renamed(event: Event<Renamed>, product: &mut ProductState) -> anyhow::Result<()> {
     product.name = event.data.name.to_owned();
+    product.slug = event.data.slug.to_owned();
     product.updated_at = event.timestamp;
     Ok(())
 }

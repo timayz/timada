@@ -42,6 +42,70 @@ async fn edits_update_the_state_and_repeat_as_no_ops() {
 }
 
 #[tokio::test]
+async fn renaming_moves_the_product_to_the_slug_of_its_new_name() {
+    let cmd = command().await;
+    let mug = create_product(&cmd, "Blue Mug").await;
+
+    cmd.rename_product(ALICE, &mug.id, "Tea Cup").await.unwrap();
+    let renamed = cmd.load_product(&mug.id).await.unwrap().unwrap();
+    assert_eq!(renamed.slug, "tea-cup");
+    let found = cmd.load_product_by_slug("tea-cup").await.unwrap().unwrap();
+    assert_eq!(found.id, mug.id);
+    assert!(
+        cmd.load_product_by_slug("blue-mug")
+            .await
+            .unwrap()
+            .is_none(),
+        "the old slug is free"
+    );
+
+    // Another product can have it; the first, coming back to the name, gets
+    // a suffix.
+    let other = create_product(&cmd, "Blue Mug").await;
+    assert_eq!(other.slug, "blue-mug");
+    cmd.rename_product(ALICE, &mug.id, "Blue Mug")
+        .await
+        .unwrap();
+    let suffixed = cmd.load_product(&mug.id).await.unwrap().unwrap();
+    assert_ne!(suffixed.slug, "blue-mug");
+    assert!(suffixed.slug.starts_with("blue-mug-"), "{}", suffixed.slug);
+    assert!(
+        cmd.load_product_by_slug("tea-cup").await.unwrap().is_none(),
+        "the slug it left is free"
+    );
+
+    // The old slug comes back to a product that returns to it.
+    cmd.rename_product(ALICE, &other.id, "Plate").await.unwrap();
+    cmd.rename_product(ALICE, &other.id, "Blue Mug")
+        .await
+        .unwrap();
+    let back = cmd.load_product(&other.id).await.unwrap().unwrap();
+    assert_eq!(back.slug, "blue-mug");
+}
+
+#[tokio::test]
+async fn renaming_keeps_the_slug_when_the_name_gives_the_same_one() {
+    let cmd = command().await;
+    let first = create_product(&cmd, "Blue Mug").await;
+    let suffixed = create_product(&cmd, "Blue Mug").await;
+    assert_ne!(suffixed.slug, first.slug);
+
+    // Not a new suffix for a new capital.
+    cmd.rename_product(ALICE, &suffixed.id, "BLUE MUG")
+        .await
+        .unwrap();
+    let renamed = cmd.load_product(&suffixed.id).await.unwrap().unwrap();
+    assert_eq!(renamed.name, "BLUE MUG");
+    assert_eq!(renamed.slug, suffixed.slug);
+    let found = cmd
+        .load_product_by_slug(&suffixed.slug)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.id, suffixed.id);
+}
+
+#[tokio::test]
 async fn edits_are_validated() {
     let cmd = command().await;
     let product = create_product(&cmd, "Blue Mug").await;
