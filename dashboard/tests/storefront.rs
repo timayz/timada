@@ -41,10 +41,11 @@ use timada_catalog::{
 use timada_core::db::Db;
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
-    SubscriptionState, category_ancestors, find_category, menu_of, published_categories,
-    published_category_body, published_category_by_slug, published_option_values, published_page,
-    published_product_by_slug, published_product_categories, published_products,
-    published_related_products, search_published_pages,
+    SubscriptionState, category_ancestors, find_category, live_announcements, menu_of,
+    published_categories, published_category_body, published_category_by_slug,
+    published_option_values, published_page, published_product_by_slug,
+    published_product_categories, published_products, published_related_products,
+    search_published_pages,
 };
 use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenantState,
@@ -2527,6 +2528,70 @@ async fn a_store_shows_the_published_pages() {
     pages.delete_page("alice", &legal).await.unwrap();
     eventually("a deleted page leaves the copy", async || {
         published_page(&db, "legal", None).await.unwrap().is_none()
+    })
+    .await;
+
+    store.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_store_shows_the_announcements_whose_window_is_open() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let pages = h.pages(&acme);
+    let message = |text: &str, starts_at, ends_at| timada_pages::NewAnnouncement {
+        text: text.into(),
+        starts_at,
+        ends_at,
+    };
+    let promo = pages
+        .add_announcement("alice", message("Code **BIENVENUE10**", None, None))
+        .await
+        .unwrap();
+    let sale = pages
+        .add_announcement(
+            "alice",
+            message("[Soldes](/boutique)", Some(100), Some(200)),
+        )
+        .await
+        .unwrap();
+    let hidden = pages
+        .add_announcement("alice", message("Bientôt", None, None))
+        .await
+        .unwrap();
+    pages.hide_announcement("alice", &hidden).await.unwrap();
+
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
+    let live = async |now| {
+        live_announcements(&db, now)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|announcement| announcement.html)
+            .collect::<Vec<_>>()
+    };
+    eventually("the announcements reach the local copy", async || {
+        !live(0).await.is_empty()
+    })
+    .await;
+    assert_eq!(live(0).await, ["Code <strong>BIENVENUE10</strong>"]);
+    assert_eq!(
+        live(150).await,
+        [
+            "Code <strong>BIENVENUE10</strong>",
+            "<a href=\"/boutique\">Soldes</a>"
+        ]
+    );
+    assert_eq!(live(200).await.len(), 1);
+
+    // The order, a hidden one shown again, and a removed one follow.
+    pages.move_announcement("alice", &sale, 0).await.unwrap();
+    pages.show_announcement("alice", &hidden).await.unwrap();
+    pages.remove_announcement("alice", &promo).await.unwrap();
+    eventually("the copy follows the bar's changes", async || {
+        live(150).await == ["<a href=\"/boutique\">Soldes</a>", "Bientôt"]
     })
     .await;
 

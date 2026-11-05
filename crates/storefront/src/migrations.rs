@@ -152,7 +152,16 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             meta_description TEXT NOT NULL,
             updated_at INTEGER NOT NULL
         );
-        CREATE INDEX storefront_pages_slug ON storefront_pages (slug);",
+        CREATE INDEX storefront_pages_slug ON storefront_pages (slug);
+        -- The shown announcements, in the bar's order; a request keeps those
+        -- whose window is open (Unix seconds, NULL for an open end).
+        CREATE TABLE storefront_announcements (
+            id TEXT PRIMARY KEY,
+            position INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            starts_at INTEGER,
+            ends_at INTEGER
+        );",
     )],
 );
 
@@ -166,6 +175,7 @@ pub const TABLES: &[&str] = &[
     "storefront_reviews",
     "storefront_stock",
     "storefront_pages",
+    "storefront_announcements",
 ];
 
 /// Applies the library's pending migrations to the local database (evento's
