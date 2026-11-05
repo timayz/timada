@@ -376,6 +376,8 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     const webhookUrl =
       (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
     expect(webhookUrl).toMatch(/\/stripe\/webhooks\/[0-9A-Z]{26}$/);
+    await expect(page.getByText("payment_intent.succeeded")).toBeVisible();
+    await expect(page.getByText("charge.refunded")).toBeVisible();
     await page.getByLabel("Publishable key").fill("pk_test_e2e");
     await page.getByLabel("Secret key").fill("not-a-key");
     await page.getByLabel("Webhook signing secret").fill("whsec_e2e");

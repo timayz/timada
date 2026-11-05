@@ -1003,6 +1003,75 @@ async fn a_refund_made_in_stripe_is_recorded_from_its_webhook() {
     h.finish().await;
 }
 
+/// A refund made here raises `charge.refunded` too, which may arrive before
+/// the refund is recorded or after: it counts once either way, with one
+/// credit note.
+#[tokio::test]
+async fn a_refund_made_here_counts_once_whenever_its_webhook_arrives() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let invoicing = timada_invoicing::Command::new(h.store(&acme), &acme.id);
+
+    for webhook_first in [true, false] {
+        let order_id = h.buy(&acme, checkout(Some(2500))).await;
+        let order = orders.load_order(&order_id).await.unwrap().unwrap();
+        let pending = orders
+            .request_refund("alice", &order_id, order.total_cents)
+            .await
+            .unwrap();
+        let refund_id = h
+            .stripe
+            .refund(
+                "sk_test_good",
+                &pending.payment_id,
+                pending.amount_cents,
+                &pending.idempotency_key,
+            )
+            .await
+            .unwrap();
+        let body = format!(
+            r#"{{"id":"evt_9","type":"charge.refunded","data":{{"object":{{"id":"ch_9","payment_intent":"{}"}}}}}}"#,
+            pending.payment_id
+        );
+
+        if webhook_first {
+            assert_eq!(
+                h.webhook(&acme, &body, signed(&body)).await,
+                Outcome::Reconciled { recorded: 1 }
+            );
+        }
+        orders
+            .record_refund("alice", &order_id, &refund_id, pending.amount_cents)
+            .await
+            .unwrap();
+        if !webhook_first {
+            assert_eq!(
+                h.webhook(&acme, &body, signed(&body)).await,
+                Outcome::Reconciled { recorded: 0 }
+            );
+        }
+        orders
+            .cancel_order("alice", &order_id, "Out of stock".to_owned())
+            .await
+            .unwrap();
+
+        let order = orders.load_order(&order_id).await.unwrap().unwrap();
+        assert_eq!(order.refunded_cents, order.total_cents);
+        assert_eq!(order.refund_ids, vec![refund_id.clone()]);
+        let credit = eventually(async || {
+            invoicing
+                .load_credit_note_of_refund(&refund_id)
+                .await
+                .unwrap()
+        })
+        .await;
+        assert_eq!(credit.total_cents, order.total_cents);
+    }
+    h.finish().await;
+}
+
 /// The holds a checkout takes last thirty minutes; a payment confirmed
 /// after that finds them lapsed. The test gives them back by hand, as time
 /// would, then lets the late payment in.

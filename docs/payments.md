@@ -70,8 +70,8 @@ not know yet, and the credit note follows.
   1. Paste the publishable key and the secret key from Stripe (Developers › API keys).
      The secret key is checked against Stripe before it is saved.
   2. In Stripe (Developers › Webhooks), add an endpoint at the URL the page shows,
-     `https://<dashboard>/stripe/webhooks/<tenant id>`, for the event
-     `payment_intent.succeeded`.
+     `https://<dashboard>/stripe/webhooks/<tenant id>`, for the events
+     `payment_intent.succeeded` and `charge.refunded`.
   3. Paste that endpoint's signing secret (`whsec_…`).
 
 - **Storefront.** Its API key needs `store:read` and `store:checkout`.
@@ -91,8 +91,8 @@ CLI and an internet connection.
    make stripe.listen
    ```
 
-   - It forwards `payment_intent.succeeded` to the shop `make seed` filled, whose id
-     the seed wrote to `config/storefront.local.env`. For another shop, use
+   - It forwards `payment_intent.succeeded` and `charge.refunded` to the shop `make seed`
+     filled, whose id the seed wrote to `config/storefront.local.env`. For another shop, use
      `STORE_TENANT_ID=<tenant_id> make stripe.listen`: `<tenant_id>` is the last
      segment of the webhook URL shown on `/t/<slug>/payments`.
    - It forwards to `localhost:3000` rather than `https://timada.localhost`, so the CLI
@@ -167,6 +167,9 @@ turning payments on for a merchant. Follow the steps above, then tick each line.
       dashboard shows for the payment, and its invoice is issued.
 - [ ] **Refund on cancel.** *Cancel and refund* marks the order Cancelled. Stripe's test
       dashboard shows the payment refunded in full, and a credit note is issued.
+- [ ] **Refund in Stripe.** Refund part of a payment by hand in Stripe's test dashboard.
+      `stripe listen` logs a `204` for `charge.refunded`, and the refund reaches the order
+      with its credit note.
 
 Last run:
 
