@@ -94,7 +94,10 @@ it wins over the postal code when the order is forwarded. The order's city is th
 last place picked, in AliExpress's spelling, on its documents too. The city is typed
 only for a province without cities, or under the list's `Other`, which the lookup
 above then files. Where a province has no `Other` (the US, Poland, Switzerland,
-Estonia, Lithuania, Italy), a town off the list cannot be picked. No list, no script
+Estonia, Lithuania, Italy), a town off the list cannot be picked. In AT, BE, CH, CZ,
+EE and LT that list holds districts, not towns: the form calls it "Province / district"
+and asks for the town with the street, as AliExpress's forms for Belgium and
+Switzerland do, so such an order's city is the district. No list, no script
 or no answer: the city is typed and the lookup does what it can. So does an express
 payment, whose address comes from the wallet.
 

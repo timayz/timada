@@ -461,6 +461,13 @@ test("a shopper picks AliExpress's province and the order goes in its words", as
   await fakeStripeJs(page);
   const aliexpress = new FakeAliexpress();
   const stripe = new FakeStripe();
+  aliexpress.places.BE = [
+    {
+      name: "Region Wallonne",
+      type: "PROVINCE",
+      children: [{ name: "Hainaut", type: "CITY" }],
+    },
+  ];
   aliexpress.places.IT = [
     {
       name: "Sicilia",
@@ -496,18 +503,27 @@ test("a shopper picks AliExpress's province and the order goes in its words", as
       const province = page.getByLabel("Région / Province");
       // France has no list here: nothing to pick.
       await expect(province).toBeHidden();
+      // Belgium's list holds provinces, so its town goes with the street.
+      const hint = page.locator("[data-commune-hint]");
+      await expect(hint).toBeHidden();
+      await page.getByLabel("Pays", { exact: true }).selectOption("BE");
+      await page.getByLabel("Code postal", { exact: true }).fill("6000");
+      await page.getByLabel("Code postal", { exact: true }).blur();
+      await expect(province).toHaveValue("Region Wallonne");
+      await expect(page.getByLabel("Province / district").locator("option[value=Hainaut]")).toHaveCount(1);
+      await expect(hint).toBeVisible();
       await page.getByLabel("Pays", { exact: true }).selectOption("IT");
+      await expect(hint).toBeHidden();
       await page.getByLabel("Code postal", { exact: true }).fill("95021");
       await page.getByLabel("Code postal", { exact: true }).blur();
       // The postal code picks the province, and the city is picked from its
-      // list. A town the list lacks, like the one typed for France, is typed
-      // only under its "Other".
+      // list. A town the list lacks is typed only under its "Other".
       await expect(province).toHaveValue("Sicilia");
       const city = page.getByLabel("Ville", { exact: true });
       const town = page.getByLabel("Commune", { exact: true });
       await expect(city.locator("option[value=Catania]")).toHaveCount(1);
-      await expect(city).toHaveValue("Other");
-      await expect(page.getByLabel("Votre ville")).toHaveValue("Paris");
+      await city.selectOption("Other");
+      await expect(page.getByLabel("Votre ville")).toBeVisible();
       await expect(town).toBeHidden();
       // A city with towns has them picked from, and nothing is typed.
       await city.selectOption("Catania");

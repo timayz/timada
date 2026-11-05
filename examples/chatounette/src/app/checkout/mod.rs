@@ -117,6 +117,10 @@ const cityField = form.elements.city;
 const cityPick = form.querySelector("[data-city-pick]");
 const townBox = form.querySelector("[data-town]");
 const townPick = form.querySelector("[data-town-pick]");
+const communeHint = form.querySelector("[data-commune-hint]");
+// Where the list below the province holds districts rather than towns, and
+// AliExpress's own form leaves the town to the street's line.
+const DISTRICT_LISTS = ["AT", "BE", "CH", "CZ", "EE", "LT"];
 const postalCode = form.elements.postal_code;
 let provincePicked = form.dataset.region || "";
 let placesAsked = 0;
@@ -135,6 +139,8 @@ function typeCity() {
   cityField.type = "text";
   cityField.removeAttribute("aria-label");
   cityLabel.htmlFor = cityField.id;
+  cityLabel.textContent = "Ville";
+  communeHint.hidden = true;
   cityPick.hidden = cityPick.disabled = true;
   townBox.hidden = townPick.disabled = true;
 }
@@ -164,6 +170,9 @@ function listCities(answer, prompt) {
   listPlaces(cityPick, cities.map((city) => city.name), prompt);
   cityPick.value = city ? city.name : other ? "Other" : "";
   cityLabel.htmlFor = cityPick.id;
+  const districts = DISTRICT_LISTS.includes(country.value);
+  cityLabel.textContent = districts ? "Province / district" : "Ville";
+  communeHint.hidden = !districts;
   cityPick.hidden = false;
   cityPick.disabled = !cities.length;
   showCityPicked();
@@ -858,7 +867,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 </ul>
                             }
                             <label for="checkout-line1">"Adresse"</label>
-                            <input id="checkout-line1" name="line1" required="" autocomplete="address-line1" value=(&draft.line1)>
+                            <input id="checkout-line1" name="line1" required="" autocomplete="address-line1" aria-describedby="checkout-commune-hint" value=(&draft.line1)>
+                            <p class="hint" id="checkout-commune-hint" data-commune-hint="" hidden=(true)>"Indiquez votre commune avec la rue."</p>
                             <details class="more" open=(!draft.line2.is_empty())>
                                 <summary>"+ Ajouter une société, un appartement, un étage…"</summary>
                                 <label for="checkout-line2">"Complément d'adresse (facultatif)"</label>
