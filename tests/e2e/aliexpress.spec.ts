@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { FakeAliexpress, PRODUCT_ID } from "./aliexpress";
 import { registerWithEmail, uniqueEmail } from "./email";
+import { productTab } from "./forms";
 import { ExampleApp, mintKey } from "./storefront";
 import { FakeStripe, fakeStripeJs, stripeSignature } from "./stripe";
 import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
@@ -124,15 +125,18 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     // the band ends at, up to .99.
     await row.getByRole("link", { name: "Open" }).click();
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Cat Tunnel Deluxe");
-    const productUrl = page.url();
+    const productUrl = page.url().split("?")[0];
     await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "draft");
+    await productTab(page, "Pictures");
     await expect(page.locator("[data-image]")).toHaveCount(4);
+    await productTab(page, "Options & variants");
     const rose = page.locator("[data-variant]", { hasText: "Colour: Rose" });
     const blue = page.locator("[data-variant]", { hasText: "Colour: Blue" });
     await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "120");
     await expect(blue.locator("[data-stock]")).toHaveAttribute("data-stock", "0");
     await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("12.93");
     await expect(blue.getByLabel("Price of Colour: Blue")).toHaveValue("15.99");
+    await productTab(page, "AliExpress");
     await expect(page.locator("[data-product-aliexpress]")).toHaveAttribute("data-product-aliexpress", PRODUCT_ID);
     await page.getByRole("button", { name: "Publish" }).click();
     await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
@@ -140,25 +144,32 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     // AliExpress has fewer roses, dearer: the next read follows.
     aliexpress.sku("12000037001").stock = 7;
     aliexpress.sku("12000037001").price = "6.00";
+    await productTab(page, "AliExpress");
     await page.getByRole("button", { name: "Sync now" }).click();
     await expect(page.getByRole("status")).toContainText("Read again from AliExpress.");
+    await productTab(page, "Options & variants");
     await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "7");
     await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("15.99");
 
     // Its own rule, from the product page, applies at the next read.
+    await productTab(page, "AliExpress");
     await page.getByLabel("Its own rule: multiply the cost by").fill("3");
     await page.getByRole("button", { name: "Save rule" }).click();
     await expect(page.getByRole("status")).toContainText("Price rule saved");
     await page.getByRole("button", { name: "Sync now" }).click();
+    await expect(page.getByRole("status")).toContainText("Read again from AliExpress.");
+    await productTab(page, "Options & variants");
     await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("18.00");
 
     // AliExpress stops selling it: nothing left, and off sale.
     aliexpress.offline = true;
+    await productTab(page, "AliExpress");
     await page.getByRole("button", { name: "Sync now" }).click();
     await expect(page.getByRole("status")).toContainText("taken off sale");
     await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "draft");
-    await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "0");
     await expect(page.locator("[data-product-aliexpress]")).toHaveAttribute("data-aliexpress-offline");
+    await productTab(page, "Options & variants");
+    await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "0");
 
     // Importing it again is refused; every call was signed with the secret.
     await page.goto(`/t/${slug}/aliexpress`);
@@ -172,7 +183,7 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     await page.getByRole("button", { name: "Archive" }).click();
     await expect(page.getByRole("status")).toContainText("Product archived.");
     await expect(async () => {
-      await page.reload();
+      await page.goto(`${productUrl}?tab=aliexpress`);
       await expect(page.locator("[data-product-aliexpress]")).toHaveCount(0, { timeout: 1000 });
     }).toPass({ timeout: 10_000 });
     await page.goto(`/t/${slug}/aliexpress`);
@@ -205,7 +216,9 @@ test("a merchant adds the combinations AliExpress gained as variants, or ignores
   await aliexpress.start();
   try {
     const productUrl = await importedShop(page, aliexpress);
+    await productTab(page, "Options & variants");
     await expect(page.locator("[data-variant]")).toHaveCount(2);
+    await productTab(page, "AliExpress");
     await expect(page.locator("[data-aliexpress-found]")).toHaveCount(0);
 
     // AliExpress now sells green and grey too: the next read offers them.
@@ -229,7 +242,7 @@ test("a merchant adds the combinations AliExpress gained as variants, or ignores
         { timeout: 1000 },
       );
     }).toPass({ timeout: 10_000 });
-    await page.goto(productUrl);
+    await page.goto(`${productUrl}?tab=aliexpress`);
 
     // Grey is ignored, then offered again; green is added.
     await page.getByRole("button", { name: "Ignore Colour: Grey" }).click();
@@ -243,16 +256,19 @@ test("a merchant adds the combinations AliExpress gained as variants, or ignores
 
     await page.getByRole("button", { name: "Add Colour: Green as a variant" }).click();
     await expect(page.getByRole("status")).toContainText("1 combination added as a variant.");
+    await expect(green).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Add all 2" })).toHaveCount(0);
+    await productTab(page, "Options & variants");
     const variant = page.locator("[data-variant]", { hasText: "Colour: Green" });
     await expect(variant.locator("[data-stock]")).toHaveAttribute("data-stock", "9");
     await expect(variant.getByLabel("Price of Colour: Green")).toHaveValue("6.00");
-    await expect(green).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Add all 2" })).toHaveCount(0);
 
     // The next read counts green like the others.
     aliexpress.sku("12000037003").stock = 3;
+    await productTab(page, "AliExpress");
     await page.getByRole("button", { name: "Sync now" }).click();
     await expect(page.getByRole("status")).toContainText("Read again from AliExpress.");
+    await productTab(page, "Options & variants");
     await expect(variant.locator("[data-stock]")).toHaveAttribute("data-stock", "3");
     await expect(page.locator("[data-variant]")).toHaveCount(3);
   } finally {
@@ -346,6 +362,7 @@ test("the dashboard reads imported products again on its own, and renews the acc
   await aliexpress.start();
   try {
     const productUrl = await importedShop(page, aliexpress);
+    await productTab(page, "Options & variants");
     const rose = page.locator("[data-variant]", { hasText: "Colour: Rose" });
     await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "120");
 
@@ -354,7 +371,7 @@ test("the dashboard reads imported products again on its own, and renews the acc
     aliexpress.sku("12000037001").price = "5.00";
     // (A read counts the stock before it prices: wait for both on one page.)
     await expect(async () => {
-      await page.goto(productUrl);
+      await page.goto(`${productUrl}?tab=variants`);
       await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "3", { timeout: 1000 });
       await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("10.00", { timeout: 1000 });
     }).toPass({ timeout: 30_000 });
@@ -736,7 +753,7 @@ test("a small move in what AliExpress asks leaves a price alone, by the shop's t
     await expect(page.getByLabel("Price tolerance (%)")).toHaveValue("5.00");
 
     // 4.40 gives 8.80, within 5 % of 8.62: the sweep reads it and leaves it.
-    await page.goto(productUrl);
+    await page.goto(`${productUrl}?tab=variants`);
     const price = page.getByLabel("Price of Colour: Rose");
     await expect(price).toHaveValue("8.62");
     aliexpress.sku("12000037001").price = "4.40";
@@ -746,14 +763,16 @@ test("a small move in what AliExpress asks leaves a price alone, by the shop's t
     await expect(price).toHaveValue("8.62");
 
     // A member asking gets the rule's price to the cent.
+    await productTab(page, "AliExpress");
     await page.getByRole("button", { name: "Sync now" }).click();
     await expect(page.getByRole("status")).toContainText("Read again from AliExpress.");
+    await productTab(page, "Options & variants");
     await expect(price).toHaveValue("8.80");
 
     // Past the tolerance, the sweep follows on its own.
     aliexpress.sku("12000037001").price = "5.00";
     await expect(async () => {
-      await page.goto(productUrl);
+      await page.goto(`${productUrl}?tab=variants`);
       await expect(price).toHaveValue("10.00", { timeout: 1000 });
     }).toPass({ timeout: 20_000 });
   } finally {

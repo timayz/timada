@@ -57,7 +57,7 @@ async function createProduct(page: Page, slug: string, name: string) {
 /// `category`, once the category list shows it.
 async function fileUnder(page: Page, url: string, category: string) {
   await expect(async () => {
-    await page.goto(url);
+    await page.goto(`${url}?tab=categories`);
     await expect(page.getByLabel("Category")).toContainText(category, { timeout: 1000 });
   }).toPass({ timeout: 15_000 });
   const select = page.getByLabel("Category");
@@ -95,12 +95,13 @@ export async function publishVariedProduct(
   category?: string,
 ) {
   const url = await createProduct(page, slug, name);
+  await page.goto(`${url}?tab=variants`);
   await page.getByLabel("Add an option").fill(option);
   await page.getByLabel("Values, one a line").fill(variants.map(([value]) => value).join("\n"));
   await page.getByRole("button", { name: "Add option" }).click();
   await expect(page.getByRole("status")).toContainText("Option added.");
   for (const [value, amount] of variants) {
-    await page.goto(url);
+    await page.goto(`${url}?tab=variants`);
     await page.getByLabel(option, { exact: true }).selectOption(value);
     await page.getByLabel("Variant price").fill(amount);
     await page.getByRole("button", { name: "Add variant" }).click();

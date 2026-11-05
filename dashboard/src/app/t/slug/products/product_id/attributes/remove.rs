@@ -5,12 +5,15 @@ use topcoat::{
 };
 
 use super::AttributeForm;
-use crate::app::t::slug::products::product_id::act;
+use crate::app::t::slug::products::product_id::{Tab, act};
 
 #[route(POST)]
 pub async fn remove(cx: &Cx, Form(form): Form<AttributeForm>) -> Result<SeeOther> {
-    act(cx, "Fact removed.", async |catalog, actor, id| {
-        catalog.remove_attribute(actor, id, &form.name).await
-    })
+    act(
+        cx,
+        Tab::Facts,
+        "Fact removed.",
+        async |catalog, actor, id| catalog.remove_attribute(actor, id, &form.name).await,
+    )
     .await
 }

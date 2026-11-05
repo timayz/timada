@@ -81,7 +81,7 @@ async function publishPage(
 
 /// A picture on the product whose dashboard page is open.
 async function addPicture(page: Page, url: string, alt: string) {
-  await page.goto(url);
+  await page.goto(`${url}?tab=pictures`);
   await page
     .getByLabel("Add a picture")
     .setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: PNG });

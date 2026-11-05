@@ -8,7 +8,7 @@ use topcoat::{
 };
 
 use super::OptionId;
-use crate::app::t::slug::products::product_id::act;
+use crate::app::t::slug::products::product_id::{Tab, act};
 
 /// The prefix of the fields labelling one value. The form cannot know the
 /// values in advance, so it posts `value:<value>` for each and the handler
@@ -40,8 +40,11 @@ pub async fn labels(cx: &Cx, Form(form): Form<LabelsForm>) -> Result<SeeOther> {
             })
             .collect(),
     };
-    act(cx, "Option labels saved.", async |catalog, actor, id| {
-        catalog.label_option(actor, id, &option_id, labels).await
-    })
+    act(
+        cx,
+        Tab::Variants,
+        "Option labels saved.",
+        async |catalog, actor, id| catalog.label_option(actor, id, &option_id, labels).await,
+    )
     .await
 }

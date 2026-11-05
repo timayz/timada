@@ -5,11 +5,11 @@ use topcoat::{
 };
 
 use super::AttributeForm;
-use crate::app::t::slug::products::product_id::act;
+use crate::app::t::slug::products::product_id::{Tab, act};
 
 #[route(POST)]
 pub async fn set(cx: &Cx, Form(form): Form<AttributeForm>) -> Result<SeeOther> {
-    act(cx, "Fact saved.", async |catalog, actor, id| {
+    act(cx, Tab::Facts, "Fact saved.", async |catalog, actor, id| {
         catalog
             .set_attribute(actor, id, &form.name, &form.value)
             .await

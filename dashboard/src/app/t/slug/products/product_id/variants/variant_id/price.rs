@@ -6,16 +6,21 @@ use topcoat::{
 };
 
 use super::{PriceForm, VariantId};
-use crate::app::t::slug::products::product_id::act;
+use crate::app::t::slug::products::product_id::{Tab, act};
 
 #[route(POST)]
 pub async fn price(cx: &Cx, Form(form): Form<PriceForm>) -> Result<SeeOther> {
     let variant_id = path_param::<VariantId>(cx).to_owned();
-    act(cx, "Variant price set.", async |catalog, actor, id| {
-        let amount = parse_amount(&form.amount)?;
-        catalog
-            .price_variant(actor, id, &variant_id, amount, &form.currency)
-            .await
-    })
+    act(
+        cx,
+        Tab::Variants,
+        "Variant price set.",
+        async |catalog, actor, id| {
+            let amount = parse_amount(&form.amount)?;
+            catalog
+                .price_variant(actor, id, &variant_id, amount, &form.currency)
+                .await
+        },
+    )
     .await
 }
