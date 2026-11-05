@@ -59,6 +59,47 @@ export const emailField = (page: Page) =>
 export const payButton = (page: Page) =>
   page.getByRole("button", { name: /^Payer ma commande/ });
 
+/// Where a parcel goes, as the checkout's lists name it: the province where
+/// the postal code does not name it, the city and, below a city that has them,
+/// the town.
+export type Place = {
+  country: string;
+  postalCode: string;
+  province?: string;
+  city: string;
+  town?: string;
+};
+
+export const PARIS: Place = {
+  country: "FR",
+  postalCode: "75002",
+  city: "Paris",
+};
+
+export const BERLIN: Place = {
+  country: "DE",
+  postalCode: "10115",
+  province: "Berlin",
+  city: "Berlin",
+  town: "Berlin",
+};
+
+/// Says where the parcel goes, as every shop's checkout asks it: from the
+/// lists of the country.
+export async function fillPlace(page: Page, place: Place) {
+  const postalCode = page.getByLabel("Code postal", { exact: true });
+  await page.getByLabel("Pays", { exact: true }).selectOption(place.country);
+  await postalCode.fill(place.postalCode);
+  await postalCode.blur();
+  if (place.province) {
+    await page.getByLabel("Région / Province").selectOption(place.province);
+  }
+  await page.getByLabel("Ville", { exact: true }).selectOption(place.city);
+  if (place.town) {
+    await page.getByLabel("Commune", { exact: true }).selectOption(place.town);
+  }
+}
+
 /// Fills the checkout's delivery details in, as Ada in Paris.
 export async function fillAddress(
   page: Page,
@@ -69,9 +110,7 @@ export async function fillAddress(
   await page.getByLabel("Nom complet").fill("Ada Lovelace");
   await page.getByLabel("Téléphone").fill("06 12 34 56 78");
   await page.getByLabel("Adresse", { exact: true }).fill(line1);
-  await page.getByLabel("Code postal", { exact: true }).fill("75002");
-  await page.getByLabel("Ville", { exact: true }).fill("Paris");
-  await page.getByLabel("Pays", { exact: true }).selectOption("FR");
+  await fillPlace(page, PARIS);
 }
 
 /// The checkout's details filled in (or checked kept from the last order).

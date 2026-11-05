@@ -93,20 +93,30 @@ not know every name the address form lists (`Gard` answered
 
 ## The checkout's province list
 
-In a shop connected to AliExpress, the storefront's checkout asks as AliExpress's own
-form does when the country has a list: the province, its city, then that city's town
-if it has any (`GET /store/places`, then `timada_storefront::places`). The postal code
-picks the province until the shopper does, the pick is `ShippingAddress::region`, and
+In every shop, connected to AliExpress or not, the storefront's checkout asks as
+AliExpress's own form does when the country has a list: the province, its city, then that city's town
+if it has any (`GET /store/places`, then `timada_storefront::places`). In France, Belgium,
+Spain, Canada and Italy the postal code names the province as it is typed, so the form
+asks for the code first and for the province only if the code names none. It cannot be
+corrected there: a town filed under another province than its code's goes under `Other`,
+and in Italy, which has none, cannot be picked. Elsewhere the shopper picks the province.
+It is `ShippingAddress::region` either way, and
 it wins over the postal code when the order is forwarded. The order's city is the
 last place picked, in AliExpress's spelling, on its documents too. The city is typed
 only for a province without cities, or under the list's `Other`, which the lookup
-above then files. Where a province has no `Other` (the US, Poland, Switzerland,
-Estonia, Lithuania, Italy), a town off the list cannot be picked. In AT, BE, CH, CZ,
+above then files. Where a province has no `Other` (Poland, Switzerland,
+Estonia, Lithuania, Italy), a town off the list cannot be picked. France's provinces are its départements, not its régions, and the
+form calls them that. In AT, BE, CH, CZ,
 EE and LT that list holds districts, not towns: the form calls it "Province / district"
 and asks for the town with the street, as AliExpress's forms for Belgium and
 Switzerland do, so such an order's city is the district. No list, no script
 or no answer: the city is typed and the lookup does what it can. So does an express
 payment, whose address comes from the wallet.
+
+A shop that does not use AliExpress gets the same lists and pays for them: its orders
+and invoices carry AliExpress's spelling (`Ales` for Alès, `PARIS 2E ARRONDISSEMENT`),
+the district as the city in the countries above, and a town off a list without `Other`
+cannot be picked. 17 of the 38 countries the checkout may ask about have a list.
 
 ## Not proven by a real order
 

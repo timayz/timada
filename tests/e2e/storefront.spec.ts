@@ -21,6 +21,7 @@ import {
   publishVariedProduct,
 } from "./storefront";
 import { selectByText } from "./forms";
+import { addToCart } from "./shop";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // The storefront, the app on the storefront library, in French, booted on a
@@ -872,6 +873,76 @@ test("a merchant sends a campaign to the confirmed subscribers, who leave in one
   await expect(page.locator("[data-subscriber-count]")).toHaveText(
     "1 subscriber(s)",
   );
+});
+
+test("a shop without AliExpress asks for the place from the lists", async ({
+  page,
+  request,
+}) => {
+  const errors: Error[] = [];
+  page.on("pageerror", (error) => errors.push(error));
+  await registerWithEmail(page, uniqueEmail("storefront-places"));
+  const { name, slug } = uniqueTenant("Storefront Places");
+  await createTenant(page, name);
+  await publishProduct(page, slug, "Blue Mug", "12.50");
+  await app.start(request, await mintKey(page, slug, true), 1);
+  await page.goto(`${app.url}/p/blue-mug`);
+  await addToCart(page);
+  await page.goto(`${app.url}/checkout`);
+
+  // The postal code first: it names the province, which is not asked for, and
+  // what is picked is what the form sends.
+  const province = page.getByLabel("Département", { exact: true });
+  const city = page.getByLabel("Ville", { exact: true });
+  await expect(province).toBeHidden();
+  await expect(city).toBeDisabled();
+  await expect(city.locator("option").first()).toHaveText(
+    "Saisissez d'abord votre code postal",
+  );
+  const postalCode = page.getByLabel("Code postal", { exact: true });
+  const sentCity = page.locator("input[name=city]");
+  const typed = async (code: string) => {
+    const answered = page.waitForResponse(/\/checkout\/places/);
+    await postalCode.fill(code);
+    await answered;
+  };
+  // As it is typed, without leaving the field.
+  await typed("30100");
+  await expect(province).toHaveValue("Gard");
+  await expect(province).toBeHidden();
+  await city.selectOption("Ales");
+  await expect(sentCity).toHaveValue("Ales");
+
+  // A code still being typed, or another in the same département, leaves the
+  // city picked.
+  await typed("301");
+  await expect(province).toHaveValue("Gard");
+  await expect(sentCity).toHaveValue("Ales");
+  await typed("30000");
+  await expect(sentCity).toHaveValue("Ales");
+
+  // One in another département: its city is picked again, the old one not sent.
+  await typed("75002");
+  await expect(province).toHaveValue("Paris");
+  await expect(city).toHaveValue("");
+  await expect(sentCity).toHaveValue("");
+
+  // A code naming no département: the shopper picks it, until one does.
+  await typed("98000");
+  await expect(province).toBeVisible();
+  await expect(province).toHaveValue("");
+  await province.selectOption("Var");
+  await expect(city.locator("option[value=Toulon]")).toHaveCount(1);
+  await typed("30100");
+  await expect(province).toHaveValue("Gard");
+  await expect(province).toBeHidden();
+  await city.selectOption("Ales");
+
+  // A town the list does not have is typed under its "Other".
+  await city.selectOption("Other");
+  await expect(page.getByLabel("Votre ville")).toBeVisible();
+
+  expect(errors).toEqual([]);
 });
 
 test("the storefront stops cleanly when told to", async ({ page, request }) => {

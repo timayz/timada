@@ -103,14 +103,16 @@ function showShipping() {
 }
 country.addEventListener("change", showShipping);
 
-// In a shop that forwards to AliExpress, the country's provinces, then the
-// cities of the one picked, then the towns of that city, from AliExpress's own
-// lists, as its own form asks; elsewhere, and without this script, the lists
-// stay hidden, send nothing, and the city is typed. The postal code picks the
-// province until the shopper does. Whatever is picked lands in the city's field,
+// The country's provinces, then the cities of the one picked, then the towns of
+// that city, from AliExpress's own lists, as its own form asks; for a country
+// without a list, and without this script, the lists stay hidden, send nothing,
+// and the city is typed. Where the postal code names the province, as it is
+// typed, the province is not asked for, though it is sent; the shopper picks it
+// only where the code cannot say. Whatever is picked lands in the city's field,
 // which is typed in only for a province without a list or for "Other", the
 // list's own word for a town it does not have.
 const provinceBox = form.querySelector("[data-province]");
+const provinceLabel = form.querySelector("[data-province-label]");
 const province = form.elements.region;
 const cityLabel = form.querySelector("[data-city-label]");
 const cityField = form.elements.city;
@@ -123,6 +125,7 @@ const communeHint = form.querySelector("[data-commune-hint]");
 const DISTRICT_LISTS = ["AT", "BE", "CH", "CZ", "EE", "LT"];
 const postalCode = form.elements.postal_code;
 let provincePicked = form.dataset.region || "";
+let shownProvince = "";
 let placesAsked = 0;
 let cities = [];
 const placeKey = (name) => name
@@ -147,6 +150,7 @@ function typeCity() {
 function hideProvince() {
   provinceBox.hidden = true;
   province.disabled = true;
+  shownProvince = "";
   typeCity();
 }
 // Follows the city picked: its towns to pick from, or a town to type.
@@ -176,10 +180,10 @@ function listCities(answer, prompt) {
   cityPick.hidden = false;
   cityPick.disabled = !cities.length;
   showCityPicked();
-  townPick.value = city?.towns.find((town) => placeKey(town) === key) || "";
+  townPick.value = (city && city.towns.find((town) => placeKey(town) === key)) || "";
   if (!other && province.value) cityField.value = townPick.value || (city && !city.towns.length ? city.name : "");
 }
-async function showPlaces() {
+async function showPlaces(postalChanged = false) {
   const asked = ++placesAsked;
   let places = { provinces: [], province: null, cities: [] };
   try {
@@ -189,12 +193,28 @@ async function showPlaces() {
   } catch {}
   if (asked !== placesAsked) return;
   if (!places.provinces.length) return hideProvince();
+  // A code naming a province takes over from the one picked or saved; one still
+  // being typed changes nothing.
+  if (places.province && provincePicked && places.province !== provincePicked) {
+    provincePicked = "";
+    return showPlaces(postalChanged);
+  }
+  const awaited = places.postal_code_awaited;
+  if (postalChanged && awaited && province.value) return;
+  // France's list holds its départements, not its régions.
+  const french = country.value === "FR";
+  provinceLabel.textContent = french ? "Département" : "Région / Province";
   const current = provincePicked || places.province || "";
+  // What was picked in another province is no place in this one.
+  if (shownProvince && current !== shownProvince) cityField.value = "";
+  shownProvince = current;
   listPlaces(province, places.provinces, "Choisir…");
   province.value = places.provinces.includes(current) ? current : "";
-  province.disabled = false;
-  provinceBox.hidden = false;
-  if (!province.value) listCities([], "Choisir d'abord la région");
+  // Hidden and still empty, it must not hold the form back.
+  province.disabled = awaited;
+  provinceBox.hidden = awaited || !!places.province;
+  if (awaited) listCities([], "Saisissez d'abord votre code postal");
+  else if (!province.value) listCities([], french ? "Choisir d'abord le département" : "Choisir d'abord la région");
   else if (places.cities.length) listCities(places.cities, "Choisir…");
   else typeCity();
 }
@@ -216,7 +236,19 @@ country.addEventListener("change", () => {
   hideProvince();
   showPlaces();
 });
-postalCode.addEventListener("change", showPlaces);
+let postalAsked = postalCode.value;
+let postalTyped;
+function postalChanged() {
+  clearTimeout(postalTyped);
+  if (postalCode.value === postalAsked) return;
+  postalAsked = postalCode.value;
+  showPlaces(true);
+}
+postalCode.addEventListener("input", () => {
+  clearTimeout(postalTyped);
+  postalTyped = setTimeout(postalChanged, 300);
+});
+postalCode.addEventListener("change", postalChanged);
 showPlaces();
 
 methods.forEach((method) => method.addEventListener("change", showShipping));
@@ -888,7 +920,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 </div>
                                 <div class="row">
                                     <span data-province="" hidden=(true)>
-                                        <label for="checkout-region">"Région / Province"</label>
+                                        <label for="checkout-region" data-province-label="">"Région / Province"</label>
                                         <select id="checkout-region" name="region" required="" autocomplete="address-level1" disabled=(true)></select>
                                     </span>
                                     <span>

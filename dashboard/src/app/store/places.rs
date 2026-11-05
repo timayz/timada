@@ -1,26 +1,23 @@
 //! `GET /store/places?country=FR&postal_code=30100&province=Gard`: what a
-//! storefront's address form offers in a shop that forwards to AliExpress,
-//! which refuses an address not in its own words: the country's provinces,
-//! the one the postal code names, and the cities of the province asked for
-//! (else of that one) with their towns.
+//! storefront's address form offers, in every shop: AliExpress's own lists,
+//! which ship with the code, as it refuses an address not in its words. The
+//! country's provinces, the one the postal code names, and the cities of the
+//! province asked for (else of that one) with their towns.
 //!
 //! 200 `{"provinces": […], "province": "Gard", "cities": [{"name": "Ales",
-//! "towns": []}, …]}`, all empty for
-//! a shop not connected to AliExpress, a country without a list, or one
+//! "towns": []}, …]}`, all empty for a country without a list, or one
 //! AliExpress lists apart (Martinique, under France here): the form then asks
-//! for no province. 401, 403 and 503 as [`super::storefront`] says.
-
-use std::sync::Arc;
+//! for no province. Where the postal
+//! code names the province, `postal_code_awaited` says it is still too short.
+//! 401, 403 and 503 as [`super::storefront`] says.
 
 use serde_json::{Value, json};
-use timada_aliexpress::{delivery_country, places_of, province_of};
+use timada_aliexpress::{delivery_country, places_of, postal_code_awaited, province_of};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::Cx,
     router::{StatusCode, content::Json, query_params, route},
 };
-
-use crate::aliexpress::Aliexpress;
 
 #[topcoat::router::query_params(error = bad_request)]
 struct PlacesQuery {
@@ -31,10 +28,9 @@ struct PlacesQuery {
 
 #[route(GET)]
 pub async fn places(cx: &Cx) -> Result<(StatusCode, Json<Value>)> {
-    let access = match super::storefront(cx).await? {
-        Ok(access) => access,
-        Err(status) => return Ok((status, Json(json!({})))),
-    };
+    if let Err(status) = super::storefront(cx).await? {
+        return Ok((status, Json(json!({}))));
+    }
     let query = query_params::<PlacesQuery>(cx)?;
     let none = json!({ "provinces": [], "province": null, "cities": [] });
     let country = query
@@ -48,14 +44,6 @@ pub async fn places(cx: &Cx) -> Result<(StatusCode, Json<Value>)> {
         || !country.bytes().all(|b| b.is_ascii_uppercase())
         || delivery_country(&country, postal_code) != country
     {
-        return Ok((StatusCode::OK, Json(none)));
-    }
-    let aliexpress = app_context::<Arc<Aliexpress>>(cx);
-    let connected = aliexpress
-        .connected(&access.tenant)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?;
-    if !connected {
         return Ok((StatusCode::OK, Json(none)));
     }
     let Some(places) = places_of(&country) else {
@@ -76,6 +64,7 @@ pub async fn places(cx: &Cx) -> Result<(StatusCode, Json<Value>)> {
             "provinces": places.provinces(),
             "province": named,
             "cities": cities,
+            "postal_code_awaited": postal_code_awaited(&country, postal_code),
         })),
     ))
 }

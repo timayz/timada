@@ -338,13 +338,14 @@ into the tenant's store whenever the merchant changes the Stripe settings.
 
 ### The province and the city's lists
 
-A shop connected to AliExpress has its forwarded addresses checked against
-AliExpress's own lists, so a form can offer them: `timada_storefront::places(cx,
+AliExpress refuses an address not on its own lists, which ship with the dashboard, so
+a form can offer them, in every shop: `timada_storefront::places(cx,
 country, postal_code, province)` answers the country's `provinces`, the `province`
 the postal code names, and the `cities` of the province asked for, else of that one,
 each with its `towns`. Put the last place picked in the address's city, and let the
 shopper type it for a province without cities or for the city `Other`. All are empty
-when the form should ask for nothing: another shop, or a country without a list. Put
+when the form should ask for nothing: a country without a list. Where the postal code names the province, `postal_code_awaited` says it is still
+too short: ask for it first, and for the province only if `province` stays empty. Put
 the pick in `ShippingAddress::region`. See
 [aliexpress-provinces.md](aliexpress-provinces.md).
 

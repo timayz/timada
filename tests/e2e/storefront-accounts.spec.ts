@@ -9,11 +9,15 @@ import {
   unescapeSlashes,
 } from "./email";
 import {
+  BERLIN,
+  PARIS,
+  type Place,
   addToCart,
   confirmPayment,
   connectStripe,
   emailField,
   fillAddress,
+  fillPlace,
   payButton,
   paymentSucceeded,
   placeOrder,
@@ -470,14 +474,16 @@ const vatField = (page: Page) =>
     "Numéro de TVA intracommunautaire (facultatif, pour une facture hors TVA)",
   );
 
-/// From the cart to Stripe's return page, shipping to `country`, as a
+const NEW_YORK: Place = {
+  country: "US",
+  postalCode: "10001",
+  province: "New York",
+  city: "New york",
+};
+
+/// From the cart to Stripe's return page, shipping to `place`, as a
 /// business when a VAT number is given.
-async function checkoutTo(
-  page: Page,
-  country: string,
-  postalCode: string,
-  vatNumber = "",
-) {
+async function checkoutTo(page: Page, place: Place, vatNumber = "") {
   await page.goto(`${SHOP}/cart`);
   await page.getByRole("link", { name: "Commander" }).click();
   await expect(page.locator("[data-import-notice]")).toBeVisible();
@@ -485,9 +491,7 @@ async function checkoutTo(
   await page.getByLabel("Nom complet").fill("Ada Lovelace");
   await page.getByLabel("Téléphone").fill("06 12 34 56 78");
   await page.getByLabel("Adresse", { exact: true }).fill("1 Main Street");
-  await page.getByLabel("Code postal", { exact: true }).fill(postalCode);
-  await page.getByLabel("Ville", { exact: true }).fill("Somewhere");
-  await page.getByLabel("Pays", { exact: true }).selectOption(country);
+  await fillPlace(page, place);
   if (await vatField(page).count()) await vatField(page).fill(vatNumber);
   await payButton(page).click();
   await expect(page).toHaveURL(
@@ -522,9 +526,9 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({
       expect(stripe.lastIntent()!.amount).toBe(1250);
       await confirmPayment(page, request, SHOP, stripe, webhookUrl);
     };
-    const buy = async (country: string, postalCode: string, vatNumber = "") => {
+    const buy = async (place: Place, vatNumber = "") => {
       await addMug();
-      await checkoutTo(page, country, postalCode, vatNumber);
+      await checkoutTo(page, place, vatNumber);
       await pay();
     };
     const year = new Date().getUTCFullYear();
@@ -571,26 +575,24 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({
     await page.getByLabel("Nom complet").fill("Ada Lovelace");
     await page.getByLabel("Téléphone").fill("06 12 34 56 78");
     await page.getByLabel("Adresse", { exact: true }).fill("1 Main Street");
-    await page.getByLabel("Code postal", { exact: true }).fill("10115");
-    await page.getByLabel("Ville", { exact: true }).fill("Berlin");
-    await page.getByLabel("Pays", { exact: true }).selectOption("DE");
+    await fillPlace(page, BERLIN);
     await vatField(page).fill("US123");
     await payButton(page).click();
     await expect(page.getByRole("alert")).toContainText(
       "numéro de TVA intracommunautaire",
     );
-    await checkoutTo(page, "DE", "10115", "DE123456789");
+    await checkoutTo(page, BERLIN, "DE123456789");
     await pay();
     await expectRegime(1, "reverse_charge");
     expect(vies.checked).toContain("DE123456789");
 
     // Out of the EU: an export.
-    await buy("US", "10001");
+    await buy(NEW_YORK);
     await expectRegime(2, "export");
 
     // Under the threshold a German consumer pays French VAT; once the
     // merchant joins the One-Stop Shop, German VAT, on the quarter's return.
-    await buy("DE", "10115");
+    await buy(BERLIN);
     await expectRegime(3, "distance_origin");
     await page.goto(`${company.companyUrl}/oss`);
     await expect(page.locator("[data-oss-empty]")).toBeVisible();
@@ -600,7 +602,7 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({
     await expect(page.getByRole("status")).toContainText(
       "Legal identity saved.",
     );
-    await buy("DE", "10115");
+    await buy(BERLIN);
     await expectRegime(4, "oss");
     await expect(async () => {
       await page.goto(`${company.companyUrl}/oss`);
@@ -622,9 +624,9 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({
     await page.getByLabel("Nom complet").fill("Ada Lovelace");
     await page.getByLabel("Téléphone").fill("06 12 34 56 78");
     await page.getByLabel("Adresse", { exact: true }).fill("350 Fifth Avenue");
-    await page.getByLabel("Code postal", { exact: true }).fill("10118");
-    await page.getByLabel("Ville", { exact: true }).fill("New York");
-    await page.getByLabel("Pays", { exact: true }).selectOption("US");
+    // A town the list does not have is typed under its "Other".
+    await fillPlace(page, { ...NEW_YORK, postalCode: "10118", city: "Other" });
+    await page.getByLabel("Votre ville").fill("New York");
     await page
       .getByLabel("Utiliser une autre adresse de facturation (facultatif)")
       .check();
@@ -937,8 +939,8 @@ test("a returning shopper signs in with a mailed code and finds their orders and
         .locator("[data-saved-address=Berlin]")
         .getByRole("link", { name: "Livrer ici" })
         .click();
-      await expect(device.getByLabel("Ville", { exact: true })).toHaveValue(
-        "Berlin",
+      await expect(device.getByLabel("Code postal", { exact: true })).toHaveValue(
+        "10117",
       );
       await expect(device.getByLabel("Ville de facturation")).toHaveValue(
         "Berlin",
@@ -1250,9 +1252,7 @@ test.describe("a French-speaking shopper", () => {
       await page
         .getByLabel("Adresse", { exact: true })
         .fill("1 rue de la Paix");
-      await page.getByLabel("Code postal", { exact: true }).fill("75002");
-      await page.getByLabel("Ville", { exact: true }).fill("Paris");
-      await page.getByLabel("Pays", { exact: true }).selectOption("FR");
+      await fillPlace(page, PARIS);
       await payButton(page).click();
       await expect(page).toHaveURL(
         /\/checkout\/complete\?.*redirect_status=succeeded/,

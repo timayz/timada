@@ -425,8 +425,8 @@ async function fillCheckout(page: Page, quantity: number) {
   await page.getByLabel("Pays", { exact: true }).selectOption("FR");
   await page.getByLabel("Code postal", { exact: true }).fill("75002");
   await page.getByLabel("Code postal", { exact: true }).blur();
-  // A shop on AliExpress picks its city from AliExpress's list.
-  await expect(page.getByLabel("Région / Province")).toHaveValue("Paris");
+  // The city is picked from AliExpress's list, as in every shop.
+  await expect(page.getByLabel("Département")).toHaveValue("Paris");
   await page.getByLabel("Ville", { exact: true }).selectOption("PARIS 2E ARRONDISSEMENT");
   await page.getByLabel("Téléphone").fill("06 12 34 56 78");
 }
@@ -530,25 +530,25 @@ test("a shopper picks AliExpress's province and the order goes in its words", as
       await expect(page.getByLabel("Votre ville")).toHaveCount(0);
       await expect(page.getByRole("textbox", { name: "Ville" })).toHaveCount(0);
       await expect(town.locator("option[value='Aci Castello']")).toHaveCount(1);
-      // The shopper's pick stays when the postal code changes.
+      // A code naming no region leaves it to the shopper.
+      await page.getByLabel("Code postal", { exact: true }).fill("99000");
+      await page.getByLabel("Code postal", { exact: true }).blur();
+      await expect(province).toBeVisible();
       await province.selectOption("Lazio");
       await expect(city.locator("option[value=Roma]")).toHaveCount(1);
-      await page.getByLabel("Code postal", { exact: true }).fill("95022");
-      await page.getByLabel("Code postal", { exact: true }).blur();
-      await expect(province).toHaveValue("Lazio");
       await city.selectOption("Roma");
       await town.selectOption("Albano Laziale");
     })}`;
     await page.goto(url);
     await page.getByRole("button", { name: "Place on AliExpress" }).click();
     await forwardIs(page, url, "placed");
-    // In AliExpress's words, the shopper's pick over the postal code's, with
-    // their town kept for the courier.
+    // In AliExpress's words, the shopper's pick, with their town kept for the
+    // courier.
     expect(aliexpress.orders[0].address).toMatchObject({
       province: "Lazio",
       city: "Roma",
       address2: "Albano Laziale",
-      zip: "95022",
+      zip: "99000",
       country: "IT",
     });
   } finally {
