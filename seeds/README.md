@@ -24,15 +24,6 @@ pictures. Run again into the same directory, it refreshes the catalogue
 and fetches only the pictures not there yet. A picture the fetch could not get is
 left to the seed, which fetches it from the shop (`--skip-images` leaves them all).
 
-The snapshot is here to try the storefront examples against a real-sized catalogue,
-nothing more.
-
-## Keeping a seeded platform
-
-Seeding the whole catalogue takes a while, and every try at the shop adds carts and
-orders. `make seed.chatounette.save` keeps the platform as the seed left it (the
-store, the read models, the pictures, the shopper keys, the Chatounette clone's
-database and the settings the seed printed) in `seeds/dev-platform/`, through
-`timada-dashboard snapshot save`; `make seed.chatounette.restore` puts it all back in
-seconds (server and Chatounette stopped). `DEV_SNAPSHOT` picks another directory. The
-copy holds a working storefront key and your account: it stays here, out of git.
+The snapshot is here to try the storefront against a real-sized catalogue, nothing
+more. Seeding the whole of it takes a while; `LIMIT=200 make seed.chatounette` loads
+only the first 200 products, which is quicker and enough for most tries at the shop.

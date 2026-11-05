@@ -1,4 +1,4 @@
-.PHONY: start cert cert.install up stop down dev reset migrate seed.chatounette seed.chatounette.save seed.chatounette.restore snapshot.chatounette aliexpress.places chatounette chatounette.migrate e2e loadtest lint fmt-check fmt test machete check
+.PHONY: start cert cert.install up stop down dev reset migrate seed.chatounette snapshot.chatounette aliexpress.places chatounette chatounette.migrate e2e loadtest lint fmt-check fmt test machete check
 
 start: up dev
 
@@ -47,25 +47,6 @@ seed.chatounette:
 		--storefront-url "$${STOREFRONT_URL-https://chatounette.localhost}" \
 		$(if $(wildcard config/stripe.local.toml),--stripe-file config/stripe.local.toml) \
 		--pages examples/chatounette/pages --env-file data/seed.chatounette.env
-
-# Keeps the platform as `make seed.chatounette` left it in DEV_SNAPSHOT (the
-# server stopped): the database, the pictures and the shopper keys, with the
-# Chatounette clone's database (best once its catalogue is in)
-# and the settings the seed printed. Restore brings it all back in seconds,
-# replacing what is there: stop the server and Chatounette first. Then
-# `make chatounette` with the settings restore prints.
-DEV_SNAPSHOT ?= seeds/dev-platform
-
-seed.chatounette.save:
-	cargo run -p timada-dashboard -- --config config/dev.local.toml snapshot save $(DEV_SNAPSHOT) --replace \
-		$(if $(wildcard chatounette.db),--also chatounette.db) \
-		$(if $(wildcard data/seed.chatounette.env),--also data/seed.chatounette.env)
-
-seed.chatounette.restore:
-	cargo run -p timada-dashboard -- --config config/dev.local.toml snapshot restore $(DEV_SNAPSHOT) \
-		$(if $(wildcard $(DEV_SNAPSHOT)/also/chatounette.db),--also chatounette.db) \
-		$(if $(wildcard $(DEV_SNAPSHOT)/also/seed.chatounette.env),--also data/seed.chatounette.env)
-	@cat data/seed.chatounette.env 2>/dev/null || true
 
 # Reads AliExpress's lists of places again (one call per country, with your
 # app's key) into crates/aliexpress/places.bin, which the next build embeds.
@@ -137,4 +118,3 @@ machete:
 # run separately.
 check: test lint fmt-check machete
 	@echo "✓ All checks passed!"
-
