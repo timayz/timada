@@ -1,0 +1,1195 @@
+//! `/checkout`: one page from the cart to the payment. The shopper's
+//! details, the address and Stripe's Payment Element sit side by side with
+//! the cart, which can still be changed there. Stripe's form shows before
+//! any payment is open (its "deferred" mode): the button asks to pay
+//! (`/checkout/start`), which opens the payment for the cart as it stands, then
+//! confirms it in the browser, which comes back to `/checkout/complete`. The
+//! total the page showed travels with the request, so a price the shopper
+//! did not see is never charged. The merchant's checkout offers show as
+//! cards above the payment, each with an Add button that puts its item in
+//! the cart and comes back here.
+
+pub mod complete;
+pub mod countries;
+pub mod places;
+pub mod start;
+
+use timada_storefront::{
+    CartView, Checkout, OfferView, OrderError, VatEstimate, accepts_business_buyers, menu,
+    payment_setup, recent_reviews, request_language, request_time_zone, save_address,
+    start_payment,
+};
+use topcoat::{
+    Result,
+    context::Cx,
+    router::{
+        content::Form,
+        error::{RouterErrorExt, SeeOther, see_other},
+        href, page, query_params, route,
+    },
+    view::{Unescaped, View, view},
+};
+
+use crate::app::account::sign_in::sign_in_url;
+use crate::app::cart::{cart_url, current_cart, discount, summary_line};
+use crate::app::{document, say};
+use crate::shopper::{
+    CheckoutDraft, PaymentInProgress, accounts_enabled, cart_id, checkout_draft,
+    save_checkout_draft, set_payment_in_progress, shopper_token, signed_in,
+};
+use countries::{DEFAULT_COUNTRY, countries_for};
+
+/// How many reviews the page shows beside the cart.
+const REVIEWS_SHOWN: u32 = 3;
+
+/// Mounts Stripe's Payment and Express Checkout elements before any payment
+/// is open, keeps the VAT line in step with the country, and pays on submit:
+/// ask the store to open the payment, then confirm it with Stripe. Static and
+/// trusted: everything it needs comes from the form's `data-` attributes.
+const CHECKOUT_SCRIPT: &str = r##"
+const form = document.querySelector("[data-checkout-form]");
+const button = form.querySelector("button.place");
+const error = document.querySelector("[data-payment-error]");
+const vat = document.querySelector("[data-checkout-vat]");
+const country = form.elements.country;
+// Absent when the shop does not sell to businesses.
+const vatNumber = form.elements.vat_number;
+
+// The shipping method picked, among those that ship to the country.
+const methods = [...form.querySelectorAll("input[name=shipping_method]")];
+const noShipping = form.querySelector("[data-no-shipping]");
+const shippingLine = document.querySelector("[data-checkout-shipping]");
+const totalLine = document.querySelector("[data-checkout-total]");
+const placeTotal = form.querySelector("[data-place-total]");
+const goods = Number(form.dataset.goods);
+const picked = () => methods.find((method) => method.checked && !method.disabled);
+
+function showVat() {
+  if (!vat) return;
+  const texts = JSON.parse(country.selectedOptions[0]?.dataset.vat || "{}");
+  const text = texts[picked()?.value || ""];
+  const reverseCharge = !!vatNumber && vatNumber.value.trim() !== "" && country.value !== "FR";
+  vat.hidden = !text || reverseCharge;
+  vat.textContent = text ? `(${text})` : "";
+}
+
+// Shows the methods that ship to the country (keeping the one picked when
+// it still does) and prices the order with the one picked.
+function showShipping() {
+  if (methods.length) {
+    for (const method of methods) {
+      const countries = method.dataset.countries;
+      const ships = !countries || countries.split(" ").includes(country.value);
+      method.disabled = !ships;
+      method.closest("label").hidden = !ships;
+    }
+    if (!picked()) {
+      const first = methods.find((method) => !method.disabled);
+      if (first) first.checked = true;
+    }
+  }
+  const method = picked();
+  if (noShipping) noShipping.hidden = !methods.length || !!method;
+  const total = goods + (method ? Number(method.dataset.amount) : 0);
+  // Written by the server, the way the shop writes its prices.
+  const totalText = method ? method.dataset.total : form.dataset.goodsTotal;
+  if (shippingLine && methods.length) shippingLine.textContent = method ? method.dataset.price : "—";
+  totalLine.textContent = totalText;
+  if (placeTotal) placeTotal.textContent = totalText;
+  form.elements.expected_total_cents.value = total;
+  form.dataset.amount = total;
+  if (elements && total > 0) elements.update({ amount: total });
+  showVat();
+}
+country.addEventListener("change", showShipping);
+
+// The country's provinces, then the cities of the one picked, then the towns of
+// that city, from AliExpress's own lists, as its own form asks; for a country
+// without a list, and without this script, the lists stay hidden, send nothing,
+// and the city is typed. Where the postal code names the province, as it is
+// typed, the province is not asked for, though it is sent; the shopper picks it
+// only where the code cannot say. Whatever is picked lands in the city's field,
+// which is typed in only for a province without a list or for "Other", the
+// list's own word for a town it does not have.
+const provinceBox = form.querySelector("[data-province]");
+const provinceLabel = form.querySelector("[data-province-label]");
+const province = form.elements.region;
+const cityLabel = form.querySelector("[data-city-label]");
+const cityField = form.elements.city;
+const cityPick = form.querySelector("[data-city-pick]");
+const townBox = form.querySelector("[data-town]");
+const townPick = form.querySelector("[data-town-pick]");
+const communeHint = form.querySelector("[data-commune-hint]");
+// Where the list below the province holds districts rather than towns, and
+// AliExpress's own form leaves the town to the street's line.
+const DISTRICT_LISTS = ["AT", "BE", "CH", "CZ", "EE", "LT"];
+const postalCode = form.elements.postal_code;
+let provincePicked = form.dataset.region || "";
+let shownProvince = "";
+let placesAsked = 0;
+let cities = [];
+const placeKey = (name) => name
+  .replace(/ä/gi, "ae").replace(/ö/gi, "oe").replace(/ü/gi, "ue").replace(/ß/g, "ss")
+  .normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function listPlaces(select, names, prompt) {
+  select.replaceChildren(
+    new Option(prompt, ""),
+    ...names.map((name) => new Option(name === "Other" ? "Autre" : name, name)),
+  );
+}
+function typeCity() {
+  cities = [];
+  cityField.type = "text";
+  cityField.removeAttribute("aria-label");
+  cityLabel.htmlFor = cityField.id;
+  cityLabel.textContent = "Ville";
+  communeHint.hidden = true;
+  cityPick.hidden = cityPick.disabled = true;
+  townBox.hidden = townPick.disabled = true;
+}
+function hideProvince() {
+  provinceBox.hidden = true;
+  province.disabled = true;
+  shownProvince = "";
+  typeCity();
+}
+// Follows the city picked: its towns to pick from, or a town to type.
+function showCityPicked() {
+  const towns = cities.find((city) => city.name === cityPick.value)?.towns || [];
+  const other = cityPick.value === "Other";
+  cityField.type = other ? "text" : "hidden";
+  if (other) cityField.setAttribute("aria-label", "Votre ville");
+  else cityField.removeAttribute("aria-label");
+  listPlaces(townPick, towns, "Choisir…");
+  townBox.hidden = townPick.disabled = !towns.length;
+}
+// Lists the cities, on the place already in the field when they have it: a
+// saved address, or what was typed while the lists were on their way.
+function listCities(answer, prompt) {
+  cities = answer;
+  const key = placeKey(cityField.value);
+  const city = key && (cities.find((city) => placeKey(city.name) === key)
+    || cities.find((city) => city.towns.some((town) => placeKey(town) === key)));
+  const other = !city && key && cities.some((city) => city.name === "Other");
+  listPlaces(cityPick, cities.map((city) => city.name), prompt);
+  cityPick.value = city ? city.name : other ? "Other" : "";
+  cityLabel.htmlFor = cityPick.id;
+  const districts = DISTRICT_LISTS.includes(country.value);
+  cityLabel.textContent = districts ? "Province / district" : "Ville";
+  communeHint.hidden = !districts;
+  cityPick.hidden = false;
+  cityPick.disabled = !cities.length;
+  showCityPicked();
+  townPick.value = (city && city.towns.find((town) => placeKey(town) === key)) || "";
+  if (!other && province.value) cityField.value = townPick.value || (city && !city.towns.length ? city.name : "");
+}
+async function showPlaces(postalChanged = false) {
+  const asked = ++placesAsked;
+  let places = { provinces: [], province: null, cities: [] };
+  try {
+    const query = new URLSearchParams({ country: country.value, postal_code: postalCode.value, province: provincePicked });
+    const answer = await fetch(`${form.dataset.placesPath}?${query}`);
+    if (answer.ok) places = await answer.json();
+  } catch {}
+  if (asked !== placesAsked) return;
+  // An overseas department the shop names goes under its own name, at its price.
+  if ([...country.options].some((option) => option.value === places.delivery_country)) {
+    country.value = places.delivery_country;
+    country.dispatchEvent(new Event("change"));
+    return;
+  }
+  if (!places.provinces.length) return hideProvince();
+  // A code naming a province takes over from the one picked or saved; one still
+  // being typed changes nothing.
+  if (places.province && provincePicked && places.province !== provincePicked) {
+    provincePicked = "";
+    return showPlaces(postalChanged);
+  }
+  const awaited = places.postal_code_awaited;
+  if (postalChanged && awaited && province.value) return;
+  // France's list holds its départements, not its régions.
+  const french = country.value === "FR";
+  provinceLabel.textContent = french ? "Département" : "Région / Province";
+  const current = provincePicked || places.province || "";
+  // What was picked in another province is no place in this one.
+  if (shownProvince && current !== shownProvince) cityField.value = "";
+  shownProvince = current;
+  listPlaces(province, places.provinces, "Choisir…");
+  province.value = places.provinces.includes(current) ? current : "";
+  // Hidden and still empty, it must not hold the form back.
+  province.disabled = awaited;
+  provinceBox.hidden = awaited || !!places.province;
+  if (awaited) listCities([], "Saisissez d'abord votre code postal");
+  else if (!province.value) listCities([], french ? "Choisir d'abord le département" : "Choisir d'abord la région");
+  else if (places.cities.length) listCities(places.cities, "Choisir…");
+  else typeCity();
+}
+province.addEventListener("change", () => {
+  provincePicked = province.value;
+  cityField.value = "";
+  showPlaces();
+});
+cityPick.addEventListener("change", () => {
+  showCityPicked();
+  const hasTowns = !townBox.hidden;
+  cityField.value = hasTowns || cityPick.value === "Other" ? "" : cityPick.value;
+  if (cityPick.value === "Other") cityField.focus();
+});
+townPick.addEventListener("change", () => { cityField.value = townPick.value; });
+country.addEventListener("change", () => {
+  provincePicked = "";
+  if (!cityPick.hidden) cityField.value = "";
+  hideProvince();
+  showPlaces();
+});
+let postalAsked = postalCode.value;
+let postalTyped;
+function postalChanged() {
+  clearTimeout(postalTyped);
+  if (postalCode.value === postalAsked) return;
+  postalAsked = postalCode.value;
+  showPlaces(true);
+}
+postalCode.addEventListener("input", () => {
+  clearTimeout(postalTyped);
+  postalTyped = setTimeout(postalChanged, 300);
+});
+postalCode.addEventListener("change", postalChanged);
+showPlaces();
+
+methods.forEach((method) => method.addEventListener("change", showShipping));
+vatNumber?.addEventListener("input", showVat);
+
+// The shop's shipping methods as Express Checkout offers them; none when
+// shipping is included.
+const rates = JSON.parse(form.dataset.shipping || "[]");
+const allRates = rates.map(({ id, displayName, amount }) => ({ id, displayName, amount }));
+const ratesTo = (code) => rates
+  .filter((rate) => !rate.countries.length || rate.countries.includes(code))
+  .map(({ id, displayName, amount }) => ({ id, displayName, amount }));
+
+// The billing fields count only while the box is ticked: a disabled
+// fieldset is neither checked nor sent.
+const billing = form.querySelector("[data-billing]");
+const billingDifferent = form.elements.billing_different;
+function showBilling() {
+  billing.hidden = !billingDifferent.checked;
+  billing.disabled = !billingDifferent.checked;
+}
+billingDifferent.addEventListener("change", showBilling);
+
+// The wallet's billing address, when it is not the delivery one.
+function walletBilling(billing, shipping) {
+  const at = billing.address, to = shipping.address || {};
+  if (!at?.line1) return null;
+  const same = (a, b) => (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();
+  return ["line1", "line2", "postal_code", "city", "country"]
+    .every((key) => same(at[key], to[key])) ? null : at;
+}
+
+function fail(message) {
+  error.textContent = message;
+  error.hidden = false;
+  button.disabled = false;
+}
+
+const key = form.dataset.publishableKey;
+let stripe = null;
+let elements = null;
+if (key && window.Stripe) {
+  stripe = Stripe(key);
+  elements = stripe.elements({
+    mode: "payment",
+    amount: Number(form.dataset.amount),
+    currency: form.dataset.currency,
+  });
+  // The details and the address are asked above: Stripe's form asks
+  // nothing again (no second country), and they are handed to it below.
+  // Link's "save my information" box would ask the e-mail, phone and name
+  // a third time: left out too.
+  elements
+    .create("payment", { fields: { billingDetails: "never" }, wallets: { link: "never" } })
+    .mount("#payment-element");
+  const express = elements.create("expressCheckout", { buttonHeight: 44 });
+  express.mount("#express-checkout");
+  express.on("ready", ({ availablePaymentMethods }) => {
+    if (availablePaymentMethods) document.querySelector("[data-express]").hidden = false;
+  });
+  express.on("click", (event) => event.resolve({
+    emailRequired: true,
+    phoneNumberRequired: true,
+    shippingAddressRequired: true,
+    // A whole address, else wallets hand only its country and postal code.
+    billingAddressRequired: true,
+    allowedShippingCountries: [...country.options].map((option) => option.value),
+    // Before the wallet's address is known: those that ship to the form's
+    // country, else all of them.
+    shippingRates: rates.length
+      ? (ratesTo(country.value).length ? ratesTo(country.value) : allRates)
+      : [{ id: "standard", displayName: "Livraison standard", amount: 0 }],
+  }));
+  // Only the methods that ship to the wallet's address, priced in.
+  express.on("shippingaddresschange", (event) => {
+    if (!rates.length) { event.resolve(); return; }
+    const here = ratesTo(event.address.country);
+    if (!here.length) { event.reject(); return; }
+    elements.update({ amount: goods + here[0].amount });
+    event.resolve({ shippingRates: here });
+  });
+  express.on("shippingratechange", (event) => {
+    if (rates.length) elements.update({ amount: goods + event.shippingRate.amount });
+    event.resolve();
+  });
+  express.on("confirm", async (event) => {
+    const billing = event.billingDetails || {};
+    const shipping = event.shippingAddress || {};
+    const address = shipping.address || {};
+    const fill = (name, value) => { if (value) form.elements[name].value = value; };
+    fill("email", billing.email);
+    fill("name", shipping.name || billing.name);
+    fillPhone(billing.phone);
+    fill("line1", address.line1);
+    fill("line2", address.line2);
+    fill("postal_code", address.postal_code);
+    fill("city", address.city);
+    fill("country", address.country);
+    // A wallet's address has no province picked from the list.
+    placesAsked++;
+    hideProvince();
+    // Billed elsewhere when the wallet says so; else at the delivery address.
+    const other = walletBilling(billing, shipping);
+    billingDifferent.checked = !!other;
+    showBilling();
+    if (other) {
+      fill("billing_name", billing.name || shipping.name);
+      for (const key of ["line1", "line2", "postal_code", "city", "country"]) {
+        form.elements[`billing_${key}`].value = other[key] || "";
+      }
+    }
+    const rate = methods.find((method) => method.value === event.shippingRate?.id);
+    if (rate) rate.checked = true;
+    showShipping();
+    if (!(await pay())) event.paymentFailed({ reason: "fail" });
+  });
+}
+
+// The phone's two fields: the calling code picked and the national number.
+// A wallet hands a whole number (+33612345678): split on the code it
+// starts with; one it does not know is kept as typed.
+const phoneBox = form.querySelector("[data-phone]");
+const phoneCode = form.elements.phone_code;
+const phoneNumber = form.elements.phone_number;
+function fillPhone(whole) {
+  if (!whole) return;
+  const digits = whole.replace(/[^\d+]/g, "");
+  const codes = [...phoneCode.options].map((option) => option.value).sort((a, b) => b.length - a.length);
+  const code = digits.startsWith("+") ? codes.find((c) => digits.startsWith("+" + c)) : null;
+  if (code) {
+    phoneCode.value = code;
+    phoneNumber.value = digits.slice(code.length + 1);
+    showPhoneCountry();
+  } else {
+    phoneNumber.value = whole;
+  }
+}
+// The phone as the server composes it: "+33 6 12 34 56 78", the trunk 0
+// dropped (Italy keeps it), a number typed international kept whole.
+function phoneText() {
+  let national = phoneNumber.value.trim();
+  if (!national) return "";
+  if (national.startsWith("+") || national.startsWith("00")) return national;
+  const code = phoneCode.value;
+  if (national.startsWith("0") && code !== "39") national = national.slice(1).trim();
+  return `+${code} ${national}`.trim();
+}
+
+// The select, kept for a page without script and as wide as the button
+// that takes its place (so nothing moves), becomes a button showing the flag and code, opening a searchable list
+// of every country: its flag, its name in the shopper's language (the
+// browser knows it from the code) and its code, the one picked ticked.
+const flagOf = (iso) => [...iso].map((c) => String.fromCodePoint(0x1f1e6 + c.charCodeAt(0) - 65)).join("");
+let regionName = (iso) => iso;
+try {
+  const names = new Intl.DisplayNames(["fr"], { type: "region" });
+  regionName = (iso) => names.of(iso) || iso;
+} catch {}
+const plain = (text) => text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const phoneCountries = [...phoneCode.options]
+  .map((option) => ({ option, iso: option.dataset.iso, dial: option.value, name: regionName(option.dataset.iso) }))
+  .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+const pickedCountry = () => phoneCode.selectedOptions[0]?.dataset.iso || "";
+const picker = document.createElement("div");
+picker.className = "phone-picker";
+picker.innerHTML = `
+  <button type="button" class="phone-country" aria-haspopup="dialog" aria-expanded="false" aria-label="Indicatif">
+    <span class="phone-flag"></span> <span class="phone-dial"></span>
+  </button>
+  <div class="phone-dialog" role="dialog" aria-modal="true" aria-label="Indicatif" hidden>
+    <input type="search" class="phone-search" placeholder="Rechercher" aria-label="Rechercher un pays" role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls="phone-country-list" autocomplete="off">
+    <p class="phone-none" hidden>Aucun pays trouvé</p>
+    <ul class="phone-list" id="phone-country-list" role="listbox" aria-label="Pays de l'indicatif"></ul>
+  </div>`;
+const phoneButton = picker.querySelector(".phone-country");
+const phoneDialog = picker.querySelector(".phone-dialog");
+const phoneSearch = picker.querySelector(".phone-search");
+const phoneNone = picker.querySelector(".phone-none");
+const phoneList = picker.querySelector(".phone-list");
+let shown = [];
+let highlighted = -1;
+function showPhoneCountry() {
+  const iso = pickedCountry();
+  phoneButton.querySelector(".phone-flag").textContent = flagOf(iso);
+  phoneButton.querySelector(".phone-dial").textContent = `+${phoneCode.value}`;
+  phoneButton.setAttribute("aria-label", `Indicatif : ${regionName(iso)} +${phoneCode.value}`);
+}
+function highlight(index) {
+  const items = [...phoneList.children];
+  items.forEach((item, i) => item.classList.toggle("highlight", i === index));
+  highlighted = index;
+  const item = items[index];
+  if (item) {
+    phoneSearch.setAttribute("aria-activedescendant", item.id);
+    item.scrollIntoView({ block: "nearest" });
+  } else {
+    phoneSearch.removeAttribute("aria-activedescendant");
+  }
+}
+function renderPhoneList(query) {
+  const q = plain(query.trim());
+  const digits = q.replace(/^\+/, "");
+  shown = phoneCountries.filter(({ iso, dial, name }) =>
+    !q || plain(name).includes(q) || iso.toLowerCase() === q || (digits && dial.startsWith(digits)));
+  const picked = pickedCountry();
+  phoneList.replaceChildren(...shown.map(({ iso, dial, name }) => {
+    const item = document.createElement("li");
+    item.id = `phone-country-${iso.toLowerCase()}`;
+    item.setAttribute("role", "option");
+    item.setAttribute("aria-selected", String(iso === picked));
+    item.dataset.iso = iso;
+    item.innerHTML = `<span class="phone-flag"></span><span class="phone-name"></span><span class="phone-dial"></span><span class="phone-check" aria-hidden="true">✓</span>`;
+    item.querySelector(".phone-flag").textContent = flagOf(iso);
+    item.querySelector(".phone-name").textContent = name;
+    item.querySelector(".phone-dial").textContent = `(+${dial})`;
+    return item;
+  }));
+  phoneNone.hidden = shown.length > 0;
+  highlight(shown.length ? Math.max(0, shown.findIndex(({ iso }) => iso === picked && !q)) : -1);
+}
+function openPhonePicker() {
+  phoneSearch.value = "";
+  renderPhoneList("");
+  phoneDialog.hidden = false;
+  phoneButton.setAttribute("aria-expanded", "true");
+  phoneSearch.focus();
+}
+function closePhonePicker(refocus) {
+  phoneDialog.hidden = true;
+  phoneButton.setAttribute("aria-expanded", "false");
+  if (refocus) phoneButton.focus();
+}
+function choosePhoneCountry(iso) {
+  const country = phoneCountries.find((c) => c.iso === iso);
+  if (!country) return;
+  country.option.selected = true;
+  showPhoneCountry();
+  closePhonePicker(false);
+  phoneNumber.focus();
+}
+phoneButton.addEventListener("click", () => (phoneDialog.hidden ? openPhonePicker() : closePhonePicker(true)));
+phoneSearch.addEventListener("input", () => renderPhoneList(phoneSearch.value));
+phoneSearch.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") { event.preventDefault(); highlight(Math.min(highlighted + 1, shown.length - 1)); }
+  else if (event.key === "ArrowUp") { event.preventDefault(); highlight(Math.max(highlighted - 1, 0)); }
+  else if (event.key === "Enter") { event.preventDefault(); if (shown[highlighted]) choosePhoneCountry(shown[highlighted].iso); }
+  else if (event.key === "Escape") { event.preventDefault(); closePhonePicker(true); }
+});
+phoneList.addEventListener("click", (event) => {
+  const item = event.target.closest("[data-iso]");
+  if (item) choosePhoneCountry(item.dataset.iso);
+});
+document.addEventListener("click", (event) => {
+  if (!phoneDialog.hidden && !picker.contains(event.target)) closePhonePicker(false);
+});
+phoneCode.hidden = true;
+phoneBox.prepend(picker);
+showPhoneCountry();
+
+// What Stripe's form was told not to ask, from the form's own fields: every
+// one of them, as "never" requires.
+// The address is the billing one when the shopper gave one.
+function billingDetails() {
+  const value = (name) => form.elements[name].value.trim();
+  const at = billingDifferent.checked ? "billing_" : "";
+  return {
+    name: value(`${at}name`),
+    email: value("email"),
+    phone: phoneText(),
+    address: {
+      line1: value(`${at}line1`),
+      line2: value(`${at}line2`),
+      city: value(`${at}city`),
+      postal_code: value(`${at}postal_code`),
+      state: "",
+      country: value(`${at}country`),
+    },
+  };
+}
+
+// Resolves false when the shopper stays on the page.
+async function pay() {
+  error.hidden = true;
+  button.disabled = true;
+  try {
+    if (elements) {
+      const { error: invalid } = await elements.submit();
+      if (invalid) { fail(invalid.message); return false; }
+    }
+    const response = await fetch(form.dataset.startPath, {
+      method: "POST",
+      body: new URLSearchParams(new FormData(form)),
+      headers: { accept: "application/json" },
+    });
+    const answer = await response.json();
+    if (answer.redirect) { location.assign(answer.redirect); return true; }
+    if (answer.error) { fail(answer.error); return false; }
+    // Payments were set up while the page was open: it loads them.
+    if (!stripe) { location.reload(); return true; }
+    const { error: refused } = await stripe.confirmPayment({
+      elements,
+      clientSecret: answer.client_secret,
+      confirmParams: {
+        return_url: new URL(form.dataset.returnPath, location.href).href,
+        payment_method_data: { billing_details: billingDetails() },
+      },
+    });
+    // Only reached when the payment could not be confirmed; otherwise the
+    // browser is on its way to the return page.
+    fail(refused.message);
+    return false;
+  } catch {
+    fail("Une erreur est survenue. Veuillez réessayer.");
+    return false;
+  }
+}
+
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  pay();
+});
+"##;
+
+#[topcoat::router::query_params(error = bad_request)]
+struct CheckoutQuery {
+    error: Option<String>,
+    /// A saved address of the signed-in shopper to ship to.
+    address: Option<String>,
+    /// A saved address of the signed-in shopper to bill to.
+    billing: Option<String>,
+}
+
+pub fn checkout_url(cx: &Cx, error: Option<&str>) -> String {
+    #[derive(serde::Serialize)]
+    struct Link<'a> {
+        error: Option<&'a str>,
+    }
+    href!(index).query(Link { error }).resolve(cx)
+}
+
+/// The checkout, shipping and billing to saved addresses.
+fn saved_url(cx: &Cx, address: Option<&str>, billing: Option<&str>) -> String {
+    #[derive(serde::Serialize)]
+    struct Link<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        address: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        billing: Option<&'a str>,
+    }
+    href!(index).query(Link { address, billing }).resolve(cx)
+}
+
+/// `dont 9,97€ VAT FR 20%`: the amount as the shop writes it.
+fn vat_text(estimate: &VatEstimate) -> String {
+    format!("dont {} {}", estimate.amount(), estimate.label())
+}
+
+/// The shop's shipping options, as Express Checkout's rates (with the
+/// countries each ships to): `[]` when shipping is included.
+pub(crate) fn express_rates(cart: &CartView) -> String {
+    let rates: Vec<_> = cart
+        .shipping_options
+        .iter()
+        .map(|option| {
+            serde_json::json!({
+                "id": option.id,
+                "displayName": option.name,
+                "amount": option.amount_cents,
+                "countries": option.countries,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(rates).to_string()
+}
+
+/// `Ada L.` as `AL`.
+fn initials(name: &str) -> String {
+    name.split_whitespace()
+        .filter_map(|word| word.chars().next())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase()
+}
+
+#[page]
+pub async fn index(cx: &Cx) -> Result<impl View> {
+    let query = query_params::<CheckoutQuery>(cx)?;
+    // Nothing to order (or something off sale to remove first): the cart.
+    let cart = current_cart(cx)
+        .await?
+        .filter(|cart| cart.can_check_out())
+        .ok_or_redirect(cart_url(cx, None))?;
+    let nav = menu(cx).await?;
+    let setup = payment_setup(cx).await?;
+    let reviews = recent_reviews(cx, REVIEWS_SHOWN).await?;
+    let business = accepts_business_buyers(cx).await?;
+    let mut draft = checkout_draft(cx);
+    if !business {
+        draft.vat_number.clear();
+    }
+    let accounts = accounts_enabled(cx);
+    let shopper = if accounts {
+        signed_in(cx).await.cloned()
+    } else {
+        None
+    };
+    // Signed in: the account's address, and the saved address chosen (or the
+    // latest one, when nothing was typed yet); the one chosen to bill to.
+    let mut shipping_to = None;
+    let mut billing_to = None;
+    if let Some(shopper) = &shopper {
+        draft.email = shopper.email.clone();
+        let pick = match query.address.as_deref() {
+            Some(id) => shopper.address(id),
+            None if draft.line1.trim().is_empty() => shopper.addresses.first(),
+            None => None,
+        };
+        if let Some(saved) = pick {
+            shipping_to = Some(saved.id.clone());
+            draft = draft.with_address(saved);
+        }
+        if let Some(saved) = query.billing.as_deref().and_then(|id| shopper.address(id)) {
+            billing_to = Some(saved.id.clone());
+            draft = draft.with_billing_address(saved);
+        }
+    }
+    let sign_in = sign_in_url(cx, Some(&href!(index).resolve(cx)), None);
+    let currency = cart.currency.clone().unwrap_or_default();
+    let country = if draft.country.is_empty() {
+        DEFAULT_COUNTRY.to_owned()
+    } else {
+        draft.country.to_ascii_uppercase()
+    };
+    // Only where the shop delivers: a saved address elsewhere starts on the
+    // first country that is.
+    let country = if cart.ships_to(&country) {
+        country
+    } else {
+        countries_for(&cart.shipping_options)
+            .find(|(code, _)| cart.ships_to(code))
+            .map_or(country, |(code, _)| code.to_owned())
+    };
+    let (phone_code, phone_number) = draft.phone_parts();
+    let phone_country =
+        countries::country_of_dial(&phone_code, &country).unwrap_or(DEFAULT_COUNTRY);
+    let billing_country = if draft.billing_country.is_empty() {
+        country.clone()
+    } else {
+        draft.billing_country.to_ascii_uppercase()
+    };
+    let bills_elsewhere = draft.bills_elsewhere();
+    // The shipping method: the one picked last when it ships here, else the
+    // first that does.
+    let shipping = cart
+        .shipping_options_to(&country)
+        .find(|option| option.id == draft.shipping_method)
+        .or_else(|| cart.shipping_options_to(&country).next())
+        .cloned();
+    let shipping_text = match &shipping {
+        Some(option) => option.price(),
+        None if cart.shipping_required => "—".to_owned(),
+        None => "Offerte".to_owned(),
+    };
+    // What the VAT line says for each country and shipping method (`""`
+    // for none), for the page's script to switch.
+    let billing_countries: Vec<(&str, &str)> = countries_for(&cart.shipping_options).collect();
+    let countries: Vec<(&str, &str, String)> = countries_for(&cart.shipping_options)
+        .filter(|(code, _)| cart.ships_to(code))
+        .map(|(code, name)| {
+            let mut texts = serde_json::Map::new();
+            for option in std::iter::once(None).chain(cart.shipping_options_to(code).map(Some)) {
+                if let Some(estimate) = cart.vat_estimate_with(code, option) {
+                    texts.insert(
+                        option.map(|option| option.id.clone()).unwrap_or_default(),
+                        vat_text(&estimate).into(),
+                    );
+                }
+            }
+            (code, name, serde_json::Value::Object(texts).to_string())
+        })
+        .collect();
+    let vat = cart
+        .vat_estimate_with(&country, shipping.as_ref())
+        .as_ref()
+        .map(vat_text)
+        .filter(|_| draft.vat_number.trim().is_empty() || country == "FR");
+    let total_cents = cart.total_with(shipping.as_ref());
+    let total = cart.total_with_label(shipping.as_ref()).unwrap_or_default();
+    // The total without shipping, for the script when no method ships to
+    // the country picked.
+    let goods_total = cart.total().unwrap_or_default();
+    let rates = express_rates(&cart);
+    // The offers the shopper may add, among the products this site sells.
+    let offers: Vec<OfferView> = cart
+        .offers
+        .iter()
+        .filter(|offer| offer.slug.is_some())
+        .cloned()
+        .collect();
+    let back_to_cart = href!(crate::app::cart::index).resolve(cx);
+    let publishable_key = setup
+        .as_ref()
+        .map(|setup| setup.publishable_key.clone())
+        .unwrap_or_default();
+
+    Ok(view! {
+        document(
+            title: "Commander",
+            nav: &nav,
+            no_drawer: true,
+            <div class="wrap">
+                <ol class="steps" aria-label="Étapes de la commande">
+                    <li class="done"><a href=(&back_to_cart)>"Panier"</a></li>
+                    <li aria-current="step">"Livraison & paiement"</li>
+                    <li>"Confirmation"</li>
+                </ol>
+                <h1 class="vh">"Commander"</h1>
+                if let Some(code) = query.error.as_deref() {
+                    <p class="notice" role="alert">(say(code))</p>
+                }
+                <div class="checkout-grid">
+                    <aside class="checkout-aside" aria-label="Récapitulatif de la commande">
+                        <section class="card summary" data-checkout-summary="">
+                            <h2>"Votre panier"</h2>
+                            <ul class="lines">
+                                for line in &cart.lines {
+                                    summary_line(line: line, currency: &currency, back: "checkout")
+                                }
+                            </ul>
+                            <details class="promo" open=(cart.discount_code.is_some())>
+                                <summary>"Vous avez un code promo ? Saisissez-le ici"</summary>
+                                <form class="discount" method="post" action=(href!(discount::discount))>
+                                    <input type="hidden" name="back" value="checkout">
+                                    if let Some(code) = &cart.discount_code {
+                                        <span>"Code " <code>(code)</code></span>
+                                        <button name="remove" value="1">"Retirer le code"</button>
+                                    } else {
+                                        <label>
+                                            <span class="vh">"Code promo"</span>
+                                            <input type="text" name="code" maxlength="32" autocomplete="off" placeholder="Code promo">
+                                        </label>
+                                        <button>"Appliquer"</button>
+                                    }
+                                </form>
+                                if let Some(refused) = cart.discount_refused {
+                                    <p class="notice" data-discount-refused=(refused)>(say(refused))</p>
+                                }
+                            </details>
+                            <dl class="totals">
+                                <dt>"Sous-total"</dt>
+                                <dd data-checkout-subtotal="">(cart.subtotal().unwrap_or_default())</dd>
+                                if let (Some(discount), Some(amount)) = (&cart.discount, cart.discount_amount()) {
+                                    <dt>"Code promo " <code>(&discount.code)</code></dt>
+                                    <dd data-checkout-discount=(&discount.code)>(amount)</dd>
+                                }
+                                <dt>"Livraison"</dt>
+                                <dd data-checkout-shipping="">(&shipping_text)</dd>
+                                <dt class="total">"Total"</dt>
+                                <dd class="total">
+                                    <strong class="price" data-checkout-total="">(&total)</strong>
+                                    <small data-checkout-vat="" hidden=(vat.is_none())>
+                                        if let Some(vat) = &vat { "(" (vat) ")" }
+                                    </small>
+                                </dd>
+                            </dl>
+                        </section>
+                        <section class="reassure">
+                            <h2>"Commandez en toute confiance"</h2>
+                            <ul>
+                                <li>"Livraison avec suivi"</li>
+                                <li>"14 jours satisfait ou remboursé"</li>
+                                <li>"Un service client à votre écoute"</li>
+                                <li>"Paiement sécurisé"</li>
+                            </ul>
+                        </section>
+                        if !reviews.is_empty() {
+                            <section class="reviews-aside" data-checkout-reviews="">
+                                <h2>"Ce que disent nos clients"</h2>
+                                for review in &reviews {
+                                    <figure class="review">
+                                        <figcaption>
+                                            <span class="avatar" aria-hidden="true">(initials(&review.author_name))</span>
+                                            <span>(&review.author_name)</span>
+                                        </figcaption>
+                                        <div class="rating" aria-label=(format!("{} sur 5", review.rating))>(review.stars())</div>
+                                        if let Some(title) = &review.title { <strong>(title)</strong> }
+                                        <blockquote>(&review.body)</blockquote>
+                                    </figure>
+                                }
+                            </section>
+                        }
+                    </aside>
+
+                    <div class="checkout-main">
+                        if let Some(shopper) = &shopper {
+                            <p class="returning" data-signed-in="">"Connecté en tant que " <strong>(&shopper.email)</strong></p>
+                        } else if accounts {
+                            <p class="returning" data-returning="">
+                                "Déjà client ? " <a href=(&sign_in)>"Cliquez ici pour vous connecter"</a>
+                            </p>
+                        }
+                        if setup.is_some() {
+                            <section class="express" data-express="" hidden="" aria-label="Paiement express">
+                                <h2>"Paiement express"</h2>
+                                <div id="express-checkout"></div>
+                                <p class="or"><span>"ou"</span></p>
+                            </section>
+                        }
+                        <form class="checkout" method="post" action=(href!(place)) data-checkout-form=""
+                            data-start-path=(href!(start::start)) data-return-path=(href!(complete::index))
+                            data-publishable-key=(&publishable_key) data-amount=(total_cents)
+                            data-goods=(cart.total_cents) data-goods-total=(&goods_total) data-shipping=(&rates)
+                            data-currency=(currency.to_lowercase())
+                            data-places-path=(href!(places::places)) data-region=(&draft.region)>
+                            <input type="hidden" name="expected_total_cents" value=(total_cents)>
+                            <section class="card">
+                                <h2>"Vos coordonnées"</h2>
+                                <label for="checkout-email">"E-mail"</label>
+                                <input id="checkout-email" name="email" type="email" required="" autocomplete="email" value=(&draft.email) readonly=(shopper.is_some())>
+                                <label for="checkout-name">"Nom complet"</label>
+                                <input id="checkout-name" name="name" required="" autocomplete="name" value=(&draft.name)>
+                                <label for="checkout-phone">"Téléphone"</label>
+                                <div class="phone" data-phone="">
+                                    <select id="checkout-phone-code" name="phone_code" aria-label="Indicatif" autocomplete="tel-country-code">
+                                        for (dial_country, dial) in countries::DIAL_CODES {
+                                            <option value=(dial) data-iso=(dial_country) selected=(*dial_country == phone_country)>(countries::flag(dial_country)) " +" (dial)</option>
+                                        }
+                                    </select>
+                                    <input id="checkout-phone" name="phone_number" type="tel" required="" autocomplete="tel-national" value=(&phone_number)>
+                                </div>
+                            </section>
+                            <section class="card">
+                                <h2>"Adresse de livraison"</h2>
+                                if let Some(shopper) = shopper.as_ref().filter(|shopper| !shopper.addresses.is_empty()) {
+                                    <ul class="saved" data-saved-addresses="">
+                                        for saved in &shopper.addresses {
+                                            <li data-saved-address=(&saved.address.city) data-current=(shipping_to.as_deref() == Some(saved.id.as_str()))
+                                                data-billing-current=(billing_to.as_deref() == Some(saved.id.as_str()))>
+                                                (&saved.address.name) ", " (&saved.address.line1) ", "
+                                                (&saved.address.postal_code) " " (&saved.address.city) " "
+                                                <a href=(saved_url(cx, Some(&saved.id), billing_to.as_deref()))>"Livrer ici"</a> " "
+                                                <a href=(saved_url(cx, shipping_to.as_deref(), Some(&saved.id))) data-bill-here="">"Facturer ici"</a>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                                <label for="checkout-line1">"Adresse"</label>
+                                <input id="checkout-line1" name="line1" required="" autocomplete="address-line1" aria-describedby="checkout-commune-hint" value=(&draft.line1)>
+                                <p class="hint" id="checkout-commune-hint" data-commune-hint="" hidden=(true)>"Indiquez votre commune avec la rue."</p>
+                                <details class="more" open=(!draft.line2.is_empty())>
+                                    <summary>"+ Ajouter une société, un appartement, un étage…"</summary>
+                                    <label for="checkout-line2">"Complément d'adresse (facultatif)"</label>
+                                    <input id="checkout-line2" name="line2" autocomplete="address-line2" value=(&draft.line2)>
+                                </details>
+                                <div class="row">
+                                    <span>
+                                        <label for="checkout-country">"Pays"</label>
+                                        <select id="checkout-country" name="country" required="" autocomplete="country">
+                                            for (code, name, text) in &countries {
+                                                <option value=(*code) selected=(*code == country) data-vat=(text)>(*name)</option>
+                                            }
+                                        </select>
+                                    </span>
+                                    <span>
+                                        <label for="checkout-postal-code">"Code postal"</label>
+                                        <input id="checkout-postal-code" name="postal_code" required="" autocomplete="postal-code" value=(&draft.postal_code)>
+                                    </span>
+                                </div>
+                                <div class="row">
+                                    <span data-province="" hidden=(true)>
+                                        <label for="checkout-region" data-province-label="">"Région / Province"</label>
+                                        <select id="checkout-region" name="region" required="" autocomplete="address-level1" disabled=(true)></select>
+                                    </span>
+                                    <span>
+                                        <label for="checkout-city" data-city-label="">"Ville"</label>
+                                        <select id="checkout-city-pick" data-city-pick="" required="" hidden=(true) disabled=(true)></select>
+                                        <input id="checkout-city" name="city" required="" autocomplete="address-level2" value=(&draft.city)>
+                                    </span>
+                                    <span data-town="" hidden=(true)>
+                                        <label for="checkout-town">"Commune"</label>
+                                        <select id="checkout-town" data-town-pick="" required="" disabled=(true)></select>
+                                    </span>
+                                </div>
+                                if !cart.shipping_options.is_empty() || cart.shipping_required {
+                                    <fieldset class="shipping-methods" data-shipping-methods="">
+                                        <legend>"Mode de livraison"</legend>
+                                        for option in &cart.shipping_options {
+                                            <label class="method" hidden=(!option.ships_to(&country))>
+                                                <input type="radio" name="shipping_method" value=(&option.id)
+                                                    data-amount=(option.amount_cents) data-price=(option.price())
+                                                    data-total=(cart.total_with_label(Some(option)).unwrap_or_default())
+                                                    data-countries=(option.countries.join(" "))
+                                                    checked=(shipping.as_ref().is_some_and(|picked| picked.id == option.id))
+                                                    disabled=(!option.ships_to(&country))>
+                                                <span class="name">(&option.name)</span>
+                                                <span class="price">(option.price())</span>
+                                            </label>
+                                        }
+                                        <p class="notice" data-no-shipping="" hidden=(shipping.is_some())>"Cette boutique ne livre pas dans ce pays."</p>
+                                    </fieldset>
+                                }
+                                if business {
+                                    <label for="checkout-vat">"Numéro de TVA intracommunautaire (facultatif, pour une facture hors TVA)"</label>
+                                    <input id="checkout-vat" name="vat_number" autocomplete="off" placeholder="DE123456789" value=(&draft.vat_number)>
+                                }
+                                <label class="check">
+                                    <input type="checkbox" name="billing_different" value="1" checked=(bills_elsewhere)>
+                                    " Utiliser une autre adresse de facturation (facultatif)"
+                                </label>
+                                <fieldset class="billing" data-billing="" hidden=(!bills_elsewhere) disabled=(!bills_elsewhere)>
+                                    <legend class="vh">"Adresse de facturation"</legend>
+                                    <label for="billing-name">"Nom ou société à facturer"</label>
+                                    <input id="billing-name" name="billing_name" required="" autocomplete="billing name" value=(&draft.billing_name)>
+                                    <label for="billing-line1">"Adresse (facturation)"</label>
+                                    <input id="billing-line1" name="billing_line1" required="" autocomplete="billing address-line1" value=(&draft.billing_line1)>
+                                    <label for="billing-line2">"Complément d'adresse de facturation (facultatif)"</label>
+                                    <input id="billing-line2" name="billing_line2" autocomplete="billing address-line2" value=(&draft.billing_line2)>
+                                    <div class="row">
+                                        <span>
+                                            <label for="billing-city">"Ville de facturation"</label>
+                                            <input id="billing-city" name="billing_city" required="" autocomplete="billing address-level2" value=(&draft.billing_city)>
+                                        </span>
+                                        <span>
+                                            <label for="billing-postal-code">"Code postal de facturation"</label>
+                                            <input id="billing-postal-code" name="billing_postal_code" required="" autocomplete="billing postal-code" value=(&draft.billing_postal_code)>
+                                        </span>
+                                        <span>
+                                            <label for="billing-country">"Pays de facturation"</label>
+                                            <select id="billing-country" name="billing_country" required="" autocomplete="billing country">
+                                                for (code, name) in &billing_countries {
+                                                    <option value=(*code) selected=(*code == billing_country)>(*name)</option>
+                                                }
+                                            </select>
+                                        </span>
+                                    </div>
+                                    if shopper.is_some() {
+                                        <label class="check">
+                                            <input type="checkbox" name="save_billing_address" value="1">
+                                            " Enregistrer cette adresse de facturation dans mon compte"
+                                        </label>
+                                    }
+                                </fieldset>
+                                <p class="hint" data-import-notice="">"Livraison hors UE ? Des droits de douane et taxes peuvent être dus à la réception."</p>
+                                if shopper.is_some() {
+                                    <label class="check">
+                                        <input type="checkbox" name="save_address" value="1" checked="">
+                                        " Enregistrer cette adresse dans mon compte"
+                                    </label>
+                                }
+                                <label for="checkout-note">"Remarque pour la boutique (facultatif)"</label>
+                                <textarea id="checkout-note" name="note" rows="2">(&draft.note)</textarea>
+                                <label class="check">
+                                    <input type="checkbox" name="newsletter" value="1" data-checkout-newsletter="">
+                                    " Je souhaite recevoir les nouveautés et offres de la boutique par e-mail (un lien de confirmation vous est envoyé)"
+                                </label>
+                            </section>
+                            if !offers.is_empty() {
+                                <section class="card offers" aria-labelledby="checkout-offers-title" data-checkout-offers="">
+                                    <h2 id="checkout-offers-title">"Offre exclusive"</h2>
+                                    <ul>
+                                        for offer in &offers {
+                                            <li data-checkout-offer=(&offer.name)>
+                                                if let Some(url) = &offer.image_url {
+                                                    <img src=(url) alt="" width="56" height="56" loading="lazy">
+                                                } else {
+                                                    <span></span>
+                                                }
+                                                <span class="what">
+                                                    <strong>(offer.heading())</strong>
+                                                    if offer.title.is_some() { <small>(&offer.name)</small> }
+                                                    if let Some(label) = &offer.variant_label { <small class="variant">(label)</small> }
+                                                    <span>
+                                                        <s aria-label=(format!("au lieu de {}", offer.price()))>(offer.price())</s> " "
+                                                        <strong class="price" data-offer-price="">(offer.offer_price())</strong> " "
+                                                        <span class="off">"−" (offer.percent_off()) "%"</span>
+                                                    </span>
+                                                </span>
+                                                // The offer's own form sits after this one: forms do not nest.
+                                                <button type="submit" form=(format!("offer-{}", offer.offer_id))
+                                                    aria-label=(format!("Ajouter {} à {}", offer.name, offer.offer_price()))>"Ajouter"</button>
+                                            </li>
+                                        }
+                                    </ul>
+                                </section>
+                            }
+                            <section class="card">
+                                <h2>"Paiement"</h2>
+                                <p class="hint">"Toutes les transactions sont sécurisées et chiffrées. Les données de votre carte ne sont jamais stockées sur nos serveurs."</p>
+                                if setup.is_some() {
+                                    <div id="payment-element"></div>
+                                } else {
+                                    <p class="hint" data-payments-off="">"Le paiement par carte n'est pas encore disponible dans cette boutique."</p>
+                                }
+                                <p class="notice" role="alert" data-payment-error="" hidden=""></p>
+                                <button class="primary place">"Payer ma commande · " <span data-place-total="">(&total)</span></button>
+                            </section>
+                        </form>
+                        for offer in &offers {
+                            <form id=(format!("offer-{}", offer.offer_id)) method="post" action=(href!(crate::app::cart::add::add))>
+                                <input type="hidden" name="slug" value=(offer.slug.as_deref().unwrap_or_default())>
+                                <input type="hidden" name="variant_id" value=(offer.variant_id.as_deref().unwrap_or_default())>
+                                <input type="hidden" name="quantity" value="1">
+                                <input type="hidden" name="offer" value=(&offer.offer_id)>
+                                <input type="hidden" name="back" value="checkout">
+                            </form>
+                        }
+                    </div>
+                </div>
+                if setup.is_some() {
+                    <script src="https://js.stripe.com/v3/"></script>
+                }
+                <script>(Unescaped::new_unchecked(CHECKOUT_SCRIPT))</script>
+            </div>
+        )
+    })
+}
+
+#[derive(serde::Deserialize)]
+pub struct CheckoutForm {
+    // A string: `flatten` hands every field to serde as text.
+    expected_total_cents: String,
+    /// Signed in: keep the address on the account.
+    #[serde(default)]
+    save_address: String,
+    /// Signed in: keep the billing address on the account too.
+    #[serde(default)]
+    save_billing_address: String,
+    /// Ticked: the shopper asks for the shop's news (confirmed from a mail).
+    #[serde(default)]
+    newsletter: String,
+    #[serde(flatten)]
+    draft: CheckoutDraft,
+}
+
+/// How a request to pay ended.
+pub(crate) enum Asked {
+    /// A payment is open; the browser confirms it with this secret.
+    Open(String),
+    /// Refused, with the reason; the cart is where some are fixed.
+    Refused {
+        code: Option<&'static str>,
+        to_cart: bool,
+    },
+}
+
+impl Asked {
+    /// The page a refusal sends the shopper back to.
+    pub(crate) fn back(&self, cx: &Cx) -> String {
+        match self {
+            Asked::Refused {
+                code,
+                to_cart: true,
+            } => cart_url(cx, *code),
+            Asked::Refused { code, .. } => checkout_url(cx, *code),
+            Asked::Open(_) => checkout_url(cx, None),
+        }
+    }
+}
+
+/// Asks to pay for the cart. The details are kept first, so a refused form
+/// comes back filled in; the payment opened for it is remembered for the
+/// return page.
+pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
+    let Some(cart_id) = cart_id(cx) else {
+        return Ok(Asked::Refused {
+            code: None,
+            to_cart: true,
+        });
+    };
+    let mut draft = form.draft;
+    // A signed-in shopper orders under their account's address, whatever
+    // the form said.
+    let token = shopper_token(cx).filter(|_| accounts_enabled(cx));
+    if token.is_some()
+        && let Some(shopper) = signed_in(cx).await
+    {
+        draft.email = shopper.email.clone();
+    }
+    save_checkout_draft(cx, draft.clone())?;
+    let business = accepts_business_buyers(cx).await?;
+    let checkout = Checkout {
+        email: draft.email.clone(),
+        shipping: draft.shipping(),
+        note: Some(draft.note.clone()),
+        // Unreadable means not shown: treat it as a price that moved.
+        expected_total_cents: Some(form.expected_total_cents.trim().parse().unwrap_or(u64::MAX)),
+        // A number kept from before the shop stopped selling to businesses
+        // is not sent: the field is not shown any more.
+        vat_number: business.then(|| draft.vat_number.clone()),
+        billing: draft.billing(),
+        shipping_method: Some(draft.shipping_method.clone()),
+        // The shop mails about the order in the shopper's language.
+        language: request_language(cx),
+        // A scheduled newsletter keeps the shopper's hours.
+        time_zone: request_time_zone(cx),
+        newsletter: !form.newsletter.is_empty(),
+    };
+    let err = match start_payment(cx, &cart_id, checkout).await? {
+        Ok(session) => {
+            // The addresses checked out: kept on the account for the next
+            // order. A refusal (ten kept already) does not stop the payment.
+            // The billing one first: the latest saved is the next delivery.
+            if let Some(token) = &token {
+                if let Some(billing) = draft
+                    .billing()
+                    .filter(|_| !form.save_billing_address.is_empty())
+                {
+                    let _ = save_address(cx, token, &billing).await?;
+                }
+                if !form.save_address.is_empty() {
+                    let _ = save_address(cx, token, &draft.shipping()).await?;
+                }
+            }
+            set_payment_in_progress(
+                cx,
+                PaymentInProgress {
+                    cart_id,
+                    request_id: session.request_id,
+                },
+            )?;
+            return Ok(Asked::Open(session.client_secret));
+        }
+        Err(err) => err,
+    };
+    let code = err.code();
+    let to_cart = matches!(err, OrderError::EmptyCart | OrderError::Unavailable { .. })
+        // The cart is where the code is changed or taken off.
+        || code.is_some_and(|code| code.starts_with("discount_"));
+    Ok(Asked::Refused { code, to_cart })
+}
+
+/// The form sent without the page's script: Stripe's form needs it, so a
+/// payment cannot be confirmed this way; a refusal is still worded.
+#[route(POST)]
+pub async fn place(cx: &Cx, Form(form): Form<CheckoutForm>) -> Result<SeeOther> {
+    let asked = ask(cx, form).await?;
+    Ok(see_other(asked.back(cx)))
+}

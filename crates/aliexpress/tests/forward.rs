@@ -6,7 +6,7 @@ use timada_aliexpress::{
     LogisticsAddress, PLACE_COUNTRIES, PlaceItem, PlaceOrder, Placement, PlannedItem,
     choose_service, decode_places, delivery_country, describe_options, encode_places,
     forward_items, freight_from_response, french_department, logistics_address,
-    placed_orders_from_response, places_of, province_of, split_phone,
+    placed_orders_from_response, places_of, postal_code_awaited, province_of, split_phone,
 };
 use timada_orders::{OrderLine, ShippingAddress};
 
@@ -900,4 +900,22 @@ async fn an_order_is_placed_once_and_read_until_it_ships() {
     assert!(done.all_shipped());
     assert_eq!(done.tracking(), vec!["LP1", "LP2"]);
     assert_eq!(done.fulfilled_tracking.as_deref(), Some("LP1, LP2"));
+}
+
+#[test]
+fn a_form_waits_for_a_postal_code_only_where_it_names_the_province() {
+    for (country, short, whole) in [
+        ("FR", "7500", "75002"),
+        ("ES", "2800", "28001"),
+        ("IT", "9502", "95021"),
+        ("BE", "600", "6000"),
+        ("CA", "", "H"),
+    ] {
+        assert!(postal_code_awaited(country, short), "{country} {short}");
+        assert!(!postal_code_awaited(country, whole), "{country} {whole}");
+    }
+    assert!(!postal_code_awaited("DE", ""));
+    assert!(!postal_code_awaited("US", "1"));
+    // Too long names nothing either, but is no longer awaited.
+    assert!(!postal_code_awaited("FR", "750021"));
 }

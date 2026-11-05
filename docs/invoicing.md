@@ -245,7 +245,7 @@ ten years the law asks.
   - `timada_storefront::documents(cx, order_id)` lists an order's documents.
   - `document_pdf(cx, order_id, document_id)` draws one. It only answers for a
     document of that order.
-  - The example app links them from the order confirmation page, for the browser
+  - The storefront links them from the order confirmation page, for the browser
     that placed the order.
 
 ## Not yet

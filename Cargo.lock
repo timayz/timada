@@ -956,21 +956,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chatounette-example"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "timada-storefront",
- "tokio",
- "topcoat",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "chinese-number"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6827,6 +6812,23 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "storefront"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "rust_iso3166",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "timada-storefront",
+ "tokio",
+ "topcoat",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "strict-num"

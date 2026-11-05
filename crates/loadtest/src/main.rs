@@ -80,7 +80,7 @@ struct Common {
     #[arg(
         long,
         env = "LOAD_TARGET",
-        default_value = "https://chatounette.localhost"
+        default_value = "https://storefront.localhost"
     )]
     target: String,
     /// The dashboard, where Stripe's webhooks go.

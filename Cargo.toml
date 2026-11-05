@@ -2,7 +2,7 @@
 members = [
 	"crates/*",
 	"dashboard",
-	"examples/*"
+	"storefront"
 ]
 resolver = "2"
 
