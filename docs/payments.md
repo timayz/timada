@@ -12,7 +12,7 @@ Stripe has confirmed the payment to the dashboard. How it works is in
    hands back what the card form needs. It refuses instead when the price moved since
    the shopper saw it, an item is off sale or Stripe is not set up.
 3. The shopper's browser confirms the payment in Stripe's Payment Element
-   (`/checkout` in the example app).
+   (`/checkout` in the storefront).
 4. Stripe calls `POST /stripe/webhooks/{tenant_id}`. The dashboard checks the signature,
    reads the payment back from Stripe and creates the order.
 5. The browser, back on `/checkout/complete`, waits for the order and shows it.
@@ -115,9 +115,9 @@ CLI and an internet connection.
 
 4. **Give the shop a key that can sell.** Tick `store:checkout` on its key on the
    API keys page, or mint a new one. If the key changes, remove the replica first:
-   `rm chatounette.db*`, then `make chatounette.migrate`.
+   `rm storefront.db*`, then `make storefront.migrate`.
 
-5. **Buy something.** Run the shop (`make chatounette` with `STORE_TOKEN` and
+5. **Buy something.** Run the shop (`make storefront` with `STORE_TOKEN` and
    `STORE_MEDIA_URL`), add a product, check out and pay with a test card. Use any
    future expiry date and any CVC.
 

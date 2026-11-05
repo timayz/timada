@@ -93,7 +93,7 @@ not know every name the address form lists (`Gard` answered
 
 ## The checkout's province list
 
-In a shop connected to AliExpress, the Chatounette checkout asks as AliExpress's own
+In a shop connected to AliExpress, the storefront's checkout asks as AliExpress's own
 form does when the country has a list: the province, its city, then that city's town
 if it has any (`GET /store/places`, then `timada_storefront::places`). The postal code
 picks the province until the shopper does, the pick is `ShippingAddress::region`, and

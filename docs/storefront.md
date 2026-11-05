@@ -140,7 +140,7 @@ is in none of this; the products that were in it stay on sale.
 ## The shop's own pages
 
 The host decides which pages it has (legal notice, terms of sale, privacy, about us)
-and where: each is a route of its own (Chatounette serves `/mentions-legales`,
+and where: each is a route of its own (the storefront serves `/mentions-legales`,
 `/politique-de-livraison`, …) and its footer links to them. Their text is the
 merchant's, written under `/t/{slug}/pages` (`timada-pages`) and read by slug: a
 published page is copied into `storefront_pages`, and leaves it when unpublished or
@@ -231,7 +231,7 @@ let config = StoreConfig::new(addr, token)
 The views carry the format (`cart.total()`, `option.price()`, `estimate.amount()`),
 so a page never formats a total itself; `money(cx)` hands it to a page that formats
 cents of its own, and `Product::price_with(money(cx))` writes a product's price with
-it. The Chatounette example passes its `12,50€` formatter this way.
+it. The storefront passes its `12,50€` formatter this way.
 
 ## Cart and checkout
 
@@ -330,10 +330,10 @@ into the tenant's store whenever the merchant changes the Stripe settings.
   that unit as a line of its own, so the invoice bills what it cost. A discount code
   comes off the total with the offer. An offer that ends, or whose conditions stop
   holding, prices nothing any more: a payment for the total shown before is refused
-  with `price_changed`. The example shows them as "Exclusive offer" cards above the
+  with `price_changed`. The storefront shows them as "Exclusive offer" cards above the
   checkout's payment, whose Add buttons post to `/cart/add` with `back=checkout`.
 - Who a shopper is, and which orders a browser may look at, is the host's call: the
-  library hands out any order by id. The example keeps the cart id, the payment in
+  library hands out any order by id. The storefront keeps the cart id, the payment in
   progress, the browser's orders and its last address in private cookies.
 
 ### The province and the city's lists
@@ -372,7 +372,7 @@ product.review_count;
 ```
 
 - The library knows nothing of who is who: offer the form only on an order the
-  shopper holds (the example checks its own cookie, as for the order page). The order
+  shopper holds (the storefront checks its own cookie, as for the order page). The order
   must be paid and not cancelled and hold the product; one review per product and
   order. It is signed with the first name and initial the order was shipped to.
 - A review goes to the dashboard (`POST /store/reviews` at the dashboard address)
@@ -482,8 +482,8 @@ client's one-click unsubscribe (`List-Unsubscribe-Post`, a POST to the same
 address), hands the token back with `stop_automated_mails(cx, token)`
 (`POST /store/automations/opt-out`, a key allowing `store:checkout`): `true` once
 the address stops getting them, `false` for a link that does not check out. The
-token carries no address and needs nothing stored. The Chatounette example has
-the page (`examples/chatounette/src/app/emails/opt_out/token`).
+token carries no address and needs nothing stored. The storefront has
+the page (`storefront/src/app/emails/opt_out/token`).
 
 ## `GET /store/status`
 
@@ -515,7 +515,7 @@ it). The categories and products go in through the catalog's commands, their pic
 are copied from the snapshot into the node's media directory (a picture the snapshot
 lacks is fetched from the shop; `--skip-images` leaves them all out, `--limit N` loads
 only the first N products), the shop gets a delivery method (France, Belgium,
-Switzerland, free from 65 €) and the promo code `MONSTER10` (10 %) so a storefront can
+Switzerland, free from 65 €) and the promo code `BIENVENUE10` (10 %) so a storefront can
 sell at once, and a key holding `store:read` and `store:checkout` is minted. The command
 ends with the storefront's settings on stdout:
 
@@ -533,11 +533,11 @@ page named after its slug, opening with a header:
 title: Politique de livraison
 meta_description: Pays desservis, délais et frais de livraison.
 ---
-Nous livrons en France, en Belgique et en Suisse…
+Indiquez ici les pays que vous desservez…
 ```
 
-(`meta_title` is the other optional key.) `examples/chatounette/pages` holds the text of
-the Chatounette's six pages, which `make seed.chatounette` passes.
+(`meta_title` is the other optional key.) `storefront/pages` holds placeholder text for
+the storefront's six pages, which `make seed.chatounette` passes.
 
 A second run skips what is already there (by slug), so a run that stopped halfway can
 be started again. The command ends by bringing the back office's catalogue and pages
@@ -547,44 +547,75 @@ and leaves it to the server, which catches up when it next starts.
 `LIMIT=200 make seed.chatounette` loads only the first 200 products; `seeds/README.md`
 says where each snapshot comes from and how to take it.
 
-## The example
+## The storefront
 
-`examples/chatounette` is a complete app on the library, in French and in the layout
-and colours of chatounette.com: a top bar with the promo code, a masthead with the
-search, the category bar, a home with the newest products, the category tiles, the
-latest reviews and the four promises, listings with the shop's sort labels and, on a
-category's first page, its longer text below the products, a product page with its
-gallery, option menus, reassurance block, folding description and facts and its
-reviews, the shop's own pages on routes of their own, a cart with its drawer, a
+`storefront/` is a complete shop on the library, to start your own from: it has every
+page a shop needs in French, and no brand and no colours. A top bar with the promo
+code, a masthead with the search, the category bar, a home with the newest products,
+the category tiles, the latest reviews and the four promises, listings with sort labels
+and, on a category's first page, its longer text below the products, a product page
+with its gallery, option menus, reassurance block, folding description and facts and
+its reviews, the shop's own pages on routes of their own, a cart with its drawer, a
 one-page checkout (steps, details, address and Stripe's Payment and Express Checkout
 elements beside an editable cart with its VAT, reassurance and recent reviews), an
 order confirmation where the shopper reviews what they bought, and shopper accounts
 (sign-in from the checkout's "Déjà client ?" or the header, `/account` with the
-orders and saved addresses, the checkout prefilled from them). It is meant to run
-against a tenant filled by `make seed.chatounette` (see "Seeding a catalogue"), which
-prints the three settings:
+orders and saved addresses, the checkout prefilled from them).
+
+To run it, fill a tenant with `make seed.chatounette` (`LIMIT=200` for a quick one, see
+"Seeding a catalogue"), which prints the three settings:
 
 ```sh
 STORE_TOKEN=tk_… STORE_MEDIA_URL=https://timada.localhost/media/<tenant id> \
-    STORE_API_URL=https://timada.localhost make chatounette
-open https://chatounette.localhost/
+    STORE_API_URL=https://timada.localhost make storefront
+open https://storefront.localhost/
 ```
 
 All three values are on the tenant's API keys page; to sell, tick `store:checkout` on
-the key. It listens on 3457 (`PORT`) and keeps its copy of the catalog in
-`chatounette.db` (`STORE_DB`; a `-wal` and a `-log` file live next to it). `STORE_ADDR`,
-`HOST`, `STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` (the host of
-`STORE_ADDR` by default) are the other knobs, `TRUSTED_PROXIES` (comma-separated
-addresses or CIDR networks) names the reverse proxies whose `X-Forwarded-For` gives
-the shopper's address, and `STORE_COOKIE_KEY` (at least 32 bytes) encrypts the
-shopper cookies; unset, a random key is made at startup and the cookies do not survive
-a restart. `RUST_LOG` sets what is logged; by default `info`, with the search index and
-the store engine kept to warnings.
+the key.
+
+### Making it your own
+
+- **Who you are:** `SHOP_NAME`, `TAGLINE`, `CONTACT_EMAIL` and `PROMO_CODE` at the top of
+  `storefront/src/app/mod.rs`. The promo code must exist in your back office; the top
+  bar, the home and the product pages advertise it at 10 % off.
+- **Your look:** add it to `storefront/src/app/theme.css`, which holds the layout only
+  and is inlined in every page, with the sheets of the cart drawer, the menu and the
+  search beside the code they style (`DRAWER_CSS`, `MENU_CSS`, `SEARCH_CSS`). The pages
+  show in the browser's own colours; the layers that cover others use the system colours
+  (`Canvas`), and a state never rests on a colour alone. Stripe's elements take their
+  colours from `appearance` where the pages create them (`checkout/mod.rs`,
+  `cart/drawer.rs`).
+- **What you say:** the home's sections in `storefront/src/app/mod.rs`, the questions in
+  `support_client/mod.rs`, the promises in `reassurance`, and the refusals in `say`. Your
+  legal pages are written in the back office; `storefront/pages` holds placeholders to
+  seed them with.
+- **Your language:** the text and the addresses (`/boutique`, `/support-client`, …) are
+  French and in the code, like the `12,50€` of `money`.
+
+### Settings
+
+`storefront --help` and `storefront serve --help` list them; each is a flag or the
+environment variable named here. Without a subcommand it serves.
+
+It listens on 3457 (`PORT`) and keeps its copy of the catalog in `storefront.db`
+(`STORE_DB`; a `-wal` and a `-log` file live next to it). `STORE_ADDR`, `HOST`,
+`STORE_TLS_CA` and `STORE_TLS_SERVER_NAME` (the host of `STORE_ADDR` by default) are the
+other knobs, `TRUSTED_PROXIES` (comma-separated addresses or CIDR networks) names the
+reverse proxies whose `X-Forwarded-For` gives the shopper's address, and
+`STORE_COOKIE_KEY` (at least 32 bytes) encrypts the shopper cookies; unset, a random key
+is made at startup and the cookies do not survive a restart. `RUST_LOG` sets what is
+logged; by default `info`, with the search index and the store engine kept to warnings.
+`storefront migrate` prepares the local database and exits, without reaching the store.
+
+Ctrl+C or `SIGTERM` stops it, even while it is still reaching the store. It stops taking
+connections, gives the requests under way `SHUTDOWN_TIMEOUT` seconds (10 by default) to
+finish, then gives the catalog subscription 5 seconds to stop, and exits with code 0.
 
 The browser suite boots it with a key minted in the dashboard on a small catalogue
-made there: `tests/e2e/chatounette.spec.ts` walks the home, a category, a product, the
-cart, the search and a shop page; `chatounette-shop.spec.ts` checks the catalogue
-follows live, then fills a cart, checks out, pays, and uses stock, discount codes,
-delivery methods and checkout offers; `chatounette-accounts.spec.ts` reviews what it
-bought, is invoiced at the VAT of where the goods go, and signs a returning shopper in
+made there: `tests/e2e/storefront.spec.ts` walks the home, a category, a product, the
+cart, the search and a shop page, and stops the process; `storefront-shop.spec.ts` checks
+the catalogue follows live, then fills a cart, checks out, pays, and uses stock, discount
+codes, delivery methods and checkout offers; `storefront-accounts.spec.ts` reviews what
+it bought, is invoiced at the VAT of where the goods go, and signs a returning shopper in
 on a second browser.
