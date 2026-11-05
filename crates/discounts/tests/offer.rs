@@ -196,3 +196,77 @@ async fn what_is_refused_at_creation() {
         Err(DiscountError::TooManyOffers)
     ));
 }
+
+#[tokio::test]
+async fn an_offer_prices_a_variant_on_sale() {
+    let cmd = command().await;
+    let catalog = timada_catalog::Command::new(cmd.executor().clone(), TENANT);
+    let shirt = catalog
+        .create_product(
+            ALICE,
+            CreateProduct {
+                name: "Shirt".to_owned(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    let from = catalog
+        .define_option(
+            ALICE,
+            &shirt,
+            "Ships From",
+            vec!["China".into(), "France".into()],
+        )
+        .await
+        .unwrap();
+    let mut variants = Vec::new();
+    for value in ["China", "France"] {
+        let variant = catalog
+            .define_variant(
+                ALICE,
+                &shirt,
+                DefineVariant {
+                    selections: vec![OptionSelection {
+                        option_id: from.clone(),
+                        value: value.into(),
+                    }],
+                    sku: None,
+                    amount_cents: 2500,
+                    currency: "EUR".into(),
+                    image_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        variants.push(variant);
+    }
+    catalog
+        .hide_option(ALICE, &shirt, &from, "France")
+        .await
+        .unwrap();
+
+    let off_sale = cmd
+        .create_offer(
+            ALICE,
+            CreateOffer {
+                variant_id: Some(variants[0].clone()),
+                ..offer(&shirt, 2000)
+            },
+        )
+        .await;
+    assert!(
+        matches!(off_sale, Err(DiscountError::OfferVariant)),
+        "{off_sale:?}"
+    );
+    cmd.create_offer(
+        ALICE,
+        CreateOffer {
+            variant_id: Some(variants[1].clone()),
+            ..offer(&shirt, 2000)
+        },
+    )
+    .await
+    .unwrap();
+}

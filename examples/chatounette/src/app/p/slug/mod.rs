@@ -62,10 +62,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let varies = product.price_range().is_some_and(|range| range.varies());
     let sold_out = !product.in_stock;
-    // A product without variants says how many are left once few are.
+    // A product with nothing to pick says how many are left once few are:
+    // of itself, or of the one variant on sale when every option is hidden.
     let few_left = product
-        .left(None)
-        .filter(|left| product.variants.is_empty() && (1..=5).contains(left));
+        .left(product.variants.first().map(|variant| variant.id.as_str()))
+        .filter(|left| product.options.is_empty() && (1..=5).contains(left));
     let currency = product.currency.clone().unwrap_or_else(|| "EUR".to_owned());
     // The first paragraph introduces the product beside its price; the
     // rest, when there is more, folds under "Description".

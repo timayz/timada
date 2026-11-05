@@ -105,7 +105,7 @@ async fn catalog_items(
         else {
             continue;
         };
-        for variant in &product.variants {
+        for variant in product.sold_variants() {
             let values: Vec<&str> = variant
                 .selections
                 .iter()

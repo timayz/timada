@@ -41,10 +41,10 @@ use crate::aggregator::category::{
 use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
     Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Created, Deleted, Described,
-    ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionLabelled,
-    OptionRemoved, OptionRenamed, OptionValueLabelled, OptionValuesChanged, Priced, Published,
-    Released, Renamed, TaxCategorySet, Uncategorized, Unpublished, VariantDefined, VariantImaged,
-    VariantPriced, VariantRemoved, VariantSkuChanged,
+    ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionHidden,
+    OptionLabelled, OptionRemoved, OptionRenamed, OptionShown, OptionValueLabelled,
+    OptionValuesChanged, Priced, Published, Released, Renamed, TaxCategorySet, Uncategorized,
+    Unpublished, VariantDefined, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
@@ -174,9 +174,16 @@ pub struct ProductOption {
     /// What a shopper reads instead of a value, for the values the merchant
     /// labelled.
     pub value_labels: BTreeMap<String, String>,
+    /// The one value on sale, when the merchant hid the option from shoppers.
+    pub fixed_value: Option<String>,
 }
 
 impl ProductOption {
+    /// Whether shoppers do not get to choose it.
+    pub fn is_hidden(&self) -> bool {
+        self.fixed_value.is_some()
+    }
+
     /// What a shopper reads for the option: its label, else its name.
     pub fn display_name(&self) -> &str {
         self.label.as_deref().unwrap_or(&self.name)
@@ -259,7 +266,8 @@ pub struct ProductState {
     pub images: Vec<ProductImage>,
     /// The ways it varies, in the order a page shows the menus.
     pub options: Vec<ProductOption>,
-    /// The combinations it sells, each with its own price.
+    /// Its combinations, each with its own price; a hidden option leaves some
+    /// off sale ([`sold_variants`](Self::sold_variants)).
     pub variants: Vec<ProductVariant>,
     /// The facts in its table, in the order they were set.
     pub attributes: Vec<ProductAttribute>,
@@ -304,9 +312,13 @@ impl ProductState {
     }
 
     /// Whether a shopper could be charged for it: a plain price, or at least
-    /// one variant to pick.
+    /// one variant on sale to pick.
     pub fn is_priced(&self) -> bool {
-        self.price.is_some() || !self.variants.is_empty()
+        if self.variants.is_empty() {
+            self.price.is_some()
+        } else {
+            self.sold_variants().next().is_some()
+        }
     }
 
     /// What a listing shows: the cheapest and dearest a shopper may pay. The
@@ -317,11 +329,11 @@ impl ProductState {
             return Some((price.amount_cents, price.amount_cents, &price.currency));
         }
         let currency = self.currency()?;
-        let amounts = self.variants.iter().map(|v| v.price.amount_cents);
-        Some((amounts.clone().min()?, amounts.max()?, currency))
+        let amounts = || self.sold_variants().map(|v| v.price.amount_cents);
+        Some((amounts().min()?, amounts().max()?, currency))
     }
 
-    /// The variant those selections name, if it is one the product sells.
+    /// The variant those selections name, if the product has it.
     pub fn variant_for(&self, selections: &[OptionSelection]) -> Option<&ProductVariant> {
         self.variants.iter().find(|v| v.matches(selections))
     }
@@ -331,25 +343,96 @@ impl ProductState {
         self.options.iter().find(|o| o.id == option_id)
     }
 
-    /// One of the combinations it sells, by id.
+    /// The ways it varies that shoppers choose, in the order a page shows the
+    /// menus.
+    pub fn shown_options(&self) -> impl Iterator<Item = &ProductOption> {
+        self.options.iter().filter(|option| !option.is_hidden())
+    }
+
+    /// One of its combinations, on sale or not, by id.
     pub fn variant(&self, variant_id: &str) -> Option<&ProductVariant> {
         self.variants.iter().find(|v| v.id == variant_id)
     }
 
-    /// What a shopper reads for a variant: the values it takes, each as its
-    /// option shows it (`Sable / Large`).
-    pub fn variant_label(&self, variant: &ProductVariant) -> String {
-        variant
-            .selections
+    /// Whether a shopper can buy a variant: it takes the value of every option
+    /// the merchant hid.
+    pub fn sells(&self, variant: &ProductVariant) -> bool {
+        self.takes_fixed_values(variant, None)
+    }
+
+    /// The combinations a shopper can buy.
+    pub fn sold_variants(&self) -> impl Iterator<Item = &ProductVariant> {
+        self.variants.iter().filter(|variant| self.sells(variant))
+    }
+
+    /// One of the combinations a shopper can buy, by id.
+    pub fn sold_variant(&self, variant_id: &str) -> Option<&ProductVariant> {
+        self.variant(variant_id)
+            .filter(|variant| self.sells(variant))
+    }
+
+    /// The values a shopper picks from for an option: those a combination on
+    /// sale takes, or all it declares while the product has no combination.
+    pub fn values_on_sale<'a>(
+        &'a self,
+        option: &'a ProductOption,
+    ) -> impl Iterator<Item = &'a String> {
+        option.values.iter().filter(move |value| {
+            self.variants.is_empty()
+                || self
+                    .sold_variants()
+                    .any(|variant| variant.value_of(&option.id) == Some(value.as_str()))
+        })
+    }
+
+    /// Whether hiding an option at `value` leaves something on sale, given
+    /// the other options hidden.
+    pub fn can_hide_at(&self, option_id: &str, value: &str) -> bool {
+        self.variants.iter().any(|variant| {
+            variant.value_of(option_id) == Some(value)
+                && self.takes_fixed_values(variant, Some(option_id))
+        })
+    }
+
+    /// Whether a variant takes the value of every hidden option but `except`.
+    fn takes_fixed_values(&self, variant: &ProductVariant, except: Option<&str>) -> bool {
+        self.options
             .iter()
+            .filter(|option| except != Some(option.id.as_str()))
+            .all(|option| {
+                option
+                    .fixed_value
+                    .as_deref()
+                    .is_none_or(|fixed| variant.value_of(&option.id) == Some(fixed))
+            })
+    }
+
+    /// The values of a variant that shoppers see: those of the options they
+    /// choose.
+    pub fn shown_selections<'a>(
+        &'a self,
+        variant: &'a ProductVariant,
+    ) -> impl Iterator<Item = &'a OptionSelection> {
+        variant.selections.iter().filter(|selection| {
+            self.option(&selection.option_id)
+                .is_none_or(|option| !option.is_hidden())
+        })
+    }
+
+    /// What a shopper reads for a variant: the values they chose, each as its
+    /// option shows it (`Sable / Large`). `None` when every option is hidden:
+    /// the shopper chose nothing.
+    pub fn variant_label(&self, variant: &ProductVariant) -> Option<String> {
+        let values: Vec<&str> = self
+            .shown_selections(variant)
             .map(|selection| {
                 self.option(&selection.option_id)
                     .map_or(selection.value.as_str(), |option| {
                         option.display_value(&selection.value)
                     })
             })
-            .collect::<Vec<_>>()
-            .join(" / ")
+            .collect();
+        (!values.is_empty()).then(|| values.join(" / "))
     }
 }
 
@@ -375,6 +458,8 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_option_removed())
         .handler(on_option_labelled())
         .handler(on_option_value_labelled())
+        .handler(on_option_hidden())
+        .handler(on_option_shown())
         .handler(on_variant_defined())
         .handler(on_variant_priced())
         .handler(on_variant_sku_changed())
@@ -599,6 +684,7 @@ async fn on_option_defined(
         values: event.data.values.to_owned(),
         label: None,
         value_labels: BTreeMap::new(),
+        fixed_value: None,
     });
     product.updated_at = event.timestamp;
     Ok(())
@@ -688,6 +774,38 @@ async fn on_option_value_labelled(
                 option.value_labels.remove(&event.data.value);
             }
         }
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_option_hidden(
+    event: Event<OptionHidden>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(option) = product
+        .options
+        .iter_mut()
+        .find(|option| option.id == event.data.option_id)
+    {
+        option.fixed_value = Some(event.data.value.to_owned());
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_option_shown(
+    event: Event<OptionShown>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(option) = product
+        .options
+        .iter_mut()
+        .find(|option| option.id == event.data.option_id)
+    {
+        option.fixed_value = None;
     }
     product.updated_at = event.timestamp;
     Ok(())

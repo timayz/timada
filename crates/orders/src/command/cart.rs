@@ -296,7 +296,7 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// The product of an item, when a shopper can buy it as asked: published,
-    /// priced, and the variant named exactly when it sells variants.
+    /// priced, and a variant on sale named exactly when it sells variants.
     pub(crate) async fn require_sellable(
         &self,
         item: &CartItem,
@@ -317,7 +317,7 @@ impl<E: Executor> super::Command<E> {
             (Some(_), true) => return Err(OrderError::VariantNotFound),
             (Some(variant_id), false) => {
                 product
-                    .variant(variant_id)
+                    .sold_variant(variant_id)
                     .ok_or(OrderError::VariantNotFound)?;
             }
         }

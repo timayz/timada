@@ -22,7 +22,7 @@ export const APP_KEY = "34567";
 export const APP_SECRET = "ae-e2e-s3cret";
 export const PRODUCT_ID = "1005006123456789";
 
-type Sku = { id: string; colour: string; price: string; stock: number };
+type Sku = { id: string; colour: string; price: string; stock: number; shipsFrom?: string };
 type Freight = { service_name: string; cents: number; tracking: boolean };
 /// An order placed: what was asked for, and its parcel once shipped.
 export type PlacedOrder = {
@@ -82,7 +82,8 @@ export class FakeAliexpress {
 
   /// How an order names a combination.
   skuAttr(sku: Sku): string {
-    return `14:${this.skus.indexOf(sku) + 1}#${sku.colour}`;
+    const attr = `14:${this.skus.indexOf(sku) + 1}#${sku.colour}`;
+    return sku.shipsFrom ? `${attr};200007763:${this.skus.indexOf(sku) + 1}#${sku.shipsFrom}` : attr;
   }
 
   /// The seller sends the parcel of an order.
@@ -277,6 +278,7 @@ export class FakeAliexpress {
                     sku_property_value: sku.colour,
                     sku_image: `${ALIEXPRESS_URL}/img/${sku.colour.toLowerCase()}.png`,
                   },
+                  ...(sku.shipsFrom ? [{ sku_property_name: "Ships From", sku_property_value: sku.shipsFrom }] : []),
                 ],
               },
             })),
