@@ -622,9 +622,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 section_card(
                     title: Some("Overview"),
                     facts(
-                        fact(term: "Slug", <code>(&product.slug)</code>)
-                        fact(term: "Price", attrs: attributes! { data-product-price="" data-product-price-range=(&price_label) }, (&price_label))
-                        fact(term: "VAT", attrs: attributes! { data-product-vat="" }, (&tax_label))
+                        // Whoever can edit reads these in the forms below.
+                        if !editable {
+                            fact(term: "Slug", <code>(&product.slug)</code>)
+                            fact(term: "Price", attrs: attributes! { data-product-price="" data-product-price-range=(&price_label) }, (&price_label))
+                            fact(term: "VAT", attrs: attributes! { data-product-vat="" }, (&tax_label))
+                        }
                         if let Some(stock) = &own_stock {
                             fact(
                                 term: "Stock",
@@ -640,11 +643,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 " · " <a class=(LINK) href=(crate::app::t::slug::reviews::product_reviews_url(cx, &slug, &product.id))>"See its reviews"</a>
                             }
                         )
-                        fact(
-                            term: "Description",
-                            attrs: attributes! { data-product-description="" class="whitespace-pre-line" },
-                            (if product.description.is_empty() { "—" } else { product.description.as_str() })
-                        )
+                        if !editable {
+                            fact(
+                                term: "Description",
+                                attrs: attributes! { data-product-description="" class="whitespace-pre-line" },
+                                (if product.description.is_empty() { "—" } else { product.description.as_str() })
+                            )
+                        }
                         fact(term: "Created", (&created_by) ", " <time datetime=(product.created_at)>(format_time(product.created_at))</time>)
                         fact(term: "Changed", <time datetime=(product.updated_at)>(format_time(product.updated_at))</time>)
                     )
@@ -658,6 +663,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 input(attrs: attributes! {
                                     id="product-name" name="name" type="text" maxlength=(MAX_NAME_LEN) required="" value=(&product.name)
                                 })
+                                <p class="text-xs text-muted-foreground">"Slug: " <code>(&product.slug)</code></p>
                             )
                             <div>
                                 button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Rename")

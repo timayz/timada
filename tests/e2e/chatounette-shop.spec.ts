@@ -364,11 +364,11 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await expect(page).toHaveURL(/error=invalid_siret/);
     // VAT-registered, so a product says what kind of goods it is.
     await page.goto(plateUrl);
-    await expect(page.locator("[data-product-vat]")).toHaveText("Standard");
+    await expect(page.getByLabel("Kind of goods, for VAT")).toHaveValue("standard");
     await page.getByLabel("Kind of goods, for VAT").selectOption("food");
     await page.getByRole("button", { name: "Set kind" }).click();
     await expect(page.getByRole("status")).toContainText("Kind of goods set.");
-    await expect(page.locator("[data-product-vat]")).toHaveText("Food");
+    await expect(page.getByLabel("Kind of goods, for VAT")).toHaveValue("food");
 
     // The merchant connects a Stripe account; a key Stripe refuses is not saved.
     await page.goto(`/t/${slug}`);

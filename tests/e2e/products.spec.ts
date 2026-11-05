@@ -31,7 +31,7 @@ test("an owner creates, edits, publishes, archives and deletes a product", async
   await expect(page.getByRole("status")).toContainText("Product created.");
   await expect(page).toHaveURL(new RegExp(`/t/${slug}/products/[0-9A-Z]{26}\\?`));
   await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "draft");
-  await expect(page.locator("[data-product-price]")).toContainText("Not priced yet");
+  await expect(page.getByLabel("Price")).toHaveValue("");
   const productUrl = page.url().split("?")[0];
 
   // Publishing needs a price; a bad amount is refused.
@@ -46,10 +46,10 @@ test("an owner creates, edits, publishes, archives and deletes a product", async
   await page.getByLabel("Currency").selectOption("EUR");
   await page.getByRole("button", { name: "Set price" }).click();
   await expect(page.getByRole("status")).toContainText("Price set.");
-  await expect(page.locator("[data-product-price]")).toContainText("12.50 €");
+  await expect(page.getByLabel("Price")).toHaveValue("12.50");
   await page.getByLabel("Description").fill("Holds 50 cl of anything hot.");
   await page.getByRole("button", { name: "Save description" }).click();
-  await expect(page.locator("[data-product-description]")).toContainText("Holds 50 cl");
+  await expect(page.getByLabel("Description")).toHaveValue("Holds 50 cl of anything hot.");
   await page.getByLabel("Name", { exact: true }).fill("Big Blue Mug");
   await page.getByRole("button", { name: "Rename" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Big Blue Mug");
@@ -77,6 +77,10 @@ test("an owner creates, edits, publishes, archives and deletes a product", async
   await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "archived");
   await expect(page.getByRole("button", { name: "Rename" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Archive" })).toHaveCount(0);
+  // With no forms left to read them in, the overview says what it holds.
+  await expect(page.locator("[data-product-price]")).toContainText("12.50 €");
+  await expect(page.locator("[data-product-description]")).toContainText("Holds 50 cl");
+  await expect(page.getByText("big-blue-mug", { exact: true })).toBeVisible();
 
   // The list shows the published products unless asked for another status.
   await expect(async () => {
@@ -259,10 +263,6 @@ test("an owner makes a product vary by colour and size, each combination priced"
   await expect(page).toHaveURL(/error=variant_exists/);
   await addVariant("Blue", "M", "19.90", "HARNESS-BEIGE-S");
   await expect(page).toHaveURL(/error=sku_taken/);
-
-  // The price a listing shows is what a shopper may pay.
-  await page.goto(productUrl);
-  await expect(page.locator("[data-product-price]")).toContainText("22.90–24.90 €");
 
   // The options are settled now: no way to add one, and no way to edit one.
   await productTab(page, "Options & variants");
