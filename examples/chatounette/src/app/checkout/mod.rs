@@ -11,6 +11,7 @@
 
 pub mod complete;
 pub mod countries;
+pub mod places;
 pub mod start;
 
 use timada_storefront::{
@@ -101,6 +102,123 @@ function showShipping() {
   showVat();
 }
 country.addEventListener("change", showShipping);
+
+// In a shop that forwards to AliExpress, the country's provinces, then the
+// cities of the one picked, then the towns of that city, from AliExpress's own
+// lists, as its own form asks; elsewhere, and without this script, the lists
+// stay hidden, send nothing, and the city is typed. The postal code picks the
+// province until the shopper does. Whatever is picked lands in the city's field,
+// which is typed in only for a province without a list or for "Other", the
+// list's own word for a town it does not have.
+const provinceBox = form.querySelector("[data-province]");
+const province = form.elements.region;
+const cityLabel = form.querySelector("[data-city-label]");
+const cityField = form.elements.city;
+const cityPick = form.querySelector("[data-city-pick]");
+const townBox = form.querySelector("[data-town]");
+const townPick = form.querySelector("[data-town-pick]");
+const communeHint = form.querySelector("[data-commune-hint]");
+// Where the list below the province holds districts rather than towns, and
+// AliExpress's own form leaves the town to the street's line.
+const DISTRICT_LISTS = ["AT", "BE", "CH", "CZ", "EE", "LT"];
+const postalCode = form.elements.postal_code;
+let provincePicked = form.dataset.region || "";
+let placesAsked = 0;
+let cities = [];
+const placeKey = (name) => name
+  .replace(/ä/gi, "ae").replace(/ö/gi, "oe").replace(/ü/gi, "ue").replace(/ß/g, "ss")
+  .normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function listPlaces(select, names, prompt) {
+  select.replaceChildren(
+    new Option(prompt, ""),
+    ...names.map((name) => new Option(name === "Other" ? "Autre" : name, name)),
+  );
+}
+function typeCity() {
+  cities = [];
+  cityField.type = "text";
+  cityField.removeAttribute("aria-label");
+  cityLabel.htmlFor = cityField.id;
+  cityLabel.textContent = "Ville";
+  communeHint.hidden = true;
+  cityPick.hidden = cityPick.disabled = true;
+  townBox.hidden = townPick.disabled = true;
+}
+function hideProvince() {
+  provinceBox.hidden = true;
+  province.disabled = true;
+  typeCity();
+}
+// Follows the city picked: its towns to pick from, or a town to type.
+function showCityPicked() {
+  const towns = cities.find((city) => city.name === cityPick.value)?.towns || [];
+  const other = cityPick.value === "Other";
+  cityField.type = other ? "text" : "hidden";
+  if (other) cityField.setAttribute("aria-label", "Votre ville");
+  else cityField.removeAttribute("aria-label");
+  listPlaces(townPick, towns, "Choisir…");
+  townBox.hidden = townPick.disabled = !towns.length;
+}
+// Lists the cities, on the place already in the field when they have it: a
+// saved address, or what was typed while the lists were on their way.
+function listCities(answer, prompt) {
+  cities = answer;
+  const key = placeKey(cityField.value);
+  const city = key && (cities.find((city) => placeKey(city.name) === key)
+    || cities.find((city) => city.towns.some((town) => placeKey(town) === key)));
+  const other = !city && key && cities.some((city) => city.name === "Other");
+  listPlaces(cityPick, cities.map((city) => city.name), prompt);
+  cityPick.value = city ? city.name : other ? "Other" : "";
+  cityLabel.htmlFor = cityPick.id;
+  const districts = DISTRICT_LISTS.includes(country.value);
+  cityLabel.textContent = districts ? "Province / district" : "Ville";
+  communeHint.hidden = !districts;
+  cityPick.hidden = false;
+  cityPick.disabled = !cities.length;
+  showCityPicked();
+  townPick.value = city?.towns.find((town) => placeKey(town) === key) || "";
+  if (!other && province.value) cityField.value = townPick.value || (city && !city.towns.length ? city.name : "");
+}
+async function showPlaces() {
+  const asked = ++placesAsked;
+  let places = { provinces: [], province: null, cities: [] };
+  try {
+    const query = new URLSearchParams({ country: country.value, postal_code: postalCode.value, province: provincePicked });
+    const answer = await fetch(`${form.dataset.placesPath}?${query}`);
+    if (answer.ok) places = await answer.json();
+  } catch {}
+  if (asked !== placesAsked) return;
+  if (!places.provinces.length) return hideProvince();
+  const current = provincePicked || places.province || "";
+  listPlaces(province, places.provinces, "Choisir…");
+  province.value = places.provinces.includes(current) ? current : "";
+  province.disabled = false;
+  provinceBox.hidden = false;
+  if (!province.value) listCities([], "Choisir d'abord la région");
+  else if (places.cities.length) listCities(places.cities, "Choisir…");
+  else typeCity();
+}
+province.addEventListener("change", () => {
+  provincePicked = province.value;
+  cityField.value = "";
+  showPlaces();
+});
+cityPick.addEventListener("change", () => {
+  showCityPicked();
+  const hasTowns = !townBox.hidden;
+  cityField.value = hasTowns || cityPick.value === "Other" ? "" : cityPick.value;
+  if (cityPick.value === "Other") cityField.focus();
+});
+townPick.addEventListener("change", () => { cityField.value = townPick.value; });
+country.addEventListener("change", () => {
+  provincePicked = "";
+  if (!cityPick.hidden) cityField.value = "";
+  hideProvince();
+  showPlaces();
+});
+postalCode.addEventListener("change", showPlaces);
+showPlaces();
+
 methods.forEach((method) => method.addEventListener("change", showShipping));
 vatNumber?.addEventListener("input", showVat);
 
@@ -198,6 +316,9 @@ if (key && window.Stripe) {
     fill("postal_code", address.postal_code);
     fill("city", address.city);
     fill("country", address.country);
+    // A wallet's address has no province picked from the list.
+    placesAsked++;
+    hideProvince();
     // Billed elsewhere when the wallet says so; else at the delivery address.
     const other = walletBilling(billing, shipping);
     billingDifferent.checked = !!other;
@@ -531,6 +652,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         draft.country.to_ascii_uppercase()
     };
+    // Only where the shop delivers: a saved address elsewhere starts on the
+    // first country that is.
+    let country = if cart.ships_to(&country) {
+        country
+    } else {
+        COUNTRIES
+            .iter()
+            .find(|(code, _)| cart.ships_to(code))
+            .map_or(country, |(code, _)| (*code).to_owned())
+    };
     let (phone_code, phone_number) = draft.phone_parts();
     let phone_country =
         countries::country_of_dial(&phone_code, &country).unwrap_or(DEFAULT_COUNTRY);
@@ -556,6 +687,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // for none), for the page's script to switch.
     let countries: Vec<(&str, &str, String)> = COUNTRIES
         .iter()
+        .filter(|(code, _)| cart.ships_to(code))
         .map(|(code, name)| {
             let mut texts = serde_json::Map::new();
             for option in std::iter::once(None).chain(cart.shipping_options_to(code).map(Some)) {
@@ -700,7 +832,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         data-start-path=(href!(start::start)) data-return-path=(href!(complete::index))
                         data-publishable-key=(&publishable_key) data-amount=(total_cents)
                         data-goods=(cart.total_cents) data-goods-total=(&goods_total) data-shipping=(&rates)
-                        data-currency=(currency.to_lowercase())>
+                        data-currency=(currency.to_lowercase())
+                        data-places-path=(href!(places::places)) data-region=(&draft.region)>
                         <input type="hidden" name="expected_total_cents" value=(total_cents)>
                         <section class="card">
                             <h2>"Vos coordonnées"</h2>
@@ -734,7 +867,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 </ul>
                             }
                             <label for="checkout-line1">"Adresse"</label>
-                            <input id="checkout-line1" name="line1" required="" autocomplete="address-line1" value=(&draft.line1)>
+                            <input id="checkout-line1" name="line1" required="" autocomplete="address-line1" aria-describedby="checkout-commune-hint" value=(&draft.line1)>
+                            <p class="hint" id="checkout-commune-hint" data-commune-hint="" hidden=(true)>"Indiquez votre commune avec la rue."</p>
                             <details class="more" open=(!draft.line2.is_empty())>
                                 <summary>"+ Ajouter une société, un appartement, un étage…"</summary>
                                 <label for="checkout-line2">"Complément d'adresse (facultatif)"</label>
@@ -742,20 +876,31 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             </details>
                             <div class="row">
                                 <span>
-                                    <label for="checkout-city">"Ville"</label>
-                                    <input id="checkout-city" name="city" required="" autocomplete="address-level2" value=(&draft.city)>
-                                </span>
-                                <span>
-                                    <label for="checkout-postal-code">"Code postal"</label>
-                                    <input id="checkout-postal-code" name="postal_code" required="" autocomplete="postal-code" value=(&draft.postal_code)>
-                                </span>
-                                <span>
                                     <label for="checkout-country">"Pays"</label>
                                     <select id="checkout-country" name="country" required="" autocomplete="country">
                                         for (code, name, text) in &countries {
                                             <option value=(*code) selected=(*code == country) data-vat=(text)>(*name)</option>
                                         }
                                     </select>
+                                </span>
+                                <span>
+                                    <label for="checkout-postal-code">"Code postal"</label>
+                                    <input id="checkout-postal-code" name="postal_code" required="" autocomplete="postal-code" value=(&draft.postal_code)>
+                                </span>
+                            </div>
+                            <div class="row">
+                                <span data-province="" hidden=(true)>
+                                    <label for="checkout-region">"Région / Province"</label>
+                                    <select id="checkout-region" name="region" required="" autocomplete="address-level1" disabled=(true)></select>
+                                </span>
+                                <span>
+                                    <label for="checkout-city" data-city-label="">"Ville"</label>
+                                    <select id="checkout-city-pick" data-city-pick="" required="" hidden=(true) disabled=(true)></select>
+                                    <input id="checkout-city" name="city" required="" autocomplete="address-level2" value=(&draft.city)>
+                                </span>
+                                <span data-town="" hidden=(true)>
+                                    <label for="checkout-town">"Commune"</label>
+                                    <select id="checkout-town" data-town-pick="" required="" disabled=(true)></select>
                                 </span>
                             </div>
                             if !cart.shipping_options.is_empty() || cart.shipping_required {

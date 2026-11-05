@@ -293,6 +293,12 @@ impl CartView {
             .filter(move |option| option.ships_to(country))
     }
 
+    /// Whether the shop delivers these goods to `country` (ISO 3166-1
+    /// alpha-2), so a form may offer it: everywhere while shipping is included.
+    pub fn ships_to(&self, country: &str) -> bool {
+        !self.shipping_required || self.shipping_options_to(country).next().is_some()
+    }
+
     /// The shipping option of that id, if the shop has it.
     pub fn shipping_option(&self, id: &str) -> Option<&ShippingOption> {
         self.shipping_options.iter().find(|option| option.id == id)

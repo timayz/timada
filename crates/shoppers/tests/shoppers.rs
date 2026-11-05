@@ -73,6 +73,7 @@ fn address(city: &str) -> ShippingAddress {
         line2: Some(" ".to_owned()),
         postal_code: "75002".to_owned(),
         city: city.to_owned(),
+        region: None,
         country: "fr".to_owned(),
         phone: None,
     }

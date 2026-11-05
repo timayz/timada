@@ -10,6 +10,7 @@ pub mod carts;
 pub mod contact;
 pub mod newsletter;
 pub mod orders;
+pub mod places;
 pub mod reviews;
 pub mod shoppers;
 

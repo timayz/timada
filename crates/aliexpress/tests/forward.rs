@@ -257,6 +257,7 @@ fn an_address_and_its_phone_read_as_aliexpress_wants() {
         line2: Some("Bât. B".into()),
         postal_code: "75002".into(),
         city: "Paris".into(),
+        region: None,
         country: "FR".into(),
         phone: Some("06 12 34 56 78".into()),
     };
@@ -379,6 +380,7 @@ fn a_martinique_address_goes_as_martinique_with_its_city_and_calling_code() {
         line2: None,
         postal_code: "97200".into(),
         city: "Fort-de-France".into(),
+        region: None,
         country: "FR".into(),
         phone: Some("+596 696 12 34 56".into()),
     };
@@ -534,6 +536,79 @@ fn a_town_names_the_province_a_postal_code_could_not() {
         (address.city.as_str(), address.address2.as_str()),
         ("Other", "Nirgendwo")
     );
+}
+
+#[test]
+fn the_shoppers_pick_settles_what_a_town_cannot() {
+    let germany = places(json!([
+        { "name": "Baden-Wuerttemberg", "children": [
+            { "name": "Freiburg im Breisgau", "children": [town("Freiburg")] },
+            { "name": "Other" }
+        ] },
+        { "name": "Niedersachsen", "children": [
+            { "name": "Stade", "children": [town("Freiburg"), town("Drochtersen")] },
+            { "name": "Other" }
+        ] },
+        { "name": "Other" }
+    ]));
+    let shipping = |region: Option<&str>, country: &str, postal_code: &str| ShippingAddress {
+        name: "Ada".into(),
+        line1: "1 Hauptstrasse".into(),
+        line2: None,
+        postal_code: postal_code.into(),
+        city: "Freiburg".into(),
+        region: region.map(str::to_owned),
+        country: country.into(),
+        phone: None,
+    };
+    // Without it Freiburg is in two Länder; with it, one.
+    let mut address = logistics_address(&shipping(None, "DE", "79098"), None, None);
+    germany.apply(&mut address);
+    assert_eq!(address.province, "Other");
+    let mut address =
+        logistics_address(&shipping(Some("Niedersachsen"), "DE", "21706"), None, None);
+    germany.apply(&mut address);
+    assert_eq!(
+        (address.province.as_str(), address.city.as_str()),
+        ("Niedersachsen", "Stade")
+    );
+    assert_eq!(address.address2, "Freiburg");
+    // It wins over the postal code, but means nothing for an overseas
+    // department, which goes as a country of its own.
+    assert_eq!(
+        logistics_address(&shipping(Some("Aude"), "FR", "59000"), None, None).province,
+        "Aude"
+    );
+    let overseas = logistics_address(&shipping(Some("Aude"), "FR", "97200"), None, None);
+    assert_eq!(
+        (overseas.country.as_str(), overseas.province.as_str()),
+        ("MQ", "Freiburg")
+    );
+}
+
+#[test]
+fn a_form_lists_the_provinces_then_each_ones_cities_and_their_towns() {
+    let germany = places(json!([
+        { "name": "Bayern", "children": [
+            { "name": "Other" },
+            { "name": "Muenchen", "children": [town("Muenchen"), town("Aschheim")] },
+            { "name": "Dachau", "children": [town("Karlsfeld")] },
+            { "name": "Augsburg" }
+        ] },
+        { "name": "Other" }
+    ]));
+    assert_eq!(germany.provinces(), ["Bayern", "Other"]);
+    assert_eq!(
+        germany.cities_in("Bayern"),
+        [
+            ("Augsburg", vec![]),
+            ("Dachau", vec!["Dachau", "Karlsfeld"]),
+            ("Muenchen", vec!["Aschheim", "Muenchen"]),
+            ("Other", vec![]),
+        ]
+    );
+    assert!(germany.cities_in("Other").is_empty());
+    assert!(germany.cities_in("Nirgendwo").is_empty());
 }
 
 #[test]

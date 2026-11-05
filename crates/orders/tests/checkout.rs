@@ -381,6 +381,8 @@ async fn an_order_is_billed_where_the_shopper_says() {
             Checkout {
                 billing: Some(ShippingAddress {
                     city: " ".into(),
+
+                    region: None,
                     ..billing()
                 }),
                 ..checkout()
@@ -406,6 +408,7 @@ async fn an_order_is_billed_where_the_shopper_says() {
         line2: None,
         postal_code: "10117".into(),
         city: "Berlin".into(),
+        region: None,
         country: "DE".into(),
         // Nobody rings a billing address.
         phone: None,

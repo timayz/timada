@@ -336,6 +336,20 @@ into the tenant's store whenever the merchant changes the Stripe settings.
   library hands out any order by id. The example keeps the cart id, the payment in
   progress, the browser's orders and its last address in private cookies.
 
+### The province and the city's lists
+
+A shop connected to AliExpress has its forwarded addresses checked against
+AliExpress's own lists, so a form can offer them: `timada_storefront::places(cx,
+country, postal_code, province)` answers the country's `provinces`, the `province`
+the postal code names, and the `cities` of the province asked for, else of that one,
+each with its `towns`. Put the last place picked in the address's city, and let the
+shopper type it for a province without cities or for the city `Other`. All are empty
+when the form should ask for nothing: another shop, a
+country without a list, or lists that could not be read. The first read of a country
+can take a while, so ask from the browser rather than while drawing the page. Put
+the pick in `ShippingAddress::region`. See
+[aliexpress-provinces.md](aliexpress-provinces.md).
+
 ## Reviews
 
 A buyer reviews a product from the page of an order they placed: 1 to 5 stars, an

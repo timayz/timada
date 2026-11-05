@@ -50,6 +50,11 @@ pub struct ShippingAddress {
     pub line2: Option<String>,
     pub postal_code: String,
     pub city: String,
+    /// The province or region the shopper picked from the shop's list, when
+    /// it shows one (a shop forwarding to AliExpress); it may read otherwise
+    /// than the city's own spelling, and goes on no document.
+    #[serde(default)]
+    pub region: Option<String>,
     /// ISO 3166-1 alpha-2, uppercase (`FR`).
     pub country: String,
     pub phone: Option<String>,
@@ -248,6 +253,7 @@ pub fn normalize_shipping(address: ShippingAddress) -> Result<ShippingAddress, O
             OrderError::InvalidAddress
         })?,
         city: text(&address.city, MAX_CITY_LEN, || OrderError::InvalidAddress)?,
+        region: optional(address.region, MAX_CITY_LEN, || OrderError::InvalidAddress)?,
         country,
         phone: optional(address.phone, MAX_PHONE_LEN, || OrderError::InvalidPhone)?,
     })
@@ -407,6 +413,7 @@ mod tests {
             line2: Some("  ".into()),
             postal_code: "75002".into(),
             city: "Paris".into(),
+            region: None,
             country: "fr".into(),
             phone: None,
         };
@@ -417,6 +424,8 @@ mod tests {
 
         let no_city = ShippingAddress {
             city: " ".into(),
+
+            region: None,
             ..address.clone()
         };
         assert!(matches!(

@@ -1,6 +1,6 @@
 //! `GET /store/shoppers/me` with `X-Shopper-Token`: who the token signs in.
 //! 200 `{"id", "email", "registered_at", "addresses": [{"id", "saved_at",
-//! "address": {name, line1, line2, postal_code, city, country, phone}}]}`,
+//! "address": {name, line1, line2, postal_code, city, region, country, phone}}]}`,
 //! addresses most recently saved first; times are unix seconds. The store
 //! only holds a shopper's personal data sealed, so a storefront asks here
 //! rather than reading it.
@@ -41,6 +41,7 @@ pub async fn me(cx: &Cx) -> Result<Answer> {
                     "line2": address.line2,
                     "postal_code": address.postal_code,
                     "city": address.city,
+                    "region": address.region,
                     "country": address.country,
                     "phone": address.phone,
                 },

@@ -345,6 +345,7 @@ fn checkout(expected_total_cents: Option<u64>) -> Checkout {
             line1: "1 rue de la Paix".into(),
             postal_code: "75002".into(),
             city: "Paris".into(),
+            region: None,
             country: "FR".into(),
             phone: Some("06 12 34 56 78".into()),
             ..Default::default()
@@ -873,6 +874,7 @@ async fn a_distance_sale_in_another_currency_counts_at_the_euro_rate() {
             line1: "Unter den Linden 1".into(),
             postal_code: "10117".into(),
             city: "Berlin".into(),
+            region: None,
             country: "DE".into(),
             phone: Some("+49 30 123456".into()),
             ..Default::default()
@@ -1880,6 +1882,7 @@ async fn an_invoice_is_addressed_where_the_order_is_billed() {
                     line1: "350 Fifth Avenue".into(),
                     postal_code: "10118".into(),
                     city: "New York".into(),
+                    region: None,
                     country: "US".into(),
                     ..checkout(None).shipping
                 },

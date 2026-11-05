@@ -142,6 +142,8 @@ struct WireAddress {
     line2: Option<String>,
     postal_code: String,
     city: String,
+    #[serde(default)]
+    region: Option<String>,
     country: String,
     phone: Option<String>,
 }
@@ -164,6 +166,7 @@ impl From<WireShopper> for Shopper {
                         line2: saved.address.line2,
                         postal_code: saved.address.postal_code,
                         city: saved.address.city,
+                        region: saved.address.region,
                         country: saved.address.country,
                         phone: saved.address.phone,
                     },
@@ -302,6 +305,7 @@ impl Store {
                 ("line2", address.line2.as_deref().unwrap_or_default()),
                 ("postal_code", &address.postal_code),
                 ("city", &address.city),
+                ("region", address.region.as_deref().unwrap_or_default()),
                 ("country", &address.country),
                 ("phone", address.phone.as_deref().unwrap_or_default()),
             ])
