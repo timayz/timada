@@ -324,16 +324,13 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
             config.server.url.trim_end_matches('/')
         ));
     }
-    if args.test_payments {
-        settings.push(format!("STORE_TENANT_ID={}", tenant.id));
-    }
+    // The address `stripe listen` forwards to ends with this id.
+    settings.push(format!("STORE_TENANT_ID={}", tenant.id));
     // The command's answer, for the shell that runs the storefront.
     for line in &settings {
         println!("{line}");
     }
-    if let Some(file) = &args.env_file
-        && !settings.is_empty()
-    {
+    if let Some(file) = &args.env_file {
         std::fs::write(file, settings.join("\n") + "\n")
             .with_context(|| format!("cannot write {}", file.display()))?;
     }

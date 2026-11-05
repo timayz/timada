@@ -523,6 +523,7 @@ ends with the storefront's settings on stdout:
 STORE_TOKEN=tk_…
 STORE_MEDIA_URL=https://timada.localhost/media/<tenant id>
 STORE_API_URL=https://timada.localhost
+STORE_TENANT_ID=<tenant id>
 ```
 
 `--pages <dir>` also writes and publishes the shop's own pages, one Markdown file per

@@ -1,8 +1,14 @@
-.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate e2e loadtest lint fmt-check fmt test machete check
+.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate stripe.listen e2e loadtest lint fmt-check fmt test machete check
 
 # What `make seed` writes and `make storefront` reads: the key and the addresses
 # of the seeded shop. Git ignores it.
 STOREFRONT_SETTINGS := config/storefront.local.env
+
+# Reads those settings into a recipe's shell. A setting in the environment wins
+# over the file.
+load_settings = keep=$$(export -p | grep ' STORE_' || true); \
+	set -a; [ ! -f $(STOREFRONT_SETTINGS) ] || . "$(abspath $(STOREFRONT_SETTINGS))"; set +a; \
+	eval "$$keep"
 
 start: up dev
 
@@ -80,14 +86,20 @@ snapshot.chatounette:
 # shopper the dashboard limits sign-in codes for. STORE_API_URL is the dashboard
 # the reviews, sign-ins and contact messages go to; the dev one unless set.
 storefront:
-	@keep=$$(export -p | grep ' STORE_' || true); \
-	set -a; [ ! -f $(STOREFRONT_SETTINGS) ] || . "$(abspath $(STOREFRONT_SETTINGS))"; set +a; \
-	eval "$$keep"; \
+	@$(load_settings); \
 	: "$${STORE_TOKEN:?run make seed first, or set it}"; \
 	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_API_URL=$${STORE_API_URL-https://timada.localhost} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p storefront
 
 storefront.migrate:
 	cargo run -p storefront -- migrate
+
+# Forwards Stripe's test payments to the shop `make seed` filled, until stopped;
+# `stripe login` first, once (docs/payments.md). It goes to the dev server rather
+# than https://timada.localhost, so the CLI does not trip over the mkcert certificate.
+stripe.listen:
+	@$(load_settings); \
+	stripe listen --events payment_intent.succeeded \
+		--forward-to http://localhost:3000/stripe/webhooks/$${STORE_TENANT_ID:?run make seed first, or set it}
 
 # Browser tests on a fresh database behind the compose Traefik, with the compose
 # dex container as the OIDC provider (`make up` first).

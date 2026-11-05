@@ -87,14 +87,16 @@ CLI and an internet connection.
 2. **Forward Stripe's webhooks to your machine:**
 
    ```sh
-   stripe login   # the Stripe CLI comes with `nix develop`
-   stripe listen --events payment_intent.succeeded \
-     --forward-to http://localhost:3000/stripe/webhooks/<tenant_id>
+   stripe login   # once; the Stripe CLI comes with `nix develop`
+   make stripe.listen
    ```
 
-   - `<tenant_id>` is the last segment of the webhook URL shown on `/t/<slug>/payments`.
-   - Forward to `localhost:3000` rather than `https://timada.localhost`, so the CLI does
-     not trip over the mkcert certificate.
+   - It forwards `payment_intent.succeeded` to the shop `make seed` filled, whose id
+     the seed wrote to `config/storefront.local.env`. For another shop, use
+     `STORE_TENANT_ID=<tenant_id> make stripe.listen`: `<tenant_id>` is the last
+     segment of the webhook URL shown on `/t/<slug>/payments`.
+   - It forwards to `localhost:3000` rather than `https://timada.localhost`, so the CLI
+     does not trip over the mkcert certificate.
    - Keep it running while you test, and copy the signing secret (`whsec_…`) it prints.
 
 3. **Connect the account.** On `/t/<slug>/payments`, enter:
@@ -104,7 +106,7 @@ CLI and an internet connection.
 
    To skip this after each `make seed`, put them in
    `config/stripe.local.toml`, which git ignores. The seed then connects the shop from
-   that file, over any account it has, and logs the tenant id for step 2. It checks
+   that file, over any account it has. It checks
    the keys' prefixes only, so a key Stripe refuses shows up at the first payment:
 
    ```toml
