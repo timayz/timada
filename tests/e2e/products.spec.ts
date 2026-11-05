@@ -53,12 +53,13 @@ test("an owner creates, edits, publishes, archives and deletes a product", async
   await page.getByLabel("Name", { exact: true }).fill("Big Blue Mug");
   await page.getByRole("button", { name: "Rename" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Big Blue Mug");
+  await expect(page.getByText("big-blue-mug", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Publish" }).click();
   await expect(page.getByRole("status")).toContainText("Product published.");
   await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
 
   // The list comes from the read model, a moment behind.
-  const row = page.locator("[data-product=blue-mug]");
+  const row = page.locator("[data-product=big-blue-mug]");
   await expect(async () => {
     await page.goto(`/t/${slug}/products`);
     await expect(row).toHaveAttribute("data-product-status", "published", { timeout: 1000 });
