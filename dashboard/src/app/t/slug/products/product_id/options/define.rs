@@ -5,7 +5,7 @@ use topcoat::{
     router::{content::Form, error::SeeOther, route},
 };
 
-use crate::app::t::slug::products::product_id::act;
+use crate::app::t::slug::products::product_id::{Tab, act};
 
 #[derive(Deserialize)]
 pub struct DefineForm {
@@ -27,11 +27,16 @@ pub fn lines(values: &str) -> Vec<String> {
 
 #[route(POST)]
 pub async fn define(cx: &Cx, Form(form): Form<DefineForm>) -> Result<SeeOther> {
-    act(cx, "Option added.", async |catalog, actor, id| {
-        catalog
-            .define_option(actor, id, &form.name, lines(&form.values))
-            .await
-            .map(|_| ())
-    })
+    act(
+        cx,
+        Tab::Variants,
+        "Option added.",
+        async |catalog, actor, id| {
+            catalog
+                .define_option(actor, id, &form.name, lines(&form.values))
+                .await
+                .map(|_| ())
+        },
+    )
     .await
 }

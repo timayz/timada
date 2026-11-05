@@ -4,14 +4,15 @@ use topcoat::{
     router::{content::Form, error::SeeOther, route},
 };
 
-use super::act;
 use super::categorize::CategorizeForm;
+use super::{Tab, act};
 
 /// Takes the product out of a category, archived or not.
 #[route(POST)]
 pub async fn uncategorize(cx: &Cx, Form(form): Form<CategorizeForm>) -> Result<SeeOther> {
     act(
         cx,
+        Tab::Categories,
         "Removed from the category.",
         async |catalog, actor, id| {
             catalog

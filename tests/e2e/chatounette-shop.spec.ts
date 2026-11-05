@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
+import { productTab } from "./forms";
 import {
   addToCart,
   confirmPayment,
@@ -51,6 +52,8 @@ test("the shop serves the tenant's published catalogue with its key", async ({
   await page.getByRole("button", { name: "Set price" }).click();
   await page.getByLabel("Description").fill("Holds 50 cl of anything hot.");
   await page.getByRole("button", { name: "Save description" }).click();
+  await expect(page.getByRole("status")).toContainText("Description saved.");
+  await productTab(page, "Pictures");
   await page
     .getByLabel("Add a picture")
     .setInputFiles({ name: "mug.png", mimeType: "image/png", buffer: PNG });
@@ -361,11 +364,11 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await expect(page).toHaveURL(/error=invalid_siret/);
     // VAT-registered, so a product says what kind of goods it is.
     await page.goto(plateUrl);
-    await expect(page.locator("[data-product-vat]")).toHaveText("Standard");
+    await expect(page.getByLabel("Kind of goods, for VAT")).toHaveValue("standard");
     await page.getByLabel("Kind of goods, for VAT").selectOption("food");
     await page.getByRole("button", { name: "Set kind" }).click();
     await expect(page.getByRole("status")).toContainText("Kind of goods set.");
-    await expect(page.locator("[data-product-vat]")).toHaveText("Food");
+    await expect(page.getByLabel("Kind of goods, for VAT")).toHaveValue("food");
 
     // The merchant connects a Stripe account; a key Stripe refuses is not saved.
     await page.goto(`/t/${slug}`);
