@@ -855,6 +855,7 @@ async fn an_order_is_placed_once_and_read_until_it_ships() {
         status: "WAIT_BUYER_ACCEPT_GOODS".into(),
         logistics_status: "SELLER_SEND_GOODS".into(),
         tracking: vec![tracking.into()],
+        closed: false,
     };
     let after = forwards
         .record_checked(&id, version, vec![checked("81", "LP1")], None)

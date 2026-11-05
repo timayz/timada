@@ -244,11 +244,13 @@ catalog until the merchant acts:
 
 ## Orders
 
-A paid order whose items were imported from AliExpress can be bought there for the
+An order whose items were imported from AliExpress can be bought there for the
 shopper: its AliExpress items go into one `aliexpress.ds.order.create` call, shipped
-to the order's address. AliExpress answers with one order per seller. The order page
-has an *AliExpress* card that shows where this stands. Two settings on the AliExpress
-page (`AliexpressForwardingSet`) decide how it works:
+to the order's address. AliExpress answers with one order per seller. The shopper's
+money is only held on their card until then: once AliExpress took the order, the
+money is taken and the invoice issued (for the whole order, its own goods too in a
+mixed one). The order page has an *AliExpress* card that shows where this stands.
+Two settings on the AliExpress page (`AliexpressForwardingSet`) decide how it works:
 
 - **Place paid orders on AliExpress automatically.** Without it, the merchant presses
   *Place on AliExpress* on the order page.
@@ -286,6 +288,15 @@ A failure is shown on the card with *Place again*. One node takes each order on
 recording the outcome, the order may be on AliExpress anyway. It is then never placed
 again on its own: the merchant checks the account's orders on AliExpress first.
 
+Right before AliExpress is asked, the forwarder writes `Order::SupplierOrderStarted` on
+the shop's order, at the version it read, on every try. A cancellation (the shopper's,
+the merchant's) landing first refuses it, so nothing is bought for a cancelled order;
+one landing after finds it, and then knows AliExpress may have the order: the shopper
+can no longer cancel, and the merchant ticks that they cancel it on AliExpress too
+(there is no API to). A sure refusal (`SupplierOrderRefused`) lets the shopper cancel
+again; a call that may have placed the order does not. An order whose card hold lapses
+within twelve hours is not placed: the merchant takes the payment first.
+
 AliExpress pushes each status change of an order to `/aliexpress/webhook` (message type
 53, the body signed with the app's key and secret in `Authorization`), and the order is
 read at once (`aliexpress.trade.ds.order.get`). A push is answered before the read,
@@ -298,8 +309,17 @@ has gone unread for `[aliexpress] order_read_every_secs` (a day), the shops taki
 turns, oldest read first. Without the callback registered, tracking arrives that late:
 lower the setting.
 
-Once each order has its parcel number, and every line of the shop's order was bought
-there, the order is fulfilled with those numbers as its tracking. A
+Once each order has its parcel number, every line of the shop's order was bought
+there and its money was taken, the order is fulfilled with those numbers as its
+tracking.
+
+AliExpress may close an order without shipping it: its push says `OrderClosed`, which
+stands even when the order cannot be read, and a read showing `FINISH` with no parcel
+ever known says the same (that read-side rule awaits the real-app test, #253). Once
+every AliExpress order of a shop's order AliExpress alone was to fill is closed, the
+shop's order is cancelled: its hold is given back, or the money it took refunded, by
+the dashboard's payments (`timada-dashboard/order-payments`). A mixed order, or one
+only partly closed, is shown on the card for the merchant to settle. A
 mixed order only shows them, for the merchant to fulfil. An order fulfilled by hand,
 cancelled, or placed more than 60 days ago is no longer read. The request and
 response shapes follow ae_sdk, like the rest: the real-app smoke test (#253) covers

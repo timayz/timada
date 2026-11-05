@@ -1,7 +1,11 @@
 mod common;
 
 use common::*;
-use timada_orders::{CancelPath, CaptureClaim, HOLD_EXPIRED_REASON, OrderError, OrderStatus};
+use evento::ProjectionAggregate;
+use timada_orders::{
+    CancelPath, CaptureClaim, HOLD_EXPIRED_REASON, HOLD_MARGIN_SECS, OrderError, OrderStatus,
+    SupplierOrder,
+};
 
 async fn held(orders: &Orders, catalog: &Catalog) -> String {
     let mug = product(catalog, "Mug", 1250, "EUR").await;
@@ -37,7 +41,7 @@ async fn a_paid_order_is_fulfilled() {
     assert!(answered.get("fulfilled_by").is_none());
 
     let late = orders
-        .request_cancellation(ALICE, &order_id, "changed my mind".into())
+        .request_cancellation(ALICE, &order_id, "changed my mind".into(), false)
         .await;
     assert!(matches!(late, Err(OrderError::NotCancellable)), "{late:?}");
 }
@@ -134,11 +138,11 @@ async fn a_held_order_is_cancelled_by_releasing_its_hold() {
     let order_id = held(&orders, &catalog).await;
 
     let bare = orders
-        .request_cancellation(ALICE, &order_id, "  ".into())
+        .request_cancellation(ALICE, &order_id, "  ".into(), false)
         .await;
     assert!(matches!(bare, Err(OrderError::InvalidReason)), "{bare:?}");
     let path = orders
-        .request_cancellation(ALICE, &order_id, "Out of stock".into())
+        .request_cancellation(ALICE, &order_id, "Out of stock".into(), false)
         .await
         .unwrap();
     let order = orders.load_order(&order_id).await.unwrap().unwrap();
@@ -150,7 +154,7 @@ async fn a_held_order_is_cancelled_by_releasing_its_hold() {
     );
     // Asked again before it is settled: the same path, nothing more written.
     let again = orders
-        .request_cancellation(SHOPPER, &order_id, "again".into())
+        .request_cancellation(SHOPPER, &order_id, "again".into(), false)
         .await
         .unwrap();
     assert_eq!(again, path);
@@ -194,7 +198,7 @@ async fn a_held_order_is_cancelled_by_releasing_its_hold() {
         .await;
     assert!(matches!(paid, Err(OrderError::OrderCancelled)), "{paid:?}");
     let done = orders
-        .request_cancellation(ALICE, &order_id, "again".into())
+        .request_cancellation(ALICE, &order_id, "again".into(), false)
         .await
         .unwrap();
     assert_eq!(done, CancelPath::Done);
@@ -242,7 +246,7 @@ async fn a_capture_in_flight_holds_off_a_cancellation() {
     orders.request_capture(DASHBOARD, &order_id).await.unwrap();
 
     let early = orders
-        .request_cancellation(ALICE, &order_id, "Out of stock".into())
+        .request_cancellation(ALICE, &order_id, "Out of stock".into(), false)
         .await;
     assert!(
         matches!(early, Err(OrderError::CapturePending)),
@@ -255,7 +259,7 @@ async fn a_capture_in_flight_holds_off_a_cancellation() {
         .await
         .unwrap();
     let path = orders
-        .request_cancellation(ALICE, &order_id, "Out of stock".into())
+        .request_cancellation(ALICE, &order_id, "Out of stock".into(), false)
         .await
         .unwrap();
     assert_eq!(path, CancelPath::Refund);
@@ -270,7 +274,7 @@ async fn a_paid_order_is_refunded_then_cancelled() {
     let order_id = paid(&orders, &catalog).await;
 
     let path = orders
-        .request_cancellation(ALICE, &order_id, "Out of stock".into())
+        .request_cancellation(ALICE, &order_id, "Out of stock".into(), false)
         .await
         .unwrap();
     assert_eq!(path, CancelPath::Refund);
@@ -348,4 +352,130 @@ async fn a_paid_order_is_refunded_then_cancelled() {
     orders.fulfil_order(ALICE, &left, None).await.unwrap();
     let late = orders.request_refund(ALICE, &left, 100).await;
     assert!(matches!(late, Err(OrderError::NotCancellable)), "{late:?}");
+}
+
+/// Ordering the goods from the supplier is written on the order first, on
+/// every try: an order to the supplier and a cancellation never cross, and
+/// once the supplier may have the order, cancelling it means saying so.
+#[tokio::test]
+async fn an_order_to_the_supplier_and_a_cancellation_never_cross() {
+    let (orders, catalog) = store().await;
+    let order_id = held(&orders, &catalog).await;
+
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.supplier_order, SupplierOrder::Started);
+    // Placed again (after a failure that may have placed it): written again,
+    // so a cancellation in between would have refused it.
+    let version = order.aggregate_version().unwrap();
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.aggregate_version().unwrap(), version + 1);
+
+    // The supplier may have it: cancelling without saying so is refused.
+    let unsaid = orders
+        .request_cancellation(ALICE, &order_id, "Out of stock".into(), false)
+        .await;
+    assert!(
+        matches!(unsaid, Err(OrderError::SupplierOrdered)),
+        "{unsaid:?}"
+    );
+    // It surely refused: cancelled freely again.
+    orders
+        .record_supplier_refusal(DASHBOARD, &order_id, "aliexpress", "No delivery to FR")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.supplier_order, SupplierOrder::Refused);
+    let path = orders
+        .request_cancellation(ALICE, &order_id, "Out of stock".into(), false)
+        .await
+        .unwrap();
+    assert!(matches!(path, CancelPath::Release { .. }), "{path:?}");
+
+    // A cancellation standing refuses the next order to the supplier, and
+    // so does the cancelled order.
+    let late = orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await;
+    assert!(
+        matches!(late, Err(OrderError::CancellationPending)),
+        "{late:?}"
+    );
+    orders
+        .record_release(DASHBOARD, &order_id, &order.payment.payment_id, "")
+        .await
+        .unwrap();
+    let after = orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await;
+    assert!(
+        matches!(after, Err(OrderError::OrderCancelled)),
+        "{after:?}"
+    );
+
+    // Said: the merchant cancels it at the supplier too.
+    let order_id = held(&orders, &catalog).await;
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let path = orders
+        .request_cancellation(ALICE, &order_id, "Out of stock".into(), true)
+        .await
+        .unwrap();
+    assert!(matches!(path, CancelPath::Release { .. }), "{path:?}");
+}
+
+/// The goods are not bought once the hold on the shopper's card is about to
+/// lapse: the money could not be taken after. Taken already, no hold limits it.
+#[tokio::test]
+async fn a_hold_about_to_lapse_is_not_ordered_from_the_supplier() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let cart_id = cart_with(&orders, &mug, 1).await;
+    let (_, mut payment) = open_payment(&orders, &cart_id, checkout()).await;
+    let lapses_at = 1_000_000;
+    payment.capture_before = Some(lapses_at);
+    let order_id = orders
+        .place_order(DASHBOARD, &cart_id, payment)
+        .await
+        .unwrap()
+        .order_id;
+
+    let late = orders
+        .begin_supplier_order(
+            DASHBOARD,
+            &order_id,
+            "aliexpress",
+            lapses_at - HOLD_MARGIN_SECS,
+        )
+        .await;
+    assert!(matches!(late, Err(OrderError::HoldExpiring)), "{late:?}");
+    orders
+        .begin_supplier_order(
+            DASHBOARD,
+            &order_id,
+            "aliexpress",
+            lapses_at - HOLD_MARGIN_SECS - 1,
+        )
+        .await
+        .unwrap();
+
+    capture(&orders, &order_id).await;
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", lapses_at * 2)
+        .await
+        .unwrap();
+    orders.fulfil_order(ALICE, &order_id, None).await.unwrap();
+    let left = orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await;
+    assert!(matches!(left, Err(OrderError::OrderFulfilled)), "{left:?}");
 }

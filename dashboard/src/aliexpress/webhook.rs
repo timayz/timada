@@ -73,8 +73,19 @@ pub async fn receive(
         forward_id: forward.id.clone(),
     };
     let db = db.clone();
+    // A closed order closes it on the forward even if it cannot be read.
+    let closed = (status == ORDER_CLOSED).then_some(ae_order_id);
     tokio::spawn(async move {
-        if let Err(err) = check(aliexpress, &db, store, &forward.tenant_id, &forward.id, now).await
+        if let Err(err) = check(
+            aliexpress,
+            &db,
+            store,
+            &forward.tenant_id,
+            &forward.id,
+            closed.as_deref(),
+            now,
+        )
+        .await
         {
             tracing::warn!(tenant = %forward.tenant_id, forward = %forward.id, error = %err, "AliExpress order not read after its push");
         }
@@ -82,21 +93,26 @@ pub async fn receive(
     Ok(outcome)
 }
 
+/// What AliExpress's push says of an order it closed without shipping it.
+const ORDER_CLOSED: &str = "OrderClosed";
+
 /// Reads the forward's AliExpress orders again, as the sweep would, which then
-/// has no reason to for a while.
+/// has no reason to for a while; `closed` is the order the push said
+/// AliExpress closed.
 pub(super) async fn check(
     aliexpress: Arc<Aliexpress>,
     db: &Db,
     store: Executor,
     tenant_id: &str,
     forward_id: &str,
+    closed: Option<&str>,
     now: u64,
 ) -> anyhow::Result<()> {
     let Some((tenant, company)) = aliexpress.connected_shop(tenant_id, now).await? else {
         return Ok(());
     };
     let read = aliexpress
-        .check_forward(&store, &tenant, &company, forward_id, now)
+        .check_forward(&store, &tenant, &company, forward_id, closed, now)
         .await;
     timada_aliexpress::note_forward_read(db, tenant_id, forward_id, now).await?;
     read?;

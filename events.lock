@@ -2,7 +2,7 @@
 # `event` and `type` lines are frozen — add a new variant instead of editing
 # one. A `view` line may change when its projection's `.revision(n)` grows.
 
-event timada-aliexpress/Forward::Checked { ae_order_id: String, status: String, logistics_status: String, tracking: Vec<String> }
+event timada-aliexpress/Forward::Checked { ae_order_id: String, status: String, logistics_status: String, tracking: Vec<String>, closed: bool }
 event timada-aliexpress/Forward::Done { tracking: Option<String>, fulfilled: bool }
 event timada-aliexpress/Forward::Failed { reason: String, failed_by: String }
 event timada-aliexpress/Forward::Placed { ae_order_ids: Vec<String>, items: Vec<ForwardItem>, pay_requested: bool, complete: bool, placed_by: String }
@@ -213,6 +213,8 @@ event timada-orders/Order::Placed { reference: String, cart_id: String, email: S
 event timada-orders/Order::RefundRequested { payment_id: String, amount_cents: u64, idempotency_key: String, requested_by: String }
 event timada-orders/Order::Refunded { payment_id: String, refund_id: String, amount_cents: u64, refunded_by: String }
 event timada-orders/Order::ShippingCharged { method_id: String, name: String, amount_cents: u64, charged_by: String }
+event timada-orders/Order::SupplierOrderRefused { supplier: String, reason: String, refused_by: String }
+event timada-orders/Order::SupplierOrderStarted { supplier: String, started_by: String }
 event timada-orders/Order::TimeZoneSet { time_zone: String, set_by: String }
 event timada-orders/OrderConfirmation::ConfirmationMailed { order_id: String, email: String, mailed_by: String }
 event timada-orders/OrderReference::Claimed { order_id: String }
