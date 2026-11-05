@@ -223,6 +223,7 @@ test("an owner makes a product vary by colour and size, each combination priced"
   const productUrl = page.url().split("?")[0];
   await productTab(page, "Options & variants");
   await expect(page.getByText("This product does not vary.")).toBeVisible();
+  await expect(page.getByLabel("Values, one a line")).toHaveAttribute("placeholder", "Beige\nBlue\nGrey");
 
   // Two options, then the combinations they make.
   await page.getByLabel("Add an option").fill("Colour");

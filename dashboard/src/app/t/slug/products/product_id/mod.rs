@@ -930,7 +930,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             )
                             field(
                                 field_label(attrs: attributes! { for="new-option-values" }, "Values, one a line")
-                                textarea(attrs: attributes! { id="new-option-values" name="values" rows="3" required="" placeholder="Beige&#10;Blue&#10;Grey" })
+                                textarea(attrs: attributes! { id="new-option-values" name="values" rows="3" required="" placeholder=("Beige\nBlue\nGrey") })
                             )
                             <div>
                                 button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Add option")
