@@ -2,18 +2,12 @@
 //! dashboard answers from AliExpress's own lists, so that the province and the
 //! town picked go through when the order is placed there.
 
-use std::time::Duration;
-
 use serde::{Deserialize, Serialize};
 use topcoat_core::context::Cx;
 use topcoat_core::error::Result;
 
 use crate::context::store;
 use crate::store::Store;
-
-/// The dashboard may have to read a country's list first, and France's weighs
-/// over 2 MB.
-const PLACES_TIMEOUT: Duration = Duration::from_secs(95);
 
 /// All empty when the form should ask for no province.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,7 +50,6 @@ impl Store {
                 ("postal_code", postal_code),
                 ("province", province),
             ])
-            .timeout(PLACES_TIMEOUT)
             .send()
             .await?
             .error_for_status()?

@@ -7286,6 +7286,7 @@ dependencies = [
  "bitcode",
  "deunicode",
  "evento",
+ "flate2",
  "hmac 0.12.1",
  "reqwest",
  "serde",

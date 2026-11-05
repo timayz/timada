@@ -6,15 +6,14 @@
 //!
 //! 200 `{"provinces": […], "province": "Gard", "cities": [{"name": "Ales",
 //! "towns": []}, …]}`, all empty for
-//! a shop not connected to AliExpress, a country without a list, one
-//! AliExpress lists apart (Martinique, under France here), or lists that
-//! could not be read: the form then asks for no province. 401, 403 and 503
-//! as [`super::storefront`] says.
+//! a shop not connected to AliExpress, a country without a list, or one
+//! AliExpress lists apart (Martinique, under France here): the form then asks
+//! for no province. 401, 403 and 503 as [`super::storefront`] says.
 
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use timada_aliexpress::{delivery_country, province_of};
+use timada_aliexpress::{delivery_country, places_of, province_of};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -59,16 +58,8 @@ pub async fn places(cx: &Cx) -> Result<(StatusCode, Json<Value>)> {
     if !connected {
         return Ok((StatusCode::OK, Json(none)));
     }
-    let client = aliexpress
-        .app_client()
-        .map_err(topcoat::Error::from_anyhow)?;
-    let places = match aliexpress.address_tree(&client, &country).await {
-        Ok(Some(places)) => places,
-        Ok(None) => return Ok((StatusCode::OK, Json(none))),
-        Err(err) => {
-            tracing::warn!(%country, %err, "AliExpress's places not read for a form");
-            return Ok((StatusCode::OK, Json(none)));
-        }
+    let Some(places) = places_of(&country) else {
+        return Ok((StatusCode::OK, Json(none)));
     };
     let named = province_of(&country, postal_code, "");
     let named = places.names_province(&named).then_some(named);

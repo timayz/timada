@@ -16,6 +16,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 deunicode.workspace = true
+flate2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # Calls AliExpress's open platform; signs each call with the app's secret.

@@ -13,6 +13,14 @@ Its `children` is a JSON string, provinces first, then cities and sometimes
 towns. A country without a list answers `ret: false`, code 801,
 `Address Exception`. The lists below were read on 2026-11-04.
 
+A list takes up to 15 s to read, so they ship with the code in
+`crates/aliexpress/places.bin` and nothing asks AliExpress for one while serving.
+`make aliexpress.places` reads them again (one call per country in
+`PLACE_COUNTRIES`, a second apart, with the app's key from `config/dev.local.toml`)
+and the next build embeds them. A country that fails stops it with the file as it
+was. A country that lost its list is logged as a warning, so read the output before
+committing, as a binary file shows nothing in a diff.
+
 ## The countries
 
 **Mapped from the postal code** (`Other` when the postal code names none):
@@ -65,9 +73,8 @@ Saint-Martin, Saint-Pierre-et-Miquelon and the Pacific territories stay `FR` +
 
 AliExpress checks `city` as well: a real Italian order with `Aci Castello` was
 refused with `Please enter a City`, although that town is on the list, under
-Sicilia → Catania, and so was a French one with `Alès`, listed as `Ales`. So the forwarder reads the country's tree when it places an
-order, kept for a day, and `AddressTree::apply` puts the address in its words (if
-the tree cannot be read, nothing is placed and the order page says to try again):
+Sicilia → Catania, and so was a French one with `Alès`, listed as `Ales`. So when the forwarder places an order, `AddressTree::apply` puts the
+address in the words of the country's list:
 
 - The town is looked for in the province the postal code named, or in every
   province where the postal code names none.
