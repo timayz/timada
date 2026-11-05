@@ -344,9 +344,7 @@ country, postal_code, province)` answers the country's `provinces`, the `provinc
 the postal code names, and the `cities` of the province asked for, else of that one,
 each with its `towns`. Put the last place picked in the address's city, and let the
 shopper type it for a province without cities or for the city `Other`. All are empty
-when the form should ask for nothing: another shop, a
-country without a list, or lists that could not be read. The first read of a country
-can take a while, so ask from the browser rather than while drawing the page. Put
+when the form should ask for nothing: another shop, or a country without a list. Put
 the pick in `ShippingAddress::region`. See
 [aliexpress-provinces.md](aliexpress-provinces.md).
 

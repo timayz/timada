@@ -3,9 +3,10 @@ use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem};
 use timada_aliexpress::{
     AddressTree, AeOrder, AeProduct, AliexpressError, ForwardStatus, FreightOption, LinkState,
-    LogisticsAddress, PlaceItem, PlaceOrder, Placement, PlannedItem, choose_service,
-    delivery_country, describe_options, forward_items, freight_from_response, french_department,
-    logistics_address, placed_orders_from_response, province_of, split_phone,
+    LogisticsAddress, PLACE_COUNTRIES, PlaceItem, PlaceOrder, Placement, PlannedItem,
+    choose_service, decode_places, delivery_country, describe_options, encode_places,
+    forward_items, freight_from_response, french_department, logistics_address,
+    placed_orders_from_response, places_of, province_of, split_phone,
 };
 use timada_orders::{OrderLine, ShippingAddress};
 
@@ -584,6 +585,28 @@ fn the_shoppers_pick_settles_what_a_town_cannot() {
         (overseas.country.as_str(), overseas.province.as_str()),
         ("MQ", "Freiburg")
     );
+}
+
+#[test]
+fn the_lists_shipped_are_read_for_every_country() {
+    let gard = places_of("FR").expect("France has a list");
+    assert!(gard.names_province("Gard"));
+    assert!(
+        gard.cities_in("Gard")
+            .iter()
+            .any(|(city, _)| *city == "Ales")
+    );
+    assert!(places_of("MQ").is_none(), "Martinique types its city");
+    assert!(places_of("ZZ").is_none());
+    // Every list opens, and what is written reads back the same.
+    let lists: Vec<_> = PLACE_COUNTRIES
+        .iter()
+        .filter_map(|country| Some(((*country).to_owned(), places_of(country)?.clone())))
+        .collect();
+    assert!(lists.len() >= 17, "only {} lists", lists.len());
+    let file = encode_places(&lists).unwrap();
+    assert_eq!(decode_places(&file).unwrap(), lists);
+    assert!(decode_places(b"nonsense").is_err());
 }
 
 #[test]

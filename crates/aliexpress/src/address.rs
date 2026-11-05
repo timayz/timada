@@ -1,7 +1,15 @@
 //! AliExpress's own names for places, from `aliexpress.ds.address.get`: an
 //! order is refused unless its province and city are on them, and a shop's
-//! address has only the postal code and the town the shopper typed.
+//! address has only the postal code and the town the shopper typed. They rarely
+//! change and take seconds to read, so they ship in `places.bin`, which
+//! `timada-dashboard aliexpress-places` writes.
 
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::sync::{LazyLock, OnceLock};
+
+use anyhow::Context;
+use flate2::{Compression, read::DeflateDecoder, write::DeflateEncoder};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -10,6 +18,66 @@ use crate::model::text;
 
 /// The answer's code for a country whose address form has no list.
 const NO_LIST: &str = "801";
+
+/// The countries whose lists `places.bin` is read for: those the checkout
+/// sells to, and the French overseas departments AliExpress files as countries.
+pub const PLACE_COUNTRIES: &[&str] = &[
+    "AT", "BE", "BG", "CA", "CH", "CY", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GB", "GF", "GP",
+    "GR", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "MC", "MQ", "MT", "NL", "NO", "PL", "PT", "RE",
+    "RO", "SE", "SI", "SK", "US", "YT",
+];
+
+static PLACES_FILE: &[u8] = include_bytes!("../places.bin");
+
+/// Each country's list, compressed apart: most are never asked for.
+type PackedPlaces = Vec<(String, Vec<u8>)>;
+
+/// A country's list as the file has it, and opened once it is asked for.
+type KeptPlaces = (Vec<u8>, OnceLock<AddressTree>);
+
+static PLACES: LazyLock<HashMap<String, KeptPlaces>> = LazyLock::new(|| {
+    bitcode::decode::<PackedPlaces>(PLACES_FILE)
+        .expect("places.bin is what aliexpress-places wrote")
+        .into_iter()
+        .map(|(country, packed)| (country, (packed, OnceLock::new())))
+        .collect()
+});
+
+/// The list of `country`, `None` for a country without one.
+pub fn places_of(country: &str) -> Option<&'static AddressTree> {
+    let (packed, tree) = PLACES.get(country)?;
+    Some(
+        tree.get_or_init(|| {
+            unpack_tree(packed).expect("places.bin is what aliexpress-places wrote")
+        }),
+    )
+}
+
+/// What `places.bin` holds for these lists.
+pub fn encode_places(lists: &[(String, AddressTree)]) -> anyhow::Result<Vec<u8>> {
+    let mut packed = PackedPlaces::new();
+    for (country, tree) in lists {
+        let mut deflate = DeflateEncoder::new(Vec::new(), Compression::best());
+        deflate.write_all(&bitcode::encode(&tree.flat()))?;
+        packed.push((country.clone(), deflate.finish()?));
+    }
+    Ok(bitcode::encode(&packed))
+}
+
+/// The lists in what [`encode_places`] wrote.
+pub fn decode_places(file: &[u8]) -> anyhow::Result<Vec<(String, AddressTree)>> {
+    bitcode::decode::<PackedPlaces>(file)
+        .context("not a list of places")?
+        .into_iter()
+        .map(|(country, packed)| Ok((country, unpack_tree(&packed)?)))
+        .collect()
+}
+
+fn unpack_tree(packed: &[u8]) -> anyhow::Result<AddressTree> {
+    let mut encoded = Vec::new();
+    DeflateDecoder::new(packed).read_to_end(&mut encoded)?;
+    AddressTree::from_flat(bitcode::decode(&encoded)?).context("not a list of places")
+}
 
 /// One country's places: provinces, their cities, and sometimes the cities'
 /// towns.
@@ -55,6 +123,51 @@ impl AddressTree {
         serde_json::from_str(&children)
             .map(Some)
             .map_err(|err| AeError::new("address", err.to_string()))
+    }
+
+    /// Each place and how deep it is, parents first: what the file keeps.
+    fn flat(&self) -> Vec<(u8, String)> {
+        fn walk(nodes: &[Node], depth: u8, flat: &mut Vec<(u8, String)>) {
+            for node in nodes {
+                flat.push((depth, node.name.clone()));
+                walk(&node.children, depth + 1, flat);
+            }
+        }
+        let mut flat = Vec::new();
+        walk(&self.0, 0, &mut flat);
+        flat
+    }
+
+    /// The tree [`Self::flat`] was given; `None` for a place with no parent.
+    fn from_flat(flat: Vec<(u8, String)>) -> Option<Self> {
+        let mut tree: Vec<Node> = Vec::new();
+        for (depth, name) in flat {
+            let mut level = &mut tree;
+            for _ in 0..depth {
+                level = &mut level.last_mut()?.children;
+            }
+            level.push(Node {
+                name,
+                children: Vec::new(),
+            });
+        }
+        Some(Self(tree))
+    }
+
+    /// How many places are on the list, at every level.
+    pub fn len(&self) -> usize {
+        fn count(nodes: &[Node]) -> usize {
+            nodes.len()
+                + nodes
+                    .iter()
+                    .map(|node| count(&node.children))
+                    .sum::<usize>()
+        }
+        count(&self.0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     /// Whether `province` is on the list as something other than "Other":

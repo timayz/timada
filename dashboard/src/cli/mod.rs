@@ -1,9 +1,11 @@
+mod aliexpress_places;
 mod migrate;
 mod rejoin;
 mod seed;
 mod serve;
 mod snapshot;
 
+pub use aliexpress_places::*;
 pub use migrate::*;
 pub use rejoin::*;
 pub use seed::*;
