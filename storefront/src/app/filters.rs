@@ -1,10 +1,8 @@
-//! The filters of a listing, as chatounette.com offers them under "Afficher
-//! les filtres": a price band among seven fixed ones ("Filtrer par tarif")
+//! The filters of a listing, under "Afficher les filtres": a price band among seven fixed ones ("Filtrer par tarif")
 //! and a colour among those the listed products come in ("Filtrer par
 //! couleur"), each a link. A band keeps the products a shopper could pay
 //! that much for (their range overlaps it); the colour is the "Couleur"
-//! option of the products. Both travel in the query string as the live site
-//! writes them: `min_price` and `max_price` in whole euros, `couleur` as a
+//! option of the products. Both travel in the query string: `min_price` and `max_price` in whole euros, `couleur` as a
 //! folded key (`rose-fonce`). No JavaScript: the panel is a `<details>`,
 //! open while a filter is on.
 

@@ -2,8 +2,8 @@
 //! at `/c/{slug}`, a product at `/p/{slug}`, the cart at `/cart`, the checkout
 //! at `/checkout`, a placed order at `/orders/{order_id}`, the shopper's
 //! account at `/account`, the support page at `/support-client`, the shop's
-//! own pages at their own addresses (`/mentions-legales`, …), and the library's `/store/status`. The look is chatounette.com's: one stylesheet
-//! (`theme.css`) inlined in every page, no asset bundle.
+//! own pages at their own addresses (`/mentions-legales`, …), and the library's `/store/status`. One stylesheet
+//! (`theme.css`) inlined in every page, layout only, and no asset bundle.
 
 pub mod account;
 pub mod boutique;
@@ -50,14 +50,17 @@ use search::{SEARCH_CSS, SEARCH_SCRIPT};
 /// A review carries up to three photos of up to 8 MiB each.
 const REVIEW_LIMIT: usize = 26 * 1024 * 1024;
 
-/// The shop's name, as the pages and the mails say it.
-pub const SHOP_NAME: &str = "Chatounette";
-/// The code the top bar advertises; the seed creates it.
-pub const PROMO_CODE: &str = "MONSTER10";
-/// What the shop says about itself, under the logo.
-const TAGLINE: &str = "La boutique chat n°1 sur internet";
+/// The shop's name, as the pages say it.
+pub const SHOP_NAME: &str = "Ma boutique";
+/// What the shop says about itself, on the home and in the footer.
+const TAGLINE: &str = "Le slogan de votre boutique";
+/// The address the support page and the footer name.
+pub const CONTACT_EMAIL: &str = "contact@example.com";
+/// The code the top bar, the home and the product pages advertise, at 10 %
+/// off. It must exist in the back office; the catalogue seed creates it.
+pub const PROMO_CODE: &str = "BIENVENUE10";
 
-/// The look, inlined in every page.
+/// The layout, inlined in every page. Add your look to this sheet.
 const THEME_CSS: &str = include_str!("theme.css");
 
 /// `trusted_proxies`: the proxies in front of the app, whose
@@ -104,9 +107,6 @@ pub fn price_line(product: &Product) -> String {
         None => String::new(),
     }
 }
-
-/// A paw, the shop's mark, drawn inline.
-pub const PAW_SVG: &str = r##"<svg viewBox="0 0 100 100" aria-hidden="true" fill="currentColor"><ellipse cx="30" cy="32" rx="10" ry="13"/><ellipse cx="70" cy="32" rx="10" ry="13"/><ellipse cx="14" cy="55" rx="9" ry="11"/><ellipse cx="86" cy="55" rx="9" ry="11"/><path d="M50 48c-16 0-30 14-30 28 0 9 7 14 15 14 6 0 10-3 15-3s9 3 15 3c8 0 15-5 15-14 0-14-14-28-30-28z"/></svg>"##;
 
 /// The HTML shell every page shares: the top bar, the masthead, the
 /// category bar, the page, the footer, and (unless `no_drawer`, for the
@@ -161,9 +161,7 @@ pub async fn document(
             <body>
                 <div class="topbar">
                     <div class="wrap">
-                        <span class="topbar-phone">"☎ 01 89 76 02 12"</span>
                         <p>"-10% maintenant avec le code " <strong>(PROMO_CODE)</strong></p>
-                        <span class="topbar-rating"><span class="stars" aria-hidden="true">"★★★★★"</span> " 4,8/5 Avis clients"</span>
                     </div>
                 </div>
                 <header class="masthead">
@@ -171,7 +169,7 @@ pub async fn document(
                         if !nav.is_empty() {
                             <a class="menu-toggle" href="#menu" aria-controls="menu">"Menu"</a>
                         }
-                        <a class="brand" href=(href!(index))>"Chat" <span>"ounette"</span></a>
+                        <a class="brand" href=(href!(index))>(SHOP_NAME)</a>
                         <form class="search" method="get" action=(href!(boutique::index)) role="search"
                             data-search=(href!(search::index)) data-search-min=(search::MIN_CHARS)>
                             <input name="q" type="search" placeholder="Rechercher un produit…" aria-label="Rechercher un produit"
@@ -212,16 +210,16 @@ pub async fn document(
 }
 
 /// The footer: the shop, its legal pages, the useful links and how to
-/// reach it, as the live shop lays them out. The pages are the shop's own
-/// routes; their text comes from the back office.
+/// reach it. The pages are the shop's own routes; their text comes from the
+/// back office.
 #[topcoat::view::component]
 pub async fn site_footer() -> Result<impl View> {
     Ok(view! {
         <footer class="sitefooter">
             <div class="wrap">
                 <div>
-                    <a class="brand" href=(href!(index))>"Chat" <span>"ounette"</span></a>
-                    <p>"Chatounette, l'endroit parfait pour les accessoires et jouets pour votre chat. Une boutique de démonstration : rien n'est expédié."</p>
+                    <a class="brand" href=(href!(index))>(SHOP_NAME)</a>
+                    <p>(TAGLINE)</p>
                 </div>
                 <div>
                     <h2>"A propos"</h2>
@@ -244,8 +242,7 @@ pub async fn site_footer() -> Result<impl View> {
                 </div>
                 <div>
                     <h2>"Contact"</h2>
-                    <p>"Service client du lundi au samedi, de 9h à 18h."</p>
-                    <p><a href=(format!("mailto:{}", support_client::CONTACT_EMAIL))>(support_client::CONTACT_EMAIL)</a></p>
+                    <p><a href=(format!("mailto:{CONTACT_EMAIL}"))>(CONTACT_EMAIL)</a></p>
                 </div>
                 <div>
                     <h2>"Newsletter"</h2>
@@ -253,7 +250,7 @@ pub async fn site_footer() -> Result<impl View> {
                     newsletter::newsletter_form()
                 </div>
             </div>
-            <p class="legal">"© 2019 – 2026 Chatounette™ · Boutique de démonstration sur timada"</p>
+            <p class="legal">"© " (SHOP_NAME)</p>
         </footer>
     })
 }
@@ -296,10 +293,10 @@ pub async fn product_card(cx: &Cx, product: &Product) -> Result<impl View> {
                             <input type="hidden" name="slug" value=(&product.slug)>
                             <input type="hidden" name="quantity" value="1">
                             <input type="hidden" name="from" value=(here)>
-                            <button class="btn btn-ghost">"Ajouter au panier"</button>
+                            <button class="btn">"Ajouter au panier"</button>
                         </form>
                     } else {
-                        <a class="btn btn-ghost" href=(&link)>"Choix des options"</a>
+                        <a class="btn" href=(&link)>"Choix des options"</a>
                     }
                 </div>
             </div>
@@ -382,14 +379,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             nav: &nav,
             <section class="hero">
                 <div class="wrap">
-                    <div>
-                        <span class="eyebrow">(TAGLINE)</span>
-                        <h1>"Chatounette, l'endroit parfait pour les accessoires et jouets pour votre chat."</h1>
-                        <p>"Votre chat fait partie de la famille : offrez-lui le couchage, les jouets, les accessoires et les petites attentions qu'il mérite, choisis avec amour par des passionnés."</p>
-                        <a class="btn" href=(discover) data-discover="">"Découvrir"</a>
-                        <p class="rating"><span class="stars" aria-hidden="true">"★★★★★"</span> " 4,8/5 d'après nos clients"</p>
-                    </div>
-                    <div class="hero-art" aria-hidden="true" style="color: var(--coral)">(Unescaped::new_unchecked(PAW_SVG))</div>
+                    <span class="eyebrow">(TAGLINE)</span>
+                    <h1>"Présentez votre boutique en une phrase"</h1>
+                    <p>"Deux ou trois lignes pour dire ce que vous vendez, à qui, et pourquoi vous choisir."</p>
+                    <a class="btn" href=(discover) data-discover="">"Découvrir"</a>
                 </div>
             </section>
             if !newest.items.is_empty() {
@@ -406,9 +399,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             }
             <section class="block band">
                 <div class="wrap prose">
-                    <h2>"Home sweet home"</h2>
-                    <p>"Un panier douillet, une gamelle à sa taille, un griffoir pour sauver le canapé et de quoi jouer quand vous n'êtes pas là : tout ce qu'il faut pour qu'il se sente chez lui."</p>
-                    <a class="btn btn-ink" href=(href!(boutique::index))>"Voir la sélection"</a>
+                    <h2>"Notre sélection"</h2>
+                    <p>"Mettez ici en avant une gamme, une saison ou un temps fort de votre boutique."</p>
+                    <a class="btn" href=(href!(boutique::index))>"Voir la sélection"</a>
                 </div>
             </section>
             if !tiles.is_empty() {
@@ -422,8 +415,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         href=(href!(c::slug::index, c::slug::Slug(tile.node.category.slug.clone())))>
                                         if let Some(image) = &tile.image {
                                             product_image(image: image, attrs: attributes! {})
-                                        } else {
-                                            <span class="tile-art" style="color: var(--coral)">(Unescaped::new_unchecked(PAW_SVG))</span>
                                         }
                                         <span>(&tile.node.category.name) <small>(tile.node.product_count) " articles"</small></span>
                                     </a>
@@ -436,8 +427,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             <section class="block band">
                 <div class="wrap prose">
                     <h2>"À propos"</h2>
-                    <p>"Chatounette est née de deux amoureux des chats qui ne trouvaient pas, en une seule boutique, tout ce dont leurs compagnons avaient besoin. Nous sélectionnons chaque article pour sa qualité, son confort et, avouons-le, sa bouille."</p>
-                    <a class="btn btn-ghost" href=(href!(qui_sommes_nous::index))>"En savoir plus"</a>
+                    <p>"Racontez ici en quelques lignes qui vous êtes et comment vous choisissez vos produits."</p>
+                    <a class="btn" href=(href!(qui_sommes_nous::index))>"En savoir plus"</a>
                 </div>
             </section>
             if !quotes.is_empty() {
@@ -505,7 +496,7 @@ pub async fn reassurance() -> Result<impl View> {
             <li>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 12a8 8 0 0 1 16 0v5a2 2 0 0 1-2 2h-2v-6h4M4 12v5a2 2 0 0 0 2 2h2v-6H4"/></svg>
                 <strong>"Service client"</strong>
-                <p>"À votre écoute du lundi au samedi, de 9h à 18h."</p>
+                <p>"À votre écoute pour toute question."</p>
             </li>
             <li>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v5h5"/></svg>

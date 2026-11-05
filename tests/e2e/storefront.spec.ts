@@ -156,11 +156,11 @@ test("the storefront shows the catalogue in French", async ({
   // category tiles with their counts, the category bar.
   await page.goto(`${app.url}/`);
   await expect(page.locator("html")).toHaveAttribute("lang", "fr");
-  await expect(page).toHaveTitle(/Chatounette/);
+  await expect(page).toHaveTitle(/Ma boutique/);
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
-    "l'endroit parfait pour les accessoires",
+    "Présentez votre boutique",
   );
-  await expect(page.locator(".topbar")).toContainText("MONSTER10");
+  await expect(page.locator(".topbar")).toContainText("BIENVENUE10");
   const newest = page.locator("[data-section=nouveautes]");
   await expect(newest.getByRole("heading", { level: 2 })).toHaveText(
     "Nouveautés",
@@ -318,7 +318,7 @@ test("the storefront shows the catalogue in French", async ({
   );
   await expect(page.locator(".buy [data-price]")).toHaveText("19,90€");
   await expect(page.locator("[data-reassure]")).toContainText(
-    "Livraison gratuite dès 65€ d'achats",
+    "Livraison avec suivi",
   );
   await expect(
     page.getByRole("heading", { name: "Avis de nos clients" }),
@@ -466,7 +466,7 @@ test("the storefront shows the catalogue in French", async ({
     .click();
   await expect(page).toHaveURL(`${app.url}/support-client`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-    "Support client : contact@chatounette.localhost",
+    "Support client : contact@example.com",
   );
   await expect(
     page.getByRole("heading", { level: 2, name: "Nous contacter" }),

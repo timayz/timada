@@ -187,58 +187,56 @@ pub async fn cart_drawer(cx: &Cx, #[default] cart: Option<&CartView>) -> Result<
     })
 }
 
-/// The drawer's look, in the shop's coral and ink. It shows on the `#cart`
+/// The drawer's layout, in the browser's colours; the sheet is opaque in the
+/// system's. It shows on the `#cart`
 /// fragment (no script: the page loads with it open, no slide) or slides in
 /// on the `open` class (the script, which adds `shut` to slide it out while
 /// the fragment is still there).
 pub const DRAWER_CSS: &str = r#"
-.cart-link { position: relative; text-decoration: none; color: var(--ink); font-weight: 600; }
-.cart-link .count { display: inline-block; min-width: 1.3rem; height: 1.3rem; line-height: 1.3rem; margin-left: .3rem; border-radius: 1rem; background: var(--coral-dark); color: #fff; font-size: .75rem; text-align: center; }
+.cart-link { position: relative; text-decoration: none; font-weight: 600; }
+.cart-link .count { display: inline-block; min-width: 1.3rem; height: 1.3rem; line-height: 1.2rem; margin-left: .3rem; border: 1px solid; border-radius: 50%; font-size: .75rem; text-align: center; }
 .drawer { position: fixed; inset: 0; z-index: 50; display: flex; justify-content: flex-end; visibility: hidden; pointer-events: none; }
 .drawer.open, .drawer:target:not(.shut) { visibility: visible; pointer-events: auto; }
 .drawer.shut { transition: visibility 0s linear .3s; }
-.drawer-backdrop { position: absolute; inset: 0; background: rgba(61,59,92,.4); opacity: 0; }
-.drawer.open .drawer-backdrop, .drawer:target:not(.shut) .drawer-backdrop { opacity: 1; }
-.drawer-sheet { position: relative; display: flex; height: 100%; max-width: 100%; transform: translateX(100%); box-shadow: -8px 0 24px rgba(0,0,0,.12); }
+.drawer-backdrop { position: absolute; inset: 0; }
+.drawer-sheet { position: relative; display: flex; height: 100%; max-width: 100%; transform: translateX(100%); background: Canvas; color: CanvasText; border-left: 1px solid; }
 .drawer.open .drawer-sheet, .drawer:target:not(.shut) .drawer-sheet { transform: none; }
 .drawer.open .drawer-sheet, .drawer.shut .drawer-sheet { transition: transform .3s ease; }
-.drawer.open .drawer-backdrop, .drawer.shut .drawer-backdrop { transition: opacity .3s; }
-.drawer-panel { order: 2; width: 26rem; max-width: 100vw; box-sizing: border-box; height: 100%; overflow-y: auto; background: #fff; padding: 1rem 1.25rem 1.5rem; display: flex; flex-direction: column; gap: .75rem; }
-.drawer-head { display: flex; justify-content: space-between; align-items: center; margin: 0; border-bottom: 1px solid var(--line); padding-bottom: .75rem; }
-.drawer-head h2 { margin: 0; font-size: 1rem; font-weight: 600; color: var(--ink); }
-.drawer-close { font-size: 1.6rem; line-height: 1; text-decoration: none; color: var(--ink); padding: 0 .25rem; }
-.drawer .summary ul.lines li { border-bottom: 1px solid var(--line); }
-.drawer .summary .what a { color: var(--ink); text-decoration: none; }
-.drawer .summary .what small { display: block; color: var(--coral-dark); font-size: .8rem; }
+.drawer-panel { order: 2; width: 26rem; max-width: 100vw; box-sizing: border-box; height: 100%; overflow-y: auto; padding: 1rem 1.25rem 1.5rem; display: flex; flex-direction: column; gap: .75rem; }
+.drawer-head { display: flex; justify-content: space-between; align-items: center; margin: 0; border-bottom: 1px solid; padding-bottom: .75rem; }
+.drawer-head h2 { margin: 0; font-size: 1rem; font-weight: 600; }
+.drawer-close { font-size: 1.6rem; line-height: 1; text-decoration: none; padding: 0 .25rem; }
+.drawer .summary ul.lines li { border-bottom: 1px solid; }
+.drawer .summary .what a { text-decoration: none; }
+.drawer .summary .what small { display: block; font-size: .8rem; }
 .drawer .summary .qty button { cursor: pointer; }
 .drawer .summary .qty button:disabled { cursor: default; opacity: .4; }
 .drawer .summary details.promo { margin: .75rem 0; }
 .drawer .hint { margin: .5rem 0 0; font-size: .8rem; }
-.drawer a.place { display: block; text-align: center; text-decoration: none; padding: .9rem; border-radius: 2rem; background: var(--coral); color: #fff; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; box-shadow: 0 6px 16px rgba(242,139,143,.35); }
-.drawer a.place:hover { background: var(--coral-dark); }
-.drawer-continue { display: block; text-align: center; color: var(--ink); font-size: .9rem; }
-.drawer-empty { color: var(--muted); text-align: center; margin: 2rem 0 1rem; }
+.drawer a.place { display: block; text-align: center; text-decoration: none; padding: .9rem; border: 1px solid; font-weight: 600; }
+.drawer a.place:hover { text-decoration: underline; }
+.drawer-continue { display: block; text-align: center; font-size: .9rem; }
+.drawer-empty { text-align: center; margin: 2rem 0 1rem; }
 .drawer-express { margin: 0; }
-.upsell { order: 1; width: 11rem; height: 100%; box-sizing: border-box; overflow-y: auto; background: var(--coral-wash); padding: 1rem .75rem; border-right: 1px solid var(--line); }
-.upsell h2 { font-size: .85rem; font-weight: 600; color: var(--ink); text-align: center; margin: 0 0 1rem; }
+.upsell { order: 1; width: 11rem; height: 100%; box-sizing: border-box; overflow-y: auto; padding: 1rem .75rem; border-right: 1px solid; }
+.upsell h2 { font-size: .85rem; font-weight: 600; text-align: center; margin: 0 0 1rem; }
 .upsell ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1.25rem; }
-.upsell li { text-align: center; font-size: .8rem; color: var(--ink); }
-.upsell li > a { display: block; color: inherit; text-decoration: none; }
-.upsell .offer-pic { display: block; width: 4.5rem; height: 4.5rem; object-fit: cover; margin: 0 auto .4rem; border-radius: .4rem; background: #fff; }
-.upsell .price { display: block; margin: .2rem 0 .4rem; font-weight: 400; color: var(--muted); }
+.upsell li { text-align: center; font-size: .8rem; }
+.upsell li > a { display: block; text-decoration: none; }
+.upsell .offer-pic { display: block; width: 4.5rem; height: 4.5rem; object-fit: cover; margin: 0 auto .4rem; }
+.upsell .price { display: block; margin: .2rem 0 .4rem; font-weight: 400; }
 .upsell form { margin: 0; }
-.upsell button, .upsell .offer-options { border: 1px solid var(--coral); background: #fff; color: var(--coral-dark); border-radius: .3rem; padding: .25rem .9rem; font-size: .75rem; cursor: pointer; text-decoration: none; display: inline-block; }
-.upsell button:hover, .upsell .offer-options:hover { background: var(--coral); color: #fff; }
+.upsell button, .upsell .offer-options { border: 1px solid; background: none; color: inherit; padding: .25rem .9rem; font-size: .75rem; cursor: pointer; text-decoration: none; display: inline-block; }
 @media (max-width: 899px) {
   .drawer-sheet { flex-direction: column; width: 26rem; }
   .drawer-panel { order: 1; flex: 1; width: 100%; }
-  .upsell { order: 2; width: 100%; height: auto; flex: none; border-right: 0; border-top: 1px solid var(--line); padding: .75rem; }
+  .upsell { order: 2; width: 100%; height: auto; flex: none; border-right: 0; border-top: 1px solid; padding: .75rem; }
   .upsell h2 { text-align: left; margin-bottom: .5rem; }
   .upsell ul { flex-direction: row; overflow-x: auto; gap: 1rem; scroll-snap-type: x mandatory; }
   .upsell li { flex: 0 0 7rem; scroll-snap-align: start; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .drawer, .drawer-backdrop, .drawer-sheet { transition: none; }
+  .drawer, .drawer-sheet { transition: none; }
 }
 "#;
 
@@ -380,7 +378,6 @@ async function express() {
     mode: "payment",
     amount: Number(drawer.dataset.amount),
     currency: drawer.dataset.currency,
-    appearance: { variables: { colorPrimary: "#f46063", borderRadius: "6px" } },
   });
   const button = stripeElements.create("expressCheckout", { buttonHeight: 44 });
   button.mount("#drawer-express-checkout");

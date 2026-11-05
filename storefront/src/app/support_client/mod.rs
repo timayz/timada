@@ -1,4 +1,4 @@
-//! The support page at `/support-client`, as chatounette.com lays it out: the
+//! The support page at `/support-client`: the
 //! contact form on one side, the questions shoppers ask most on the other,
 //! the shop's four promises below. The form posts here too and hands the
 //! message to the dashboard, where the shop reads it; the shopper is told
@@ -18,29 +18,26 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::app::{document, reassurance, say};
-
-/// The address the page names, and the footer with it.
-pub const CONTACT_EMAIL: &str = "contact@chatounette.localhost";
+use crate::app::{CONTACT_EMAIL, document, reassurance, say};
 
 /// What the form says when the shop has nowhere to send messages (no
 /// dashboard address): the visitor is told to write instead.
 const MESSAGES_UNAVAILABLE: &str = "messages_unavailable";
 
-/// The questions and their answers, in the demo's own terms (its policy
-/// pages say the same).
+/// The questions and their answers: placeholders for your own, which your
+/// policy pages should agree with.
 pub const FAQ: &[(&str, &str)] = &[
     (
         "Votre site Web est-il sécurisé ?",
         "Oui : tout ce que vous saisissez transite chiffré, et le paiement est confié à Stripe. La boutique ne voit jamais votre numéro de carte.",
     ),
     (
-        "Sur quel serveur le site Web est-il hébergé ?",
-        "Sur la machine qui fait tourner cette démonstration. Chatounette est une boutique de démonstration de la plateforme timada : rien n'est expédié.",
+        "Qui édite et héberge ce site ?",
+        "L'éditeur et l'hébergeur du site sont indiqués dans nos mentions légales.",
     ),
     (
         "Quel est le délai de livraison prévu ?",
-        "Votre commande est préparée sous 24 à 48 heures ouvrées, puis livrée sous 3 à 7 jours en France, en Belgique et en Suisse, avec suivi de colis. La livraison est offerte dès 65 € d'achats.",
+        "Votre commande est préparée puis expédiée avec suivi de colis. Les pays desservis, les frais et les délais sont indiqués dans notre politique de livraison.",
     ),
     (
         "Quelles sont les étapes pour suivre votre colis ?",
@@ -52,7 +49,7 @@ pub const FAQ: &[(&str, &str)] = &[
     ),
     (
         "Vous souhaitez effectuer un retour produit ?",
-        "Écrivez-nous à contact@chatounette.localhost : nous vous indiquons la marche à suivre. L'article revient complet et en bon état ; le remboursement intervient dans les 14 jours suivant sa réception.",
+        "Écrivez-nous depuis cette page : nous vous indiquons la marche à suivre. L'article revient complet et en bon état ; le remboursement intervient dans les 14 jours suivant sa réception.",
     ),
     (
         "Puis-je me renseigner sur votre politique concernant les retours ?",
@@ -73,8 +70,8 @@ pub const SEARCH_ENTRY: SearchEntry = SearchEntry {
     slug: "support-client",
     title: "Support client",
     paragraphs: &[
-        "Nous contacter : une question sur un article, une commande, un retour ? Le service client répond du lundi au samedi.",
-        "Questions fréquemment posées : sécurité, hébergement, délai de livraison, suivi de colis, annulation, retour produit, politique de retours.",
+        "Nous contacter : une question sur un article, une commande, un retour ? Le service client vous répond.",
+        "Questions fréquemment posées : sécurité, éditeur et hébergeur, délai de livraison, suivi de colis, annulation, retour produit, politique de retours.",
     ],
 };
 
@@ -143,7 +140,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <p class="notice" role="alert">(say_support(code))</p>
                         }
                         if sent {
-                            <p class="notice" role="status" data-sent="">"Message envoyé : nous vous répondons sous 24 h ouvrées, à l'adresse indiquée."</p>
+                            <p class="notice" role="status" data-sent="">"Message envoyé : nous vous répondons à l'adresse indiquée."</p>
                         }
                         if takes {
                             <form class="checkout" method="post" action=(href!(send)) data-support-form="">
@@ -161,11 +158,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <label>"Message"
                                     <textarea name="body" rows="6" required="" minlength="10" maxlength="4000"></textarea>
                                 </label>
-                                <p class="hint">"Nous répondons du lundi au samedi, de 9h à 18h."</p>
-                                <button class="btn">"Envoyer"</button>
+                                                                <button class="btn">"Envoyer"</button>
                             </form>
                         } else {
-                            <p data-support-unavailable="">"Écrivez-nous à " <a href=(format!("mailto:{CONTACT_EMAIL}"))>(CONTACT_EMAIL)</a> " : nous répondons du lundi au samedi, de 9h à 18h."</p>
+                            <p data-support-unavailable="">"Écrivez-nous à " <a href=(format!("mailto:{CONTACT_EMAIL}"))>(CONTACT_EMAIL)</a> "."</p>
                         }
                     </div>
                     <div class="card panel">

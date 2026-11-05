@@ -76,30 +76,30 @@ pub async fn site_menu(nav: &[CategoryNode]) -> Result<impl View> {
 /// is styled with the masthead, in `theme.css`.)
 pub const MENU_CSS: &str = r#"
 .menu-close { display: none; }
-nav.sections { position: relative; border-bottom: 1px solid var(--line); background: var(--paper); }
-nav.sections a { color: inherit; text-decoration: none; }
-nav.sections a:hover, nav.sections a:focus-visible { color: var(--coral-dark); }
+nav.sections { position: relative; border-bottom: 1px solid; }
+nav.sections a { text-decoration: none; }
+nav.sections a:hover, nav.sections a:focus-visible { text-decoration: underline; }
 ul.menu-bar { list-style: none; padding: 0; margin: 0 auto; width: min(1200px, 100% - 2rem); display: flex; flex-wrap: wrap; justify-content: center; gap: 0 1.75rem; }
-.menu-top { display: inline-block; padding: .75rem 0; font-size: .85rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--ink); cursor: pointer; }
+.menu-top { display: inline-block; padding: .75rem 0; font-size: .85rem; font-weight: 700; cursor: pointer; }
 summary.menu-top { list-style: none; }
 summary.menu-top::-webkit-details-marker { display: none; }
-summary.menu-top::after { content: '▾'; margin-left: .3rem; font-size: .7rem; color: var(--muted); }
-details[open] > summary.menu-top { color: var(--coral-dark); }
-.menu-panel { position: absolute; left: 0; right: 0; top: 100%; z-index: 30; background: var(--paper); border: 1px solid var(--line); border-top: 2px solid var(--coral); box-shadow: var(--shadow); padding: 1.25rem max(1.5rem, calc((100% - 1200px) / 2)); }
-nav.sections a.menu-all { display: inline-block; margin-bottom: 1rem; font-weight: 700; color: var(--coral-dark); }
+summary.menu-top::after { content: '▾'; margin-left: .3rem; font-size: .7rem; }
+details[open] > summary.menu-top { text-decoration: underline; }
+.menu-panel { position: absolute; left: 0; right: 0; top: 100%; z-index: 30; background: Canvas; color: CanvasText; border: 1px solid; padding: 1.25rem max(1.5rem, calc((100% - 1200px) / 2)); }
+nav.sections a.menu-all { display: inline-block; margin-bottom: 1rem; font-weight: 700; }
 ul.menu-columns { list-style: none; padding: 0; margin: 0; columns: 12rem; column-gap: 2rem; }
 ul.menu-columns > li { break-inside: avoid; margin-bottom: .9rem; }
-nav.sections a.menu-heading { font-weight: 700; color: var(--ink); }
-ul.menu-columns ul { list-style: none; padding: 0 0 0 .75rem; margin: .25rem 0 0; font-size: .9rem; color: var(--muted); }
+nav.sections a.menu-heading { font-weight: 700; }
+ul.menu-columns ul { list-style: none; padding: 0 0 0 .75rem; margin: .25rem 0 0; font-size: .9rem; }
 ul.menu-columns ul li { margin: .15rem 0; }
 @media (max-width: 900px) {
   nav.sections { display: none; border: 0; margin: 0; }
-  nav.sections:target { display: block; position: fixed; inset: 0; z-index: 40; overflow-y: auto; background: var(--paper); padding: 1rem; }
-  nav.sections .menu-close { display: block; margin-bottom: 1rem; color: var(--coral-dark); }
+  nav.sections:target { display: block; position: fixed; inset: 0; z-index: 40; overflow-y: auto; background: Canvas; color: CanvasText; padding: 1rem; }
+  nav.sections .menu-close { display: block; margin-bottom: 1rem; }
   ul.menu-bar { display: block; width: auto; }
-  .menu-item { border-bottom: 1px solid var(--line); }
+  .menu-item { border-bottom: 1px solid; }
   .menu-top { display: block; }
-  .menu-panel { position: static; border: 0; box-shadow: none; padding: 0 0 1rem 1rem; }
+  .menu-panel { position: static; border: 0; padding: 0 0 1rem 1rem; }
   ul.menu-columns { columns: auto; }
 }
 "#;

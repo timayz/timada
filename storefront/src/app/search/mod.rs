@@ -1,5 +1,5 @@
 //! The live search at `/search?q=`: not a page but the dropdown the masthead
-//! shows as the shopper types, as chatounette.com does. The products that
+//! shows as the shopper types. The products that
 //! match (as `/boutique` finds them), the categories whose name matches, the
 //! link to all the results, then the shop's own pages under "Autres
 //! résultats". The masthead's script fetches it and drops it under the box;
@@ -168,19 +168,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 /// The dropdown under the masthead's search box.
 pub const SEARCH_CSS: &str = r#"
 form.search { position: relative; }
-.search-drop { position: absolute; left: 0; right: 0; top: 100%; z-index: 35; margin-top: .35rem; max-height: 70vh; overflow-y: auto; background: var(--paper); border: 1px solid var(--line); border-top: 2px solid var(--coral); border-radius: 0 0 var(--radius) var(--radius); box-shadow: var(--shadow); text-align: left; }
+.search-drop { position: absolute; left: 0; right: 0; top: 100%; z-index: 35; margin-top: .35rem; max-height: 70vh; overflow-y: auto; background: Canvas; color: CanvasText; border: 1px solid; text-align: left; }
 .search-list { list-style: none; margin: 0; padding: 0; }
-.search-row { display: flex; align-items: center; gap: .75rem; padding: .6rem .85rem; border-bottom: 1px solid var(--line); color: var(--ink); text-decoration: none; font-size: .9rem; }
-.search-row:hover, .search-row:focus-visible { background: var(--coral-wash); outline: none; }
-.search-pic { flex: none; width: 3.5rem; height: 3.5rem; object-fit: cover; border-radius: .4rem; background: var(--soft); }
+.search-row { display: flex; align-items: center; gap: .75rem; padding: .6rem .85rem; border-bottom: 1px solid; text-decoration: none; font-size: .9rem; }
+.search-row:hover .search-name { text-decoration: underline; }
+.search-pic { flex: none; width: 3.5rem; height: 3.5rem; object-fit: cover; }
 .search-text { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
 .search-name { font-weight: 700; }
-.search-price { color: var(--muted); }
-.search-kind { margin-left: auto; flex: none; font-size: .7rem; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
-.search-all { display: block; padding: .7rem; background: var(--ink); color: #fff; text-align: center; text-decoration: none; text-transform: uppercase; font-size: .8rem; font-weight: 700; letter-spacing: .04em; }
-.search-all:hover, .search-all:focus-visible { background: var(--coral-dark); outline: none; }
-.search-heading { margin: 0; padding: .6rem .85rem .3rem; font-size: 1rem; font-weight: 700; color: var(--ink-soft); }
-.search-empty { margin: 0; padding: .8rem .85rem; color: var(--muted); }
+.search-kind { margin-left: auto; flex: none; font-size: .7rem; }
+.search-all { display: block; padding: .7rem; text-align: center; text-decoration: none; font-size: .8rem; font-weight: 700; }
+.search-all:hover { text-decoration: underline; }
+.search-heading { margin: 0; padding: .6rem .85rem .3rem; font-size: 1rem; font-weight: 700; }
+.search-empty { margin: 0; padding: .8rem .85rem; }
 "#;
 
 /// Fetches `/search?q=` as the shopper types and drops it under the box:

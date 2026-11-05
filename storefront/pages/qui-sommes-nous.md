@@ -1,9 +1,7 @@
 ---
 title: Qui sommes-nous ?
-meta_description: Chatounette, la boutique de deux amoureux des chats.
+meta_description: Qui nous sommes et ce que nous vendons.
 ---
-Chatounette est née de deux amoureux des chats qui ne trouvaient pas, en une seule boutique, tout ce dont leurs compagnons avaient besoin : un couchage vraiment douillet, des jouets qui résistent, des accessoires jolis sans être fragiles.
+Présentez ici votre boutique : qui vous êtes, ce que vous vendez et comment vous choisissez vos produits.
 
-Nous testons ce que nous vendons avec nos propres chats, Moustache et Praline, qui ont un avis très arrêté sur les griffoirs.
-
-Cette version de la boutique est une démonstration de la plateforme timada : la vitrine, le panier, le paiement et les avis fonctionnent comme dans une vraie boutique, sans qu'aucun colis ne parte.
+Ce texte, comme celui des autres pages de la boutique, se modifie dans le back-office.

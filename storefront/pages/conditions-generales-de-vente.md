@@ -11,5 +11,3 @@ Les prix sont indiqués en euros, toutes taxes comprises, hors frais de livraiso
 ## Droit de rétractation
 
 Conformément au droit de la consommation, vous disposez de **14 jours** à compter de la réception pour changer d'avis, sans avoir à vous justifier. Les articles doivent être retournés complets et en bon état.
-
-Cette boutique étant une démonstration, aucune de ces dispositions ne crée d'engagement réel.

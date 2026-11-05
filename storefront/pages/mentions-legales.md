@@ -1,13 +1,17 @@
 ---
 title: Mentions légales
-meta_description: Qui édite et héberge cette boutique de démonstration.
+meta_description: Qui édite et héberge cette boutique.
 ---
-Ce site est une boutique de démonstration construite sur la plateforme timada. Il reprend la présentation d'une boutique en ligne pour montrer ce qu'un marchand peut y publier ; aucune société n'exploite ce site et aucune commande n'y est honorée.
+Indiquez ici les informations légales de votre société.
 
-## Éditeur et hébergement
+## Éditeur
 
-Éditeur : l'équipe timada, pour les besoins de la démonstration. Hébergement : la machine sur laquelle vous l'avez lancé.
+Raison sociale, forme juridique, capital, adresse du siège, numéro d'immatriculation, numéro de TVA, directeur de la publication et moyen de vous contacter.
+
+## Hébergement
+
+Nom, adresse et téléphone de votre hébergeur.
 
 ## Propriété intellectuelle
 
-Les textes et photographies des produits proviennent du catalogue public dont cette démonstration s'inspire et restent la propriété de leurs auteurs.
+À qui appartiennent les textes et les photographies de ce site.

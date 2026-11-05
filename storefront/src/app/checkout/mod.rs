@@ -264,7 +264,6 @@ if (key && window.Stripe) {
     mode: "payment",
     amount: Number(form.dataset.amount),
     currency: form.dataset.currency,
-    appearance: { variables: { colorPrimary: "#f46063", borderRadius: "6px" } },
   });
   // The details and the address are asked above: Stripe's form asks
   // nothing again (no second country), and they are handed to it below.
@@ -366,9 +365,8 @@ function phoneText() {
   return `+${code} ${national}`.trim();
 }
 
-// The select, kept for a page without script and styled like the button
-// that takes its place (same text, width and chevron, so nothing moves),
-// becomes a button showing the flag and code, opening a searchable list
+// The select, kept for a page without script and as wide as the button
+// that takes its place (so nothing moves), becomes a button showing the flag and code, opening a searchable list
 // of every country: its flag, its name in the shopper's language (the
 // browser knows it from the code) and its code, the one picked ticked.
 const flagOf = (iso) => [...iso].map((c) => String.fromCodePoint(0x1f1e6 + c.charCodeAt(0) - 65)).join("");
@@ -788,10 +786,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <section class="reassure">
                         <h2>"Commandez en toute confiance"</h2>
                         <ul>
-                            <li>"Livraison gratuite dès 65€ d'achats"</li>
-                            <li>"Livraison avec suivi en France, Belgique, Suisse"</li>
+                            <li>"Livraison avec suivi"</li>
                             <li>"14 jours satisfait ou remboursé"</li>
-                            <li>"Service client disponible 6/7J"</li>
+                            <li>"Un service client à votre écoute"</li>
                             <li>"Paiement sécurisé"</li>
                         </ul>
                     </section>
@@ -973,7 +970,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <textarea id="checkout-note" name="note" rows="2">(&draft.note)</textarea>
                             <label class="check">
                                 <input type="checkbox" name="newsletter" value="1" data-checkout-newsletter="">
-                                " Je souhaite recevoir les nouveautés et offres de Chatounette par e-mail (un lien de confirmation vous est envoyé)"
+                                " Je souhaite recevoir les nouveautés et offres de la boutique par e-mail (un lien de confirmation vous est envoyé)"
                             </label>
                         </section>
                         if !offers.is_empty() {

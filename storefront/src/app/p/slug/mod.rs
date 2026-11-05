@@ -147,10 +147,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <button class="btn" disabled=(sold_out)>"Ajouter au panier"</button>
                         </form>
                         <ul class="reassure-list" data-reassure="">
-                            <strong>"Livraison gratuite dès 65€ d'achats"</strong>
-                            <li>"Livraison avec suivi en France, Belgique, Suisse"</li>
+                            <li>"Livraison avec suivi"</li>
                             <li>"14 jours satisfait ou remboursé"</li>
-                            <li>"Service client disponible 6/7J"</li>
+                            <li>"Un service client à votre écoute"</li>
                         </ul>
                         if !product.options.is_empty() {
                             <details>

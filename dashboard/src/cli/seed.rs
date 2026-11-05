@@ -91,7 +91,7 @@ const SHIPPING_METHOD: &str = "Livraison avec suivi";
 const SHIPPING_CENTS: u64 = 490;
 const FREE_ABOVE_CENTS: u64 = 6_500;
 const SHIPPING_COUNTRIES: &[&str] = &["FR", "BE", "CH"];
-const PROMO_CODE: &str = "MONSTER10";
+const PROMO_CODE: &str = "BIENVENUE10";
 /// Basis points: 10 %.
 const PROMO_PERCENT: u32 = 1_000;
 /// How long the seed waits for the other nodes of a cluster to answer.

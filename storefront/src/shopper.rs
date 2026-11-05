@@ -17,7 +17,7 @@ const MAX_AGE_DAYS: i64 = 30;
 /// How many of its orders a browser remembers.
 const RECENT_ORDERS: usize = 10;
 
-// Not `Secure`: the example is served over plain HTTP on 127.0.0.1. A shop
+// Not `Secure`: the app is served over plain HTTP on 127.0.0.1. A shop
 // behind HTTPS sets it (and may use a `__Host-` name).
 fn jar(cx: &Cx) -> impl Cookies + '_ {
     private_cookies(cx)

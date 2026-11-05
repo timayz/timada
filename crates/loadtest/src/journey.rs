@@ -21,7 +21,7 @@ use crate::stripe::FakeStripe;
 /// How long a paid order may take to show before it counts as lost.
 const ORDER_DEADLINE: Duration = Duration::from_secs(60);
 /// The promo code `seed` gives the shop.
-const PROMO_CODE: &str = "MONSTER10";
+const PROMO_CODE: &str = "BIENVENUE10";
 
 /// How shoppers behave, as probabilities and means.
 #[derive(Clone, Debug)]

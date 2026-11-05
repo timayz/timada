@@ -30,7 +30,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             <div class="wrap">
                 <h1>"Confirmer votre inscription"</h1>
                 <div class="card panel">
-                    <p>"Un clic encore et vous recevrez la newsletter Chatounette."</p>
+                    <p>"Un clic encore et vous recevrez notre newsletter."</p>
                     <form method="post" action=(href!(submit, Token(token))) data-newsletter-confirm="">
                         <button class="btn">"Confirmer mon inscription"</button>
                     </form>

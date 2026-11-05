@@ -106,7 +106,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <nav class="crumbs" aria-label="Fil d'Ariane">
                     <a href=(href!(crate::app::index))>"Accueil"</a> " / " (title)
                 </nav>
-                <h1>"La newsletter Chatounette"</h1>
+                <h1>"Notre newsletter"</h1>
                 <div class="card panel" data-newsletter="">
                     if let Some(code) = &query.error {
                         <p class="notice" role="alert" data-newsletter-error=(code)>(say_newsletter(code))</p>
