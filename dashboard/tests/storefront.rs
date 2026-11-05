@@ -42,9 +42,9 @@ use timada_core::db::Db;
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
     SubscriptionState, category_ancestors, find_category, menu_of, published_categories,
-    published_category_body, published_category_by_slug, published_page, published_product_by_slug,
-    published_product_categories, published_products, published_related_products,
-    search_published_pages,
+    published_category_body, published_category_by_slug, published_option_values, published_page,
+    published_product_by_slug, published_product_categories, published_products,
+    published_related_products, search_published_pages,
 };
 use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenantState,
@@ -1091,6 +1091,182 @@ async fn a_store_carries_the_variants_a_shopper_picks_from() {
             == Some("22.90 €".to_owned())
     })
     .await;
+
+    store.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_store_shows_only_what_a_hidden_option_leaves_on_sale() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme);
+
+    // A tunnel shipping from China in two colours, plenty of each, and from
+    // France in one, sold out.
+    let tunnel_id = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Cat Tunnel".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    let from = catalog
+        .define_option(
+            "alice",
+            &tunnel_id,
+            "Ships From",
+            vec!["China".into(), "France".into()],
+        )
+        .await
+        .unwrap();
+    let colour = catalog
+        .define_option(
+            "alice",
+            &tunnel_id,
+            "Colour",
+            vec!["Rose".into(), "Blue".into()],
+        )
+        .await
+        .unwrap();
+    let mut french = String::new();
+    for (warehouse, shade, amount, on_hand) in [
+        ("China", "Rose", 1000u64, 9u32),
+        ("China", "Blue", 1100, 9),
+        ("France", "Rose", 1500, 0),
+    ] {
+        let variant = catalog
+            .define_variant(
+                "alice",
+                &tunnel_id,
+                DefineVariant {
+                    selections: vec![
+                        OptionSelection {
+                            option_id: from.clone(),
+                            value: warehouse.into(),
+                        },
+                        OptionSelection {
+                            option_id: colour.clone(),
+                            value: shade.into(),
+                        },
+                    ],
+                    sku: None,
+                    amount_cents: amount,
+                    currency: "EUR".into(),
+                    image_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        catalog
+            .set_stock("alice", &tunnel_id, Some(&variant), on_hand)
+            .await
+            .unwrap();
+        if warehouse == "France" {
+            french = variant;
+        }
+    }
+    catalog.publish_product("alice", &tunnel_id).await.unwrap();
+
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
+    eventually("every combination reaches the local copy", async || {
+        published_product_by_slug(&db, "cat-tunnel")
+            .await
+            .unwrap()
+            .is_some_and(|p| p.variants.len() == 3 && p.stock.len() == 3)
+    })
+    .await;
+    let facet = async |option: &str| -> Vec<String> {
+        published_option_values(&db, &ProductQuery::default(), option)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|value| value.label)
+            .collect()
+    };
+    assert_eq!(facet("Ships From").await, ["China", "France"]);
+
+    catalog
+        .hide_option("alice", &tunnel_id, &from, "France")
+        .await
+        .unwrap();
+    eventually("the hidden option reaches the local copy", async || {
+        published_product_by_slug(&db, "cat-tunnel")
+            .await
+            .unwrap()
+            .is_some_and(|p| p.variants.len() == 1)
+    })
+    .await;
+    let tunnel = published_product_by_slug(&db, "cat-tunnel")
+        .await
+        .unwrap()
+        .unwrap();
+    // The shop knows nothing of the option, nor of what it left off sale:
+    // not its price, its colour, or its stock.
+    assert_eq!(tunnel.options.len(), 1);
+    assert_eq!(tunnel.options[0].name, "Colour");
+    assert_eq!(tunnel.options[0].values, ["Rose"]);
+    assert_eq!(tunnel.variants[0].id, french);
+    assert_eq!(tunnel.variant_label(&tunnel.variants[0]), "Rose");
+    assert_eq!(
+        tunnel
+            .variant(&[(colour.clone(), "Rose".to_owned())])
+            .map(|v| v.id.as_str()),
+        Some(french.as_str())
+    );
+    assert_eq!(tunnel.price().as_deref(), Some("15.00 €"));
+    assert_eq!(tunnel.stock.len(), 1);
+    assert_eq!(tunnel.left(Some(&french)), Some(0));
+    assert!(!tunnel.in_stock, "the one on sale is sold out");
+    assert!(facet("Ships From").await.is_empty());
+    assert_eq!(facet("Colour").await, ["Rose"]);
+
+    // Every option hidden, there is nothing to choose: one variant, named by
+    // no pair at all.
+    catalog
+        .hide_option("alice", &tunnel_id, &colour, "Rose")
+        .await
+        .unwrap();
+    eventually(
+        "the second hidden option reaches the local copy",
+        async || {
+            published_product_by_slug(&db, "cat-tunnel")
+                .await
+                .unwrap()
+                .is_some_and(|p| p.options.is_empty())
+        },
+    )
+    .await;
+    let tunnel = published_product_by_slug(&db, "cat-tunnel")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tunnel.variant(&[]).map(|v| v.id.as_str()),
+        Some(french.as_str())
+    );
+    assert_eq!(tunnel.variant_label(&tunnel.variants[0]), "");
+
+    // Shown again, everything is back.
+    for option in [&from, &colour] {
+        catalog
+            .show_option("alice", &tunnel_id, option)
+            .await
+            .unwrap();
+    }
+    eventually("the shown options reach the local copy", async || {
+        published_product_by_slug(&db, "cat-tunnel")
+            .await
+            .unwrap()
+            .is_some_and(|p| p.options.len() == 2 && p.variants.len() == 3 && p.in_stock)
+    })
+    .await;
+    assert_eq!(facet("Ships From").await, ["China", "France"]);
 
     store.shutdown().await;
 }

@@ -1,10 +1,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use timada_aliexpress::aggregator::NewSku;
 use timada_aliexpress::{
     AeProduct, AeSku, AeSkuProperty, Fit, LinkState, LinkStatus, SyncRead, add_combinations,
     apply_sync, fit, map_product, track_imported,
 };
+use timada_catalog::{CreateProduct, DefineVariant, OptionSelection};
 use timada_catalog_import::{ImportOptions, NoImages, import_one};
 use timada_tenancy::{Pricing, PricingRule, Rounding};
 
@@ -687,4 +689,107 @@ async fn a_read_finds_new_combinations_the_merchant_adds_or_ignores() {
         .await
         .unwrap();
     assert!(outcome.found.is_empty());
+}
+
+#[tokio::test]
+async fn a_combination_a_hidden_option_leaves_off_sale_is_not_offered_as_fitting() {
+    let executor = executor().await;
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let product_id = catalog
+        .create_product(
+            ALICE,
+            CreateProduct {
+                name: "Cat Tunnel".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+    let from = catalog
+        .define_option(
+            ALICE,
+            &product_id,
+            "Ships From",
+            vec!["China".into(), "France".into()],
+        )
+        .await
+        .unwrap();
+    let colour = catalog
+        .define_option(ALICE, &product_id, "Color", vec!["Rose".into()])
+        .await
+        .unwrap();
+    let mut french = None;
+    for warehouse in ["China", "France"] {
+        let variant = catalog
+            .define_variant(
+                ALICE,
+                &product_id,
+                DefineVariant {
+                    selections: vec![
+                        OptionSelection {
+                            option_id: from.clone(),
+                            value: warehouse.into(),
+                        },
+                        OptionSelection {
+                            option_id: colour.clone(),
+                            value: "Rose".into(),
+                        },
+                    ],
+                    sku: None,
+                    amount_cents: 1000,
+                    currency: "EUR".into(),
+                    image_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        if warehouse == "France" {
+            french = Some(variant);
+        }
+    }
+    catalog
+        .hide_option(ALICE, &product_id, &from, "France")
+        .await
+        .unwrap();
+    let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+    let found = |warehouse: &str, shade: &str| NewSku {
+        sku_id: "12000037009".into(),
+        selections: vec![
+            ("Ships From".into(), warehouse.into()),
+            ("Color".into(), shade.into()),
+        ],
+        cost_cents: 300,
+        available: 5,
+        image: None,
+    };
+
+    // Another warehouse would not be on sale; the merchant is told why.
+    let fitted = fit(&product, &found("China", "Blue"));
+    assert_eq!(
+        fitted,
+        Fit::OffSale {
+            option: "Ships From".into(),
+            value: "France".into(),
+        }
+    );
+    assert_eq!(
+        fitted.reason().as_deref(),
+        Some("Ships From is hidden from shoppers at France: it would not be on sale.")
+    );
+
+    // The value on sale fits, and what is a variant already stays linkable,
+    // on sale or not.
+    assert!(matches!(
+        fit(&product, &found("France", "Blue")),
+        Fit::Fits { ref new_values, .. } if new_values.len() == 1
+    ));
+    assert_eq!(
+        fit(&product, &found("France", "Rose")),
+        Fit::Exists(french.unwrap())
+    );
+    assert!(matches!(
+        fit(&product, &found("China", "Rose")),
+        Fit::Exists(_)
+    ));
 }

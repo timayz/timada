@@ -127,6 +127,22 @@ pub enum Product {
         label: Option<String>,
         labelled_by: String,
     },
+    /// Shoppers stop choosing the option: the shop sells only the combinations
+    /// taking `value` and shows them without it (where an imported product
+    /// ships from, say). The other combinations stay, off sale, so an import
+    /// still finds them all. Hiding it again moves what is on sale to another
+    /// value.
+    OptionHidden {
+        option_id: String,
+        value: String,
+        hidden_by: String,
+    },
+    /// Shoppers choose the option again, and every combination it left off
+    /// sale is back.
+    OptionShown {
+        option_id: String,
+        shown_by: String,
+    },
     /// One combination of the options, with its own price: what a shopper
     /// actually buys. `selections` names a value for every option, once.
     VariantDefined {

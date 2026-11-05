@@ -161,9 +161,10 @@ pub struct Product {
     pub updated_at: i64,
     /// Its pictures, in the order the merchant put them.
     pub images: Vec<Image>,
-    /// The ways it varies; empty when it does not.
+    /// The ways it varies that shoppers choose, with the values on sale;
+    /// empty when there is nothing to choose.
     pub options: Vec<ProductOption>,
-    /// The combinations it sells, each with its own price.
+    /// The combinations on sale, each with its own price.
     pub variants: Vec<Variant>,
     /// The facts in its table.
     pub attributes: Vec<Attribute>,
@@ -252,7 +253,8 @@ impl Product {
     }
 
     /// What a shopper reads for a variant: the values it takes, each as its
-    /// option shows it (`Sable / Large`).
+    /// option shows it (`Sable / Large`). Empty when the merchant hid every
+    /// option.
     pub fn variant_label(&self, variant: &Variant) -> String {
         variant
             .selections
@@ -270,7 +272,8 @@ impl Product {
     }
 
     /// The variant those `(option id, value)` pairs name, if the product
-    /// sells it: what a page resolves its menus to.
+    /// sells it: what a page resolves its menus to. With every option hidden
+    /// there is one, named by no pair at all.
     pub fn variant(&self, picked: &[(String, String)]) -> Option<&Variant> {
         self.variants.iter().find(|variant| variant.matches(picked))
     }

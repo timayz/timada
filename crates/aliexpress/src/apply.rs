@@ -322,6 +322,9 @@ pub enum Fit {
     TooManyValues(String),
     /// The product has all the variants it can sell.
     TooManyVariants,
+    /// The merchant hid this option at another value, so it would not be on
+    /// sale.
+    OffSale { option: String, value: String },
 }
 
 impl Fit {
@@ -342,6 +345,9 @@ impl Fit {
             Self::MissingOption(name) => format!("It names no {name}."),
             Self::TooManyValues(name) => format!("{name} has all the values it can take."),
             Self::TooManyVariants => "The product has all the variants it can sell.".into(),
+            Self::OffSale { option, value } => {
+                format!("{option} is hidden from shoppers at {value}: it would not be on sale.")
+            }
         })
     }
 }
@@ -392,6 +398,21 @@ pub fn fit(product: &ProductState, found: &NewSku) -> Fit {
     }
     if let Some(variant) = product.variant_for(&selections) {
         return Fit::Exists(variant.id.clone());
+    }
+    if let Some((option, fixed)) =
+        product
+            .options
+            .iter()
+            .zip(&selections)
+            .find_map(|(option, selection)| {
+                let fixed = option.fixed_value.as_ref()?;
+                (*fixed != selection.value).then_some((option, fixed))
+            })
+    {
+        return Fit::OffSale {
+            option: option.name.clone(),
+            value: fixed.clone(),
+        };
     }
     if product.variants.len() >= MAX_VARIANTS {
         return Fit::TooManyVariants;

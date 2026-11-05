@@ -161,6 +161,10 @@ pub fn describe_error(code: &str) -> &'static str {
             "The options cannot change while the product has variants. Remove them first."
         }
         "option_value_in_use" => "A variant still uses one of the values you dropped.",
+        "option_value_not_sold" => "No variant would be on sale at this value.",
+        "option_hidden_at_value" => {
+            "This option is hidden from shoppers at a value you dropped. Show it first."
+        }
         "too_many_variants" => "A product sells at most a hundred variants.",
         "invalid_selection" => "Choose a value for every option.",
         "variant_exists" => "This combination is already sold as another variant.",

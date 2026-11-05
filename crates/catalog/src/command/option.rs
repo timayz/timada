@@ -5,8 +5,8 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{
-    OptionDefined, OptionLabelled, OptionRemoved, OptionRenamed, OptionValueLabelled,
-    OptionValuesChanged,
+    OptionDefined, OptionHidden, OptionLabelled, OptionRemoved, OptionRenamed, OptionShown,
+    OptionValueLabelled, OptionValuesChanged,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
@@ -105,8 +105,9 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Replaces the values an option takes. A value a variant still uses
-    /// cannot be dropped; the same list is a no-op.
+    /// Replaces the values an option takes. A value a variant still uses, or
+    /// the one the option is hidden at, cannot be dropped; the same list is a
+    /// no-op.
     pub async fn change_option_values(
         &self,
         actor: &str,
@@ -130,6 +131,13 @@ impl<E: Executor> super::Command<E> {
         });
         if in_use {
             return Err(CatalogError::OptionValueInUse);
+        }
+        if option
+            .fixed_value
+            .as_ref()
+            .is_some_and(|fixed| !values.contains(fixed))
+        {
+            return Err(CatalogError::OptionHiddenAtValue);
         }
         product
             .write()?
@@ -202,6 +210,77 @@ impl<E: Executor> super::Command<E> {
             return Ok(());
         }
         write.tenant(&self.tenant).commit(&self.executor).await?;
+        Ok(())
+    }
+
+    /// Hides an option from shoppers at one of its values: the shop sells
+    /// only the combinations taking it, without asking, and leaves the option
+    /// out of what shoppers read. The variants do not move, so an import that
+    /// named them still finds them, and this changes while they are sold, like
+    /// labels. Refused at a value that would leave nothing on sale; the same
+    /// value is a no-op.
+    pub async fn hide_option(
+        &self,
+        actor: &str,
+        product_id: &str,
+        option_id: &str,
+        value: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let value = value.trim();
+        let product = self.require_editable(product_id).await?;
+        let option = product
+            .option(option_id)
+            .ok_or(CatalogError::OptionNotFound)?;
+        if !option.values.iter().any(|known| known == value) {
+            return Err(CatalogError::OptionValueNotFound);
+        }
+        if option.fixed_value.as_deref() == Some(value) {
+            return Ok(());
+        }
+        if !product.can_hide_at(option_id, value) {
+            return Err(CatalogError::OptionValueNotSold);
+        }
+        product
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&OptionHidden {
+                option_id: option_id.to_owned(),
+                value: value.to_owned(),
+                hidden_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await?;
+        Ok(())
+    }
+
+    /// Lets shoppers choose an option again, every combination back on sale.
+    /// One they choose already is a no-op.
+    pub async fn show_option(
+        &self,
+        actor: &str,
+        product_id: &str,
+        option_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let product = self.require_editable(product_id).await?;
+        let option = product
+            .option(option_id)
+            .ok_or(CatalogError::OptionNotFound)?;
+        if !option.is_hidden() {
+            return Ok(());
+        }
+        product
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&OptionShown {
+                option_id: option_id.to_owned(),
+                shown_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await?;
         Ok(())
     }
 
