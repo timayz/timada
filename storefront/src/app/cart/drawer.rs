@@ -14,7 +14,7 @@ use topcoat::{
 };
 
 use super::{add::add, discount, drawer_url, summary_line};
-use crate::app::checkout::countries::COUNTRIES;
+use crate::app::checkout::countries::countries_for;
 use crate::app::say;
 
 /// How many products the "frequently bought together" column offers.
@@ -67,9 +67,9 @@ pub async fn cart_drawer(cx: &Cx, #[default] cart: Option<&CartView>) -> Result<
         .as_ref()
         .map(|setup| setup.publishable_key.clone())
         .unwrap_or_default();
-    let countries = COUNTRIES
-        .iter()
-        .map(|(code, _)| *code)
+    let methods = cart.as_ref().map_or(&[][..], |cart| &cart.shipping_options);
+    let countries = countries_for(methods)
+        .map(|(code, _)| code)
         .filter(|code| cart.as_ref().is_none_or(|cart| cart.ships_to(code)))
         .collect::<Vec<_>>()
         .join(",");

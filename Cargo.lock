@@ -6819,6 +6819,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "rust_iso3166",
  "serde",
  "serde_json",
  "serde_urlencoded",

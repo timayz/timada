@@ -12,6 +12,7 @@ import {
   BERLIN,
   PARIS,
   type Place,
+  addShippingMethod,
   addToCart,
   confirmPayment,
   connectStripe,
@@ -726,6 +727,66 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({
     });
   } finally {
     await vies.stop();
+    await stripe.stop();
+  }
+});
+
+test("a country only a shipping method names is offered, and sold to as an export", async ({
+  page,
+  request,
+}) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Overseas Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    await setLegalIdentity(page, slug);
+    const webhookUrl = await connectStripe(page, slug);
+
+    await addShippingMethod(page, slug, "Outre-mer", "9,90", "Martinique MQ");
+
+    await app.start(request, await mintKey(page, slug, true), 1);
+    await page.goto(`${SHOP}/p/blue-mug`);
+    await addToCart(page);
+    await page.goto(`${SHOP}/checkout`);
+
+    // The only place it delivers, where the checkout starts. It has no list,
+    // so its city is typed.
+    const country = page.getByLabel("Pays", { exact: true });
+    await expect(country.locator("option")).toHaveText(["Martinique"]);
+    await expect(country).toHaveValue("MQ");
+    await emailField(page).fill("ada@example.org");
+    await page.getByLabel("Nom complet").fill("Ada Lovelace");
+    await page.getByLabel("Téléphone").fill("06 12 34 56 78");
+    await page.getByLabel("Adresse", { exact: true }).fill("1 rue Victor Hugo");
+    await page.getByLabel("Code postal", { exact: true }).fill("97200");
+    await page.getByLabel("Code postal", { exact: true }).blur();
+    await expect(
+      page.getByLabel(/^(Département|Région \/ Province)$/),
+    ).toBeHidden();
+    await page
+      .getByRole("textbox", { name: "Ville", exact: true })
+      .fill("Fort-de-France");
+    await payButton(page).click();
+    await expect(page).toHaveURL(
+      /\/checkout\/complete\?.*redirect_status=succeeded/,
+      { timeout: 30_000 },
+    );
+    expect(stripe.lastIntent()!.amount).toBe(2240);
+    await confirmPayment(page, request, SHOP, stripe, webhookUrl);
+
+    const year = new Date().getUTCFullYear();
+    await expect(async () => {
+      await page.goto(`/t/${slug}/invoices`);
+      await expect(
+        page.locator(
+          `[data-document="F${year}-000001"] [data-document-regime]`,
+        ),
+      ).toHaveAttribute("data-document-regime", "export", { timeout: 1000 });
+    }).toPass({ timeout: 20_000 });
+  } finally {
     await stripe.stop();
   }
 });

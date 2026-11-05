@@ -59,6 +59,28 @@ export const emailField = (page: Page) =>
 export const payButton = (page: Page) =>
   page.getByRole("button", { name: /^Payer ma commande/ });
 
+/// Adds a shipping method for one country, by the name of its checkbox on the
+/// shipping page (`Martinique MQ`).
+export async function addShippingMethod(
+  page: Page,
+  slug: string,
+  name: string,
+  price: string,
+  country: string,
+) {
+  await page.goto(`/t/${slug}/shipping`);
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await page.getByLabel("Price").fill(price);
+  await page
+    .getByRole("group", { name: "Countries (optional)" })
+    .getByRole("checkbox", { name: country })
+    .check();
+  await page.getByRole("button", { name: "Add shipping method" }).click();
+  await expect(page.getByRole("status")).toContainText(
+    "Shipping method added.",
+  );
+}
+
 /// Where a parcel goes, as the checkout's lists name it: the province where
 /// the postal code does not name it, the city and, below a city that has them,
 /// the town.

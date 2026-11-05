@@ -1,5 +1,7 @@
 //! The countries the shop ships to, as the checkout's select lists them.
 
+use timada_storefront::ShippingOption;
+
 /// ISO 3166-1 alpha-2 and the name a shopper reads, in that order: the EU,
 /// then its neighbours and a few more.
 pub const COUNTRIES: &[(&str, &str)] = &[
@@ -37,6 +39,243 @@ pub const COUNTRIES: &[(&str, &str)] = &[
     ("GB", "Royaume-Uni"),
     ("US", "États-Unis"),
 ];
+
+/// Every other country a shipping method can name, for those a shop ticks: its
+/// shipping page offers them all. By their short French names in the CLDR.
+const OTHER_COUNTRIES: &[(&str, &str)] = &[
+    ("AF", "Afghanistan"),
+    ("ZA", "Afrique du Sud"),
+    ("AL", "Albanie"),
+    ("DZ", "Algérie"),
+    ("AD", "Andorre"),
+    ("AO", "Angola"),
+    ("AI", "Anguilla"),
+    ("AQ", "Antarctique"),
+    ("AG", "Antigua-et-Barbuda"),
+    ("SA", "Arabie saoudite"),
+    ("AR", "Argentine"),
+    ("AM", "Arménie"),
+    ("AW", "Aruba"),
+    ("AU", "Australie"),
+    ("AZ", "Azerbaïdjan"),
+    ("BS", "Bahamas"),
+    ("BH", "Bahreïn"),
+    ("BD", "Bangladesh"),
+    ("BB", "Barbade"),
+    ("BZ", "Belize"),
+    ("BJ", "Bénin"),
+    ("BM", "Bermudes"),
+    ("BT", "Bhoutan"),
+    ("BY", "Biélorussie"),
+    ("BO", "Bolivie"),
+    ("BA", "Bosnie-Herzégovine"),
+    ("BW", "Botswana"),
+    ("BR", "Brésil"),
+    ("BN", "Brunei"),
+    ("BF", "Burkina Faso"),
+    ("BI", "Burundi"),
+    ("KH", "Cambodge"),
+    ("CM", "Cameroun"),
+    ("CV", "Cap-Vert"),
+    ("CL", "Chili"),
+    ("CN", "Chine"),
+    ("CO", "Colombie"),
+    ("KM", "Comores"),
+    ("CG", "Congo-Brazzaville"),
+    ("CD", "Congo-Kinshasa"),
+    ("KP", "Corée du Nord"),
+    ("KR", "Corée du Sud"),
+    ("CR", "Costa Rica"),
+    ("CI", "Côte d’Ivoire"),
+    ("CU", "Cuba"),
+    ("CW", "Curaçao"),
+    ("DJ", "Djibouti"),
+    ("DM", "Dominique"),
+    ("EG", "Égypte"),
+    ("AE", "Émirats arabes unis"),
+    ("EC", "Équateur"),
+    ("ER", "Érythrée"),
+    ("SZ", "Eswatini"),
+    ("VA", "État de la Cité du Vatican"),
+    ("ET", "Éthiopie"),
+    ("FJ", "Fidji"),
+    ("GA", "Gabon"),
+    ("GM", "Gambie"),
+    ("GE", "Géorgie"),
+    ("GS", "Géorgie du Sud-et-les Îles Sandwich du Sud"),
+    ("GH", "Ghana"),
+    ("GI", "Gibraltar"),
+    ("GD", "Grenade"),
+    ("GL", "Groenland"),
+    ("GP", "Guadeloupe"),
+    ("GU", "Guam"),
+    ("GT", "Guatemala"),
+    ("GG", "Guernesey"),
+    ("GN", "Guinée"),
+    ("GQ", "Guinée équatoriale"),
+    ("GW", "Guinée-Bissau"),
+    ("GY", "Guyana"),
+    ("GF", "Guyane française"),
+    ("HT", "Haïti"),
+    ("HN", "Honduras"),
+    ("HK", "Hong Kong"),
+    ("BV", "Île Bouvet"),
+    ("CX", "Île Christmas"),
+    ("IM", "Île de Man"),
+    ("NF", "Île Norfolk"),
+    ("AX", "Îles Åland"),
+    ("KY", "Îles Caïmans"),
+    ("CC", "Îles Cocos"),
+    ("CK", "Îles Cook"),
+    ("FO", "Îles Féroé"),
+    ("HM", "Îles Heard-et-MacDonald"),
+    ("FK", "Îles Malouines"),
+    ("MP", "Îles Mariannes du Nord"),
+    ("MH", "Îles Marshall"),
+    ("UM", "Îles mineures éloignées des États-Unis"),
+    ("PN", "Îles Pitcairn"),
+    ("SB", "Îles Salomon"),
+    ("TC", "Îles Turques-et-Caïques"),
+    ("VG", "Îles Vierges britanniques"),
+    ("VI", "Îles Vierges des États-Unis"),
+    ("IN", "Inde"),
+    ("ID", "Indonésie"),
+    ("IQ", "Irak"),
+    ("IR", "Iran"),
+    ("IS", "Islande"),
+    ("IL", "Israël"),
+    ("JM", "Jamaïque"),
+    ("JP", "Japon"),
+    ("JE", "Jersey"),
+    ("JO", "Jordanie"),
+    ("KZ", "Kazakhstan"),
+    ("KE", "Kenya"),
+    ("KG", "Kirghizstan"),
+    ("KI", "Kiribati"),
+    ("KW", "Koweït"),
+    ("RE", "La Réunion"),
+    ("LA", "Laos"),
+    ("LS", "Lesotho"),
+    ("LB", "Liban"),
+    ("LR", "Liberia"),
+    ("LY", "Libye"),
+    ("LI", "Liechtenstein"),
+    ("MO", "Macao"),
+    ("MK", "Macédoine du Nord"),
+    ("MG", "Madagascar"),
+    ("MY", "Malaisie"),
+    ("MW", "Malawi"),
+    ("MV", "Maldives"),
+    ("ML", "Mali"),
+    ("MA", "Maroc"),
+    ("MQ", "Martinique"),
+    ("MU", "Maurice"),
+    ("MR", "Mauritanie"),
+    ("YT", "Mayotte"),
+    ("MX", "Mexique"),
+    ("FM", "Micronésie"),
+    ("MD", "Moldavie"),
+    ("MN", "Mongolie"),
+    ("ME", "Monténégro"),
+    ("MS", "Montserrat"),
+    ("MZ", "Mozambique"),
+    ("MM", "Myanmar (Birmanie)"),
+    ("NA", "Namibie"),
+    ("NR", "Nauru"),
+    ("NP", "Népal"),
+    ("NI", "Nicaragua"),
+    ("NE", "Niger"),
+    ("NG", "Nigeria"),
+    ("NU", "Niue"),
+    ("NC", "Nouvelle-Calédonie"),
+    ("NZ", "Nouvelle-Zélande"),
+    ("OM", "Oman"),
+    ("UG", "Ouganda"),
+    ("UZ", "Ouzbékistan"),
+    ("PK", "Pakistan"),
+    ("PW", "Palaos"),
+    ("PS", "Palestine"),
+    ("PA", "Panama"),
+    ("PG", "Papouasie-Nouvelle-Guinée"),
+    ("PY", "Paraguay"),
+    ("BQ", "Pays-Bas caribéens"),
+    ("PE", "Pérou"),
+    ("PH", "Philippines"),
+    ("PF", "Polynésie française"),
+    ("PR", "Porto Rico"),
+    ("QA", "Qatar"),
+    ("CF", "République centrafricaine"),
+    ("DO", "République dominicaine"),
+    ("RU", "Russie"),
+    ("RW", "Rwanda"),
+    ("EH", "Sahara occidental"),
+    ("BL", "Saint-Barthélemy"),
+    ("KN", "Saint-Christophe-et-Niévès"),
+    ("SM", "Saint-Marin"),
+    ("MF", "Saint-Martin"),
+    ("SX", "Saint-Martin (partie néerlandaise)"),
+    ("PM", "Saint-Pierre-et-Miquelon"),
+    ("VC", "Saint-Vincent-et-les Grenadines"),
+    ("SH", "Sainte-Hélène"),
+    ("LC", "Sainte-Lucie"),
+    ("SV", "Salvador"),
+    ("WS", "Samoa"),
+    ("AS", "Samoa américaines"),
+    ("ST", "Sao Tomé-et-Principe"),
+    ("SN", "Sénégal"),
+    ("RS", "Serbie"),
+    ("SC", "Seychelles"),
+    ("SL", "Sierra Leone"),
+    ("SG", "Singapour"),
+    ("SO", "Somalie"),
+    ("SD", "Soudan"),
+    ("SS", "Soudan du Sud"),
+    ("LK", "Sri Lanka"),
+    ("SR", "Suriname"),
+    ("SJ", "Svalbard et Jan Mayen"),
+    ("SY", "Syrie"),
+    ("TJ", "Tadjikistan"),
+    ("TW", "Taïwan"),
+    ("TZ", "Tanzanie"),
+    ("TD", "Tchad"),
+    ("TF", "Terres australes françaises"),
+    ("IO", "Territoire britannique de l’océan Indien"),
+    ("TH", "Thaïlande"),
+    ("TL", "Timor oriental"),
+    ("TG", "Togo"),
+    ("TK", "Tokelau"),
+    ("TO", "Tonga"),
+    ("TT", "Trinité-et-Tobago"),
+    ("TN", "Tunisie"),
+    ("TM", "Turkménistan"),
+    ("TR", "Turquie"),
+    ("TV", "Tuvalu"),
+    ("UA", "Ukraine"),
+    ("UY", "Uruguay"),
+    ("VU", "Vanuatu"),
+    ("VE", "Venezuela"),
+    ("VN", "Viêt Nam"),
+    ("WF", "Wallis-et-Futuna"),
+    ("YE", "Yémen"),
+    ("ZM", "Zambie"),
+    ("ZW", "Zimbabwe"),
+];
+
+/// The countries a form can name for a shop with these shipping methods: the
+/// usual ones, then any other that a method names. One that ships everywhere
+/// keeps to the usual ones.
+pub fn countries_for(
+    methods: &[ShippingOption],
+) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
+    COUNTRIES
+        .iter()
+        .chain(OTHER_COUNTRIES.iter().filter(|(code, _)| {
+            methods
+                .iter()
+                .any(|method| method.countries.iter().any(|c| c == code))
+        }))
+        .copied()
+}
 
 /// Where a checkout starts when the shopper has not said.
 pub const DEFAULT_COUNTRY: &str = "FR";
@@ -319,4 +558,21 @@ pub fn flag(country: &str) -> String {
             char::from_u32(0x1F1E6 + u32::from(c.to_ascii_uppercase()) - u32::from('A'))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_country_a_shipping_method_can_name_has_one_french_name() {
+        for country in rust_iso3166::ALL {
+            let named = COUNTRIES
+                .iter()
+                .chain(OTHER_COUNTRIES)
+                .filter(|(code, _)| *code == country.alpha2)
+                .count();
+            assert_eq!(named, 1, "{}", country.alpha2);
+        }
+    }
 }

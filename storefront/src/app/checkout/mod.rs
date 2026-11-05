@@ -37,7 +37,7 @@ use crate::shopper::{
     CheckoutDraft, PaymentInProgress, accounts_enabled, cart_id, checkout_draft,
     save_checkout_draft, set_payment_in_progress, shopper_token, signed_in,
 };
-use countries::{COUNTRIES, DEFAULT_COUNTRY};
+use countries::{DEFAULT_COUNTRY, countries_for};
 
 /// How many reviews the page shows beside the cart.
 const REVIEWS_SHOWN: u32 = 3;
@@ -687,10 +687,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let country = if cart.ships_to(&country) {
         country
     } else {
-        COUNTRIES
-            .iter()
+        countries_for(&cart.shipping_options)
             .find(|(code, _)| cart.ships_to(code))
-            .map_or(country, |(code, _)| (*code).to_owned())
+            .map_or(country, |(code, _)| code.to_owned())
     };
     let (phone_code, phone_number) = draft.phone_parts();
     let phone_country =
@@ -715,8 +714,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     // What the VAT line says for each country and shipping method (`""`
     // for none), for the page's script to switch.
-    let countries: Vec<(&str, &str, String)> = COUNTRIES
-        .iter()
+    let billing_countries: Vec<(&str, &str)> = countries_for(&cart.shipping_options).collect();
+    let countries: Vec<(&str, &str, String)> = countries_for(&cart.shipping_options)
         .filter(|(code, _)| cart.ships_to(code))
         .map(|(code, name)| {
             let mut texts = serde_json::Map::new();
@@ -728,7 +727,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     );
                 }
             }
-            (*code, *name, serde_json::Value::Object(texts).to_string())
+            (code, name, serde_json::Value::Object(texts).to_string())
         })
         .collect();
     let vat = cart
@@ -979,7 +978,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         <span>
                                             <label for="billing-country">"Pays de facturation"</label>
                                             <select id="billing-country" name="billing_country" required="" autocomplete="billing country">
-                                                for (code, name) in COUNTRIES {
+                                                for (code, name) in &billing_countries {
                                                     <option value=(*code) selected=(*code == billing_country)>(*name)</option>
                                                 }
                                             </select>

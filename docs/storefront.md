@@ -310,7 +310,10 @@ into the tenant's store whenever the merchant changes the Stripe settings.
   it in `Checkout::shipping_method`; the total is `CartView::total_with(option)` and
   `vat_estimate_with(country, option)` adds shipping's VAT, at the rates of the goods.
   A missing method, one that does not ship there or one removed since is refused with
-  `shipping_unavailable`. A shop without methods ships for free and takes none.
+  `shipping_unavailable`. A shop without methods ships for free and takes none. The
+  storefront's checkout offers the countries its methods name, whichever they are,
+  with their French names (`checkout/countries.rs`); a method that ships everywhere,
+  or a shop without methods, offers the 33 it lists first.
 - A cart takes one discount code: `apply_discount(cx, &cart_id, code)` (an unknown
   code is refused at once, `discount_unknown`) and `remove_discount`. `CartView` then
   has `subtotal_cents`, `discount` (what the code takes off) and `total_cents`; a code
