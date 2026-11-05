@@ -3,11 +3,38 @@ use evento::{Executor, WriteError};
 
 use crate::aggregator::{Claimed, Released};
 use crate::error::CatalogError;
-use crate::value_object::product_slug_id;
+use crate::value_object::{product_slug_id, suffixed_slug};
 
 use super::Command;
 
+/// Tries at the derived slug, then with fresh random suffixes.
+const SLUG_ATTEMPTS: usize = 4;
+
 impl<E: Executor> Command<E> {
+    /// Claims the slug derived from a name for `product_id`, with a random
+    /// suffix when it is taken, and returns the one it got.
+    pub(crate) async fn claim_derived_slug(
+        &self,
+        base: String,
+        product_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<String, CatalogError> {
+        let mut slug = base.clone();
+        for attempt in 0..SLUG_ATTEMPTS {
+            match self
+                .claim_slug(&slug, product_id, routing_key.clone())
+                .await
+            {
+                Ok(()) => break,
+                Err(CatalogError::SlugTaken) if attempt + 1 < SLUG_ATTEMPTS => {
+                    slug = suffixed_slug(&base);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(slug)
+    }
+
     /// Points a normalized slug at `product_id`, creating or re-claiming the
     /// index entry. Fails when it already points at another product.
     pub(crate) async fn claim_slug(

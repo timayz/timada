@@ -9,7 +9,8 @@
 //! A product's URL handle (`slug`) is unique within the tenant through an index
 //! aggregate with a deterministic id, like a tenant's slug in the tenancy
 //! context: appending its first event at version 0 is an atomic
-//! create-unless-exists. Archiving a product gives its slug back.
+//! create-unless-exists. Renaming a product moves it to the slug of its new
+//! name; archiving it gives its slug back.
 
 pub mod aggregator;
 mod command;

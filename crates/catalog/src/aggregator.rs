@@ -12,8 +12,11 @@ pub enum Product {
         name: String,
         created_by: String,
     },
+    /// A new name and the slug that goes with it, which [`ProductSlug`] holds
+    /// from then on.
     Renamed {
         name: String,
+        slug: String,
         renamed_by: String,
     },
     Described {

@@ -354,6 +354,21 @@ async fn a_store_follows_its_tenant_catalog_locally() {
         "{:?}",
         started.elapsed()
     );
+    // The slug moved with the name: the old address leads nowhere.
+    assert_eq!(
+        published_product_by_slug(&db, "big-blue-mug")
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        mug.id
+    );
+    assert!(
+        published_product_by_slug(&db, "blue-mug")
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // The cursor is local; the store has no cursor of ours.
     assert_eq!(

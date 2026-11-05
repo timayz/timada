@@ -416,7 +416,14 @@ async fn a_search_reads_the_index_of_its_own_tenant() {
     assert_eq!(
         count_products(&pool, TENANT, &search("é m")).await.unwrap(),
         0,
-        "the old name is out of the index (the slug keeps \"cafe\")"
+        "the old name is out of the index"
+    );
+    assert_eq!(
+        count_products(&pool, TENANT, &search("cafe"))
+            .await
+            .unwrap(),
+        0,
+        "and so is the old slug"
     );
     let found = products_of_tenant(&pool, TENANT, &search("tea c"), 0, 50)
         .await

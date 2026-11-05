@@ -72,7 +72,7 @@ event timada-catalog/Product::OptionValueLabelled { option_id: String, value: St
 event timada-catalog/Product::OptionValuesChanged { option_id: String, values: Vec<String>, changed_by: String }
 event timada-catalog/Product::Priced { amount_cents: u64, currency: String, priced_by: String }
 event timada-catalog/Product::Published { published_by: String }
-event timada-catalog/Product::Renamed { name: String, renamed_by: String }
+event timada-catalog/Product::Renamed { name: String, slug: String, renamed_by: String }
 event timada-catalog/Product::TaxCategorySet { category: Option<String>, set_by: String }
 event timada-catalog/Product::Uncategorized { category_id: String, uncategorized_by: String }
 event timada-catalog/Product::Unpublished { unpublished_by: String }

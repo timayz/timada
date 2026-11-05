@@ -280,10 +280,12 @@ A member renames a product on `/t/{slug}/products/{id}`:
 2. `timada_catalog::Command::new(store, tenant_id)` is the catalog gateway in the
    tenant's streams.
 3. `rename_product` loads the product's write-side state in that tenant, checks the
-   invariants and commits `Renamed { name, renamed_by }` at the observed version.
+   invariants, claims the slug of the new name and commits
+   `Renamed { name, slug, renamed_by }` at the observed version, then frees the old
+   slug.
 4. The commit goes through the Accord node and lands in `data/timada.db`, in the
    tenant's stream of that product.
-5. The `catalog` subscription writes the new name into `catalog_products`, under the
+5. The `catalog` subscription writes the new name and slug into `catalog_products`, under the
    event's tenant; the next page load shows it. The
    same subscription follows the `Category` streams into `catalog_categories`, and
    rewrites a product's rows in `catalog_product_categories` whenever it is filed
