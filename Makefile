@@ -1,4 +1,4 @@
-.PHONY: start cert cert.install up stop down dev reset migrate seed.chatounette seed.chatounette.save seed.chatounette.restore snapshot.chatounette chatounette chatounette.migrate e2e loadtest lint fmt-check fmt test machete check
+.PHONY: start cert cert.install up stop down dev reset migrate seed.chatounette seed.chatounette.save seed.chatounette.restore snapshot.chatounette aliexpress.places chatounette chatounette.migrate e2e loadtest lint fmt-check fmt test machete check
 
 start: up dev
 
@@ -66,6 +66,11 @@ seed.chatounette.restore:
 		$(if $(wildcard $(DEV_SNAPSHOT)/also/chatounette.db),--also chatounette.db) \
 		$(if $(wildcard $(DEV_SNAPSHOT)/also/seed.chatounette.env),--also data/seed.chatounette.env)
 	@cat data/seed.chatounette.env 2>/dev/null || true
+
+# Reads AliExpress's lists of places again (one call per country, with your
+# app's key) into crates/aliexpress/places.bin, which the next build embeds.
+aliexpress.places:
+	cargo run -p timada-dashboard -- --config config/dev.local.toml aliexpress-places
 
 # Takes the snapshot from the live shop, pictures included (see
 # seeds/README.md); run again, it fetches only the pictures not there yet.

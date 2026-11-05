@@ -76,6 +76,8 @@ enum Commands {
     /// Keep the platform (store, read models, pictures, shopper keys) in a
     /// directory, or put a kept one back (server stopped)
     Snapshot(cli::SnapshotArgs),
+    /// Read AliExpress's lists of places again, into the file the build embeds
+    AliexpressPlaces(cli::AliexpressPlacesArgs),
     /// Drop the databases and recreate them from scratch (debug builds only)
     #[cfg(debug_assertions)]
     Reset,
@@ -97,6 +99,7 @@ async fn main() -> Result<()> {
         Commands::Rejoin => cli::rejoin(config).await,
         Commands::Seed(args) => cli::seed(config, args).await,
         Commands::Snapshot(args) => cli::snapshot(config, args).await,
+        Commands::AliexpressPlaces(args) => cli::aliexpress_places(config, args).await,
         #[cfg(debug_assertions)]
         Commands::Reset => cli::reset(config).await,
     }

@@ -405,9 +405,12 @@ async function fillCheckout(page: Page, quantity: number) {
   await page.getByLabel("E-mail", { exact: true }).fill("ada@example.org");
   await page.getByLabel("Nom complet").fill("Ada Lovelace");
   await page.getByLabel("Adresse", { exact: true }).fill("1 rue de la Paix");
-  await page.getByLabel("Code postal", { exact: true }).fill("75002");
-  await page.getByLabel("Ville", { exact: true }).fill("Paris");
   await page.getByLabel("Pays", { exact: true }).selectOption("FR");
+  await page.getByLabel("Code postal", { exact: true }).fill("75002");
+  await page.getByLabel("Code postal", { exact: true }).blur();
+  // A shop on AliExpress picks its city from AliExpress's list.
+  await expect(page.getByLabel("Région / Province")).toHaveValue("Paris");
+  await page.getByLabel("Ville", { exact: true }).selectOption("PARIS 2E ARRONDISSEMENT");
   await page.getByLabel("Téléphone").fill("06 12 34 56 78");
 }
 
@@ -461,28 +464,6 @@ test("a shopper picks AliExpress's province and the order goes in its words", as
   await fakeStripeJs(page);
   const aliexpress = new FakeAliexpress();
   const stripe = new FakeStripe();
-  aliexpress.places.BE = [
-    {
-      name: "Region Wallonne",
-      type: "PROVINCE",
-      children: [{ name: "Hainaut", type: "CITY" }],
-    },
-  ];
-  aliexpress.places.IT = [
-    {
-      name: "Sicilia",
-      type: "PROVINCE",
-      children: [
-        { name: "Catania", type: "CITY", children: [{ name: "Aci Castello", type: "TOWN" }] },
-        { name: "Other", type: "CITY" },
-      ],
-    },
-    {
-      name: "Lazio",
-      type: "PROVINCE",
-      children: [{ name: "Roma", type: "CITY", children: [{ name: "Albano Laziale", type: "TOWN" }] }],
-    },
-  ];
   await aliexpress.start();
   await stripe.start();
   try {
@@ -501,31 +482,33 @@ test("a shopper picks AliExpress's province and the order goes in its words", as
 
     const url = `/t/${slug}/orders/${await buyRoses(page, request, stripe, webhookUrl, 1, async () => {
       const province = page.getByLabel("Région / Province");
-      // France has no list here: nothing to pick.
-      await expect(province).toBeHidden();
-      // Belgium's list holds provinces, so its town goes with the street.
+      const city = page.getByLabel("Ville", { exact: true });
+      const town = page.getByLabel("Commune", { exact: true });
       const hint = page.locator("[data-commune-hint]");
+      // France's list has towns, and an "Other" where one can be typed.
       await expect(hint).toBeHidden();
+      await city.selectOption("Other");
+      await expect(page.getByLabel("Votre ville")).toBeVisible();
+      // Belgium's list holds provinces, so its town goes with the street.
       await page.getByLabel("Pays", { exact: true }).selectOption("BE");
       await page.getByLabel("Code postal", { exact: true }).fill("6000");
       await page.getByLabel("Code postal", { exact: true }).blur();
       await expect(province).toHaveValue("Region Wallonne");
       await expect(page.getByLabel("Province / district").locator("option[value=Hainaut]")).toHaveCount(1);
       await expect(hint).toBeVisible();
+      // Sweden has no list: its city is typed and no province is asked for.
+      await page.getByLabel("Pays", { exact: true }).selectOption("SE");
+      await expect(province).toBeHidden();
+      await expect(page.getByRole("textbox", { name: "Ville", exact: true })).toBeVisible();
+      // The postal code picks the province, then a city with towns has them
+      // picked from, and nothing is typed.
       await page.getByLabel("Pays", { exact: true }).selectOption("IT");
       await expect(hint).toBeHidden();
       await page.getByLabel("Code postal", { exact: true }).fill("95021");
       await page.getByLabel("Code postal", { exact: true }).blur();
-      // The postal code picks the province, and the city is picked from its
-      // list. A town the list lacks is typed only under its "Other".
       await expect(province).toHaveValue("Sicilia");
-      const city = page.getByLabel("Ville", { exact: true });
-      const town = page.getByLabel("Commune", { exact: true });
       await expect(city.locator("option[value=Catania]")).toHaveCount(1);
-      await city.selectOption("Other");
-      await expect(page.getByLabel("Votre ville")).toBeVisible();
       await expect(town).toBeHidden();
-      // A city with towns has them picked from, and nothing is typed.
       await city.selectOption("Catania");
       await expect(page.getByLabel("Votre ville")).toHaveCount(0);
       await expect(page.getByRole("textbox", { name: "Ville" })).toHaveCount(0);
@@ -618,7 +601,7 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
       full_name: "Ada Lovelace",
       address: "1 rue de la Paix",
       zip: "75002",
-      city: "Paris",
+      city: "PARIS 2E ARRONDISSEMENT",
       province: "Paris",
       country: "FR",
       phone_country: "+33",

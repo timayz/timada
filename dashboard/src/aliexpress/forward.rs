@@ -174,14 +174,11 @@ impl Aliexpress {
             order.language.as_deref(),
             settings.order_phone.as_deref(),
         );
-        // Without the places the address would go unchecked, to be refused
-        // for a spelling: better to say AliExpress did not answer.
-        let places = self.address_tree(&client, &country).await?;
-        if let Some(places) = &places {
+        let places = timada_aliexpress::places_of(&country);
+        if let Some(places) = places {
             places.apply(&mut address);
         }
         let province = places
-            .as_ref()
             .filter(|places| places.names_province(&address.province))
             .map(|_| address.province.clone());
         let mut products = BTreeMap::new();
