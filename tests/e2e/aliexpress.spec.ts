@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { FakeAliexpress, PRODUCT_ID } from "./aliexpress";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { productTab } from "./forms";
-import { ExampleApp, mintKey } from "./storefront";
+import { StorefrontApp, mintKey } from "./storefront";
 import { FakeStripe, fakeStripeJs, stripeSignature } from "./stripe";
 import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
 
@@ -404,12 +404,12 @@ test("a connected shop with nothing imported still has its access renewed", asyn
 
 // Order forwarding: the shop's paid orders are bought on AliExpress for the
 // shopper, delivered free by AliExpress itself, and fulfilled with the parcel
-// number once it ships. The Chatounette example runs on a port of its own.
-const app = new ExampleApp("chatounette", Number(process.env.E2E_ALIEXPRESS_SHOP_PORT ?? 3458));
+// number once it ships. The storefront runs on a port of its own.
+const app = new StorefrontApp(Number(process.env.E2E_ALIEXPRESS_SHOP_PORT ?? 3458));
 
 test.afterEach(() => app.stop());
 
-/// A shopper fills the Chatounette example's checkout for `quantity` roses,
+/// A shopper fills the storefront's checkout for `quantity` roses,
 /// stopping short of paying.
 async function fillCheckout(page: Page, quantity: number) {
   await page.goto(`${app.url}/p/cat-tunnel-deluxe`);
@@ -431,7 +431,7 @@ async function fillCheckout(page: Page, quantity: number) {
   await page.getByLabel("Téléphone").fill("06 12 34 56 78");
 }
 
-/// A shopper buys `quantity` roses on the Chatounette example and pays: the
+/// A shopper buys `quantity` roses on the storefront and pays: the
 /// order's id.
 async function buyRoses(
   page: Page,

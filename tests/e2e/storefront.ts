@@ -4,12 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-// Shared between the specs of the example storefronts: a merchant mints an
-// API key and publishes products in the dashboard, then an example binary
-// (a separate process built on timada-storefront) is booted with the key
-// and followed until it has synced the catalog.
+// Shared between the specs of the storefront: a merchant mints an API key and
+// publishes products in the dashboard, then the storefront binary (a separate
+// process built on timada-storefront) is booted with the key and followed
+// until it has synced the catalog.
 
-/// The store API address the example binaries connect to.
+/// The store API address the storefront connects to.
 export const STORE_ADDR = process.env.E2E_STORE_ADDR ?? "127.0.0.1:4321";
 
 /// A 1x1 PNG, as the bytes a browser posts when a file is chosen.
@@ -18,7 +18,7 @@ export const PNG = Buffer.from(
   "base64",
 );
 
-/// What `mintKey` reads back: the token and the addresses the example needs.
+/// What `mintKey` reads back: the token and the addresses the storefront needs.
 export type StoreKey = { token: string; mediaUrl: string; apiUrl?: string };
 
 /// Mints a key on the tenant's page and reads it, with the address the
@@ -113,27 +113,24 @@ export async function publishVariedProduct(
   return url;
 }
 
-/// An example storefront binary from `target/debug`, run as a child process
-/// on `port` with a throwaway database. One instance per spec; `stop` it
-/// after each test.
-export class ExampleApp {
-  /// Where the example serves, for the browser and the API client.
+/// The storefront binary from `target/debug`, run as a child process on
+/// `port` with a throwaway database. One instance per spec; `stop` it after
+/// each test.
+export class StorefrontApp {
+  /// Where it serves, for the browser and the API client.
   readonly url: string;
   private child: ChildProcess | undefined;
   private dir: string | undefined;
 
-  constructor(
-    readonly binary: string,
-    readonly port: number,
-  ) {
+  constructor(readonly port: number) {
     this.url = `http://127.0.0.1:${port}`;
   }
 
-  /// Boots the example with `token` and waits for it to have synced at
+  /// Boots it with `token` and waits for it to have synced at
   /// least `products` products.
   async start(request: APIRequestContext, { token, mediaUrl, apiUrl }: StoreKey, products: number): Promise<void> {
-    this.dir = fs.mkdtempSync(path.join(os.tmpdir(), `timada-${this.binary}-`));
-    this.child = spawn(path.resolve(`target/debug/${this.binary}`), [], {
+    this.dir = fs.mkdtempSync(path.join(os.tmpdir(), "timada-storefront-"));
+    this.child = spawn(path.resolve("target/debug/storefront"), [], {
       env: {
         ...process.env,
         STORE_ADDR,

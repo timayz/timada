@@ -398,7 +398,7 @@ impl Shopper<'_> {
 }
 
 /// The refusal a `/checkout/start` answer words for the shopper, as the
-/// shop's code names it (examples/chatounette/src/app/mod.rs, `say`).
+/// shop's code names it (storefront/src/app/mod.rs, `say`).
 fn code_of(text: &str) -> &'static str {
     const CODES: &[(&str, &str)] = &[
         ("Le paiement est indisponible", "payments_unavailable"),

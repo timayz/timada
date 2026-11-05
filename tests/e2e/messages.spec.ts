@@ -6,8 +6,8 @@ import { createTenant, uniqueTenant } from "./tenants";
 // Messages: what visitors sent through a shop's contact form is listed under
 // /t/{slug}/messages for members with `support:read`; those with
 // `support:manage` mark a message handled. A visitor sending one from the
-// Chatounette example and the owner handling it is covered in
-// `chatounette.spec.ts`.
+// storefront and the owner handling it is covered in
+// `storefront.spec.ts`.
 
 test("an owner sees the messages section, empty at first", async ({ page }) => {
   await registerWithEmail(page, uniqueEmail("owner"));

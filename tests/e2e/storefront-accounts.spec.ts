@@ -18,22 +18,19 @@ import {
   paymentSucceeded,
   placeOrder,
 } from "./shop";
-import { ExampleApp, PNG, mintKey, publishProduct } from "./storefront";
+import { StorefrontApp, PNG, mintKey, publishProduct } from "./storefront";
 import { FakeStripe, fakeStripeJs } from "./stripe";
 import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
 import { FakeVies } from "./vies";
 
-// What happens around an order on the Chatounette example: the buyer's
+// What happens around an order on the storefront: the buyer's
 // reviews (handed in over the store API or from the order page, moderated
 // in the dashboard), VAT by where the goods go, shopper accounts (a mailed
 // code, the orders and saved addresses, signing out everywhere, deletion),
 // the review-request mail and the shopper's language. The app runs on a
-// port of its own, so this file runs beside the other Chatounette specs.
+// port of its own, so this file runs beside the other storefront specs.
 
-const app = new ExampleApp(
-  "chatounette",
-  Number(process.env.E2E_ACCOUNTS_PORT ?? 3460),
-);
+const app = new StorefrontApp(Number(process.env.E2E_ACCOUNTS_PORT ?? 3460));
 const SHOP = app.url;
 
 test.beforeEach(async ({ page }) => {

@@ -1,17 +1,17 @@
 [package]
-name = "chatounette-example"
+name = "storefront"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 publish = false
-description = "A French cat shop on timada-storefront, in the layout and colours of chatounette.com, seeded from the seeds/chatounette snapshot"
+description = "A shop on timada-storefront with no brand and no colours: the structure to start your own from"
 
 [[bin]]
-name = "chatounette"
+name = "storefront"
 path = "src/main.rs"
 
 [dependencies]
-timada-storefront = { path = "../../crates/storefront" }
+timada-storefront = { path = "../crates/storefront" }
 topcoat = { version = "=0.11.0", features = ["anyhow", "multipart"] }
 tokio.workspace = true
 anyhow.workspace = true

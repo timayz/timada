@@ -1,7 +1,7 @@
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { type FakeStripe, stripeSignature } from "./stripe";
 
-// The Chatounette example as a shopper drives it, shared by the specs that
+// The storefront as a shopper drives it, shared by the specs that
 // buy something there: the merchant's Stripe account in the dashboard, the
 // cart drawer, the one-page checkout and Stripe's way back. The shop is in
 // French; its totals are written as the library writes them (`25.00 €`),

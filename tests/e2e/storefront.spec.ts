@@ -14,7 +14,7 @@ import {
   uniqueEmail,
 } from "./email";
 import {
-  ExampleApp,
+  StorefrontApp,
   PNG,
   mintKey,
   publishProduct,
@@ -23,16 +23,13 @@ import {
 import { selectByText } from "./forms";
 import { createTenant, uniqueTenant } from "./tenants";
 
-// The Chatounette clone: the second example app, in French and in the
-// layout of chatounette.com, booted on a small catalogue a merchant made in
-// the dashboard (the real shop's catalogue is seeded from seeds/ outside
-// the browser suite). It walks the home, the category bar, a category, a
-// product, the cart drawer, the search and a shop page.
+// The storefront, the app on the storefront library, in French, booted on a
+// small catalogue a merchant made in the dashboard (a real-sized catalogue is
+// seeded from seeds/ outside the browser suite). It walks the home, the
+// category bar, a category, a product, the cart drawer, the search and a shop
+// page.
 
-const app = new ExampleApp(
-  "chatounette",
-  Number(process.env.E2E_CHATOUNETTE_PORT ?? 3457),
-);
+const app = new StorefrontApp(Number(process.env.E2E_STOREFRONT_PORT ?? 3457));
 
 test.afterEach(() => app.stop());
 
@@ -90,14 +87,14 @@ async function addPicture(page: Page, url: string, alt: string) {
   await expect(page.getByRole("status")).toContainText("Picture added.");
 }
 
-test("the Chatounette clone shows the catalogue as a French cat shop", async ({
+test("the storefront shows the catalogue in French", async ({
   page,
   request,
   browser,
 }) => {
-  const owner = uniqueEmail("chatounette");
+  const owner = uniqueEmail("storefront");
   await registerWithEmail(page, owner);
-  const { name, slug } = uniqueTenant("Chat Clone");
+  const { name, slug } = uniqueTenant("Storefront Shop");
   await createTenant(page, name);
 
   // The text of the shop's own pages, written in the back office (the shop
@@ -569,14 +566,14 @@ test("the Chatounette clone shows the catalogue as a French cat shop", async ({
   }).toPass();
 });
 
-test("a shopper signs up to the Chatounette newsletter from the footer and confirms from the mail", async ({
+test("a shopper signs up to the newsletter from the footer and confirms from the mail", async ({
   page,
   request,
   browser,
 }) => {
-  const owner = uniqueEmail("chatounette-news");
+  const owner = uniqueEmail("storefront-news");
   await registerWithEmail(page, owner);
-  const { name, slug } = uniqueTenant("Chat News");
+  const { name, slug } = uniqueTenant("Storefront News");
   await createTenant(page, name);
   await app.start(request, await mintKey(page, slug, true), 0);
 
@@ -719,7 +716,7 @@ test("a shopper signs up to the Chatounette newsletter from the footer and confi
   await shopperContext.close();
 });
 
-/// Signs `email` up from the Chatounette footer and follows the mailed
+/// Signs `email` up from the storefront footer and follows the mailed
 /// link, in a browser of its own.
 async function subscribeFromFooter(
   browser: Browser,
@@ -750,9 +747,9 @@ test("a merchant sends a campaign to the confirmed subscribers, who leave in one
   request,
   browser,
 }) => {
-  const owner = uniqueEmail("chatounette-campaign");
+  const owner = uniqueEmail("storefront-campaign");
   await registerWithEmail(page, owner);
-  const { name, slug } = uniqueTenant("Chat Campaign");
+  const { name, slug } = uniqueTenant("Storefront Campaign");
   await createTenant(page, name);
   await app.start(request, await mintKey(page, slug, true), 0);
   await page.goto(`/t/${slug}/api-keys`);

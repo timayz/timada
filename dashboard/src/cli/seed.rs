@@ -666,9 +666,8 @@ mod tests {
     }
 
     #[test]
-    fn the_chatounette_pages_read() {
-        let dir =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/chatounette/pages");
+    fn the_storefront_pages_read() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../storefront/pages");
         let pages = read_pages(&dir).unwrap();
         assert_eq!(pages.len(), 6);
         assert!(

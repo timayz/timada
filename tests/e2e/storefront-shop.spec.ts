@@ -10,23 +10,19 @@ import {
   paymentSucceeded,
   placeOrder,
 } from "./shop";
-import { ExampleApp, PNG, mintKey, publishProduct } from "./storefront";
+import { StorefrontApp, PNG, mintKey, publishProduct } from "./storefront";
 import { FakeStripe, fakeStripeJs } from "./stripe";
 import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
 
-// The shop as a shopper sees it, on the Chatounette example (the app on the
-// storefront library): the catalogue following the dashboard live, the
+// The shop as a shopper sees it, on the storefront: the catalogue following the dashboard live, the
 // categories and their menu, the cart and its drawer, the one-page checkout,
 // paying with Stripe (a fake Stripe.js in the page, a fake Stripe API behind
 // the dashboard), stock, discount codes, delivery methods and the merchant's
 // checkout offers. The merchant's side is the dashboard, in English; the shop
 // is in French. The app runs on a port of its own, so this file runs beside
-// the other Chatounette specs.
+// the other storefront specs.
 
-const app = new ExampleApp(
-  "chatounette",
-  Number(process.env.E2E_SHOP_PORT ?? 3459),
-);
+const app = new StorefrontApp(Number(process.env.E2E_SHOP_PORT ?? 3459));
 const SHOP = app.url;
 
 test.beforeEach(async ({ page }) => {

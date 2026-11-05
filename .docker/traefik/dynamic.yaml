@@ -17,10 +17,10 @@ http:
       priority: 25
       entryPoints:
         - https
-    chatounette-dev:
-      rule: "Host(`chatounette.localhost`)"
+    storefront-dev:
+      rule: "Host(`storefront.localhost`)"
       tls: true
-      service: chatounette-dev
+      service: storefront-dev
       priority: 25
       entryPoints:
         - https
@@ -39,8 +39,8 @@ http:
           path: /auth/login
           interval: 2s
           timeout: 1s
-    # The Chatounette clone (`make chatounette`).
-    chatounette-dev:
+    # The storefront (`make storefront`).
+    storefront-dev:
       loadBalancer:
         servers:
           - url: "http://host.docker.internal:3457"
