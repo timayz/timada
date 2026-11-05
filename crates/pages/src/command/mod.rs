@@ -5,11 +5,13 @@
 //! goes stale. They are not snapshotted: a page is edited a few dozen times
 //! at most.
 
+mod announcements;
 mod page;
 mod slug_index;
 
 use std::ops::Deref;
 
+pub use announcements::*;
 pub use page::*;
 
 use evento::{Executor, Projection, metadata::Event};

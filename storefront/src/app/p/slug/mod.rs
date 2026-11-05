@@ -13,7 +13,7 @@ use topcoat::{
 };
 
 use crate::app::cart::add::{OPTION_FIELD_PREFIX, add};
-use crate::app::{PROMO_CODE, document, money, price_line, product_card, say};
+use crate::app::{document, money, price_line, product_card, say};
 
 module_param!(pub slug);
 
@@ -104,7 +104,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             if varies { <small>"Plage de prix"</small> }
                             <span data-price="">(price_line(&product))</span>
                         </p>
-                        <p class="promo-line">"-10% avec le code " <strong>(PROMO_CODE)</strong></p>
                         if let (Some(rating), Some(whole)) = (product.rating(), product.rating_stars()) {
                             <p class="rating" data-product-rating=(format!("{rating:.1}"))>
                                 <a href="#reviews">

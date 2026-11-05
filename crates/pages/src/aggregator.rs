@@ -67,3 +67,48 @@ pub enum PageSlug {
     Claimed { page_id: String },
     Released,
 }
+
+/// The short messages the storefront's top bar cycles through ("-10% with
+/// the code WELCOME10"): one stream per shop, with the id
+/// [`announcements_id`](crate::announcements_id). Times are Unix seconds;
+/// a message shows from `starts_at` (none: at once) until `ends_at` (none:
+/// for as long as it is not hidden).
+#[evento::aggregate(name = "timada-pages/Announcements")]
+pub enum Announcements {
+    /// Shown, last in the bar.
+    AnnouncementAdded {
+        announcement_id: String,
+        /// Text with `**bold**` and at most one `[link](/path)`.
+        text: String,
+        starts_at: Option<u64>,
+        ends_at: Option<u64>,
+        added_by: String,
+    },
+    /// Replaces the text and the window.
+    AnnouncementChanged {
+        announcement_id: String,
+        text: String,
+        starts_at: Option<u64>,
+        ends_at: Option<u64>,
+        changed_by: String,
+    },
+    /// Kept in the back office, off the bar.
+    AnnouncementHidden {
+        announcement_id: String,
+        hidden_by: String,
+    },
+    AnnouncementShown {
+        announcement_id: String,
+        shown_by: String,
+    },
+    /// Moved to `position` (0 is first) in the order the bar shows them.
+    AnnouncementMoved {
+        announcement_id: String,
+        position: u32,
+        moved_by: String,
+    },
+    AnnouncementRemoved {
+        announcement_id: String,
+        removed_by: String,
+    },
+}

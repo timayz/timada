@@ -86,7 +86,8 @@ pub struct SeedArgs {
     pub env_file: Option<PathBuf>,
 }
 
-/// The delivery method and the code the seeded shop opens with.
+/// The delivery method and the code the seeded shop opens with, the code
+/// announced in the storefront's top bar.
 const SHIPPING_METHOD: &str = "Livraison avec suivi";
 const SHIPPING_CENTS: u64 = 490;
 const FREE_ABOVE_CENTS: u64 = 6_500;
@@ -523,6 +524,20 @@ async fn open_shop(
             )
             .await?;
         tracing::info!(code = PROMO_CODE, "promo code added");
+    }
+    let pages = timada_pages::Command::new(executor.clone(), tenant_id);
+    if pages.announcements().await?.is_empty() {
+        pages
+            .add_announcement(
+                actor,
+                timada_pages::NewAnnouncement {
+                    text: format!("-10% maintenant avec le code **{PROMO_CODE}**"),
+                    starts_at: None,
+                    ends_at: None,
+                },
+            )
+            .await?;
+        tracing::info!(code = PROMO_CODE, "promo code announced");
     }
     Ok(())
 }

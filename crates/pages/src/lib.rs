@@ -11,15 +11,23 @@
 //!
 //! The store keeps the Markdown as written; [`render_markdown`] turns it into
 //! HTML each time a page is shown, which keeps no raw HTML and no picture
-//! from elsewhere. Pure domain code: no permission checks, no HTTP.
+//! from elsewhere.
+//!
+//! The shop's announcements live here too: the short messages ("-10% with
+//! the code WELCOME10") the storefront's top bar cycles through, each shown
+//! or hidden, within an optional window, in the order the merchant set. One
+//! stream holds them all; [`render_announcement`] turns one into HTML. Pure
+//! domain code: no permission checks, no HTTP.
 
 pub mod aggregator;
+mod announcement;
 mod command;
 mod error;
 mod markdown;
 mod query;
 mod value_object;
 
+pub use announcement::*;
 pub use command::*;
 pub use error::*;
 pub use markdown::*;

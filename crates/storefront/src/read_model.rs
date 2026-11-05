@@ -13,7 +13,7 @@
 //! with it.
 //!
 //! And the shop's pages: a published one is copied, one unpublished or
-//! deleted leaves.
+//! deleted leaves. And its announcements: the shown ones are copied whole.
 
 use evento::{
     Executor,
@@ -46,6 +46,7 @@ pub fn catalog_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(on_stock_event())
         .handler(on_review_event())
         .handler(crate::pages::on_page_event())
+        .handler(crate::announcements::on_announcements_event())
         .any_routing_key()
 }
 

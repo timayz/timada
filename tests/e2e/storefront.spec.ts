@@ -77,6 +77,14 @@ async function publishPage(
   return url;
 }
 
+/// Adds a message to the storefront's top bar in the dashboard.
+async function addAnnouncement(page: Page, slug: string, text: string) {
+  await page.goto(`/t/${slug}/announcements`);
+  await page.getByLabel("Message").fill(text);
+  await page.getByRole("button", { name: "Add announcement" }).click();
+  await expect(page.getByRole("status")).toContainText("Announcement added");
+}
+
 /// A picture on the product whose dashboard page is open.
 async function addPicture(page: Page, url: string, alt: string) {
   await page.goto(`${url}?tab=pictures`);
@@ -120,6 +128,10 @@ test("the storefront shows the catalogue in French", async ({
     "Deux amoureux des chats.",
   );
 
+  // The top bar's messages, taking turns.
+  await addAnnouncement(page, slug, "-10% maintenant avec le code **BIENVENUE10**");
+  await addAnnouncement(page, slug, "Livraison offerte dès 65 € : [voir](/politique-de-livraison)");
+
   await createCategory(page, slug, "Couchage");
   // The longer text the shop shows below a category's products.
   await page
@@ -161,7 +173,20 @@ test("the storefront shows the catalogue in French", async ({
   await expect(page.getByRole("heading", { level: 1 })).toContainText(
     "Présentez votre boutique",
   );
-  await expect(page.locator(".topbar")).toContainText("BIENVENUE10");
+  // The first message shows, the second takes its turn after five
+  // seconds, and Pause holds the bar.
+  const bar = page.getByRole("region", { name: "Annonces" });
+  const messages = bar.locator("[data-announcement]");
+  await expect(messages.first().locator("strong")).toHaveText("BIENVENUE10");
+  await expect(messages.nth(1)).toBeHidden();
+  await expect(messages.nth(1)).toBeVisible({ timeout: 8_000 });
+  await expect(messages.first()).toBeHidden();
+  await expect(messages.nth(1).getByRole("link", { name: "voir" })).toHaveAttribute(
+    "href",
+    "/politique-de-livraison",
+  );
+  await bar.getByRole("button", { name: "Pause" }).click();
+  await expect(bar.getByRole("button", { name: "Reprendre" })).toHaveAttribute("aria-pressed", "true");
   const newest = page.locator("[data-section=nouveautes]");
   await expect(newest.getByRole("heading", { level: 2 })).toHaveText(
     "Nouveautés",

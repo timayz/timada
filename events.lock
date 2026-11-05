@@ -218,6 +218,12 @@ event timada-orders/ShippingMethods::MethodChanged { method_id: String, name: St
 event timada-orders/ShippingMethods::MethodRemoved { method_id: String, removed_by: String }
 event timada-orders/Storefront::StorefrontAddressCleared { cleared_by: String }
 event timada-orders/Storefront::StorefrontAddressSet { url: String, set_by: String }
+event timada-pages/Announcements::AnnouncementAdded { announcement_id: String, text: String, starts_at: Option<u64>, ends_at: Option<u64>, added_by: String }
+event timada-pages/Announcements::AnnouncementChanged { announcement_id: String, text: String, starts_at: Option<u64>, ends_at: Option<u64>, changed_by: String }
+event timada-pages/Announcements::AnnouncementHidden { announcement_id: String, hidden_by: String }
+event timada-pages/Announcements::AnnouncementMoved { announcement_id: String, position: u32, moved_by: String }
+event timada-pages/Announcements::AnnouncementRemoved { announcement_id: String, removed_by: String }
+event timada-pages/Announcements::AnnouncementShown { announcement_id: String, shown_by: String }
 event timada-pages/Page::Created { slug: String, title: String, body: String, created_by: String }
 event timada-pages/Page::Deleted { deleted_by: String }
 event timada-pages/Page::Edited { title: String, body: String, edited_by: String }
