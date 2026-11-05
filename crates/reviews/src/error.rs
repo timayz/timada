@@ -27,6 +27,9 @@ pub enum ReviewError {
     NotPurchased,
     #[error("this order was cancelled")]
     OrderCancelled,
+    /// The money of the order is only held: nothing is bought yet.
+    #[error("this order is not paid yet")]
+    OrderNotPaid,
     #[error("this product has already been reviewed for this order")]
     AlreadyReviewed,
     #[error("review not found")]
@@ -72,6 +75,7 @@ impl ReviewError {
             Self::OrderNotFound => REVIEW_ORDER_NOT_FOUND,
             Self::NotPurchased => REVIEW_NOT_PURCHASED,
             Self::OrderCancelled => REVIEW_ORDER_CANCELLED,
+            Self::OrderNotPaid => REVIEW_ORDER_NOT_PAID,
             Self::AlreadyReviewed => REVIEW_ALREADY_REVIEWED,
             Self::NotFound => REVIEW_NOT_FOUND,
             Self::Rejected => "review_rejected",
@@ -92,6 +96,7 @@ pub const REVIEW_TOO_MANY_PHOTOS: &str = "review_too_many_photos";
 pub const REVIEW_ORDER_NOT_FOUND: &str = "review_order_not_found";
 pub const REVIEW_NOT_PURCHASED: &str = "review_not_purchased";
 pub const REVIEW_ORDER_CANCELLED: &str = "review_order_cancelled";
+pub const REVIEW_ORDER_NOT_PAID: &str = "review_order_not_paid";
 pub const REVIEW_ALREADY_REVIEWED: &str = "review_already_reviewed";
 pub const REVIEW_NOT_FOUND: &str = "review_not_found";
 pub const REVIEW_PHOTO_NOT_FOUND: &str = "review_photo_not_found";
@@ -110,6 +115,7 @@ pub const SHOPPER_CODES: &[&str] = &[
     REVIEW_ORDER_NOT_FOUND,
     REVIEW_NOT_PURCHASED,
     REVIEW_ORDER_CANCELLED,
+    REVIEW_ORDER_NOT_PAID,
     REVIEW_ALREADY_REVIEWED,
     REVIEW_NOT_FOUND,
     REVIEW_PHOTO_NOT_FOUND,

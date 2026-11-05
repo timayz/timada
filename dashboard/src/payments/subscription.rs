@@ -92,7 +92,7 @@ async fn on_checkout_requested<E: Executor>(
         goods.read_again(&event.tenant, &products).await;
     }
 
-    let pending = match orders.pending_payment(&cart_id, &request_id).await {
+    let mut pending = match orders.pending_payment(&cart_id, &request_id).await {
         Ok(Some(pending)) => pending,
         Ok(None) => return Ok(()),
         Err(err) => match err.code() {
@@ -107,6 +107,10 @@ async fn on_checkout_requested<E: Executor>(
         refuse(PAYMENTS_UNAVAILABLE).await?;
         return Ok(());
     }
+    // Goods a supplier buys once the order is placed keep the money held
+    // until they are bought; otherwise it is taken as soon as the order is.
+    let goods: Arc<dyn SuppliedGoods> = context.extract();
+    pending.supplier = goods.supplier_of(&event.tenant, &pending.lines).await?;
     let Some(merchant) = payments.active_tenant(&event.tenant).await? else {
         refuse(PAYMENTS_UNAVAILABLE).await?;
         return Ok(());

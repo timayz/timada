@@ -107,9 +107,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = menu(cx).await?;
     let documents = order_documents(cx, order_id).await?;
     // One review per product of the order, whatever variants of it it holds;
-    // none for a cancelled order or a shop that takes no reviews.
+    // none before it is paid, for a cancelled order or a shop that takes no
+    // reviews.
     let mut line_reviews: Vec<LineReview> = Vec::new();
-    if order.status != OrderStatus::Cancelled && store(cx).takes_reviews() {
+    let reviewable = matches!(order.status, OrderStatus::Paid | OrderStatus::Fulfilled);
+    if reviewable && store(cx).takes_reviews() {
         for line in &order.lines {
             if line_reviews
                 .iter()
@@ -133,10 +135,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     }
     let order_key = order_id.to_owned();
     let status = match order.status {
+        OrderStatus::Authorized if order.supplier.is_some() => {
+            "Enregistrée : votre carte sera débitée dès que la boutique l'aura confirmée."
+        }
+        OrderStatus::Authorized => "Enregistrée : le paiement est en cours.",
         OrderStatus::Paid => "Payée : la boutique la prépare.",
         OrderStatus::Fulfilled => "Expédiée : elle est en route.",
-        OrderStatus::Cancelled => "Annulée, et le paiement remboursé.",
+        OrderStatus::Cancelled if order.is_paid() => "Annulée, et le paiement remboursé.",
+        OrderStatus::Cancelled => "Annulée. Rien n'a été débité.",
     };
+    let paid = order.is_paid();
     let title = format!("Commande {}", order.reference);
     let currency = order.currency.clone();
 
@@ -299,8 +307,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </section>
                     }
                 }
-                <h2>"Facture"</h2>
-                if documents.is_empty() {
+                if paid || !documents.is_empty() {
+                    <h2>"Facture"</h2>
+                }
+                if paid && documents.is_empty() {
                     <p data-invoice-pending="">"Votre facture est en préparation : rechargez cette page dans un instant."</p>
                 }
                 <ul data-documents="">

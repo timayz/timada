@@ -263,8 +263,11 @@ only adds each line's slug and picture.
 Paying goes through the dashboard, which holds the merchant's payment provider
 account (Stripe): a storefront asks to pay, the dashboard opens a payment and hands
 back what the provider's card form needs, the shopper's browser confirms it with the
-provider, and the provider tells the dashboard. The order exists only then. A
-storefront never creates an order, and its key cannot.
+provider, which holds the money on the card, and the provider tells the dashboard.
+The order exists only then, `Authorized`; it is `Paid` once the money is taken, at
+once for goods the shop holds, once the supplier has them for goods it buys after the
+sale (`OrderState::supplier`). A storefront never creates an order, and its key
+cannot.
 
 ```rust
 use timada_storefront::{add_to_cart, cart, start_payment, order_of_cart, Checkout};
@@ -291,8 +294,10 @@ The payment form can show before any payment is open, with the cart and the
 address on one page: `payment_setup(cx)` gives the provider and the merchant's
 publishable key (`None` while the shop takes no payments), enough for Stripe's
 Payment Element in its deferred mode (`elements({ mode: "payment", amount,
-currency })`). On submit, call `elements.submit()`, then `start_payment`, then
-`confirmPayment` with the client secret it returned. The dashboard copies the key
+currency, captureMethod: "manual" })`: the payment holds the money, and Stripe.js
+refuses a form whose capture method differs from the payment's). On submit, call
+`elements.submit()`, then `start_payment`, then `confirmPayment` with the client
+secret it returned. The dashboard copies the key
 into the tenant's store whenever the merchant changes the Stripe settings.
 
 - Every call returns `Result<Result<T, OrderError>>`: the outer error is the store
@@ -316,9 +321,10 @@ into the tenant's store whenever the merchant changes the Stripe settings.
   under the EU distance-sales threshold whatever its currency: the invoice decides,
   from the merchant's VAT standing, the year's sales abroad (one in another currency
   counted at the day's euro rate), the postal code and a buyer's VAT number.
-- The order (`order_of_cart`, `order`) arrives once the provider confirmed the payment
-  to the dashboard, usually a second after the browser comes back. Its `reference`
-  (`K7Q4-MZP2`) is what a shopper quotes.
+- The order (`order_of_cart`, `order`) arrives once the provider told the dashboard the
+  shopper confirmed the payment, usually a second after the browser comes back; for
+  goods the shop holds, its money is taken a moment later (`status` `Paid`). Its
+  `reference` (`K7Q4-MZP2`) is what a shopper quotes.
 - Shipping: when the merchant set up shipping methods (`/t/{slug}/shipping`),
   `CartView::shipping_options` lists them, priced for the cart (`amount_cents` is 0
   once the goods, less any discount, reach a method's free-above threshold), and
@@ -396,7 +402,8 @@ product.review_count;
 
 - The library knows nothing of who is who: offer the form only on an order the
   shopper holds (the storefront checks its own cookie, as for the order page). The order
-  must be paid and not cancelled and hold the product; one review per product and
+  must be paid (its money taken, not only held) and not cancelled and hold the product;
+  one review per product and
   order. It is signed with the first name and initial the order was shipped to.
 - A review goes to the dashboard (`POST /store/reviews` at the dashboard address)
   with its photos, which the dashboard checks and keeps like product pictures. A key

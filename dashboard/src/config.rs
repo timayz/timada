@@ -616,7 +616,9 @@ pub struct PaymentsConfig {
     #[serde(default)]
     pub stripe_api_url: Option<String>,
     /// How often, in seconds, this node looks for card forms left open past
-    /// the time their goods were held for, and closes them with Stripe.
+    /// the time their goods were held for, and closes them with Stripe; and
+    /// for orders whose money Stripe was asked to take or give back without
+    /// answering, and settles them.
     #[serde(default = "default_cancel_check_secs")]
     pub cancel_check_secs: u64,
 }

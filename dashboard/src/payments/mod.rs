@@ -4,19 +4,26 @@
 //! has the cart's supplied goods read again ([`SuppliedGoods`]), prices the
 //! cart from the store, opens a payment with Stripe under the tenant's secret
 //! key and records it (`Cart::PaymentRequested`) for the storefront's card
-//! form. Stripe tells the webhook (`app/stripe`) when the
-//! payment went through, and only then does the order exist. Cancelling an
-//! order gives the money back through Stripe first. A card form left open
-//! past the time its goods were held for is closed by [`lapsed`]'s sweep
-//! before it can charge.
+//! form. The payment only holds the money on the shopper's card: Stripe
+//! tells the webhook (`app/stripe`) when the shopper confirmed it, and the
+//! order then exists, its money held. It is taken ([`settle`]) at once for
+//! goods the shop holds ([`capture`]), or once the supplier has the goods.
+//! Cancelling an order gives the hold back, or the money once taken,
+//! through Stripe first. A card form left open past the time its goods were
+//! held for is closed by [`lapsed`]'s sweep before it can be confirmed;
+//! what an order asked of Stripe and got no answer to is settled by
+//! [`pending`]'s.
 //!
 //! The tenant's Stripe secrets are recorded sealed ([`Sealer`]) under the
 //! operator's `secrets.key`; without a
 //! `[payments]` section no tenant takes payments.
 
+mod capture;
 mod gateway;
 mod goods;
 mod lapsed;
+mod pending;
+pub mod settle;
 mod setup;
 pub mod signature;
 mod subscription;
@@ -24,9 +31,11 @@ pub mod webhook;
 
 use std::sync::Arc;
 
+pub use capture::*;
 pub use gateway::*;
 pub use goods::*;
 pub use lapsed::*;
+pub use pending::*;
 pub use setup::*;
 pub use subscription::*;
 

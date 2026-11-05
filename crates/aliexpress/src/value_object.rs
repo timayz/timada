@@ -26,6 +26,9 @@ pub const REFRESH_MARGIN_SECS: u64 = 24 * 60 * 60;
 
 /// Who writes what the dashboard does on its own (imports, syncs).
 pub const ALIEXPRESS_ACTOR: &str = "timada-aliexpress";
+/// The supplier an order names when some of its goods are bought on
+/// AliExpress once it is placed (`Order::Placed.supplier`).
+pub const ALIEXPRESS_SUPPLIER: &str = "aliexpress";
 
 /// How long an import may run before the merchant may ask again: a node
 /// that took it on and stopped leaves it there.

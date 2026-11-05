@@ -31,9 +31,17 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 discount_code TEXT,
                 discount_cents INTEGER NOT NULL,
                 fulfilled_at INTEGER,
+                supplier TEXT,
+                payment_state TEXT NOT NULL,
+                capture_before INTEGER,
+                capture_requested_at INTEGER,
+                cancel_requested_at INTEGER,
+                paid_at INTEGER,
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX orders_orders_placed ON orders_orders (tenant_id, placed_at);
+        CREATE INDEX orders_orders_payment_due ON orders_orders (tenant_id, placed_at)
+                WHERE status = 'authorized' OR cancel_requested_at IS NOT NULL;
         CREATE INDEX orders_orders_status ON orders_orders (tenant_id, status, placed_at);
         CREATE INDEX orders_orders_discount ON orders_orders (tenant_id, discount_id)
                 WHERE discount_id IS NOT NULL;

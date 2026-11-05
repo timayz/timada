@@ -1,15 +1,64 @@
-use evento::{Executor, ProjectionAggregate};
+use evento::{Executor, ProjectionAggregate, WriteError};
 
-use crate::aggregator::{Cancelled, Fulfilled, RefundRequested, Refunded};
+use crate::aggregator::{
+    CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, Fulfilled, Paid,
+    PaymentReleased, RefundRequested, Refunded,
+};
 use crate::error::OrderError;
-use crate::value_object::{normalize_reason, normalize_tracking};
+use crate::value_object::{MAX_REASON_LEN, normalize_reason, normalize_tracking};
 
-use super::{OrderStatus, PendingRefund};
+use super::{OrderState, OrderStatus, PendingCapture, PendingRefund};
+
+/// How many times a write to an order is tried again when another one
+/// landed at the same moment.
+const ORDER_WRITE_ATTEMPTS: usize = 3;
+
+/// What asking for the held money came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureClaim {
+    /// This call asked: it is the one to speak to the provider.
+    Claimed(PendingCapture),
+    /// Someone asked already and the provider has not answered yet.
+    Pending(PendingCapture),
+    /// The money was taken already.
+    Paid,
+}
+
+/// What a cancellation still needs once asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CancelPath {
+    /// Nothing was taken: the hold goes back to the shopper with the
+    /// provider, then [`record_release`](super::Command::record_release)
+    /// cancels the order.
+    Release { payment_id: String },
+    /// The money was taken: what is outstanding is refunded first
+    /// ([`request_refund`](super::Command::request_refund), the provider,
+    /// [`record_refund`](super::Command::record_refund)), then
+    /// [`complete_cancellation`](super::Command::complete_cancellation).
+    Refund,
+    /// It is cancelled already.
+    Done,
+}
+
+impl OrderState {
+    /// What the cancellation of this order needs, now that it is asked for.
+    pub fn cancel_path(&self) -> CancelPath {
+        if self.status == OrderStatus::Cancelled {
+            CancelPath::Done
+        } else if self.is_paid() {
+            CancelPath::Refund
+        } else {
+            CancelPath::Release {
+                payment_id: self.payment.payment_id.clone(),
+            }
+        }
+    }
+}
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Records that an order left, with its tracking number if any; already
-    /// fulfilled is a no-op.
+    /// fulfilled is a no-op. The money must have been taken first.
     pub async fn fulfil_order(
         &self,
         actor: &str,
@@ -23,6 +72,10 @@ impl<E: Executor> super::Command<E> {
             OrderStatus::Paid => {}
             OrderStatus::Fulfilled => return Ok(()),
             OrderStatus::Cancelled => return Err(OrderError::OrderCancelled),
+            OrderStatus::Authorized => return Err(OrderError::PaymentNotCaptured),
+        }
+        if order.pending_cancellation.is_some() {
+            return Err(OrderError::CancellationPending);
         }
         order
             .write()?
@@ -37,48 +90,289 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Calls off an order that has not left; already cancelled is a no-op.
-    /// Giving the money back is the caller's (it speaks to the provider):
-    /// asked for with [`request_refund`](Self::request_refund), recorded
-    /// with [`record_refund`](Self::record_refund). While a refund is asked
-    /// for and not recorded, the order is not cancelled (`RefundPending`):
-    /// the money must be known to be on its way back first.
-    pub async fn cancel_order(
+    /// Asks for the money held on the shopper's card, before the provider
+    /// is: whoever writes the request is the one to speak to it
+    /// ([`CaptureClaim::Claimed`]). A request already standing, or the money
+    /// taken, is told rather than asked again; a cancelled order, or one
+    /// being cancelled, refuses.
+    pub async fn request_capture(
+        &self,
+        actor: &str,
+        order_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<CaptureClaim, OrderError> {
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            if order.is_paid() {
+                return Ok(CaptureClaim::Paid);
+            }
+            if let Some(pending) = &order.pending_capture {
+                return Ok(CaptureClaim::Pending(pending.clone()));
+            }
+            if order.status == OrderStatus::Cancelled || order.released_at.is_some() {
+                return Err(OrderError::OrderCancelled);
+            }
+            if order.pending_cancellation.is_some() {
+                return Err(OrderError::CancellationPending);
+            }
+            let requested = CaptureRequested {
+                payment_id: order.payment.payment_id.clone(),
+                amount_cents: order.payment.amount_cents,
+                requested_by: actor.to_owned(),
+            };
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&requested)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => {
+                    return Ok(CaptureClaim::Claimed(
+                        self.require_order(order_id)
+                            .await?
+                            .pending_capture
+                            .unwrap_or(PendingCapture {
+                                payment_id: requested.payment_id,
+                                amount_cents: requested.amount_cents,
+                                requested_by: requested.requested_by,
+                                requested_at: 0,
+                            }),
+                    ));
+                }
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(OrderError::Write(WriteError::InvalidOriginalVersion))
+    }
+
+    /// Records that the provider took the money; told twice, the second
+    /// time is a no-op. A cancelled order refuses (`OrderCancelled`): the
+    /// caller gives the money back.
+    pub async fn record_payment(
+        &self,
+        actor: &str,
+        order_id: &str,
+        payment_id: &str,
+        amount_cents: u64,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            if order.is_paid() {
+                return Ok(());
+            }
+            if order.payment.payment_id != payment_id {
+                return Err(OrderError::PaymentNotFound);
+            }
+            if order.status == OrderStatus::Cancelled {
+                return Err(OrderError::OrderCancelled);
+            }
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&Paid {
+                    payment_id: payment_id.to_owned(),
+                    amount_cents,
+                    paid_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Records that the provider would not take the money; `reason` is what
+    /// it said. Only a standing request is settled this way: anything else
+    /// is a no-op.
+    pub async fn record_capture_failure(
+        &self,
+        actor: &str,
+        order_id: &str,
+        reason: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        let reason: String = reason.trim().chars().take(MAX_REASON_LEN).collect();
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            let Some(pending) = order.pending_capture.clone() else {
+                return Ok(());
+            };
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&CaptureFailed {
+                    payment_id: pending.payment_id,
+                    reason: reason.clone(),
+                    failed_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Asks for an order to be cancelled, before the provider is asked to
+    /// give anything back; returns what is left to do. Asked again while it
+    /// stands, the same path comes back. A fulfilled order is
+    /// `NotCancellable`; one whose money is being asked for is
+    /// `CapturePending` until the provider answered.
+    pub async fn request_cancellation(
         &self,
         actor: &str,
         order_id: &str,
         reason: String,
         routing_key: Option<String>,
-    ) -> Result<(), OrderError> {
+    ) -> Result<CancelPath, OrderError> {
         let reason = normalize_reason(&reason)?;
-        let order = self.require_order(order_id).await?;
-        match order.status {
-            OrderStatus::Paid => {}
-            OrderStatus::Cancelled => return Ok(()),
-            OrderStatus::Fulfilled => return Err(OrderError::NotCancellable),
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            match order.status {
+                OrderStatus::Cancelled => return Ok(CancelPath::Done),
+                OrderStatus::Fulfilled => return Err(OrderError::NotCancellable),
+                OrderStatus::Authorized | OrderStatus::Paid => {}
+            }
+            if order.pending_cancellation.is_some() {
+                return Ok(order.cancel_path());
+            }
+            if order.pending_capture.is_some() {
+                return Err(OrderError::CapturePending);
+            }
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&CancellationRequested {
+                    reason: reason.clone(),
+                    requested_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(order.cancel_path()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
         }
-        if order.pending_refund.is_some() {
-            return Err(OrderError::RefundPending);
+        Err(OrderError::Write(WriteError::InvalidOriginalVersion))
+    }
+
+    /// Records that the hold went back to the shopper, nothing taken, and
+    /// cancels the order in the same write: with the reason the cancellation
+    /// was asked with, or `reason` when the provider dropped the hold on its
+    /// own (it lapsed). Told twice, the second time is a no-op; an order
+    /// whose money was taken refuses (`NotCancellable`): there is nothing
+    /// held to release.
+    pub async fn record_release(
+        &self,
+        actor: &str,
+        order_id: &str,
+        payment_id: &str,
+        reason: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            if order.released_at.is_some() || order.status == OrderStatus::Cancelled {
+                return Ok(());
+            }
+            if order.payment.payment_id != payment_id {
+                return Err(OrderError::PaymentNotFound);
+            }
+            if order.is_paid() || order.status == OrderStatus::Fulfilled {
+                return Err(OrderError::NotCancellable);
+            }
+            let (reason, cancelled_by) = match &order.pending_cancellation {
+                Some(asked) => (asked.reason.clone(), asked.requested_by.clone()),
+                None => (reason.to_owned(), actor.to_owned()),
+            };
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&PaymentReleased {
+                    payment_id: payment_id.to_owned(),
+                    released_by: actor.to_owned(),
+                })
+                .event(&Cancelled {
+                    reason,
+                    cancelled_by,
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
         }
-        order
-            .write()?
-            .routing_key_opt(routing_key)
-            .event(&Cancelled {
-                reason,
-                cancelled_by: actor.to_owned(),
-            })
-            .tenant(&self.tenant)
-            .commit(&self.executor)
-            .await?;
         Ok(())
     }
 
-    /// Asks for `amount_cents` of the order's payment to go back, before the
+    /// Cancels an order whose money was taken, once all of it went back:
+    /// with the reason and the person of the cancellation asked for. A no-op
+    /// when it is cancelled already, or no cancellation stands;
+    /// `RefundPending` while a refund is asked for and not recorded, and
+    /// `InvalidRefund` while money is still outstanding.
+    pub async fn complete_cancellation(
+        &self,
+        order_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            if order.status == OrderStatus::Cancelled {
+                return Ok(());
+            }
+            let Some(asked) = order.pending_cancellation.clone() else {
+                return Ok(());
+            };
+            if order.pending_refund.is_some() {
+                return Err(OrderError::RefundPending);
+            }
+            if order.outstanding_cents() > 0 {
+                return Err(OrderError::InvalidRefund);
+            }
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&Cancelled {
+                    reason: asked.reason,
+                    cancelled_by: asked.requested_by,
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Asks for `amount_cents` of the money taken to go back, before the
     /// provider is: the key the provider must be asked with comes back, and
     /// asking again while the refund is pending gives the same key, so a
-    /// retry (or another node) makes the same refund. The order must be paid
-    /// and not left (`NotCancellable`), and the amount within what is still
-    /// outstanding (`InvalidRefund`). Settled by
+    /// retry (or another node) makes the same refund. The money must have
+    /// been taken (`PaymentNotCaptured`: a hold is released, not refunded),
+    /// the order not left (`NotCancellable`), and the amount within what is
+    /// still outstanding (`InvalidRefund`). Settled by
     /// [`record_refund`](Self::record_refund).
     pub async fn request_refund(
         &self,
@@ -90,6 +384,9 @@ impl<E: Executor> super::Command<E> {
         let order = self.require_order(order_id).await?;
         if let Some(pending) = &order.pending_refund {
             return Ok(pending.clone());
+        }
+        if !order.is_paid() {
+            return Err(OrderError::PaymentNotCaptured);
         }
         if order.status == OrderStatus::Fulfilled {
             return Err(OrderError::NotCancellable);

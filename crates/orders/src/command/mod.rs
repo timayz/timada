@@ -19,18 +19,20 @@ use std::ops::Deref;
 
 pub use cart::*;
 pub use checkout::*;
+pub use lifecycle::*;
 pub use payment_method::*;
 
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BusinessBuyersAccepted, BusinessBuyersRefused,
-    BuyerIdentified, Cancelled, CheckedOut, CheckoutRequested, Claimed, ConfirmationMailed,
-    Created, DiscountApplied, DiscountGranted, DiscountRemoved, Discounted, Fulfilled, ItemAdded,
-    ItemRemoved, LanguageGiven, LanguageSet, MethodAdded, MethodChanged, MethodRemoved,
-    NewsletterOptInSet, NewsletterOptedIn, PaymentCancelled, PaymentRefused, PaymentRequested,
-    PaymentReturned, PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested,
-    Refunded, ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
+    BuyerIdentified, CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, CheckedOut,
+    CheckoutRequested, Claimed, ConfirmationMailed, Created, DiscountApplied, DiscountGranted,
+    DiscountRemoved, Discounted, Fulfilled, ItemAdded, ItemRemoved, LanguageGiven, LanguageSet,
+    MethodAdded, MethodChanged, MethodRemoved, NewsletterOptInSet, NewsletterOptedIn, Paid,
+    PaymentCancelled, PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturned,
+    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded,
+    ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
     StorefrontAddressSet, TimeZoneGiven, TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
@@ -133,19 +135,20 @@ pub struct PaymentSnapshot {
     pub total_cents: u64,
     pub discount: Option<OrderDiscount>,
     pub shipping: Option<OrderShipping>,
+    /// Who supplies some of the goods once the order is placed
+    /// (`aliexpress`): the money is taken once they are bought from it.
+    pub supplier: Option<String>,
     /// Unix seconds the payment was opened at: what the checkout holds (the
     /// goods, the discount's use) was taken just before, so it has lapsed
     /// once the reservation's length has passed since.
     pub opened_at: u64,
 }
 
-/// A payment that went through too late to be an order: what the checkout
-/// held had lapsed and gone to someone else, so the money went back.
+/// A payment authorized too late to be an order: what the checkout held had
+/// lapsed and gone to someone else, so the hold went back, nothing taken.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ReturnedPayment {
     pub payment_id: String,
-    pub refund_id: String,
-    pub amount_cents: u64,
     /// What was gone: `out_of_stock`, `discount_exhausted`,
     /// `discount_already_used`.
     pub code: String,
@@ -158,8 +161,8 @@ pub enum PaymentAnswer {
     Requested(Box<PaymentSnapshot>),
     /// It cannot go ahead; the code says why.
     Refused(String),
-    /// It was paid, too late for what the checkout held: given back, no
-    /// order.
+    /// It was authorized, too late for what the checkout held: the hold
+    /// went back, nothing taken, no order.
     Returned(Box<ReturnedPayment>),
     /// It was cancelled with the provider before the shopper confirmed it,
     /// what the checkout held having lapsed: nothing to confirm any more,
@@ -450,6 +453,7 @@ async fn on_payment_requested(
             total_cents: event.data.total_cents,
             discount: None,
             shipping: None,
+            supplier: event.data.supplier.to_owned(),
             opened_at: event.timestamp,
         })));
     }
@@ -485,8 +489,6 @@ async fn on_payment_returned(
     {
         request.answer = Some(PaymentAnswer::Returned(Box::new(ReturnedPayment {
             payment_id: event.data.payment_id.to_owned(),
-            refund_id: event.data.refund_id.to_owned(),
-            amount_cents: event.data.amount_cents,
             code: event.data.code.to_owned(),
         })));
     }
@@ -637,22 +639,31 @@ async fn on_shipping_granted(
 // Order
 // =============================================================================
 
-/// Where an order stands. An order exists once paid; the merchant fulfils it,
-/// or cancels it before it leaves (and the payment goes back).
+/// Where an order stands. An order exists once its payment is held on the
+/// shopper's card (`Authorized`); it is `Paid` once the money is taken, and
+/// the merchant fulfils it, or cancels it before it leaves (and the hold, or
+/// the money, goes back).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OrderStatus {
     #[default]
+    Authorized,
     Paid,
     Fulfilled,
     Cancelled,
 }
 
 impl OrderStatus {
-    pub const ALL: [Self; 3] = [Self::Paid, Self::Fulfilled, Self::Cancelled];
+    pub const ALL: [Self; 4] = [
+        Self::Authorized,
+        Self::Paid,
+        Self::Fulfilled,
+        Self::Cancelled,
+    ];
 
     /// The value stored in the read models.
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Authorized => "authorized",
             Self::Paid => "paid",
             Self::Fulfilled => "fulfilled",
             Self::Cancelled => "cancelled",
@@ -668,6 +679,7 @@ impl OrderStatus {
     /// How a page words it.
     pub fn label(self) -> &'static str {
         match self {
+            Self::Authorized => "Authorized",
             Self::Paid => "Paid",
             Self::Fulfilled => "Fulfilled",
             Self::Cancelled => "Cancelled",
@@ -695,9 +707,29 @@ pub struct OrderState {
     pub note: Option<String>,
     pub lines: Vec<OrderLine>,
     pub currency: String,
-    /// What was paid: the lines, less the discount, plus shipping.
+    /// What the shopper owes: the lines, less the discount, plus shipping.
     pub total_cents: u64,
+    /// The payment held on the shopper's card, then taken.
     pub payment: Payment,
+    /// Who supplies some of the goods once the order is placed
+    /// (`aliexpress`): the money is taken once they are bought from it.
+    /// `None`: taken at once.
+    pub supplier: Option<String>,
+    /// What was taken from the shopper's card, in minor units: 0 while the
+    /// payment is only held.
+    pub paid_cents: u64,
+    /// Unix seconds the money was taken at.
+    pub paid_at: Option<u64>,
+    /// The provider was asked to take the money and has not answered yet.
+    pub pending_capture: Option<PendingCapture>,
+    /// Why the provider would not take the money, the last time it was
+    /// asked; cleared by the next request.
+    pub capture_failure: Option<String>,
+    /// A cancellation asked for and not settled yet: the hold is being
+    /// released, or what was taken refunded.
+    pub pending_cancellation: Option<PendingCancellation>,
+    /// Unix seconds the hold went back to the shopper, nothing taken.
+    pub released_at: Option<u64>,
     /// The discount code it was paid with, if any.
     pub discount: Option<OrderDiscount>,
     /// The shipping it was paid with; `None` when shipping was included.
@@ -742,10 +774,73 @@ pub struct PendingRefund {
     pub requested_at: u64,
 }
 
+/// The money asked of the provider and not answered yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PendingCapture {
+    pub payment_id: String,
+    pub amount_cents: u64,
+    /// Who asked: a member, the dashboard, or what bought the goods.
+    pub requested_by: String,
+    /// Unix seconds.
+    pub requested_at: u64,
+}
+
+/// A cancellation asked for: what `Cancelled` will say once the money is
+/// settled.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PendingCancellation {
+    pub reason: String,
+    pub requested_by: String,
+    /// Unix seconds.
+    pub requested_at: u64,
+}
+
 impl OrderState {
-    /// What was paid and not given back yet.
+    /// What was taken and not given back yet: nothing while the payment is
+    /// only held.
     pub fn outstanding_cents(&self) -> u64 {
-        self.total_cents.saturating_sub(self.refunded_cents)
+        self.paid_cents.saturating_sub(self.refunded_cents)
+    }
+
+    /// Whether the money was taken.
+    pub fn is_paid(&self) -> bool {
+        self.paid_at.is_some()
+    }
+
+    /// Whether it went as far as it goes: fulfilled or cancelled.
+    pub fn is_settled(&self) -> bool {
+        matches!(self.status, OrderStatus::Fulfilled | OrderStatus::Cancelled)
+    }
+
+    /// Whether the held money may be asked for now: the payment is held,
+    /// nobody asked yet and no cancellation stands.
+    pub fn may_capture(&self) -> bool {
+        self.status == OrderStatus::Authorized
+            && self.pending_capture.is_none()
+            && self.pending_cancellation.is_none()
+            && self.released_at.is_none()
+    }
+
+    /// Whether the money waits for the supplier to have the goods.
+    pub fn awaits_supplier(&self) -> bool {
+        self.status == OrderStatus::Authorized && self.supplier.is_some()
+    }
+
+    /// Where the money stands, as the read model stores it: `held`,
+    /// `capturing` (asked of the provider), `capture_failed`, `paid` or
+    /// `released`.
+    pub fn payment_state(&self) -> &'static str {
+        if self.is_paid() {
+            "paid"
+        } else if self.released_at.is_some() {
+            "released"
+        } else if self.pending_capture.is_some() {
+            "capturing"
+        } else if self.capture_failure.is_some() {
+            "capture_failed"
+        } else {
+            "held"
+        }
     }
 
     /// How many items, all lines together.
@@ -767,6 +862,11 @@ impl OrderState {
 pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
     Projection::new::<crate::aggregator::Order>()
         .handler(on_placed())
+        .handler(on_capture_requested())
+        .handler(on_paid())
+        .handler(on_capture_failed())
+        .handler(on_cancellation_requested())
+        .handler(on_payment_released())
         .handler(on_fulfilled())
         .handler(on_cancelled())
         .handler(on_refund_requested())
@@ -792,8 +892,74 @@ async fn on_placed(event: Event<Placed>, order: &mut OrderState) -> anyhow::Resu
     order.currency = event.data.currency.to_owned();
     order.total_cents = event.data.total_cents;
     order.payment = event.data.payment.to_owned();
-    order.status = OrderStatus::Paid;
+    order.supplier = event.data.supplier.to_owned();
+    order.status = OrderStatus::Authorized;
     order.placed_at = event.timestamp;
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_capture_requested(
+    event: Event<CaptureRequested>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.pending_capture = Some(PendingCapture {
+        payment_id: event.data.payment_id.to_owned(),
+        amount_cents: event.data.amount_cents,
+        requested_by: event.data.requested_by.to_owned(),
+        requested_at: event.timestamp,
+    });
+    order.capture_failure = None;
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_paid(event: Event<Paid>, order: &mut OrderState) -> anyhow::Result<()> {
+    if order.status == OrderStatus::Authorized {
+        order.status = OrderStatus::Paid;
+    }
+    order.paid_cents = event.data.amount_cents;
+    order.paid_at = Some(event.timestamp);
+    order.pending_capture = None;
+    order.capture_failure = None;
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_capture_failed(
+    event: Event<CaptureFailed>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.pending_capture = None;
+    order.capture_failure = Some(event.data.reason.to_owned());
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_cancellation_requested(
+    event: Event<CancellationRequested>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.pending_cancellation = Some(PendingCancellation {
+        reason: event.data.reason.to_owned(),
+        requested_by: event.data.requested_by.to_owned(),
+        requested_at: event.timestamp,
+    });
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_payment_released(
+    event: Event<PaymentReleased>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.released_at = Some(event.timestamp);
+    order.pending_capture = None;
     order.updated_at = event.timestamp;
     Ok(())
 }
@@ -890,6 +1056,7 @@ async fn on_fulfilled(event: Event<Fulfilled>, order: &mut OrderState) -> anyhow
 #[evento::handler]
 async fn on_cancelled(event: Event<Cancelled>, order: &mut OrderState) -> anyhow::Result<()> {
     order.status = OrderStatus::Cancelled;
+    order.pending_cancellation = None;
     order.cancel_reason = Some(event.data.reason.to_owned());
     order.cancelled_at = Some(event.timestamp);
     order.updated_at = event.timestamp;

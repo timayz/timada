@@ -181,6 +181,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 /// The colour of an order's status.
 pub(crate) fn order_tone(status: OrderStatus) -> Tone {
     match status {
+        OrderStatus::Authorized => Tone::Warning,
         OrderStatus::Paid => Tone::Info,
         OrderStatus::Fulfilled => Tone::Success,
         OrderStatus::Cancelled => Tone::Danger,

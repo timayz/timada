@@ -298,10 +298,13 @@ let stripe = null;
 let elements = null;
 if (key && window.Stripe) {
   stripe = Stripe(key);
+  // The money is only held when the shopper pays, and taken once the shop
+  // has the goods: the payment the dashboard opens is captured by hand too.
   elements = stripe.elements({
     mode: "payment",
     amount: Number(form.dataset.amount),
     currency: form.dataset.currency,
+    captureMethod: "manual",
   });
   // The details and the address are asked above: Stripe's form asks
   // nothing again (no second country), and they are handed to it below.

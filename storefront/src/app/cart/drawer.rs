@@ -378,6 +378,7 @@ async function express() {
     mode: "payment",
     amount: Number(drawer.dataset.amount),
     currency: drawer.dataset.currency,
+    captureMethod: "manual",
   });
   const button = stripeElements.create("expressCheckout", { buttonHeight: 44 });
   button.mount("#drawer-express-checkout");

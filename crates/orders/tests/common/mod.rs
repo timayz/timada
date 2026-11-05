@@ -3,7 +3,7 @@
 use timada_catalog::{CreateProduct, DefineVariant, OptionSelection};
 use timada_core::db::Db;
 use timada_orders::{
-    CartItem, Checkout, Command, OpenedPayment, PROVIDER_STRIPE, Payment, PlacedOrder,
+    CancelPath, CartItem, Checkout, Command, OpenedPayment, PROVIDER_STRIPE, Payment, PlacedOrder,
     STOREFRONT_ACTOR, ShippingAddress,
 };
 
@@ -177,6 +177,7 @@ pub async fn open_payment(orders: &Orders, cart_id: &str, checkout: Checkout) ->
         payment_id: format!("pi_{request_id}"),
         amount_cents: pending.total_cents,
         currency: pending.currency.clone(),
+        capture_before: None,
     };
     orders
         .record_payment_request(
@@ -195,11 +196,74 @@ pub async fn open_payment(orders: &Orders, cart_id: &str, checkout: Checkout) ->
     (request_id, payment)
 }
 
-/// The whole way from a cart to its paid order.
-pub async fn pay(orders: &Orders, cart_id: &str, checkout: Checkout) -> PlacedOrder {
+/// From a cart to its order, the payment held on the shopper's card.
+pub async fn place(orders: &Orders, cart_id: &str, checkout: Checkout) -> PlacedOrder {
     let (_, payment) = open_payment(orders, cart_id, checkout).await;
     orders
-        .place_paid_order(DASHBOARD, cart_id, payment)
+        .place_order(DASHBOARD, cart_id, payment)
         .await
         .unwrap()
+}
+
+/// Takes the held money of an order, as the dashboard does once the
+/// provider said it did.
+pub async fn capture(orders: &Orders, order_id: &str) {
+    orders.request_capture(DASHBOARD, order_id).await.unwrap();
+    let order = orders.load_order(order_id).await.unwrap().unwrap();
+    orders
+        .record_payment(
+            DASHBOARD,
+            order_id,
+            &order.payment.payment_id,
+            order.payment.amount_cents,
+        )
+        .await
+        .unwrap();
+}
+
+/// The whole way from a cart to its paid order.
+pub async fn pay(orders: &Orders, cart_id: &str, checkout: Checkout) -> PlacedOrder {
+    let placed = place(orders, cart_id, checkout).await;
+    capture(orders, &placed.order_id).await;
+    placed
+}
+
+/// Cancels an order as the dashboard does once the provider answered: the
+/// hold released, or what was taken refunded first.
+pub async fn cancel(orders: &Orders, order_id: &str, reason: &str) {
+    match orders
+        .request_cancellation(ALICE, order_id, reason.to_owned())
+        .await
+        .unwrap()
+    {
+        CancelPath::Release { payment_id } => orders
+            .record_release(DASHBOARD, order_id, &payment_id, "")
+            .await
+            .unwrap(),
+        CancelPath::Refund => {
+            let outstanding = orders
+                .load_order(order_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .outstanding_cents();
+            if outstanding > 0 {
+                let pending = orders
+                    .request_refund(ALICE, order_id, outstanding)
+                    .await
+                    .unwrap();
+                orders
+                    .record_refund(
+                        DASHBOARD,
+                        order_id,
+                        &format!("re_{}", pending.idempotency_key),
+                        outstanding,
+                    )
+                    .await
+                    .unwrap();
+            }
+            orders.complete_cancellation(order_id).await.unwrap();
+        }
+        CancelPath::Done => {}
+    }
 }

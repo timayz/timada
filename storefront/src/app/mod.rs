@@ -521,13 +521,13 @@ pub fn say(code: &str) -> &'static str {
         "payment_failed" => "Le paiement n'a pas abouti. Réessayez ou utilisez une autre carte.",
         "payment_expired" => "Ce paiement n'est plus ouvert. Veuillez recommencer votre commande.",
         "payment_returned_out_of_stock" => {
-            "Le dernier exemplaire est parti pendant votre paiement : il vous est remboursé en entier. Votre panier est inchangé."
+            "Le dernier exemplaire est parti pendant votre paiement : rien n'a été débité. Votre panier est inchangé."
         }
         "payment_returned_discount_exhausted" => {
-            "Ce code promo a été épuisé pendant votre paiement : il vous est remboursé en entier. Retirez le code et réessayez."
+            "Ce code promo a été épuisé pendant votre paiement : rien n'a été débité. Retirez le code et réessayez."
         }
         "payment_returned_discount_already_used" => {
-            "Ce code promo a déjà servi pour votre adresse : votre paiement vous est remboursé en entier. Retirez le code et réessayez."
+            "Ce code promo a déjà servi pour votre adresse : rien n'a été débité. Retirez le code et réessayez."
         }
         "invalid_email" => "Saisissez une adresse e-mail valide.",
         "invalid_vat_number" => {
@@ -562,6 +562,7 @@ pub fn say(code: &str) -> &'static str {
         "review_order_not_found" => "Cette commande ne peut pas être évaluée.",
         "review_not_purchased" => "Ce produit ne fait pas partie de cette commande.",
         "review_order_cancelled" => "Une commande annulée ne peut pas être évaluée.",
+        "review_order_not_paid" => "Une commande s'évalue une fois confirmée.",
         "review_already_reviewed" => "Vous avez déjà donné votre avis sur ce produit.",
         "review_not_pending" => {
             "La boutique a déjà examiné votre avis : il ne peut plus être modifié."
