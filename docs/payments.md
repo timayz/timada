@@ -102,7 +102,7 @@ CLI and an internet connection.
    - the `whsec_…` printed by `stripe listen`, not one from an endpoint registered in
      the Stripe dashboard.
 
-   To skip this after each `make seed.chatounette`, put them in
+   To skip this after each `make seed`, put them in
    `config/stripe.local.toml`, which git ignores. The seed then connects the shop from
    that file, over any account it has, and logs the tenant id for step 2. It checks
    the keys' prefixes only, so a key Stripe refuses shows up at the first payment:
@@ -113,12 +113,12 @@ CLI and an internet connection.
    webhook_secret = "whsec_…"
    ```
 
-4. **Give the shop a key that can sell.** Tick `store:checkout` on its key on the
-   API keys page, or mint a new one. If the key changes, remove the replica first:
+4. **Give the shop a key that can sell.** The key `make seed` wrote can. For another
+   key, tick `store:checkout` on it on the API keys page. If it is another tenant's,
+   remove the replica first, or the shop keeps showing the old tenant's products:
    `rm storefront.db*`, then `make storefront.migrate`.
 
-5. **Buy something.** Run the shop (`make storefront` with `STORE_TOKEN` and
-   `STORE_MEDIA_URL`), add a product, check out and pay with a test card. Use any
+5. **Buy something.** Run the shop (`make storefront`), add a product, check out and pay with a test card. Use any
    future expiry date and any CVC.
 
    | Card | What happens |

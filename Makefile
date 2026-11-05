@@ -1,4 +1,8 @@
-.PHONY: start cert cert.install up stop down dev reset migrate seed.chatounette snapshot.chatounette aliexpress.places storefront storefront.migrate e2e loadtest lint fmt-check fmt test machete check
+.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate e2e loadtest lint fmt-check fmt test machete check
+
+# What `make seed` writes and `make storefront` reads: the key and the addresses
+# of the seeded shop. Git ignores it.
+STOREFRONT_SETTINGS := config/storefront.local.env
 
 start: up dev
 
@@ -24,8 +28,11 @@ down:
 dev:
 	TIMADA_CONFIG=config/dev.local.toml topcoat dev -p timada-dashboard
 
+# Also removes what only meant something with that store: the storefront's copy
+# of its catalogue, which would keep showing the old products, and its key.
 reset:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml reset
+	rm -f storefront.db* $(STOREFRONT_SETTINGS)
 
 migrate:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml migrate
@@ -34,19 +41,19 @@ migrate:
 # (taken by `make snapshot.chatounette`, pictures included), owned by the
 # registered user OWNER names, links it to a test company unless it already
 # has a company, connects it to the Stripe account of config/stripe.local.toml
-# when there is one (see docs/payments.md), and prints the STORE_* settings for the
-# storefront. Runs with the server stopped; LIMIT loads only the first products
-# of the snapshot (a quick seed for trying the shop), and the back office's lists
-# catch up when the server next starts, so `make storefront` can follow at once:
-#   OWNER=me@example.com make seed.chatounette
-#   LIMIT=200 OWNER=me@example.com make seed.chatounette
-seed.chatounette:
+# when there is one (see docs/payments.md), and writes the storefront's settings
+# to STOREFRONT_SETTINGS. Runs with the server stopped; LIMIT loads only the first
+# products of the snapshot (a quick seed for trying the shop), and the back office's
+# lists catch up when the server next starts, so `make storefront` can follow at once:
+#   OWNER=me@example.com make seed
+#   LIMIT=200 OWNER=me@example.com make seed
+seed:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml seed \
 		--snapshot seeds/chatounette --tenant Chatounette --owner "$${OWNER:?set OWNER to the owner's e-mail}" \
 		$${LIMIT:+--limit "$$LIMIT"} --no-catch-up --test-company \
 		--storefront-url "$${STOREFRONT_URL-https://storefront.localhost}" \
 		$(if $(wildcard config/stripe.local.toml),--stripe-file config/stripe.local.toml) \
-		--pages storefront/pages --env-file data/seed.chatounette.env
+		--pages storefront/pages --env-file $(STOREFRONT_SETTINGS)
 
 # Reads AliExpress's lists of places again (one call per country, with your
 # app's key) into crates/aliexpress/places.bin, which the next build embeds.
@@ -62,9 +69,9 @@ snapshot.chatounette:
 		--tab-stop-at "À propos"
 
 # The shop at https://storefront.localhost, listening on every interface so the
-# compose Traefik reaches it, with the settings `make seed.chatounette` printed:
-# STORE_TOKEN and STORE_MEDIA_URL (where the product pictures load from) both come
-# from a tenant's API keys page; without the media URL the pictures don't show.
+# compose Traefik reaches it, with the settings `make seed` wrote. A setting in the
+# environment wins over the file, as for another tenant's key (STORE_TOKEN and
+# STORE_MEDIA_URL, where the product pictures load from, are on its API keys page):
 #   STORE_TOKEN=... STORE_MEDIA_URL=... make storefront
 # It talks to one node's store API (127.0.0.1:4321) unless told otherwise; to
 # go through Traefik's balancer over the cluster nodes instead:
@@ -73,6 +80,10 @@ snapshot.chatounette:
 # shopper the dashboard limits sign-in codes for. STORE_API_URL is the dashboard
 # the reviews, sign-ins and contact messages go to; the dev one unless set.
 storefront:
+	@keep=$$(export -p | grep ' STORE_' || true); \
+	set -a; [ ! -f $(STOREFRONT_SETTINGS) ] || . "$(abspath $(STOREFRONT_SETTINGS))"; set +a; \
+	eval "$$keep"; \
+	: "$${STORE_TOKEN:?run make seed first, or set it}"; \
 	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_API_URL=$${STORE_API_URL-https://timada.localhost} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p storefront
 
 storefront.migrate:

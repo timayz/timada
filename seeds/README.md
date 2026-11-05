@@ -25,5 +25,5 @@ and fetches only the pictures not there yet. A picture the fetch could not get i
 left to the seed, which fetches it from the shop (`--skip-images` leaves them all).
 
 The snapshot is here to try the storefront against a real-sized catalogue, nothing
-more. Seeding the whole of it takes a while; `LIMIT=200 make seed.chatounette` loads
+more. Seeding the whole of it takes a while; `LIMIT=200 make seed` loads
 only the first 200 products, which is quicker and enough for most tries at the shop.

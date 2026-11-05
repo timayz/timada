@@ -537,15 +537,17 @@ Indiquez ici les pays que vous desservez…
 ```
 
 (`meta_title` is the other optional key.) `storefront/pages` holds placeholder text for
-the storefront's six pages, which `make seed.chatounette` passes.
+the storefront's six pages, which `make seed` passes.
 
 A second run skips what is already there (by slug), so a run that stopped halfway can
 be started again. The command ends by bringing the back office's catalogue and pages
 lists up to date, which takes a while for a large catalogue; `--no-catch-up` skips that
 and leaves it to the server, which catches up when it next starts.
-`make seed.chatounette` wraps the command for the dev config with `--no-catch-up`, and
-`LIMIT=200 make seed.chatounette` loads only the first 200 products; `seeds/README.md`
-says where each snapshot comes from and how to take it.
+`make seed` wraps the command for the dev config with `--no-catch-up`, and
+`LIMIT=200 make seed` loads only the first 200 products; `seeds/README.md`
+says where each snapshot comes from and how to take it. `--env-file` also writes the
+settings to a file: `make seed` writes them to `config/storefront.local.env`, which git
+ignores and `make storefront` reads.
 
 ## The storefront
 
@@ -562,17 +564,20 @@ order confirmation where the shopper reviews what they bought, and shopper accou
 (sign-in from the checkout's "Déjà client ?" or the header, `/account` with the
 orders and saved addresses, the checkout prefilled from them).
 
-To run it, fill a tenant with `make seed.chatounette` (`LIMIT=200` for a quick one, see
-"Seeding a catalogue"), which prints the three settings:
+To run it, fill a tenant (`LIMIT=200` for a quick one, see "Seeding a catalogue"), then
+start it with the settings the seed wrote:
 
 ```sh
-STORE_TOKEN=tk_… STORE_MEDIA_URL=https://timada.localhost/media/<tenant id> \
-    STORE_API_URL=https://timada.localhost make storefront
+OWNER=me@example.com make seed
+make storefront
 open https://storefront.localhost/
 ```
 
-All three values are on the tenant's API keys page; to sell, tick `store:checkout` on
-the key.
+For another tenant, set `STORE_TOKEN`, `STORE_MEDIA_URL` and `STORE_API_URL` in the
+environment, which wins over the file. All three are on the tenant's API keys page; to
+sell, tick `store:checkout` on the key. The local copy of the catalog belongs to one
+tenant: with another tenant's key, `rm storefront.db*` first, or the shop keeps showing
+the old tenant's products. `make reset` removes the copy and the settings with the store.
 
 ### Making it your own
 
