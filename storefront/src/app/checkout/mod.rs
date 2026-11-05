@@ -728,307 +728,309 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             title: "Commander",
             nav: &nav,
             no_drawer: true,
-            <ol class="steps" aria-label="Étapes de la commande">
-                <li class="done"><a href=(&back_to_cart)>"Panier"</a></li>
-                <li aria-current="step">"Livraison & paiement"</li>
-                <li>"Confirmation"</li>
-            </ol>
-            <h1 class="vh">"Commander"</h1>
-            if let Some(code) = query.error.as_deref() {
-                <p class="notice" role="alert">(say(code))</p>
-            }
-            <div class="checkout-grid">
-                <aside class="checkout-aside" aria-label="Récapitulatif de la commande">
-                    <section class="card summary" data-checkout-summary="">
-                        <h2>"Votre panier"</h2>
-                        <ul class="lines">
-                            for line in &cart.lines {
-                                summary_line(line: line, currency: &currency, back: "checkout")
-                            }
-                        </ul>
-                        <details class="promo" open=(cart.discount_code.is_some())>
-                            <summary>"Vous avez un code promo ? Saisissez-le ici"</summary>
-                            <form class="discount" method="post" action=(href!(discount::discount))>
-                                <input type="hidden" name="back" value="checkout">
-                                if let Some(code) = &cart.discount_code {
-                                    <span>"Code " <code>(code)</code></span>
-                                    <button name="remove" value="1">"Retirer le code"</button>
-                                } else {
-                                    <label>
-                                        <span class="vh">"Code promo"</span>
-                                        <input type="text" name="code" maxlength="32" autocomplete="off" placeholder="Code promo">
-                                    </label>
-                                    <button>"Appliquer"</button>
+            <div class="wrap">
+                <ol class="steps" aria-label="Étapes de la commande">
+                    <li class="done"><a href=(&back_to_cart)>"Panier"</a></li>
+                    <li aria-current="step">"Livraison & paiement"</li>
+                    <li>"Confirmation"</li>
+                </ol>
+                <h1 class="vh">"Commander"</h1>
+                if let Some(code) = query.error.as_deref() {
+                    <p class="notice" role="alert">(say(code))</p>
+                }
+                <div class="checkout-grid">
+                    <aside class="checkout-aside" aria-label="Récapitulatif de la commande">
+                        <section class="card summary" data-checkout-summary="">
+                            <h2>"Votre panier"</h2>
+                            <ul class="lines">
+                                for line in &cart.lines {
+                                    summary_line(line: line, currency: &currency, back: "checkout")
                                 }
-                            </form>
-                            if let Some(refused) = cart.discount_refused {
-                                <p class="notice" data-discount-refused=(refused)>(say(refused))</p>
-                            }
-                        </details>
-                        <dl class="totals">
-                            <dt>"Sous-total"</dt>
-                            <dd data-checkout-subtotal="">(cart.subtotal().unwrap_or_default())</dd>
-                            if let (Some(discount), Some(amount)) = (&cart.discount, cart.discount_amount()) {
-                                <dt>"Code promo " <code>(&discount.code)</code></dt>
-                                <dd data-checkout-discount=(&discount.code)>(amount)</dd>
-                            }
-                            <dt>"Livraison"</dt>
-                            <dd data-checkout-shipping="">(&shipping_text)</dd>
-                            <dt class="total">"Total"</dt>
-                            <dd class="total">
-                                <strong class="price" data-checkout-total="">(&total)</strong>
-                                <small data-checkout-vat="" hidden=(vat.is_none())>
-                                    if let Some(vat) = &vat { "(" (vat) ")" }
-                                </small>
-                            </dd>
-                        </dl>
-                    </section>
-                    <section class="reassure">
-                        <h2>"Commandez en toute confiance"</h2>
-                        <ul>
-                            <li>"Livraison avec suivi"</li>
-                            <li>"14 jours satisfait ou remboursé"</li>
-                            <li>"Un service client à votre écoute"</li>
-                            <li>"Paiement sécurisé"</li>
-                        </ul>
-                    </section>
-                    if !reviews.is_empty() {
-                        <section class="reviews-aside" data-checkout-reviews="">
-                            <h2>"Ce que disent nos clients"</h2>
-                            for review in &reviews {
-                                <figure class="review">
-                                    <figcaption>
-                                        <span class="avatar" aria-hidden="true">(initials(&review.author_name))</span>
-                                        <span>(&review.author_name)</span>
-                                    </figcaption>
-                                    <div class="rating" aria-label=(format!("{} sur 5", review.rating))>(review.stars())</div>
-                                    if let Some(title) = &review.title { <strong>(title)</strong> }
-                                    <blockquote>(&review.body)</blockquote>
-                                </figure>
-                            }
-                        </section>
-                    }
-                </aside>
-
-                <div class="checkout-main">
-                    if let Some(shopper) = &shopper {
-                        <p class="returning" data-signed-in="">"Connecté en tant que " <strong>(&shopper.email)</strong></p>
-                    } else if accounts {
-                        <p class="returning" data-returning="">
-                            "Déjà client ? " <a href=(&sign_in)>"Cliquez ici pour vous connecter"</a>
-                        </p>
-                    }
-                    if setup.is_some() {
-                        <section class="express" data-express="" hidden="" aria-label="Paiement express">
-                            <h2>"Paiement express"</h2>
-                            <div id="express-checkout"></div>
-                            <p class="or"><span>"ou"</span></p>
-                        </section>
-                    }
-                    <form class="checkout" method="post" action=(href!(place)) data-checkout-form=""
-                        data-start-path=(href!(start::start)) data-return-path=(href!(complete::index))
-                        data-publishable-key=(&publishable_key) data-amount=(total_cents)
-                        data-goods=(cart.total_cents) data-goods-total=(&goods_total) data-shipping=(&rates)
-                        data-currency=(currency.to_lowercase())
-                        data-places-path=(href!(places::places)) data-region=(&draft.region)>
-                        <input type="hidden" name="expected_total_cents" value=(total_cents)>
-                        <section class="card">
-                            <h2>"Vos coordonnées"</h2>
-                            <label for="checkout-email">"E-mail"</label>
-                            <input id="checkout-email" name="email" type="email" required="" autocomplete="email" value=(&draft.email) readonly=(shopper.is_some())>
-                            <label for="checkout-name">"Nom complet"</label>
-                            <input id="checkout-name" name="name" required="" autocomplete="name" value=(&draft.name)>
-                            <label for="checkout-phone">"Téléphone"</label>
-                            <div class="phone" data-phone="">
-                                <select id="checkout-phone-code" name="phone_code" aria-label="Indicatif" autocomplete="tel-country-code">
-                                    for (dial_country, dial) in countries::DIAL_CODES {
-                                        <option value=(dial) data-iso=(dial_country) selected=(*dial_country == phone_country)>(countries::flag(dial_country)) " +" (dial)</option>
+                            </ul>
+                            <details class="promo" open=(cart.discount_code.is_some())>
+                                <summary>"Vous avez un code promo ? Saisissez-le ici"</summary>
+                                <form class="discount" method="post" action=(href!(discount::discount))>
+                                    <input type="hidden" name="back" value="checkout">
+                                    if let Some(code) = &cart.discount_code {
+                                        <span>"Code " <code>(code)</code></span>
+                                        <button name="remove" value="1">"Retirer le code"</button>
+                                    } else {
+                                        <label>
+                                            <span class="vh">"Code promo"</span>
+                                            <input type="text" name="code" maxlength="32" autocomplete="off" placeholder="Code promo">
+                                        </label>
+                                        <button>"Appliquer"</button>
                                     }
-                                </select>
-                                <input id="checkout-phone" name="phone_number" type="tel" required="" autocomplete="tel-national" value=(&phone_number)>
-                            </div>
-                        </section>
-                        <section class="card">
-                            <h2>"Adresse de livraison"</h2>
-                            if let Some(shopper) = shopper.as_ref().filter(|shopper| !shopper.addresses.is_empty()) {
-                                <ul class="saved" data-saved-addresses="">
-                                    for saved in &shopper.addresses {
-                                        <li data-saved-address=(&saved.address.city) data-current=(shipping_to.as_deref() == Some(saved.id.as_str()))
-                                            data-billing-current=(billing_to.as_deref() == Some(saved.id.as_str()))>
-                                            (&saved.address.name) ", " (&saved.address.line1) ", "
-                                            (&saved.address.postal_code) " " (&saved.address.city) " "
-                                            <a href=(saved_url(cx, Some(&saved.id), billing_to.as_deref()))>"Livrer ici"</a> " "
-                                            <a href=(saved_url(cx, shipping_to.as_deref(), Some(&saved.id))) data-bill-here="">"Facturer ici"</a>
-                                        </li>
-                                    }
-                                </ul>
-                            }
-                            <label for="checkout-line1">"Adresse"</label>
-                            <input id="checkout-line1" name="line1" required="" autocomplete="address-line1" aria-describedby="checkout-commune-hint" value=(&draft.line1)>
-                            <p class="hint" id="checkout-commune-hint" data-commune-hint="" hidden=(true)>"Indiquez votre commune avec la rue."</p>
-                            <details class="more" open=(!draft.line2.is_empty())>
-                                <summary>"+ Ajouter une société, un appartement, un étage…"</summary>
-                                <label for="checkout-line2">"Complément d'adresse (facultatif)"</label>
-                                <input id="checkout-line2" name="line2" autocomplete="address-line2" value=(&draft.line2)>
+                                </form>
+                                if let Some(refused) = cart.discount_refused {
+                                    <p class="notice" data-discount-refused=(refused)>(say(refused))</p>
+                                }
                             </details>
-                            <div class="row">
-                                <span>
-                                    <label for="checkout-country">"Pays"</label>
-                                    <select id="checkout-country" name="country" required="" autocomplete="country">
-                                        for (code, name, text) in &countries {
-                                            <option value=(*code) selected=(*code == country) data-vat=(text)>(*name)</option>
+                            <dl class="totals">
+                                <dt>"Sous-total"</dt>
+                                <dd data-checkout-subtotal="">(cart.subtotal().unwrap_or_default())</dd>
+                                if let (Some(discount), Some(amount)) = (&cart.discount, cart.discount_amount()) {
+                                    <dt>"Code promo " <code>(&discount.code)</code></dt>
+                                    <dd data-checkout-discount=(&discount.code)>(amount)</dd>
+                                }
+                                <dt>"Livraison"</dt>
+                                <dd data-checkout-shipping="">(&shipping_text)</dd>
+                                <dt class="total">"Total"</dt>
+                                <dd class="total">
+                                    <strong class="price" data-checkout-total="">(&total)</strong>
+                                    <small data-checkout-vat="" hidden=(vat.is_none())>
+                                        if let Some(vat) = &vat { "(" (vat) ")" }
+                                    </small>
+                                </dd>
+                            </dl>
+                        </section>
+                        <section class="reassure">
+                            <h2>"Commandez en toute confiance"</h2>
+                            <ul>
+                                <li>"Livraison avec suivi"</li>
+                                <li>"14 jours satisfait ou remboursé"</li>
+                                <li>"Un service client à votre écoute"</li>
+                                <li>"Paiement sécurisé"</li>
+                            </ul>
+                        </section>
+                        if !reviews.is_empty() {
+                            <section class="reviews-aside" data-checkout-reviews="">
+                                <h2>"Ce que disent nos clients"</h2>
+                                for review in &reviews {
+                                    <figure class="review">
+                                        <figcaption>
+                                            <span class="avatar" aria-hidden="true">(initials(&review.author_name))</span>
+                                            <span>(&review.author_name)</span>
+                                        </figcaption>
+                                        <div class="rating" aria-label=(format!("{} sur 5", review.rating))>(review.stars())</div>
+                                        if let Some(title) = &review.title { <strong>(title)</strong> }
+                                        <blockquote>(&review.body)</blockquote>
+                                    </figure>
+                                }
+                            </section>
+                        }
+                    </aside>
+
+                    <div class="checkout-main">
+                        if let Some(shopper) = &shopper {
+                            <p class="returning" data-signed-in="">"Connecté en tant que " <strong>(&shopper.email)</strong></p>
+                        } else if accounts {
+                            <p class="returning" data-returning="">
+                                "Déjà client ? " <a href=(&sign_in)>"Cliquez ici pour vous connecter"</a>
+                            </p>
+                        }
+                        if setup.is_some() {
+                            <section class="express" data-express="" hidden="" aria-label="Paiement express">
+                                <h2>"Paiement express"</h2>
+                                <div id="express-checkout"></div>
+                                <p class="or"><span>"ou"</span></p>
+                            </section>
+                        }
+                        <form class="checkout" method="post" action=(href!(place)) data-checkout-form=""
+                            data-start-path=(href!(start::start)) data-return-path=(href!(complete::index))
+                            data-publishable-key=(&publishable_key) data-amount=(total_cents)
+                            data-goods=(cart.total_cents) data-goods-total=(&goods_total) data-shipping=(&rates)
+                            data-currency=(currency.to_lowercase())
+                            data-places-path=(href!(places::places)) data-region=(&draft.region)>
+                            <input type="hidden" name="expected_total_cents" value=(total_cents)>
+                            <section class="card">
+                                <h2>"Vos coordonnées"</h2>
+                                <label for="checkout-email">"E-mail"</label>
+                                <input id="checkout-email" name="email" type="email" required="" autocomplete="email" value=(&draft.email) readonly=(shopper.is_some())>
+                                <label for="checkout-name">"Nom complet"</label>
+                                <input id="checkout-name" name="name" required="" autocomplete="name" value=(&draft.name)>
+                                <label for="checkout-phone">"Téléphone"</label>
+                                <div class="phone" data-phone="">
+                                    <select id="checkout-phone-code" name="phone_code" aria-label="Indicatif" autocomplete="tel-country-code">
+                                        for (dial_country, dial) in countries::DIAL_CODES {
+                                            <option value=(dial) data-iso=(dial_country) selected=(*dial_country == phone_country)>(countries::flag(dial_country)) " +" (dial)</option>
                                         }
                                     </select>
-                                </span>
-                                <span>
-                                    <label for="checkout-postal-code">"Code postal"</label>
-                                    <input id="checkout-postal-code" name="postal_code" required="" autocomplete="postal-code" value=(&draft.postal_code)>
-                                </span>
-                            </div>
-                            <div class="row">
-                                <span data-province="" hidden=(true)>
-                                    <label for="checkout-region">"Région / Province"</label>
-                                    <select id="checkout-region" name="region" required="" autocomplete="address-level1" disabled=(true)></select>
-                                </span>
-                                <span>
-                                    <label for="checkout-city" data-city-label="">"Ville"</label>
-                                    <select id="checkout-city-pick" data-city-pick="" required="" hidden=(true) disabled=(true)></select>
-                                    <input id="checkout-city" name="city" required="" autocomplete="address-level2" value=(&draft.city)>
-                                </span>
-                                <span data-town="" hidden=(true)>
-                                    <label for="checkout-town">"Commune"</label>
-                                    <select id="checkout-town" data-town-pick="" required="" disabled=(true)></select>
-                                </span>
-                            </div>
-                            if !cart.shipping_options.is_empty() || cart.shipping_required {
-                                <fieldset class="shipping-methods" data-shipping-methods="">
-                                    <legend>"Mode de livraison"</legend>
-                                    for option in &cart.shipping_options {
-                                        <label class="method" hidden=(!option.ships_to(&country))>
-                                            <input type="radio" name="shipping_method" value=(&option.id)
-                                                data-amount=(option.amount_cents) data-price=(option.price())
-                                                data-total=(cart.total_with_label(Some(option)).unwrap_or_default())
-                                                data-countries=(option.countries.join(" "))
-                                                checked=(shipping.as_ref().is_some_and(|picked| picked.id == option.id))
-                                                disabled=(!option.ships_to(&country))>
-                                            <span class="name">(&option.name)</span>
-                                            <span class="price">(option.price())</span>
-                                        </label>
-                                    }
-                                    <p class="notice" data-no-shipping="" hidden=(shipping.is_some())>"Cette boutique ne livre pas dans ce pays."</p>
-                                </fieldset>
-                            }
-                            if business {
-                                <label for="checkout-vat">"Numéro de TVA intracommunautaire (facultatif, pour une facture hors TVA)"</label>
-                                <input id="checkout-vat" name="vat_number" autocomplete="off" placeholder="DE123456789" value=(&draft.vat_number)>
-                            }
-                            <label class="check">
-                                <input type="checkbox" name="billing_different" value="1" checked=(bills_elsewhere)>
-                                " Utiliser une autre adresse de facturation (facultatif)"
-                            </label>
-                            <fieldset class="billing" data-billing="" hidden=(!bills_elsewhere) disabled=(!bills_elsewhere)>
-                                <legend class="vh">"Adresse de facturation"</legend>
-                                <label for="billing-name">"Nom ou société à facturer"</label>
-                                <input id="billing-name" name="billing_name" required="" autocomplete="billing name" value=(&draft.billing_name)>
-                                <label for="billing-line1">"Adresse (facturation)"</label>
-                                <input id="billing-line1" name="billing_line1" required="" autocomplete="billing address-line1" value=(&draft.billing_line1)>
-                                <label for="billing-line2">"Complément d'adresse de facturation (facultatif)"</label>
-                                <input id="billing-line2" name="billing_line2" autocomplete="billing address-line2" value=(&draft.billing_line2)>
+                                    <input id="checkout-phone" name="phone_number" type="tel" required="" autocomplete="tel-national" value=(&phone_number)>
+                                </div>
+                            </section>
+                            <section class="card">
+                                <h2>"Adresse de livraison"</h2>
+                                if let Some(shopper) = shopper.as_ref().filter(|shopper| !shopper.addresses.is_empty()) {
+                                    <ul class="saved" data-saved-addresses="">
+                                        for saved in &shopper.addresses {
+                                            <li data-saved-address=(&saved.address.city) data-current=(shipping_to.as_deref() == Some(saved.id.as_str()))
+                                                data-billing-current=(billing_to.as_deref() == Some(saved.id.as_str()))>
+                                                (&saved.address.name) ", " (&saved.address.line1) ", "
+                                                (&saved.address.postal_code) " " (&saved.address.city) " "
+                                                <a href=(saved_url(cx, Some(&saved.id), billing_to.as_deref()))>"Livrer ici"</a> " "
+                                                <a href=(saved_url(cx, shipping_to.as_deref(), Some(&saved.id))) data-bill-here="">"Facturer ici"</a>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                                <label for="checkout-line1">"Adresse"</label>
+                                <input id="checkout-line1" name="line1" required="" autocomplete="address-line1" aria-describedby="checkout-commune-hint" value=(&draft.line1)>
+                                <p class="hint" id="checkout-commune-hint" data-commune-hint="" hidden=(true)>"Indiquez votre commune avec la rue."</p>
+                                <details class="more" open=(!draft.line2.is_empty())>
+                                    <summary>"+ Ajouter une société, un appartement, un étage…"</summary>
+                                    <label for="checkout-line2">"Complément d'adresse (facultatif)"</label>
+                                    <input id="checkout-line2" name="line2" autocomplete="address-line2" value=(&draft.line2)>
+                                </details>
                                 <div class="row">
                                     <span>
-                                        <label for="billing-city">"Ville de facturation"</label>
-                                        <input id="billing-city" name="billing_city" required="" autocomplete="billing address-level2" value=(&draft.billing_city)>
-                                    </span>
-                                    <span>
-                                        <label for="billing-postal-code">"Code postal de facturation"</label>
-                                        <input id="billing-postal-code" name="billing_postal_code" required="" autocomplete="billing postal-code" value=(&draft.billing_postal_code)>
-                                    </span>
-                                    <span>
-                                        <label for="billing-country">"Pays de facturation"</label>
-                                        <select id="billing-country" name="billing_country" required="" autocomplete="billing country">
-                                            for (code, name) in COUNTRIES {
-                                                <option value=(*code) selected=(*code == billing_country)>(*name)</option>
+                                        <label for="checkout-country">"Pays"</label>
+                                        <select id="checkout-country" name="country" required="" autocomplete="country">
+                                            for (code, name, text) in &countries {
+                                                <option value=(*code) selected=(*code == country) data-vat=(text)>(*name)</option>
                                             }
                                         </select>
                                     </span>
+                                    <span>
+                                        <label for="checkout-postal-code">"Code postal"</label>
+                                        <input id="checkout-postal-code" name="postal_code" required="" autocomplete="postal-code" value=(&draft.postal_code)>
+                                    </span>
                                 </div>
+                                <div class="row">
+                                    <span data-province="" hidden=(true)>
+                                        <label for="checkout-region">"Région / Province"</label>
+                                        <select id="checkout-region" name="region" required="" autocomplete="address-level1" disabled=(true)></select>
+                                    </span>
+                                    <span>
+                                        <label for="checkout-city" data-city-label="">"Ville"</label>
+                                        <select id="checkout-city-pick" data-city-pick="" required="" hidden=(true) disabled=(true)></select>
+                                        <input id="checkout-city" name="city" required="" autocomplete="address-level2" value=(&draft.city)>
+                                    </span>
+                                    <span data-town="" hidden=(true)>
+                                        <label for="checkout-town">"Commune"</label>
+                                        <select id="checkout-town" data-town-pick="" required="" disabled=(true)></select>
+                                    </span>
+                                </div>
+                                if !cart.shipping_options.is_empty() || cart.shipping_required {
+                                    <fieldset class="shipping-methods" data-shipping-methods="">
+                                        <legend>"Mode de livraison"</legend>
+                                        for option in &cart.shipping_options {
+                                            <label class="method" hidden=(!option.ships_to(&country))>
+                                                <input type="radio" name="shipping_method" value=(&option.id)
+                                                    data-amount=(option.amount_cents) data-price=(option.price())
+                                                    data-total=(cart.total_with_label(Some(option)).unwrap_or_default())
+                                                    data-countries=(option.countries.join(" "))
+                                                    checked=(shipping.as_ref().is_some_and(|picked| picked.id == option.id))
+                                                    disabled=(!option.ships_to(&country))>
+                                                <span class="name">(&option.name)</span>
+                                                <span class="price">(option.price())</span>
+                                            </label>
+                                        }
+                                        <p class="notice" data-no-shipping="" hidden=(shipping.is_some())>"Cette boutique ne livre pas dans ce pays."</p>
+                                    </fieldset>
+                                }
+                                if business {
+                                    <label for="checkout-vat">"Numéro de TVA intracommunautaire (facultatif, pour une facture hors TVA)"</label>
+                                    <input id="checkout-vat" name="vat_number" autocomplete="off" placeholder="DE123456789" value=(&draft.vat_number)>
+                                }
+                                <label class="check">
+                                    <input type="checkbox" name="billing_different" value="1" checked=(bills_elsewhere)>
+                                    " Utiliser une autre adresse de facturation (facultatif)"
+                                </label>
+                                <fieldset class="billing" data-billing="" hidden=(!bills_elsewhere) disabled=(!bills_elsewhere)>
+                                    <legend class="vh">"Adresse de facturation"</legend>
+                                    <label for="billing-name">"Nom ou société à facturer"</label>
+                                    <input id="billing-name" name="billing_name" required="" autocomplete="billing name" value=(&draft.billing_name)>
+                                    <label for="billing-line1">"Adresse (facturation)"</label>
+                                    <input id="billing-line1" name="billing_line1" required="" autocomplete="billing address-line1" value=(&draft.billing_line1)>
+                                    <label for="billing-line2">"Complément d'adresse de facturation (facultatif)"</label>
+                                    <input id="billing-line2" name="billing_line2" autocomplete="billing address-line2" value=(&draft.billing_line2)>
+                                    <div class="row">
+                                        <span>
+                                            <label for="billing-city">"Ville de facturation"</label>
+                                            <input id="billing-city" name="billing_city" required="" autocomplete="billing address-level2" value=(&draft.billing_city)>
+                                        </span>
+                                        <span>
+                                            <label for="billing-postal-code">"Code postal de facturation"</label>
+                                            <input id="billing-postal-code" name="billing_postal_code" required="" autocomplete="billing postal-code" value=(&draft.billing_postal_code)>
+                                        </span>
+                                        <span>
+                                            <label for="billing-country">"Pays de facturation"</label>
+                                            <select id="billing-country" name="billing_country" required="" autocomplete="billing country">
+                                                for (code, name) in COUNTRIES {
+                                                    <option value=(*code) selected=(*code == billing_country)>(*name)</option>
+                                                }
+                                            </select>
+                                        </span>
+                                    </div>
+                                    if shopper.is_some() {
+                                        <label class="check">
+                                            <input type="checkbox" name="save_billing_address" value="1">
+                                            " Enregistrer cette adresse de facturation dans mon compte"
+                                        </label>
+                                    }
+                                </fieldset>
+                                <p class="hint" data-import-notice="">"Livraison hors UE ? Des droits de douane et taxes peuvent être dus à la réception."</p>
                                 if shopper.is_some() {
                                     <label class="check">
-                                        <input type="checkbox" name="save_billing_address" value="1">
-                                        " Enregistrer cette adresse de facturation dans mon compte"
+                                        <input type="checkbox" name="save_address" value="1" checked="">
+                                        " Enregistrer cette adresse dans mon compte"
                                     </label>
                                 }
-                            </fieldset>
-                            <p class="hint" data-import-notice="">"Livraison hors UE ? Des droits de douane et taxes peuvent être dus à la réception."</p>
-                            if shopper.is_some() {
+                                <label for="checkout-note">"Remarque pour la boutique (facultatif)"</label>
+                                <textarea id="checkout-note" name="note" rows="2">(&draft.note)</textarea>
                                 <label class="check">
-                                    <input type="checkbox" name="save_address" value="1" checked="">
-                                    " Enregistrer cette adresse dans mon compte"
+                                    <input type="checkbox" name="newsletter" value="1" data-checkout-newsletter="">
+                                    " Je souhaite recevoir les nouveautés et offres de la boutique par e-mail (un lien de confirmation vous est envoyé)"
                                 </label>
-                            }
-                            <label for="checkout-note">"Remarque pour la boutique (facultatif)"</label>
-                            <textarea id="checkout-note" name="note" rows="2">(&draft.note)</textarea>
-                            <label class="check">
-                                <input type="checkbox" name="newsletter" value="1" data-checkout-newsletter="">
-                                " Je souhaite recevoir les nouveautés et offres de la boutique par e-mail (un lien de confirmation vous est envoyé)"
-                            </label>
-                        </section>
-                        if !offers.is_empty() {
-                            <section class="card offers" aria-labelledby="checkout-offers-title" data-checkout-offers="">
-                                <h2 id="checkout-offers-title">"Offre exclusive"</h2>
-                                <ul>
-                                    for offer in &offers {
-                                        <li data-checkout-offer=(&offer.name)>
-                                            if let Some(url) = &offer.image_url {
-                                                <img src=(url) alt="" width="56" height="56" loading="lazy">
-                                            } else {
-                                                <span></span>
-                                            }
-                                            <span class="what">
-                                                <strong>(offer.heading())</strong>
-                                                if offer.title.is_some() { <small>(&offer.name)</small> }
-                                                if let Some(label) = &offer.variant_label { <small class="variant">(label)</small> }
-                                                <span>
-                                                    <s aria-label=(format!("au lieu de {}", offer.price()))>(offer.price())</s> " "
-                                                    <strong class="price" data-offer-price="">(offer.offer_price())</strong> " "
-                                                    <span class="off">"−" (offer.percent_off()) "%"</span>
-                                                </span>
-                                            </span>
-                                            // The offer's own form sits after this one: forms do not nest.
-                                            <button type="submit" form=(format!("offer-{}", offer.offer_id))
-                                                aria-label=(format!("Ajouter {} à {}", offer.name, offer.offer_price()))>"Ajouter"</button>
-                                        </li>
-                                    }
-                                </ul>
                             </section>
-                        }
-                        <section class="card">
-                            <h2>"Paiement"</h2>
-                            <p class="hint">"Toutes les transactions sont sécurisées et chiffrées. Les données de votre carte ne sont jamais stockées sur nos serveurs."</p>
-                            if setup.is_some() {
-                                <div id="payment-element"></div>
-                            } else {
-                                <p class="hint" data-payments-off="">"Le paiement par carte n'est pas encore disponible dans cette boutique."</p>
+                            if !offers.is_empty() {
+                                <section class="card offers" aria-labelledby="checkout-offers-title" data-checkout-offers="">
+                                    <h2 id="checkout-offers-title">"Offre exclusive"</h2>
+                                    <ul>
+                                        for offer in &offers {
+                                            <li data-checkout-offer=(&offer.name)>
+                                                if let Some(url) = &offer.image_url {
+                                                    <img src=(url) alt="" width="56" height="56" loading="lazy">
+                                                } else {
+                                                    <span></span>
+                                                }
+                                                <span class="what">
+                                                    <strong>(offer.heading())</strong>
+                                                    if offer.title.is_some() { <small>(&offer.name)</small> }
+                                                    if let Some(label) = &offer.variant_label { <small class="variant">(label)</small> }
+                                                    <span>
+                                                        <s aria-label=(format!("au lieu de {}", offer.price()))>(offer.price())</s> " "
+                                                        <strong class="price" data-offer-price="">(offer.offer_price())</strong> " "
+                                                        <span class="off">"−" (offer.percent_off()) "%"</span>
+                                                    </span>
+                                                </span>
+                                                // The offer's own form sits after this one: forms do not nest.
+                                                <button type="submit" form=(format!("offer-{}", offer.offer_id))
+                                                    aria-label=(format!("Ajouter {} à {}", offer.name, offer.offer_price()))>"Ajouter"</button>
+                                            </li>
+                                        }
+                                    </ul>
+                                </section>
                             }
-                            <p class="notice" role="alert" data-payment-error="" hidden=""></p>
-                            <button class="primary place">"Payer ma commande · " <span data-place-total="">(&total)</span></button>
-                        </section>
-                    </form>
-                    for offer in &offers {
-                        <form id=(format!("offer-{}", offer.offer_id)) method="post" action=(href!(crate::app::cart::add::add))>
-                            <input type="hidden" name="slug" value=(offer.slug.as_deref().unwrap_or_default())>
-                            <input type="hidden" name="variant_id" value=(offer.variant_id.as_deref().unwrap_or_default())>
-                            <input type="hidden" name="quantity" value="1">
-                            <input type="hidden" name="offer" value=(&offer.offer_id)>
-                            <input type="hidden" name="back" value="checkout">
+                            <section class="card">
+                                <h2>"Paiement"</h2>
+                                <p class="hint">"Toutes les transactions sont sécurisées et chiffrées. Les données de votre carte ne sont jamais stockées sur nos serveurs."</p>
+                                if setup.is_some() {
+                                    <div id="payment-element"></div>
+                                } else {
+                                    <p class="hint" data-payments-off="">"Le paiement par carte n'est pas encore disponible dans cette boutique."</p>
+                                }
+                                <p class="notice" role="alert" data-payment-error="" hidden=""></p>
+                                <button class="primary place">"Payer ma commande · " <span data-place-total="">(&total)</span></button>
+                            </section>
                         </form>
-                    }
+                        for offer in &offers {
+                            <form id=(format!("offer-{}", offer.offer_id)) method="post" action=(href!(crate::app::cart::add::add))>
+                                <input type="hidden" name="slug" value=(offer.slug.as_deref().unwrap_or_default())>
+                                <input type="hidden" name="variant_id" value=(offer.variant_id.as_deref().unwrap_or_default())>
+                                <input type="hidden" name="quantity" value="1">
+                                <input type="hidden" name="offer" value=(&offer.offer_id)>
+                                <input type="hidden" name="back" value="checkout">
+                            </form>
+                        }
+                    </div>
                 </div>
+                if setup.is_some() {
+                    <script src="https://js.stripe.com/v3/"></script>
+                }
+                <script>(Unescaped::new_unchecked(CHECKOUT_SCRIPT))</script>
             </div>
-            if setup.is_some() {
-                <script src="https://js.stripe.com/v3/"></script>
-            }
-            <script>(Unescaped::new_unchecked(CHECKOUT_SCRIPT))</script>
         )
     })
 }

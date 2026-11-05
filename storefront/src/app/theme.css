@@ -6,13 +6,14 @@
 /* Base */
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
-body { margin: 0; font: 16px/1.55 system-ui, sans-serif; }
+body { margin: 0; font: 16px/1.55 system-ui, sans-serif; overflow-wrap: break-word; }
 a { color: inherit; }
 h1, h2, h3 { line-height: 1.2; }
 h1 { font-size: 1.9rem; margin: 0 0 1rem; }
 h2 { font-size: 1.5rem; margin: 0 0 1rem; }
 img { max-width: 100%; height: auto; }
 button, input, select, textarea { font: inherit; }
+select { background: Field; color: FieldText; }
 .wrap { width: min(1200px, 100% - 2rem); margin: 0 auto; }
 main { min-height: 50vh; }
 main > .wrap { padding: 1.5rem 0 3rem; }
@@ -86,7 +87,7 @@ ul.catalog { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25re
 
 /* Category tiles */
 .tiles { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); }
-.tile { display: block; border: 1px solid; overflow: hidden; text-decoration: none; }
+.tile { display: block; height: 100%; border: 1px solid; overflow: hidden; text-decoration: none; }
 .tile:hover { text-decoration: underline; }
 .tile img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
 .tile span { display: block; padding: .75rem 1rem; font-weight: 700; font-size: 1.05rem; }
@@ -95,6 +96,7 @@ ul.catalog { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25re
 /* Prose blocks */
 .prose { max-width: 44rem; margin: 0 auto; text-align: center; }
 .band { border-block: 1px solid; }
+.hero + .band, .band + .band { border-top: 0; }
 
 /* Testimonials */
 .quotes { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); }
@@ -103,11 +105,11 @@ ul.catalog { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25re
 .quotes cite { font-style: normal; font-weight: 700; display: block; margin-top: .75rem; }
 
 /* Reassurance */
-.reassure { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); text-align: center; }
-.reassure li { padding: 1.25rem 1rem; border: 1px solid; }
-.reassure svg { width: 2.2rem; height: 2.2rem; }
-.reassure strong { display: block; margin: .5rem 0 .25rem; }
-.reassure p { margin: 0; font-size: .85rem; }
+ul.reassure { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); text-align: center; }
+ul.reassure li { padding: 1.25rem 1rem; border: 1px solid; }
+ul.reassure svg { width: 2.2rem; height: 2.2rem; }
+ul.reassure strong { display: block; margin: .5rem 0 .25rem; }
+ul.reassure p { margin: 0; font-size: .85rem; }
 
 /* Promo card on the home (the cart's `details.promo` is another thing) */
 .block .promo { border: 1px solid; padding: 2.5rem 2rem; text-align: center; }
@@ -118,7 +120,7 @@ ul.catalog { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25re
 nav.crumbs { font-size: .85rem; margin: 0 0 1rem; }
 .listing-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; margin: 1rem 0 1.25rem; }
 .listing-head p { margin: 0; font-size: .9rem; }
-form.sort { display: flex; align-items: center; gap: .5rem; font-size: .9rem; }
+form.sort { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-size: .9rem; }
 form.sort select { padding: .45rem .75rem; border: 1px solid; }
 form.sort button { padding: .45rem .9rem; border: 1px solid; background: none; color: inherit; cursor: pointer; }
 p.description { max-width: 48rem; white-space: pre-line; }
@@ -180,17 +182,16 @@ section.related { margin-top: 3rem; }
 
 /* Footer */
 .sitefooter { border-top: 1px solid; margin-top: 2rem; font-size: .9rem; }
-.sitefooter .wrap { display: grid; gap: 2rem; grid-template-columns: 1.3fr 1fr 1fr 1fr 1.3fr; padding: 3rem 0 2rem; }
+.sitefooter .wrap { display: grid; gap: 2rem; grid-template-columns: repeat(auto-fit, minmax(min(9.5rem, 100%), 1fr)); padding: 3rem 0 2rem; }
 .sitefooter h2 { font-size: 1rem; margin-bottom: .75rem; }
 .sitefooter ul { list-style: none; padding: 0; margin: 0; }
 .sitefooter li { margin: .35rem 0; }
 .sitefooter .legal { border-top: 1px solid; padding: 1rem 0; text-align: center; font-size: .8rem; }
-@media (max-width: 734px) { .sitefooter .wrap { grid-template-columns: 1fr 1fr; } }
 
 /* Newsletter: the footer's sign-up, and the same form on its page */
 .newsletter label { display: block; font-size: .85rem; margin-bottom: .35rem; }
-.newsletter-row { display: flex; gap: .5rem; }
-.newsletter-row input { flex: 1; min-width: 0; }
+.newsletter-row { display: flex; flex-wrap: wrap; gap: .5rem; }
+.newsletter-row input { flex: 1 1 8rem; width: 8rem; min-width: 0; padding: .6rem .75rem; border: 1px solid; }
 .sitefooter .newsletter .btn { white-space: nowrap; }
 
 /* The shop's own pages: the Markdown the merchant wrote, as HTML */
@@ -221,9 +222,10 @@ article.page hr { border: 0; border-top: 1px solid; margin: 2rem 0; }
 /* Cart page, checkout, sign-in, history: the classes the shared pages use. */
 table.cart { border-collapse: collapse; width: 100%; margin: 1rem 0; }
 table.cart th, table.cart td { border-bottom: 1px solid; padding: .6rem; text-align: left; vertical-align: middle; }
-table.cart img { width: 4rem; height: 4rem; object-fit: cover; }
+table.cart img { width: 4rem; max-width: none; height: 4rem; object-fit: cover; }
 table.cart input[type=number] { width: 4rem; padding: .3rem; }
-button.primary { margin-top: 1rem; padding: .8rem 1.6rem; font-weight: 700; cursor: pointer; }
+@media (max-width: 734px) { table.cart { display: block; overflow-x: auto; } }
+button.primary { margin-top: 1rem; padding: .8rem 1.6rem; border: 1px solid; background: none; color: inherit; font-weight: 700; cursor: pointer; }
 ol.steps { list-style: none; display: flex; justify-content: center; gap: 0; padding: 0; margin: 0 auto 1.5rem; max-width: 40rem; counter-reset: step; }
 ol.steps li { flex: 1; text-align: center; position: relative; padding-top: 1.75rem; font-size: .9rem; }
 ol.steps li::before { counter-increment: step; content: counter(step); position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 1.4rem; height: 1.4rem; line-height: 1.25rem; border: 1px solid; border-radius: 50%; background: Canvas; font-size: .75rem; font-weight: 600; z-index: 1; }
@@ -262,7 +264,7 @@ form.checkout .phone-list li[aria-selected="true"] .phone-check { visibility: vi
 form.checkout .phone-none { margin: 0; padding: .6rem .75rem; }
 form.checkout details.more summary { cursor: pointer; margin-top: .6rem; font-size: .9rem; }
 .hint { font-size: .875rem; }
-button.place { display: block; width: 100%; margin-top: 1.5rem; padding: 1rem; font-size: 1.1rem; font-weight: 600; cursor: pointer; }
+button.place { display: block; width: 100%; margin-top: 1.5rem; padding: 1rem; border: 1px solid; background: none; color: inherit; font-size: 1.1rem; font-weight: 600; cursor: pointer; }
 button.place:disabled { opacity: .6; cursor: progress; }
 #payment-element { margin: 1rem 0; }
 .express { border: 1px solid; padding: 1rem 1.25rem 0; margin-bottom: 1.25rem; }

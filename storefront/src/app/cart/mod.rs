@@ -96,98 +96,100 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             title: "Votre panier",
             nav: &nav,
             no_drawer: true,
-            <h1>"Votre panier"</h1>
-            if let Some(code) = query.error.as_deref() {
-                <p class="notice" role="alert">(say(code))</p>
-            }
-            if let Some(cart) = &cart {
-                <table class="cart" data-cart="">
-                    <thead>
-                        <tr><th></th><th>"Produit"</th><th>"Prix"</th><th>"Quantité"</th><th>"Montant"</th><th></th></tr>
-                    </thead>
-                    <tbody>
-                        for line in cart.lines.iter().chain(&cart.unavailable) {
-                            <tr data-cart-line=(&line.name) data-available=(if line.unit_amount_cents.is_some() { "true" } else { "false" })>
-                                <td>
-                                    if let Some(url) = &line.image_url {
-                                        <img src=(url) alt="" loading="lazy">
-                                    }
-                                </td>
-                                <td>
-                                    if let Some(slug) = &line.slug {
-                                        <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::Slug(slug.clone())))>(&line.name)</a>
-                                    } else {
-                                        (if line.name.is_empty() { "Un produit qui n'est plus vendu" } else { line.name.as_str() })
-                                    }
-                                    if let Some(label) = &line.variant_label {
-                                        <div><small>(label)</small></div>
-                                    }
-                                    if let Some(offer) = &line.offer {
-                                        <div><small class="offer-note" data-line-offer=(&offer.offer_id)>"Offre : 1 à " (money(offer.unit_amount_cents as i64, &currency))</small></div>
-                                    }
-                                    if line.unit_amount_cents.is_none() {
-                                        <div><small>"Plus en vente : retirez-le pour commander le reste."</small></div>
-                                    }
-                                </td>
-                                <td>
-                                    if let Some(unit) = line.unit_amount_cents {
-                                        (money(unit as i64, &currency))
-                                    }
-                                </td>
-                                <td>
-                                    <form method="post" action=(href!(quantity::quantity))>
-                                        <input type="hidden" name="product_id" value=(&line.product_id)>
-                                        <input type="hidden" name="variant_id" value=(line.variant_id.as_deref().unwrap_or(""))>
-                                        <label>
-                                            <span hidden="">"Quantité de " (&line.name)</span>
-                                            <input type="number" name="quantity" min="0" max="99" value=(line.quantity) aria-label=(format!("Quantité de {}", line.name))>
-                                        </label>
-                                        <button>"Mettre à jour"</button>
-                                    </form>
-                                </td>
-                                <td data-line-amount="">
-                                    if let Some(amount) = line.amount_cents {
-                                        (money(amount as i64, &currency))
-                                    }
-                                </td>
-                                <td>
-                                    <form method="post" action=(href!(remove::remove))>
-                                        <input type="hidden" name="product_id" value=(&line.product_id)>
-                                        <input type="hidden" name="variant_id" value=(line.variant_id.as_deref().unwrap_or(""))>
-                                        <button aria-label=(format!("Retirer {}", line.name))>"Retirer"</button>
-                                    </form>
-                                </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
-                <p>"Sous-total : " <span data-cart-subtotal="">(cart.subtotal().unwrap_or_default())</span></p>
-                if let (Some(discount), Some(amount)) = (&cart.discount, cart.discount_amount()) {
-                    <p data-cart-discount=(&discount.code)>"Code promo " <code>(&discount.code)</code> " : " <span data-discount-amount="">(amount)</span></p>
+            <div class="wrap">
+                <h1>"Votre panier"</h1>
+                if let Some(code) = query.error.as_deref() {
+                    <p class="notice" role="alert">(say(code))</p>
                 }
-                if let Some(refused) = cart.discount_refused {
-                    <p class="notice" role="alert" data-discount-refused=(refused)>(say(refused))</p>
-                }
-                <form class="discount" method="post" action=(href!(discount::discount))>
-                    if let Some(code) = &cart.discount_code {
-                        <span>"Code " <code>(code)</code></span>
-                        <button name="remove" value="1">"Retirer le code"</button>
-                    } else {
-                        <label>
-                            "Code promo "
-                            <input type="text" name="code" maxlength="32" autocomplete="off">
-                        </label>
-                        <button>"Appliquer"</button>
+                if let Some(cart) = &cart {
+                    <table class="cart" data-cart="">
+                        <thead>
+                            <tr><th></th><th>"Produit"</th><th>"Prix"</th><th>"Quantité"</th><th>"Montant"</th><th></th></tr>
+                        </thead>
+                        <tbody>
+                            for line in cart.lines.iter().chain(&cart.unavailable) {
+                                <tr data-cart-line=(&line.name) data-available=(if line.unit_amount_cents.is_some() { "true" } else { "false" })>
+                                    <td>
+                                        if let Some(url) = &line.image_url {
+                                            <img src=(url) alt="" loading="lazy">
+                                        }
+                                    </td>
+                                    <td>
+                                        if let Some(slug) = &line.slug {
+                                            <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::Slug(slug.clone())))>(&line.name)</a>
+                                        } else {
+                                            (if line.name.is_empty() { "Un produit qui n'est plus vendu" } else { line.name.as_str() })
+                                        }
+                                        if let Some(label) = &line.variant_label {
+                                            <div><small>(label)</small></div>
+                                        }
+                                        if let Some(offer) = &line.offer {
+                                            <div><small class="offer-note" data-line-offer=(&offer.offer_id)>"Offre : 1 à " (money(offer.unit_amount_cents as i64, &currency))</small></div>
+                                        }
+                                        if line.unit_amount_cents.is_none() {
+                                            <div><small>"Plus en vente : retirez-le pour commander le reste."</small></div>
+                                        }
+                                    </td>
+                                    <td>
+                                        if let Some(unit) = line.unit_amount_cents {
+                                            (money(unit as i64, &currency))
+                                        }
+                                    </td>
+                                    <td>
+                                        <form method="post" action=(href!(quantity::quantity))>
+                                            <input type="hidden" name="product_id" value=(&line.product_id)>
+                                            <input type="hidden" name="variant_id" value=(line.variant_id.as_deref().unwrap_or(""))>
+                                            <label>
+                                                <span hidden="">"Quantité de " (&line.name)</span>
+                                                <input type="number" name="quantity" min="0" max="99" value=(line.quantity) aria-label=(format!("Quantité de {}", line.name))>
+                                            </label>
+                                            <button>"Mettre à jour"</button>
+                                        </form>
+                                    </td>
+                                    <td data-line-amount="">
+                                        if let Some(amount) = line.amount_cents {
+                                            (money(amount as i64, &currency))
+                                        }
+                                    </td>
+                                    <td>
+                                        <form method="post" action=(href!(remove::remove))>
+                                            <input type="hidden" name="product_id" value=(&line.product_id)>
+                                            <input type="hidden" name="variant_id" value=(line.variant_id.as_deref().unwrap_or(""))>
+                                            <button aria-label=(format!("Retirer {}", line.name))>"Retirer"</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <p>"Sous-total : " <span data-cart-subtotal="">(cart.subtotal().unwrap_or_default())</span></p>
+                    if let (Some(discount), Some(amount)) = (&cart.discount, cart.discount_amount()) {
+                        <p data-cart-discount=(&discount.code)>"Code promo " <code>(&discount.code)</code> " : " <span data-discount-amount="">(amount)</span></p>
                     }
-                </form>
-                <p>"Total : " <strong class="price" data-cart-total="">(cart.total().unwrap_or_default())</strong></p>
-                if cart.can_check_out() {
-                    <p><a href=(href!(crate::app::checkout::index))>"Commander"</a></p>
+                    if let Some(refused) = cart.discount_refused {
+                        <p class="notice" role="alert" data-discount-refused=(refused)>(say(refused))</p>
+                    }
+                    <form class="discount" method="post" action=(href!(discount::discount))>
+                        if let Some(code) = &cart.discount_code {
+                            <span>"Code " <code>(code)</code></span>
+                            <button name="remove" value="1">"Retirer le code"</button>
+                        } else {
+                            <label>
+                                "Code promo "
+                                <input type="text" name="code" maxlength="32" autocomplete="off">
+                            </label>
+                            <button>"Appliquer"</button>
+                        }
+                    </form>
+                    <p>"Total : " <strong class="price" data-cart-total="">(cart.total().unwrap_or_default())</strong></p>
+                    if cart.can_check_out() {
+                        <p><a class="btn" href=(href!(crate::app::checkout::index))>"Commander"</a></p>
+                    }
+                } else {
+                    <p data-cart-empty="">"Votre panier est vide."</p>
+                    <p><a href=(href!(crate::app::index))>"Continuer mes achats"</a></p>
                 }
-            } else {
-                <p data-cart-empty="">"Votre panier est vide."</p>
-                <p><a href=(href!(crate::app::index))>"Continuer mes achats"</a></p>
-            }
+            </div>
         )
     })
 }

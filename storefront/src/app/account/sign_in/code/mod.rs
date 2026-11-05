@@ -47,23 +47,25 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: "Saisir le code",
             nav: &nav,
-            <h1>"Saisir le code"</h1>
-            <p>"Nous avons envoyé un code à six chiffres à " <strong>(&flow.email)</strong> ". Il est valable 10 minutes."</p>
-            if let Some(code) = query.error.as_deref() {
-                <p class="notice" role="alert">(say(code))</p>
-            } else if query.resent.is_some() {
-                <p class="notice" role="status">"Un nouveau code est en route."</p>
-            }
-            <form class="sign-in" method="post" action=(href!(verify))>
-                <label for="sign-in-code">"Code"</label>
-                <input id="sign-in-code" name="code" required="" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="8">
-                <button class="primary">"Valider"</button>
-            </form>
-            <form method="post" action=(href!(verify))>
-                <input type="hidden" name="resend" value="1">
-                <button>"Recevoir un nouveau code"</button>
-            </form>
-            <p><a href=(super::sign_in_url(cx, Some(&flow.next), None))>"Utiliser une autre adresse"</a></p>
+            <div class="wrap">
+                <h1>"Saisir le code"</h1>
+                <p>"Nous avons envoyé un code à six chiffres à " <strong>(&flow.email)</strong> ". Il est valable 10 minutes."</p>
+                if let Some(code) = query.error.as_deref() {
+                    <p class="notice" role="alert">(say(code))</p>
+                } else if query.resent.is_some() {
+                    <p class="notice" role="status">"Un nouveau code est en route."</p>
+                }
+                <form class="sign-in" method="post" action=(href!(verify))>
+                    <label for="sign-in-code">"Code"</label>
+                    <input id="sign-in-code" name="code" required="" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="8">
+                    <button class="primary">"Valider"</button>
+                </form>
+                <form method="post" action=(href!(verify))>
+                    <input type="hidden" name="resend" value="1">
+                    <button>"Recevoir un nouveau code"</button>
+                </form>
+                <p><a href=(super::sign_in_url(cx, Some(&flow.next), None))>"Utiliser une autre adresse"</a></p>
+            </div>
         )
     })
 }

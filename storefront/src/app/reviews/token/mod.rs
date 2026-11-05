@@ -36,11 +36,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: "Lien expiré",
             nav: &nav,
-            <h1>"Ce lien a expiré"</h1>
-            <p data-review-link-expired="">
-                "Le lien pour donner votre avis sur votre commande ne fonctionne plus. Connectez-vous avec l'adresse e-mail utilisée pour commander afin de retrouver vos commandes et donner votre avis."
-            </p>
-            <p><a class="primary" href=(sign_in_url(cx, None, None))>"Se connecter"</a></p>
+            <div class="wrap">
+                <h1>"Ce lien a expiré"</h1>
+                <p data-review-link-expired="">
+                    "Le lien pour donner votre avis sur votre commande ne fonctionne plus. Connectez-vous avec l'adresse e-mail utilisée pour commander afin de retrouver vos commandes et donner votre avis."
+                </p>
+                <p><a class="primary" href=(sign_in_url(cx, None, None))>"Se connecter"</a></p>
+            </div>
         )
     })
 }

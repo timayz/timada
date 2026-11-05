@@ -91,88 +91,90 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: "Mon compte",
             nav: &nav,
-            <h1>"Mon compte"</h1>
-            <p>"Connecté avec l'adresse " <strong data-account-email="">(&shopper.email)</strong></p>
-            <form method="post" action=(href!(sign_out::sign_out))>
-                <button>"Se déconnecter"</button>
-            </form>
-            if let Some(code) = query.error.as_deref() {
-                <p class="notice" role="alert">(say(code))</p>
-            }
-            if let Some(done) = query.done.as_deref().and_then(say_done) {
-                <p class="notice" role="status">(done)</p>
-            }
-            <section data-account-orders="">
-                <h2>"Mes commandes"</h2>
-                if orders.is_empty() {
-                    <p>"Aucune commande pour le moment."</p>
-                } else {
-                    <table class="history">
-                        <thead>
-                            <tr><th>"Commande"</th><th>"Articles"</th><th>"Total"</th><th>"Statut"</th></tr>
-                        </thead>
-                        <tbody>
-                            for order in &orders {
-                                <tr data-account-order=(&order.reference)>
-                                    <td><a href=(href!(order_page, OrderId(order.id.clone())))>(&order.reference)</a></td>
-                                    <td>(order.item_count)</td>
-                                    <td>(order.total_label())</td>
-                                    <td>(status_label(order.status()))</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                }
-            </section>
-            <section data-account-addresses="">
-                <h2>"Mes adresses"</h2>
-                if shopper.addresses.is_empty() {
-                    <p>"Les adresses de livraison que vous saisissez en passant commande sont enregistrées ici."</p>
-                } else {
-                    <ul class="saved">
-                        for saved in &shopper.addresses {
-                            <li data-saved-address=(&saved.address.city)>
-                                <strong>(&saved.address.name)</strong> ", "
-                                (&saved.address.line1) ", "
-                                (&saved.address.postal_code) " " (&saved.address.city) ", "
-                                (&saved.address.country) " "
-                                <form method="post" action=(href!(addresses::remove::remove))>
-                                    <input type="hidden" name="address_id" value=(&saved.id)>
-                                    <button>"Retirer"</button>
-                                </form>
-                            </li>
-                        }
-                    </ul>
-                }
-            </section>
-            <section data-account-newsletter=(if subscribed { "on" } else { "off" })>
-                <h2>"Newsletter"</h2>
-                if subscribed {
-                    <p>"Vous recevez nos nouveautés et nos offres par e-mail."</p>
-                    <form method="post" action=(href!(newsletter::newsletter))>
-                        <input type="hidden" name="subscribed" value="false">
-                        <button>"Ne plus recevoir la newsletter"</button>
-                    </form>
-                } else {
-                    <p>"Nouveautés, conseils et offres réservées aux abonnés, une à deux fois par mois."</p>
-                    <form method="post" action=(href!(newsletter::newsletter))>
-                        <input type="hidden" name="subscribed" value="true">
-                        <button>"Recevoir la newsletter"</button>
-                    </form>
-                }
-            </section>
-            <section data-account-sessions="">
-                <h2>"Mes connexions"</h2>
-                <p>"Connecté sur un ordinateur que vous n'utilisez plus ? Déconnectez-vous de tous les autres navigateurs ; celui-ci reste connecté."</p>
-                <form method="post" action=(href!(sign_out_everywhere::sign_out_everywhere))>
-                    <button>"Se déconnecter partout ailleurs"</button>
+            <div class="wrap">
+                <h1>"Mon compte"</h1>
+                <p>"Connecté avec l'adresse " <strong data-account-email="">(&shopper.email)</strong></p>
+                <form method="post" action=(href!(sign_out::sign_out))>
+                    <button>"Se déconnecter"</button>
                 </form>
-            </section>
-            <section data-account-delete="">
-                <h2>"Supprimer mon compte"</h2>
-                <p>"Efface vos adresses et vous déconnecte partout. Vos commandes restent chez la boutique."</p>
-                <a href=(href!(delete::index))>"Supprimer mon compte…"</a>
-            </section>
+                if let Some(code) = query.error.as_deref() {
+                    <p class="notice" role="alert">(say(code))</p>
+                }
+                if let Some(done) = query.done.as_deref().and_then(say_done) {
+                    <p class="notice" role="status">(done)</p>
+                }
+                <section data-account-orders="">
+                    <h2>"Mes commandes"</h2>
+                    if orders.is_empty() {
+                        <p>"Aucune commande pour le moment."</p>
+                    } else {
+                        <table class="history">
+                            <thead>
+                                <tr><th>"Commande"</th><th>"Articles"</th><th>"Total"</th><th>"Statut"</th></tr>
+                            </thead>
+                            <tbody>
+                                for order in &orders {
+                                    <tr data-account-order=(&order.reference)>
+                                        <td><a href=(href!(order_page, OrderId(order.id.clone())))>(&order.reference)</a></td>
+                                        <td>(order.item_count)</td>
+                                        <td>(order.total_label())</td>
+                                        <td>(status_label(order.status()))</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </section>
+                <section data-account-addresses="">
+                    <h2>"Mes adresses"</h2>
+                    if shopper.addresses.is_empty() {
+                        <p>"Les adresses de livraison que vous saisissez en passant commande sont enregistrées ici."</p>
+                    } else {
+                        <ul class="saved">
+                            for saved in &shopper.addresses {
+                                <li data-saved-address=(&saved.address.city)>
+                                    <strong>(&saved.address.name)</strong> ", "
+                                    (&saved.address.line1) ", "
+                                    (&saved.address.postal_code) " " (&saved.address.city) ", "
+                                    (&saved.address.country) " "
+                                    <form method="post" action=(href!(addresses::remove::remove))>
+                                        <input type="hidden" name="address_id" value=(&saved.id)>
+                                        <button>"Retirer"</button>
+                                    </form>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </section>
+                <section data-account-newsletter=(if subscribed { "on" } else { "off" })>
+                    <h2>"Newsletter"</h2>
+                    if subscribed {
+                        <p>"Vous recevez nos nouveautés et nos offres par e-mail."</p>
+                        <form method="post" action=(href!(newsletter::newsletter))>
+                            <input type="hidden" name="subscribed" value="false">
+                            <button>"Ne plus recevoir la newsletter"</button>
+                        </form>
+                    } else {
+                        <p>"Nouveautés, conseils et offres réservées aux abonnés, une à deux fois par mois."</p>
+                        <form method="post" action=(href!(newsletter::newsletter))>
+                            <input type="hidden" name="subscribed" value="true">
+                            <button>"Recevoir la newsletter"</button>
+                        </form>
+                    }
+                </section>
+                <section data-account-sessions="">
+                    <h2>"Mes connexions"</h2>
+                    <p>"Connecté sur un ordinateur que vous n'utilisez plus ? Déconnectez-vous de tous les autres navigateurs ; celui-ci reste connecté."</p>
+                    <form method="post" action=(href!(sign_out_everywhere::sign_out_everywhere))>
+                        <button>"Se déconnecter partout ailleurs"</button>
+                    </form>
+                </section>
+                <section data-account-delete="">
+                    <h2>"Supprimer mon compte"</h2>
+                    <p>"Efface vos adresses et vous déconnecte partout. Vos commandes restent chez la boutique."</p>
+                    <a href=(href!(delete::index))>"Supprimer mon compte…"</a>
+                </section>
+            </div>
         )
     })
 }

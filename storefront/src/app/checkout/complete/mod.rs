@@ -65,10 +65,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: "Confirmation du paiement",
             nav: &nav,
-            <h1>"Confirmation de votre paiement…"</h1>
-            <p data-payment-confirming="">"Cela prend quelques secondes. La page se rafraîchit toute seule."</p>
-            <p><a href=(href!(index))>"Vérifier à nouveau"</a></p>
-            <script>(Unescaped::new_unchecked(RELOAD_SCRIPT))</script>
+            <div class="wrap">
+                <h1>"Confirmation de votre paiement…"</h1>
+                <p data-payment-confirming="">"Cela prend quelques secondes. La page se rafraîchit toute seule."</p>
+                <p><a href=(href!(index))>"Vérifier à nouveau"</a></p>
+                <script>(Unescaped::new_unchecked(RELOAD_SCRIPT))</script>
+            </div>
         )
     })
 }

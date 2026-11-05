@@ -47,17 +47,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: "Se connecter",
             nav: &nav,
-            <h1>"Se connecter"</h1>
-            <p>"Saisissez votre adresse e-mail : nous vous enverrons un code pour vous connecter. Pas de mot de passe ni de compte à créer : vos commandes passées avec cette adresse sont déjà là."</p>
-            if let Some(code) = query.error.as_deref() {
-                <p class="notice" role="alert">(say(code))</p>
-            }
-            <form class="sign-in" method="post" action=(href!(request))>
-                <input type="hidden" name="next" value=(&next)>
-                <label for="sign-in-email">"E-mail"</label>
-                <input id="sign-in-email" name="email" type="email" required="" autocomplete="email" value=(&email)>
-                <button class="primary">"Recevoir un code"</button>
-            </form>
+            <div class="wrap">
+                <h1>"Se connecter"</h1>
+                <p>"Saisissez votre adresse e-mail : nous vous enverrons un code pour vous connecter. Pas de mot de passe ni de compte à créer : vos commandes passées avec cette adresse sont déjà là."</p>
+                if let Some(code) = query.error.as_deref() {
+                    <p class="notice" role="alert">(say(code))</p>
+                }
+                <form class="sign-in" method="post" action=(href!(request))>
+                    <input type="hidden" name="next" value=(&next)>
+                    <label for="sign-in-email">"E-mail"</label>
+                    <input id="sign-in-email" name="email" type="email" required="" autocomplete="email" value=(&email)>
+                    <button class="primary">"Recevoir un code"</button>
+                </form>
+            </div>
         )
     })
 }

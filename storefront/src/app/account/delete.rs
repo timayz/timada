@@ -25,18 +25,20 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: "Supprimer mon compte",
             nav: &nav,
-            <h1>"Supprimer mon compte"</h1>
-            <p>"Supprimer le compte de " <strong>(&shopper.email)</strong> " :"</p>
-            <ul>
-                <li>"efface les adresses que vous avez enregistrées ;"</li>
-                <li>"vous déconnecte partout, y compris sur ce navigateur."</li>
-            </ul>
-            <p>"Vos commandes et leurs factures restent chez la boutique, qui doit les conserver. Si vous vous reconnectez avec cette adresse, vous repartez avec un nouveau compte et y retrouvez vos commandes."</p>
-            <form method="post" action=(href!(delete))>
-                <button class="primary">"Supprimer mon compte"</button>
-                " "
-                <a href=(account_url(cx, None))>"Conserver mon compte"</a>
-            </form>
+            <div class="wrap">
+                <h1>"Supprimer mon compte"</h1>
+                <p>"Supprimer le compte de " <strong>(&shopper.email)</strong> " :"</p>
+                <ul>
+                    <li>"efface les adresses que vous avez enregistrées ;"</li>
+                    <li>"vous déconnecte partout, y compris sur ce navigateur."</li>
+                </ul>
+                <p>"Vos commandes et leurs factures restent chez la boutique, qui doit les conserver. Si vous vous reconnectez avec cette adresse, vous repartez avec un nouveau compte et y retrouvez vos commandes."</p>
+                <form method="post" action=(href!(delete))>
+                    <button class="primary">"Supprimer mon compte"</button>
+                    " "
+                    <a href=(account_url(cx, None))>"Conserver mon compte"</a>
+                </form>
+            </div>
         )
     })
 }
