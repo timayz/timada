@@ -12,6 +12,7 @@
 /node_modules
 /.docker/traefik/certs
 *.local.toml
+*.local.env
 # Catalogue snapshots, pictures included: taken locally with `make snapshot.chatounette`
 /seeds/*
 !/seeds/README.md

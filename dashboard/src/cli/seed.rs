@@ -91,7 +91,7 @@ const SHIPPING_METHOD: &str = "Livraison avec suivi";
 const SHIPPING_CENTS: u64 = 490;
 const FREE_ABOVE_CENTS: u64 = 6_500;
 const SHIPPING_COUNTRIES: &[&str] = &["FR", "BE", "CH"];
-const PROMO_CODE: &str = "MONSTER10";
+const PROMO_CODE: &str = "BIENVENUE10";
 /// Basis points: 10 %.
 const PROMO_PERCENT: u32 = 1_000;
 /// How long the seed waits for the other nodes of a cluster to answer.
@@ -324,16 +324,13 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
             config.server.url.trim_end_matches('/')
         ));
     }
-    if args.test_payments {
-        settings.push(format!("STORE_TENANT_ID={}", tenant.id));
-    }
+    // The address `stripe listen` forwards to ends with this id.
+    settings.push(format!("STORE_TENANT_ID={}", tenant.id));
     // The command's answer, for the shell that runs the storefront.
     for line in &settings {
         println!("{line}");
     }
-    if let Some(file) = &args.env_file
-        && !settings.is_empty()
-    {
+    if let Some(file) = &args.env_file {
         std::fs::write(file, settings.join("\n") + "\n")
             .with_context(|| format!("cannot write {}", file.display()))?;
     }
@@ -666,9 +663,8 @@ mod tests {
     }
 
     #[test]
-    fn the_chatounette_pages_read() {
-        let dir =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/chatounette/pages");
+    fn the_storefront_pages_read() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../storefront/pages");
         let pages = read_pages(&dir).unwrap();
         assert_eq!(pages.len(), 6);
         assert!(

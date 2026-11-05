@@ -126,7 +126,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <li>
                         "Under Developers › Webhooks, add an endpoint at "
                         <code class="text-foreground" data-webhook-url="">(&webhook)</code>
-                        " for the event "<code class="text-foreground">"payment_intent.succeeded"</code>", and copy its signing secret."
+                        " for the events "<code class="text-foreground">"payment_intent.succeeded"</code>" and "<code class="text-foreground">"charge.refunded"</code>", and copy its signing secret."
                     </li>
                 </ol>
                 <form method="post" action=(href!(configure::configure, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">

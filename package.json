@@ -1,7 +1,7 @@
 {
   "name": "timada",
   "version": "0.4.0",
-  "description": "The browser suite of the Timada dashboard and example storefronts (Playwright comes from the Nix dev shell, see flake.nix)",
+  "description": "The browser suite of the Timada dashboard and storefront (Playwright comes from the Nix dev shell, see flake.nix)",
   "private": true,
   "scripts": {
     "test": "playwright test",

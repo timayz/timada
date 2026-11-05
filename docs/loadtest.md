@@ -1,7 +1,7 @@
 # Load testing
 
 `make loadtest` (`scripts/loadtest.sh`) puts crowds of random shoppers on the
-three-node cluster through the Chatounette clone, to find what breaks under
+three-node cluster through the storefront, to find what breaks under
 load and how much the platform takes before it slows down: the number to
 know before thinking about sharding.
 
@@ -18,7 +18,7 @@ and the snapshot in `seeds/chatounette`):
    mailed code, `--test-payments` links a test company and connects the
    Stripe test keys;
 3. the storefront, through Traefik's balancer over the nodes' store API, with
-   its own copy of the catalogue in `data/load/chatounette.db`;
+   its own copy of the catalogue in `data/load/storefront.db`;
 4. `timada-loadtest`, which also serves the stand-in for Stripe the nodes
    call (`payments.stripe_api_url`), in front of stripe-mock.
 

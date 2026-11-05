@@ -6,8 +6,8 @@ import { createTenant, uniqueTenant } from "./tenants";
 // Newsletter: who asked for a shop's news is listed under
 // /t/{slug}/newsletter for members with `newsletter:read`; those with
 // `newsletter:manage` unsubscribe and erase. A shopper signing up from the
-// Chatounette example, confirming from the mail and leaving again is
-// covered in `chatounette.spec.ts`.
+// storefront, confirming from the mail and leaving again is
+// covered in `storefront.spec.ts`.
 
 test("an owner sees the newsletter section, empty at first", async ({
   page,

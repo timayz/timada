@@ -12,7 +12,7 @@ Stripe has confirmed the payment to the dashboard. How it works is in
    hands back what the card form needs. It refuses instead when the price moved since
    the shopper saw it, an item is off sale or Stripe is not set up.
 3. The shopper's browser confirms the payment in Stripe's Payment Element
-   (`/checkout` in the example app).
+   (`/checkout` in the storefront).
 4. Stripe calls `POST /stripe/webhooks/{tenant_id}`. The dashboard checks the signature,
    reads the payment back from Stripe and creates the order.
 5. The browser, back on `/checkout/complete`, waits for the order and shows it.
@@ -70,8 +70,8 @@ not know yet, and the credit note follows.
   1. Paste the publishable key and the secret key from Stripe (Developers › API keys).
      The secret key is checked against Stripe before it is saved.
   2. In Stripe (Developers › Webhooks), add an endpoint at the URL the page shows,
-     `https://<dashboard>/stripe/webhooks/<tenant id>`, for the event
-     `payment_intent.succeeded`.
+     `https://<dashboard>/stripe/webhooks/<tenant id>`, for the events
+     `payment_intent.succeeded` and `charge.refunded`.
   3. Paste that endpoint's signing secret (`whsec_…`).
 
 - **Storefront.** Its API key needs `store:read` and `store:checkout`.
@@ -87,14 +87,16 @@ CLI and an internet connection.
 2. **Forward Stripe's webhooks to your machine:**
 
    ```sh
-   stripe login   # the Stripe CLI comes with `nix develop`
-   stripe listen --events payment_intent.succeeded \
-     --forward-to http://localhost:3000/stripe/webhooks/<tenant_id>
+   stripe login   # once; the Stripe CLI comes with `nix develop`
+   make stripe.listen
    ```
 
-   - `<tenant_id>` is the last segment of the webhook URL shown on `/t/<slug>/payments`.
-   - Forward to `localhost:3000` rather than `https://timada.localhost`, so the CLI does
-     not trip over the mkcert certificate.
+   - It forwards `payment_intent.succeeded` and `charge.refunded` to the shop `make seed`
+     filled, whose id the seed wrote to `config/storefront.local.env`. For another shop, use
+     `STORE_TENANT_ID=<tenant_id> make stripe.listen`: `<tenant_id>` is the last
+     segment of the webhook URL shown on `/t/<slug>/payments`.
+   - It forwards to `localhost:3000` rather than `https://timada.localhost`, so the CLI
+     does not trip over the mkcert certificate.
    - Keep it running while you test, and copy the signing secret (`whsec_…`) it prints.
 
 3. **Connect the account.** On `/t/<slug>/payments`, enter:
@@ -102,9 +104,9 @@ CLI and an internet connection.
    - the `whsec_…` printed by `stripe listen`, not one from an endpoint registered in
      the Stripe dashboard.
 
-   To skip this after each `make seed.chatounette`, put them in
+   To skip this after each `make seed`, put them in
    `config/stripe.local.toml`, which git ignores. The seed then connects the shop from
-   that file, over any account it has, and logs the tenant id for step 2. It checks
+   that file, over any account it has. It checks
    the keys' prefixes only, so a key Stripe refuses shows up at the first payment:
 
    ```toml
@@ -113,12 +115,12 @@ CLI and an internet connection.
    webhook_secret = "whsec_…"
    ```
 
-4. **Give the shop a key that can sell.** Tick `store:checkout` on its key on the
-   API keys page, or mint a new one. If the key changes, remove the replica first:
-   `rm chatounette.db*`, then `make chatounette.migrate`.
+4. **Give the shop a key that can sell.** The key `make seed` wrote can. For another
+   key, tick `store:checkout` on it on the API keys page. If it is another tenant's,
+   remove the replica first, or the shop keeps showing the old tenant's products:
+   `rm storefront.db*`, then `make storefront.migrate`.
 
-5. **Buy something.** Run the shop (`make chatounette` with `STORE_TOKEN` and
-   `STORE_MEDIA_URL`), add a product, check out and pay with a test card. Use any
+5. **Buy something.** Run the shop (`make storefront`), add a product, check out and pay with a test card. Use any
    future expiry date and any CVC.
 
    | Card | What happens |
@@ -165,6 +167,9 @@ turning payments on for a merchant. Follow the steps above, then tick each line.
       dashboard shows for the payment, and its invoice is issued.
 - [ ] **Refund on cancel.** *Cancel and refund* marks the order Cancelled. Stripe's test
       dashboard shows the payment refunded in full, and a credit note is issued.
+- [ ] **Refund in Stripe.** Refund part of a payment by hand in Stripe's test dashboard.
+      `stripe listen` logs a `204` for `charge.refunded`, and the refund reaches the order
+      with its credit note.
 
 Last run:
 

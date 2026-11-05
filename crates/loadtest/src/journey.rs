@@ -21,7 +21,7 @@ use crate::stripe::FakeStripe;
 /// How long a paid order may take to show before it counts as lost.
 const ORDER_DEADLINE: Duration = Duration::from_secs(60);
 /// The promo code `seed` gives the shop.
-const PROMO_CODE: &str = "MONSTER10";
+const PROMO_CODE: &str = "BIENVENUE10";
 
 /// How shoppers behave, as probabilities and means.
 #[derive(Clone, Debug)]
@@ -398,7 +398,7 @@ impl Shopper<'_> {
 }
 
 /// The refusal a `/checkout/start` answer words for the shopper, as the
-/// shop's code names it (examples/chatounette/src/app/mod.rs, `say`).
+/// shop's code names it (storefront/src/app/mod.rs, `say`).
 fn code_of(text: &str) -> &'static str {
     const CODES: &[(&str, &str)] = &[
         ("Le paiement est indisponible", "payments_unavailable"),

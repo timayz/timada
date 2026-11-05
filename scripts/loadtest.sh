@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Load-tests the three-node cluster through the Chatounette storefront, on a
+# Load-tests the three-node cluster through the storefront, on a
 # platform made afresh under data/load: builds everything (release unless
 # LOAD_PROFILE says otherwise), migrates the three nodes, starts two of them,
 # seeds the shop through the third (so the seed's writes reach a quorum),
@@ -35,7 +35,7 @@ case "$profile" in
   *) bin="target/$profile" ;;
 esac
 dashboard="${LOAD_DASHBOARD:-https://timada.localhost}"
-target="${LOAD_TARGET:-https://chatounette.localhost}"
+target="${LOAD_TARGET:-https://storefront.localhost}"
 stripe_mock="${LOAD_STRIPE_MOCK:-http://localhost:12111}"
 
 if ! curl -s -o /dev/null "$stripe_mock/v1/balance"; then
@@ -48,7 +48,7 @@ if [ ! -f seeds/chatounette/catalog.json.gz ]; then
 fi
 
 topcoat asset bundle -p timada-dashboard --profile "$profile"
-cargo build --profile "$profile" -p timada-dashboard -p chatounette-example -p timada-loadtest
+cargo build --profile "$profile" -p timada-dashboard -p storefront -p timada-loadtest
 
 node() {
   "$bin/timada-dashboard" --config "config/load-node$1.toml" "${@:2}"
@@ -57,7 +57,7 @@ node() {
 # One `timada-dashboard snapshot` per node; node 0's also holds the
 # storefront's database and the seed's settings.
 kept=data/load-snapshot
-storefront_files=(--also data/load/chatounette.db --also data/load/seed.env)
+storefront_files=(--also data/load/storefront.db --also data/load/seed.env)
 
 reuse=""
 if [ "${LOAD_REUSE:-}" = 1 ] && [ -s "$kept/node0/also/seed.env" ]; then
@@ -117,12 +117,12 @@ done
 # The storefront gives up when the store is not answering yet (nodes just
 # started, waiting for one another): it is started again until it stays up.
 start_storefront() {
-  STORE_DB=data/load/chatounette.db \
+  STORE_DB=data/load/storefront.db \
     STORE_ADDR=store.timada.localhost:4320 \
     STORE_TLS_CA="${STORE_TLS_CA:-/etc/ssl/certs/ca-certificates.crt}" \
     HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=172.16.0.0/12 \
     STORE_COOKIE_KEY=load-only-cookie-key-load-only-cookie-key \
-    "$bin/chatounette" >>data/load/chatounette.log 2>&1 &
+    "$bin/storefront" >>data/load/storefront.log 2>&1 &
   storefront=$!
 }
 
@@ -148,7 +148,7 @@ start_platform() {
     # The seed logs on stdout too: only its STORE_* lines are settings.
     if ! node 0 seed --snapshot seeds/chatounette --tenant Chatounette \
       --owner load@example.org --owner-password load-test-password \
-      --storefront-url "$target" --pages examples/chatounette/pages \
+      --storefront-url "$target" --pages storefront/pages \
       --test-payments --env-file data/load/seed.env >data/load/seed.out 2>&1; then
       echo "the seed failed: see data/load/seed.out" >&2
       exit 1
@@ -163,14 +163,14 @@ start_platform() {
   wait_for http://127.0.0.1:3000/auth/login 60
   wait_for "$dashboard/auth/login" 30
 
-  [ -f data/load/chatounette.db ] || STORE_DB=data/load/chatounette.db "$bin/chatounette" migrate >/dev/null
+  [ -f data/load/storefront.db ] || STORE_DB=data/load/storefront.db "$bin/storefront" migrate >/dev/null
   for _ in $(seq 30); do
     start_storefront
     sleep 3
     if kill -0 "$storefront" 2>/dev/null; then break; fi
   done
   if ! kill -0 "$storefront" 2>/dev/null; then
-    echo "the storefront does not start: see data/load/chatounette.log" >&2
+    echo "the storefront does not start: see data/load/storefront.log" >&2
     exit 1
   fi
   pids+=("$storefront")
@@ -192,7 +192,7 @@ start_platform() {
     sleep 5
   done
   if [ "$still" -lt 4 ]; then
-    echo "the storefront's catalogue is still filling after an hour: see data/load/chatounette.log" >&2
+    echo "the storefront's catalogue is still filling after an hour: see data/load/storefront.log" >&2
     exit 1
   fi
 }

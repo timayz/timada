@@ -14,7 +14,7 @@ fi
 
 export TIMADA_CONFIG=config/e2e.toml
 topcoat asset bundle -p timada-dashboard
-cargo build -q -p timada-dashboard -p chatounette-example   # the shop specs spawn the example
+cargo build -q -p timada-dashboard -p storefront   # the shop specs spawn it
 # What the build wrote is still on its way to the disk. Flushed some 30 s later,
 # in the middle of the suite, it stalls the server for seconds: answers come too
 # late for the tests, and the proxy's health check gives up on the server.

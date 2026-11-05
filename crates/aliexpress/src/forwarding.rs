@@ -209,6 +209,18 @@ pub fn province_of(country: &str, postal_code: &str, city: &str) -> String {
     .to_owned()
 }
 
+/// Whether the postal code is still too short to say, in the countries where
+/// [`province_of`] reads the province off it: a form asks for it first.
+pub fn postal_code_awaited(country: &str, postal_code: &str) -> bool {
+    let digits = postal_code.chars().filter(char::is_ascii_digit).count();
+    match country {
+        "FR" | "ES" | "IT" => digits < 5,
+        "BE" => digits < 4,
+        "CA" => postal_code.trim().is_empty(),
+        _ => false,
+    }
+}
+
 /// The region of a Belgian postal code, as AliExpress lists them.
 pub fn belgian_region(postal_code: &str) -> Option<&'static str> {
     let digits: String = postal_code.chars().filter(char::is_ascii_digit).collect();

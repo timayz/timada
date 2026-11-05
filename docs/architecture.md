@@ -33,7 +33,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/loadtest` | `timada-loadtest` | Crowds of random shoppers on a storefront over plain HTTP, paying through a stand-in for Stripe: latency, capacity and anomalies (see `docs/loadtest.md`) |
 | `crates/core` | `timada-core` | What every context shares and none owns: the paused-store refusal, languages and time zones, the personal-data keys (`keys`), the mailed-code MAC (`codes`), and the one form of an e-mail address, a slug, a currency, the clock, a calendar date, an amount and a `LIKE` pattern (`email`, `slug`, `currency`, `time`, `civil`, `money`, `sql`). Depends on evento only, never on a database driver or the web framework; every context depends on it |
 | `dashboard` | `timada-dashboard` | The composition root: runtime, HTTP, auth, store API, CLI |
-| `examples/chatounette` | `chatounette-example` | The merchant app on the library: a French cat shop in chatounette.com's layout and colours, fed by the `seeds/chatounette` snapshot and driven by the browser suite |
+| `storefront` | `storefront` | The merchant app on the library: a French shop with no brand and no colours, to start your own from, tried on the `seeds/chatounette` snapshot and driven by the browser suite |
 | `tests/e2e` | | Playwright suite against the running dashboard |
 | `events.lock` | | Every persisted shape, frozen (see *Evolving events*) |
 
@@ -101,7 +101,7 @@ data/media/<id>/          one per tenant: the product pictures and the review ph
                           named <image id>.<ext>
 data/shopper-keys/<id>/   one per tenant: each shopper account's and each contact message's
                           key, sealed, named <key id> (<key id>.gone once destroyed)
-<merchant app>/chatounette.db  the shop's replica (`STORE_DB`): subscription cursor,
+<merchant app>/storefront.db  the shop's replica (`STORE_DB`): subscription cursor,
                           snapshots, product and category rows
 ```
 
@@ -681,7 +681,7 @@ executor: the library asks the dashboard's `/store/carts/*` and `/store/orders/*
 endpoints for the one its page holds the id of (`StoreConfig::api_url`), and the
 dashboard writes what the shopper does. The library registers no page of its own
 (route discovery belongs to the host); it offers queries, a guard, two components (a
-price, a picture) and `GET {prefix}/status`. Details and the example app are in
+price, a picture) and `GET {prefix}/status`. Details and the app are in
 `docs/storefront.md`.
 
 ## Evolving events
@@ -749,7 +749,7 @@ Everything but `serve` runs with the server stopped.
   `storefront` (the library against a live store), `payments` (the webhook, the late
   payments and the refunds against a fake Stripe), `styles` (the stylesheet build),
   `events_lock`. The review endpoint is covered over HTTP by the browser suite.
-- `make e2e`: `scripts/e2e.sh` builds the dashboard and the Chatounette example, resets
+- `make e2e`: `scripts/e2e.sh` builds the dashboard and the storefront, resets
   the database, starts the server on `config/e2e.toml` and runs Playwright through the
   compose stack (`make up`: Traefik for HTTPS, dex as an OIDC provider, MailDev as the
   mailbox the tests read codes from). Pass a spec path or a title filter to run part of it.

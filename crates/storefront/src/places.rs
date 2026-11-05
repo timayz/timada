@@ -1,6 +1,6 @@
-//! What an address form offers in a shop that forwards to AliExpress: the
-//! dashboard answers from AliExpress's own lists, so that the province and the
-//! town picked go through when the order is placed there.
+//! What an address form offers: the dashboard answers from AliExpress's own
+//! lists, so that the province and the town picked go through when an order is
+//! placed there.
 
 use serde::{Deserialize, Serialize};
 use topcoat_core::context::Cx;
@@ -19,6 +19,14 @@ pub struct Places {
     /// The cities of the province asked for, else of that one. None for a
     /// province without a list, whose town is typed.
     pub cities: Vec<PlaceCity>,
+    /// Where the postal code really delivers, when it is not the country asked
+    /// about: a French overseas department (`MQ` for France and `97200`).
+    #[serde(default)]
+    pub delivery_country: Option<String>,
+    /// Whether the postal code names the province here and is still too short
+    /// to: the form then asks for it first.
+    #[serde(default)]
+    pub postal_code_awaited: bool,
 }
 
 /// A city a form lists.
