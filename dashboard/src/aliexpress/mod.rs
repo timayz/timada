@@ -42,6 +42,9 @@ const ADDRESS_TREE_KEPT: Duration = Duration::from_secs(24 * 60 * 60);
 /// How many times a read's record is tried when a request came in between.
 const RECORD_ATTEMPTS: usize = 3;
 
+/// A country's places and when they were read, `None` without a list.
+type KeptTree = (Instant, Option<Arc<AddressTree>>);
+
 pub struct Aliexpress {
     sealer: Option<Sealer>,
     /// The platform's app: its key and secret, once the operator gave one.
@@ -66,7 +69,7 @@ pub struct Aliexpress {
     /// What the app may spend, and what this node spent.
     budget: CallBudget,
     /// AliExpress's places by country, `None` where it has no list.
-    address_trees: Mutex<HashMap<String, (Instant, Option<Arc<AddressTree>>)>>,
+    address_trees: Mutex<HashMap<String, KeptTree>>,
     /// Which of the nodes up this one is, at the moment of asking.
     share: Arc<dyn Fn() -> Share + Send + Sync>,
 }

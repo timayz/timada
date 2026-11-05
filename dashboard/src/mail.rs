@@ -692,6 +692,7 @@ mod tests {
                 line2: None,
                 postal_code: "75002".into(),
                 city: "Paris".into(),
+                region: None,
                 country: "FR".into(),
                 phone: None,
             },

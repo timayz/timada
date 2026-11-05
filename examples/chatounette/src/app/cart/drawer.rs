@@ -70,6 +70,7 @@ pub async fn cart_drawer(cx: &Cx, #[default] cart: Option<&CartView>) -> Result<
     let countries = COUNTRIES
         .iter()
         .map(|(code, _)| *code)
+        .filter(|code| cart.as_ref().is_none_or(|cart| cart.ships_to(code)))
         .collect::<Vec<_>>()
         .join(",");
     let rates = cart

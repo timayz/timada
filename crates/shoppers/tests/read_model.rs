@@ -54,6 +54,7 @@ fn address(city: &str) -> ShippingAddress {
         line1: "1 rue de la Paix".to_owned(),
         postal_code: "75002".to_owned(),
         city: city.to_owned(),
+        region: None,
         country: "FR".to_owned(),
         ..Default::default()
     }

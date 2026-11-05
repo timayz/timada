@@ -1,6 +1,6 @@
 //! `POST /store/shoppers/addresses` with `X-Shopper-Token` and the fields of
-//! an address (`name`, `line1`, `line2`, `postal_code`, `city`, `country`,
-//! `phone`): keeps it on the account. 201 `{"id": …}`; saving one already
+//! an address (`name`, `line1`, `line2`, `postal_code`, `city`, `region`,
+//! `country`, `phone`): keeps it on the account. 201 `{"id": …}`; saving one already
 //! kept answers its id again.
 
 pub mod remove;
@@ -24,6 +24,8 @@ pub struct AddressForm {
     line2: Option<String>,
     postal_code: String,
     city: String,
+    #[serde(default)]
+    region: Option<String>,
     country: String,
     #[serde(default)]
     phone: Option<String>,
@@ -45,6 +47,7 @@ pub async fn save(cx: &Cx, Form(form): Form<AddressForm>) -> Result<Answer> {
         line2: form.line2,
         postal_code: form.postal_code,
         city: form.city,
+        region: form.region,
         country: form.country,
         phone: form.phone,
     };

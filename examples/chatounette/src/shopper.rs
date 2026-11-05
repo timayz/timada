@@ -112,6 +112,9 @@ pub struct CheckoutDraft {
     pub line2: String,
     pub postal_code: String,
     pub city: String,
+    /// The province picked in the list a forwarding shop shows.
+    #[serde(default)]
+    pub region: String,
     pub country: String,
     /// The phone as ordered (`+33 6 12 34 56 78`): what the form's two
     /// fields compose, or what a wallet handed over whole.
@@ -158,6 +161,7 @@ impl CheckoutDraft {
         self.line2 = address.line2.clone().unwrap_or_default();
         self.postal_code = address.postal_code.clone();
         self.city = address.city.clone();
+        self.region = address.region.clone().unwrap_or_default();
         self.country = address.country.clone();
         self.phone = address.phone.clone().unwrap_or_default();
         self.phone_code.clear();
@@ -214,6 +218,7 @@ impl CheckoutDraft {
             line2: optional(&self.line2),
             postal_code: self.postal_code.clone(),
             city: self.city.clone(),
+            region: optional(&self.region),
             country: self.country.clone(),
             phone: optional(&self.phone_text()),
         }
@@ -233,6 +238,7 @@ impl CheckoutDraft {
             line2: optional(&self.billing_line2),
             postal_code: self.billing_postal_code.clone(),
             city: self.billing_city.clone(),
+            region: None,
             country: self.billing_country.clone(),
             phone: None,
         })

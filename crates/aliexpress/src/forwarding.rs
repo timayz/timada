@@ -146,7 +146,13 @@ pub fn logistics_address(
             .unwrap_or_default()
             .to_owned(),
         city: address.city.trim().to_owned(),
-        province: province_of(&country, &address.postal_code, &address.city),
+        // The shopper's pick, unless the address goes as a country of its own.
+        province: address
+            .region
+            .as_deref()
+            .filter(|_| country == shop_country)
+            .map(|region| region.trim().to_owned())
+            .unwrap_or_else(|| province_of(&country, &address.postal_code, &address.city)),
         zip: address.postal_code.trim().to_owned(),
         country,
         phone_country,
