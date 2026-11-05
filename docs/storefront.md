@@ -347,7 +347,9 @@ country, postal_code, province)` answers the country's `provinces`, the `provinc
 the postal code names, and the `cities` of the province asked for, else of that one,
 each with its `towns`. Put the last place picked in the address's city, and let the
 shopper type it for a province without cities or for the city `Other`. All are empty
-when the form should ask for nothing: a country without a list. Where the postal code names the province, `postal_code_awaited` says it is still
+when the form should ask for nothing: a country without a list, or a postal code
+under France that means an overseas department, which `delivery_country` then names
+(`MQ`). Where the postal code names the province, `postal_code_awaited` says it is still
 too short: ask for it first, and for the province only if `province` stays empty. Put
 the pick in `ShippingAddress::region`. See
 [aliexpress-provinces.md](aliexpress-provinces.md).

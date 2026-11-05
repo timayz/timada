@@ -19,6 +19,10 @@ pub struct Places {
     /// The cities of the province asked for, else of that one. None for a
     /// province without a list, whose town is typed.
     pub cities: Vec<PlaceCity>,
+    /// Where the postal code really delivers, when it is not the country asked
+    /// about: a French overseas department (`MQ` for France and `97200`).
+    #[serde(default)]
+    pub delivery_country: Option<String>,
     /// Whether the postal code names the province here and is still too short
     /// to: the form then asks for it first.
     #[serde(default)]

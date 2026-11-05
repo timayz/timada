@@ -62,7 +62,9 @@ Slovaquie, Slovénie, Suède. The free text was seen on the site for Martinique
 only, the others are read from the API's answer.
 
 **French overseas departments:** the checkout files them under France, unless a
-shipping method names one, and it is then offered under its own name. AliExpress
+shipping method names one. It is then offered under its own name, and the form
+moves to it when the postal code under France means it (`delivery_country` in the
+answer of `GET /store/places`), so its shipping price applies. AliExpress
 lists them as countries, so `delivery_country` turns the postal code
 into one for the address and the delivery. None has a list, so each takes the
 city. Martinique (MQ) was seen on the site; Guadeloupe (GP), Guyane (GF),

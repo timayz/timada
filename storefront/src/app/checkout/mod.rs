@@ -192,6 +192,12 @@ async function showPlaces(postalChanged = false) {
     if (answer.ok) places = await answer.json();
   } catch {}
   if (asked !== placesAsked) return;
+  // An overseas department the shop names goes under its own name, at its price.
+  if ([...country.options].some((option) => option.value === places.delivery_country)) {
+    country.value = places.delivery_country;
+    country.dispatchEvent(new Event("change"));
+    return;
+  }
   if (!places.provinces.length) return hideProvince();
   // A code naming a province takes over from the one picked or saved; one still
   // being typed changes nothing.

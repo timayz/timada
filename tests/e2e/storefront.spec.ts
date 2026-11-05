@@ -21,7 +21,7 @@ import {
   publishVariedProduct,
 } from "./storefront";
 import { selectByText } from "./forms";
-import { addToCart } from "./shop";
+import { addShippingMethod, addToCart } from "./shop";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // The storefront, the app on the storefront library, in French, booted on a
@@ -943,6 +943,42 @@ test("a shop without AliExpress asks for the place from the lists", async ({
   await expect(page.getByLabel("Votre ville")).toBeVisible();
 
   expect(errors).toEqual([]);
+});
+
+test("a postal code overseas moves the order there, when the shop ships there", async ({
+  page,
+  request,
+}) => {
+  await registerWithEmail(page, uniqueEmail("storefront-overseas"));
+  const { name, slug } = uniqueTenant("Storefront Overseas");
+  await createTenant(page, name);
+  await publishProduct(page, slug, "Blue Mug", "12.50");
+  await addShippingMethod(page, slug, "Métropole", "4,90", "France FR");
+  await addShippingMethod(page, slug, "Outre-mer", "9,90", "Martinique MQ");
+  await app.start(request, await mintKey(page, slug, true), 1);
+  await page.goto(`${app.url}/p/blue-mug`);
+  await addToCart(page);
+  await page.goto(`${app.url}/checkout`);
+
+  const country = page.getByLabel("Pays", { exact: true });
+  const postalCode = page.getByLabel("Code postal", { exact: true });
+  const shipping = page.locator("[data-checkout-shipping]");
+  await expect(country).toHaveValue("FR");
+  await expect(shipping).toHaveText("4,90€");
+
+  // Martinique's postal code under France: delivered there, at its price.
+  await postalCode.fill("97200");
+  await postalCode.blur();
+  await expect(country).toHaveValue("MQ");
+  await expect(shipping).toHaveText("9,90€");
+
+  // A postal code in France, and France chosen again: it stays.
+  await postalCode.fill("75002");
+  await postalCode.blur();
+  await country.selectOption("FR");
+  await expect(page.getByLabel("Département")).toHaveValue("Paris");
+  await expect(country).toHaveValue("FR");
+  await expect(shipping).toHaveText("4,90€");
 });
 
 test("the storefront stops cleanly when told to", async ({ page, request }) => {
