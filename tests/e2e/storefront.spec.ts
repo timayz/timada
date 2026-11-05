@@ -873,3 +873,17 @@ test("a merchant sends a campaign to the confirmed subscribers, who leave in one
     "1 subscriber(s)",
   );
 });
+
+test("the storefront stops cleanly when told to", async ({ page, request }) => {
+  await registerWithEmail(page, uniqueEmail("storefront-stop"));
+  const { name, slug } = uniqueTenant("Storefront Stop");
+  await createTenant(page, name);
+  await app.start(request, await mintKey(page, slug, true), 0);
+
+  // SIGTERM, as a host sends it: a clean exit, well before the drain and the
+  // store's limits (10 s and 5 s) with nothing under way, and the port free.
+  const asked = Date.now();
+  expect(await app.terminate()).toBe(0);
+  expect(Date.now() - asked).toBeLessThan(10_000);
+  await expect(request.get(`${app.url}/store/status`)).rejects.toThrow();
+});

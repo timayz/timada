@@ -152,6 +152,19 @@ export class StorefrontApp {
     }).toPass({ timeout: 30_000 });
   }
 
+  /// Tells the process to stop as a host does (SIGTERM) and answers with its
+  /// exit code once it has gone: `null` if the signal killed it outright.
+  async terminate(): Promise<number | null> {
+    const child = this.child!;
+    const exited = new Promise<number | null>((resolve) =>
+      child.once("exit", (code) => resolve(code)),
+    );
+    child.kill("SIGTERM");
+    const code = await exited;
+    this.child = undefined;
+    return code;
+  }
+
   /// Kills the process and removes its database; a no-op when not started.
   stop(): void {
     this.child?.kill();
