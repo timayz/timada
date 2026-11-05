@@ -3,6 +3,7 @@
 //! and then asks the [`TenantAccess`] for the permission it needs.
 
 pub mod aliexpress;
+pub mod announcements;
 pub mod api_keys;
 pub mod automations;
 pub mod carts;

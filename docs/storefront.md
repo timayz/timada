@@ -164,6 +164,23 @@ let found = timada_storefront::search_pages(cx, "livrais", 3).await?; // [PageLi
 the title or text that starts with the query, accents aside, titles first; the host
 keeps the hits it has a route for.
 
+## Announcements
+
+The short messages at the top of the shop ("-10% maintenant avec le code BIENVENUE10")
+are the merchant's too, written under `/t/{slug}/announcements`: up to ten, each shown or
+hidden, within an optional window, in the order the merchant set. The shown ones are
+copied into `storefront_announcements`; `announcements` keeps those whose window is open
+at the time of the request, so a message starts and stops on time with no event to wait
+for. A message is one line with `**bold**` and at most one `[link](/path)` to a page of
+the shop or an `https://` address; its `html` is escaped, everything else is text.
+
+```rust
+let live = timada_storefront::announcements(cx).await?; // [LiveAnnouncement { id, html }]
+```
+
+The storefront shows the first without JS and the others in turn with it, holding on
+hover, focus or its Pause button.
+
 ## What a product varies by
 
 ```rust
@@ -521,8 +538,8 @@ it). The categories and products go in through the catalog's commands, their pic
 are copied from the snapshot into the node's media directory (a picture the snapshot
 lacks is fetched from the shop; `--skip-images` leaves them all out, `--limit N` loads
 only the first N products), the shop gets a delivery method (France, Belgium,
-Switzerland, free from 65 €) and the promo code `BIENVENUE10` (10 %) so a storefront can
-sell at once, and a key holding `store:read` and `store:checkout` is minted. The command
+Switzerland, free from 65 €) and the promo code `BIENVENUE10` (10 %), announced in the
+top bar, so a storefront can sell at once, and a key holding `store:read` and `store:checkout` is minted. The command
 ends with the storefront's settings on stdout:
 
 ```
@@ -559,8 +576,8 @@ ignores and `make storefront` reads.
 ## The storefront
 
 `storefront/` is a complete shop on the library, to start your own from: it has every
-page a shop needs in French, and no brand and no colours. A top bar with the promo
-code, a masthead with the search, the category bar, a home with the newest products,
+page a shop needs in French, and no brand and no colours. A top bar with the merchant's
+announcements, a masthead with the search, the category bar, a home with the newest products,
 the category tiles, the latest reviews and the four promises, listings with sort labels
 and, on a category's first page, its longer text below the products, a product page
 with its gallery, option menus, reassurance block, folding description and facts and
@@ -588,9 +605,9 @@ the old tenant's products. `make reset` removes the copy and the settings with t
 
 ### Making it your own
 
-- **Who you are:** `SHOP_NAME`, `TAGLINE`, `CONTACT_EMAIL` and `PROMO_CODE` at the top of
-  `storefront/src/app/mod.rs`. The promo code must exist in your back office; the top
-  bar, the home and the product pages advertise it at 10 % off.
+- **Who you are:** `SHOP_NAME`, `TAGLINE` and `CONTACT_EMAIL` at the top of
+  `storefront/src/app/mod.rs`. What the top bar says (a promo code, a sale) is written
+  in the back office, under Announcements.
 - **Your look:** add it to `storefront/src/app/theme.css`, which holds the layout only
   and is inlined in every page, with the sheets of the cart drawer, the menu and the
   search beside the code they style (`DRAWER_CSS`, `MENU_CSS`, `SEARCH_CSS`). The pages

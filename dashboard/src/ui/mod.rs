@@ -200,6 +200,13 @@ pub fn describe_error(code: &str) -> &'static str {
         "page_too_many_images" => "A page carries at most 50 pictures.",
         "page_not_found" => "This page does not exist.",
         "page_image_not_found" => "This picture is no longer on the page.",
+        "announcement_invalid" => "An announcement is 1 to 200 characters.",
+        "announcement_invalid_link" => {
+            "An announcement links at most once, to a page of the shop (/…) or an https:// address."
+        }
+        "announcement_invalid_window" => "Give the dates as day and time, the end after the start.",
+        "too_many_announcements" => "The bar holds at most 10 announcements.",
+        "announcement_not_found" => "This announcement does not exist.",
         "campaign_sent" => "This campaign was sent already: it can no longer be changed.",
         "campaign_invalid_schedule" => {
             "This schedule does not hold together: pick at least one day (every week), a day 1 to 28 (every month), an end time after the start time, and dates from today on."

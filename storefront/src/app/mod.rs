@@ -26,6 +26,7 @@ pub mod qui_sommes_nous;
 pub mod reviews;
 pub mod search;
 pub mod support_client;
+pub mod topbar;
 
 use timada_storefront::{
     CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, Store,
@@ -46,6 +47,7 @@ use crate::shopper::accounts_enabled;
 use cart::drawer::{CART_SCRIPT, DRAWER_CSS, cart_drawer};
 use menu::{MENU_CSS, MENU_SCRIPT, site_menu};
 use search::{SEARCH_CSS, SEARCH_SCRIPT};
+use topbar::announcement_bar;
 
 /// A review carries up to three photos of up to 8 MiB each.
 const REVIEW_LIMIT: usize = 26 * 1024 * 1024;
@@ -56,9 +58,6 @@ pub const SHOP_NAME: &str = "Ma boutique";
 const TAGLINE: &str = "Le slogan de votre boutique";
 /// The address the support page and the footer name.
 pub const CONTACT_EMAIL: &str = "contact@example.com";
-/// The code the top bar, the home and the product pages advertise, at 10 %
-/// off. It must exist in the back office; the catalogue seed creates it.
-pub const PROMO_CODE: &str = "BIENVENUE10";
 
 /// The layout, inlined in every page. Add your look to this sheet.
 const THEME_CSS: &str = include_str!("theme.css");
@@ -108,7 +107,7 @@ pub fn price_line(product: &Product) -> String {
     }
 }
 
-/// The HTML shell every page shares: the top bar, the masthead, the
+/// The HTML shell every page shares: the announcements bar, the masthead, the
 /// category bar, the page, the footer, and (unless `no_drawer`, for the
 /// cart and the checkout, which show the cart already) the cart drawer.
 #[topcoat::view::component]
@@ -138,6 +137,7 @@ pub async fn document(
         .unwrap_or_else(|| money(0, "EUR"));
     let accounts = accounts_enabled(cx);
     let signed_in = accounts && crate::shopper::signed_in(cx).await.is_some();
+    let announcements = timada_storefront::announcements(cx).await?;
     let page_title = if title == SHOP_NAME {
         format!("{SHOP_NAME} : {TAGLINE}")
     } else {
@@ -159,11 +159,7 @@ pub async fn document(
                 <style>(Unescaped::new_unchecked(SEARCH_CSS))</style>
             </head>
             <body>
-                <div class="topbar">
-                    <div class="wrap">
-                        <p>"-10% maintenant avec le code " <strong>(PROMO_CODE)</strong></p>
-                    </div>
-                </div>
+                announcement_bar(announcements: &announcements)
                 <header class="masthead">
                     <div class="wrap">
                         if !nav.is_empty() {
@@ -460,15 +456,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </div>
                 </section>
             }
-            <section class="block">
-                <div class="wrap">
-                    <div class="promo">
-                        <h2>"Profitez de -10%"</h2>
-                        <p>"Sur toute la boutique, dès votre première commande : saisissez le code au moment de payer."</p>
-                        <code>(PROMO_CODE)</code>
-                    </div>
-                </div>
-            </section>
             <section class="block">
                 <div class="wrap">
                     reassurance()

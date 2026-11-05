@@ -1,7 +1,8 @@
 use evento::WriteError;
 
 use crate::value_object::{
-    MAX_BODY_LEN, MAX_IMAGES_PER_PAGE, MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_TITLE_LEN,
+    MAX_ANNOUNCEMENT_LEN, MAX_ANNOUNCEMENTS, MAX_BODY_LEN, MAX_IMAGES_PER_PAGE,
+    MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_TITLE_LEN,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +28,16 @@ pub enum PageError {
     NotFound,
     #[error("picture not found")]
     ImageNotFound,
+    #[error("an announcement is 1 to {MAX_ANNOUNCEMENT_LEN} characters")]
+    InvalidAnnouncement,
+    #[error("an announcement links at most once, to a page of the shop or an https address")]
+    InvalidAnnouncementLink,
+    #[error("an announcement ends after it starts")]
+    InvalidAnnouncementWindow,
+    #[error("the bar holds at most {MAX_ANNOUNCEMENTS} announcements")]
+    TooManyAnnouncements,
+    #[error("announcement not found")]
+    AnnouncementNotFound,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -58,6 +69,11 @@ impl PageError {
             Self::UnsupportedImage => "unsupported_image",
             Self::NotFound => "page_not_found",
             Self::ImageNotFound => "page_image_not_found",
+            Self::InvalidAnnouncement => "announcement_invalid",
+            Self::InvalidAnnouncementLink => "announcement_invalid_link",
+            Self::InvalidAnnouncementWindow => "announcement_invalid_window",
+            Self::TooManyAnnouncements => "too_many_announcements",
+            Self::AnnouncementNotFound => "announcement_not_found",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })

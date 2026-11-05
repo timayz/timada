@@ -111,3 +111,39 @@ pub fn is_image_file(file: &str) -> bool {
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
         && image_mime(ext).is_some()
 }
+
+/// How many messages the top bar holds, shown or hidden.
+pub const MAX_ANNOUNCEMENTS: usize = 10;
+/// The longest message, marks included: one line on a phone, two at most.
+pub const MAX_ANNOUNCEMENT_LEN: usize = 200;
+
+/// The stream of the shop's announcements: one per tenant store.
+pub fn announcements_id() -> String {
+    evento::hash_ids(vec!["announcements"])
+}
+
+/// A fresh id for an announcement: a ULID.
+pub fn new_announcement_id() -> String {
+    ulid::Ulid::generate().to_string()
+}
+
+/// Puts a message on one line, checks it is 1 to 200 characters with
+/// marks it may carry, and that its window, when it has both ends, ends
+/// after it starts.
+pub fn normalize_announcement(
+    text: &str,
+    starts_at: Option<u64>,
+    ends_at: Option<u64>,
+) -> Result<String, PageError> {
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() || text.chars().count() > MAX_ANNOUNCEMENT_LEN {
+        return Err(PageError::InvalidAnnouncement);
+    }
+    crate::announcement::check_announcement_marks(&text)?;
+    if let (Some(starts_at), Some(ends_at)) = (starts_at, ends_at)
+        && ends_at <= starts_at
+    {
+        return Err(PageError::InvalidAnnouncementWindow);
+    }
+    Ok(text)
+}
