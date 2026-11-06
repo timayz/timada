@@ -841,9 +841,12 @@ impl OrderState {
             && self.released_at.is_none()
     }
 
-    /// Whether the money waits for the supplier to have the goods.
+    /// Whether the money waits for the supplier to have the goods: it is
+    /// still held, and a supplier buys some of them.
     pub fn awaits_supplier(&self) -> bool {
-        self.status == OrderStatus::Authorized && self.supplier.is_some()
+        self.status == OrderStatus::Authorized
+            && self.supplier.is_some()
+            && self.released_at.is_none()
     }
 
     /// Whether the shopper may still cancel it: its money only held, waiting

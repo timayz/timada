@@ -246,7 +246,9 @@ pub enum Order {
         requested_by: String,
     },
     /// The hold on the shopper's card went back, nothing taken. Written
-    /// with the `Cancelled` it makes.
+    /// with the `Cancelled` it makes, unless the provider dropped it on its
+    /// own while the supplier may have the order: the order then stays open
+    /// for the merchant to settle.
     PaymentReleased {
         payment_id: String,
         released_by: String,

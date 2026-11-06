@@ -8,7 +8,7 @@
 //! a retry) does what asking once did.
 
 use timada_orders::{
-    CancelPath, HOLD_CANCELLED_REASON, HOLD_EXPIRED_REASON, OrderError, OrderStatus,
+    CancelPath, HOLD_CANCELLED_REASON, HOLD_EXPIRED_REASON, OrderError, OrderStatus, Released,
 };
 
 use super::{Account, CaptureAnswer, DASHBOARD_ACTOR, Payments, ReleaseAnswer};
@@ -28,6 +28,9 @@ pub enum CaptureOutcome {
     /// The hold was gone (it lapsed, or was cancelled in the provider's
     /// dashboard): the order is cancelled, nothing taken.
     Released,
+    /// The hold was gone and the supplier may have the order: nothing taken,
+    /// the hold recorded gone, and the order left open for the merchant.
+    KeptOpen,
     /// The provider could not be reached: the request stands, and is asked
     /// again later.
     Unanswered,
@@ -86,16 +89,24 @@ pub async fn capture(
             Ok(CaptureOutcome::Paid)
         }
         Ok(CaptureAnswer::Cancelled { lapsed }) => {
-            orders
+            match orders
                 .record_release(
                     DASHBOARD_ACTOR,
                     order_id,
                     &pending.payment_id,
                     release_reason(lapsed),
                 )
-                .await?;
-            tracing::warn!(tenant = %orders.tenant(), order = %order_id, lapsed, "an order's hold was gone when its payment was taken: cancelled");
-            Ok(CaptureOutcome::Released)
+                .await?
+            {
+                Released::Cancelled => {
+                    tracing::warn!(tenant = %orders.tenant(), order = %order_id, lapsed, "an order's hold was gone when its payment was taken: cancelled");
+                    Ok(CaptureOutcome::Released)
+                }
+                Released::KeptOpen => {
+                    tracing::error!(tenant = %orders.tenant(), order = %order_id, lapsed, "an order's hold was gone when its payment was taken, and its supplier may have it: left open for the merchant");
+                    Ok(CaptureOutcome::KeptOpen)
+                }
+            }
         }
         Ok(CaptureAnswer::Refused(reason)) => {
             orders

@@ -285,7 +285,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let can_cancel = can_manage
         && matches!(status, OrderStatus::Authorized | OrderStatus::Paid)
         && order.pending_capture.is_none();
-    let can_capture = can_manage && status == OrderStatus::Authorized && cancelling.is_none();
+    // Nothing to take once the hold went back (an order kept open because
+    // AliExpress may have it).
+    let can_capture = can_manage
+        && status == OrderStatus::Authorized
+        && cancelling.is_none()
+        && order.released_at.is_none();
     // Asked of the supplier: cancelling means cancelling there too.
     let supplier_ordered = order.supplier_order == SupplierOrder::Started;
     let capture_label = if order.capture_failure.is_some() {

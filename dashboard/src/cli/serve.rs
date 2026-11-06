@@ -357,6 +357,14 @@ fn subscriptions(
                 store.clone(),
             ),
         ),
+        (
+            "AliExpress pushes",
+            crate::aliexpress::webhook::pushes_subscription(
+                aliexpress.clone(),
+                db.clone(),
+                store.clone(),
+            ),
+        ),
         ("pictures", crate::media::subscription(media.clone())),
         (
             "shopper keys",

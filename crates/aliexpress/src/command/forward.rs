@@ -3,11 +3,12 @@
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
+use super::claim_ae_order;
 use crate::aggregator::forward::{
     Checked, Done, Failed, Forward, ForwardItem, Placed, Requested, Started,
 };
 use crate::error::AliexpressError;
-use crate::value_object::forward_id;
+use crate::value_object::{FORWARD_STALL_SECS, forward_id};
 
 /// Where placing an order on AliExpress stands.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -286,7 +287,14 @@ impl<E: Executor> super::Command<E> {
         }
     }
 
-    /// Records the orders AliExpress took.
+    /// Records the orders AliExpress took, then each in the platform's
+    /// streams ([`claim_ae_order`]), so a push naming one finds the forward.
+    /// AliExpress has them whatever the forward says meanwhile: another write
+    /// in between is read again and written over, and a forward given up as
+    /// stalled is placed after all. Recorded already with these orders (a
+    /// retry after a write that landed), only what is left of the platform's
+    /// record is written; a forward placed as other orders refuses
+    /// (`AlreadyForwarded`).
     pub async fn record_placed(
         &self,
         actor: &str,
@@ -294,21 +302,82 @@ impl<E: Executor> super::Command<E> {
         placement: Placement,
         routing_key: Option<String>,
     ) -> Result<(), AliexpressError> {
-        let forward = self.require_forward(forward_id).await?;
-        forward
+        let placed = Placed {
+            ae_order_ids: placement.ae_order_ids,
+            items: placement.items,
+            pay_requested: placement.pay_requested,
+            complete: placement.complete,
+            placed_by: actor.to_owned(),
+        };
+        for attempt in 1..=super::WRITE_ATTEMPTS {
+            let forward = self.require_forward(forward_id).await?;
+            if matches!(forward.status, ForwardStatus::Placed | ForwardStatus::Done) {
+                let same = forward
+                    .ae_orders
+                    .iter()
+                    .map(|order| &order.id)
+                    .eq(placed.ae_order_ids.iter());
+                if !same {
+                    return Err(AliexpressError::AlreadyForwarded);
+                }
+                break;
+            }
+            let written = forward
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&placed)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => break,
+                Err(WriteError::InvalidOriginalVersion) if attempt < super::WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        for ae_order_id in &placed.ae_order_ids {
+            claim_ae_order(&self.executor, ae_order_id, &self.tenant, forward_id).await?;
+        }
+        Ok(())
+    }
+
+    /// Says AliExpress may have the order of a forward taken on and not
+    /// heard of for [`FORWARD_STALL_SECS`] before `now` (unix seconds): the
+    /// node placing it stopped, or could not record what AliExpress
+    /// answered. `reason` is what the merchant reads, who looks there before
+    /// placing it again. Whether it was said: `false` for a forward that
+    /// moved on meanwhile, or not stalled yet.
+    pub async fn fail_stalled_forward(
+        &self,
+        actor: &str,
+        forward_id: &str,
+        reason: &str,
+        now: u64,
+        routing_key: Option<String>,
+    ) -> Result<bool, AliexpressError> {
+        let Some(forward) = self.load_forward_by_id(forward_id).await? else {
+            return Ok(false);
+        };
+        let stalled = forward.status == ForwardStatus::Started
+            && now.saturating_sub(forward.updated_at) > FORWARD_STALL_SECS;
+        if !stalled {
+            return Ok(false);
+        }
+        let written = forward
             .write()?
             .routing_key_opt(routing_key)
-            .event(&Placed {
-                ae_order_ids: placement.ae_order_ids,
-                items: placement.items,
-                pay_requested: placement.pay_requested,
-                complete: placement.complete,
-                placed_by: actor.to_owned(),
+            .event(&Failed {
+                reason: reason.chars().take(500).collect(),
+                failed_by: actor.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
-            .await?;
-        Ok(())
+            .await;
+        match written {
+            Ok(_) => Ok(true),
+            Err(WriteError::InvalidOriginalVersion) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
     }
 
     /// Records why nothing was placed.

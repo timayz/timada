@@ -4,7 +4,7 @@ use common::*;
 use evento::ProjectionAggregate;
 use timada_orders::{
     CancelPath, CaptureClaim, HOLD_EXPIRED_REASON, HOLD_MARGIN_SECS, OrderError, OrderStatus,
-    SupplierOrder,
+    Released, SupplierOrder,
 };
 
 async fn held(orders: &Orders, catalog: &Catalog) -> String {
@@ -235,6 +235,104 @@ async fn a_lapsed_hold_cancels_the_order() {
         matches!(released, Err(OrderError::NotCancellable)),
         "{released:?}"
     );
+}
+
+/// The provider dropped the hold while the supplier may have the order: it
+/// may be shipping, so nothing cancels the order but the merchant. The hold
+/// is recorded gone, once, and the cancellation they ask for settles it.
+#[tokio::test]
+async fn a_dropped_hold_leaves_an_order_the_supplier_may_have_to_the_merchant() {
+    let (orders, catalog) = store().await;
+    let order_id = held(&orders, &catalog).await;
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    let payment_id = order.payment.payment_id.clone();
+
+    let released = orders
+        .record_release(DASHBOARD, &order_id, &payment_id, HOLD_EXPIRED_REASON)
+        .await
+        .unwrap();
+    assert_eq!(released, Released::KeptOpen);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Authorized, "not cancelled");
+    assert!(order.released_at.is_some());
+    assert_eq!(order.payment_state(), "released");
+    assert_eq!(order.cancel_reason, None);
+    let version = order.aggregate_version().unwrap();
+
+    // Told again (the webhook, the sweep): nothing more.
+    let again = orders
+        .record_release(DASHBOARD, &order_id, &payment_id, HOLD_EXPIRED_REASON)
+        .await
+        .unwrap();
+    assert_eq!(again, Released::KeptOpen);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.aggregate_version().unwrap(), version);
+    // Nothing is held any more: nothing to take, nothing to buy with it.
+    let taken = orders.request_capture(DASHBOARD, &order_id).await;
+    assert!(
+        matches!(taken, Err(OrderError::OrderCancelled)),
+        "{taken:?}"
+    );
+    let bought = orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await;
+    assert!(
+        matches!(bought, Err(OrderError::OrderCancelled)),
+        "{bought:?}"
+    );
+
+    // The merchant settles it with the supplier and cancels it.
+    let path = orders
+        .request_cancellation(ALICE, &order_id, "Cancelled on AliExpress".into(), true)
+        .await
+        .unwrap();
+    assert_eq!(
+        path,
+        CancelPath::Release {
+            payment_id: payment_id.clone()
+        }
+    );
+    let released = orders
+        .record_release(DASHBOARD, &order_id, &payment_id, "")
+        .await
+        .unwrap();
+    assert_eq!(released, Released::Cancelled);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Cancelled);
+    assert_eq!(
+        order.cancel_reason.as_deref(),
+        Some("Cancelled on AliExpress")
+    );
+    assert!(order.pending_cancellation.is_none());
+
+    // The supplier surely refused it: a dropped hold cancels the order again.
+    let order_id = held(&orders, &catalog).await;
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    orders
+        .record_supplier_refusal(DASHBOARD, &order_id, "aliexpress", "No delivery to FR")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    let released = orders
+        .record_release(
+            DASHBOARD,
+            &order_id,
+            &order.payment.payment_id,
+            HOLD_EXPIRED_REASON,
+        )
+        .await
+        .unwrap();
+    assert_eq!(released, Released::Cancelled);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Cancelled);
+    assert_eq!(order.cancel_reason.as_deref(), Some(HOLD_EXPIRED_REASON));
 }
 
 /// The provider is asked one thing at a time: a cancellation waits for a

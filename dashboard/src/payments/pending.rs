@@ -135,7 +135,9 @@ impl PendingPayments {
             } else if order.pending_capture.is_some() {
                 settle::capture(&self.payments, &account, &orders, order_id).await?
                     != CaptureOutcome::Unanswered
-            } else if order.status != OrderStatus::Authorized {
+            } else if order.status != OrderStatus::Authorized || order.released_at.is_some() {
+                // Settled, or kept open without its hold for the merchant:
+                // nothing to ask the provider.
                 true
             } else if order
                 .payment

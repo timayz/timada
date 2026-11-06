@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::db::Db;
 use evento::{
@@ -37,11 +38,29 @@ const ORDER_WINDOW_SECS: u64 = 60 * 60;
 /// A request older than this is history being replayed.
 const REQUEST_WINDOW_SECS: u64 = 10 * 60;
 
+/// How many times what AliExpress took is written before it is only logged,
+/// and the pause before the second try, doubled each time after: writes
+/// paused for a moment, a node rejoining, another write at the same moment.
+const RECORD_ATTEMPTS: u32 = 5;
+#[cfg(not(test))]
+const RECORD_RETRY_PAUSE: Duration = Duration::from_millis(500);
+#[cfg(test)]
+const RECORD_RETRY_PAUSE: Duration = Duration::from_millis(5);
+
+/// Why a forward failed when AliExpress may have the order all the same: it
+/// did not answer the order, or the node placing it stopped, or could not
+/// record the answer. Never placed again on its own.
+pub const MAY_HAVE_PLACED: &str = "AliExpress did not answer: look at the account's orders on AliExpress before placing this one again.";
+
 /// How placing one order went.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForwardResult {
     /// AliExpress took it, as these orders.
     Placed(Vec<String>),
+    /// AliExpress took it, as these orders, and the store would not record
+    /// them: they are in the log, and the forward is left taken on, for the
+    /// sweep to say AliExpress may have it once it stalled.
+    Unrecorded(Vec<String>),
     /// Another node took it on, or it is no longer to place.
     Skipped,
     /// Nothing was placed; recorded on the forward.
@@ -102,11 +121,20 @@ impl Aliexpress {
         match placed {
             Ok(placement) => {
                 let ae_order_ids = placement.ae_order_ids.clone();
-                forwards
-                    .record_placed(ALIEXPRESS_ACTOR, forward_id, placement)
-                    .await?;
-                tracing::info!(tenant = %tenant_id, order = %forward.order_id, ae_orders = ?ae_order_ids, "order placed on AliExpress");
-                Ok(ForwardResult::Placed(ae_order_ids))
+                match record_placement(&forwards, forward_id, placement).await {
+                    Ok(()) => {
+                        tracing::info!(tenant = %tenant_id, order = %forward.order_id, ae_orders = ?ae_order_ids, "order placed on AliExpress");
+                        Ok(ForwardResult::Placed(ae_order_ids))
+                    }
+                    Err(err) => {
+                        // AliExpress has the order, and only this line says
+                        // as which: the forward stays taken on until the
+                        // sweep finds it stalled and says AliExpress may
+                        // have it.
+                        tracing::error!(tenant = %tenant_id, order = %forward.order_id, forward = %forward_id, ae_orders = ?ae_order_ids, error = %err, "order placed on AliExpress but not recorded: look for these AliExpress orders before placing it again");
+                        Ok(ForwardResult::Unrecorded(ae_order_ids))
+                    }
+                }
             }
             Err(Refusal(reason)) => {
                 tracing::warn!(tenant = %tenant_id, order = %forward.order_id, %reason, "order not placed on AliExpress");
@@ -302,10 +330,7 @@ impl Aliexpress {
         let ae_order_ids = match client.place_order(&request).await {
             Ok(ids) => ids,
             Err(err) if err.may_have_placed() => {
-                return Err(Refusal(
-                    "AliExpress did not answer: look at the account's orders on AliExpress before placing this one again."
-                        .to_owned(),
-                ));
+                return Err(Refusal(MAY_HAVE_PLACED.to_owned()));
             }
             Err(err) => {
                 let reason = format!("AliExpress refused the order: {}", describe(&err));
@@ -542,6 +567,35 @@ fn not_placeable(err: OrderError) -> Result<Refusal, OrderError> {
         }
         .to_owned(),
     ))
+}
+
+/// Records the orders AliExpress took, trying again while the store does not
+/// take the write (each try reads the forward again); the last error once
+/// every try failed. A refusal of the forward itself is not tried again.
+async fn record_placement<E: evento::Executor>(
+    forwards: &timada_aliexpress::Command<E>,
+    forward_id: &str,
+    placement: Placement,
+) -> Result<(), AliexpressError> {
+    let mut pause = RECORD_RETRY_PAUSE;
+    let mut attempt = 1;
+    loop {
+        match forwards
+            .record_placed(ALIEXPRESS_ACTOR, forward_id, placement.clone())
+            .await
+        {
+            Ok(()) => return Ok(()),
+            Err(err @ (AliexpressError::Write(_) | AliexpressError::Other(_)))
+                if attempt < RECORD_ATTEMPTS =>
+            {
+                tracing::warn!(forward = %forward_id, attempt, error = %err, "orders AliExpress took not recorded yet: trying again");
+                tokio::time::sleep(pause).await;
+                pause *= 2;
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 /// The parcel numbers, joined, as many as an order's tracking holds.

@@ -2,6 +2,8 @@
 # `event` and `type` lines are frozen — add a new variant instead of editing
 # one. A `view` line may change when its projection's `.revision(n)` grows.
 
+event timada-aliexpress/AeOrder::Claimed { ae_order_id: String, tenant_id: String, forward_id: String }
+event timada-aliexpress/AeOrder::Pushed { ae_order_id: String, status: String }
 event timada-aliexpress/Forward::Checked { ae_order_id: String, status: String, logistics_status: String, tracking: Vec<String>, closed: bool }
 event timada-aliexpress/Forward::Done { tracking: Option<String>, fulfilled: bool }
 event timada-aliexpress/Forward::Failed { reason: String, failed_by: String }

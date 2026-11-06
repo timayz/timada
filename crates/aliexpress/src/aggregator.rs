@@ -149,3 +149,25 @@ pub mod forward {
         },
     }
 }
+
+/// One order AliExpress holds for a company's account, by its AliExpress
+/// number: which shop's forward placed it, and what AliExpress pushed of it.
+/// A push names the order and nothing else, so these streams are the
+/// platform's own (no tenant), one per AliExpress order, with the
+/// deterministic id [`ae_order_index_id`](crate::ae_order_index_id). Both
+/// sides write to the one stream, so a push that comes before the forward
+/// recorded its orders is found by that record, and the other way round.
+pub mod ae_order {
+    #[evento::aggregate(name = "timada-aliexpress/AeOrder")]
+    pub enum AeOrder {
+        /// The forward `forward_id` of the shop `tenant_id` placed it.
+        Claimed {
+            ae_order_id: String,
+            tenant_id: String,
+            forward_id: String,
+        },
+        /// AliExpress pushed its new status (`OrderShipped`, `OrderClosed`…),
+        /// recorded before the push is answered.
+        Pushed { ae_order_id: String, status: String },
+    }
+}

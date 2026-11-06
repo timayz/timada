@@ -2,8 +2,8 @@ use serde_json::json;
 use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem};
 use timada_aliexpress::{
-    AddressTree, AeOrder, AeProduct, AliexpressError, ForwardStatus, FreightOption, LinkState,
-    LogisticsAddress, PLACE_COUNTRIES, PlaceItem, PlaceOrder, Placement, PlannedItem,
+    AddressTree, AeOrder, AeProduct, AliexpressError, ForwardRef, ForwardStatus, FreightOption,
+    LinkState, LogisticsAddress, PLACE_COUNTRIES, PlaceItem, PlaceOrder, Placement, PlannedItem,
     choose_service, decode_places, delivery_country, describe_options, encode_places,
     forward_items, freight_from_response, french_department, logistics_address,
     placed_orders_from_response, places_of, postal_code_awaited, province_of, split_phone,
@@ -909,6 +909,216 @@ async fn an_order_is_placed_once_and_read_until_it_ships() {
     assert!(done.all_shipped());
     assert_eq!(done.tracking(), vec!["LP1", "LP2"]);
     assert_eq!(done.fulfilled_tracking.as_deref(), Some("LP1, LP2"));
+}
+
+fn placement(ae_order_ids: &[&str]) -> Placement {
+    Placement {
+        ae_order_ids: ae_order_ids.iter().map(|id| (*id).to_owned()).collect(),
+        items: Vec::new(),
+        pay_requested: true,
+        complete: true,
+    }
+}
+
+/// How many `Placed` the forward's stream holds.
+async fn placed_events(executor: &evento::Turso, forward_id: &str) -> usize {
+    evento::read::<timada_aliexpress::aggregator::forward::Forward>(forward_id)
+        .tenant(TENANT)
+        .execute(executor)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|event| event.name == "Placed")
+        .count()
+}
+
+/// AliExpress has the orders once it answered: recording them is tried
+/// again and again, by one node or two at once, and lands once; each
+/// AliExpress order then names its forward in the platform's streams.
+#[tokio::test]
+async fn the_orders_aliexpress_took_are_recorded_once_however_often_told() {
+    let executor = executor().await;
+    let forwards = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let id = forwards
+        .request_forward(ALICE, "order-1", false)
+        .await
+        .unwrap();
+    assert!(forwards.start_forward(ALICE, &id).await.unwrap());
+
+    let (first, second) = tokio::join!(
+        forwards.record_placed(ALICE, &id, placement(&["81", "82"])),
+        forwards.record_placed(ALICE, &id, placement(&["81", "82"])),
+    );
+    first.unwrap();
+    second.unwrap();
+    forwards
+        .record_placed(ALICE, &id, placement(&["81", "82"]))
+        .await
+        .unwrap();
+    assert_eq!(placed_events(&executor, &id).await, 1);
+    let placed = forwards.load_forward("order-1").await.unwrap().unwrap();
+    assert_eq!(placed.status, ForwardStatus::Placed);
+    for ae_order_id in ["81", "82"] {
+        let order = timada_aliexpress::load_ae_order(&executor, ae_order_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(order.ae_order_id, ae_order_id);
+        assert_eq!(
+            order.forward,
+            Some(ForwardRef {
+                tenant_id: TENANT.into(),
+                forward_id: id.clone(),
+            })
+        );
+    }
+
+    // Placed as other orders (placed again by hand meanwhile): refused, the
+    // forward keeps what it has.
+    let other = forwards.record_placed(ALICE, &id, placement(&["91"])).await;
+    assert!(
+        matches!(other, Err(AliexpressError::AlreadyForwarded)),
+        "{other:?}"
+    );
+    assert_eq!(placed_events(&executor, &id).await, 1);
+    assert!(
+        timada_aliexpress::load_ae_order(&executor, "91")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// A forward taken on and never heard of: once stalled, it says AliExpress
+/// may have the order, and only the merchant places it again. AliExpress
+/// answering after all still places it.
+#[tokio::test]
+async fn a_stalled_forward_says_aliexpress_may_have_the_order() {
+    let executor = executor().await;
+    let forwards = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let id = forwards
+        .request_forward(ALICE, "order-1", false)
+        .await
+        .unwrap();
+    let reason = "Look on AliExpress first.";
+
+    // Only asked for: nothing was taken on.
+    assert!(
+        !forwards
+            .fail_stalled_forward(ALICE, &id, reason, u64::MAX)
+            .await
+            .unwrap()
+    );
+    assert!(forwards.start_forward(ALICE, &id).await.unwrap());
+    let started = forwards.load_forward("order-1").await.unwrap().unwrap();
+    let stalled_at = started.updated_at + timada_aliexpress::FORWARD_STALL_SECS + 1;
+    assert!(
+        !forwards
+            .fail_stalled_forward(ALICE, &id, reason, stalled_at - 1)
+            .await
+            .unwrap(),
+        "still being placed"
+    );
+    assert!(
+        forwards
+            .fail_stalled_forward(ALICE, &id, reason, stalled_at)
+            .await
+            .unwrap()
+    );
+    let failed = forwards.load_forward("order-1").await.unwrap().unwrap();
+    assert_eq!(failed.status, ForwardStatus::Failed);
+    assert_eq!(failed.last_error.as_deref(), Some(reason));
+    assert!(
+        !forwards
+            .fail_stalled_forward(ALICE, &id, reason, stalled_at)
+            .await
+            .unwrap(),
+        "said once"
+    );
+
+    // The node was only slow: what AliExpress took is recorded all the same.
+    forwards
+        .record_placed(ALICE, &id, placement(&["81"]))
+        .await
+        .unwrap();
+    let placed = forwards.load_forward("order-1").await.unwrap().unwrap();
+    assert_eq!(placed.status, ForwardStatus::Placed);
+    assert!(placed.last_error.is_none());
+    assert!(
+        !forwards
+            .fail_stalled_forward(ALICE, &id, reason, u64::MAX)
+            .await
+            .unwrap()
+    );
+}
+
+/// A push names an AliExpress order and nothing else: it is recorded in the
+/// platform's stream of that order whether or not a forward recorded it yet,
+/// and the forward's record finds the pushes that came first.
+#[tokio::test]
+async fn a_push_before_the_forward_records_its_order_waits_for_that_record() {
+    let executor = executor().await;
+    let forward = ForwardRef {
+        tenant_id: TENANT.into(),
+        forward_id: "forward-1".into(),
+    };
+
+    assert_eq!(
+        timada_aliexpress::record_push(&executor, "81", "OrderCreated")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        timada_aliexpress::record_push(&executor, "81", timada_aliexpress::ORDER_CLOSED)
+            .await
+            .unwrap(),
+        None
+    );
+    let order = timada_aliexpress::load_ae_order(&executor, "81")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(order.waiting, 2);
+    assert!(order.closed);
+    assert!(order.waited(1) && order.waited(2));
+
+    timada_aliexpress::claim_ae_order(&executor, "81", TENANT, "forward-1")
+        .await
+        .unwrap();
+    // Told again, or by another forward: the first record stands.
+    timada_aliexpress::claim_ae_order(&executor, "81", TENANT, "forward-1")
+        .await
+        .unwrap();
+    timada_aliexpress::claim_ae_order(&executor, "81", "another-shop", "forward-9")
+        .await
+        .unwrap();
+    assert_eq!(
+        timada_aliexpress::record_push(&executor, "81", "OrderShipped")
+            .await
+            .unwrap(),
+        Some(forward.clone())
+    );
+    let order = timada_aliexpress::load_ae_order(&executor, "81")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(order.forward, Some(forward));
+    assert_eq!(order.claimed_version, Some(3));
+    assert_eq!(order.waiting, 2, "only the pushes before the record wait");
+    assert!(order.waited(2));
+    assert!(!order.waited(4));
+    let events = evento::read::<timada_aliexpress::aggregator::ae_order::AeOrder>(
+        timada_aliexpress::ae_order_index_id("81"),
+    )
+    .execute(&executor)
+    .await
+    .unwrap();
+    assert_eq!(events.len(), 4);
+    assert!(
+        events.iter().all(|event| event.tenant.is_empty()),
+        "the platform's"
+    );
 }
 
 #[test]

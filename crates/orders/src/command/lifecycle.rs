@@ -26,6 +26,17 @@ pub enum CaptureClaim {
     Paid,
 }
 
+/// What a hold that went back came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Released {
+    /// The order is cancelled with it (now, or already).
+    Cancelled,
+    /// The supplier may have the order and nobody chose to cancel it: the
+    /// hold is recorded gone, and the order stays open for the merchant to
+    /// settle (now, or already).
+    KeptOpen,
+}
+
 /// What a cancellation still needs once asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelPath {
@@ -405,6 +416,13 @@ impl<E: Executor> super::Command<E> {
     /// own (it lapsed). Told twice, the second time is a no-op; an order
     /// whose money was taken refuses (`NotCancellable`): there is nothing
     /// held to release.
+    ///
+    /// A hold the provider dropped on its own while the supplier may have the
+    /// order ([`SupplierOrder::Started`], no cancellation asked) cancels
+    /// nothing: the supplier may be shipping it, so the order stays open,
+    /// its hold recorded gone, for the merchant to settle
+    /// ([`Released::KeptOpen`]). A cancellation the merchant asks for then is
+    /// settled here like any other.
     pub async fn record_release(
         &self,
         actor: &str,
@@ -412,11 +430,11 @@ impl<E: Executor> super::Command<E> {
         payment_id: &str,
         reason: &str,
         routing_key: Option<String>,
-    ) -> Result<(), OrderError> {
+    ) -> Result<Released, OrderError> {
         for attempt in 1..=ORDER_WRITE_ATTEMPTS {
             let order = self.require_order(order_id).await?;
-            if order.released_at.is_some() || order.status == OrderStatus::Cancelled {
-                return Ok(());
+            if order.status == OrderStatus::Cancelled {
+                return Ok(Released::Cancelled);
             }
             if order.payment.payment_id != payment_id {
                 return Err(OrderError::PaymentNotFound);
@@ -424,31 +442,38 @@ impl<E: Executor> super::Command<E> {
             if order.is_paid() || order.status == OrderStatus::Fulfilled {
                 return Err(OrderError::NotCancellable);
             }
-            let (reason, cancelled_by) = match &order.pending_cancellation {
-                Some(asked) => (asked.reason.clone(), asked.requested_by.clone()),
-                None => (reason.to_owned(), actor.to_owned()),
-            };
-            let written = order
-                .write()?
-                .routing_key_opt(routing_key.clone())
-                .event(&PaymentReleased {
+            let kept_open = order.supplier_order == SupplierOrder::Started
+                && order.pending_cancellation.is_none();
+            if kept_open && order.released_at.is_some() {
+                return Ok(Released::KeptOpen);
+            }
+            let mut write = order.write()?;
+            write.routing_key_opt(routing_key.clone());
+            if order.released_at.is_none() {
+                write.event(&PaymentReleased {
                     payment_id: payment_id.to_owned(),
                     released_by: actor.to_owned(),
-                })
-                .event(&Cancelled {
+                });
+            }
+            if !kept_open {
+                let (reason, cancelled_by) = match &order.pending_cancellation {
+                    Some(asked) => (asked.reason.clone(), asked.requested_by.clone()),
+                    None => (reason.to_owned(), actor.to_owned()),
+                };
+                write.event(&Cancelled {
                     reason,
                     cancelled_by,
-                })
-                .tenant(&self.tenant)
-                .commit(&self.executor)
-                .await;
+                });
+            }
+            let written = write.tenant(&self.tenant).commit(&self.executor).await;
             match written {
-                Ok(_) => return Ok(()),
+                Ok(_) if kept_open => return Ok(Released::KeptOpen),
+                Ok(_) => return Ok(Released::Cancelled),
                 Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
                 Err(err) => return Err(err.into()),
             }
         }
-        Ok(())
+        Err(OrderError::Write(WriteError::InvalidOriginalVersion))
     }
 
     /// Cancels an order whose money was taken, once all of it went back:

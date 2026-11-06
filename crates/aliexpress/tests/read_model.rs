@@ -1,7 +1,8 @@
 use timada_aliexpress::{
     AeOrderState, ForwardRow, ForwardState, ForwardStatus, LinkRow, LinkState, LinkStatus,
-    MIGRATIONS, Share, forwards_due, link_of_product, links_due, note_forward_read, note_published,
-    note_read, note_tried, note_wanted, upsert_forward, upsert_link,
+    MIGRATIONS, Share, forwards_due, forwards_stalled, link_of_product, links_due,
+    note_forward_read, note_published, note_read, note_tried, note_wanted, upsert_forward,
+    upsert_link,
 };
 use timada_core::db::{Db, Turso};
 
@@ -503,6 +504,46 @@ async fn an_order_with_every_parcel_known_stays_due_until_it_is_settled() {
 
     let ids: Vec<&str> = due.iter().map(|forward| forward.id.as_str()).collect();
     assert_eq!(ids, ["stopped"]);
+}
+
+#[tokio::test]
+async fn orders_left_being_placed_are_found_once_silent_long_enough() {
+    let db = database().await;
+    for (id, status, updated_at) in [
+        ("started-early", ForwardStatus::Started, 100),
+        ("started-late", ForwardStatus::Started, 300),
+        ("started-now", ForwardStatus::Started, 950),
+        ("requested", ForwardStatus::Requested, 100),
+        ("placed", ForwardStatus::Placed, 100),
+        ("failed", ForwardStatus::Failed, 100),
+        ("done", ForwardStatus::Done, 100),
+    ] {
+        let forward = ForwardState {
+            id: id.to_owned(),
+            status,
+            updated_at,
+            ..Default::default()
+        };
+        upsert_forward(&db, "acme", &forward).await.unwrap();
+    }
+
+    let stalled = forwards_stalled(&db, 900, Share::ALONE, 10).await.unwrap();
+
+    let ids: Vec<&str> = stalled.iter().map(|forward| forward.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["started-early", "started-late"],
+        "the longest silent first"
+    );
+    assert!(stalled.iter().all(|forward| forward.status == "started"));
+    let db = &db;
+    let on_node = |index| async move {
+        forwards_stalled(db, 900, Share { index, of: 2 }, 10)
+            .await
+            .unwrap()
+            .len()
+    };
+    assert_eq!(on_node(0).await + on_node(1).await, 2, "each on one node");
 }
 
 #[tokio::test]

@@ -210,7 +210,9 @@ by construction.
    `POST /stripe/webhooks/{tenant_id}`, any node, which checks the signature, reads the
    payment back from Stripe and acts on its state (`payments/webhook.rs`): held, the
    order is placed (`place_order`, status `Authorized`); taken, it is recorded; dropped
-   (the week a card holds money ran out), the order is cancelled. A second payment of a
+   (the week a card holds money ran out), the order is cancelled, unless the supplier may
+   have it (its fence written, no cancellation asked): the hold is then recorded gone
+   and the order left open for the merchant. A second payment of a
    cart, and one confirmed after the checkout's holds lapsed and went to someone else
    (`Cart::PaymentReturned`), are given back, nothing taken. The money is taken
    (`payments/settle.rs`) once the order asks for it (`Order::CaptureRequested`): at
