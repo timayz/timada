@@ -39,7 +39,7 @@ fn delivery_options_read_wrapped_or_refused() {
                 "success": true,
                 "delivery_options": {
                     "delivery_option_d_t_o": [
-                        { "code": "CAINIAO_STANDARD", "free_shipping": true, "shipping_fee_cent": "450", "tracking": true, "ship_from_country": "DE" },
+                        { "code": "CAINIAO_STANDARD", "free_shipping": true, "shipping_fee_cent": "450", "tracking": true, "ship_from_country": "DE", "min_delivery_days": 8, "max_delivery_days": "15" },
                         { "code": "YANWEN_JYT", "free_shipping": false, "shipping_fee_cent": "120", "tracking": false },
                         { "code": "CAINIAO_PREMIUM", "free_shipping": "false", "shipping_fee_cent": "9.90", "tracking": "true" },
                         { "company": "Without a code" }
@@ -55,16 +55,22 @@ fn delivery_options_read_wrapped_or_refused() {
                 service_name: "CAINIAO_STANDARD".into(),
                 cents: 0,
                 tracking: true,
+                min_days: Some(8),
+                max_days: Some(15),
             },
             FreightOption {
                 service_name: "YANWEN_JYT".into(),
                 cents: 120,
                 tracking: false,
+                min_days: None,
+                max_days: None,
             },
             FreightOption {
                 service_name: "CAINIAO_PREMIUM".into(),
                 cents: 990,
                 tracking: true,
+                min_days: None,
+                max_days: None,
             },
         ]
     );
@@ -176,6 +182,8 @@ fn delivery_by_aliexpress_itself_is_chosen_free_first_then_cheapest() {
         service_name: name.into(),
         cents,
         tracking,
+        min_days: None,
+        max_days: None,
     };
     let options = vec![
         option("YANWEN_JYT", 0, true),
@@ -919,4 +927,26 @@ fn a_form_waits_for_a_postal_code_only_where_it_names_the_province() {
     assert!(!postal_code_awaited("US", "1"));
     // Too long names nothing either, but is no longer awaited.
     assert!(!postal_code_awaited("FR", "750021"));
+}
+
+#[test]
+fn a_delivery_service_says_how_many_days_it_takes() {
+    let option = |min_days, max_days| FreightOption {
+        service_name: "CAINIAO_STANDARD".into(),
+        cents: 0,
+        tracking: true,
+        min_days,
+        max_days,
+    };
+    let days = |min, max| timada_catalog::DeliveryDays::new(min, max).unwrap();
+    assert_eq!(option(Some(8), Some(15)).delivery_days(), Some(days(8, 15)));
+    assert_eq!(option(None, Some(12)).delivery_days(), Some(days(12, 12)));
+    assert_eq!(option(None, None).delivery_days(), None);
+    // Days a shop could not announce are no time at all.
+    assert_eq!(option(Some(20), Some(10)).delivery_days(), None);
+    assert_eq!(option(Some(8), Some(400)).delivery_days(), None);
+    assert_eq!(
+        describe_options(&[option(Some(8), Some(15))], "EUR"),
+        "CAINIAO_STANDARD (free, tracked, 8–15 days)"
+    );
 }

@@ -92,7 +92,7 @@ pub fn choose_service(options: &[FreightOption]) -> Option<&FreightOption> {
 }
 
 /// The delivery services offered, for the merchant to read:
-/// `CAINIAO_PREMIUM (9.90 EUR, tracked), YANWEN_JYT (free)`.
+/// `CAINIAO_PREMIUM (9.90 EUR, tracked, 8–15 days), YANWEN_JYT (free)`.
 pub fn describe_options(options: &[FreightOption], currency: &str) -> String {
     options
         .iter()
@@ -107,7 +107,12 @@ pub fn describe_options(options: &[FreightOption], currency: &str) -> String {
                 )
             };
             let tracked = if option.tracking { ", tracked" } else { "" };
-            format!("{} ({fee}{tracked})", option.service_name)
+            let days = match option.delivery_days() {
+                Some(days) if days.min == days.max => format!(", {} days", days.max),
+                Some(days) => format!(", {}–{} days", days.min, days.max),
+                None => String::new(),
+            };
+            format!("{} ({fee}{tracked}{days})", option.service_name)
         })
         .collect::<Vec<_>>()
         .join(", ")

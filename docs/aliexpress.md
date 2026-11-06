@@ -131,10 +131,16 @@ neither of which harms it.
 
 *Sync now*, on the AliExpress page or on the product page, asks the same way, naming
 the member, and waits up to ten seconds so the page can say what the read found.
-Past that, the page says the read is on its way. A read does three things:
+Past that, the page says the read is on its way. A read does four things:
 
 - each variant's stock becomes what AliExpress has;
 - with a rule (the product's own, else the shop's), each price follows the cost;
+- the product's delivery time becomes the days the service an order would ship with
+  takes to the shop's country (`min_delivery_days` and `max_delivery_days` of
+  `aliexpress.ds.freight.query`, the call that already prices the delivery, so it
+  costs nothing more). AliExpress's days always win: the product page shows them
+  without a form. No days given clears the product's, and the shop's default (the
+  Shipping page) stands in. Shoppers in other countries see the same days;
 - an item AliExpress no longer sells gets stock 0 everywhere and is taken off sale.
   It stays a draft until the merchant publishes it again.
 

@@ -1,6 +1,6 @@
 //! What a read of AliExpress changes in the catalog: each combination's
-//! stock, its price when a rule prices it, and the product taken off sale
-//! once AliExpress no longer sells it. A read also finds the combinations
+//! stock, its price when a rule prices it, the days delivery takes, and the
+//! product taken off sale once AliExpress no longer sells it. A read also finds the combinations
 //! AliExpress sells and the shop does not; the merchant adds those as
 //! variants ([`add_combinations`]) or ignores them. No HTTP here but the
 //! pictures of what is added: the caller fetched the product.
@@ -234,6 +234,22 @@ pub async fn apply_sync<E: Executor>(
             cost_cents,
             ..linked.clone()
         });
+    }
+    // The days the delivery service takes: AliExpress's word, always; none
+    // given falls back to the shop's default.
+    if let Some(product) = product.filter(|_| !outcome.offline)
+        && state.delivery_days != product.delivery_days
+    {
+        match catalog
+            .set_product_delivery_days(actor, product_id, product.delivery_days)
+            .await
+        {
+            Ok(()) => {}
+            Err(err) if err.is_user_facing() => {
+                outcome.warnings.push(format!("delivery time: {err}"))
+            }
+            Err(err) => return Err(err),
+        }
     }
     outcome.found = match product {
         Some(product) if !outcome.offline => {

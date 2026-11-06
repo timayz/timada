@@ -138,6 +138,8 @@ impl StandIn {
                 "shipping_fee_cent": cents.to_string(),
                 "shipping_fee_currency": "EUR",
                 "tracking": true,
+                "min_delivery_days": 7,
+                "max_delivery_days": 12,
             }] },
         } } })
     }
@@ -564,6 +566,24 @@ async fn a_read_prices_the_delivery_aliexpress_charges_in() {
         .unwrap();
     assert_eq!(link.skus[0].cost_cents, 931);
     assert_eq!(shop.stand_in.reads(), 1, "the delivery lookup is no read");
+}
+
+#[tokio::test]
+async fn a_read_brings_in_the_days_the_delivery_takes() {
+    let shop = Shop::new().await;
+
+    let result = shop.sync(SyncMode::Asked { by: ALICE }).await;
+
+    assert!(matches!(result, SyncResult::Synced { .. }), "{result:?}");
+    let product = timada_catalog::Command::new(shop.store.clone(), &shop.tenant.id)
+        .load_product(&shop.product_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        product.delivery_days,
+        Some(timada_catalog::DeliveryDays::new(7, 12).unwrap())
+    );
 }
 
 #[tokio::test]
