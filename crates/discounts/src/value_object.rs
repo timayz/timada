@@ -145,17 +145,24 @@ pub struct CarriedReservation {
     pub expires_at: u64,
 }
 
-/// A spent use a usage generation remembers: the order made from `cart_id`.
+/// A spent use a usage generation remembers: the order made from `cart_id`,
+/// and whether it was given back since.
 #[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct CarriedUse {
     pub cart_id: String,
     pub order_id: String,
+    pub returned: bool,
 }
 
 /// The stream of one shopper's use of a discount good once per e-mail. The
 /// e-mail is the normalized one the checkout carries.
 pub fn discount_buyer_id(discount_id: &str, email: &str) -> String {
     evento::hash_ids(vec!["discount-buyer", discount_id, email])
+}
+
+/// The stream of what one order spent of a code.
+pub fn discount_spend_id(order_id: &str) -> String {
+    evento::hash_ids(vec!["discount-spend", order_id])
 }
 
 /// The stream of the tenant's checkout offers: one per tenant store.

@@ -3,6 +3,7 @@
 //! else is sent to sign in first (the link in the order's confirmation mail
 //! may be opened on another device): an order id is not a password.
 
+pub mod cancel;
 pub mod documents;
 pub mod review;
 pub mod revise;
@@ -35,6 +36,25 @@ pub(crate) struct OrderQuery {
     pub product: Option<String>,
     pub reviewed: Option<String>,
     pub revised: Option<String>,
+    /// Back from cancelling it: done, or `error` says why not.
+    pub cancelled: Option<String>,
+}
+
+/// The order's page after the shopper asked to cancel it: done, or the
+/// refusal.
+pub fn cancelled_url(cx: &Cx, order_id: &str, error: Option<&str>) -> String {
+    #[derive(serde::Serialize)]
+    struct Link<'a> {
+        cancelled: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<&'a str>,
+    }
+    href!(index, OrderId(order_id.to_owned()))
+        .query(Link {
+            cancelled: "1",
+            error,
+        })
+        .resolve(cx)
 }
 
 /// The order's page, with a refusal or a confirmation about the review of
@@ -135,6 +155,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     }
     let order_key = order_id.to_owned();
     let status = match order.status {
+        OrderStatus::Authorized | OrderStatus::Paid if order.pending_cancellation.is_some() => {
+            "Annulation en cours."
+        }
         OrderStatus::Authorized if order.supplier.is_some() => {
             "Enregistrée : votre carte sera débitée dès que la boutique l'aura confirmée."
         }
@@ -145,6 +168,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         OrderStatus::Cancelled => "Annulée. Rien n'a été débité.",
     };
     let paid = order.is_paid();
+    let cancellable = order.cancellable_by_shopper();
+    // Back from cancelling: what came of it.
+    let cancel_notice = query
+        .cancelled
+        .as_ref()
+        .map(|_| match query.error.as_deref() {
+            Some(code) => (true, say(code)),
+            None => (false, "Votre commande est annulée : rien n'a été débité."),
+        });
     let title = format!("Commande {}", order.reference);
     let currency = order.currency.clone();
 
@@ -156,6 +188,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <h1>"Merci pour votre commande !"</h1>
                 <p>"Votre commande " <strong data-order-reference="">(&order.reference)</strong> " est enregistrée."</p>
                 <p data-order-status=(order.status.as_str())>(status)</p>
+                if let Some((refused, text)) = cancel_notice {
+                    <p class="notice" role=(if refused { "alert" } else { "status" }) data-order-cancel-notice="">(text)</p>
+                }
+                if cancellable {
+                    <details class="order-cancel" data-order-cancel="">
+                        <summary>"Annuler ma commande"</summary>
+                        <p>"Tant que la boutique ne l'a pas commandée à son fournisseur, votre commande s'annule ici, et rien n'est débité."</p>
+                        <form method="post" action=(href!(cancel::cancel, OrderId(order_key.clone())))>
+                            <button>"Confirmer l'annulation"</button>
+                        </form>
+                    </details>
+                }
                 if let Some(tracking) = &order.tracking {
                     <p>"Suivi : " (tracking)</p>
                 }

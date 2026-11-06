@@ -226,8 +226,9 @@ pub async fn order_by_id(db: &Db, tenant_id: &str, id: &str) -> anyhow::Result<O
     .await
 }
 
-/// How many orders each discount of the tenant was used by, by discount id
-/// (cancelled ones too: the use was spent).
+/// How many orders each discount of the tenant was used by, by discount id:
+/// cancelled ones too once paid (the use was spent), not one cancelled
+/// before it was, whose use went back.
 pub async fn discount_use_counts(
     db: &Db,
     tenant_id: &str,
@@ -235,7 +236,8 @@ pub async fn discount_use_counts(
     let rows: Vec<(String, i64)> = db
         .fetch_all(
             "SELECT discount_id, count(*) FROM orders_orders
-         WHERE tenant_id = ?1 AND discount_id IS NOT NULL GROUP BY discount_id",
+         WHERE tenant_id = ?1 AND discount_id IS NOT NULL AND payment_state <> 'released'
+         GROUP BY discount_id",
             (tenant_id,),
         )
         .await?;
