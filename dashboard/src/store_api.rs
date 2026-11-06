@@ -11,12 +11,13 @@
 //! [`StoreConnections`] (a reconnect gets the new scopes); suspending the
 //! tenant ends every connection of the tenant, and their reconnects are
 //! refused. Each node holds its own connections: the page that took the
-//! request ends its node's at once, and [`closing_subscription`] the other
-//! nodes'.
+//! request ends its node's at once, and [`closing_subscription`], started
+//! before the listener, the other nodes'.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use evento::metadata::Event;
@@ -224,25 +225,68 @@ impl Resolver for StoreResolver {
 /// The label of [`closing_subscription`]; nothing is stored under it.
 pub const CLOSING_SUBSCRIPTION: &str = "timada-dashboard/store-closing";
 
+/// How long before its start [`closing_subscription`] still acts on an
+/// event: room for the nodes' clocks to disagree (the cluster's own margins
+/// assume they agree to within a fraction of a second).
+const CLOSING_MARGIN: Duration = Duration::from_secs(10);
+
 /// Ends this node's connections of a key revoked or re-scoped, and of a
 /// tenant suspended, whichever node took the request: each node holds its
 /// own connections, and a key is only checked when a connection opens. The
 /// page that took the request ends its own node's at once; this ends the
-/// others'. It runs on every node and follows every routing key from the
-/// moment the node starts, with its cursor in memory and no claim: a node
-/// holds no connection from before it started, so the history has nothing
-/// to end.
+/// others'. It runs on every node, follows every routing key and claims
+/// nothing, with its cursor in memory, from the head of the store.
+///
+/// Start it before the store API takes a connection: every connection is
+/// then younger than it, and an event written before it started (less
+/// [`CLOSING_MARGIN`]) is already in what the connection's key was checked
+/// against, so it is skipped. Right after a whole cluster restarts, the
+/// store does not know its head yet and the subscription reads from the
+/// beginning; the skip keeps a key re-scoped long ago from dropping
+/// connections opened since.
 pub fn closing_subscription<E: evento::Executor>(
     connections: Arc<StoreConnections>,
 ) -> SubscriptionBuilder<E> {
+    let since = SystemTime::now()
+        .checked_sub(CLOSING_MARGIN)
+        .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |at| u64::try_from(at.as_micros()).unwrap_or(u64::MAX));
+    closing_handlers(connections, since)
+        .ephemeral()
+        .start_from_latest()
+}
+
+/// The handlers of [`closing_subscription`], acting on events stamped from
+/// `since_micros` (unix microseconds) on.
+fn closing_handlers<E: evento::Executor>(
+    connections: Arc<StoreConnections>,
+    since_micros: u64,
+) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(CLOSING_SUBSCRIPTION)
-        .data(connections)
+        .data(Closing {
+            connections,
+            since_micros,
+        })
         .handler(on_key_revoked())
         .handler(on_key_scoped())
         .handler(on_tenant_suspended())
         .any_routing_key()
-        .ephemeral()
-        .start_from_latest()
+}
+
+/// What the closing handlers share: this node's connections, and the stamp
+/// before which an event changes nothing.
+#[derive(Clone)]
+struct Closing {
+    connections: Arc<StoreConnections>,
+    since_micros: u64,
+}
+
+impl Closing {
+    /// The node's connections, unless `event` was written before the
+    /// subscription started.
+    fn connections_for(&self, event: &evento::Event) -> Option<&StoreConnections> {
+        (event.timestamp_micros() >= self.since_micros).then_some(&*self.connections)
+    }
 }
 
 #[evento::subscription]
@@ -250,7 +294,10 @@ async fn on_key_revoked<E: evento::Executor>(
     context: &Context<'_, E>,
     event: Event<Revoked>,
 ) -> anyhow::Result<()> {
-    let connections: Arc<StoreConnections> = context.extract();
+    let closing: Closing = context.extract();
+    let Some(connections) = closing.connections_for(&event) else {
+        return Ok(());
+    };
     let ended = connections.close_key(&event.aggregate_id);
     if ended > 0 {
         tracing::info!(
@@ -266,7 +313,10 @@ async fn on_key_scoped<E: evento::Executor>(
     context: &Context<'_, E>,
     event: Event<Scoped>,
 ) -> anyhow::Result<()> {
-    let connections: Arc<StoreConnections> = context.extract();
+    let closing: Closing = context.extract();
+    let Some(connections) = closing.connections_for(&event) else {
+        return Ok(());
+    };
     let ended = connections.close_key(&event.aggregate_id);
     if ended > 0 {
         tracing::info!(
@@ -282,7 +332,10 @@ async fn on_tenant_suspended<E: evento::Executor>(
     context: &Context<'_, E>,
     event: Event<Suspended>,
 ) -> anyhow::Result<()> {
-    let connections: Arc<StoreConnections> = context.extract();
+    let closing: Closing = context.extract();
+    let Some(connections) = closing.connections_for(&event) else {
+        return Ok(());
+    };
     let ended = connections.close_tenant(&event.aggregate_id);
     if ended > 0 {
         tracing::info!(
@@ -337,4 +390,52 @@ fn tls_acceptor(cert: &Path, key: &Path) -> Result<TlsAcceptor> {
         .with_single_cert(certs, key)
         .context("the store API certificate and key do not go together")?;
     Ok(TlsAcceptor::from(Arc::new(config)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A store holding one scope change of key `k1`, written now.
+    async fn store_with_a_scope_change() -> evento::Turso {
+        let store = evento::Turso::in_memory_concurrent().await.unwrap();
+        evento::append("k1")
+            .original_version(0)
+            .event(&Scoped {
+                scopes: vec![SCOPE_STORE_READ.to_owned()],
+                scoped_by: "alice".to_owned(),
+                scoped_at: 0,
+            })
+            .commit(&store)
+            .await
+            .unwrap();
+        store
+    }
+
+    #[tokio::test]
+    async fn an_event_from_before_the_start_ends_no_connection() {
+        let store = store_with_a_scope_change().await;
+        let connections = StoreConnections::new();
+        let (_guard, closed) = connections.register("k1", "acme");
+
+        // Read from the beginning, as when the store does not know its head
+        // yet: the change is older than the start, so the key's connection
+        // already carries it.
+        closing_handlers::<evento::Turso>(connections.clone(), u64::MAX)
+            .ephemeral()
+            .run_once(&store)
+            .await
+            .unwrap();
+        assert_eq!(connections.count("k1"), 1);
+        assert!(!*closed.borrow());
+
+        // Started before it, the change ends the connection.
+        closing_handlers::<evento::Turso>(connections.clone(), 0)
+            .ephemeral()
+            .run_once(&store)
+            .await
+            .unwrap();
+        assert_eq!(connections.count("k1"), 0);
+        assert!(*closed.borrow());
+    }
 }

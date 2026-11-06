@@ -445,6 +445,11 @@ struct StoreApi {
 impl StoreApi {
     async fn start(node: &Node) -> Self {
         let connections = StoreConnections::new();
+        // Before the listener, as `serve` starts it: no connection is older.
+        let closing = store_api::closing_subscription::<Executor>(connections.clone())
+            .start(&node.store)
+            .await
+            .unwrap();
         // The ephemeral port is only known from a listener.
         let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = probe.local_addr().unwrap();
@@ -458,10 +463,6 @@ impl StoreApi {
         let server = store_api::serve(Some(&config), node.store.clone(), connections.clone())
             .await
             .unwrap()
-            .unwrap();
-        let closing = store_api::closing_subscription::<Executor>(connections.clone())
-            .start(&node.store)
-            .await
             .unwrap();
         Self {
             connections,

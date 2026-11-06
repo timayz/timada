@@ -195,9 +195,12 @@ by construction.
    connection of the tenant, and reconnects are refused. Each node holds its own
    connections and checks a key only when one opens, so this happens on every
    node: the page that took the request ends its node's at once, and every node
-   runs `store_api::closing_subscription` for the others. It starts at the head
-   of the store with its cursor in memory (a node holds no connection from before
-   it started) and claims nothing.
+   runs `store_api::closing_subscription` for the others. It starts before the
+   store API takes a connection, reads from the head of the store with its cursor
+   in memory, and claims nothing. An event written before it started (less a
+   margin for the clocks) is already in every connection's key, so it is skipped:
+   right after the whole cluster restarts, the store may not know its head yet,
+   and the subscription then reads from the beginning.
 4. **Payments** (`payments/`). Each tenant connects its own Stripe account on
    `/t/{slug}/payments`; the secret key and the webhook signing secret are recorded
    in the tenant's platform events sealed with AES-256-GCM (`seal.rs`) under the
