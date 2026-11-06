@@ -187,6 +187,7 @@ event timada-orders/BusinessBuyers::BusinessBuyersRefused { refused_by: String }
 event timada-orders/Cart::BillingAddressGiven { request_id: String, billing: ShippingAddress, given_by: String }
 event timada-orders/Cart::BuyerIdentified { request_id: String, vat_number: String, identified_by: String }
 event timada-orders/Cart::CheckedOut { order_id: String, checked_out_by: String }
+event timada-orders/Cart::CheckoutClaimed { request_id: String, claimant: String, claimed_by: String }
 event timada-orders/Cart::CheckoutRequested { request_id: String, email: String, shipping: ShippingAddress, note: Option<String>, expected_total_cents: Option<u64>, requested_by: String }
 event timada-orders/Cart::Created { created_by: String }
 event timada-orders/Cart::DiscountApplied { code: String, applied_by: String }
@@ -225,6 +226,7 @@ event timada-orders/Order::SupplierOrderStarted { supplier: String, started_by: 
 event timada-orders/Order::TimeZoneSet { time_zone: String, set_by: String }
 event timada-orders/OrderMail::Mailed { order_id: String, mail: String, email: String, mailed_by: String }
 event timada-orders/OrderReference::Claimed { order_id: String }
+event timada-orders/OrderReference::Released { released_by: String }
 event timada-orders/PaymentMethod::PaymentsDisabled { disabled_by: String }
 event timada-orders/PaymentMethod::PaymentsEnabled { provider: String, publishable_key: String, enabled_by: String }
 event timada-orders/ShippingMethods::MethodAdded { method_id: String, name: String, price_cents: u64, currency: String, countries: Vec<String>, free_above_cents: Option<u64>, added_by: String }

@@ -70,13 +70,14 @@ async fn on_order_event<E: Executor>(
 pub async fn upsert_cart(db: &Db, tenant_id: &str, cart: &CartState) -> anyhow::Result<()> {
     db.execute(
         "INSERT INTO orders_carts (tenant_id, id, order_id, line_count, item_count, created_at,
-            updated_at, status, return_requested_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            updated_at, status, return_requested_at, unanswered_since)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             order_id = excluded.order_id, line_count = excluded.line_count,
             status = excluded.status,
             item_count = excluded.item_count, updated_at = excluded.updated_at,
-            return_requested_at = excluded.return_requested_at",
+            return_requested_at = excluded.return_requested_at,
+            unanswered_since = excluded.unanswered_since",
         (
             tenant_id,
             cart.id.as_str(),
@@ -87,6 +88,7 @@ pub async fn upsert_cart(db: &Db, tenant_id: &str, cart: &CartState) -> anyhow::
             cart.updated_at as i64,
             cart.status(),
             cart.return_requested_at().map(|at| at as i64),
+            cart.unanswered_since().map(|at| at as i64),
         ),
     )
     .await?;

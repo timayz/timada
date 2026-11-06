@@ -27,12 +27,12 @@ use evento::{Executor, Projection, metadata::Event};
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BusinessBuyersAccepted, BusinessBuyersRefused,
     BuyerIdentified, CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, CheckedOut,
-    CheckoutRequested, Claimed, Created, DiscountApplied, DiscountGranted, DiscountRemoved,
-    Discounted, Fulfilled, ItemAdded, ItemRemoved, LanguageGiven, LanguageSet, Mailed, MethodAdded,
-    MethodChanged, MethodRemoved, NewsletterOptInSet, NewsletterOptedIn, Paid, PaymentCancelled,
-    PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturnRequested, PaymentReturned,
-    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded,
-    ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
+    CheckoutClaimed, CheckoutRequested, Claimed, Created, DiscountApplied, DiscountGranted,
+    DiscountRemoved, Discounted, Fulfilled, ItemAdded, ItemRemoved, LanguageGiven, LanguageSet,
+    Mailed, MethodAdded, MethodChanged, MethodRemoved, NewsletterOptInSet, NewsletterOptedIn, Paid,
+    PaymentCancelled, PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturnRequested,
+    PaymentReturned, PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested,
+    Refunded, Released, ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
     StorefrontAddressSet, SupplierOrderRefused, SupplierOrderStarted, TimeZoneGiven, TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
@@ -185,6 +185,8 @@ pub enum PaymentAnswer {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CheckoutRequest {
     pub request_id: String,
+    /// Unix seconds the shopper asked at.
+    pub requested_at: u64,
     pub email: String,
     pub shipping: ShippingAddress,
     pub note: Option<String>,
@@ -202,9 +204,28 @@ pub struct CheckoutRequest {
     pub newsletter: bool,
     /// The shopper's IANA time zone, when the browser said one.
     pub time_zone: Option<String>,
+    /// The node answering it, once one took it on. Not a storefront's
+    /// business, so left out of what the dashboard answers it.
+    #[serde(skip)]
+    pub claim: Option<RequestClaim>,
     pub answer: Option<PaymentAnswer>,
     /// Its payment is on its way back to the shopper: it makes no order.
     pub returning: Option<PendingReturn>,
+}
+
+/// A node that took a request to pay on.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RequestClaim {
+    pub claimant: String,
+    /// Unix seconds.
+    pub claimed_at: u64,
+}
+
+impl RequestClaim {
+    /// Whether it still keeps other nodes off the request at `now`.
+    pub fn holds_at(&self, now: u64) -> bool {
+        now < self.claimed_at.saturating_add(crate::CHECKOUT_CLAIM_SECS)
+    }
 }
 
 impl CheckoutRequest {
@@ -254,6 +275,27 @@ impl CartState {
 
     pub fn request(&self, request_id: &str) -> Option<&CheckoutRequest> {
         self.requests.iter().find(|r| r.request_id == request_id)
+    }
+
+    /// Whether `request_id` is the shopper's last request to pay: a later
+    /// one holds the cart's goods and code for itself.
+    pub fn is_latest_request(&self, request_id: &str) -> bool {
+        self.requests
+            .last()
+            .is_some_and(|request| request.request_id == request_id)
+    }
+
+    /// Unix seconds the oldest request nobody answered yet was asked at, on
+    /// a cart that is no order yet.
+    pub fn unanswered_since(&self) -> Option<u64> {
+        if self.is_checked_out() {
+            return None;
+        }
+        self.requests
+            .iter()
+            .filter(|request| request.answer.is_none())
+            .map(|request| request.requested_at)
+            .min()
     }
 
     /// The request whose open payment has that provider id.
@@ -351,6 +393,7 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_payment_returned())
         .handler(on_payment_return_requested())
         .handler(on_payment_cancelled())
+        .handler(on_checkout_claimed())
         .handler(on_discount_applied())
         .handler(on_discount_removed())
         .handler(on_discount_granted())
@@ -426,6 +469,7 @@ async fn on_checkout_requested(
 ) -> anyhow::Result<()> {
     cart.requests.push(CheckoutRequest {
         request_id: event.data.request_id.to_owned(),
+        requested_at: event.timestamp,
         email: event.data.email.to_owned(),
         shipping: event.data.shipping.to_owned(),
         note: event.data.note.to_owned(),
@@ -436,6 +480,7 @@ async fn on_checkout_requested(
         language: None,
         newsletter: false,
         time_zone: None,
+        claim: None,
         answer: None,
         returning: None,
     });
@@ -570,6 +615,24 @@ async fn on_payment_cancelled(
         request.answer = Some(PaymentAnswer::Cancelled(event.data.payment_id.to_owned()));
     }
     cart.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_checkout_claimed(
+    event: Event<CheckoutClaimed>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|r| r.request_id == event.data.request_id)
+    {
+        request.claim = Some(RequestClaim {
+            claimant: event.data.claimant.to_owned(),
+            claimed_at: event.timestamp,
+        });
+    }
     Ok(())
 }
 
@@ -1215,11 +1278,14 @@ async fn on_cancelled(event: Event<Cancelled>, order: &mut OrderState) -> anyhow
 pub struct OrderReferenceState {
     pub id: String,
     pub order_id: String,
+    /// Given back: it names no order.
+    pub released: bool,
 }
 
 pub fn order_reference_projection<E: Executor>() -> Projection<E, OrderReferenceState> {
     Projection::new::<crate::aggregator::OrderReference>()
         .handler(on_reference_claimed())
+        .handler(on_reference_released())
         .strict()
 }
 
@@ -1230,6 +1296,15 @@ async fn on_reference_claimed(
 ) -> anyhow::Result<()> {
     index.id = event.aggregate_id.to_owned();
     index.order_id = event.data.order_id.to_owned();
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_reference_released(
+    _event: Event<Released>,
+    index: &mut OrderReferenceState,
+) -> anyhow::Result<()> {
+    index.released = true;
     Ok(())
 }
 
