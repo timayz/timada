@@ -1157,16 +1157,21 @@ test("a shopper sees how long delivery takes, the product's own or the shop's de
     await expect(page.getByRole("status")).toContainText(
       "Default delivery time set.",
     );
-    await app.start(request, await mintKey(page, slug, true), 1);
+    await app.start(request, await mintKey(page, slug, true), 2);
 
+    // The default is the last change: the shop's copy shows it a moment
+    // after the products.
+    await expect(async () => {
+      await page.goto(`${SHOP}/p/blue-mug`);
+      await expect(page.locator("[data-delivery-days]")).toHaveText(
+        "Livraison avec suivi en 2 à 4 jours",
+        { timeout: 1000 },
+      );
+    }).toPass({ timeout: 15_000 });
+    await addToCart(page);
     await page.goto(`${SHOP}/p/floor-lamp`);
     await expect(page.locator("[data-delivery-days]")).toHaveText(
       "Livraison avec suivi en 8 à 15 jours",
-    );
-    await addToCart(page);
-    await page.goto(`${SHOP}/p/blue-mug`);
-    await expect(page.locator("[data-delivery-days]")).toHaveText(
-      "Livraison avec suivi en 2 à 4 jours",
     );
     await addToCart(page);
 
