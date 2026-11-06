@@ -4,6 +4,7 @@
 //! `null`. Anything unreadable is left out rather than failing the product.
 
 use serde_json::Value;
+use timada_catalog::DeliveryDays;
 
 /// Where and how the shop buys: the country goods ship to, the currency it
 /// is charged in and the language products are worded in.
@@ -74,6 +75,10 @@ pub struct AeProduct {
     pub skus: Vec<AeSku>,
     /// Its facts, in AliExpress's order.
     pub properties: Vec<(String, String)>,
+    /// How long the service an order would ship with takes to the market's
+    /// country, once [`Client::product_delivered`](crate::Client::product_delivered)
+    /// asked; `None` before, or when AliExpress gives no days.
+    pub delivery_days: Option<DeliveryDays>,
 }
 
 /// One combination AliExpress sells.
@@ -179,6 +184,7 @@ impl AeProduct {
             images,
             skus,
             properties,
+            delivery_days: None,
         })
     }
 }
@@ -270,6 +276,24 @@ pub struct FreightOption {
     pub cents: u64,
     /// Whether the parcel can be followed.
     pub tracking: bool,
+    /// How many days it takes at the soonest and at the latest, when
+    /// AliExpress says (`min_delivery_days`, `max_delivery_days`).
+    pub min_days: Option<u16>,
+    pub max_days: Option<u16>,
+}
+
+impl FreightOption {
+    /// The days it takes as a shop announces them; `None` when AliExpress
+    /// gives none, or days a shop could not announce. One bound alone
+    /// stands for both.
+    pub fn delivery_days(&self) -> Option<DeliveryDays> {
+        let (min, max) = match (self.min_days, self.max_days) {
+            (Some(min), Some(max)) => (min, max),
+            (Some(days), None) | (None, Some(days)) => (days, days),
+            (None, None) => return None,
+        };
+        DeliveryDays::new(min, max).ok()
+    }
 }
 
 impl FreightOption {
@@ -304,10 +328,19 @@ impl FreightOption {
                         .unwrap_or(0)
                 };
                 let tracking = is_true(option, "tracking");
+                let days = |name: &str| {
+                    option
+                        .get(name)
+                        .and_then(number)
+                        .filter(|days| *days > 0)
+                        .and_then(|days| u16::try_from(days).ok())
+                };
                 Some(Self {
                     service_name,
                     cents,
                     tracking,
+                    min_days: days("min_delivery_days"),
+                    max_days: days("max_delivery_days"),
                 })
             })
             .collect()
@@ -461,6 +494,7 @@ mod tests {
             images: Vec::new(),
             skus,
             properties: Vec::new(),
+            delivery_days: None,
         }
     }
 

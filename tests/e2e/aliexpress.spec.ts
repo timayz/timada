@@ -127,6 +127,9 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Cat Tunnel Deluxe");
     const productUrl = page.url().split("?")[0];
     await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "draft");
+    // The days the delivery service takes come from AliExpress, not a form.
+    await expect(page.locator("[data-delivery-days]")).toHaveAttribute("data-delivery-days", "7–12 days");
+    await expect(page.getByLabel("Shortest delivery, in days")).toHaveCount(0);
     await productTab(page, "Pictures");
     await expect(page.locator("[data-image]")).toHaveCount(4);
     await productTab(page, "Options & variants");
@@ -664,7 +667,7 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     await expect(page.getByRole("status")).toContainText("The order is being placed on AliExpress.");
     await forwardIs(page, first, "failed");
     await expect(page.locator("[data-order-aliexpress-error]")).toContainText(
-      "No delivery of “Cat Tunnel Deluxe” to FR on AliExpress can be followed; offered: YANWEN_JYT (1.20 EUR).",
+      "No delivery of “Cat Tunnel Deluxe” to FR on AliExpress can be followed; offered: YANWEN_JYT (1.20 EUR, 7–12 days).",
     );
     expect(aliexpress.orders).toHaveLength(0);
 
