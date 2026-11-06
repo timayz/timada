@@ -337,6 +337,97 @@ async fn a_reset_replaces_the_password() {
 }
 
 #[tokio::test]
+async fn a_reset_ends_every_session_in_the_same_write() {
+    let cmd = command().await;
+    let alice = register_via_email(&cmd, "alice@example.com").await;
+    let laptop = [1u8; 32];
+    let phone = [2u8; 32];
+    cmd.start_session(&laptop, &alice, NOW + 600, context())
+        .await
+        .unwrap();
+    cmd.start_session(&phone, &alice, NOW + 600, context())
+        .await
+        .unwrap();
+    // The millisecond cutoff must be strictly after both starts.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+    let issued = cmd
+        .issue_email_code(
+            "alice@example.com",
+            ChallengePurpose::ResetPassword,
+            NOW + 1,
+        )
+        .await
+        .unwrap();
+    cmd.reset_password(
+        ResetPassword {
+            email: "alice@example.com".to_owned(),
+            code: issued.code,
+            password_hash: hash_password("a brand new password").await.unwrap(),
+            context: context(),
+        },
+        NOW + 2,
+    )
+    .await
+    .unwrap();
+    // Nothing else asked for: whoever held the old password is out.
+    assert!(
+        cmd.resolve_session(&laptop, NOW + 2)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        cmd.resolve_session(&phone, NOW + 2)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // The session the reset signs in with starts afterwards and stays.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let fresh = [3u8; 32];
+    cmd.start_session(&fresh, &alice, NOW + 600, context())
+        .await
+        .unwrap();
+    assert!(
+        cmd.resolve_session(&fresh, NOW + 2)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn a_change_ends_the_other_sessions_in_the_same_write() {
+    let cmd = command().await;
+    let alice = register_via_email(&cmd, "alice@example.com").await;
+    let laptop = [1u8; 32];
+    let phone = [2u8; 32];
+    cmd.start_session(&laptop, &alice, NOW + 600, context())
+        .await
+        .unwrap();
+    cmd.start_session(&phone, &alice, NOW + 600, context())
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+    cmd.change_password(ChangePassword {
+        user_id: alice.clone(),
+        current_password: PASSWORD.to_owned(),
+        new_password_hash: hash_password("a brand new password").await.unwrap(),
+        session_token_hash: Some(laptop),
+    })
+    .await
+    .unwrap();
+    assert!(
+        cmd.resolve_session(&laptop, NOW).await.unwrap().is_some(),
+        "the asking browser stays"
+    );
+    assert!(cmd.resolve_session(&phone, NOW).await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn the_password_counts_as_a_sign_in_method() {
     let cmd = command().await;
     let alice = register_via_email(&cmd, "alice@example.com").await;
@@ -397,6 +488,7 @@ async fn the_password_changes_with_the_current_one() {
         user_id: user.to_owned(),
         current_password: current.to_owned(),
         new_password_hash: new_hash.clone(),
+        session_token_hash: None,
     };
 
     let err = cmd

@@ -70,7 +70,11 @@ Recurring patterns:
 - **Uniqueness without a unique index.** A slug, an e-mail address, a session or API
   token is an *index aggregate* with a deterministic id (`hash_ids([kind, value])`).
   Appending its first event at version 0 is an atomic create-unless-exists, and loading
-  it reads the event store directly, so a lookup sees its own writes.
+  it reads the event store directly, so a lookup sees its own writes. An entry for
+  something another stream also records (a user's sign-in identity) counts only while
+  that stream lists it: the entry is claimed first and given back if the record
+  fails, the record goes first on the way out, and a subscription frees what a crash
+  in between left behind (`timada_identity::index_release_subscription`).
 - **Every event says who did it** (`*_by` fields). Authorisation lives in the host.
 - **Write-side state** is a strict projection with `#[evento::snapshot(none)]`, so
   commands observe the exact version they write against.

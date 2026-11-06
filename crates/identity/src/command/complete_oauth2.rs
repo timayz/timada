@@ -6,6 +6,7 @@ use crate::error::IdentityError;
 use crate::value_object::{LoginContext, OAuth2Mode, ProviderIdentity, SignInKind, SignInMethod};
 
 use super::UserState;
+use super::oauth2_index::free_oauth2_index;
 use super::sign_in::SignInFacts;
 
 /// A verified OIDC callback.
@@ -45,6 +46,7 @@ impl<E: Executor> super::Command<E> {
         cmd: CompleteOAuth2,
         routing_key: Option<String>,
     ) -> Result<OAuth2Outcome, IdentityError> {
+        // Registered means listed on the account the entry points at.
         let existing = self
             .load_oauth2_account(&cmd.identity.provider, &cmd.identity.provider_user_id)
             .await?;
@@ -165,7 +167,8 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// Links a provider identity to an existing user: index first (the
-    /// uniqueness check), then the user's own record of it.
+    /// uniqueness check), then the user's own record of it. A failure after
+    /// the claim gives the entry back, as `add_email` does.
     async fn link_oauth2(
         &self,
         user_id: &str,
@@ -192,14 +195,26 @@ impl<E: Executor> super::Command<E> {
                 Ok(())
             })
             .await;
-        match result {
-            Ok(user) => Ok(user),
+        let err = match result {
+            Ok(user) => return Ok(user),
             // Already listed on the user: idempotent.
-            Err(IdentityError::InvalidState) => Ok(user),
-            Err(IdentityError::Write(WriteError::InvalidOriginalVersion)) => {
-                Err(IdentityError::InvalidState)
-            }
-            Err(err) => Err(err),
+            Err(IdentityError::InvalidState) => return Ok(user),
+            Err(err) => err,
+        };
+        if let Err(free) = free_oauth2_index(
+            &self.executor,
+            user_id,
+            &identity.provider,
+            &identity.provider_user_id,
+            None,
+        )
+        .await
+        {
+            tracing::error!(%free, user_id, "cannot give the identity back after a failed link");
         }
+        Err(match err {
+            IdentityError::Write(WriteError::InvalidOriginalVersion) => IdentityError::InvalidState,
+            err => err,
+        })
     }
 }

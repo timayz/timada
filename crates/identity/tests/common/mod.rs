@@ -1,11 +1,15 @@
 #![allow(dead_code)]
 
-use evento::Executor;
+use std::sync::Arc;
+
+use evento::cursor::{Args, ReadResult, Value};
+use evento::{AggregateEvent, EventFilter, Executor, RoutingKey, TenantFilter, WriteError};
 use timada_core::db::Db;
 use timada_identity::{
     AddPasskey, ChallengePurpose, Command, CompleteOAuth2, LoginContext, OAuth2Mode,
     RegisterWithPassword, SignInPasskey, VerifiedPasskey, hash_password,
 };
+use ulid::Ulid;
 
 /// A fixed "now" for the commands that take one (unix seconds).
 pub const NOW: u64 = 1_700_000_000;
@@ -141,4 +145,152 @@ pub fn sign_in_passkey(
         session_user_id: session_user_id.map(str::to_owned),
         context: context(),
     }
+}
+
+/// The store of a node whose writes of some events fail, as if it stopped
+/// right there: a write holding one of them never lands, every other does.
+#[derive(Clone)]
+pub struct Refusing {
+    pub store: evento::Turso,
+    refused: Vec<(&'static str, &'static str)>,
+}
+
+impl Refusing {
+    pub fn new(store: evento::Turso) -> Self {
+        Self {
+            store,
+            refused: Vec::new(),
+        }
+    }
+
+    /// Also refuses every write of `D`.
+    pub fn refuse<D: AggregateEvent>(mut self) -> Self {
+        self.refused.push((D::aggregate_type(), D::event_name()));
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl Executor for Refusing {
+    async fn write(&self, events: Vec<evento::Event>) -> Result<(), WriteError> {
+        if let Some(event) = events.iter().find(|event| {
+            self.refused
+                .iter()
+                .any(|(kind, name)| event.aggregate_type == *kind && event.name == *name)
+        }) {
+            return Err(WriteError::Unknown(anyhow::anyhow!(
+                "refused {}::{}",
+                event.aggregate_type,
+                event.name
+            )));
+        }
+        self.store.write(events).await
+    }
+
+    async fn read(
+        &self,
+        aggregators: Option<Arc<[EventFilter]>>,
+        routing_key: Option<RoutingKey>,
+        tenant: TenantFilter,
+        args: Args,
+        to_micros: Option<u64>,
+    ) -> anyhow::Result<ReadResult<evento::Event>> {
+        self.store
+            .read(aggregators, routing_key, tenant, args, to_micros)
+            .await
+    }
+
+    async fn latest_timestamp(
+        &self,
+        aggregators: Option<Arc<[EventFilter]>>,
+        routing_key: Option<RoutingKey>,
+        tenant: TenantFilter,
+    ) -> anyhow::Result<u64> {
+        self.store
+            .latest_timestamp(aggregators, routing_key, tenant)
+            .await
+    }
+
+    async fn get_subscriber_cursor(&self, key: String) -> anyhow::Result<Option<Value>> {
+        self.store.get_subscriber_cursor(key).await
+    }
+
+    async fn is_subscriber_running(&self, key: String, worker_id: Ulid) -> anyhow::Result<bool> {
+        self.store.is_subscriber_running(key, worker_id).await
+    }
+
+    async fn upsert_subscriber(&self, key: String, worker_id: Ulid) -> anyhow::Result<()> {
+        self.store.upsert_subscriber(key, worker_id).await
+    }
+
+    async fn acknowledge(
+        &self,
+        key: String,
+        worker_id: Ulid,
+        cursor: Value,
+        lag: u64,
+    ) -> anyhow::Result<bool> {
+        self.store.acknowledge(key, worker_id, cursor, lag).await
+    }
+
+    async fn get_snapshot(
+        &self,
+        tenant: String,
+        aggregate_type: String,
+        projection: String,
+        aggregate_revision: String,
+        id: String,
+    ) -> anyhow::Result<Option<(Vec<u8>, Value)>> {
+        self.store
+            .get_snapshot(tenant, aggregate_type, projection, aggregate_revision, id)
+            .await
+    }
+
+    async fn save_snapshot(
+        &self,
+        tenant: String,
+        aggregate_type: String,
+        projection: String,
+        aggregate_revision: String,
+        id: String,
+        data: Vec<u8>,
+        cursor: Value,
+    ) -> anyhow::Result<()> {
+        self.store
+            .save_snapshot(
+                tenant,
+                aggregate_type,
+                projection,
+                aggregate_revision,
+                id,
+                data,
+                cursor,
+            )
+            .await
+    }
+
+    async fn delete_snapshot(
+        &self,
+        tenant: String,
+        aggregate_type: String,
+        projection: String,
+        id: String,
+    ) -> anyhow::Result<()> {
+        self.store
+            .delete_snapshot(tenant, aggregate_type, projection, id)
+            .await
+    }
+}
+
+/// The identity gateway over a store that refuses what `refusing` says.
+pub fn refusing_command(refusing: Refusing) -> Command<Refusing> {
+    Command::new(refusing, codes())
+}
+
+/// Frees whatever index entries the subscription finds to free, once.
+pub async fn release_indexes(executor: &evento::Turso) {
+    timada_identity::index_release_subscription::<evento::Turso>()
+        .run_once(executor)
+        .await
+        .unwrap();
 }

@@ -7,6 +7,9 @@ use crate::aggregator::{AdminRevoked, Deleted, SessionsRevoked};
 use crate::error::IdentityError;
 
 use super::UserState;
+use super::email_index::free_email_index;
+use super::oauth2_index::free_oauth2_index;
+use super::passkey_index::free_passkey_index;
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
@@ -45,7 +48,9 @@ impl<E: Executor> super::Command<E> {
 
     /// Deletes an account: the user is gone for every command and every
     /// session of theirs is void, then their sign-in identities are freed so
-    /// the person can register again. The actor cannot delete themself.
+    /// the person can register again (by the index-release subscription
+    /// should that fail; a deleted user holds nothing meanwhile). The actor
+    /// cannot delete themself.
     pub async fn delete_user(
         &self,
         actor_id: &str,
@@ -62,7 +67,7 @@ impl<E: Executor> super::Command<E> {
             return Err(IdentityError::UserNotFound);
         };
         if !user.deleted {
-            self.append_user(user_id, routing_key.clone(), |_, builder| {
+            self.append_user(user_id, routing_key, |_, builder| {
                 builder.event(&Deleted);
                 builder.event(&SessionsRevoked {
                     except_session: None,
@@ -71,40 +76,43 @@ impl<E: Executor> super::Command<E> {
             })
             .await?;
         }
-        // `Forbidden` here means someone else registered the identity since
-        // (a retry after the first deletion freed it): nothing left to free.
-        for account in &user.oauth2_accounts {
-            let freed = self
-                .unlink_oauth2_index(
-                    user_id,
-                    &account.provider,
-                    &account.provider_user_id,
-                    routing_key.clone(),
-                )
-                .await;
-            tolerate_new_owner(freed)?;
-        }
-        for passkey in &user.passkeys {
-            let freed = self
-                .remove_passkey_index(user_id, &passkey.credential_id, routing_key.clone())
-                .await;
-            tolerate_new_owner(freed)?;
-        }
-        if let Some(password) = &user.password {
-            let freed = self
-                .release_email_index(user_id, &password.email, routing_key.clone())
-                .await;
-            tolerate_new_owner(freed)?;
+        if let Err(err) = free_indexes(&self.executor, &user, None).await {
+            tracing::warn!(%err, user_id, "the deleted user's index entries are freed later");
         }
         Ok(())
     }
 }
 
-fn tolerate_new_owner(result: Result<(), IdentityError>) -> Result<(), IdentityError> {
-    match result {
-        Ok(()) | Err(IdentityError::Forbidden) => Ok(()),
-        Err(err) => Err(err),
+/// Frees every index entry of a deleted user's sign-in identities, each as
+/// [`free_passkey_index`] does; the first failure is returned once all were
+/// tried.
+pub(crate) async fn free_indexes<E: Executor>(
+    executor: &E,
+    user: &UserState,
+    let_go_at_ms: Option<u64>,
+) -> Result<(), IdentityError> {
+    let mut outcome = Ok(());
+    for account in &user.oauth2_accounts {
+        let freed = free_oauth2_index(
+            executor,
+            &user.id,
+            &account.provider,
+            &account.provider_user_id,
+            let_go_at_ms,
+        )
+        .await;
+        outcome = outcome.and(freed);
     }
+    for passkey in &user.passkeys {
+        let freed =
+            free_passkey_index(executor, &user.id, &passkey.credential_id, let_go_at_ms).await;
+        outcome = outcome.and(freed);
+    }
+    if let Some(password) = &user.password {
+        let freed = free_email_index(executor, &user.id, &password.email, let_go_at_ms).await;
+        outcome = outcome.and(freed);
+    }
+    outcome
 }
 
 impl<E: Executor> super::Command<E> {

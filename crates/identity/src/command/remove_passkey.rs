@@ -1,11 +1,16 @@
 use evento::Executor;
-use evento::ProjectionAggregate;
 
-use crate::aggregator::{PasskeyRemoved, Removed};
+use crate::aggregator::PasskeyRemoved;
 use crate::error::IdentityError;
+
+use super::passkey_index::free_passkey_index;
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
+    /// Removes a passkey from the user's account. The user keeps at least one
+    /// way to sign in. The account is written first: from then on the passkey
+    /// signs nobody in, whatever its index entry says. The entry is freed
+    /// next, and by the index-release subscription should that fail.
     pub async fn remove_passkey(
         &self,
         user_id: &str,
@@ -22,9 +27,6 @@ impl<E: Executor> super::Command<E> {
             return Err(IdentityError::LastSignInMethod);
         }
 
-        self.remove_passkey_index(user_id, credential_id, routing_key.clone())
-            .await?;
-
         self.append_user(user_id, routing_key, |user, builder| {
             if user.passkey(credential_id).is_none() {
                 return Err(IdentityError::Forbidden);
@@ -38,30 +40,9 @@ impl<E: Executor> super::Command<E> {
             Ok(())
         })
         .await?;
-        Ok(())
-    }
-}
 
-impl<E: Executor> super::Command<E> {
-    /// Frees the index entry of a passkey owned by `user_id`, so the
-    /// credential can be registered again. A missing or already freed entry
-    /// is fine; one owned by someone else is `Forbidden`.
-    pub(crate) async fn remove_passkey_index(
-        &self,
-        user_id: &str,
-        credential_id: &str,
-        routing_key: Option<String>,
-    ) -> Result<(), IdentityError> {
-        if let Some(index) = self.load_passkey(credential_id).await? {
-            if index.user_id != user_id {
-                return Err(IdentityError::Forbidden);
-            }
-            index
-                .write()?
-                .routing_key_opt(routing_key)
-                .event(&Removed)
-                .commit(&self.executor)
-                .await?;
+        if let Err(err) = free_passkey_index(&self.executor, user_id, credential_id, None).await {
+            tracing::warn!(%err, user_id, "the removed passkey's index entry is freed later");
         }
         Ok(())
     }

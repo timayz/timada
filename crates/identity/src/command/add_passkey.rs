@@ -5,6 +5,7 @@ use crate::error::IdentityError;
 use crate::value_object::MAX_PASSKEYS_PER_USER;
 
 pub use super::passkey_index::VerifiedPasskey;
+use super::passkey_index::free_passkey_index;
 
 /// A finished registration ceremony for a signed-in user. Passkeys never
 /// create accounts: a person registers with a provider or an e-mail address
@@ -39,6 +40,7 @@ impl<E: Executor> super::Command<E> {
 
 impl<E: Executor> super::Command<E> {
     /// Index first (the uniqueness check), then the user's own record of it.
+    /// A failure after the claim gives the entry back, as `add_email` does.
     async fn attach_passkey(
         &self,
         user_id: &str,
@@ -70,8 +72,16 @@ impl<E: Executor> super::Command<E> {
             })
             .await;
         match result {
+            // Already listed on the user: idempotent.
             Ok(_) | Err(IdentityError::InvalidState) => Ok(()),
-            Err(err) => Err(err),
+            Err(err) => {
+                if let Err(free) =
+                    free_passkey_index(&self.executor, user_id, &passkey.credential_id, None).await
+                {
+                    tracing::error!(%free, user_id, "cannot give the passkey back after a failed add");
+                }
+                Err(err)
+            }
         }
     }
 }
