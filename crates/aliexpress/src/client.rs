@@ -420,7 +420,8 @@ impl Client {
     }
 
     /// [`product`](Self::product), each combination's cost with what delivery
-    /// to the market's country costs added: the service an order would ship
+    /// to the market's country costs added, and the days it takes
+    /// ([`AeProduct::delivery_days`]): the service an order would ship
     /// with ([`choose_service`]), asked once for one combination. Some sellers
     /// list an item at a few cents and charge its price as delivery; a cost
     /// without it would sell such an item at a loss. An item no longer sold
@@ -456,6 +457,7 @@ impl Client {
             return Err(AeError::new("freight", message));
         };
         product.add_delivery(service.cents, &market.currency);
+        product.delivery_days = service.delivery_days();
         Ok(product)
     }
 

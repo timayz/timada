@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use evento::ProjectionAggregate;
 use timada_aliexpress::aggregator::NewSku;
 use timada_aliexpress::{
     AeProduct, AeSku, AeSkuProperty, Fit, LinkState, LinkStatus, SyncRead, add_combinations,
@@ -792,4 +793,82 @@ async fn a_combination_a_hidden_option_leaves_off_sale_is_not_offered_as_fitting
         fit(&product, &found("China", "Rose")),
         Fit::Exists(_)
     ));
+}
+
+#[tokio::test]
+async fn a_read_brings_in_the_days_delivery_takes() {
+    let executor = executor().await;
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let link_id = links
+        .request_import(ALICE, "1005006123456789")
+        .await
+        .unwrap();
+    assert!(links.start_import("node-a", &link_id).await.unwrap());
+    let mapped = map_product(&fixture(), "EUR", Some(&PRICING)).unwrap();
+    let imported = import_one(
+        &catalog,
+        ALICE,
+        &mapped.seed,
+        Path::new(""),
+        Arc::new(NoImages),
+        &ImportOptions::default(),
+    )
+    .await
+    .unwrap();
+    let skus = track_imported(
+        &catalog,
+        ALICE,
+        &imported.product_id,
+        &imported.variant_ids,
+        &mapped.skus,
+    )
+    .await
+    .unwrap();
+    links
+        .record_import(ALICE, &link_id, &imported.product_id, skus)
+        .await
+        .unwrap();
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    let days = |min, max| timada_catalog::DeliveryDays::new(min, max).unwrap();
+    let product = async || {
+        catalog
+            .load_product(&imported.product_id)
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    let sync = async |read: &AeProduct| {
+        apply_sync(&catalog, "sync", &link, Some(read), Some(&PRICING), 0)
+            .await
+            .unwrap()
+    };
+
+    // AliExpress's days replace the merchant's.
+    catalog
+        .set_product_delivery_days(ALICE, &imported.product_id, Some(days(2, 3)))
+        .await
+        .unwrap();
+    let mut read = fixture();
+    read.delivery_days = Some(days(8, 15));
+    sync(&read).await;
+    let synced = product().await;
+    assert_eq!(synced.delivery_days, Some(days(8, 15)));
+
+    // The same days write nothing.
+    sync(&read).await;
+    assert_eq!(
+        product().await.aggregate_version().unwrap(),
+        synced.aggregate_version().unwrap()
+    );
+
+    // An item AliExpress no longer sells keeps the last days it said.
+    let mut withdrawn = fixture();
+    withdrawn.status = "offline".into();
+    sync(&withdrawn).await;
+    assert_eq!(product().await.delivery_days, Some(days(8, 15)));
+
+    // No days given: the shop's default stands in.
+    sync(&fixture()).await;
+    assert_eq!(product().await.delivery_days, None);
 }

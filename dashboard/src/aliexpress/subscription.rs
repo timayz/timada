@@ -274,5 +274,11 @@ async fn import<E: Executor>(
     )
     .await
     .map_err(|err| format!("The stock could not be set: {err}"))?;
+    if let Err(err) = catalog
+        .set_product_delivery_days(actor, &imported.product_id, product.delivery_days)
+        .await
+    {
+        tracing::warn!(%tenant_id, %ae_product_id, error = %err, "AliExpress delivery time not set");
+    }
     Ok((imported.product_id, skus))
 }

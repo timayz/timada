@@ -191,6 +191,8 @@ export class FakeAliexpress {
                 shipping_fee_currency: "EUR",
                 tracking: option.tracking,
                 ship_from_country: "CN",
+                min_delivery_days: 7,
+                max_delivery_days: 12,
               })),
             },
           },
