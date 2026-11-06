@@ -210,6 +210,12 @@ impl<E: Executor> super::Command<E> {
     /// shown, so the code may serve one order more than its cap says. Once
     /// the uses are written, the order's spend is (`DiscountSpend::Spent`),
     /// which [`return_use`](Self::return_use) gives back from.
+    ///
+    /// The order's spend is read first: every node tells this once, each at
+    /// its own pace, and a node behind the others may tell it after another
+    /// gave the use back. The generation would not stop it (it remembers
+    /// only the recent uses, and a use given back is no longer the cart's),
+    /// so the use would be spent again and never given back.
     pub async fn consume_use(
         &self,
         actor: &str,
@@ -219,6 +225,9 @@ impl<E: Executor> super::Command<E> {
         order_id: &str,
         routing_key: Option<String>,
     ) -> Result<(), DiscountError> {
+        if self.load_spend(order_id).await?.is_some() {
+            return Ok(());
+        }
         let discount = self
             .load_discount(discount_id)
             .await?
