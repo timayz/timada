@@ -211,11 +211,14 @@ impl<E: Executor> super::Command<E> {
     /// the uses are written, the order's spend is (`DiscountSpend::Spent`),
     /// which [`return_use`](Self::return_use) gives back from.
     ///
-    /// The order's spend is read first: every node tells this once, each at
-    /// its own pace, and a node behind the others may tell it after another
-    /// gave the use back. The generation would not stop it (it remembers
-    /// only the recent uses, and a use given back is no longer the cart's),
-    /// so the use would be spent again and never given back.
+    /// The order's spend is read first, and again after each stream is read
+    /// and before it is written: every node tells this once, each at its own
+    /// pace, and a node behind the others may tell it after another gave the
+    /// use back. The generation would not stop it (it remembers only the
+    /// recent uses, and a use given back is no longer the cart's), so the
+    /// use would be spent again and never given back. A use is only given
+    /// back once its spend exists, so a stream read showing it given back
+    /// is followed by a spend read that finds it.
     pub async fn consume_use(
         &self,
         actor: &str,
@@ -228,121 +231,8 @@ impl<E: Executor> super::Command<E> {
         if self.load_spend(order_id).await?.is_some() {
             return Ok(());
         }
-        let discount = self
-            .load_discount(discount_id)
-            .await?
-            .ok_or(DiscountError::NotFound)?;
-        if discount.max_uses.is_some() {
-            for attempt in 1..=WRITE_ATTEMPTS {
-                let current = self
-                    .current_generation(actor, discount_id, &routing_key)
-                    .await?;
-                if current
-                    .state
-                    .as_ref()
-                    .is_some_and(|usage| usage.consumed_by_cart(cart_id).is_some())
-                {
-                    break;
-                }
-                if !current
-                    .state
-                    .as_ref()
-                    .is_some_and(|usage| usage.holds(cart_id, unix_now()))
-                {
-                    tracing::warn!(%discount_id, %cart_id, %order_id, "an order spends a use its checkout no longer held");
-                }
-                let consumed = Consumed {
-                    cart_id: cart_id.to_owned(),
-                    order_id: order_id.to_owned(),
-                    consumed_by: actor.to_owned(),
-                };
-                let written = match current.state {
-                    Some(usage) => {
-                        usage
-                            .write()?
-                            .routing_key_opt(routing_key.clone())
-                            .event(&consumed)
-                            .tenant(&self.tenant)
-                            .commit(&self.executor)
-                            .await
-                    }
-                    None => {
-                        evento::append(&current.id)
-                            .original_version(0)
-                            .routing_key_opt(routing_key.clone())
-                            .event(&consumed)
-                            .tenant(&self.tenant)
-                            .commit(&self.executor)
-                            .await
-                    }
-                }
-                .map_err(DiscountError::from);
-                match written {
-                    Ok(_) => break,
-                    Err(err) if is_conflict(&err) && attempt < WRITE_ATTEMPTS => {}
-                    Err(err) => return Err(err),
-                }
-            }
-        }
-        if discount.once_per_email {
-            for attempt in 1..=WRITE_ATTEMPTS {
-                let buyer = self.load_buyer(discount_id, email).await?;
-                if let Some(spent) = buyer.as_ref().and_then(|buyer| buyer.order_id.as_deref()) {
-                    if spent != order_id {
-                        tracing::warn!(%discount_id, %order_id, %spent, "an e-mail used a code good once a second time");
-                    }
-                    break;
-                }
-                let consumed = BuyerConsumed {
-                    cart_id: cart_id.to_owned(),
-                    order_id: order_id.to_owned(),
-                    consumed_by: actor.to_owned(),
-                };
-                let written = match buyer {
-                    Some(buyer) => {
-                        buyer
-                            .write()?
-                            .routing_key_opt(routing_key.clone())
-                            .event(&consumed)
-                            .tenant(&self.tenant)
-                            .commit(&self.executor)
-                            .await
-                    }
-                    None => {
-                        evento::append(discount_buyer_id(discount_id, email))
-                            .original_version(0)
-                            .routing_key_opt(routing_key.clone())
-                            .event(&consumed)
-                            .tenant(&self.tenant)
-                            .commit(&self.executor)
-                            .await
-                    }
-                }
-                .map_err(DiscountError::from);
-                match written {
-                    Ok(_) => break,
-                    Err(err) if is_conflict(&err) && attempt < WRITE_ATTEMPTS => {}
-                    Err(err) => return Err(err),
-                }
-            }
-        }
-        let spent = evento::append(discount_spend_id(order_id))
-            .original_version(0)
-            .routing_key_opt(routing_key)
-            .event(&Spent {
-                discount_id: discount_id.to_owned(),
-                cart_id: cart_id.to_owned(),
-                email: email.to_owned(),
-                spent_by: actor.to_owned(),
-            })
-            .tenant(&self.tenant)
-            .commit(&self.executor)
-            .await;
-        match spent {
-            // Told at the same moment on another node: written once.
-            Ok(_) | Err(WriteError::InvalidOriginalVersion) => Ok(()),
-            Err(err) => Err(err.into()),
-        }
+        self.consume_unspent(actor, discount_id, cart_id, email, order_id, routing_key)
+            .await
     }
 
     /// Gives back the use `order_id` spent, its order cancelled before its
@@ -400,6 +290,140 @@ impl<E: Executor> super::Command<E> {
 }
 
 impl<E: Executor> super::Command<E> {
+    /// [`consume_use`](Self::consume_use) once the order's spend was found
+    /// missing: read again before each write.
+    async fn consume_unspent(
+        &self,
+        actor: &str,
+        discount_id: &str,
+        cart_id: &str,
+        email: &str,
+        order_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), DiscountError> {
+        let discount = self
+            .load_discount(discount_id)
+            .await?
+            .ok_or(DiscountError::NotFound)?;
+        if discount.max_uses.is_some() {
+            for attempt in 1..=WRITE_ATTEMPTS {
+                let current = self
+                    .current_generation(actor, discount_id, &routing_key)
+                    .await?;
+                if current
+                    .state
+                    .as_ref()
+                    .is_some_and(|usage| usage.consumed_by_cart(cart_id).is_some())
+                {
+                    break;
+                }
+                if self.load_spend(order_id).await?.is_some() {
+                    return Ok(());
+                }
+                if !current
+                    .state
+                    .as_ref()
+                    .is_some_and(|usage| usage.holds(cart_id, unix_now()))
+                {
+                    tracing::warn!(%discount_id, %cart_id, %order_id, "an order spends a use its checkout no longer held");
+                }
+                let consumed = Consumed {
+                    cart_id: cart_id.to_owned(),
+                    order_id: order_id.to_owned(),
+                    consumed_by: actor.to_owned(),
+                };
+                let written = match current.state {
+                    Some(usage) => {
+                        usage
+                            .write()?
+                            .routing_key_opt(routing_key.clone())
+                            .event(&consumed)
+                            .tenant(&self.tenant)
+                            .commit(&self.executor)
+                            .await
+                    }
+                    None => {
+                        evento::append(&current.id)
+                            .original_version(0)
+                            .routing_key_opt(routing_key.clone())
+                            .event(&consumed)
+                            .tenant(&self.tenant)
+                            .commit(&self.executor)
+                            .await
+                    }
+                }
+                .map_err(DiscountError::from);
+                match written {
+                    Ok(_) => break,
+                    Err(err) if is_conflict(&err) && attempt < WRITE_ATTEMPTS => {}
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+        if discount.once_per_email {
+            for attempt in 1..=WRITE_ATTEMPTS {
+                let buyer = self.load_buyer(discount_id, email).await?;
+                if let Some(spent) = buyer.as_ref().and_then(|buyer| buyer.order_id.as_deref()) {
+                    if spent != order_id {
+                        tracing::warn!(%discount_id, %order_id, %spent, "an e-mail used a code good once a second time");
+                    }
+                    break;
+                }
+                if self.load_spend(order_id).await?.is_some() {
+                    return Ok(());
+                }
+                let consumed = BuyerConsumed {
+                    cart_id: cart_id.to_owned(),
+                    order_id: order_id.to_owned(),
+                    consumed_by: actor.to_owned(),
+                };
+                let written = match buyer {
+                    Some(buyer) => {
+                        buyer
+                            .write()?
+                            .routing_key_opt(routing_key.clone())
+                            .event(&consumed)
+                            .tenant(&self.tenant)
+                            .commit(&self.executor)
+                            .await
+                    }
+                    None => {
+                        evento::append(discount_buyer_id(discount_id, email))
+                            .original_version(0)
+                            .routing_key_opt(routing_key.clone())
+                            .event(&consumed)
+                            .tenant(&self.tenant)
+                            .commit(&self.executor)
+                            .await
+                    }
+                }
+                .map_err(DiscountError::from);
+                match written {
+                    Ok(_) => break,
+                    Err(err) if is_conflict(&err) && attempt < WRITE_ATTEMPTS => {}
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+        let spent = evento::append(discount_spend_id(order_id))
+            .original_version(0)
+            .routing_key_opt(routing_key)
+            .event(&Spent {
+                discount_id: discount_id.to_owned(),
+                cart_id: cart_id.to_owned(),
+                email: email.to_owned(),
+                spent_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await;
+        match spent {
+            // Told at the same moment on another node: written once.
+            Ok(_) | Err(WriteError::InvalidOriginalVersion) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     /// Takes the use of `order_id` off the count of the code, unless the
     /// generation remembers it given back (a delivery that stopped before
     /// the order's spend recorded it).
