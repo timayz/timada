@@ -7329,6 +7329,7 @@ dependencies = [
  "anyhow",
  "bitcode",
  "evento",
+ "serde",
  "thiserror 2.0.21",
  "timada-core",
  "tokio",

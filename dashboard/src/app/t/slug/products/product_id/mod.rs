@@ -5,6 +5,7 @@ pub mod archive;
 pub mod attributes;
 pub mod categorize;
 pub mod delete;
+pub mod delivery_days;
 pub mod describe;
 pub mod images;
 pub mod options;
@@ -20,9 +21,9 @@ pub mod variants;
 use std::sync::Arc;
 use timada_catalog::{
     CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_ATTRIBUTE_VALUE_LEN,
-    MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN, MAX_OPTION_LABEL_LEN,
-    MAX_OPTION_NAME_LEN, MAX_OPTIONS, MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState,
-    ProductVariant, TAX_CATEGORIES, format_money, tax_category_label,
+    MAX_DELIVERY_DAYS, MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN,
+    MAX_OPTION_LABEL_LEN, MAX_OPTION_NAME_LEN, MAX_OPTIONS, MAX_SKU_LEN, MAX_VARIANTS,
+    ProductOption, ProductState, ProductVariant, TAX_CATEGORIES, format_money, tax_category_label,
 };
 use timada_tenancy::{
     PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ, PERMISSION_REVIEWS_READ,
@@ -573,6 +574,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         "Not charged".to_owned()
     };
+    let delivery_label = product
+        .delivery_days
+        .map_or_else(|| "None given".to_owned(), crate::ui::delivery_days_label);
     let slug = tenant.slug.clone();
     let current_currency = product
         .price
@@ -726,6 +730,30 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 )
                                 <div>
                                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Set kind")
+                                </div>
+                            </form>
+                        }
+                        if link.is_some() {
+                            <div class=(class!(CARD, "gap-2 px-6")) data-delivery-days=(delivery_label.clone())>
+                                <p class="text-sm font-medium">"Delivery time"</p>
+                                <p class="text-sm">(delivery_label.clone())</p>
+                                <p class="text-xs text-muted-foreground">"Synced from AliExpress: the delivery service an order ships with, to the shop's country."</p>
+                            </div>
+                        } else {
+                            <form method="post" action=(href!(delivery_days::delivery_days, Slug(slug.clone()), ProductId(product.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                                <fieldset class="grid gap-2">
+                                    <legend class="text-sm font-medium">"Delivery time, in days"</legend>
+                                    <div class="flex items-center gap-2">
+                                        <label class="sr-only" for="product-delivery-min">"Shortest delivery, in days"</label>
+                                        input(attrs: attributes! { id="product-delivery-min" name="min" type="number" min="1" max=(MAX_DELIVERY_DAYS) inputmode="numeric" class="w-24" value=(product.delivery_days.map(|days| days.min.to_string()).unwrap_or_default()) })
+                                        <span aria-hidden="true">"to"</span>
+                                        <label class="sr-only" for="product-delivery-max">"Longest delivery, in days"</label>
+                                        input(attrs: attributes! { id="product-delivery-max" name="max" type="number" min="1" max=(MAX_DELIVERY_DAYS) inputmode="numeric" class="w-24" value=(product.delivery_days.map(|days| days.max.to_string()).unwrap_or_default()) })
+                                    </div>
+                                    <p class="text-xs text-muted-foreground">"Empty uses the shop's default, set on the Shipping page."</p>
+                                </fieldset>
+                                <div>
+                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Set delivery time")
                                 </div>
                             </form>
                         }
@@ -1343,6 +1371,15 @@ pub struct DescribeForm {
 pub struct PriceForm {
     pub amount: String,
     pub currency: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct DeliveryDaysForm {
+    /// Days, both empty for the shop's default.
+    #[serde(default)]
+    pub min: String,
+    #[serde(default)]
+    pub max: String,
 }
 
 #[derive(serde::Deserialize)]

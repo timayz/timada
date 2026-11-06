@@ -815,6 +815,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 }
                                 <dt>"Livraison"</dt>
                                 <dd data-checkout-shipping="">(&shipping_text)</dd>
+                                if let Some(days) = cart.delivery_window {
+                                    <dt>"Délai de livraison"</dt>
+                                    <dd data-checkout-delivery=(crate::app::delivery_days(days))>(crate::app::delivery_days(days))</dd>
+                                }
                                 <dt class="total">"Total"</dt>
                                 <dd class="total">
                                     <strong class="price" data-checkout-total="">(&total)</strong>

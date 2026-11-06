@@ -53,12 +53,14 @@ event timada-catalog/Category::Renamed { name: String, renamed_by: String }
 event timada-catalog/Category::ShownInMenu { shown_by: String }
 event timada-catalog/CategorySlug::Claimed { category_id: String }
 event timada-catalog/CategorySlug::Released unit
+event timada-catalog/DeliveryDefault::DefaultDeliveryDaysSet { days: Option<DeliveryDays>, set_by: String }
 event timada-catalog/Product::Archived { archived_by: String }
 event timada-catalog/Product::AttributeRemoved { name: String, removed_by: String }
 event timada-catalog/Product::AttributeSet { name: String, value: String, set_by: String }
 event timada-catalog/Product::Categorized { category_id: String, categorized_by: String }
 event timada-catalog/Product::Created { slug: String, name: String, created_by: String }
 event timada-catalog/Product::Deleted { deleted_by: String }
+event timada-catalog/Product::DeliveryDaysSet { days: Option<DeliveryDays>, set_by: String }
 event timada-catalog/Product::Described { description: String, described_by: String }
 event timada-catalog/Product::ImageAdded { image_id: String, ext: String, mime: String, size: u64, width: Option<u32>, height: Option<u32>, alt: String, added_by: String }
 event timada-catalog/Product::ImageAltChanged { image_id: String, alt: String, changed_by: String }
@@ -326,6 +328,7 @@ type timada_aliexpress::aggregator::SkuLink { sku_id: String, variant_id: Option
 type timada_aliexpress::aggregator::forward::ForwardItem { ae_product_id: String, sku_id: String, quantity: u32, service_name: String }
 type timada_catalog::value_object::CarriedHold { cart_id: String, quantity: u32, expires_at: u64 }
 type timada_catalog::value_object::CarriedTake { order_id: String, cart_id: Option<String>, restored: bool }
+type timada_catalog::value_object::DeliveryDays { min: u16, max: u16 }
 type timada_catalog::value_object::OptionSelection { option_id: String, value: String }
 type timada_catalog::value_object::TakenLine { product_id: String, variant_id: Option<String>, quantity: u32 }
 type timada_discounts::value_object::CarriedReservation { cart_id: String, expires_at: u64 }
@@ -337,7 +340,7 @@ type timada_invoicing::value_object::Address { name: String, line1: String, line
 type timada_invoicing::value_object::InvoiceLine { name: String, variant_label: Option<String>, sku: Option<String>, quantity: u32, unit_amount_cents: u64, vat_rate_bps: Option<u32> }
 type timada_invoicing::value_object::Seller { address: Address, legal_form: String, share_capital_cents: Option<u64>, siret: String, rcs_city: Option<String>, contact_email: String, vat_number: Option<String> }
 type timada_invoicing::value_object::VatSubtotal { rate_bps: u32, base_cents: u64, vat_cents: u64 }
-type timada_orders::value_object::OrderLine { product_id: String, variant_id: Option<String>, name: String, variant_label: Option<String>, sku: Option<String>, unit_amount_cents: u64, quantity: u32, tax_category: String }
+type timada_orders::value_object::OrderLine { product_id: String, variant_id: Option<String>, name: String, variant_label: Option<String>, sku: Option<String>, unit_amount_cents: u64, quantity: u32, tax_category: String, delivery_days: Option<timada_catalog::DeliveryDays> }
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String, capture_before: Option<u64> }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, region: Option<String>, country: String, phone: Option<String> }
 type timada_reviews::value_object::ReviewPhoto { id: String, ext: String, mime: String, size: u64, width: Option<u32>, height: Option<u32> }

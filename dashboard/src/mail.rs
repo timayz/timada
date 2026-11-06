@@ -20,8 +20,8 @@ use timada_orders::OrderState;
 use timada_reviews::REVIEW_LINK_TTL_SECS;
 use timada_shoppers::CODE_TTL_SECS;
 use timada_tenancy::{
-    AddressVars, AutomationCustomerVars, AutomationDiscountVars, AutomationOrderVars, DiscountVars,
-    LineVars, MailVars, NewProductVars, NewsletterConfirmationVars, NewsletterVars,
+    AddressVars, AutomationCustomerVars, AutomationDiscountVars, AutomationOrderVars, DeliveryVars,
+    DiscountVars, LineVars, MailVars, NewProductVars, NewsletterConfirmationVars, NewsletterVars,
     OrderCancelledVars, OrderConfirmationVars, OrderPaidVars, OrderVars, RenderedMail,
     ReviewOrderVars, ReviewRequestVars, ShippingMethodVars, ShopMailKind, ShopVars,
     ShopperCodeVars, TenantState, render, render_text,
@@ -344,6 +344,10 @@ fn order_vars(order: &OrderState) -> OrderVars {
                 free: shipping.amount_cents == 0,
             }),
         total: format_money(order.total_cents, currency),
+        delivery: order.delivery_window().map(|days| DeliveryVars {
+            min_days: days.min,
+            max_days: days.max,
+        }),
         shipping_address: address_vars(
             &ship.name,
             &ship.line1,
