@@ -78,7 +78,9 @@ async fn placed(executor: &evento::Turso, order_id: &str, email: &str) {
                 payment_id: format!("pi-{order_id}"),
                 amount_cents: 1000,
                 currency: "EUR".to_owned(),
+                capture_before: None,
             },
+            supplier: None,
             placed_by: "storefront".to_owned(),
         })
         .tenant(TENANT)

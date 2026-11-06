@@ -1,7 +1,9 @@
 //! Payments end to end on one node, with a stand-in for Stripe: a request to
 //! pay is answered by the tenant's payments subscription with a payment the
-//! storefront can confirm, or refused; the webhook then turns the paid cart
-//! into the order, once, and gives back a second payment of the same cart.
+//! storefront can confirm, or refused; the webhook then turns the confirmed
+//! cart into the order, once, its money held, and gives back a second
+//! payment of the same cart. The money of goods the shop holds is taken at
+//! once; a cancelled order's hold is given back.
 //!
 //! The dashboard is a binary crate, so its modules are reached through
 //! `#[path]` includes, which drag in items this test never calls.
@@ -40,11 +42,14 @@ use timada_tenancy::{
 };
 
 use cluster::Cluster;
+use payments::settle::{CancelOutcome, CaptureOutcome};
 use payments::webhook::{Outcome, receive};
 use payments::{
-    Cancellation, DASHBOARD_ACTOR, LapsedCheckouts, NewPayment, OpenPayment, PaymentGateway,
-    PaymentStatus, Payments, RECHECK_SECS, RefundRecord, SuppliedGoods, signature,
+    ASKED_SECS, Cancellation, CaptureAnswer, DASHBOARD_ACTOR, LapsedCheckouts, NewPayment,
+    OpenPayment, PaymentGateway, PaymentState, PaymentStatus, Payments, PendingPayments,
+    RECHECK_SECS, RefundRecord, ReleaseAnswer, SuppliedGoods, signature,
 };
+use timada_orders::{CaptureClaim, HOLD_EXPIRED_REASON, OrderLine, OrderStatus};
 
 const WEBHOOK_SECRET: &str = "whsec_test";
 const SEAL_KEY: &str = "a-test-secret-of-thirty-two-chars!!";
@@ -54,24 +59,73 @@ const SEAL_KEY: &str = "a-test-secret-of-thirty-two-chars!!";
 struct FakeStripe {
     /// Opened payments by idempotency key: the same key, the same payment.
     opened: Mutex<HashMap<String, (OpenPayment, NewPayment)>>,
-    /// Payments the shopper paid.
-    paid: Mutex<Vec<String>>,
+    /// Payments the shopper confirmed: the money is held on their card.
+    authorized: Mutex<Vec<String>>,
+    /// Payments whose money was taken.
+    captured: Mutex<Vec<String>>,
     /// Payments confirmed that Stripe is settling (a bank debit).
     confirming: Mutex<Vec<String>>,
     /// Payments cancelled, by this server or in Stripe's own dashboard.
     cancelled: Mutex<Vec<String>>,
+    /// Payments Stripe cancelled on its own, their hold lapsed.
+    lapsed: Mutex<Vec<String>>,
     refunds: Mutex<Vec<(String, u64)>>,
     /// Stripe is down: opening a payment fails.
     down: std::sync::atomic::AtomicBool,
+    /// Taking a held payment is refused (the card was cancelled, say).
+    refuses_capture: std::sync::atomic::AtomicBool,
+    /// Taking or giving back a hold gets no answer.
+    unreachable: std::sync::atomic::AtomicBool,
 }
 
 impl FakeStripe {
-    fn pay(&self, payment_id: &str) {
-        self.paid.lock().unwrap().push(payment_id.to_owned());
+    /// The shopper confirms the payment: its money is held.
+    fn authorize(&self, payment_id: &str) {
+        self.authorized.lock().unwrap().push(payment_id.to_owned());
+    }
+
+    /// The hold lapses: Stripe cancels the payment on its own.
+    fn lapse(&self, payment_id: &str) {
+        self.lapsed.lock().unwrap().push(payment_id.to_owned());
     }
 
     fn opened_count(&self) -> usize {
         self.opened.lock().unwrap().len()
+    }
+
+    fn amount_of(&self, payment_id: &str) -> u64 {
+        self.opened
+            .lock()
+            .unwrap()
+            .values()
+            .find(|(open, _)| open.payment_id == payment_id)
+            .map_or(0, |(_, new)| new.amount_cents)
+    }
+
+    fn is(&self, list: &Mutex<Vec<String>>, payment_id: &str) -> bool {
+        list.lock().unwrap().iter().any(|id| id == payment_id)
+    }
+
+    fn state_of(&self, payment_id: &str) -> PaymentState {
+        if self.is(&self.captured, payment_id) {
+            PaymentState::Captured
+        } else if self.is(&self.cancelled, payment_id) || self.is(&self.lapsed, payment_id) {
+            PaymentState::Cancelled
+        } else if self.is(&self.authorized, payment_id) {
+            PaymentState::Authorized
+        } else if self.is(&self.confirming, payment_id) {
+            PaymentState::Processing
+        } else {
+            PaymentState::Open
+        }
+    }
+
+    fn reachable(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.unreachable.load(std::sync::atomic::Ordering::SeqCst),
+            "Stripe did not answer"
+        );
+        Ok(())
     }
 }
 
@@ -118,12 +172,25 @@ impl PaymentGateway for FakeStripe {
             .values()
             .find(|(open, _)| open.payment_id == payment_id)
             .ok_or_else(|| anyhow::anyhow!("no such payment"))?;
-        let succeeded = self.paid.lock().unwrap().contains(&open.payment_id);
+        let (open, new) = (open.clone(), new.clone());
+        drop(opened);
+        let state = self.state_of(&open.payment_id);
         Ok(PaymentStatus {
             payment_id: open.payment_id.clone(),
-            succeeded,
-            amount_received: if succeeded { new.amount_cents } else { 0 },
+            state,
+            amount_capturable: if state == PaymentState::Authorized {
+                new.amount_cents
+            } else {
+                0
+            },
+            amount_received: if state == PaymentState::Captured {
+                new.amount_cents
+            } else {
+                0
+            },
             currency: new.currency.to_ascii_lowercase(),
+            capture_before: None,
+            lapsed: self.is(&self.lapsed, &open.payment_id),
             metadata: new.metadata.clone(),
         })
     }
@@ -165,29 +232,58 @@ impl PaymentGateway for FakeStripe {
         _secret_key: &str,
         payment_id: &str,
     ) -> anyhow::Result<Cancellation> {
-        if self
-            .paid
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|paid| paid == payment_id)
-        {
-            return Ok(Cancellation::Paid);
+        match self.state_of(payment_id) {
+            PaymentState::Captured => return Ok(Cancellation::Paid),
+            PaymentState::Processing => return Ok(Cancellation::Confirming),
+            PaymentState::Authorized => return Ok(Cancellation::Authorized),
+            PaymentState::Cancelled => return Ok(Cancellation::Cancelled),
+            PaymentState::Open => {}
         }
-        if self
-            .confirming
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|confirming| confirming == payment_id)
-        {
-            return Ok(Cancellation::Confirming);
-        }
-        let mut cancelled = self.cancelled.lock().unwrap();
-        if !cancelled.iter().any(|cancelled| cancelled == payment_id) {
-            cancelled.push(payment_id.to_owned());
-        }
+        self.cancelled.lock().unwrap().push(payment_id.to_owned());
         Ok(Cancellation::Cancelled)
+    }
+
+    async fn capture_payment(
+        &self,
+        _secret_key: &str,
+        payment_id: &str,
+    ) -> anyhow::Result<CaptureAnswer> {
+        self.reachable()?;
+        let amount_cents = self.amount_of(payment_id);
+        Ok(match self.state_of(payment_id) {
+            PaymentState::Captured => CaptureAnswer::Captured { amount_cents },
+            PaymentState::Cancelled => CaptureAnswer::Cancelled {
+                lapsed: self.is(&self.lapsed, payment_id),
+            },
+            PaymentState::Authorized
+                if !self
+                    .refuses_capture
+                    .load(std::sync::atomic::Ordering::SeqCst) =>
+            {
+                self.captured.lock().unwrap().push(payment_id.to_owned());
+                CaptureAnswer::Captured { amount_cents }
+            }
+            PaymentState::Authorized => CaptureAnswer::Refused("Your card was declined.".into()),
+            _ => CaptureAnswer::Refused("This payment was not confirmed.".into()),
+        })
+    }
+
+    async fn release_payment(
+        &self,
+        _secret_key: &str,
+        payment_id: &str,
+    ) -> anyhow::Result<ReleaseAnswer> {
+        self.reachable()?;
+        Ok(match self.state_of(payment_id) {
+            PaymentState::Captured => ReleaseAnswer::Captured {
+                amount_cents: self.amount_of(payment_id),
+            },
+            PaymentState::Cancelled => ReleaseAnswer::Released,
+            _ => {
+                self.cancelled.lock().unwrap().push(payment_id.to_owned());
+                ReleaseAnswer::Released
+            }
+        })
     }
 }
 
@@ -200,6 +296,8 @@ struct FakeGoods {
     reads: Mutex<Vec<Vec<String>>>,
     /// The store the reads write to, once the harness has one.
     store: Mutex<Option<cluster::Executor>>,
+    /// Who buys the goods once the order is placed: the money then waits.
+    supplier: Mutex<Option<String>>,
 }
 
 /// What a read finds.
@@ -228,6 +326,14 @@ impl SuppliedGoods for FakeGoods {
                 .unwrap(),
             None => {}
         }
+    }
+
+    async fn supplier_of(
+        &self,
+        _tenant_id: &str,
+        _lines: &[OrderLine],
+    ) -> anyhow::Result<Option<String>> {
+        Ok(self.supplier.lock().unwrap().clone())
     }
 }
 
@@ -313,6 +419,7 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
             goods.clone(),
             platform.clone(),
         ),
+        payments::capture_subscription(subscribed.clone(), platform.clone()),
         timada_orders::discount_usage_subscription(platform.clone()),
         timada_orders::stock_usage_subscription(platform.clone()),
         invoicing::subscription(
@@ -545,6 +652,30 @@ impl<G: PaymentGateway + 'static> Harness<G> {
         .unwrap()
     }
 
+    /// Waits for the money of the order to be taken; the order then.
+    async fn paid(&self, tenant: &TenantState, order_id: &str) -> timada_orders::OrderState {
+        let orders = timada_orders::Command::new(self.store(tenant), &tenant.id);
+        eventually(async || {
+            orders
+                .load_order(order_id)
+                .await
+                .unwrap()
+                .filter(|order| order.is_paid())
+        })
+        .await
+    }
+
+    /// The tenant's Stripe account, opened.
+    async fn account(&self, tenant: &TenantState) -> payments::Account {
+        let tenant = self
+            .platform
+            .load_tenant(&tenant.id)
+            .await
+            .unwrap()
+            .unwrap();
+        self.payments.account_of(&tenant).unwrap().unwrap()
+    }
+
     async fn finish(self) {
         for subscription in &self.subscriptions {
             subscription.stop();
@@ -558,18 +689,27 @@ impl<G: PaymentGateway + 'static> Harness<G> {
 }
 
 impl Harness {
-    /// Pays a cart shipped as `checkout` says, end to end; returns the order.
-    async fn buy(&self, tenant: &TenantState, checkout: Checkout) -> String {
+    /// Has the shopper confirm a cart shipped as `checkout` says, end to
+    /// end; returns the order, its money held.
+    async fn place(&self, tenant: &TenantState, checkout: Checkout) -> String {
         let (cart_id, _) = self.cart(tenant).await;
         let PaymentAnswer::Requested(payment) = self.ask_with(tenant, &cart_id, checkout).await
         else {
             panic!("a payment is opened");
         };
-        self.stripe.pay(&payment.payment_id);
-        let body = succeeded(&payment.payment_id);
+        self.stripe.authorize(&payment.payment_id);
+        let body = authorized(&payment.payment_id);
         let Outcome::Placed { order_id } = self.webhook(tenant, &body, signed(&body)).await else {
             panic!("the order is placed");
         };
+        order_id
+    }
+
+    /// The same, for goods the shop holds: returns the order once its money
+    /// is taken.
+    async fn buy(&self, tenant: &TenantState, checkout: Checkout) -> String {
+        let order_id = self.place(tenant, checkout).await;
+        self.paid(tenant, &order_id).await;
         order_id
     }
 }
@@ -581,10 +721,24 @@ fn now() -> i64 {
         .as_secs() as i64
 }
 
-fn succeeded(payment_id: &str) -> String {
+/// What Stripe sends about a payment: `kind` is the event type.
+fn payment_event(kind: &str, payment_id: &str) -> String {
     format!(
-        r#"{{"id":"evt_1","type":"payment_intent.succeeded","data":{{"object":{{"id":"{payment_id}","object":"payment_intent"}}}}}}"#
+        r#"{{"id":"evt_1","type":"{kind}","data":{{"object":{{"id":"{payment_id}","object":"payment_intent"}}}}}}"#
     )
+}
+
+/// The shopper confirmed the payment: its money is held.
+fn authorized(payment_id: &str) -> String {
+    payment_event("payment_intent.amount_capturable_updated", payment_id)
+}
+
+fn succeeded(payment_id: &str) -> String {
+    payment_event("payment_intent.succeeded", payment_id)
+}
+
+fn canceled(payment_id: &str) -> String {
+    payment_event("payment_intent.canceled", payment_id)
 }
 
 fn signed(body: &str) -> Option<String> {
@@ -613,13 +767,13 @@ async fn a_paid_cart_becomes_one_order() {
         assert_eq!(new.receipt_email.as_deref(), Some("ada@example.org"));
     }
 
-    // Not paid yet: Stripe's word is that it did not succeed.
-    let body = succeeded(&payment.payment_id);
+    // Not confirmed yet: Stripe's word is that nothing is held.
+    let body = authorized(&payment.payment_id);
     assert_eq!(
         h.webhook(&acme, &body, signed(&body)).await,
         Outcome::Ignored
     );
-    h.stripe.pay(&payment.payment_id);
+    h.stripe.authorize(&payment.payment_id);
     let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
         panic!("the order is placed");
     };
@@ -627,6 +781,23 @@ async fn a_paid_cart_becomes_one_order() {
     assert_eq!(
         h.webhook(&acme, &body, signed(&body)).await,
         Outcome::Placed {
+            order_id: order_id.clone()
+        }
+    );
+    // The shop holds the mugs: their money is taken at once, once.
+    let order = h.paid(&acme, &order_id).await;
+    assert_eq!(order.status, OrderStatus::Paid);
+    assert_eq!(order.paid_cents, 2500);
+    assert_eq!(order.supplier, None);
+    assert_eq!(
+        *h.stripe.captured.lock().unwrap(),
+        vec![payment.payment_id.clone()]
+    );
+    // Stripe says so too: known already.
+    let body = succeeded(&payment.payment_id);
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Paid {
             order_id: order_id.clone()
         }
     );
@@ -695,8 +866,8 @@ async fn webhooks_that_do_not_check_out_change_nothing() {
     let PaymentAnswer::Requested(payment) = h.ask(&acme, &cart_id, None).await else {
         panic!("a payment is opened");
     };
-    h.stripe.pay(&payment.payment_id);
-    let body = succeeded(&payment.payment_id);
+    h.stripe.authorize(&payment.payment_id);
+    let body = authorized(&payment.payment_id);
 
     assert_eq!(h.webhook(&acme, &body, None).await, Outcome::Rejected);
     let forged = Some(signature::sign(body.as_bytes(), "whsec_guess", now()));
@@ -890,8 +1061,8 @@ async fn a_distance_sale_in_another_currency_counts_at_the_euro_rate() {
     else {
         panic!("a payment is opened");
     };
-    h.stripe.pay(&payment.payment_id);
-    let body = succeeded(&payment.payment_id);
+    h.stripe.authorize(&payment.payment_id);
+    let body = authorized(&payment.payment_id);
     let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
         panic!("the order is placed");
     };
@@ -1053,11 +1224,13 @@ async fn a_refund_made_here_counts_once_whenever_its_webhook_arrives() {
             );
         }
         orders
-            .cancel_order("alice", &order_id, "Out of stock".to_owned())
+            .request_cancellation("alice", &order_id, "Out of stock".to_owned())
             .await
             .unwrap();
+        orders.complete_cancellation(&order_id).await.unwrap();
 
         let order = orders.load_order(&order_id).await.unwrap().unwrap();
+        assert_eq!(order.status, OrderStatus::Cancelled);
         assert_eq!(order.refunded_cents, order.total_cents);
         assert_eq!(order.refund_ids, vec![refund_id.clone()]);
         let credit = eventually(async || {
@@ -1076,7 +1249,7 @@ async fn a_refund_made_here_counts_once_whenever_its_webhook_arrives() {
 /// after that finds them lapsed. The test gives them back by hand, as time
 /// would, then lets the late payment in.
 #[tokio::test]
-async fn a_late_payment_places_the_order_or_gives_the_money_back() {
+async fn a_late_payment_places_the_order_or_gives_its_hold_back() {
     let h = harness().await;
     let acme = h.create("acme").await;
     let acme = h.connect_stripe(&acme).await;
@@ -1155,8 +1328,8 @@ async fn a_late_payment_places_the_order_or_gives_the_money_back() {
         (cart_id, *payment)
     };
     let pay = async |payment_id: &str| {
-        h.stripe.pay(payment_id);
-        let body = succeeded(payment_id);
+        h.stripe.authorize(payment_id);
+        let body = authorized(payment_id);
         h.webhook(&acme, &body, signed(&body)).await
     };
     let stock_consumed_by = async |cart_id: &str| {
@@ -1198,7 +1371,8 @@ async fn a_late_payment_places_the_order_or_gives_the_money_back() {
     assert_eq!(stock_consumed_by(&ada_cart).await.on_hand, 1);
 
     // Bob holds the last mug; his hold lapses and Carol buys it. Bob's
-    // payment then finds the shelf empty: the money goes back, no order.
+    // payment then finds the shelf empty: its hold goes back, no order,
+    // nothing charged.
     let (bob_cart, bob_payment) = cart_with(None, "bob@example.org").await;
     catalog
         .release_stock(DASHBOARD_ACTOR, &bob_cart, &lines(1))
@@ -1213,14 +1387,14 @@ async fn a_late_payment_places_the_order_or_gives_the_money_back() {
     assert_eq!(
         returned,
         Outcome::Returned {
-            refund_id: "re_1".into(),
             code: "out_of_stock".into(),
         }
     );
     assert_eq!(
-        *h.stripe.refunds.lock().unwrap(),
-        vec![(bob_payment.payment_id.clone(), 1250)]
+        *h.stripe.cancelled.lock().unwrap(),
+        vec![bob_payment.payment_id.clone()]
     );
+    assert!(h.stripe.refunds.lock().unwrap().is_empty(), "nothing taken");
     assert!(
         orders
             .load_order_of_cart(&bob_cart)
@@ -1230,19 +1404,16 @@ async fn a_late_payment_places_the_order_or_gives_the_money_back() {
     );
     let cart = orders.load_cart(&bob_cart).await.unwrap().unwrap();
     let recorded = cart.returned_payment(&bob_payment.payment_id).unwrap();
-    assert_eq!(
-        (recorded.code.as_str(), recorded.amount_cents),
-        ("out_of_stock", 1250)
-    );
+    assert_eq!(recorded.code, "out_of_stock");
     assert!(!cart.is_paying(), "nothing left to confirm");
     assert_eq!(cart.status(), "open");
-    // Told twice: the same answer, one refund.
-    let body = succeeded(&bob_payment.payment_id);
+    // Told twice: the same answer, one release.
+    let body = authorized(&bob_payment.payment_id);
     assert_eq!(h.webhook(&acme, &body, signed(&body)).await, returned);
-    assert_eq!(h.stripe.refunds.lock().unwrap().len(), 1);
+    assert_eq!(h.stripe.cancelled.lock().unwrap().len(), 1);
 
     // The same with a code good once: Dave holds its use, lets it lapse, Erin
-    // spends it. Dave's payment is given back for the code; the shelf (filled
+    // spends it. Dave's hold is given back for the code; the shelf (filled
     // again) is left as it was.
     catalog.set_stock("alice", &mug.id, None, 10).await.unwrap();
     let five = once("FIVE").await;
@@ -1259,9 +1430,15 @@ async fn a_late_payment_places_the_order_or_gives_the_money_back() {
     assert_eq!(
         pay(&dave_payment.payment_id).await,
         Outcome::Returned {
-            refund_id: "re_2".into(),
             code: "discount_exhausted".into(),
         }
+    );
+    assert!(
+        h.stripe
+            .cancelled
+            .lock()
+            .unwrap()
+            .contains(&dave_payment.payment_id)
     );
     assert!(
         orders
@@ -1294,7 +1471,7 @@ async fn a_card_form_left_open_past_its_holds_is_closed_before_it_charges() {
         (cart_id, *payment)
     };
     // Ada walks away from her card form; Bob confirmed a bank debit Stripe
-    // is settling; Carol paid, her webhook still to come; Dave's was
+    // is settling; Carol confirmed, her webhook still to come; Dave's was
     // cancelled in Stripe's own dashboard.
     let (ada_cart, ada) = open().await;
     let (bob_cart, bob) = open().await;
@@ -1305,7 +1482,7 @@ async fn a_card_form_left_open_past_its_holds_is_closed_before_it_charges() {
         .lock()
         .unwrap()
         .push(bob.payment_id.clone());
-    h.stripe.pay(&carol.payment_id);
+    h.stripe.authorize(&carol.payment_id);
     h.stripe
         .cancelled
         .lock()
@@ -1348,10 +1525,16 @@ async fn a_card_form_left_open_past_its_holds_is_closed_before_it_charges() {
     assert_eq!(h.stripe.cancelled.lock().unwrap().len(), 1);
 
     // They lapsed: Ada's payment is cancelled with Stripe and Dave's, found
-    // cancelled there, is recorded as such; Bob's and Carol's are left to
-    // the webhook.
+    // cancelled there, is recorded as such; Bob's is left to the webhook,
+    // and Carol's, confirmed, becomes her order as the webhook would make it.
     let later = now + RESERVATION_SECS;
     assert_eq!(sweep.sweep(later).await.unwrap(), 2);
+    let carol_order = orders
+        .load_order_of_cart(&carol_cart)
+        .await
+        .unwrap()
+        .expect("the sweep placed the order of a confirmed payment");
+    assert_eq!(carol_order.payment.payment_id, carol.payment_id);
     assert_eq!(
         *h.stripe.cancelled.lock().unwrap(),
         vec![dave.payment_id.clone(), ada.payment_id.clone()]
@@ -1365,19 +1548,20 @@ async fn a_card_form_left_open_past_its_holds_is_closed_before_it_charges() {
     assert_eq!(cart.status(), "open");
     let cart = orders.load_cart(&dave_cart).await.unwrap().unwrap();
     assert!(cart.is_payment_cancelled(&dave.payment_id));
-    for cart_id in [&bob_cart, &carol_cart] {
-        let cart = orders.load_cart(cart_id).await.unwrap().unwrap();
-        assert!(cart.is_paying(), "left to the shopper");
-    }
+    let cart = orders.load_cart(&bob_cart).await.unwrap().unwrap();
+    assert!(cart.is_paying(), "left to the shopper");
     // Looked at again: nothing more, and Stripe is not asked to cancel twice.
     assert_eq!(sweep.sweep(later).await.unwrap(), 0);
     assert_eq!(h.stripe.cancelled.lock().unwrap().len(), 2);
 
-    // Carol's webhook lands: her order is placed as before.
-    let body = succeeded(&carol.payment_id);
-    let Outcome::Placed { .. } = h.webhook(&acme, &body, signed(&body)).await else {
-        panic!("the order is placed");
-    };
+    // Carol's webhook lands: the same order.
+    let body = authorized(&carol.payment_id);
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Placed {
+            order_id: carol_order.id.clone()
+        }
+    );
     // Bob's debit fails and his form is open again: the sweep does not ask
     // Stripe about a payment it left alone until its time comes, then
     // closes it.
@@ -1406,7 +1590,7 @@ async fn a_second_payment_of_a_cart_is_given_back() {
     let acme = h.create("acme").await;
     let acme = h.connect_stripe(&acme).await;
     let (cart_id, _) = h.cart(&acme).await;
-    // Two tabs: two payments opened, both paid.
+    // Two tabs: two payments opened, both confirmed.
     let PaymentAnswer::Requested(first) = h.ask(&acme, &cart_id, None).await else {
         panic!("a payment is opened");
     };
@@ -1414,23 +1598,24 @@ async fn a_second_payment_of_a_cart_is_given_back() {
         panic!("a payment is opened");
     };
     assert_ne!(first.payment_id, second.payment_id);
-    h.stripe.pay(&first.payment_id);
-    h.stripe.pay(&second.payment_id);
+    h.stripe.authorize(&first.payment_id);
+    h.stripe.authorize(&second.payment_id);
 
-    let body = succeeded(&first.payment_id);
+    let body = authorized(&first.payment_id);
     assert!(matches!(
         h.webhook(&acme, &body, signed(&body)).await,
         Outcome::Placed { .. }
     ));
-    let body = succeeded(&second.payment_id);
-    assert!(matches!(
-        h.webhook(&acme, &body, signed(&body)).await,
-        Outcome::Refunded { .. }
-    ));
+    let body = authorized(&second.payment_id);
     assert_eq!(
-        *h.stripe.refunds.lock().unwrap(),
-        vec![(second.payment_id.clone(), 2500)]
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Released
     );
+    assert_eq!(
+        *h.stripe.cancelled.lock().unwrap(),
+        vec![second.payment_id.clone()]
+    );
+    assert!(h.stripe.refunds.lock().unwrap().is_empty(), "nothing taken");
     h.finish().await;
 }
 
@@ -1508,8 +1693,8 @@ async fn a_discount_code_is_charged_held_and_invoiced() {
         PaymentAnswer::Refused("discount_already_used".into())
     );
 
-    h.stripe.pay(&payment.payment_id);
-    let body = succeeded(&payment.payment_id);
+    h.stripe.authorize(&payment.payment_id);
+    let body = authorized(&payment.payment_id);
     let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
         panic!("the order is placed");
     };
@@ -1576,8 +1761,8 @@ async fn a_checkout_offer_is_charged_and_invoiced() {
         .map(|line| (line.unit_amount_cents, line.quantity))
         .collect();
     assert_eq!(lines, vec![(500, 1), (1250, 1)]);
-    h.stripe.pay(&payment.payment_id);
-    let body = succeeded(&payment.payment_id);
+    h.stripe.authorize(&payment.payment_id);
+    let body = authorized(&payment.payment_id);
     let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
         panic!("the order is placed");
     };
@@ -1760,6 +1945,16 @@ async fn the_stripe_client_speaks_stripe() {
         .await
         .unwrap();
     assert!(status.payment_id.starts_with("pi_"));
+    // stripe-mock keeps no state: what matters is that each call is sent
+    // and its answer read.
+    stripe
+        .capture_payment("sk_test_123", &opened.payment_id)
+        .await
+        .unwrap();
+    stripe
+        .release_payment("sk_test_123", &opened.payment_id)
+        .await
+        .unwrap();
     let refund = stripe
         .refund(
             "sk_test_123",
@@ -1774,11 +1969,12 @@ async fn the_stripe_client_speaks_stripe() {
 
 /// One checkout through Stripe itself, in test mode, with the operator's own
 /// key (`STRIPE_TEST_SECRET_KEY`, `sk_test_…`): the payments subscription
-/// opens a real PaymentIntent, the test pays it with Stripe's test Visa card
-/// (`pm_card_visa`) as the Payment Element would, then hands the webhook a
-/// signed `payment_intent.succeeded`, and the dashboard reads the payment
-/// back from Stripe before placing the order. Cancelling refunds it, and
-/// Stripe is asked whether the refund went through.
+/// opens a real PaymentIntent, held only, the test confirms it with Stripe's
+/// test Visa card (`pm_card_visa`) as the Payment Element would, then hands
+/// the webhook a signed `payment_intent.amount_capturable_updated`, and the
+/// dashboard reads the payment back from Stripe before placing the order.
+/// The shop holds the goods, so the money is taken at once. Cancelling
+/// refunds it, and Stripe is asked whether the refund went through.
 ///
 /// Ignored: it needs the network and a Stripe account. Run it with
 /// `STRIPE_TEST_SECRET_KEY=sk_test_… cargo test -p timada-dashboard --test
@@ -1815,8 +2011,8 @@ async fn a_checkout_goes_through_stripe_test_mode() {
     assert!(payment.payment_id.starts_with("pi_"), "{payment:?}");
     assert_eq!(payment.total_cents, 2500);
 
-    // Not paid yet: Stripe says so, and nothing is placed.
-    let body = succeeded(&payment.payment_id);
+    // Not confirmed yet: Stripe says so, and nothing is placed.
+    let body = authorized(&payment.payment_id);
     assert_eq!(
         h.webhook(&acme, &body, signed(&body)).await,
         Outcome::Ignored
@@ -1832,14 +2028,18 @@ async fn a_checkout_goes_through_stripe_test_mode() {
         .send(&client)
         .await
         .unwrap();
-    assert_eq!(confirmed.status, PaymentIntentStatus::Succeeded);
+    assert_eq!(confirmed.status, PaymentIntentStatus::RequiresCapture);
 
     let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
         panic!("the order is placed");
     };
     let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
-    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    let order = h.paid(&acme, &order_id).await;
     assert_eq!(order.status, timada_orders::OrderStatus::Paid);
+    assert!(
+        order.payment.capture_before.is_some(),
+        "a card says until when"
+    );
     assert_eq!(order.cart_id, cart_id);
     assert_eq!(order.total_cents, 2500);
     assert_eq!(order.payment.payment_id, payment.payment_id);
@@ -1847,28 +2047,21 @@ async fn a_checkout_goes_through_stripe_test_mode() {
     assert_eq!(order.payment.currency, "EUR");
 
     // Cancelled as the order page does it: refunded through Stripe first.
-    let refund_id = h
-        .payments
-        .gateway
-        .refund(
-            &secret_key,
-            &order.payment.payment_id,
-            order.total_cents,
-            &format!("timada-cancel-{order_id}"),
-        )
-        .await
-        .unwrap();
     orders
-        .record_refund("alice", &order_id, &refund_id, order.total_cents)
+        .request_cancellation("alice", &order_id, "Live test".into())
         .await
         .unwrap();
-    orders
-        .cancel_order("alice", &order_id, "Live test".into())
-        .await
-        .unwrap();
+    let account = h.account(&acme).await;
+    assert_eq!(
+        payments::settle::settle_cancellation(&h.payments, &account, &orders, &order_id)
+            .await
+            .unwrap(),
+        CancelOutcome::Cancelled
+    );
     let order = orders.load_order(&order_id).await.unwrap().unwrap();
     assert_eq!(order.status, timada_orders::OrderStatus::Cancelled);
     assert_eq!(order.refunded_cents, 2500);
+    let refund_id = order.refund_ids[0].clone();
 
     let refund = RetrieveRefund::new(refund_id.as_str())
         .send(&client)
@@ -2033,5 +2226,248 @@ async fn shipping_is_paid_and_invoiced_at_the_rates_of_the_goods() {
     assert_eq!(invoice.vat.len(), 1);
     assert_eq!(invoice.vat[0].rate_bps, 2000);
     assert_eq!(invoice.vat[0].base_cents + invoice.vat[0].vat_cents, 2990);
+    h.finish().await;
+}
+
+/// Stripe would not take the money of an order (the card was cancelled
+/// since): the order records why, has no invoice, and the merchant takes it
+/// once more by hand.
+#[tokio::test]
+async fn a_refused_capture_is_recorded_and_taken_again_by_hand() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let invoicing = timada_invoicing::Command::new(h.store(&acme), &acme.id);
+    h.stripe
+        .refuses_capture
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let order_id = h.place(&acme, checkout(Some(2500))).await;
+    let order = eventually(async || {
+        orders
+            .load_order(&order_id)
+            .await
+            .unwrap()
+            .filter(|order| order.capture_failure.is_some())
+    })
+    .await;
+    assert_eq!(order.status, OrderStatus::Authorized);
+    assert_eq!(order.payment_state(), "capture_failed");
+    assert_eq!(
+        order.capture_failure.as_deref(),
+        Some("Your card was declined.")
+    );
+    assert!(
+        invoicing
+            .load_invoice_of_order(&order_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    h.stripe
+        .refuses_capture
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let claim = orders.request_capture("alice", &order_id).await.unwrap();
+    assert!(matches!(claim, CaptureClaim::Claimed(_)), "{claim:?}");
+    let account = h.account(&acme).await;
+    assert_eq!(
+        payments::settle::capture(&h.payments, &account, &orders, &order_id)
+            .await
+            .unwrap(),
+        CaptureOutcome::Paid
+    );
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Paid);
+    assert_eq!(order.capture_failure, None);
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
+    assert_eq!(invoice.total_cents, 2500);
+    h.finish().await;
+}
+
+/// Goods a supplier buys once the order is placed: the money stays held.
+/// Cancelled before it is taken, the hold is given back with Stripe, the
+/// goods return to the shelf, and there is neither invoice nor credit note.
+#[tokio::test]
+async fn a_held_order_is_cancelled_by_giving_its_hold_back() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let store = h.store(&acme);
+    let orders = timada_orders::Command::new(store.clone(), &acme.id);
+    let catalog = timada_catalog::Command::new(store.clone(), &acme.id);
+    let invoicing = timada_invoicing::Command::new(store, &acme.id);
+    *h.goods.supplier.lock().unwrap() = Some("aliexpress".into());
+    let (cart_id, mug) = h.cart(&acme).await;
+    catalog.set_stock("alice", &mug, None, 5).await.unwrap();
+
+    let PaymentAnswer::Requested(payment) = h.ask(&acme, &cart_id, Some(2500)).await else {
+        panic!("a payment is opened");
+    };
+    h.stripe.authorize(&payment.payment_id);
+    let body = authorized(&payment.payment_id);
+    let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
+        panic!("the order is placed");
+    };
+    eventually(async || {
+        catalog
+            .load_stock(&mug, None)
+            .await
+            .unwrap()
+            .filter(|stock| stock.on_hand == 3)
+    })
+    .await;
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Authorized);
+    assert_eq!(order.supplier.as_deref(), Some("aliexpress"));
+    assert!(order.awaits_supplier());
+    assert!(
+        h.stripe.captured.lock().unwrap().is_empty(),
+        "nothing taken"
+    );
+
+    orders
+        .request_cancellation("alice", &order_id, "Out of stock".into())
+        .await
+        .unwrap();
+    let account = h.account(&acme).await;
+    assert_eq!(
+        payments::settle::settle_cancellation(&h.payments, &account, &orders, &order_id)
+            .await
+            .unwrap(),
+        CancelOutcome::Cancelled
+    );
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Cancelled);
+    assert_eq!(order.cancel_reason.as_deref(), Some("Out of stock"));
+    assert!(order.released_at.is_some());
+    assert_eq!(
+        *h.stripe.cancelled.lock().unwrap(),
+        vec![payment.payment_id.clone()]
+    );
+    assert!(h.stripe.refunds.lock().unwrap().is_empty());
+    eventually(async || {
+        catalog
+            .load_stock(&mug, None)
+            .await
+            .unwrap()
+            .filter(|stock| stock.on_hand == 5)
+    })
+    .await;
+    assert!(
+        invoicing
+            .load_invoice_of_order(&order_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Stripe tells of the cancel it made: known already.
+    let body = canceled(&payment.payment_id);
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Ignored
+    );
+    h.finish().await;
+}
+
+/// A hold nobody took within its time is dropped by Stripe: the order is
+/// cancelled when Stripe says so.
+#[tokio::test]
+async fn a_lapsed_hold_cancels_its_order() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    *h.goods.supplier.lock().unwrap() = Some("aliexpress".into());
+    let order_id = h.place(&acme, checkout(Some(2500))).await;
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+
+    h.stripe.lapse(&order.payment.payment_id);
+    let body = canceled(&order.payment.payment_id);
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Cancelled {
+            order_id: order_id.clone()
+        }
+    );
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Cancelled);
+    assert_eq!(order.cancel_reason.as_deref(), Some(HOLD_EXPIRED_REASON));
+    assert!(order.released_at.is_some());
+    // Told again: nothing more.
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Ignored
+    );
+    h.finish().await;
+}
+
+/// Stripe did not answer when it was asked: the capture or the cancellation
+/// stands on the order, and the sweep settles it once Stripe answers.
+#[tokio::test]
+async fn what_stripe_did_not_answer_is_settled_by_the_sweep() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let sweep = PendingPayments::new(h.db.clone(), h.store(&acme), h.payments.clone());
+    let account = h.account(&acme).await;
+    let unreachable = |down: bool| {
+        h.stripe
+            .unreachable
+            .store(down, std::sync::atomic::Ordering::SeqCst)
+    };
+
+    // Goods the shop holds: the capture is asked and gets no answer.
+    unreachable(true);
+    let bought = h.place(&acme, checkout(Some(2500))).await;
+    eventually(async || {
+        orders
+            .load_order(&bought)
+            .await
+            .unwrap()
+            .filter(|order| order.pending_capture.is_some())
+    })
+    .await;
+    // Goods a supplier buys: the merchant cancels, Stripe does not answer.
+    *h.goods.supplier.lock().unwrap() = Some("aliexpress".into());
+    let held = h.place(&acme, checkout(Some(2500))).await;
+    orders
+        .request_cancellation("alice", &held, "Out of stock".into())
+        .await
+        .unwrap();
+    assert!(matches!(
+        payments::settle::settle_cancellation(&h.payments, &account, &orders, &held)
+            .await
+            .unwrap(),
+        CancelOutcome::Unanswered(_)
+    ));
+
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    let now = now() as u64;
+    // Whoever asked has a minute to settle it.
+    assert_eq!(sweep.sweep(now).await.unwrap(), 0);
+    // Stripe still silent: left for later.
+    let later = now + ASKED_SECS + 1;
+    assert_eq!(sweep.sweep(later).await.unwrap(), 0);
+    unreachable(false);
+    assert_eq!(
+        sweep.sweep(later).await.unwrap(),
+        0,
+        "asked again only later"
+    );
+    assert_eq!(sweep.sweep(later + RECHECK_SECS).await.unwrap(), 2);
+    assert_eq!(
+        orders.load_order(&bought).await.unwrap().unwrap().status,
+        OrderStatus::Paid
+    );
+    let held = orders.load_order(&held).await.unwrap().unwrap();
+    assert_eq!(held.status, OrderStatus::Cancelled);
+    assert!(held.released_at.is_some());
     h.finish().await;
 }

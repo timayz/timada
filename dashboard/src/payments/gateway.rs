@@ -1,20 +1,29 @@
 //! What the dashboard asks of a payment provider, behind a trait so tests
 //! run without one. [`StripeGateway`] speaks to Stripe through async-stripe,
 //! with the tenant's own secret key on every call.
+//!
+//! A payment is opened to be held on the shopper's card only (manual
+//! capture): the money is taken later ([`PaymentGateway::capture_payment`])
+//! or the hold given back ([`PaymentGateway::release_payment`]). Neither is
+//! sent with an idempotency key: Stripe replays the first answer to a key,
+//! errors included, for a day, while a payment's own state already makes
+//! each of them happen once.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
 
-use stripe::{ClientBuilder, IdempotencyKey, RequestStrategy, StripeRequest};
-use stripe_core::PaymentIntentStatus;
+use stripe::{ClientBuilder, IdempotencyKey, RequestStrategy, StripeError, StripeRequest};
 use stripe_core::balance::RetrieveForMyAccountBalance;
 use stripe_core::payment_intent::{
-    CancelPaymentIntent, CancelPaymentIntentCancellationReason, CreatePaymentIntent,
-    CreatePaymentIntentAutomaticPaymentMethods, RetrievePaymentIntent,
+    CancelPaymentIntent, CancelPaymentIntentCancellationReason, CapturePaymentIntent,
+    CreatePaymentIntent, CreatePaymentIntentAutomaticPaymentMethods, RetrievePaymentIntent,
 };
 use stripe_core::refund::{CreateRefund, ListRefund};
+use stripe_core::{
+    PaymentIntent, PaymentIntentCancellationReason, PaymentIntentCaptureMethod, PaymentIntentStatus,
+};
 
 /// A payment to open for a cart.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,15 +59,38 @@ pub struct RefundRecord {
     pub succeeded: bool,
 }
 
+/// Where a payment stands with the provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaymentState {
+    /// Waiting for the shopper: the card form, or a bank's challenge.
+    Open,
+    /// The shopper confirmed it and the provider is settling it (a payment
+    /// method that takes days).
+    Processing,
+    /// The shopper confirmed it: the money is held on their card, to be
+    /// taken or given back.
+    Authorized,
+    /// The money was taken.
+    Captured,
+    /// Cancelled: the hold given back, or lapsed, or the form closed.
+    Cancelled,
+}
+
 /// A payment as the provider sees it now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaymentStatus {
     pub payment_id: String,
-    pub succeeded: bool,
-    /// What was received, in minor units of `currency`.
+    pub state: PaymentState,
+    /// What the provider holds and may take, in minor units of `currency`.
+    pub amount_capturable: u64,
+    /// What was taken, in minor units of `currency`.
     pub amount_received: u64,
     /// ISO-4217, lowercase as Stripe writes it.
     pub currency: String,
+    /// Unix seconds the hold lapses at, for a card.
+    pub capture_before: Option<u64>,
+    /// Cancelled by the provider on its own: the hold lapsed.
+    pub lapsed: bool,
     pub metadata: HashMap<String, String>,
 }
 
@@ -74,10 +106,48 @@ pub enum Cancellation {
     /// more, and the webhook settles it. A card form still open, a bank's
     /// challenge included, is not this: it is cancelled.
     Confirming,
-    /// The shopper paid: the webhook turns it into the order, or gives it
-    /// back.
+    /// The shopper confirmed it and the money is held on their card: the
+    /// webhook turns it into the order, or releases it.
+    Authorized,
+    /// The money was taken: the webhook settles it.
     Paid,
 }
+
+/// What came of asking the provider to take the held money.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaptureAnswer {
+    /// Taken (now, or it already was).
+    Captured { amount_cents: u64 },
+    /// The hold is gone, nothing taken: it lapsed (`lapsed`), or was
+    /// cancelled in the provider's own dashboard.
+    Cancelled { lapsed: bool },
+    /// The provider would not take it; what it said.
+    Refused(String),
+}
+
+/// What came of asking the provider to give a hold back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseAnswer {
+    /// Given back (now, or it already was): nothing taken.
+    Released,
+    /// The money was taken in between (in the provider's own dashboard):
+    /// it is refunded instead.
+    Captured { amount_cents: u64 },
+}
+
+/// A request the provider refused (a 4xx answer other than 429): asking
+/// again the same way gets the same answer. Any other error (no answer, a
+/// 5xx, a 429) is worth asking again later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused(pub String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 #[async_trait::async_trait]
 pub trait PaymentGateway: Send + Sync {
@@ -116,24 +186,86 @@ pub trait PaymentGateway: Send + Sync {
         secret_key: &str,
         payment_id: &str,
     ) -> anyhow::Result<Cancellation>;
+    /// Takes the money held for the payment. An error is a provider that
+    /// could not be reached: asked again later, it answers.
+    async fn capture_payment(
+        &self,
+        secret_key: &str,
+        payment_id: &str,
+    ) -> anyhow::Result<CaptureAnswer>;
+    /// Gives the hold of the payment back, nothing taken. An error is a
+    /// provider that could not be reached, or that refused for a reason it
+    /// gave.
+    async fn release_payment(
+        &self,
+        secret_key: &str,
+        payment_id: &str,
+    ) -> anyhow::Result<ReleaseAnswer>;
 }
 
 /// Reads [`Cancellation`] off a payment's status, for one the shopper may
 /// confirm no more; `None` while it may still be cancelled. Stripe cancels
-/// a payment awaiting its method, its confirmation, the bank's challenge
-/// (`requires_action`) or a capture, so a shopper who left the challenge
-/// open is closed like one who left the form open: the challenge does not
-/// expire by itself, and finishing it days later would charge for goods
-/// long gone. Only a payment Stripe is settling (`processing`) stays.
+/// a payment awaiting its method, its confirmation or the bank's challenge
+/// (`requires_action`), so a shopper who left the challenge open is closed
+/// like one who left the form open: the challenge does not expire by
+/// itself, and finishing it days later would charge for goods long gone. A
+/// payment Stripe is settling (`processing`) stays, and so does one the
+/// shopper confirmed (`requires_capture`): its money is held for an order.
 fn settled(status: &PaymentIntentStatus) -> Option<Cancellation> {
     match status {
         PaymentIntentStatus::Canceled => Some(Cancellation::Cancelled),
         PaymentIntentStatus::Succeeded => Some(Cancellation::Paid),
         PaymentIntentStatus::Processing => Some(Cancellation::Confirming),
+        PaymentIntentStatus::RequiresCapture => Some(Cancellation::Authorized),
         // Cancellable, or a status this crate does not know, tried as well:
         // Stripe refuses the cancel itself when it must.
         _ => None,
     }
+}
+
+/// Where a payment stands, read off its status.
+fn state_of(status: &PaymentIntentStatus) -> PaymentState {
+    match status {
+        PaymentIntentStatus::RequiresCapture => PaymentState::Authorized,
+        PaymentIntentStatus::Succeeded => PaymentState::Captured,
+        PaymentIntentStatus::Canceled => PaymentState::Cancelled,
+        PaymentIntentStatus::Processing => PaymentState::Processing,
+        _ => PaymentState::Open,
+    }
+}
+
+/// The payment as [`PaymentStatus`] says it.
+fn status_of(intent: PaymentIntent) -> PaymentStatus {
+    let capture_before = intent
+        .latest_charge
+        .as_ref()
+        .and_then(|charge| charge.as_object())
+        .and_then(|charge| charge.payment_method_details.as_ref())
+        .and_then(|details| details.card.as_ref())
+        .and_then(|card| card.capture_before)
+        .map(|at| at.max(0) as u64);
+    PaymentStatus {
+        payment_id: intent.id.to_string(),
+        state: state_of(&intent.status),
+        amount_capturable: intent.amount_capturable.max(0) as u64,
+        amount_received: intent.amount_received.max(0) as u64,
+        currency: intent.currency.to_string(),
+        capture_before,
+        lapsed: matches!(
+            intent.cancellation_reason,
+            Some(
+                PaymentIntentCancellationReason::Automatic
+                    | PaymentIntentCancellationReason::Expired
+            )
+        ),
+        metadata: intent.metadata,
+    }
+}
+
+/// Whether an error is a refusal the provider gave (as opposed to no
+/// answer).
+fn refusal(err: &anyhow::Error) -> Option<&Refused> {
+    err.downcast_ref::<Refused>()
 }
 
 /// Stripe, through async-stripe. One client per secret key, kept.
@@ -205,10 +337,18 @@ where
         request = request.request_strategy(strategy);
     }
     Box::pin(async move {
-        let value = request
-            .send(client)
-            .await
-            .map_err(|err| anyhow::anyhow!("{err}"))?;
+        let value = request.send(client).await.map_err(|err| match err {
+            StripeError::Stripe(errors, status)
+                if (400..500).contains(&status) && status != 429 =>
+            {
+                anyhow::Error::new(Refused(
+                    errors
+                        .message
+                        .unwrap_or_else(|| format!("Stripe refused the request ({status})")),
+                ))
+            }
+            err => anyhow::anyhow!("{err}"),
+        })?;
         miniserde::json::from_str(&miniserde::json::to_string(&value))
             .map_err(|err| anyhow::anyhow!("Stripe answered with an unexpected body: {err}"))
     })
@@ -231,8 +371,10 @@ impl PaymentGateway for StripeGateway {
             payment.currency.to_ascii_lowercase().parse().map_err(|_| {
                 anyhow::anyhow!("Stripe does not know the currency {}", payment.currency)
             })?;
+        // Held only: taken once the order may be filled, or given back.
         let mut request = CreatePaymentIntent::new(payment.amount_cents as i64, currency)
             .automatic_payment_methods(CreatePaymentIntentAutomaticPaymentMethods::new(true))
+            .capture_method(PaymentIntentCaptureMethod::Manual)
             .metadata(payment.metadata);
         if let Some(email) = payment.receipt_email {
             request = request.receipt_email(email);
@@ -257,14 +399,11 @@ impl PaymentGateway for StripeGateway {
         payment_id: &str,
     ) -> anyhow::Result<PaymentStatus> {
         let client = self.client(secret_key)?;
-        let intent = send(&RetrievePaymentIntent::new(payment_id), None, &client).await?;
-        Ok(PaymentStatus {
-            payment_id: intent.id.to_string(),
-            succeeded: intent.status == PaymentIntentStatus::Succeeded,
-            amount_received: intent.amount_received.max(0) as u64,
-            currency: intent.currency.to_string(),
-            metadata: intent.metadata,
-        })
+        // The charge says until when the card holds the money.
+        let request =
+            RetrievePaymentIntent::new(payment_id).expand(vec!["latest_charge".to_owned()]);
+        let intent = send(&request, None, &client).await?;
+        Ok(status_of(intent))
     }
 
     async fn refund(
@@ -323,6 +462,65 @@ impl PaymentGateway for StripeGateway {
         let intent = send(&RetrievePaymentIntent::new(payment_id), None, &client).await?;
         settled(&intent.status).ok_or(refused)
     }
+
+    /// A refusal is read against the payment as it then stands: taken
+    /// already (another node, the merchant in Stripe's dashboard) is taken,
+    /// a hold that lapsed is gone; anything else is the provider's reason.
+    async fn capture_payment(
+        &self,
+        secret_key: &str,
+        payment_id: &str,
+    ) -> anyhow::Result<CaptureAnswer> {
+        let client = self.client(secret_key)?;
+        let refused = match send(&CapturePaymentIntent::new(payment_id), None, &client).await {
+            Ok(intent) => {
+                return Ok(CaptureAnswer::Captured {
+                    amount_cents: intent.amount_received.max(0) as u64,
+                });
+            }
+            Err(err) => match refusal(&err) {
+                Some(refused) => refused.clone(),
+                None => return Err(err),
+            },
+        };
+        let status = self.payment_status(secret_key, payment_id).await?;
+        Ok(match status.state {
+            PaymentState::Captured => CaptureAnswer::Captured {
+                amount_cents: status.amount_received,
+            },
+            PaymentState::Cancelled => CaptureAnswer::Cancelled {
+                lapsed: status.lapsed,
+            },
+            _ => CaptureAnswer::Refused(refused.0),
+        })
+    }
+
+    /// Read first, then cancelled: a hold cancelled already is given back,
+    /// money taken already is told.
+    async fn release_payment(
+        &self,
+        secret_key: &str,
+        payment_id: &str,
+    ) -> anyhow::Result<ReleaseAnswer> {
+        let client = self.client(secret_key)?;
+        let answer = |status: PaymentStatus| match status.state {
+            PaymentState::Cancelled => Some(ReleaseAnswer::Released),
+            PaymentState::Captured => Some(ReleaseAnswer::Captured {
+                amount_cents: status.amount_received,
+            }),
+            _ => None,
+        };
+        if let Some(settled) = answer(self.payment_status(secret_key, payment_id).await?) {
+            return Ok(settled);
+        }
+        let cancel = CancelPaymentIntent::new(payment_id)
+            .cancellation_reason(CancelPaymentIntentCancellationReason::RequestedByCustomer);
+        let refused = match send(&cancel, None, &client).await {
+            Ok(_) => return Ok(ReleaseAnswer::Released),
+            Err(err) => err,
+        };
+        answer(self.payment_status(secret_key, payment_id).await?).ok_or(refused)
+    }
 }
 
 #[cfg(test)]
@@ -330,15 +528,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_payment_is_cancelled_unless_paid_or_settling() {
+    fn a_payment_is_cancelled_unless_confirmed() {
         for cancellable in [
             PaymentIntentStatus::RequiresPaymentMethod,
             PaymentIntentStatus::RequiresConfirmation,
             PaymentIntentStatus::RequiresAction,
-            PaymentIntentStatus::RequiresCapture,
         ] {
             assert_eq!(settled(&cancellable), None, "{cancellable:?}");
         }
+        assert_eq!(
+            settled(&PaymentIntentStatus::RequiresCapture),
+            Some(Cancellation::Authorized),
+            "its money is held for an order"
+        );
         assert_eq!(
             settled(&PaymentIntentStatus::Processing),
             Some(Cancellation::Confirming)

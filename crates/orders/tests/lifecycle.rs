@@ -1,12 +1,18 @@
 mod common;
 
 use common::*;
-use timada_orders::{OrderError, OrderStatus};
+use timada_orders::{CancelPath, CaptureClaim, HOLD_EXPIRED_REASON, OrderError, OrderStatus};
 
-async fn paid(orders: &Orders, catalog: &Catalog) -> String {
+async fn held(orders: &Orders, catalog: &Catalog) -> String {
     let mug = product(catalog, "Mug", 1250, "EUR").await;
     let cart_id = cart_with(orders, &mug, 1).await;
-    pay(orders, &cart_id, checkout()).await.order_id
+    place(orders, &cart_id, checkout()).await.order_id
+}
+
+async fn paid(orders: &Orders, catalog: &Catalog) -> String {
+    let order_id = held(orders, catalog).await;
+    capture(orders, &order_id).await;
+    order_id
 }
 
 #[tokio::test]
@@ -31,58 +37,248 @@ async fn a_paid_order_is_fulfilled() {
     assert!(answered.get("fulfilled_by").is_none());
 
     let late = orders
-        .cancel_order(ALICE, &order_id, "changed my mind".into())
+        .request_cancellation(ALICE, &order_id, "changed my mind".into())
         .await;
     assert!(matches!(late, Err(OrderError::NotCancellable)), "{late:?}");
 }
 
+/// The order exists once the money is held: nothing can be refunded and
+/// nothing leaves before it is taken, and taking it goes in two steps, so
+/// only the one who asked speaks to the provider.
 #[tokio::test]
-async fn an_order_is_cancelled_with_a_reason_and_refunded() {
+async fn a_held_payment_is_taken_once() {
     let (orders, catalog) = store().await;
-    let order_id = paid(&orders, &catalog).await;
+    let order_id = held(&orders, &catalog).await;
 
-    let bare = orders.cancel_order(ALICE, &order_id, "  ".into()).await;
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Authorized);
+    assert!(order.may_capture());
+    assert!(!order.awaits_supplier(), "the shop holds the goods");
+    let refund = orders.request_refund(ALICE, &order_id, 100).await;
+    assert!(
+        matches!(refund, Err(OrderError::PaymentNotCaptured)),
+        "{refund:?}"
+    );
+    let early = orders.fulfil_order(ALICE, &order_id, None).await;
+    assert!(
+        matches!(early, Err(OrderError::PaymentNotCaptured)),
+        "{early:?}"
+    );
+
+    let claim = orders.request_capture(DASHBOARD, &order_id).await.unwrap();
+    let CaptureClaim::Claimed(pending) = claim else {
+        panic!("the first to ask claims it: {claim:?}");
+    };
+    assert_eq!(pending.payment_id, order.payment.payment_id);
+    assert_eq!(pending.amount_cents, 1250);
+    assert_eq!(pending.requested_by, DASHBOARD);
+    // Another node, or the merchant, asking meanwhile: told, not asked again.
+    let again = orders.request_capture(ALICE, &order_id).await.unwrap();
+    assert!(matches!(again, CaptureClaim::Pending(_)), "{again:?}");
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.payment_state(), "capturing");
+    assert!(!order.may_capture());
+
+    // The provider refused: recorded, and it may be asked again.
+    orders
+        .record_capture_failure(DASHBOARD, &order_id, "Your card was declined.")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.payment_state(), "capture_failed");
+    assert_eq!(
+        order.capture_failure.as_deref(),
+        Some("Your card was declined.")
+    );
+    assert!(order.pending_capture.is_none());
+    // A failure with nothing asked is nothing.
+    orders
+        .record_capture_failure(DASHBOARD, &order_id, "late")
+        .await
+        .unwrap();
+    let claim = orders.request_capture(ALICE, &order_id).await.unwrap();
+    assert!(matches!(claim, CaptureClaim::Claimed(_)), "{claim:?}");
+
+    let wrong = orders
+        .record_payment(DASHBOARD, &order_id, "pi_other", 1250)
+        .await;
+    assert!(
+        matches!(wrong, Err(OrderError::PaymentNotFound)),
+        "{wrong:?}"
+    );
+    orders
+        .record_payment(DASHBOARD, &order_id, &order.payment.payment_id, 1250)
+        .await
+        .unwrap();
+    // Told twice (the webhook after the capture): the same order.
+    orders
+        .record_payment(DASHBOARD, &order_id, &order.payment.payment_id, 1250)
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Paid);
+    assert_eq!(order.paid_cents, 1250);
+    assert!(order.paid_at.is_some());
+    assert_eq!(order.capture_failure, None);
+    assert_eq!(order.outstanding_cents(), 1250);
+    let done = orders.request_capture(ALICE, &order_id).await.unwrap();
+    assert_eq!(done, CaptureClaim::Paid);
+}
+
+/// A held order is cancelled by giving its hold back: the reason and the
+/// person of the request are what `Cancelled` says, written with the
+/// release, and nothing can take the money any more.
+#[tokio::test]
+async fn a_held_order_is_cancelled_by_releasing_its_hold() {
+    let (orders, catalog) = store().await;
+    let order_id = held(&orders, &catalog).await;
+
+    let bare = orders
+        .request_cancellation(ALICE, &order_id, "  ".into())
+        .await;
     assert!(matches!(bare, Err(OrderError::InvalidReason)), "{bare:?}");
-    orders
-        .cancel_order(ALICE, &order_id, "Out of stock".into())
+    let path = orders
+        .request_cancellation(ALICE, &order_id, "Out of stock".into())
         .await
         .unwrap();
-    orders
-        .cancel_order(ALICE, &order_id, "again".into())
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(
+        path,
+        CancelPath::Release {
+            payment_id: order.payment.payment_id.clone()
+        }
+    );
+    // Asked again before it is settled: the same path, nothing more written.
+    let again = orders
+        .request_cancellation(SHOPPER, &order_id, "again".into())
         .await
         .unwrap();
-    orders
-        .record_refund(ALICE, &order_id, "re_1", 1250)
-        .await
-        .unwrap();
-    orders
-        .record_refund(ALICE, &order_id, "re_1", 1250)
-        .await
-        .unwrap();
+    assert_eq!(again, path);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Authorized, "not cancelled yet");
+    assert_eq!(
+        order
+            .pending_cancellation
+            .as_ref()
+            .map(|asked| asked.requested_by.as_str()),
+        Some(ALICE)
+    );
+    let taken = orders.request_capture(DASHBOARD, &order_id).await;
+    assert!(
+        matches!(taken, Err(OrderError::CancellationPending)),
+        "{taken:?}"
+    );
+    let shipped = orders.fulfil_order(ALICE, &order_id, None).await;
+    assert!(shipped.is_err(), "{shipped:?}");
 
+    orders
+        .record_release(DASHBOARD, &order_id, &order.payment.payment_id, "")
+        .await
+        .unwrap();
+    orders
+        .record_release(DASHBOARD, &order_id, &order.payment.payment_id, "")
+        .await
+        .unwrap();
     let order = orders.load_order(&order_id).await.unwrap().unwrap();
     assert_eq!(order.status, OrderStatus::Cancelled);
     assert_eq!(order.cancel_reason.as_deref(), Some("Out of stock"));
-    assert_eq!(order.refunded_cents, 1250, "the same refund counts once");
-    let fulfilled = orders.fulfil_order(ALICE, &order_id, None).await;
+    assert!(order.released_at.is_some());
+    assert_eq!(order.payment_state(), "released");
+    assert!(order.pending_cancellation.is_none());
+    assert_eq!(order.refunded_cents, 0, "nothing was taken");
+
+    let late = orders.request_capture(DASHBOARD, &order_id).await;
+    assert!(matches!(late, Err(OrderError::OrderCancelled)), "{late:?}");
+    let paid = orders
+        .record_payment(DASHBOARD, &order_id, &order.payment.payment_id, 1250)
+        .await;
+    assert!(matches!(paid, Err(OrderError::OrderCancelled)), "{paid:?}");
+    let done = orders
+        .request_cancellation(ALICE, &order_id, "again".into())
+        .await
+        .unwrap();
+    assert_eq!(done, CancelPath::Done);
+}
+
+/// The provider dropped the hold on its own: the order is cancelled with
+/// the reason given, by whoever recorded it.
+#[tokio::test]
+async fn a_lapsed_hold_cancels_the_order() {
+    let (orders, catalog) = store().await;
+    let order_id = held(&orders, &catalog).await;
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+
+    orders
+        .record_release(
+            DASHBOARD,
+            &order_id,
+            &order.payment.payment_id,
+            HOLD_EXPIRED_REASON,
+        )
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Cancelled);
+    assert_eq!(order.cancel_reason.as_deref(), Some(HOLD_EXPIRED_REASON));
+
+    // A taken payment is not released: there is nothing held.
+    let order_id = paid(&orders, &catalog).await;
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    let released = orders
+        .record_release(DASHBOARD, &order_id, &order.payment.payment_id, "")
+        .await;
     assert!(
-        matches!(fulfilled, Err(OrderError::OrderCancelled)),
-        "{fulfilled:?}"
-    );
-    let missing = orders.fulfil_order(ALICE, "no-such-order", None).await;
-    assert!(
-        matches!(missing, Err(OrderError::OrderNotFound)),
-        "{missing:?}"
+        matches!(released, Err(OrderError::NotCancellable)),
+        "{released:?}"
     );
 }
 
-/// A refund is asked for on the order before the provider is: the key the
-/// provider is asked with is fixed there, so a retry makes the same refund,
-/// and the order is not cancelled until the money is known to be on its way.
+/// The provider is asked one thing at a time: a cancellation waits for a
+/// capture in flight, then takes the refund path.
 #[tokio::test]
-async fn a_refund_is_requested_before_the_provider_and_settled_after() {
+async fn a_capture_in_flight_holds_off_a_cancellation() {
+    let (orders, catalog) = store().await;
+    let order_id = held(&orders, &catalog).await;
+    orders.request_capture(DASHBOARD, &order_id).await.unwrap();
+
+    let early = orders
+        .request_cancellation(ALICE, &order_id, "Out of stock".into())
+        .await;
+    assert!(
+        matches!(early, Err(OrderError::CapturePending)),
+        "{early:?}"
+    );
+
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    orders
+        .record_payment(DASHBOARD, &order_id, &order.payment.payment_id, 1250)
+        .await
+        .unwrap();
+    let path = orders
+        .request_cancellation(ALICE, &order_id, "Out of stock".into())
+        .await
+        .unwrap();
+    assert_eq!(path, CancelPath::Refund);
+}
+
+/// A taken payment is refunded before the order is cancelled; the key the
+/// provider is asked with is fixed on the order first, so a retry makes the
+/// same refund.
+#[tokio::test]
+async fn a_paid_order_is_refunded_then_cancelled() {
     let (orders, catalog) = store().await;
     let order_id = paid(&orders, &catalog).await;
+
+    let path = orders
+        .request_cancellation(ALICE, &order_id, "Out of stock".into())
+        .await
+        .unwrap();
+    assert_eq!(path, CancelPath::Refund);
+    let shipped = orders.fulfil_order(ALICE, &order_id, None).await;
+    assert!(
+        matches!(shipped, Err(OrderError::CancellationPending)),
+        "{shipped:?}"
+    );
 
     let none = orders.request_refund(ALICE, &order_id, 0).await;
     assert!(matches!(none, Err(OrderError::InvalidRefund)), "{none:?}");
@@ -90,6 +286,12 @@ async fn a_refund_is_requested_before_the_provider_and_settled_after() {
     assert!(
         matches!(too_much, Err(OrderError::InvalidRefund)),
         "{too_much:?}"
+    );
+    // Not cancelled while money is outstanding.
+    let unpaid_back = orders.complete_cancellation(&order_id).await;
+    assert!(
+        matches!(unpaid_back, Err(OrderError::InvalidRefund)),
+        "{unpaid_back:?}"
     );
     let pending = orders.request_refund(ALICE, &order_id, 1250).await.unwrap();
     assert_eq!(pending.amount_cents, 1250);
@@ -105,12 +307,14 @@ async fn a_refund_is_requested_before_the_provider_and_settled_after() {
     );
 
     // Not cancelled while the money is not known to be on its way.
-    let early = orders
-        .cancel_order(ALICE, &order_id, "Out of stock".into())
-        .await;
+    let early = orders.complete_cancellation(&order_id).await;
     assert!(matches!(early, Err(OrderError::RefundPending)), "{early:?}");
 
-    // The provider's word settles it; the order can then be cancelled.
+    // The provider's word settles it; the order is then cancelled.
+    orders
+        .record_refund(ALICE, &order_id, "re_1", 1250)
+        .await
+        .unwrap();
     orders
         .record_refund(ALICE, &order_id, "re_1", 1250)
         .await
@@ -118,13 +322,26 @@ async fn a_refund_is_requested_before_the_provider_and_settled_after() {
     let order = orders.load_order(&order_id).await.unwrap().unwrap();
     assert!(order.pending_refund.is_none());
     assert_eq!(order.outstanding_cents(), 0);
-    orders
-        .cancel_order(ALICE, &order_id, "Out of stock".into())
-        .await
-        .unwrap();
+    assert_eq!(order.refunded_cents, 1250, "the same refund counts once");
+    orders.complete_cancellation(&order_id).await.unwrap();
+    orders.complete_cancellation(&order_id).await.unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Cancelled);
+    assert_eq!(order.cancel_reason.as_deref(), Some("Out of stock"));
+    assert_eq!(order.released_at, None);
     // Nothing outstanding: nothing more to ask for.
     let spent = orders.request_refund(ALICE, &order_id, 1).await;
     assert!(matches!(spent, Err(OrderError::InvalidRefund)), "{spent:?}");
+    let fulfilled = orders.fulfil_order(ALICE, &order_id, None).await;
+    assert!(
+        matches!(fulfilled, Err(OrderError::OrderCancelled)),
+        "{fulfilled:?}"
+    );
+    let missing = orders.fulfil_order(ALICE, "no-such-order", None).await;
+    assert!(
+        matches!(missing, Err(OrderError::OrderNotFound)),
+        "{missing:?}"
+    );
 
     // An order that left is not refunded this way.
     let left = paid(&orders, &catalog).await;

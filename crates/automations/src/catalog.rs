@@ -55,14 +55,16 @@ impl Subject {
     }
 }
 
-/// An order was placed: it is paid, as an order exists only once paid.
+/// An order was placed: its payment is held on the shopper's card, and
+/// taken at once or once a supplier has the goods.
 pub const ORDER_PLACED: &str = "order.placed";
 /// An order was marked shipped (fulfilled).
 pub const ORDER_FULFILLED: &str = "order.fulfilled";
 pub const ORDER_CANCELLED: &str = "order.cancelled";
 /// Money went back on an order: once per refund, so a partial refund
-/// fires it as many times as there are refunds, and cancelling an order
-/// (which refunds it) fires it next to [`ORDER_CANCELLED`].
+/// fires it as many times as there are refunds, and cancelling a paid order
+/// (which refunds it) fires it next to [`ORDER_CANCELLED`]. A hold given
+/// back, nothing taken, is no refund.
 pub const ORDER_REFUNDED: &str = "order.refunded";
 /// A customer made an account with the shop.
 pub const SHOPPER_REGISTERED: &str = "shopper.registered";

@@ -61,6 +61,7 @@ fn say_done(code: &str) -> Option<&'static str> {
 /// An order's status, as the orders table shows it.
 fn status_label(status: OrderStatus) -> &'static str {
     match status {
+        OrderStatus::Authorized => "Enregistrée",
         OrderStatus::Paid => "Payée",
         OrderStatus::Fulfilled => "Expédiée",
         OrderStatus::Cancelled => "Annulée",

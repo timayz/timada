@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use timada_orders::{OrderStatus, normalize_reason};
+use timada_orders::{CancelPath, OrderError, normalize_reason};
 use timada_tenancy::PERMISSION_ORDERS_MANAGE;
 use topcoat::{
     Result,
@@ -12,18 +12,19 @@ use topcoat::{
     },
 };
 
-use super::{CancelForm, OrderId, order_url, require_order};
+use super::{CancelForm, OrderId, order_url};
 use crate::app::t::slug::orders::orders;
 use crate::app::t::slug::require_tenant;
 use crate::payments::Payments;
+use crate::payments::settle::{CancelOutcome, settle_cancellation};
 
-/// Calls off a paid order: the refund is asked for on the order first
-/// (`request_refund`, which fixes the idempotency key), then made through
-/// Stripe (in full, what is not refunded yet), recorded, and only then is
-/// the order cancelled. A refund Stripe refuses leaves the order paid with
-/// the request pending; posting again retries under the same key, so Stripe
-/// never refunds twice, and `charge.refunded` records a refund Stripe took
-/// whose recording failed here.
+/// Calls off an order that has not left. The cancellation is asked for on
+/// the order first, then settled with Stripe: a payment only held is given
+/// back, one taken is refunded in full (the refund asked for on the order
+/// first, which fixes the idempotency key), and only then is the order
+/// cancelled. A Stripe that refuses, or does not answer, leaves the
+/// cancellation standing: posting again retries under the same key, so
+/// Stripe never refunds twice, and the sweep settles it otherwise.
 #[route(POST)]
 pub async fn cancel(cx: &Cx, Form(form): Form<CancelForm>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
@@ -39,50 +40,42 @@ pub async fn cancel(cx: &Cx, Form(form): Form<CancelForm>) -> Result<SeeOther> {
         Ok(reason) => reason,
         Err(err) => return Ok(back(err.code(), None)),
     };
-    let order = require_order(cx, &access).await?;
+    let payments = app_context::<Arc<Payments>>(cx);
+    let Some(account) = payments
+        .account_of(&access.tenant)
+        .map_err(topcoat::Error::from_anyhow)?
+    else {
+        return Ok(back(Some("payments_unavailable"), None));
+    };
     let gateway = orders(&access)?;
-    let outstanding = order.total_cents.saturating_sub(order.refunded_cents);
-    if order.status == OrderStatus::Paid && outstanding > 0 {
-        let payments = app_context::<Arc<Payments>>(cx);
-        let Some(account) = payments
-            .account_of(&access.tenant)
-            .map_err(topcoat::Error::from_anyhow)?
-        else {
-            return Ok(back(Some("payments_unavailable"), None));
-        };
-        let pending = gateway
-            .request_refund(&access.user_id, &order_id, outstanding)
-            .await
-            .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
-        let refund = payments
-            .gateway
-            .refund(
-                &account.secret_key,
-                &pending.payment_id,
-                pending.amount_cents,
-                &pending.idempotency_key,
-            )
-            .await;
-        let refund_id = match refund {
-            Ok(id) => id,
-            Err(err) => {
-                tracing::warn!(tenant = %slug, %order_id, %err, "Stripe refused a refund");
-                return Ok(back(Some("refund_failed"), None));
-            }
-        };
-        gateway
-            .record_refund(&access.user_id, &order_id, &refund_id, pending.amount_cents)
-            .await
-            .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
-    }
-    match gateway
-        .cancel_order(&access.user_id, &order_id, reason)
+    let path = match gateway
+        .request_cancellation(&access.user_id, &order_id, reason)
         .await
     {
-        Ok(()) => Ok(back(None, Some("Order cancelled and refunded."))),
+        Ok(path) => path,
+        Err(err @ OrderError::Other(_)) => return Err(topcoat::Error::from_anyhow(err.into())),
         Err(err) => match err.code() {
-            Some(code) => Ok(back(Some(code), None)),
-            None => Err(topcoat::Error::from_anyhow(err.into())),
+            Some(code) => return Ok(back(Some(code), None)),
+            None => return Err(topcoat::Error::from_anyhow(err.into())),
         },
-    }
+    };
+    let settled = settle_cancellation(payments, &account, &gateway, &order_id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    Ok(match settled {
+        CancelOutcome::Cancelled | CancelOutcome::Nothing => back(
+            None,
+            Some(match path {
+                CancelPath::Refund => "Order cancelled and refunded.",
+                CancelPath::Release { .. } => {
+                    "Order cancelled: the hold on the shopper's card was given back."
+                }
+                CancelPath::Done => "Order cancelled.",
+            }),
+        ),
+        CancelOutcome::Unanswered(reason) => {
+            tracing::warn!(tenant = %slug, %order_id, %reason, "an order's cancellation is not settled with Stripe yet");
+            back(Some("refund_failed"), None)
+        }
+    })
 }

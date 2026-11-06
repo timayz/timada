@@ -95,7 +95,7 @@ async fn a_discounted_payment_makes_a_discounted_order_and_spends_the_use() {
     assert_eq!((granted.subtotal_cents, granted.amount_cents), (2500, 250));
 
     let placed = orders
-        .place_paid_order(DASHBOARD, &cart_id, payment)
+        .place_order(DASHBOARD, &cart_id, payment)
         .await
         .unwrap();
     let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();

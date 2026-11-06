@@ -95,8 +95,9 @@ pub fn check_draft(
 
 impl<E: Executor> super::Command<E> {
     /// The line of a paid, live order a shopper may review `product_id` from,
-    /// with the order: refused for an unknown or cancelled order, a product
-    /// it does not hold, or one already reviewed from it.
+    /// with the order: refused for an unknown or cancelled order, one whose
+    /// money is only held, a product it does not hold, or one already
+    /// reviewed from it.
     pub async fn reviewable_line(
         &self,
         order_id: &str,
@@ -108,8 +109,10 @@ impl<E: Executor> super::Command<E> {
             .execute(&self.executor)
             .await?
             .ok_or(ReviewError::OrderNotFound)?;
-        if order.status == OrderStatus::Cancelled {
-            return Err(ReviewError::OrderCancelled);
+        match order.status {
+            OrderStatus::Paid | OrderStatus::Fulfilled => {}
+            OrderStatus::Cancelled => return Err(ReviewError::OrderCancelled),
+            OrderStatus::Authorized => return Err(ReviewError::OrderNotPaid),
         }
         let line = order
             .lines

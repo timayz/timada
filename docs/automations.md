@@ -39,8 +39,9 @@ the scenario's name and its `Definition`, kept whole as JSON in the events:
   (its *subject*: an order, a customer, a subscriber, a review, a message) and
   what a condition may look at for each subject. No enum is frozen in
   `events.lock`, so the catalog grows freely. Today's triggers: `order.placed`
-  (paid: an order exists only once paid), `order.fulfilled`, `order.cancelled`,
-  `order.refunded` (once per refund), `shopper.registered`,
+  (its payment held on the shopper's card, taken then or later), `order.fulfilled`,
+  `order.cancelled`, `order.refunded` (once per refund: a hold given back is none),
+  `shopper.registered`,
   `subscriber.confirmed`, `review.submitted`, `review.published`,
   `message.received` and `checkout.abandoned` (a shopper asked to pay and no
   order followed within `[automations]`'s delay). Today's steps: `wait`,
