@@ -16,6 +16,7 @@ use topcoat::{
 use super::{payments_url, publish_setup};
 use crate::app::t::slug::require_tenant;
 use crate::app::tenants::{error_code, tenancy};
+use crate::db::Db;
 use crate::payments::Payments;
 
 #[derive(Deserialize)]
@@ -25,7 +26,9 @@ pub struct ConfigureForm {
     webhook_secret: String,
 }
 
-/// Saves the Stripe account once Stripe accepts its secret key.
+/// Saves the Stripe account once Stripe accepts its secret key; after a
+/// stop, it takes payments again. Another account (another publishable
+/// key) is refused while anything is held or owed under the current one.
 #[route(POST)]
 pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
@@ -57,6 +60,27 @@ pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOt
             cx,
             slug,
             Some("invalid_webhook_secret"),
+            None,
+        )));
+    }
+    // What is still held or owed is settled under the account it was paid
+    // through: until it is, another account's keys would strand it. The
+    // same account's keys (a rolled secret key) are fine.
+    let other_account = access
+        .tenant
+        .payments
+        .as_ref()
+        .is_some_and(|current| current.publishable_key != form.publishable_key.trim());
+    if other_account
+        && timada_orders::money_owed(app_context::<Db>(cx), &access.tenant.id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+            > 0
+    {
+        return Ok(see_other(payments_url(
+            cx,
+            slug,
+            Some("account_in_use"),
             None,
         )));
     }

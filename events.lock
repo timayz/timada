@@ -200,6 +200,7 @@ event timada-orders/Cart::NewsletterOptedIn { request_id: String, opted_in_by: S
 event timada-orders/Cart::PaymentCancelled { request_id: String, payment_id: String, cancelled_by: String }
 event timada-orders/Cart::PaymentRefused { request_id: String, code: String, refused_by: String }
 event timada-orders/Cart::PaymentRequested { request_id: String, provider: String, payment_id: String, client_secret: String, publishable_key: String, lines: Vec<OrderLine>, currency: String, total_cents: u64, supplier: Option<String>, requested_by: String }
+event timada-orders/Cart::PaymentReturnRefused { request_id: String, payment_id: String, reason: String, refused_by: String }
 event timada-orders/Cart::PaymentReturnRequested { request_id: String, payment_id: String, code: String, requested_by: String }
 event timada-orders/Cart::PaymentReturned { request_id: String, payment_id: String, code: String, refund_id: Option<String>, returned_by: String }
 event timada-orders/Cart::QuantitySet { product_id: String, variant_id: Option<String>, quantity: u32, set_by: String }
@@ -315,7 +316,8 @@ event timada-tenancy/Tenant::MemberGranted { user_id: String, role: String }
 event timada-tenancy/Tenant::MemberRevoked { user_id: String }
 event timada-tenancy/Tenant::MemberRoleChanged { user_id: String, role: String }
 event timada-tenancy/Tenant::PaymentsConfigured { provider: String, publishable_key: String, secret_key_sealed: Vec<u8>, webhook_secret_sealed: Vec<u8>, configured_by: String }
-event timada-tenancy/Tenant::PaymentsRemoved { removed_by: String }
+event timada-tenancy/Tenant::PaymentsForgotten { forgotten_by: String }
+event timada-tenancy/Tenant::PaymentsStopped { stopped_by: String }
 event timada-tenancy/Tenant::Renamed { name: String }
 event timada-tenancy/Tenant::Resumed unit
 event timada-tenancy/Tenant::RoleDefined { role: String, label: String, permissions: Vec<String> }

@@ -63,8 +63,18 @@ pub enum Tenant {
         webhook_secret_sealed: Vec<u8>,
         configured_by: String,
     },
-    PaymentsRemoved {
-        removed_by: String,
+    /// The tenant takes no new payment: storefronts stop offering the card
+    /// form and requests to pay are refused. The keys stay, sealed, so what
+    /// is still held or owed is settled; they are forgotten
+    /// (`PaymentsForgotten`) once nothing is. Saving keys again
+    /// (`PaymentsConfigured`) takes payments again.
+    PaymentsStopped {
+        stopped_by: String,
+    },
+    /// The keys of a tenant that stopped taking payments are dropped:
+    /// nothing was held or owed any more. Written by the dashboard.
+    PaymentsForgotten {
+        forgotten_by: String,
     },
     /// The tenant sells as this company ([`company`]): its invoices name
     /// the company and are numbered in the company's series `series_code`

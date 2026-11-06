@@ -118,14 +118,15 @@ async fn upsert_tenant(db: &Db, tenant: &TenantState) -> anyhow::Result<()> {
                 tx,
                 "INSERT INTO tenancy_tenants (id, slug, name, created_by, created_at, suspended,
                     suspended_reason, member_count, company_id, series_code, slug_search,
-                    name_search)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                    name_search, payments_stopped_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT (id) DO UPDATE SET
                     slug = excluded.slug, name = excluded.name,
                     suspended = excluded.suspended, suspended_reason = excluded.suspended_reason,
                     member_count = excluded.member_count, company_id = excluded.company_id,
                     series_code = excluded.series_code, slug_search = excluded.slug_search,
-                    name_search = excluded.name_search",
+                    name_search = excluded.name_search,
+                    payments_stopped_at = excluded.payments_stopped_at",
                 (
                     tenant.id.as_str(),
                     tenant.slug.as_str(),
@@ -142,6 +143,11 @@ async fn upsert_tenant(db: &Db, tenant: &TenantState) -> anyhow::Result<()> {
                         .map(|link| link.series_code.as_str()),
                     search_key(&tenant.slug),
                     search_key(&tenant.name),
+                    tenant
+                        .payments
+                        .as_ref()
+                        .and_then(|payments| payments.stopped_at)
+                        .map(|at| at as i64),
                 ),
             )
             .await?;

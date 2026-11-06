@@ -127,6 +127,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<OrderQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let order = require_order(cx, &access).await?;
+    // Another payment of its cart that Stripe would not give back, for
+    // good: the merchant settles it in Stripe.
+    let not_given_back: Vec<(String, String)> = orders(&access)?
+        .load_cart(&order.cart_id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .map(|cart| {
+            cart.refused_returns()
+                .into_iter()
+                .map(|(payment_id, reason)| (payment_id.to_owned(), reason.to_owned()))
+                .collect()
+        })
+        .unwrap_or_default();
     // Read from their own streams, like the order: issued a moment after
     // the payment (or the refund), they show as soon as they exist.
     let invoicing = crate::app::t::slug::invoices::invoicing(&access)?;
@@ -332,6 +345,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     }
                     if let Some(pending) = &pending_refund {
                         fact(term: "Refund pending", attrs: attributes! { data-order-refund-pending="" }, (pending) " · asked for, not confirmed by Stripe yet")
+                    }
+                    for (payment_id, reason) in &not_given_back {
+                        fact(term: "Not given back", attrs: attributes! { data-order-not-given-back=(payment_id) }, "another payment of this cart, " (payment_id) ": Stripe said " (reason) " · settle it in Stripe")
                     }
                     if let Some(at) = order.fulfilled_at {
                         fact(term: "Fulfilled", <time datetime=(at)>(format_time(at))</time>)

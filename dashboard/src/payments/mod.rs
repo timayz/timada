@@ -105,8 +105,31 @@ impl Payments {
         self.sealer()?.seal_for(tenant_id, plain)
     }
 
+    /// The account new payments open with: none once the tenant stopped
+    /// taking payments, whose keys only settle what is held or owed.
+    pub fn checkout_account_of(&self, tenant: &TenantState) -> anyhow::Result<Option<Account>> {
+        let stopped = tenant
+            .payments
+            .as_ref()
+            .is_some_and(timada_tenancy::PaymentSettings::is_stopped);
+        if stopped {
+            return Ok(None);
+        }
+        self.account_of(tenant)
+    }
+
+    /// Forgets the keys of a tenant that stopped taking payments, the caller
+    /// having found nothing held or owed any more (`Tenant::PaymentsForgotten`):
+    /// whether this call forgot them.
+    pub async fn forget_keys(&self, tenant_id: &str) -> anyhow::Result<bool> {
+        Ok(timada_tenancy::Command(self.platform.clone())
+            .forget_payments(DASHBOARD_ACTOR, tenant_id)
+            .await?)
+    }
+
     /// The tenant's Stripe account, opened; `None` when it set up none or
-    /// payments are off here.
+    /// payments are off here. A tenant that stopped taking payments keeps
+    /// it until what is held or owed is settled.
     pub fn account_of(&self, tenant: &TenantState) -> anyhow::Result<Option<Account>> {
         let (Some(settings), Some(sealer)) = (&tenant.payments, &self.sealer) else {
             return Ok(None);

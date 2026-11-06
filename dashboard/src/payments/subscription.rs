@@ -212,7 +212,9 @@ impl Checkouts {
                 return Ok(());
             }
         }
-        let Some(account) = payments.account_of(&merchant)? else {
+        // A shop that stopped taking payments opens none, its keys kept only
+        // to settle what is held or owed.
+        let Some(account) = payments.checkout_account_of(&merchant)? else {
             refuse(PAYMENTS_UNAVAILABLE).await?;
             return Ok(());
         };

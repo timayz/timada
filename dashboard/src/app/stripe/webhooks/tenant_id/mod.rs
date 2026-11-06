@@ -60,6 +60,7 @@ pub async fn receive(cx: &Cx, body: Bytes) -> Result<StatusCode> {
         Outcome::Placed { .. }
         | Outcome::Refunded { .. }
         | Outcome::Returned { .. }
+        | Outcome::NotReturned { .. }
         | Outcome::Paid { .. }
         | Outcome::Cancelled { .. }
         | Outcome::Reconciled { .. }

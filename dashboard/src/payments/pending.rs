@@ -13,15 +13,17 @@
 //! provider. Two nodes doing it at once ask the provider twice, under the
 //! same keys; its answer is recorded once.
 //!
-//! A shop that is suspended or took its provider account away is skipped.
-//! An order the provider would not answer for is asked about again only
-//! after [`RECHECK_SECS`](super::RECHECK_SECS).
+//! A shop that is suspended or whose keys are forgotten is skipped; one that
+//! stopped taking payments is settled with the keys it keeps for that, and
+//! the sweep forgets them (`Tenant::PaymentsForgotten`) once nothing is held
+//! or owed any more. An order the provider would not answer for is asked
+//! about again only after [`RECHECK_SECS`](super::RECHECK_SECS).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use timada_orders::{OrderStatus, payments_due, returns_due};
+use timada_orders::{OrderStatus, money_owed, payments_due, returns_due};
 use tokio::task::JoinHandle;
 
 use super::settle::{self, CancelOutcome, CaptureOutcome};
@@ -114,8 +116,30 @@ impl PendingPayments {
                 }
             }
         }
+        // A shop that stopped taking payments keeps its keys only while
+        // something is held or owed: once nothing is, they are forgotten.
+        for tenant_id in timada_tenancy::payments_stopped_tenant_ids(&self.db).await? {
+            match self.forget_if_settled(&tenant_id).await {
+                Ok(true) => {
+                    tracing::info!(%tenant_id, "a shop that stopped taking payments holds nothing any more: its keys are forgotten");
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    tracing::error!(%tenant_id, error = %err, "a stopped shop's keys not forgotten");
+                }
+            }
+        }
         lock(&self.recheck_at).retain(|_, at| *at > now);
         Ok(settled)
+    }
+
+    /// Forgets the keys of a shop that stopped taking payments, once
+    /// nothing is held or owed any more: whether it did.
+    async fn forget_if_settled(&self, tenant_id: &str) -> anyhow::Result<bool> {
+        if money_owed(&self.db, tenant_id).await? > 0 {
+            return Ok(false);
+        }
+        self.payments.forget_keys(tenant_id).await
     }
 
     /// The tenant's provider account, unless it is suspended or took it away.
@@ -235,7 +259,7 @@ impl PendingPayments {
                     Err(err) => Err(err),
                 };
                 match returned {
-                    Ok(Outcome::Returned { .. }) => settled += 1,
+                    Ok(Outcome::Returned { .. } | Outcome::NotReturned { .. }) => settled += 1,
                     Ok(outcome) => {
                         tracing::warn!(%tenant_id, cart = %cart_id, payment = %payment_id, ?outcome, "a payment to give back is not given back yet");
                         lock(&self.recheck_at).insert(payment_id.to_owned(), now + RECHECK_SECS);

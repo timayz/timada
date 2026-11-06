@@ -8,7 +8,7 @@ mod common;
 
 use common::*;
 use timada_orders::{
-    Command, OrderError, PaymentAnswer, ReturnedPayment, money_held, payments_due,
+    Command, OrderError, PaymentAnswer, ReturnedPayment, money_owed, payments_due,
     read_model_subscription, returns_due,
 };
 
@@ -87,7 +87,7 @@ async fn a_payment_goes_back_once_for_the_reason_asked_first() {
         returns_due(&db, 0, 10).await.unwrap().is_empty(),
         "asked just now"
     );
-    assert!(money_held(&db, TENANT).await.unwrap());
+    assert_eq!(money_owed(&db, TENANT).await.unwrap(), 1);
 
     orders
         .return_payment(DASHBOARD, &cart_id, &payment.payment_id, None)
@@ -117,7 +117,7 @@ async fn a_payment_goes_back_once_for_the_reason_asked_first() {
     );
     read().await;
     assert!(returns_due(&db, i64::MAX, 10).await.unwrap().is_empty());
-    assert!(!money_held(&db, TENANT).await.unwrap());
+    assert_eq!(money_owed(&db, TENANT).await.unwrap(), 0);
 }
 
 #[tokio::test]
@@ -215,7 +215,7 @@ async fn money_taken_for_a_cancelled_order_goes_back_through_it() {
         .unwrap();
     let due = payments_due(&db, 0, i64::MAX, 10).await.unwrap();
     assert!(due.iter().any(|row| row.id == placed.order_id), "{due:?}");
-    assert!(money_held(&db, TENANT).await.unwrap());
+    assert_eq!(money_owed(&db, TENANT).await.unwrap(), 1);
 
     orders
         .record_refund(DASHBOARD, &placed.order_id, "re_1", pending.amount_cents)
@@ -237,5 +237,125 @@ async fn money_taken_for_a_cancelled_order_goes_back_through_it() {
         .run_once(&executor)
         .await
         .unwrap();
-    assert!(!money_held(&db, TENANT).await.unwrap());
+    assert_eq!(money_owed(&db, TENANT).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn what_is_held_or_owed_is_counted_until_it_is_settled() {
+    let (executor, db) = executor_with_pool().await;
+    let orders = Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let owed = async || {
+        read_model_subscription::<evento::Turso>(db.clone())
+            .run_once(&executor)
+            .await
+            .unwrap();
+        money_owed(&db, TENANT).await.unwrap()
+    };
+    assert_eq!(owed().await, 0);
+
+    // A request being answered, a card form open, an order's money held.
+    let asking = cart_with(&orders, &mug, 1).await;
+    let asked = orders
+        .request_checkout(SHOPPER, &asking, checkout())
+        .await
+        .unwrap();
+    let paying = cart_with(&orders, &mug, 1).await;
+    open_payment(&orders, &paying, checkout()).await;
+    let held = cart_with(&orders, &mug, 1).await;
+    let placed = place(&orders, &held, checkout()).await;
+    assert_eq!(owed().await, 3);
+
+    // Answered, closed, taken: nothing held any more. A paid order owes
+    // nothing either.
+    orders
+        .refuse_payment_request(DASHBOARD, &asking, &asked, "payments_unavailable")
+        .await
+        .unwrap();
+    let opened = orders.load_cart(&paying).await.unwrap().unwrap().requests[0]
+        .payment()
+        .unwrap()
+        .payment_id
+        .clone();
+    orders
+        .cancel_payment(DASHBOARD, &paying, &opened)
+        .await
+        .unwrap();
+    capture(&orders, &placed.order_id).await;
+    assert_eq!(owed().await, 0);
+}
+
+#[tokio::test]
+async fn a_return_the_provider_refuses_for_good_is_settled() {
+    let (executor, db) = executor_with_pool().await;
+    let orders = Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let cart_id = cart_with(&orders, &mug, 1).await;
+    let (_, first) = open_payment(&orders, &cart_id, checkout()).await;
+    let (_, second) = open_payment(&orders, &cart_id, checkout()).await;
+    orders
+        .place_order(DASHBOARD, &cart_id, first.clone())
+        .await
+        .unwrap();
+    // Nobody asked to give it back: nothing to refuse.
+    assert!(matches!(
+        orders
+            .refuse_payment_return(DASHBOARD, &cart_id, &second.payment_id, "disputed")
+            .await,
+        Err(OrderError::PaymentNotFound)
+    ));
+    orders
+        .request_payment_return(DASHBOARD, &cart_id, &second.payment_id, "duplicate_payment")
+        .await
+        .unwrap()
+        .unwrap();
+    orders
+        .refuse_payment_return(
+            DASHBOARD,
+            &cart_id,
+            &second.payment_id,
+            " This charge is disputed. ",
+        )
+        .await
+        .unwrap();
+
+    // Settled: nothing more is tried, and the cart says what Stripe said.
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(cart.pending_return(&second.payment_id), None);
+    assert_eq!(
+        cart.return_refusal(&second.payment_id),
+        Some("This charge is disputed.")
+    );
+    assert_eq!(
+        cart.refused_returns(),
+        [(second.payment_id.as_str(), "This charge is disputed.")]
+    );
+    assert_eq!(
+        orders
+            .request_payment_return(DASHBOARD, &cart_id, &second.payment_id, "duplicate_payment")
+            .await
+            .unwrap(),
+        None
+    );
+    orders
+        .refuse_payment_return(DASHBOARD, &cart_id, &second.payment_id, "again")
+        .await
+        .unwrap();
+    orders
+        .return_payment(DASHBOARD, &cart_id, &second.payment_id, None)
+        .await
+        .unwrap();
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(
+        cart.return_refusal(&second.payment_id),
+        Some("This charge is disputed.")
+    );
+    assert_eq!(cart.returned_payment(&second.payment_id), None);
+    read_model_subscription::<evento::Turso>(db.clone())
+        .run_once(&executor)
+        .await
+        .unwrap();
+    assert!(returns_due(&db, i64::MAX, 10).await.unwrap().is_empty());
 }

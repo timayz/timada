@@ -110,6 +110,20 @@ pub async fn count_tenants(db: &Db, q: Option<&str>) -> Result<i64> {
     db.fetch_scalar(statement, (search,)).await
 }
 
+/// The ids of the tenants that stopped taking payments and still keep their
+/// keys, to settle what is held or owed: the ones whose keys are to be
+/// forgotten once nothing is.
+pub async fn payments_stopped_tenant_ids(db: &Db) -> Result<Vec<String>> {
+    let rows: Vec<(String,)> = db
+        .fetch_all(
+            "SELECT id FROM tenancy_tenants WHERE payments_stopped_at IS NOT NULL
+             ORDER BY payments_stopped_at, id",
+            (),
+        )
+        .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 /// The ids of every tenant not suspended, oldest first: the tenants a node
 /// keeps a copy of.
 pub async fn active_tenant_ids(db: &Db) -> Result<Vec<String>> {

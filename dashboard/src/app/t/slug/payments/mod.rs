@@ -25,6 +25,7 @@ use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
 use crate::config::Config;
+use crate::db::Db;
 use crate::payments::Payments;
 use crate::ui::{
     Shell, Tone, document, fact, facts, format_time, icons, notice, page_header, section_card,
@@ -81,6 +82,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let webhook = webhook_url(cx, &tenant.id);
     let slug = tenant.slug.clone();
     let settings = tenant.payments.clone();
+    // Stopped, the keys stay until what is held or owed is settled.
+    let stopped_note = match settings.as_ref().filter(|settings| settings.is_stopped()) {
+        Some(_) => Some(stopped_note(
+            timada_orders::money_owed(app_context::<Db>(cx), &tenant.id)
+                .await
+                .map_err(topcoat::Error::from_anyhow)?,
+        )),
+        None => None,
+    };
     let title = format!("Payments · {}", tenant.name);
 
     Ok(view! {
@@ -104,23 +114,35 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 if let Some(settings) = &settings {
                     <div class="mb-4" data-payments="stripe">
                         facts(
-                            fact(term: "Status", status_badge(tone: Tone::Success, "Connected"))
+                            if stopped_note.is_some() {
+                                fact(term: "Status", status_badge(tone: Tone::Warning, attrs: attributes! { data-payments-stopped="" }, "Stopped"))
+                            } else {
+                                fact(term: "Status", status_badge(tone: Tone::Success, "Connected"))
+                            }
                             fact(term: "Publishable key", <code data-publishable-key="">(&settings.publishable_key)</code>)
                             fact(term: "Secret key", "Saved, never shown again")
                             fact(term: "Webhook signing secret", "Saved, never shown again")
                             fact(term: "Since", <time datetime=(settings.configured_at)>(format_time(settings.configured_at))</time>)
                         )
                     </div>
-                    <form method="post" action=(href!(remove::remove, Slug(slug.clone())))>
-                        button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop taking payments")
-                    </form>
+                    if let Some(note) = &stopped_note {
+                        <p class="text-sm text-muted-foreground" data-payments-forgetting="">(note)</p>
+                    } else {
+                        <form method="post" action=(href!(remove::remove, Slug(slug.clone())))>
+                            button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop taking payments")
+                        </form>
+                    }
                 } else {
                     <p class="text-sm text-muted-foreground" data-payments="none">"Not set up: shoppers cannot pay yet."</p>
                 }
             )
 
             section_card(
-                title: Some(if settings.is_some() { "Replace the keys" } else { "Connect a Stripe account" }),
+                title: Some(match &settings {
+                    Some(_) if stopped_note.is_some() => "Take payments again",
+                    Some(_) => "Replace the keys",
+                    None => "Connect a Stripe account",
+                }),
                 <ol class="mb-4 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
                     <li>"In the Stripe dashboard, under Developers › API keys, copy the publishable and the secret key."</li>
                     <li>
@@ -160,4 +182,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             )
         )
     })
+}
+
+/// What the page says of a tenant that stopped taking payments, `owed`
+/// payments still held or owed.
+fn stopped_note(owed: i64) -> String {
+    match owed {
+        0 => "Payments stopped: nothing is held any more, and the keys are forgotten at the next check.".to_owned(),
+        1 => "Payments stopped: the keys are forgotten once the payment still held is settled.".to_owned(),
+        n => format!("Payments stopped: the keys are forgotten once the {n} payments still held are settled."),
+    }
 }

@@ -107,9 +107,14 @@ order does not know yet, and the credit note follows.
      `payment_intent.canceled` and `charge.refunded`.
   3. Paste that endpoint's signing secret (`whsec_…`).
 
-  "Stop taking payments" is refused while an order still holds money on a shopper's
-  card or has money on its way back: taking it, giving it back and hearing from Stripe
-  about it all need the keys. Take the payment or cancel those orders first.
+  "Stop taking payments" stops new checkouts at once: storefronts stop offering the card
+  form and new requests to pay are refused. The keys stay, sealed, while anything is held
+  or owed (an order's money held or being taken, cancelled or refunded, a card form still
+  open, a request being answered, a payment being given back), so the sweeps and the
+  webhook settle it; the page says how many payments are left, and a sweep forgets the
+  keys once none is. Saving keys again takes payments again. Until then another Stripe
+  account (another publishable key) is refused; a new secret key of the same account is
+  fine.
 
 - **Storefront.** Its API key needs `store:read` and `store:checkout`.
 

@@ -177,25 +177,28 @@ pub async fn payments_due(
     .await
 }
 
-/// Whether the tenant has money held on a shopper's card, or on its way to
-/// or from one: an order whose payment is only held, or asked to be taken,
-/// cancelled or refunded, or a payment a cart is giving back. Settling any
-/// of it needs the tenant's provider account.
-pub async fn money_held(db: &Db, tenant_id: &str) -> anyhow::Result<bool> {
-    let held: i64 = db
-        .fetch_scalar(
-            "SELECT EXISTS (
-                SELECT 1 FROM orders_orders WHERE tenant_id = ?1
-                  AND (status = 'authorized' OR capture_requested_at IS NOT NULL
-                       OR cancel_requested_at IS NOT NULL OR refund_requested_at IS NOT NULL)
-             ) OR EXISTS (
-                SELECT 1 FROM orders_carts WHERE tenant_id = ?1
-                  AND return_requested_at IS NOT NULL
-             )",
-            (tenant_id,),
-        )
-        .await?;
-    Ok(held != 0)
+/// How many payments the tenant still holds or owes, each needing its
+/// provider account to settle:
+/// - orders whose money is held on the shopper's card (an authorized order
+///   whose hold went back holds nothing), or asked to be taken, cancelled or
+///   refunded;
+/// - carts with a payment open (a card form that may still confirm), one on
+///   its way back, or a request to pay being answered.
+pub async fn money_owed(db: &Db, tenant_id: &str) -> anyhow::Result<i64> {
+    db.fetch_scalar(
+        "SELECT (
+            SELECT count(*) FROM orders_orders WHERE tenant_id = ?1
+              AND ((status = 'authorized' AND payment_state <> 'released')
+                   OR capture_requested_at IS NOT NULL OR cancel_requested_at IS NOT NULL
+                   OR refund_requested_at IS NOT NULL)
+         ) + (
+            SELECT count(*) FROM orders_carts WHERE tenant_id = ?1
+              AND (status = 'paying' OR return_requested_at IS NOT NULL
+                   OR unanswered_since IS NOT NULL)
+         )",
+        (tenant_id,),
+    )
+    .await
 }
 
 /// An order that left, across every tenant this node follows.

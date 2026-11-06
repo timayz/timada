@@ -47,7 +47,8 @@ use timada_orders::{CartState, OrderError, PROVIDER_STRIPE, Payment};
 
 use super::settle::{self, release_reason};
 use super::{
-    Account, DASHBOARD_ACTOR, PaymentState, PaymentStatus, Payments, ReleaseAnswer, signature,
+    Account, DASHBOARD_ACTOR, PaymentState, PaymentStatus, Payments, Refused, ReleaseAnswer,
+    signature,
 };
 use crate::cluster::Executor;
 
@@ -69,6 +70,9 @@ pub enum Outcome {
     /// late, what the checkout held having lapsed and gone to someone else.
     /// `code` says which.
     Returned { code: String },
+    /// To be given back, but Stripe will not, for good: settled as refused,
+    /// for the merchant to settle in Stripe. `reason` is what Stripe said.
+    NotReturned { reason: String },
     /// The order's payment is taken (recorded now, or already).
     Paid { order_id: String },
     /// The order's hold was dropped by Stripe: it is cancelled.
@@ -254,6 +258,15 @@ pub async fn reconcile(
                 let code = pending.code.clone();
                 return give_payment_back(payments, account, &orders, cart_id, status, &code).await;
             }
+            // One Stripe would not give back, for good: the merchant's now.
+            if let Some(reason) = cart
+                .as_ref()
+                .and_then(|cart| cart.return_refusal(&status.payment_id))
+            {
+                return Ok(Outcome::NotReturned {
+                    reason: reason.to_owned(),
+                });
+            }
             if let Some(order) = &order {
                 // The cart is an order already, paid by another payment.
                 tracing::warn!(%tenant_id, order = %order.id, payment = %status.payment_id, "a second payment of an ordered cart: given back");
@@ -389,34 +402,51 @@ pub async fn give_payment_back(
         .request_payment_return(DASHBOARD_ACTOR, cart_id, &status.payment_id, code)
         .await?;
     let Some(pending) = pending else {
-        // Gone back already: the same answer.
-        let code = orders
-            .load_cart(cart_id)
-            .await?
-            .and_then(|cart| cart.returned_payment(&status.payment_id).cloned())
-            .map_or_else(|| code.to_owned(), |returned| returned.code);
+        // Settled already: the same answer.
+        let cart = orders.load_cart(cart_id).await?;
+        if let Some(reason) = cart
+            .as_ref()
+            .and_then(|cart| cart.return_refusal(&status.payment_id))
+        {
+            return Ok(Outcome::NotReturned {
+                reason: reason.to_owned(),
+            });
+        }
+        let code = cart
+            .as_ref()
+            .and_then(|cart| cart.returned_payment(&status.payment_id))
+            .map_or_else(|| code.to_owned(), |returned| returned.code.clone());
         return Ok(Outcome::Returned { code });
     };
-    let refund_id = release_or_refund(
-        payments,
-        account,
-        status,
-        &format!("timada-return-{}", status.payment_id),
-    )
-    .await?;
+    let refund_id = match release_or_refund(payments, account, status).await {
+        Ok(refund_id) => refund_id,
+        // Stripe will not, for good (a disputed charge, say): the return is
+        // settled as refused, for the merchant to settle in Stripe, rather
+        // than asked again for ever.
+        Err(err) if err.downcast_ref::<Refused>().is_some() => {
+            let reason = err.to_string();
+            orders
+                .refuse_payment_return(DASHBOARD_ACTOR, cart_id, &status.payment_id, &reason)
+                .await?;
+            tracing::error!(tenant = %orders.tenant(), %cart_id, payment = %status.payment_id, %reason, "Stripe will not give a payment back: the merchant settles it in Stripe");
+            return Ok(Outcome::NotReturned { reason });
+        }
+        Err(err) => return Err(err),
+    };
     orders
         .return_payment(DASHBOARD_ACTOR, cart_id, &status.payment_id, refund_id)
         .await?;
     Ok(Outcome::Returned { code: pending.code })
 }
 
-/// Asks Stripe to give a payment back: its hold released, or the money
-/// refunded under `key`, had it been taken. The refund's id, when it was.
+/// Asks Stripe to give a payment back: its hold released, or, had it been
+/// taken, what is not refunded yet (by hand in Stripe's own dashboard, say)
+/// refunded under a key of the payment and that amount. The refund's id,
+/// when there is one.
 async fn release_or_refund(
     payments: &Payments,
     account: &Account,
     status: &PaymentStatus,
-    key: &str,
 ) -> anyhow::Result<Option<String>> {
     let mut amount_cents = status.amount_received;
     if status.state != PaymentState::Captured {
@@ -431,9 +461,27 @@ async fn release_or_refund(
             } => amount_cents = taken,
         }
     }
+    let refunds = payments
+        .gateway
+        .refunds_of(&account.secret_key, &status.payment_id)
+        .await?;
+    let refunded: u64 = refunds
+        .iter()
+        .filter(|refund| refund.succeeded)
+        .map(|refund| refund.amount_cents)
+        .sum();
+    let left = amount_cents.saturating_sub(refunded);
+    if left == 0 {
+        return Ok(refunds
+            .iter()
+            .rev()
+            .find(|refund| refund.succeeded)
+            .map(|refund| refund.refund_id.clone()));
+    }
+    let key = format!("timada-return-{}-{left}", status.payment_id);
     let refund_id = payments
         .gateway
-        .refund(&account.secret_key, &status.payment_id, amount_cents, key)
+        .refund(&account.secret_key, &status.payment_id, left, &key)
         .await?;
     Ok(Some(refund_id))
 }

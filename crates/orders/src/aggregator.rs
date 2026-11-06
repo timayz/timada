@@ -202,6 +202,18 @@ pub enum Cart {
         code: String,
         requested_by: String,
     },
+    /// The provider will not give the payment of a request back, for good
+    /// (a disputed charge, say): `reason` is what it said. The return its
+    /// `PaymentReturnRequested` asked for is settled, nothing more is tried,
+    /// and the merchant settles it in the provider's own dashboard; the
+    /// order of the cart, if it has one, shows it. Written by the dashboard,
+    /// never a shopper.
+    PaymentReturnRefused {
+        request_id: String,
+        payment_id: String,
+        reason: String,
+        refused_by: String,
+    },
     /// A node took the request on: only `claimant` holds the goods and the
     /// code, opens the payment and answers, so the other nodes following the
     /// tenant leave it alone. Unanswered after

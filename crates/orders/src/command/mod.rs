@@ -30,10 +30,11 @@ use crate::aggregator::{
     CheckoutClaimed, CheckoutRequested, Claimed, Created, DiscountApplied, DiscountGranted,
     DiscountRemoved, Discounted, Fulfilled, ItemAdded, ItemRemoved, LanguageGiven, LanguageSet,
     Mailed, MethodAdded, MethodChanged, MethodRemoved, NewsletterOptInSet, NewsletterOptedIn, Paid,
-    PaymentCancelled, PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturnRequested,
-    PaymentReturned, PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested,
-    Refunded, Released, ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
-    StorefrontAddressSet, SupplierOrderRefused, SupplierOrderStarted, TimeZoneGiven, TimeZoneSet,
+    PaymentCancelled, PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturnRefused,
+    PaymentReturnRequested, PaymentReturned, PaymentsDisabled, PaymentsEnabled, Placed,
+    QuantitySet, RefundRequested, Refunded, Released, ShippingCharged, ShippingGranted,
+    ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet, SupplierOrderRefused,
+    SupplierOrderStarted, TimeZoneGiven, TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -211,6 +212,9 @@ pub struct CheckoutRequest {
     pub answer: Option<PaymentAnswer>,
     /// Its payment is on its way back to the shopper: it makes no order.
     pub returning: Option<PendingReturn>,
+    /// The provider would not give its payment back, for good: what it
+    /// said. The merchant settles it in the provider's own dashboard.
+    pub return_refused: Option<String>,
 }
 
 /// A node that took a request to pay on.
@@ -235,6 +239,12 @@ impl CheckoutRequest {
             Some(PaymentAnswer::Requested(payment)) => Some(payment.as_ref()),
             _ => None,
         }
+    }
+
+    /// Whether its payment buys nothing: on its way back, or one the
+    /// provider would not give back. It makes no order either way.
+    pub fn gives_back(&self) -> bool {
+        self.returning.is_some() || self.return_refused.is_some()
     }
 }
 
@@ -341,29 +351,50 @@ impl CartState {
             .min()
     }
 
+    /// What the provider said when it would not give back the payment with
+    /// that provider id, for good.
+    pub fn return_refusal(&self, payment_id: &str) -> Option<&str> {
+        self.request_paid_by(payment_id)
+            .and_then(|request| request.return_refused.as_deref())
+    }
+
+    /// The payments the provider would not give back, for good, and what it
+    /// said: the merchant settles them in its own dashboard.
+    pub fn refused_returns(&self) -> Vec<(&str, &str)> {
+        self.requests
+            .iter()
+            .filter_map(|r| {
+                Some((
+                    r.payment()?.payment_id.as_str(),
+                    r.return_refused.as_deref()?,
+                ))
+            })
+            .collect()
+    }
+
     /// The payments still open whose checkout holds have lapsed at `now`:
     /// opened `held_secs` or more ago, on a cart that is no order yet, and
-    /// not on their way back. What the dashboard cancels with the provider.
+    /// not being given back. What the dashboard cancels with the provider.
     pub fn lapsed_payments(&self, now: u64, held_secs: u64) -> Vec<&PaymentSnapshot> {
         if self.is_checked_out() {
             return Vec::new();
         }
         self.requests
             .iter()
-            .filter(|r| r.returning.is_none())
+            .filter(|r| !r.gives_back())
             .filter_map(CheckoutRequest::payment)
             .filter(|payment| now.saturating_sub(payment.opened_at) >= held_secs)
             .collect()
     }
 
-    /// Whether a payment is open for it (the shopper may be paying), one on
-    /// its way back aside.
+    /// Whether a payment is open for it (the shopper may be paying), one
+    /// being given back aside.
     pub fn is_paying(&self) -> bool {
         !self.is_checked_out()
             && self
                 .requests
                 .iter()
-                .any(|r| r.payment().is_some() && r.returning.is_none())
+                .any(|r| r.payment().is_some() && !r.gives_back())
     }
 
     /// `open`, `paying` or `ordered`: what the read model stores.
@@ -392,6 +423,7 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_payment_refused())
         .handler(on_payment_returned())
         .handler(on_payment_return_requested())
+        .handler(on_payment_return_refused())
         .handler(on_payment_cancelled())
         .handler(on_checkout_claimed())
         .handler(on_discount_applied())
@@ -483,6 +515,7 @@ async fn on_checkout_requested(
         claim: None,
         answer: None,
         returning: None,
+        return_refused: None,
     });
     cart.updated_at = event.timestamp;
     Ok(())
@@ -597,6 +630,23 @@ async fn on_payment_return_requested(
             code: event.data.code.to_owned(),
             requested_at: event.timestamp,
         });
+    }
+    cart.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_payment_return_refused(
+    event: Event<PaymentReturnRefused>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|r| r.request_id == event.data.request_id)
+    {
+        request.returning = None;
+        request.return_refused = Some(event.data.reason.to_owned());
     }
     cart.updated_at = event.timestamp;
     Ok(())

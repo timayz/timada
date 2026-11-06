@@ -218,7 +218,9 @@ by construction.
    cart, and one confirmed after the checkout's holds lapsed and went to someone else,
    are given back, nothing taken: the cart records that the payment goes back and why
    (`Cart::PaymentReturnRequested`) before Stripe is asked, and that it went
-   (`Cart::PaymentReturned`) after, and money Stripe took for an order cancelled
+   (`Cart::PaymentReturned`) after, only what Stripe has not refunded yet being refunded
+   (a refusal for good settles it too, `Cart::PaymentReturnRefused`, shown on the order
+   for the merchant to settle in Stripe), and money Stripe took for an order cancelled
    meanwhile goes back through the order (`Order::RefundRequested`, then Stripe,
    `Refunded`). The money is taken
    (`payments/settle.rs`) once the order asks for it (`Order::CaptureRequested`): at
