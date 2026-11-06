@@ -14,6 +14,7 @@ mod edit;
 mod image;
 mod lifecycle;
 mod option;
+mod ordered;
 mod sku_index;
 mod slug_index;
 mod stock;
@@ -28,6 +29,7 @@ pub use create::*;
 pub use delivery::*;
 pub use image::*;
 pub use option::*;
+pub use ordered::*;
 pub use stock::*;
 pub use variant::*;
 

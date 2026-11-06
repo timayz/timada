@@ -86,9 +86,9 @@ impl<E: Executor> super::Command<E> {
     /// the codes of its variants are free again, and the host deletes its
     /// pictures' files. Archived or not, any product can go; one that is
     /// gone already is `NotFound`. Only a product nobody ever ordered may be
-    /// deleted, and that is the host's to check before calling: the catalog
-    /// cannot see the orders. Returns what the product was, for the host to
-    /// clean up after it.
+    /// deleted: one marked ordered ([`mark_ordered`](Self::mark_ordered))
+    /// is `Ordered`. Returns what the product was, for the host to clean up
+    /// after it.
     pub async fn delete_product(
         &self,
         actor: &str,
@@ -99,6 +99,9 @@ impl<E: Executor> super::Command<E> {
             .load_product(product_id)
             .await?
             .ok_or(CatalogError::NotFound)?;
+        if self.load_ordered(product_id).await?.is_some() {
+            return Err(CatalogError::Ordered);
+        }
         product
             .write()?
             .routing_key_opt(routing_key.clone())
