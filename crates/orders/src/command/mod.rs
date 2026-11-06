@@ -33,7 +33,7 @@ use crate::aggregator::{
     PaymentCancelled, PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturned,
     PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded,
     ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
-    StorefrontAddressSet, TimeZoneGiven, TimeZoneSet,
+    StorefrontAddressSet, SupplierOrderRefused, SupplierOrderStarted, TimeZoneGiven, TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -730,6 +730,8 @@ pub struct OrderState {
     pub pending_cancellation: Option<PendingCancellation>,
     /// Unix seconds the hold went back to the shopper, nothing taken.
     pub released_at: Option<u64>,
+    /// Whether the goods were ordered from the supplier.
+    pub supplier_order: SupplierOrder,
     /// The discount code it was paid with, if any.
     pub discount: Option<OrderDiscount>,
     /// The shipping it was paid with; `None` when shipping was included.
@@ -772,6 +774,18 @@ pub struct PendingRefund {
     pub idempotency_key: String,
     /// Unix seconds.
     pub requested_at: u64,
+}
+
+/// Where ordering an order's goods from its supplier stands.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SupplierOrder {
+    /// Nothing was asked of the supplier.
+    #[default]
+    None,
+    /// The supplier was asked, or is being asked: it may have the order.
+    Started,
+    /// The supplier surely refused the last order.
+    Refused,
 }
 
 /// The money asked of the provider and not answered yet.
@@ -826,6 +840,33 @@ impl OrderState {
         self.status == OrderStatus::Authorized && self.supplier.is_some()
     }
 
+    /// Whether its goods may be ordered from the supplier at `now` (unix
+    /// seconds): the order neither left, nor is cancelled or being so, and
+    /// a payment only held still holds for long enough
+    /// ([`HOLD_MARGIN_SECS`](crate::HOLD_MARGIN_SECS)) to be taken after.
+    pub fn may_order_from_supplier(&self, now: u64) -> Result<(), crate::OrderError> {
+        use crate::OrderError;
+        match self.status {
+            OrderStatus::Cancelled => return Err(OrderError::OrderCancelled),
+            OrderStatus::Fulfilled => return Err(OrderError::OrderFulfilled),
+            OrderStatus::Authorized | OrderStatus::Paid => {}
+        }
+        if self.released_at.is_some() {
+            return Err(OrderError::OrderCancelled);
+        }
+        if self.pending_cancellation.is_some() {
+            return Err(OrderError::CancellationPending);
+        }
+        let lapsing = self
+            .payment
+            .capture_before
+            .is_some_and(|before| now.saturating_add(crate::HOLD_MARGIN_SECS) >= before);
+        if !self.is_paid() && lapsing {
+            return Err(OrderError::HoldExpiring);
+        }
+        Ok(())
+    }
+
     /// Where the money stands, as the read model stores it: `held`,
     /// `capturing` (asked of the provider), `capture_failed`, `paid` or
     /// `released`.
@@ -867,6 +908,8 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_capture_failed())
         .handler(on_cancellation_requested())
         .handler(on_payment_released())
+        .handler(on_supplier_order_started())
+        .handler(on_supplier_order_refused())
         .handler(on_fulfilled())
         .handler(on_cancelled())
         .handler(on_refund_requested())
@@ -949,6 +992,26 @@ async fn on_cancellation_requested(
         requested_by: event.data.requested_by.to_owned(),
         requested_at: event.timestamp,
     });
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_supplier_order_started(
+    event: Event<SupplierOrderStarted>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.supplier_order = SupplierOrder::Started;
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_supplier_order_refused(
+    event: Event<SupplierOrderRefused>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.supplier_order = SupplierOrder::Refused;
     order.updated_at = event.timestamp;
     Ok(())
 }

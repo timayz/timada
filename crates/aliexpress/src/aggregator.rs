@@ -130,12 +130,15 @@ pub mod forward {
         },
         /// Nothing was placed; `reason` says why, for the merchant.
         Failed { reason: String, failed_by: String },
-        /// One AliExpress order as read again, when that changed.
+        /// One AliExpress order as read again, when that changed. `closed`:
+        /// AliExpress closed it without shipping it (its push said so, or it
+        /// finished with no parcel ever known).
         Checked {
             ae_order_id: String,
             status: String,
             logistics_status: String,
             tracking: Vec<String>,
+            closed: bool,
         },
         /// No longer read again: `fulfilled` when the shop's order was
         /// fulfilled with AliExpress's `tracking`, else the order was settled

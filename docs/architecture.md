@@ -212,8 +212,8 @@ by construction.
    cart, and one confirmed after the checkout's holds lapsed and went to someone else
    (`Cart::PaymentReturned`), are given back, nothing taken. The money is taken
    (`payments/settle.rs`) once the order asks for it (`Order::CaptureRequested`): at
-   once by the subscription `timada-dashboard/payment-capture` when the shop holds every
-   good, once the AliExpress order is placed, or by the merchant; Stripe's answer is
+   once by the subscription `timada-dashboard/order-payments` when the shop holds every
+   good, by the same once AliExpress took the order, or by the merchant; Stripe's answer is
    `Order::Paid` (the invoice follows) or `Order::CaptureFailed`. Anything irreversible
    (taking the money, giving it back, ordering from the supplier) is first written on the
    order at the version read, so two of them never cross: a pending capture holds off a

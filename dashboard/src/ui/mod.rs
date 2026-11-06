@@ -298,6 +298,13 @@ pub fn describe_error(code: &str) -> &'static str {
         "hold_expired" => {
             "The hold on the shopper's card had expired: nothing was taken, and the order is cancelled."
         }
+        "order_fulfilled" => "This order has left already.",
+        "hold_expiring" => {
+            "The hold on the shopper's card ends too soon to buy the goods: take the payment first."
+        }
+        "supplier_ordered" => {
+            "AliExpress may already have this order: tick that you cancel it there too."
+        }
         "invalid_storefront_url" => {
             "A storefront address starts with https:// and is at most 200 characters."
         }

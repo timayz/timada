@@ -13,7 +13,9 @@ use std::sync::Arc;
 use timada_aliexpress::{ForwardState, ForwardStatus};
 use timada_catalog::format_money;
 use timada_invoicing::{DocumentKind, format_amount_fr};
-use timada_orders::{MAX_REASON_LEN, MAX_TRACKING_LEN, OrderError, OrderState, OrderStatus};
+use timada_orders::{
+    MAX_REASON_LEN, MAX_TRACKING_LEN, OrderError, OrderState, OrderStatus, SupplierOrder,
+};
 use timada_tenancy::{
     PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_ORDERS_MANAGE, PERMISSION_ORDERS_READ,
 };
@@ -177,8 +179,20 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         && matches!(order.status, OrderStatus::Authorized | OrderStatus::Paid)
         && order.pending_cancellation.is_none()
         && access.can(cx, PERMISSION_ALIEXPRESS_MANAGE).await?;
-    let ae = (from_aliexpress || forward.is_some())
+    let mut ae = (from_aliexpress || forward.is_some())
         .then(|| AliexpressCard::of(forward.as_ref(), can_forward, crate::auth::now()));
+    // Cancelled here, still open there: no API cancels it for the merchant.
+    let open_on_aliexpress = forward
+        .as_ref()
+        .is_some_and(|forward| !forward.ae_orders.is_empty() && !forward.all_closed());
+    if order.status == OrderStatus::Cancelled
+        && open_on_aliexpress
+        && let Some(ae) = ae.as_mut()
+    {
+        ae.notes.push(
+            "The shop's order is cancelled: cancel the AliExpress order there if you have not.",
+        );
+    }
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let lines: Vec<LineRow> = order
@@ -255,6 +269,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         && matches!(status, OrderStatus::Authorized | OrderStatus::Paid)
         && order.pending_capture.is_none();
     let can_capture = can_manage && status == OrderStatus::Authorized && cancelling.is_none();
+    // Asked of the supplier: cancelling means cancelling there too.
+    let supplier_ordered = order.supplier_order == SupplierOrder::Started;
     let capture_label = if order.capture_failure.is_some() {
         "Take the payment again"
     } else {
@@ -527,6 +543,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     field_label(attrs: attributes! { for="order-cancel-reason" }, "Reason for cancelling")
                                     input(attrs: attributes! { id="order-cancel-reason" name="reason" type="text" required="" maxlength=(MAX_REASON_LEN) })
                                 )
+                                if supplier_ordered {
+                                    <label class="flex items-start gap-2 text-sm">
+                                        <input type="checkbox" name="supplier_cancelled" required="" class="mt-1">
+                                        "AliExpress may already have this order: I cancel it there too."
+                                    </label>
+                                }
                                 <div>
                                     button(variant: ButtonVariant::Destructive, attrs: attributes! { type="submit" }, (cancel_label))
                                 </div>
@@ -602,17 +624,18 @@ impl AliexpressCard {
                     .map(|order| {
                         let tracking =
                             (!order.tracking.is_empty()).then(|| order.tracking.join(", "));
-                        (
-                            order.id.clone(),
-                            ae_status_label(&order.status).to_owned(),
-                            tracking,
-                        )
+                        let status = if order.closed {
+                            "closed by AliExpress, nothing shipped"
+                        } else {
+                            ae_status_label(&order.status)
+                        };
+                        (order.id.clone(), status.to_owned(), tracking)
                     })
                     .collect();
-                let unpaid = forward
-                    .ae_orders
-                    .iter()
-                    .any(|order| order.status.is_empty() || order.status == "PLACE_ORDER_SUCCESS");
+                let unpaid = forward.ae_orders.iter().any(|order| {
+                    !order.closed
+                        && (order.status.is_empty() || order.status == "PLACE_ORDER_SUCCESS")
+                });
                 if forward.status == ForwardStatus::Placed && unpaid {
                     shown.notes.push(if forward.pay_requested {
                         "AliExpress was asked to pay it with the account's saved payment method; if it could not, pay it in AliExpress."
@@ -622,6 +645,13 @@ impl AliexpressCard {
                 }
                 if !forward.complete {
                     shown.notes.push("Some items of this order are not from AliExpress: ship them, then mark the order as fulfilled.");
+                }
+                if forward.all_closed() && forward.complete {
+                    shown.notes.push("AliExpress closed the order: nothing ships, so the shop's order is cancelled and the shopper's money given back.");
+                } else if forward.ae_orders.iter().any(|order| order.closed) {
+                    shown.notes.push(
+                        "AliExpress closed part of the order: refund or cancel the rest yourself.",
+                    );
                 }
             }
         }
@@ -653,4 +683,8 @@ pub struct FulfilForm {
 #[derive(serde::Deserialize)]
 pub struct CancelForm {
     pub reason: String,
+    /// Ticked: the merchant cancels at the supplier what it may already
+    /// have of the order.
+    #[serde(default)]
+    pub supplier_cancelled: Option<String>,
 }

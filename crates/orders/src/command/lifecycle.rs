@@ -2,12 +2,12 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 
 use crate::aggregator::{
     CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, Fulfilled, Paid,
-    PaymentReleased, RefundRequested, Refunded,
+    PaymentReleased, RefundRequested, Refunded, SupplierOrderRefused, SupplierOrderStarted,
 };
 use crate::error::OrderError;
 use crate::value_object::{MAX_REASON_LEN, normalize_reason, normalize_tracking};
 
-use super::{OrderState, OrderStatus, PendingCapture, PendingRefund};
+use super::{OrderState, OrderStatus, PendingCapture, PendingRefund, SupplierOrder};
 
 /// How many times a write to an order is tried again when another one
 /// landed at the same moment.
@@ -230,12 +230,16 @@ impl<E: Executor> super::Command<E> {
     /// give anything back; returns what is left to do. Asked again while it
     /// stands, the same path comes back. A fulfilled order is
     /// `NotCancellable`; one whose money is being asked for is
-    /// `CapturePending` until the provider answered.
+    /// `CapturePending` until the provider answered; one whose goods were
+    /// ordered from the supplier is `SupplierOrdered` unless the caller
+    /// knows (`supplier_known`: the merchant cancels it there, or the
+    /// supplier closed it).
     pub async fn request_cancellation(
         &self,
         actor: &str,
         order_id: &str,
         reason: String,
+        supplier_known: bool,
         routing_key: Option<String>,
     ) -> Result<CancelPath, OrderError> {
         let reason = normalize_reason(&reason)?;
@@ -251,6 +255,9 @@ impl<E: Executor> super::Command<E> {
             }
             if order.pending_capture.is_some() {
                 return Err(OrderError::CapturePending);
+            }
+            if order.supplier_order == SupplierOrder::Started && !supplier_known {
+                return Err(OrderError::SupplierOrdered);
             }
             let written = order
                 .write()?
@@ -269,6 +276,78 @@ impl<E: Executor> super::Command<E> {
             }
         }
         Err(OrderError::Write(WriteError::InvalidOriginalVersion))
+    }
+
+    /// Asks for the goods to be ordered from `supplier`, right before it is:
+    /// written at the version read, on every try, so a cancellation landing
+    /// first refuses it and one landing after finds it. Refused as
+    /// [`may_order_from_supplier`](OrderState::may_order_from_supplier) says
+    /// at `now` (unix seconds).
+    pub async fn begin_supplier_order(
+        &self,
+        actor: &str,
+        order_id: &str,
+        supplier: &str,
+        now: u64,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            order.may_order_from_supplier(now)?;
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&SupplierOrderStarted {
+                    supplier: supplier.to_owned(),
+                    started_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(OrderError::Write(WriteError::InvalidOriginalVersion))
+    }
+
+    /// Records that the supplier surely refused the order it was asked for
+    /// (it took nothing): the shopper may cancel again. A no-op unless an
+    /// order to the supplier stands.
+    pub async fn record_supplier_refusal(
+        &self,
+        actor: &str,
+        order_id: &str,
+        supplier: &str,
+        reason: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        let reason: String = reason.trim().chars().take(MAX_REASON_LEN).collect();
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            if order.supplier_order != SupplierOrder::Started {
+                return Ok(());
+            }
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&SupplierOrderRefused {
+                    supplier: supplier.to_owned(),
+                    reason: reason.clone(),
+                    refused_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(())
     }
 
     /// Records that the hold went back to the shopper, nothing taken, and

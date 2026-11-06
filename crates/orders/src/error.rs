@@ -66,6 +66,14 @@ pub enum OrderError {
     CancellationPending,
     #[error("the payment is only held on the shopper's card: take it first")]
     PaymentNotCaptured,
+    #[error("this order has left already")]
+    OrderFulfilled,
+    #[error(
+        "the hold on the shopper's card ends too soon to buy the goods: take the payment first"
+    )]
+    HoldExpiring,
+    #[error("the supplier may have this order already: say you will cancel it there")]
+    SupplierOrdered,
     #[error("the refund must be more than nothing and at most what is outstanding")]
     InvalidRefund,
     #[error("the tracking number is at most 200 characters")]
@@ -172,6 +180,9 @@ impl OrderError {
             Self::CapturePending => "capture_pending",
             Self::CancellationPending => "cancellation_pending",
             Self::PaymentNotCaptured => "payment_not_captured",
+            Self::OrderFulfilled => "order_fulfilled",
+            Self::HoldExpiring => "hold_expiring",
+            Self::SupplierOrdered => "supplier_ordered",
             Self::InvalidRefund => "invalid_refund",
             Self::InvalidTracking => "invalid_tracking",
             Self::InvalidReason => "invalid_reason",

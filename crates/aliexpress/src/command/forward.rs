@@ -46,6 +46,8 @@ pub struct AeOrderState {
     pub status: String,
     pub logistics_status: String,
     pub tracking: Vec<String>,
+    /// AliExpress closed it without shipping it.
+    pub closed: bool,
 }
 
 /// A shop's order on AliExpress.
@@ -94,6 +96,11 @@ impl ForwardState {
                 .ae_orders
                 .iter()
                 .all(|order| !order.tracking.is_empty())
+    }
+
+    /// Whether AliExpress closed every one of its orders, shipping none.
+    pub fn all_closed(&self) -> bool {
+        !self.ae_orders.is_empty() && self.ae_orders.iter().all(|order| order.closed)
     }
 }
 
@@ -167,6 +174,7 @@ async fn on_checked(event: Event<Checked>, forward: &mut ForwardState) -> anyhow
         order.status = data.status.to_owned();
         order.logistics_status = data.logistics_status.to_owned();
         order.tracking = data.tracking.to_owned();
+        order.closed = data.closed;
     }
     forward.updated_at = event.timestamp;
     Ok(())

@@ -419,7 +419,7 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
             goods.clone(),
             platform.clone(),
         ),
-        payments::capture_subscription(subscribed.clone(), platform.clone()),
+        payments::order_payments_subscription(subscribed.clone(), platform.clone()),
         timada_orders::discount_usage_subscription(platform.clone()),
         timada_orders::stock_usage_subscription(platform.clone()),
         invoicing::subscription(
@@ -1224,7 +1224,7 @@ async fn a_refund_made_here_counts_once_whenever_its_webhook_arrives() {
             );
         }
         orders
-            .request_cancellation("alice", &order_id, "Out of stock".to_owned())
+            .request_cancellation("alice", &order_id, "Out of stock".to_owned(), false)
             .await
             .unwrap();
         orders.complete_cancellation(&order_id).await.unwrap();
@@ -2048,7 +2048,7 @@ async fn a_checkout_goes_through_stripe_test_mode() {
 
     // Cancelled as the order page does it: refunded through Stripe first.
     orders
-        .request_cancellation("alice", &order_id, "Live test".into())
+        .request_cancellation("alice", &order_id, "Live test".into(), false)
         .await
         .unwrap();
     let account = h.account(&acme).await;
@@ -2329,7 +2329,7 @@ async fn a_held_order_is_cancelled_by_giving_its_hold_back() {
     );
 
     orders
-        .request_cancellation("alice", &order_id, "Out of stock".into())
+        .request_cancellation("alice", &order_id, "Out of stock".into(), false)
         .await
         .unwrap();
     let account = h.account(&acme).await;
@@ -2435,7 +2435,7 @@ async fn what_stripe_did_not_answer_is_settled_by_the_sweep() {
     *h.goods.supplier.lock().unwrap() = Some("aliexpress".into());
     let held = h.place(&acme, checkout(Some(2500))).await;
     orders
-        .request_cancellation("alice", &held, "Out of stock".into())
+        .request_cancellation("alice", &held, "Out of stock".into(), false)
         .await
         .unwrap();
     assert!(matches!(
@@ -2469,5 +2469,64 @@ async fn what_stripe_did_not_answer_is_settled_by_the_sweep() {
     let held = orders.load_order(&held).await.unwrap().unwrap();
     assert_eq!(held.status, OrderStatus::Cancelled);
     assert!(held.released_at.is_some());
+    h.finish().await;
+}
+
+/// Goods bought on AliExpress once the order is placed: the money stays held
+/// until AliExpress took the order, then it is taken and invoiced.
+#[tokio::test]
+async fn an_order_placed_on_aliexpress_is_paid_then() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let store = h.store(&acme);
+    let orders = timada_orders::Command::new(store.clone(), &acme.id);
+    let invoicing = timada_invoicing::Command::new(store.clone(), &acme.id);
+    *h.goods.supplier.lock().unwrap() = Some("aliexpress".into());
+    let order_id = h.place(&acme, checkout(Some(2500))).await;
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Authorized);
+    assert!(order.awaits_supplier());
+
+    // The forwarder writes its fence, AliExpress takes the order.
+    orders
+        .begin_supplier_order("timada-aliexpress", &order_id, "aliexpress", now() as u64)
+        .await
+        .unwrap();
+    let forwards = timada_aliexpress::Command::new(store, &acme.id);
+    let forward_id = forwards
+        .request_forward("timada-aliexpress", &order_id, false)
+        .await
+        .unwrap();
+    assert!(
+        forwards
+            .start_forward("timada-aliexpress", &forward_id)
+            .await
+            .unwrap()
+    );
+    assert!(h.stripe.captured.lock().unwrap().is_empty(), "still held");
+    forwards
+        .record_placed(
+            "timada-aliexpress",
+            &forward_id,
+            timada_aliexpress::Placement {
+                ae_order_ids: vec!["8100000000000001".into()],
+                items: Vec::new(),
+                pay_requested: true,
+                complete: true,
+            },
+        )
+        .await
+        .unwrap();
+
+    let order = h.paid(&acme, &order_id).await;
+    assert_eq!(order.paid_cents, 2500);
+    assert_eq!(
+        order.pending_capture, None,
+        "taken by the capture subscription"
+    );
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
+    assert_eq!(invoice.total_cents, 2500);
     h.finish().await;
 }

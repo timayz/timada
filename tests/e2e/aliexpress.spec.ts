@@ -643,13 +643,12 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     const auto = aliexpress.orders[1];
     expect(auto.tryToPay).toBe(true);
     expect(auto.items[0].product_count).toBe(2);
-    // Placed on AliExpress, its money is still only held: the merchant
-    // takes it.
-    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "authorized");
-    await expect(page.locator("[data-order-awaits-supplier]")).toBeVisible();
-    await page.getByRole("button", { name: "Take the payment" }).click();
-    await expect(page.getByRole("status")).toContainText("The payment was taken.");
-    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid");
+    // Placed on AliExpress: the shopper's money is taken, and invoiced.
+    await expect(async () => {
+      await page.goto(second);
+      await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    expect(stripe.lastIntent()!.captured).toBe(true);
 
     // AliExpress pushes the order's new status to the platform's webhook
     // (its message push, signed with the app's key and secret): the order
@@ -677,6 +676,27 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "fulfilled");
     await expect(page.locator("[data-order-tracking]")).toHaveText("LP00123456FR");
     await expect(page.locator("[data-order-aliexpress-tracking]")).toHaveText("LP00123456FR");
+
+    // AliExpress closes a third order without shipping it, and pushes so:
+    // nothing will come, so the shop's order is cancelled and the money it
+    // took goes back to the shopper.
+    const third = `/t/${slug}/orders/${await buyRoses(page, request, stripe, webhookUrl, 1)}`;
+    const thirdIntent = stripe.lastIntent()!;
+    await forwardIs(page, third, "placed");
+    await expect(async () => {
+      await page.goto(third);
+      await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    const closing = aliexpress.orders[2];
+    aliexpress.close(closing.id);
+    expect((await aliexpress.push(request, pushUrl, closing.id, "OrderClosed")).status()).toBe(200);
+    await expect(async () => {
+      await page.goto(third);
+      await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "cancelled", { timeout: 1000 });
+    }).toPass({ timeout: 20_000 });
+    await expect(page.locator("[data-order-cancel-reason]")).toHaveText("AliExpress closed the order without shipping it.");
+    await expect(page.locator(`[data-order-aliexpress-order="${closing.id}"]`)).toContainText("closed by AliExpress");
+    expect(stripe.refunds.at(-1)).toEqual({ payment_intent: thirdIntent.id, amount: thirdIntent.amount });
     expect(aliexpress.badSignatures).toBe(0);
   } finally {
     await stripe.stop();

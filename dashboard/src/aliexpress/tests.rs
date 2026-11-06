@@ -941,6 +941,7 @@ async fn a_push_saves_the_sweep_its_read() {
         shop.store.clone(),
         &shop.tenant.id,
         &forward_id,
+        None,
         pushed_at,
     )
     .await
@@ -981,6 +982,7 @@ async fn a_node_that_stopped_with_the_parcels_known_leaves_the_order_to_the_next
                 status: "WAIT_BUYER_ACCEPT_GOODS".to_owned(),
                 logistics_status: "SELLER_SEND_GOODS".to_owned(),
                 tracking: vec!["LP00123456FR".to_owned()],
+                closed: false,
             }],
             None,
         )

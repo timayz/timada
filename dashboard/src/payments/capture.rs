@@ -1,8 +1,14 @@
-//! Takes an order's held money once it may be: at once for goods the shop
-//! holds itself (`Order::Placed` naming no supplier). Every node runs it;
-//! the node whose request lands on the order is the one that speaks to the
-//! provider, and a provider that could not be reached is asked again by the
-//! sweep ([`PendingPayments`](super::PendingPayments)).
+//! Settles an order's money with the provider when no page does: takes the
+//! held money once it may be, at once for goods the shop holds itself
+//! (`Order::Placed` naming no supplier) and once AliExpress took the order of
+//! goods bought there (`Forward::Placed`), the goods the shop holds of a
+//! mixed order with them; and gives it back when AliExpress closed the order
+//! (its `Order::CancellationRequested`). Every node runs it; the node whose
+//! request lands on the order is the one that asks for a capture, a
+//! cancellation is settled by whichever node gets to it (the provider makes
+//! it once), and a provider that could not be reached is asked again by the
+//! sweep ([`PendingPayments`](super::PendingPayments)). Replayed, a request
+//! finds the money settled, and does nothing.
 
 use std::sync::Arc;
 
@@ -11,26 +17,30 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use timada_orders::aggregator::Placed;
+use timada_aliexpress::ALIEXPRESS_ACTOR;
+use timada_aliexpress::aggregator::forward::Placed as PlacedOnAliexpress;
+use timada_orders::aggregator::{CancellationRequested, Placed};
 use timada_orders::{CaptureClaim, OrderError};
 
 use super::{DASHBOARD_ACTOR, Payments, settle};
 
 /// The cursor identity of the subscription, in the store.
-pub const CAPTURE_SUBSCRIPTION: &str = "timada-dashboard/payment-capture";
+pub const ORDER_PAYMENTS_SUBSCRIPTION: &str = "timada-dashboard/order-payments";
 
 /// The store, to write with.
 #[derive(Clone)]
 struct Store(Evento);
 
-pub fn capture_subscription<E: Executor>(
+pub fn order_payments_subscription<E: Executor>(
     payments: Arc<Payments>,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
-    SubscriptionBuilder::new(CAPTURE_SUBSCRIPTION)
+    SubscriptionBuilder::new(ORDER_PAYMENTS_SUBSCRIPTION)
         .data(payments)
         .data(Store(store))
         .handler(on_placed())
+        .handler(on_placed_on_aliexpress())
+        .handler(on_cancellation_requested())
         .any_routing_key()
         .retry(5)
 }
@@ -82,4 +92,52 @@ async fn on_placed<E: Executor>(
         DASHBOARD_ACTOR,
     )
     .await
+}
+
+#[evento::subscription]
+async fn on_placed_on_aliexpress<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<PlacedOnAliexpress>,
+) -> anyhow::Result<()> {
+    let payments: Arc<Payments> = context.extract();
+    let store: Store = context.extract();
+    let Some(forward) = timada_aliexpress::Command::new(store.0.clone(), &event.tenant)
+        .load_forward_by_id(&event.aggregate_id)
+        .await?
+    else {
+        return Ok(());
+    };
+    take_payment(
+        &payments,
+        &store.0,
+        &event.tenant,
+        &forward.order_id,
+        ALIEXPRESS_ACTOR,
+    )
+    .await
+}
+
+/// A cancellation AliExpress asked for (it closed the order): settled here,
+/// as no page waits to settle it. A merchant's or a shopper's is settled by
+/// the page that asked.
+#[evento::subscription]
+async fn on_cancellation_requested<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<CancellationRequested>,
+) -> anyhow::Result<()> {
+    if event.data.requested_by != ALIEXPRESS_ACTOR {
+        return Ok(());
+    }
+    let payments: Arc<Payments> = context.extract();
+    let store: Store = context.extract();
+    let account = match payments.active_tenant(&event.tenant).await? {
+        Some(tenant) => payments.account_of(&tenant)?,
+        None => None,
+    };
+    let Some(account) = account else {
+        return Ok(());
+    };
+    let orders = timada_orders::Command::new(store.0.clone(), &event.tenant);
+    settle::settle_cancellation(&payments, &account, &orders, &event.aggregate_id).await?;
+    Ok(())
 }

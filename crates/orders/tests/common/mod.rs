@@ -232,7 +232,7 @@ pub async fn pay(orders: &Orders, cart_id: &str, checkout: Checkout) -> PlacedOr
 /// hold released, or what was taken refunded first.
 pub async fn cancel(orders: &Orders, order_id: &str, reason: &str) {
     match orders
-        .request_cancellation(ALICE, order_id, reason.to_owned())
+        .request_cancellation(ALICE, order_id, reason.to_owned(), false)
         .await
         .unwrap()
     {

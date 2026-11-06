@@ -251,6 +251,22 @@ pub enum Order {
         payment_id: String,
         released_by: String,
     },
+    /// The goods are about to be ordered from `supplier` (`aliexpress`),
+    /// written at the version read just before it is asked, on every try:
+    /// a cancellation landing first refuses it, one landing after finds it.
+    /// From then on the supplier may have the order, and the shopper no
+    /// longer cancels it.
+    SupplierOrderStarted {
+        supplier: String,
+        started_by: String,
+    },
+    /// The supplier surely refused the order (it did not take it):
+    /// the shopper may cancel again.
+    SupplierOrderRefused {
+        supplier: String,
+        reason: String,
+        refused_by: String,
+    },
     /// The goods left; `tracking` is a parcel number or link, if any.
     Fulfilled {
         tracking: Option<String>,

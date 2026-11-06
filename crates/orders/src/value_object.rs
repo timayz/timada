@@ -131,6 +131,10 @@ pub const INVOICING_NOT_CONFIGURED: &str = "invoicing_not_configured";
 /// The refusal a storefront reads for a payment the dashboard cancelled
 /// once what its checkout held had lapsed: the shopper asks to pay again.
 pub const PAYMENT_EXPIRED: &str = "payment_expired";
+/// How long before the hold on the shopper's card lapses its goods are no
+/// longer ordered from a supplier: buying them and taking the money must both
+/// happen before, even with the provider slow to answer.
+pub const HOLD_MARGIN_SECS: u64 = 12 * 60 * 60;
 /// Why an order is cancelled when the hold on the shopper's card lapsed
 /// before the money was taken.
 pub const HOLD_EXPIRED_REASON: &str =

@@ -384,8 +384,8 @@ fn subscriptions(
             ),
         ),
         (
-            "payment capture",
-            crate::payments::capture_subscription(payments.clone(), store.clone()),
+            "order payments",
+            crate::payments::order_payments_subscription(payments.clone(), store.clone()),
         ),
         (
             "discount usage",
