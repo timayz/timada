@@ -33,7 +33,10 @@ pub struct AddPageImage {
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Writes a draft under a fresh id; its slug must be free.
+    /// Writes a draft under a fresh id; its slug must be free. A creation
+    /// that fails keeps the claim, as its write may land yet (the store
+    /// could not tell): a claim whose page never got written is taken over
+    /// once it is no longer fresh.
     pub async fn create_page(
         &self,
         actor: &str,
@@ -50,26 +53,18 @@ impl<E: Executor> super::Command<E> {
         let id = new_page_id();
         self.claim_page_slug(&slug, &id, 0, routing_key.clone())
             .await?;
-        let created = evento::append(&id)
+        evento::append(&id)
             .original_version(0)
-            .routing_key_opt(routing_key.clone())
+            .routing_key_opt(routing_key)
             .event(&Created {
-                slug: slug.clone(),
+                slug,
                 title,
                 body,
                 created_by: actor.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
-            .await;
-        if let Err(err) = created {
-            // Best effort: a claim whose page never got written is taken
-            // over once it is no longer fresh.
-            let _ = self
-                .release_page_slug_claim(&slug, &id, 0, routing_key)
-                .await;
-            return Err(err.into());
-        }
+            .await?;
         Ok(id)
     }
 

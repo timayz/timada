@@ -8,6 +8,14 @@
 /// How long a claim counts as live while its holder has written nothing
 /// past it: the holder may be committing it right now. Past this, a node
 /// died between the claim and the holder's write, and the value is free.
+///
+/// The claim's stamp is the cluster's and `now` the clock of the node
+/// asking, so the grace holds while the nodes' clocks agree to well within
+/// it (they run NTP) and a holder's write lands well within it of its
+/// claim. A node whose clock runs five minutes fast, or a holder write the
+/// cluster settles more than five minutes after its claim (one that was in
+/// flight when a majority of the nodes went away), could see a claim still
+/// in use as given up.
 pub const CLAIM_GRACE_SECS: u64 = 300;
 
 /// Whether a claim made at `claimed_at` (unix seconds) may still be

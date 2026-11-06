@@ -70,20 +70,20 @@ impl<E: Executor> Command<E> {
         })
     }
 
-    /// Frees the entry of a slug owned by `category_id` once the category
-    /// holds it no more: archived, or never written. A missing or already
-    /// freed entry is fine; one owned by another category is left alone.
+    /// Frees the entry of a slug owned by `category_id` once the category is
+    /// archived. A missing or already freed entry is fine; one owned by
+    /// another category is left alone.
     pub(crate) async fn release_category_slug(
         &self,
         slug: &str,
         category_id: &str,
         routing_key: Option<String>,
     ) -> Result<(), CatalogError> {
-        let held = self
+        let archived = self
             .load_category(category_id)
             .await?
-            .is_some_and(|category| !category.archived);
-        if held {
+            .is_some_and(|category| category.archived);
+        if !archived {
             return Ok(());
         }
         for _ in 0..CLAIM_ATTEMPTS {

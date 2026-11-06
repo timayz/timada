@@ -74,21 +74,20 @@ impl<E: Executor> Command<E> {
         })
     }
 
-    /// Frees the entry of a code owned by `discount_id` once the discount
-    /// holds it no more: archived, or never written. A missing or already
-    /// freed entry is fine; one owned by another discount is left alone.
-    /// Told twice, nothing more happens.
-    pub(crate) async fn release_code(
+    /// Frees the entry of a code owned by `discount_id` once the discount is
+    /// archived. A missing or already freed entry is fine; one owned by
+    /// another discount is left alone. Told twice, nothing more happens.
+    async fn release_code(
         &self,
         code: &str,
         discount_id: &str,
         routing_key: Option<String>,
     ) -> Result<(), DiscountError> {
-        let held = self
+        let archived = self
             .load_discount(discount_id)
             .await?
-            .is_some_and(|discount| !discount.is_archived());
-        if held {
+            .is_some_and(|discount| discount.is_archived());
+        if !archived {
             return Ok(());
         }
         for _ in 0..CLAIM_ATTEMPTS {

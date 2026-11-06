@@ -84,8 +84,11 @@ impl<E: Executor> Command<E> {
     }
 
     /// Gives back a claim the variant could not use: the product's write
-    /// after the claim at `product_version` failed. Left alone when the
-    /// variant holds the code after all.
+    /// after the claim at `product_version` failed, and the product has been
+    /// written past that version without the variant taking the code. While
+    /// it is still at that version the write may land yet (the store could
+    /// not tell), so the claim stays: the next claim takes it over once the
+    /// product writes past it, or once it is no longer fresh.
     pub(crate) async fn release_sku_claim(
         &self,
         sku: &str,
@@ -94,11 +97,10 @@ impl<E: Executor> Command<E> {
         product_version: u16,
         routing_key: Option<String>,
     ) -> Result<(), CatalogError> {
-        let held = self
-            .load_product_any(product_id)
-            .await?
-            .is_some_and(|product| product.holds_sku(variant_id, sku));
-        if held {
+        let Some(product) = self.load_product_any(product_id).await? else {
+            return Ok(());
+        };
+        if product.holds_sku(variant_id, sku) || product.aggregate_version()? <= product_version {
             return Ok(());
         }
         self.release_sku(
@@ -147,5 +149,84 @@ impl<E: Executor> Command<E> {
             }
         }
         Err(WriteError::InvalidOriginalVersion.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use evento::ProjectionAggregate;
+
+    use crate::aggregator::VariantDefined;
+    use crate::{CatalogError, Command, CreateProduct, DefineVariant, OptionSelection};
+
+    /// A variant claims its code, and the product's write fails with an
+    /// outcome the store could not tell: the claim stays, so the variant
+    /// defined after all keeps the code to itself.
+    #[tokio::test]
+    async fn a_claim_whose_write_may_still_land_is_kept() {
+        let store = evento::Turso::in_memory_concurrent().await.unwrap();
+        let cmd = Command::new(store, "acme");
+        let mug = cmd
+            .create_product(
+                "alice",
+                CreateProduct {
+                    name: "Blue Mug".into(),
+                    slug: None,
+                },
+            )
+            .await
+            .unwrap();
+        let colour = cmd
+            .define_option(
+                "alice",
+                &mug.id,
+                "Colour",
+                vec!["Blue".into(), "Red".into()],
+            )
+            .await
+            .unwrap();
+        let mug = cmd.load_product(&mug.id).await.unwrap().unwrap();
+        let version = mug.aggregate_version().unwrap();
+        let pick = |value: &str| OptionSelection {
+            option_id: colour.clone(),
+            value: value.into(),
+        };
+        cmd.claim_sku("MUG-1", &mug.id, "v-blue", version, None)
+            .await
+            .unwrap();
+        cmd.release_sku_claim("MUG-1", &mug.id, "v-blue", version, None)
+            .await
+            .unwrap();
+        assert!(cmd.load_sku_index("MUG-1").await.unwrap().is_some());
+
+        mug.write()
+            .unwrap()
+            .event(&VariantDefined {
+                variant_id: "v-blue".into(),
+                selections: vec![pick("Blue")],
+                sku: Some("MUG-1".into()),
+                amount_cents: 1250,
+                currency: "EUR".into(),
+                image_id: None,
+                defined_by: "alice".into(),
+            })
+            .tenant("acme")
+            .commit(cmd.executor())
+            .await
+            .unwrap();
+        let taken = cmd
+            .define_variant(
+                "alice",
+                &mug.id,
+                DefineVariant {
+                    selections: vec![pick("Red")],
+                    sku: Some("mug-1".into()),
+                    amount_cents: 1250,
+                    currency: "EUR".into(),
+                    image_id: None,
+                },
+            )
+            .await;
+        assert!(matches!(taken, Err(CatalogError::SkuTaken)), "{taken:?}");
     }
 }

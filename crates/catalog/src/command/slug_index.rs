@@ -110,8 +110,11 @@ impl<E: Executor> Command<E> {
     }
 
     /// Gives back a claim the product could not use: its write after the
-    /// claim at `product_version` failed. Left alone when the product holds
-    /// the slug after all.
+    /// claim at `product_version` failed, and the product has been written
+    /// past that version without the slug. While it is still at that
+    /// version the write may land yet (the store could not tell), so the
+    /// claim stays: the next claim takes it over once the product writes
+    /// past it, or once it is no longer fresh.
     pub(crate) async fn release_slug_claim(
         &self,
         slug: &str,
@@ -119,11 +122,10 @@ impl<E: Executor> Command<E> {
         product_version: u16,
         routing_key: Option<String>,
     ) -> Result<(), CatalogError> {
-        let held = self
-            .load_product_any(product_id)
-            .await?
-            .is_some_and(|product| product.holds_slug(slug));
-        if held {
+        let Some(product) = self.load_product_any(product_id).await? else {
+            return Ok(());
+        };
+        if product.holds_slug(slug) || product.aggregate_version()? <= product_version {
             return Ok(());
         }
         self.release_slug(
@@ -167,5 +169,85 @@ impl<E: Executor> Command<E> {
             }
         }
         Err(WriteError::InvalidOriginalVersion.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use evento::ProjectionAggregate;
+
+    use crate::aggregator::Renamed;
+    use crate::{CatalogError, Command, CreateProduct, ProductState};
+
+    async fn with_a_mug() -> (Command<evento::Turso>, ProductState) {
+        let store = evento::Turso::in_memory_concurrent().await.unwrap();
+        let cmd = Command::new(store, "acme");
+        let mug = cmd
+            .create_product(
+                "alice",
+                CreateProduct {
+                    name: "Blue Mug".into(),
+                    slug: None,
+                },
+            )
+            .await
+            .unwrap();
+        (cmd, mug)
+    }
+
+    /// A rename claims its slug, and its write fails with an outcome the
+    /// store could not tell: the compensation keeps the claim, so the write
+    /// landing after all leaves the slug to the product alone.
+    #[tokio::test]
+    async fn a_claim_whose_write_may_still_land_is_kept() {
+        let (cmd, mug) = with_a_mug().await;
+        let version = mug.aggregate_version().unwrap();
+        cmd.claim_slug("tea-cup", &mug.id, version, None)
+            .await
+            .unwrap();
+        cmd.release_slug_claim("tea-cup", &mug.id, version, None)
+            .await
+            .unwrap();
+        assert!(cmd.load_slug_index("tea-cup").await.unwrap().is_some());
+
+        mug.write()
+            .unwrap()
+            .event(&Renamed {
+                name: "Tea Cup".into(),
+                slug: "tea-cup".into(),
+                renamed_by: "alice".into(),
+            })
+            .tenant("acme")
+            .commit(cmd.executor())
+            .await
+            .unwrap();
+        let taken = cmd
+            .create_product(
+                "alice",
+                CreateProduct {
+                    name: "Tea Cup".into(),
+                    slug: Some("tea-cup".into()),
+                },
+            )
+            .await;
+        assert!(matches!(taken, Err(CatalogError::SlugTaken)), "{taken:?}");
+    }
+
+    /// A write refused because another landed first never lands: once the
+    /// product is past the claim, the compensation gives it back.
+    #[tokio::test]
+    async fn a_claim_whose_write_was_refused_is_given_back() {
+        let (cmd, mug) = with_a_mug().await;
+        let version = mug.aggregate_version().unwrap();
+        cmd.claim_slug("tea-cup", &mug.id, version, None)
+            .await
+            .unwrap();
+        cmd.describe_product("alice", &mug.id, "Holds tea.")
+            .await
+            .unwrap();
+        cmd.release_slug_claim("tea-cup", &mug.id, version, None)
+            .await
+            .unwrap();
+        assert!(cmd.load_slug_index("tea-cup").await.unwrap().is_none());
     }
 }

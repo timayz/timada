@@ -2,14 +2,14 @@ use evento::ProjectionAggregate;
 use evento::{Executor, WriteError};
 use timada_core::claim::claim_is_fresh;
 
-use crate::aggregator::{Claimed, Released};
+use crate::aggregator::Claimed;
 use crate::error::TenancyError;
 use crate::value_object::tenant_slug_id;
 
 use super::{Command, TenantSlugState};
 
-/// How many times a claim or a release reads the entry again after losing
-/// a race for it.
+/// How many times a claim reads the entry again after losing a race for
+/// it.
 const CLAIM_ATTEMPTS: usize = 3;
 
 impl<E: Executor> Command<E> {
@@ -68,39 +68,5 @@ impl<E: Executor> Command<E> {
     async fn slug_dangling(&self, index: &TenantSlugState) -> anyhow::Result<bool> {
         Ok(!claim_is_fresh(index.claimed_at, timada_core::unix_now())
             && self.load_tenant(&index.tenant_id).await?.is_none())
-    }
-
-    /// Gives back the slug a tenant that could not be created claimed. A
-    /// missing or already freed entry is fine; one owned by another tenant,
-    /// or by a tenant written after all, is left alone.
-    pub(crate) async fn release_slug(
-        &self,
-        slug: &str,
-        tenant_id: &str,
-        routing_key: Option<String>,
-    ) -> Result<(), TenancyError> {
-        if self.load_tenant(tenant_id).await?.is_some() {
-            return Ok(());
-        }
-        for _ in 0..CLAIM_ATTEMPTS {
-            let Some(index) = self.load_slug_index(slug).await? else {
-                return Ok(());
-            };
-            if index.tenant_id != tenant_id {
-                return Ok(());
-            }
-            let released = index
-                .write()?
-                .routing_key_opt(routing_key.clone())
-                .event(&Released)
-                .commit(&self.0)
-                .await;
-            match released {
-                Ok(_) => return Ok(()),
-                Err(WriteError::InvalidOriginalVersion) => continue,
-                Err(err) => return Err(err.into()),
-            }
-        }
-        Err(WriteError::InvalidOriginalVersion.into())
     }
 }

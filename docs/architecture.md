@@ -75,7 +75,11 @@ Recurring patterns:
   for a release: a slug or a code whose holder is gone for good (archived, deleted),
   wrote past the claim without taking it, or never got written within
   `timada_core::claim::CLAIM_GRACE_SECS`, is taken over by the next claim. A product's
-  and a page's claim record the holder's version it was made at for that. The entries
+  and a page's claim record the holder's version it was made at for that. The grace
+  compares the claim's stamp, which the cluster sets, with the clock of the node
+  asking: the nodes' clocks must agree to well within it (they run NTP). A holder
+  write that failed keeps its claim unless the holder has since been written past
+  it, since a write the store could not answer for may still land. The entries
   themselves are freed by a release subscription per context (`timada-catalog/releases`,
   `timada-discounts/releases`, `timada-pages/releases`) on what gives a value up, from
   the holder as it is now: only what it holds no more and claimed before the event, so

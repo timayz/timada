@@ -87,8 +87,11 @@ impl<E: Executor> Command<E> {
     }
 
     /// Gives back a claim the page could not use: its write after the claim
-    /// at `page_version` failed. Left alone when the page holds the slug
-    /// after all.
+    /// at `page_version` failed, and the page has been written past that
+    /// version without the slug. While it is still at that version the
+    /// write may land yet (the store could not tell), so the claim stays:
+    /// the next claim takes it over once the page writes past it, or once
+    /// it is no longer fresh.
     pub(crate) async fn release_page_slug_claim(
         &self,
         slug: &str,
@@ -96,11 +99,10 @@ impl<E: Executor> Command<E> {
         page_version: u16,
         routing_key: Option<String>,
     ) -> Result<(), PageError> {
-        let held = self
-            .load_page_any(page_id)
-            .await?
-            .is_some_and(|page| page.holds_slug(slug));
-        if held {
+        let Some(page) = self.load_page_any(page_id).await? else {
+            return Ok(());
+        };
+        if page.holds_slug(slug) || page.aggregate_version()? <= page_version {
             return Ok(());
         }
         self.release_page_slug(slug, page_id, page_version.saturating_add(1), routing_key)
@@ -177,5 +179,56 @@ impl<E: Executor> Command<E> {
                 .await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use evento::ProjectionAggregate;
+
+    use crate::aggregator::Renamed;
+    use crate::{Command, CreatePage, PageError};
+
+    /// A rename claims its slug, and its write fails with an outcome the
+    /// store could not tell: the claim stays, so the rename landing after
+    /// all leaves the slug to the page alone.
+    #[tokio::test]
+    async fn a_claim_whose_write_may_still_land_is_kept() {
+        let store = evento::Turso::in_memory_concurrent().await.unwrap();
+        let pages = Command::new(store, "acme");
+        let page = |slug: &str, title: &str| CreatePage {
+            slug: slug.into(),
+            title: title.into(),
+            body: "Who we are.".into(),
+        };
+        let id = pages
+            .create_page("alice", page("", "About us"))
+            .await
+            .unwrap();
+        let about = pages.load_page(&id).await.unwrap().unwrap();
+        let version = about.aggregate_version().unwrap();
+        pages
+            .claim_page_slug("about", &id, version, None)
+            .await
+            .unwrap();
+        pages
+            .release_page_slug_claim("about", &id, version, None)
+            .await
+            .unwrap();
+        assert!(pages.load_page_slug_index("about").await.unwrap().is_some());
+
+        about
+            .write()
+            .unwrap()
+            .event(&Renamed {
+                slug: "about".into(),
+                renamed_by: "alice".into(),
+            })
+            .tenant("acme")
+            .commit(pages.executor())
+            .await
+            .unwrap();
+        let taken = pages.create_page("alice", page("about", "About")).await;
+        assert!(matches!(taken, Err(PageError::SlugTaken)), "{taken:?}");
     }
 }

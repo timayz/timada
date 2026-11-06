@@ -33,8 +33,9 @@ pub struct CreateCategory {
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Creates a category: checks the parent leaves room below it, claims the
-    /// slug, then appends `Created`. A stream that cannot be created after
-    /// the claim gives the slug back (best effort).
+    /// slug, then appends `Created`. A creation that fails keeps the claim,
+    /// as its write may land yet (the store could not tell): a claim whose
+    /// category never got written is taken over once it is no longer fresh.
     pub async fn create_category(
         &self,
         actor: &str,
@@ -82,27 +83,18 @@ impl<E: Executor> super::Command<E> {
             }
         };
 
-        let created = evento::append(&category_id)
+        evento::append(&category_id)
             .original_version(0)
-            .routing_key_opt(routing_key.clone())
+            .routing_key_opt(routing_key)
             .event(&Created {
-                slug: slug.clone(),
+                slug,
                 name,
                 parent_id,
                 created_by: actor.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
-            .await;
-        if let Err(err) = created {
-            if let Err(release) = self
-                .release_category_slug(&slug, &category_id, routing_key)
-                .await
-            {
-                tracing::warn!(%slug, %release, "cannot give the category slug back after a failed creation");
-            }
-            return Err(err.into());
-        }
+            .await?;
 
         self.load_category(&category_id)
             .await?

@@ -23,8 +23,9 @@ impl<E: Executor> super::Command<E> {
     /// Derives the slug from the name (`Acme Shop` → `acme-shop`; a taken one
     /// gets a short random suffix, `acme-shop-k3x9p`), claims it, then creates
     /// the tenant with its owner and the default price rule in one commit. A
-    /// tenant stream that cannot be created after the claim gives the slug back
-    /// (best effort: a failure there only leaves the slug reserved).
+    /// creation that fails keeps the claim, as its write may land yet (the
+    /// store could not tell): a claim whose tenant never got written is taken
+    /// over once it is no longer fresh.
     pub async fn create_tenant(
         &self,
         cmd: CreateTenant,
@@ -48,12 +49,12 @@ impl<E: Executor> super::Command<E> {
             }
         }
 
-        let created = evento::append(&tenant_id)
+        evento::append(&tenant_id)
             .original_version(0)
-            .routing_key_opt(routing_key.clone())
+            .routing_key_opt(routing_key)
             .requested_by(cmd.owner_user_id.clone())
             .event(&Created {
-                slug: slug.clone(),
+                slug,
                 name,
                 created_by: cmd.owner_user_id.clone(),
             })
@@ -66,13 +67,7 @@ impl<E: Executor> super::Command<E> {
                 set_by: cmd.owner_user_id,
             })
             .commit(&self.0)
-            .await;
-        if let Err(err) = created {
-            if let Err(release) = self.release_slug(&slug, &tenant_id, routing_key).await {
-                tracing::warn!(%slug, %release, "cannot give the slug back after a failed creation");
-            }
-            return Err(err.into());
-        }
+            .await?;
 
         self.load_tenant(&tenant_id)
             .await?
