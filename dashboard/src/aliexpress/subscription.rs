@@ -230,7 +230,7 @@ async fn import<E: Executor>(
     };
     let market = Aliexpress::market_of(settings);
     let product = client
-        .product(ae_product_id, &market)
+        .product_delivered(ae_product_id, &market)
         .await
         .map_err(|err| {
             if err.gone {

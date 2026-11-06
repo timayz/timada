@@ -110,6 +110,31 @@ impl AeProduct {
         self.skus.iter().find(|sku| sku.id == sku_id)
     }
 
+    /// The combination whose delivery stands for every other's: the first
+    /// priced in `currency` and in stock, else the first priced in it.
+    pub fn delivery_sku(&self, currency: &str) -> Option<&AeSku> {
+        let priced = || {
+            self.skus
+                .iter()
+                .filter(|sku| sku.cost_cents.is_some() && sku.quoted_in(currency))
+        };
+        priced()
+            .find(|sku| sku.available > 0)
+            .or_else(|| priced().next())
+    }
+
+    /// Adds `cents` of delivery to the cost of every combination priced in
+    /// `currency`: what the shop pays to have one delivered.
+    pub fn add_delivery(&mut self, cents: u64, currency: &str) {
+        for sku in &mut self.skus {
+            if sku.quoted_in(currency)
+                && let Some(cost) = &mut sku.cost_cents
+            {
+                *cost = cost.saturating_add(cents);
+            }
+        }
+    }
+
     pub(crate) fn from_json(product_id: &str, result: &Value) -> Option<Self> {
         let base = result.get("ae_item_base_info_dto")?;
         let images = result
@@ -159,6 +184,14 @@ impl AeProduct {
 }
 
 impl AeSku {
+    /// Whether its cost is in `currency`; one AliExpress does not name the
+    /// currency of is taken to be.
+    fn quoted_in(&self, currency: &str) -> bool {
+        self.currency
+            .as_deref()
+            .is_none_or(|own| own.eq_ignore_ascii_case(currency))
+    }
+
     fn from_json(sku: &Value) -> Option<Self> {
         let id = ["sku_id", "id"]
             .iter()
@@ -405,5 +438,60 @@ mod tests {
         assert_eq!(parse_amount("0.99"), Some(99));
         assert_eq!(parse_amount("abc"), None);
         assert_eq!(parse_amount(""), None);
+    }
+
+    fn sku(id: &str, cost_cents: Option<u64>, currency: Option<&str>, available: u32) -> AeSku {
+        AeSku {
+            id: id.to_owned(),
+            cost_cents,
+            currency: currency.map(str::to_owned),
+            available,
+            properties: Vec::new(),
+            attr: None,
+        }
+    }
+
+    fn product(skus: Vec<AeSku>) -> AeProduct {
+        AeProduct {
+            id: "1".to_owned(),
+            subject: String::new(),
+            detail: String::new(),
+            currency: "CNY".to_owned(),
+            status: "onSelling".to_owned(),
+            images: Vec::new(),
+            skus,
+            properties: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn delivery_is_asked_for_a_priced_combination_in_stock() {
+        let mixed = product(vec![
+            sku("unpriced", None, Some("EUR"), 5),
+            sku("in-usd", Some(100), Some("USD"), 5),
+            sku("sold-out", Some(14), Some("EUR"), 0),
+            sku("in-stock", Some(14), None, 3),
+        ]);
+        assert_eq!(mixed.delivery_sku("EUR").unwrap().id, "in-stock");
+        let sold_out = product(vec![sku("sold-out", Some(14), Some("EUR"), 0)]);
+        assert_eq!(sold_out.delivery_sku("EUR").unwrap().id, "sold-out");
+        assert!(
+            product(vec![sku("unpriced", None, None, 5)])
+                .delivery_sku("EUR")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn delivery_adds_to_every_cost_in_the_currency() {
+        let mut product = product(vec![
+            sku("a", Some(14), Some("EUR"), 3),
+            sku("b", Some(20), Some("eur"), 0),
+            sku("c", None, Some("EUR"), 3),
+            sku("d", Some(100), Some("USD"), 3),
+        ]);
+        product.add_delivery(2_805, "EUR");
+        let costs: Vec<_> = product.skus.iter().map(|sku| sku.cost_cents).collect();
+        assert_eq!(costs, [Some(2_819), Some(2_825), None, Some(100)]);
     }
 }
