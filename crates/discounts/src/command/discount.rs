@@ -29,7 +29,8 @@ pub struct CreateDiscount {
 impl<E: Executor> super::Command<E> {
     /// Creates an active discount: claims its code, then appends `Created`.
     /// A discount stream that cannot be created after the claim gives the
-    /// code back (best effort: a failure there only leaves it reserved).
+    /// code back (best effort: a claim whose discount never got written is
+    /// taken over once it is no longer fresh).
     pub async fn create_discount(
         &self,
         actor: &str,
@@ -104,8 +105,9 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Retires the discount for good and frees its code. Already archived is
-    /// a no-op.
+    /// Retires the discount for good. Its code is free to any claim at once,
+    /// and the release subscription frees its entry. Already archived is a
+    /// no-op.
     pub async fn archive_discount(
         &self,
         actor: &str,
@@ -119,15 +121,14 @@ impl<E: Executor> super::Command<E> {
         };
         discount
             .write()?
-            .routing_key_opt(routing_key.clone())
+            .routing_key_opt(routing_key)
             .event(&Archived {
                 archived_by: actor.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
             .await?;
-        self.release_code(&discount.code, discount_id, routing_key)
-            .await
+        Ok(())
     }
 }
 

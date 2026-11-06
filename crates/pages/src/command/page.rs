@@ -48,7 +48,7 @@ impl<E: Executor> super::Command<E> {
             normalize_slug(&cmd.slug)?
         };
         let id = new_page_id();
-        self.claim_page_slug(&slug, &id, routing_key.clone())
+        self.claim_page_slug(&slug, &id, 0, routing_key.clone())
             .await?;
         let created = evento::append(&id)
             .original_version(0)
@@ -63,7 +63,11 @@ impl<E: Executor> super::Command<E> {
             .commit(&self.executor)
             .await;
         if let Err(err) = created {
-            let _ = self.release_page_slug(&slug, &id, routing_key).await;
+            // Best effort: a claim whose page never got written is taken
+            // over once it is no longer fresh.
+            let _ = self
+                .release_page_slug_claim(&slug, &id, 0, routing_key)
+                .await;
             return Err(err.into());
         }
         Ok(id)
@@ -123,7 +127,8 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// Moves the page to another slug, which must be free; the old one is
-    /// freed once the page has moved.
+    /// free to any claim once the page has moved, and the release
+    /// subscription frees its entry.
     pub async fn rename_page(
         &self,
         actor: &str,
@@ -136,7 +141,8 @@ impl<E: Executor> super::Command<E> {
         if page.slug == slug {
             return Ok(());
         }
-        self.claim_page_slug(&slug, &page.id, routing_key.clone())
+        let version = page.aggregate_version()?;
+        self.claim_page_slug(&slug, &page.id, version, routing_key.clone())
             .await?;
         let renamed = self
             .write_page(
@@ -149,11 +155,12 @@ impl<E: Executor> super::Command<E> {
             )
             .await;
         if let Err(err) = renamed {
-            let _ = self.release_page_slug(&slug, &page.id, routing_key).await;
+            let _ = self
+                .release_page_slug_claim(&slug, &page.id, version, routing_key)
+                .await;
             return Err(err);
         }
-        self.release_page_slug(&page.slug, &page.id, routing_key)
-            .await
+        Ok(())
     }
 
     /// Shows it on the storefront; already published is a no-op.
@@ -254,8 +261,9 @@ impl<E: Executor> super::Command<E> {
         .await
     }
 
-    /// Deletes the page for good and frees its slug. Returns what it was, so
-    /// the host can delete its pictures' files.
+    /// Deletes the page for good. Its slug is free to any claim at once, and
+    /// the release subscription frees its entry. Returns what it was, so the
+    /// host can delete its pictures' files.
     pub async fn delete_page(
         &self,
         actor: &str,
@@ -268,11 +276,9 @@ impl<E: Executor> super::Command<E> {
             &Deleted {
                 deleted_by: actor.to_owned(),
             },
-            routing_key.clone(),
+            routing_key,
         )
         .await?;
-        self.release_page_slug(&page.slug, &page.id, routing_key)
-            .await?;
         Ok(page)
     }
 }

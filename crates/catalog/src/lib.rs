@@ -10,15 +10,19 @@
 //! aggregate with a deterministic id, like a tenant's slug in the tenancy
 //! context: appending its first event at version 0 is an atomic
 //! create-unless-exists. Renaming a product moves it to the slug of its new
-//! name; archiving it gives its slug back.
+//! name; archiving it gives its slug back. A value a product let go of is
+//! free at once to the next claim, and the release subscription
+//! ([`release_subscription`]) frees its entry.
 
 pub mod aggregator;
 mod command;
 mod error;
 mod query;
+mod releases;
 mod value_object;
 
 pub use command::*;
 pub use error::*;
 pub use query::*;
+pub use releases::*;
 pub use value_object::*;

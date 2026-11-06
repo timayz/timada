@@ -285,8 +285,9 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Retires the category for good and frees its slug. Already archived
-    /// is a no-op. Its children and products are left as they are.
+    /// Retires the category for good. Its slug is free to any claim at once,
+    /// and the release subscription frees its entry. Already archived is a
+    /// no-op. Its children and products are left as they are.
     pub async fn archive_category(
         &self,
         actor: &str,
@@ -300,19 +301,13 @@ impl<E: Executor> super::Command<E> {
         };
         category
             .write()?
-            .routing_key_opt(routing_key.clone())
+            .routing_key_opt(routing_key)
             .event(&Archived {
                 archived_by: actor.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
             .await?;
-        if let Err(release) = self
-            .release_category_slug(&category.slug, category_id, routing_key)
-            .await
-        {
-            tracing::warn!(slug = %category.slug, %release, "cannot give the category slug back after archiving");
-        }
         Ok(())
     }
 }

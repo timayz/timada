@@ -849,6 +849,7 @@ async fn a_stock_code_means_one_variant_across_the_tenant() {
     cmd.remove_variant(ALICE, &product_id, &beige)
         .await
         .unwrap();
+    run_releases(&cmd).await;
     assert!(
         cmd.load_sku_index("harness-sand").await.unwrap().is_none(),
         "the code is free again"
@@ -870,6 +871,7 @@ async fn archiving_a_product_frees_the_codes_of_its_variants() {
     .await
     .unwrap();
     cmd.archive_product(ALICE, &product_id).await.unwrap();
+    run_releases(&cmd).await;
     assert!(cmd.load_sku_index("gone-soon").await.unwrap().is_none());
 
     let (other_id, other_colour) = with_colours(&cmd).await;

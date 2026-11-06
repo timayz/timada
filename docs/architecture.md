@@ -70,7 +70,16 @@ Recurring patterns:
 - **Uniqueness without a unique index.** A slug, an e-mail address, a session or API
   token is an *index aggregate* with a deterministic id (`hash_ids([kind, value])`).
   Appending its first event at version 0 is an atomic create-unless-exists, and loading
-  it reads the event store directly, so a lookup sees its own writes.
+  it reads the event store directly, so a lookup sees its own writes. A command claims
+  the value, then writes its holder; a node may die in between, so a claim never waits
+  for a release: a slug or a code whose holder is gone for good (archived, deleted),
+  wrote past the claim without taking it, or never got written within
+  `timada_core::claim::CLAIM_GRACE_SECS`, is taken over by the next claim. A product's
+  and a page's claim record the holder's version it was made at for that. The entries
+  themselves are freed by a release subscription per context (`timada-catalog/releases`,
+  `timada-discounts/releases`, `timada-pages/releases`) on what gives a value up, from
+  the holder as it is now: only what it holds no more and claimed before the event, so
+  a value taken back since stays its own.
 - **Every event says who did it** (`*_by` fields). Authorisation lives in the host.
 - **Write-side state** is a strict projection with `#[evento::snapshot(none)]`, so
   commands observe the exact version they write against.
@@ -295,9 +304,9 @@ A member renames a product on `/t/{slug}/products/{id}`:
 2. `timada_catalog::Command::new(store, tenant_id)` is the catalog gateway in the
    tenant's streams.
 3. `rename_product` loads the product's write-side state in that tenant, checks the
-   invariants, claims the slug of the new name and commits
-   `Renamed { name, slug, renamed_by }` at the observed version, then frees the old
-   slug.
+   invariants, claims the slug of the new name at the product's version and commits
+   `Renamed { name, slug, renamed_by }` at that version. The old slug is free to the
+   next claim at once; the subscription `timada-catalog/releases` frees its entry.
 4. The commit goes through the Accord node and lands in `data/timada.db`, in the
    tenant's stream of that product.
 5. The `catalog` subscription writes the new name and slug into `catalog_products`, under the
@@ -331,7 +340,7 @@ one variant, which the shop sells with nothing to pick.
 
 Codes are unique across a tenant through the same index-aggregate pattern as slugs
 (`timada-catalog/ProductSku`), compared without regard to case. A variant that goes,
-and an archived product, give their codes back.
+one whose code changes, and an archived product, give their codes back.
 
 A product leaves the catalog one of two ways. `Archived` is final and keeps it on
 record: no more edits, its slug and codes free again, its row still listed as
