@@ -47,7 +47,8 @@ use payments::webhook::{Outcome, receive};
 use payments::{
     ASKED_SECS, Busy, Cancellation, CaptureAnswer, Checkouts, DASHBOARD_ACTOR, LapsedCheckouts,
     NewPayment, OpenPayment, PaymentGateway, PaymentState, PaymentStatus, Payments,
-    PendingPayments, RECHECK_SECS, RefundRecord, ReleaseAnswer, SuppliedGoods, signature,
+    PendingPayments, RECHECK_SECS, RefundRecord, ReleaseAnswer, SuppliedGoods, UnansweredCheckouts,
+    signature,
 };
 use timada_orders::{CaptureClaim, HOLD_EXPIRED_REASON, OrderLine, OrderStatus};
 
@@ -420,6 +421,22 @@ async fn harness() -> Harness {
 
 /// A harness whose tenants pay through `stripe` with `secret_key`.
 async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &str) -> Harness<G> {
+    harness_on(stripe, secret_key, true).await
+}
+
+/// A harness whose node answers no request to pay: as if the node that
+/// took one on stopped.
+async fn harness_without_answers() -> Harness {
+    harness_on(Arc::new(FakeStripe::default()), "sk_test_good", false).await
+}
+
+/// `answers`: whether this node runs the subscription answering requests
+/// to pay.
+async fn harness_on<G: PaymentGateway + 'static>(
+    stripe: Arc<G>,
+    secret_key: &str,
+    answers: bool,
+) -> Harness<G> {
     let dir = std::env::temp_dir().join(format!("timada-payments-{}", ulid::Ulid::generate()));
     std::fs::create_dir_all(&dir).unwrap();
     // The store in memory (a file would fsync every commit of the thirty-odd
@@ -443,14 +460,17 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
     // The subscriptions the dashboard runs on the store, each following
     // every tenant.
     let mut subscriptions = Vec::new();
-    for builder in [
-        payments::subscription(payments::Checkouts::new(
+    if answers {
+        let answering = payments::subscription(payments::Checkouts::new(
             subscribed.clone(),
             fake_rates(),
             goods.clone(),
             platform.clone(),
             "node-0",
-        )),
+        ));
+        subscriptions.push(answering.start(&platform).await.unwrap());
+    }
+    for builder in [
         payments::order_payments_subscription(subscribed.clone(), platform.clone()),
         timada_orders::discount_usage_subscription(platform.clone()),
         timada_orders::stock_usage_subscription(platform.clone()),
@@ -1124,6 +1144,151 @@ async fn a_payment_stripe_is_still_opening_is_asked_for_again() {
     let stock = stock_of(&h, &acme, &mug).await;
     assert!(stock.holds.contains_key(&cart_id), "{stock:?}");
     assert_eq!(stock.available_at(now() as u64), Some(8));
+    h.finish().await;
+}
+
+/// Holds the two mugs of the cart for its checkout, as the node that took
+/// a request on does before it asks Stripe.
+async fn hold_the_mugs(h: &Harness, tenant: &TenantState, cart_id: &str, mug: &str) {
+    timada_catalog::Command::new(h.store(tenant), &tenant.id)
+        .reserve_stock(
+            DASHBOARD_ACTOR,
+            cart_id,
+            &[StockLine {
+                product_id: mug.to_owned(),
+                variant_id: None,
+                quantity: 2,
+            }],
+            RESERVATION_SECS,
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_request_whose_node_stopped_is_refused_once_its_claim_lapses() {
+    let h = harness_without_answers().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let (cart_id, mug) = h.cart(&acme).await;
+    timada_catalog::Command::new(h.store(&acme), &acme.id)
+        .set_stock("alice", &mug, None, 10)
+        .await
+        .unwrap();
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let sweep = UnansweredCheckouts::new(h.db.clone(), h.store(&acme));
+
+    // node-9 takes the request on, holds the mugs, and stops for good.
+    let request_id = orders
+        .request_checkout(STOREFRONT_ACTOR, &cart_id, checkout(Some(2500)))
+        .await
+        .unwrap();
+    orders
+        .claim_checkout(DASHBOARD_ACTOR, &cart_id, &request_id, "node-9")
+        .await
+        .unwrap();
+    hold_the_mugs(&h, &acme, &cart_id, &mug).await;
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+
+    // While its claim holds, the request is node-9's.
+    let now = now() as u64;
+    assert_eq!(sweep.sweep(now).await.unwrap(), 0);
+    assert_eq!(
+        sweep
+            .sweep(now + timada_orders::CHECKOUT_CLAIM_SECS - 60)
+            .await
+            .unwrap(),
+        0
+    );
+    // Once it lapsed, the request is refused and the mugs go back.
+    let lapsed = now + timada_orders::CHECKOUT_CLAIM_SECS + 1;
+    assert_eq!(sweep.sweep(lapsed).await.unwrap(), 1);
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(
+        cart.request(&request_id).unwrap().answer,
+        Some(PaymentAnswer::Refused("payments_unavailable".into()))
+    );
+    let stock = stock_of(&h, &acme, &mug).await;
+    assert!(!stock.holds.contains_key(&cart_id), "{stock:?}");
+    assert_eq!(stock.available_at(now), Some(10));
+    // Answered: nothing more to sweep.
+    assert_eq!(sweep.sweep(lapsed).await.unwrap(), 0);
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_refusal_that_is_not_the_latest_request_gives_nothing_back() {
+    let h = harness_without_answers().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let (cart_id, mug) = h.cart(&acme).await;
+    timada_catalog::Command::new(h.store(&acme), &acme.id)
+        .set_stock("alice", &mug, None, 10)
+        .await
+        .unwrap();
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let sweep = UnansweredCheckouts::new(h.db.clone(), h.store(&acme));
+
+    // node-9 takes the first request on and stops; the shopper asks again,
+    // and another node holds the mugs for the second and opens its payment.
+    let first = orders
+        .request_checkout(STOREFRONT_ACTOR, &cart_id, checkout(Some(2500)))
+        .await
+        .unwrap();
+    orders
+        .claim_checkout(DASHBOARD_ACTOR, &cart_id, &first, "node-9")
+        .await
+        .unwrap();
+    let second = orders
+        .request_checkout(STOREFRONT_ACTOR, &cart_id, checkout(Some(2500)))
+        .await
+        .unwrap();
+    hold_the_mugs(&h, &acme, &cart_id, &mug).await;
+    let pending = orders
+        .pending_payment(&cart_id, &second)
+        .await
+        .unwrap()
+        .unwrap();
+    orders
+        .record_payment_request(
+            DASHBOARD_ACTOR,
+            &cart_id,
+            pending,
+            timada_orders::OpenedPayment {
+                provider: timada_orders::PROVIDER_STRIPE.into(),
+                payment_id: "pi_second".into(),
+                client_secret: "pi_second_secret".into(),
+                publishable_key: "pk_test_123".into(),
+            },
+        )
+        .await
+        .unwrap();
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+
+    // The first is refused; the mugs stay held for the second's payment.
+    let now = now() as u64;
+    assert_eq!(
+        sweep
+            .sweep(now + timada_orders::CHECKOUT_CLAIM_SECS + 1)
+            .await
+            .unwrap(),
+        1
+    );
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(
+        cart.request(&first).unwrap().answer,
+        Some(PaymentAnswer::Refused("payments_unavailable".into()))
+    );
+    assert!(cart.request(&second).unwrap().payment().is_some());
+    let stock = stock_of(&h, &acme, &mug).await;
+    assert!(stock.holds.contains_key(&cart_id), "{stock:?}");
+    assert_eq!(stock.available_at(now), Some(8));
     h.finish().await;
 }
 

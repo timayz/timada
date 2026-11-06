@@ -427,6 +427,30 @@ pub struct PendingPayment {
     pub supplier: Option<String>,
 }
 
+/// What the checkout of a request holds, or may hold: the goods (one hold
+/// per thing, for the cart) and a use of a discount (for the cart and the
+/// request's address). What goes back when the request is refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckoutHolds {
+    pub stock_lines: Vec<timada_catalog::StockLine>,
+    pub discount_id: Option<String>,
+    pub email: String,
+}
+
+impl From<&PendingPayment> for CheckoutHolds {
+    /// What a request priced as `pending` holds.
+    fn from(pending: &PendingPayment) -> Self {
+        Self {
+            stock_lines: crate::stock_lines(&pending.lines),
+            discount_id: pending
+                .discount
+                .as_ref()
+                .map(|discount| discount.discount_id.clone()),
+            email: pending.request.email.clone(),
+        }
+    }
+}
+
 impl<E: Executor> super::Command<E> {
     /// What the dashboard does with a request to pay: `None` when there is
     /// nothing to do (answered already, the cart ordered, the request
@@ -511,6 +535,44 @@ impl<E: Executor> super::Command<E> {
             method_id: method.id.clone(),
             name: method.name.clone(),
             amount_cents,
+        }))
+    }
+
+    /// What the checkout of a request may hold, as its cart stands: a hold
+    /// on each thing its lines name, and a use of the discount its code
+    /// names, for the request's address. For a request refused before it
+    /// was priced (its claimant stopped): what its checkout took, unless the
+    /// shopper changed the cart since; a hold left over lapses on its own.
+    pub async fn checkout_holds(
+        &self,
+        cart_id: &str,
+        request_id: &str,
+    ) -> Result<Option<CheckoutHolds>, OrderError> {
+        let Some(cart) = self.load_cart(cart_id).await? else {
+            return Ok(None);
+        };
+        let Some(request) = cart.request(request_id) else {
+            return Ok(None);
+        };
+        let discount_id = match &cart.discount_code {
+            Some(code) => self
+                .load_discount_by_code(code)
+                .await?
+                .map(|discount| discount.id),
+            None => None,
+        };
+        Ok(Some(CheckoutHolds {
+            stock_lines: cart
+                .lines
+                .iter()
+                .map(|line| timada_catalog::StockLine {
+                    product_id: line.product_id.clone(),
+                    variant_id: line.variant_id.clone(),
+                    quantity: line.quantity,
+                })
+                .collect(),
+            discount_id,
+            email: request.email.clone(),
         }))
     }
 

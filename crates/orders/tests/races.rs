@@ -1,5 +1,6 @@
 //! Two nodes doing the same thing at once: one of them answers a request to
-//! pay, and an order placed by both keeps one reference.
+//! pay, and an order placed by both keeps one reference. A request whose
+//! node stopped stays listed until someone answers it.
 
 mod common;
 
@@ -12,7 +13,103 @@ use ulid::Ulid;
 
 use common::*;
 use timada_orders::aggregator::Claimed;
-use timada_orders::{CheckoutClaim, Command, Payment, order_reference_id};
+use timada_orders::{
+    CheckoutClaim, Command, Payment, order_reference_id, read_model_subscription, unanswered_carts,
+};
+
+#[tokio::test]
+async fn a_request_nobody_answered_is_listed_until_it_is() {
+    let (executor, db) = executor_with_pool().await;
+    let orders = Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let discounts = timada_discounts::Command::new(executor.clone(), TENANT);
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let ten = discounts
+        .create_discount(
+            ALICE,
+            timada_discounts::CreateDiscount {
+                code: "TEN".into(),
+                value: timada_discounts::DiscountValue::Percent(1000),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let cart_id = cart_with(&orders, &mug, 2).await;
+    orders
+        .apply_discount(SHOPPER, &cart_id, "TEN")
+        .await
+        .unwrap();
+    let request_id = orders
+        .request_checkout(SHOPPER, &cart_id, checkout())
+        .await
+        .unwrap();
+    orders
+        .claim_checkout(DASHBOARD, &cart_id, &request_id, "node-1")
+        .await
+        .unwrap();
+    let read = async || {
+        read_model_subscription::<evento::Turso>(db.clone())
+            .run_once(&executor)
+            .await
+            .unwrap();
+    };
+
+    // Listed from the moment it was asked, claimed or not.
+    read().await;
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    let asked_at = cart.request(&request_id).unwrap().requested_at;
+    assert!(asked_at > 0);
+    assert_eq!(cart.unanswered_since(), Some(asked_at));
+    let listed = |rows: Vec<timada_orders::PaymentDue>| {
+        rows.into_iter().map(|row| row.id).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        listed(unanswered_carts(&db, asked_at as i64, 10).await.unwrap()),
+        [cart_id.clone()]
+    );
+    assert!(
+        unanswered_carts(&db, asked_at as i64 - 1, 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "asked after"
+    );
+    // What its checkout may hold: the cart's goods, the code's use for the
+    // request's address.
+    let holds = orders
+        .checkout_holds(&cart_id, &request_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(holds.stock_lines.len(), 1);
+    assert_eq!(holds.stock_lines[0].product_id, mug);
+    assert_eq!(holds.stock_lines[0].quantity, 2);
+    assert_eq!(holds.discount_id, Some(ten.id));
+    assert_eq!(holds.email, "ada@example.org");
+
+    // Answered, it is listed no more.
+    orders
+        .refuse_payment_request(DASHBOARD, &cart_id, &request_id, "payments_unavailable")
+        .await
+        .unwrap();
+    read().await;
+    assert_eq!(
+        orders
+            .load_cart(&cart_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .unanswered_since(),
+        None
+    );
+    assert!(
+        unanswered_carts(&db, i64::MAX, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
 
 #[tokio::test]
 async fn one_node_answers_a_request_to_pay() {
