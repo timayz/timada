@@ -325,6 +325,12 @@ into the tenant's store whenever the merchant changes the Stripe settings.
   shopper confirmed the payment, usually a second after the browser comes back; for
   goods the shop holds, its money is taken a moment later (`status` `Paid`). Its
   `reference` (`K7Q4-MZP2`) is what a shopper quotes.
+- `cancel_order(cx, order_id)` is the shopper cancelling it, while
+  `OrderState::cancellable_by_shopper()` holds: its money only held, for goods a supplier
+  buys once the order is placed, and the supplier not asked yet. The hold goes back,
+  nothing is charged, a discount code's use returns. Once the shop is buying the goods
+  the dashboard refuses (`order_in_preparation`). Offer it only on an order the shopper
+  holds, as for reviews.
 - Shipping: when the merchant set up shipping methods (`/t/{slug}/shipping`),
   `CartView::shipping_options` lists them, priced for the cart (`amount_cents` is 0
   once the goods, less any discount, reach a method's free-above threshold), and

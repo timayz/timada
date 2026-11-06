@@ -563,6 +563,12 @@ pub fn say(code: &str) -> &'static str {
         "review_not_purchased" => "Ce produit ne fait pas partie de cette commande.",
         "review_order_cancelled" => "Une commande annulée ne peut pas être évaluée.",
         "review_order_not_paid" => "Une commande s'évalue une fois confirmée.",
+        "order_in_preparation" => {
+            "La boutique prépare déjà votre commande : elle ne peut plus être annulée ici. Contactez-la."
+        }
+        "not_cancellable" => "Cette commande est partie : elle ne peut plus être annulée.",
+        "order_cancelled" => "Cette commande est déjà annulée.",
+        "cancellation_pending" => "L'annulation de votre commande est en cours.",
         "review_already_reviewed" => "Vous avez déjà donné votre avis sur ce produit.",
         "review_not_pending" => {
             "La boutique a déjà examiné votre avis : il ne peut plus être modifié."

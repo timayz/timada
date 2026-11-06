@@ -916,6 +916,22 @@ impl Store {
         self.fetch_order(&format!("orders/{order_id}")).await
     }
 
+    /// See [`cancel_order`].
+    pub async fn cancel_order(&self, order_id: &str) -> anyhow::Result<Refusable<OrderState>> {
+        match self
+            .cart_call(
+                reqwest::Method::POST,
+                &format!("orders/{order_id}/cancel"),
+                NO_BODY,
+            )
+            .await?
+            .parsed::<OrderState>()?
+        {
+            Some(answer) => refusable(answer),
+            None => Ok(Err(OrderError::OrderNotFound)),
+        }
+    }
+
     async fn fetch_order(&self, path: &str) -> anyhow::Result<Option<OrderState>> {
         match self
             .cart_call(reqwest::Method::GET, path, NO_BODY)
@@ -1071,6 +1087,20 @@ pub async fn payment_returned(
 /// wording can say nothing was charged.
 pub fn returned_code(code: &str) -> String {
     format!("payment_returned_{code}")
+}
+
+/// The shopper cancels their order: possible while its money is only held
+/// for goods the shop has not bought from its supplier yet
+/// ([`OrderState::cancellable_by_shopper`]); the hold goes back, nothing is
+/// charged. The order as it then stands, or the refusal
+/// (`order_in_preparation` once it is too late). Like the order itself,
+/// anyone holding the id may: the host decides who (the browser that placed
+/// it, or the signed-in shopper it went to).
+pub async fn cancel_order(cx: &Cx, order_id: &str) -> Result<Refusable<OrderState>> {
+    store(cx)
+        .cancel_order(order_id)
+        .await
+        .map_err(Error::from_anyhow)
 }
 
 /// An order, as the dashboard answers for its id. Anyone holding the id can

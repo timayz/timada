@@ -51,6 +51,11 @@ A card holds the money for a week. Stripe drops a hold nobody took
 the shelf. The order page shows until when the card holds it, and the AliExpress
 forwarder does not place an order whose hold ends within twelve hours.
 
+The shopper may cancel an order of goods a supplier buys after the sale until the
+shop asks the supplier for them (`/store/orders/{order_id}/cancel`): its hold goes back,
+nothing is charged, and a discount code's use returns. An own-stock order is paid at once
+and is the merchant's to cancel.
+
 Cancelling an order settles the money with Stripe first: the order records the
 cancellation (`Order::CancellationRequested`), then a hold is given back (written with
 `Order::Cancelled`), or money taken is refunded in full, the refund recorded first
