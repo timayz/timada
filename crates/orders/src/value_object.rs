@@ -193,9 +193,9 @@ pub fn storefront_id() -> String {
     evento::hash_ids(vec!["storefront"])
 }
 
-/// The stream of the confirmation mailed for an order.
-pub fn order_confirmation_id(order_id: &str) -> String {
-    evento::hash_ids(vec!["order-confirmation", order_id])
+/// The stream of one mail sent about an order.
+pub fn order_mail_id(order_id: &str, mail: &str) -> String {
+    evento::hash_ids(vec!["order-mail", order_id, mail])
 }
 
 /// The address of a storefront as the merchant typed it, absolute and

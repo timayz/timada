@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<body>
+{% if shop.logo_url %}
+<p><img src="{{ shop.logo_url }}" alt="{{ shop.name }}" style="max-height: 64px; max-width: 240px;"></p>
+{% endif %}
+<p>We have received the payment for your order at <strong>{{ shop.name }}</strong>.</p>
+<p>Order <strong>{{ order.reference }}</strong></p>
+<table cellpadding="4" style="border-collapse: collapse;">
+{% for line in order.lines %}
+  <tr>
+    <td>{{ line.name }}{% if line.variant %} · {{ line.variant }}{% endif %}</td>
+    <td>× {{ line.quantity }}</td>
+    <td style="text-align: right;">{{ line.amount }}</td>
+  </tr>
+{% endfor %}
+{% if order.discount %}
+  <tr>
+    <td colspan="2">Discount {{ order.discount.code }}</td>
+    <td style="text-align: right;">-{{ order.discount.amount }}</td>
+  </tr>
+{% endif %}
+{% if order.shipping_method %}
+  <tr>
+    <td colspan="2">Shipping: {{ order.shipping_method.name }}</td>
+    <td style="text-align: right;">{% if order.shipping_method.free %}Free{% else %}{{ order.shipping_method.amount }}{% endif %}</td>
+  </tr>
+{% endif %}
+  <tr>
+    <td colspan="2"><strong>Total</strong></td>
+    <td style="text-align: right;"><strong>{{ order.total }}</strong></td>
+  </tr>
+</table>
+{% if link %}
+<p><a href="{{ link }}"{% if shop.accent %} style="color: {{ shop.accent }};"{% endif %}>View your order and its invoice</a></p>
+{% endif %}
+{% if shop.footer %}
+<hr style="border: none; border-top: 1px solid #e5e7eb;">
+<p style="color: #6b7280; font-size: 12px; white-space: pre-line;">{{ shop.footer }}</p>
+{% endif %}
+</body>
+</html>

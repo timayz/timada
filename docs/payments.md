@@ -26,6 +26,10 @@ the goods for goods it buys after the sale (AliExpress). How it works is in
 6. The browser, back on `/checkout/complete`, waits for the order and shows it: paid,
    for goods the shop holds; saved, for goods a supplier buys first.
 
+The shopper is mailed at each step that concerns their money: the confirmation once the
+order exists (saying when the card is only held), the payment taken once the invoice is
+issued, and the cancellation, saying whether money goes back (`docs/mail.md`).
+
 Only payment methods that can hold money are offered: cards, Apple Pay, Google Pay,
 Link, PayPal, Klarna. SEPA debit, iDEAL and Bancontact cannot, and leave the form.
 
@@ -194,12 +198,14 @@ turning payments on for a merchant. Follow the steps above, then tick each line.
       `payment_intent.amount_capturable_updated` and then `payment_intent.succeeded`, and
       the page moves on from "Confirming your payment…".
 - [ ] **Order.** `/t/<slug>/orders` lists it as Paid at the amount Stripe's test
-      dashboard shows for the payment, and its invoice is issued.
+      dashboard shows for the payment, its invoice is issued, and the shopper gets the
+      confirmation and the "Payment received" mail.
 - [ ] **Refund on cancel.** *Cancel and refund* marks the order Cancelled. Stripe's test
       dashboard shows the payment refunded in full, and a credit note is issued.
 - [ ] **Hold given back.** An order whose goods a supplier buys stays Authorized, and
       Stripe's test dashboard shows its payment Uncaptured. *Cancel and release the hold*
-      marks it Cancelled; Stripe shows the payment cancelled, and no invoice is issued.
+      marks it Cancelled; Stripe shows the payment cancelled, no invoice is issued, and
+      the shopper's "Cancelled" mail says nothing was charged.
 - [ ] **Refund in Stripe.** Refund part of a payment by hand in Stripe's test dashboard.
       `stripe listen` logs a `204` for `charge.refunded`, and the refund reaches the order
       with its credit note.

@@ -33,29 +33,37 @@ async fn the_storefront_address_is_set_and_forgotten() {
 }
 
 #[tokio::test]
-async fn one_confirmation_is_mailed_per_order() {
+async fn each_mail_is_sent_once_per_order() {
     let (orders, _) = store().await;
     assert!(
         orders
-            .claim_confirmation("order-1", "ada@example.org", "node-a")
+            .claim_order_mail("order-1", "order_confirmation", "ada@example.org", "node-a")
             .await
             .unwrap()
     );
     assert!(
         !orders
-            .claim_confirmation("order-1", "ada@example.org", "node-b")
+            .claim_order_mail("order-1", "order_confirmation", "ada@example.org", "node-b")
+            .await
+            .unwrap()
+    );
+    // Another mail of the same order is its own.
+    assert!(
+        orders
+            .claim_order_mail("order-1", "order_cancelled", "ada@example.org", "node-b")
             .await
             .unwrap()
     );
     let mailed = orders
-        .load_order_confirmation("order-1")
+        .load_order_mail("order-1", "order_confirmation")
         .await
         .unwrap()
         .unwrap();
     assert_eq!(mailed.email, "ada@example.org");
+    assert_eq!(mailed.mail, "order_confirmation");
     assert!(
         orders
-            .load_order_confirmation("order-2")
+            .load_order_mail("order-2", "order_confirmation")
             .await
             .unwrap()
             .is_none()

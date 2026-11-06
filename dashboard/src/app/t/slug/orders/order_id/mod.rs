@@ -17,7 +17,7 @@ use timada_orders::{
     MAX_REASON_LEN, MAX_TRACKING_LEN, OrderError, OrderState, OrderStatus, SupplierOrder,
 };
 use timada_tenancy::{
-    PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_ORDERS_MANAGE, PERMISSION_ORDERS_READ,
+    PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_ORDERS_MANAGE, PERMISSION_ORDERS_READ, ShopMailKind,
 };
 use topcoat::{
     Result,
@@ -143,10 +143,27 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
         documents.extend(note);
     }
-    let confirmation = orders(&access)?
-        .load_order_confirmation(&order.id)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?;
+    // The mails the shopper was sent about it, by kind.
+    let mut mails = Vec::new();
+    for (kind, term, shown) in [
+        (ShopMailKind::OrderConfirmation, "Confirmation", true),
+        (ShopMailKind::OrderPaid, "Payment mail", order.is_paid()),
+        (
+            ShopMailKind::OrderCancelled,
+            "Cancellation mail",
+            order.status == OrderStatus::Cancelled,
+        ),
+    ] {
+        if !shown {
+            continue;
+        }
+        let mailed = orders(&access)?
+            .load_order_mail(&order.id, kind.key())
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+            .map(|mailed| mailed.mailed_at);
+        mails.push((kind.key(), term, mailed));
+    }
     let review_request = crate::app::t::slug::reviews::reviews(&access)?
         .load_review_request(&order.id)
         .await
@@ -329,15 +346,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         fact(term: "Reason", attrs: attributes! { data-order-cancel-reason="" }, (reason))
                     }
                     fact(term: "E-mail", <a class=(LINK) href=(format!("mailto:{}", order.email))>(&order.email)</a>)
-                    fact(
-                        term: "Confirmation",
-                        attrs: attributes! { data-order-confirmation=(if confirmation.is_some() { "mailed" } else { "none" }) },
-                        if let Some(mailed) = &confirmation {
-                            "Mailed " <time datetime=(mailed.mailed_at)>(format_time(mailed.mailed_at))</time>
-                        } else {
-                            "Not mailed"
-                        }
-                    )
+                    for (key, term, mailed) in &mails {
+                        fact(
+                            term: term,
+                            attrs: attributes! { data-order-mail=(key) data-mailed=(if mailed.is_some() { "mailed" } else { "none" }) },
+                            if let Some(at) = mailed {
+                                "Mailed " <time datetime=(at)>(format_time(*at))</time>
+                            } else {
+                                "Not mailed"
+                            }
+                        )
+                    }
                     fact(
                         term: "Review request",
                         attrs: attributes! { data-order-review-request=(if review_request.is_some() { "mailed" } else { "none" }) },

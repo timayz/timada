@@ -66,8 +66,8 @@ from = "Timada <no-reply@timada.localhost>"
 # is the development mailbox from compose.yml, whose inbox is readable at
 # http://localhost:1080. Set TIMADA__MAIL__SMTP_URL in production.
 smtp_url = "smtp://localhost:1025"
-# A shop can send its mails to shoppers (order confirmations, review requests,
-# sign-in codes) through a mail server of its own, set on /t/<slug>/mail;
+# A shop can send its mails to shoppers (order mails, review requests, sign-in
+# codes) through a mail server of its own, set on /t/<slug>/mail;
 # shops without one use the server above, under their own name. A shop's
 # server may not be on this machine or a private network unless this is true:
 # leave it off outside development, or merchants could reach internal services.

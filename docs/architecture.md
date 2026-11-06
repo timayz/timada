@@ -161,7 +161,7 @@ by construction.
    read models (users, the tenant catalog, the members' history), the tenants' read
    models, this node's copies of the pictures and the
    personal-data keys, the answers the dashboard writes back (payments, invoices),
-   the mails it sends (order confirmations, message notices, newsletter opt-ins),
+   the mails it sends (order mails, message notices, newsletter opt-ins),
    the automation runs it starts.
    A handler takes the tenant from `event.tenant` and builds the gateway it writes
    back with from it. Adding a tenant-scoped context means adding one entry there.
@@ -228,8 +228,8 @@ by construction.
    testing it locally: `docs/payments.md`.
 5. **Shop mail** (`shop_mail.rs`). A merchant sets up SMTP servers of its own on
    `/t/{slug}/mail` (up to ten) and picks one for each kind of mail
-   (`MailServersPicked`). The shop's mails to its shoppers (order confirmations,
-   review requests, sign-in codes) go out through the server picked for them, and
+   (`MailServersPicked`). The shop's mails to its shoppers (order mails, review
+   requests, sign-in codes) go out through the server picked for them, and
    through the platform's `[mail]` server under the shop's name when none is
    (`ShopMail::sender_of`). Saving a server sends a test mail first. The passwords
    are recorded in the tenant's platform events (`MailServerAdded`/`Changed`)
@@ -528,8 +528,8 @@ The members who may read the messages (the owners, and the roles granting
 `support:read`) are told of each arrival by a platform mail with the visitor's first
 name and a link to the inbox, nothing else the visitor wrote. A per-tenant
 subscription (`timada-dashboard/message-notifications`) follows `Received`, claims the
-notice first (`MessageNotification`, one stream per message, as the order
-confirmations do) so a cluster mails once, then mails every recipient that identity
+notice first (`MessageNotification`, one stream per message, as the order mails do
+with `OrderMail`, one stream per order and mail) so a cluster mails once, then mails every recipient that identity
 holds an address for (a member who signed up with a provider or a passkey alone has
 none). A message older than an hour at the time it is seen is history being replayed
 and gets no notice.

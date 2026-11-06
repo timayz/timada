@@ -44,6 +44,11 @@ const GLOBALS: [&str; 4] = ["range", "dict", "namespace", "loop"];
 pub enum ShopMailKind {
     ShopperCode,
     OrderConfirmation,
+    /// The money of an order was taken: its invoice is there to read.
+    OrderPaid,
+    /// An order was cancelled, by anyone: the shopper is told whether
+    /// money goes back or nothing was charged.
+    OrderCancelled,
     ReviewRequest,
     NewsletterConfirmation,
     /// A campaign of the shop's newsletter. Not one of [`ALL`](Self::ALL):
@@ -100,7 +105,7 @@ const SHOPPER_CODE_VARIABLES: [MailVariable; 2] = [
 
 const ADDRESS_FIELDS: [&str; 6] = ["name", "line1", "line2", "postal_code", "city", "country"];
 
-const ORDER_CONFIRMATION_VARIABLES: [MailVariable; 11] = [
+const ORDER_VARIABLES: [MailVariable; 11] = [
     MailVariable {
         name: "order.reference",
         description: "The order's reference.",
@@ -127,7 +132,7 @@ const ORDER_CONFIRMATION_VARIABLES: [MailVariable; 11] = [
     },
     MailVariable {
         name: "order.total",
-        description: "What the shopper paid.",
+        description: "The order's total, what the shopper pays.",
     },
     MailVariable {
         name: "order.shipping_address",
@@ -152,6 +157,18 @@ const ORDER_CONFIRMATION_VARIABLES: [MailVariable; 11] = [
         description: "The order's page on the shop, when the shop has an address.",
     },
 ];
+
+const PAYMENT_HELD: MailVariable = MailVariable {
+    name: "payment_held",
+    description: "Whether the shopper's card only holds the money for now: it is taken once the \
+                  shop confirms the order. Check it with {% if payment_held %}.",
+};
+
+const REFUNDED: MailVariable = MailVariable {
+    name: "refunded",
+    description: "Whether money goes back to the shopper (it was taken); otherwise nothing was \
+                  charged. Check it with {% if refunded %}.",
+};
 
 const REVIEW_REQUEST_VARIABLES: [MailVariable; 4] = [
     MailVariable {
@@ -216,9 +233,11 @@ const AUTOMATION_CUSTOMER_VARIABLES: [MailVariable; 2] =
     [AUTOMATION_UNSUBSCRIBE, AUTOMATION_DISCOUNT];
 
 impl ShopMailKind {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 6] = [
         Self::ShopperCode,
         Self::OrderConfirmation,
+        Self::OrderPaid,
+        Self::OrderCancelled,
         Self::ReviewRequest,
         Self::NewsletterConfirmation,
     ];
@@ -228,6 +247,8 @@ impl ShopMailKind {
         match self {
             Self::ShopperCode => "shopper_code",
             Self::OrderConfirmation => "order_confirmation",
+            Self::OrderPaid => "order_paid",
+            Self::OrderCancelled => "order_cancelled",
             Self::ReviewRequest => "review_request",
             Self::NewsletterConfirmation => "newsletter_confirmation",
             Self::Newsletter => "newsletter",
@@ -244,6 +265,8 @@ impl ShopMailKind {
         match self {
             Self::ShopperCode => "Sign-in code",
             Self::OrderConfirmation => "Order confirmation",
+            Self::OrderPaid => "Payment taken",
+            Self::OrderCancelled => "Order cancelled",
             Self::ReviewRequest => "Review request",
             Self::NewsletterConfirmation => "Newsletter confirmation",
             Self::Newsletter => "Newsletter",
@@ -255,7 +278,11 @@ impl ShopMailKind {
     pub fn description(self) -> &'static str {
         match self {
             Self::ShopperCode => "Sent when a shopper signs in to their account.",
-            Self::OrderConfirmation => "Sent once an order is paid.",
+            Self::OrderConfirmation => "Sent once an order is placed.",
+            Self::OrderPaid => "Sent once an order's payment is taken, with its invoice.",
+            Self::OrderCancelled => {
+                "Sent when an order is cancelled, saying whether money goes back."
+            }
             Self::ReviewRequest => "Sent after an order is fulfilled, asking for a review.",
             Self::NewsletterConfirmation => {
                 "Sent when a shopper asks for the shop's news, to confirm their address."
@@ -268,16 +295,26 @@ impl ShopMailKind {
 
     /// What the template may use: the shop's variables, then the mail's own.
     pub fn variables(self) -> Vec<MailVariable> {
+        let order_and = |extra: Option<&'static MailVariable>| -> Vec<MailVariable> {
+            SHOP_VARIABLES
+                .iter()
+                .chain(&ORDER_VARIABLES)
+                .chain(extra)
+                .copied()
+                .collect()
+        };
         let own: &[MailVariable] = match self {
             Self::ShopperCode => &SHOPPER_CODE_VARIABLES,
-            Self::OrderConfirmation => &ORDER_CONFIRMATION_VARIABLES,
+            Self::OrderConfirmation => return order_and(Some(&PAYMENT_HELD)),
+            Self::OrderPaid => return order_and(None),
+            Self::OrderCancelled => return order_and(Some(&REFUNDED)),
             Self::ReviewRequest => &REVIEW_REQUEST_VARIABLES,
             Self::NewsletterConfirmation => &NEWSLETTER_CONFIRMATION_VARIABLES,
             Self::Newsletter => &NEWSLETTER_VARIABLES,
             Self::AutomationOrder => {
                 return SHOP_VARIABLES
                     .iter()
-                    .chain(&ORDER_CONFIRMATION_VARIABLES)
+                    .chain(&ORDER_VARIABLES)
                     .chain([&AUTOMATION_UNSUBSCRIBE, &AUTOMATION_DISCOUNT])
                     .copied()
                     .collect();
@@ -291,9 +328,11 @@ impl ShopMailKind {
     fn url_variables(self) -> &'static [&'static str] {
         match self {
             Self::ShopperCode => &["shop.logo_url"],
-            Self::OrderConfirmation | Self::ReviewRequest | Self::NewsletterConfirmation => {
-                &["link", "shop.logo_url"]
-            }
+            Self::OrderConfirmation
+            | Self::OrderPaid
+            | Self::OrderCancelled
+            | Self::ReviewRequest
+            | Self::NewsletterConfirmation => &["link", "shop.logo_url"],
             Self::Newsletter => &[
                 "unsubscribe_url",
                 "shop.logo_url",
@@ -317,7 +356,13 @@ impl ShopMailKind {
                 paths.insert(format!("discount.{field}"));
             }
         }
-        if matches!(self, Self::OrderConfirmation | Self::AutomationOrder) {
+        if matches!(
+            self,
+            Self::OrderConfirmation
+                | Self::OrderPaid
+                | Self::OrderCancelled
+                | Self::AutomationOrder
+        ) {
             for field in ["code", "amount"] {
                 paths.insert(format!("order.discount.{field}"));
             }
@@ -337,6 +382,10 @@ impl ShopMailKind {
         match self {
             Self::ShopperCode => "Your sign-in code for {{ shop.name }}",
             Self::OrderConfirmation => "Your {{ shop.name }} order {{ order.reference }}",
+            Self::OrderPaid => {
+                "Payment received for your {{ shop.name }} order {{ order.reference }}"
+            }
+            Self::OrderCancelled => "Cancelled: your {{ shop.name }} order {{ order.reference }}",
             Self::ReviewRequest => "How was your {{ shop.name }} order {{ order.reference }}?",
             Self::NewsletterConfirmation => "Confirm your subscription to {{ shop.name }}'s news",
             Self::Newsletter => "News from {{ shop.name }}",
@@ -349,6 +398,8 @@ impl ShopMailKind {
         match self {
             Self::ShopperCode => include_str!("mail_templates/shopper_code.html"),
             Self::OrderConfirmation => include_str!("mail_templates/order_confirmation.html"),
+            Self::OrderPaid => include_str!("mail_templates/order_paid.html"),
+            Self::OrderCancelled => include_str!("mail_templates/order_cancelled.html"),
             Self::ReviewRequest => include_str!("mail_templates/review_request.html"),
             Self::NewsletterConfirmation => {
                 include_str!("mail_templates/newsletter_confirmation.html")
@@ -389,8 +440,20 @@ impl ShopMailKind {
                     shop,
                     order: sample_order(full),
                     link: full.then(|| "https://shop.example.com/orders/A1B2C3".to_owned()),
+                    payment_held: full,
                 }))
             }
+            Self::OrderPaid => MailVars::OrderPaid(Box::new(OrderPaidVars {
+                shop,
+                order: sample_order(full),
+                link: full.then(|| "https://shop.example.com/orders/A1B2C3".to_owned()),
+            })),
+            Self::OrderCancelled => MailVars::OrderCancelled(Box::new(OrderCancelledVars {
+                shop,
+                order: sample_order(full),
+                link: full.then(|| "https://shop.example.com/orders/A1B2C3".to_owned()),
+                refunded: full,
+            })),
             Self::ReviewRequest => MailVars::ReviewRequest(ReviewRequestVars {
                 shop,
                 order: ReviewOrderVars {
@@ -512,6 +575,8 @@ fn sample_order(full: bool) -> OrderVars {
 pub enum MailVars {
     ShopperCode(ShopperCodeVars),
     OrderConfirmation(Box<OrderConfirmationVars>),
+    OrderPaid(Box<OrderPaidVars>),
+    OrderCancelled(Box<OrderCancelledVars>),
     ReviewRequest(ReviewRequestVars),
     NewsletterConfirmation(NewsletterConfirmationVars),
     Newsletter(NewsletterVars),
@@ -525,6 +590,8 @@ impl MailVars {
         match self {
             Self::ShopperCode(_) => ShopMailKind::ShopperCode,
             Self::OrderConfirmation(_) => ShopMailKind::OrderConfirmation,
+            Self::OrderPaid(_) => ShopMailKind::OrderPaid,
+            Self::OrderCancelled(_) => ShopMailKind::OrderCancelled,
             Self::ReviewRequest(_) => ShopMailKind::ReviewRequest,
             Self::NewsletterConfirmation(_) => ShopMailKind::NewsletterConfirmation,
             Self::Newsletter(_) => ShopMailKind::Newsletter,
@@ -567,6 +634,24 @@ pub struct OrderConfirmationVars {
     pub shop: ShopVars,
     pub order: OrderVars,
     pub link: Option<String>,
+    /// The shopper's card only holds the money for now.
+    pub payment_held: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OrderPaidVars {
+    pub shop: ShopVars,
+    pub order: OrderVars,
+    pub link: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OrderCancelledVars {
+    pub shop: ShopVars,
+    pub order: OrderVars,
+    pub link: Option<String>,
+    /// Money goes back to the shopper; otherwise nothing was charged.
+    pub refunded: bool,
 }
 
 /// An order, its amounts already worded with their currency.
@@ -1120,6 +1205,48 @@ mod tests {
             );
         }
         assert!(!mail.html.contains("none"));
+    }
+
+    #[test]
+    fn the_order_mails_say_where_the_money_stands() {
+        let shop = || ShopVars::named("Chez Léa");
+        let render_sample = |kind: ShopMailKind, full: bool| {
+            render(
+                kind.default_subject(),
+                kind.default_html(),
+                None,
+                &kind.sample_with(shop(), full),
+            )
+            .unwrap()
+        };
+        let held = render_sample(ShopMailKind::OrderConfirmation, true);
+        assert!(
+            held.html.contains("Nothing is charged yet"),
+            "{}",
+            held.html
+        );
+        let taken = render_sample(ShopMailKind::OrderConfirmation, false);
+        assert!(!taken.html.contains("Nothing is charged yet"));
+
+        let paid = render_sample(ShopMailKind::OrderPaid, true);
+        assert_eq!(
+            paid.subject,
+            "Payment received for your Chez Léa order A1B2C3"
+        );
+        assert!(paid.html.contains("View your order and its invoice"));
+
+        let refunded = render_sample(ShopMailKind::OrderCancelled, true);
+        assert_eq!(refunded.subject, "Cancelled: your Chez Léa order A1B2C3");
+        assert!(
+            refunded
+                .html
+                .contains("The money you paid is on its way back to your card."),
+            "{}",
+            refunded.html
+        );
+        let released = render_sample(ShopMailKind::OrderCancelled, false);
+        assert!(released.html.contains("Nothing was charged"));
+        assert!(!released.html.contains("on its way back"));
     }
 
     #[test]
