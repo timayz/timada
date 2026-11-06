@@ -15,8 +15,8 @@ use timada_discounts::{
 use timada_invoicing::tax::{self, Destination, TaxProfile, TaxRefusal};
 use timada_orders::aggregator::CheckoutRequested;
 use timada_orders::{
-    CheckoutClaim, INVOICING_NOT_CONFIGURED, OSS_REQUIRED_FOR_CURRENCY, OpenedPayment, OrderError,
-    PAYMENTS_UNAVAILABLE, PROVIDER_STRIPE,
+    CheckoutClaim, CheckoutHolds, INVOICING_NOT_CONFIGURED, OSS_REQUIRED_FOR_CURRENCY,
+    OpenedPayment, OrderError, PAYMENTS_UNAVAILABLE, PROVIDER_STRIPE,
 };
 
 use super::webhook::OUT_OF_STOCK;
@@ -123,15 +123,6 @@ impl Checkouts {
             orders
                 .refuse_payment_request(DASHBOARD_ACTOR, cart_id, request_id, code)
                 .await
-        };
-        // What this claim holds goes back once its refusal is the request's
-        // answer (a payment recorded meanwhile keeps it), and while no later
-        // request of the cart took the cart's holds on for itself.
-        let holds_are_ours = async || -> anyhow::Result<bool> {
-            Ok(orders
-                .load_cart(cart_id)
-                .await?
-                .is_some_and(|cart| cart.is_latest_request(request_id)))
         };
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -262,41 +253,40 @@ impl Checkouts {
                 Err(err) => return Err(err.into()),
             }
         }
-        let release_discount = async || {
-            if let Some(discount_id) = &discount_id
-                && let Err(err) = discounts
-                    .release_use(DASHBOARD_ACTOR, discount_id, cart_id, &email)
-                    .await
-            {
-                tracing::warn!(%cart_id, %err, "cannot give a discount's use back");
-            }
-        };
         // The goods are held the same way, so two shoppers never pay for the
         // last one.
+        let holds = CheckoutHolds::from(&pending);
         let catalog = timada_catalog::Command::new(self.store.clone(), tenant_id);
-        let stock_lines = timada_orders::stock_lines(&pending.lines);
         match catalog
-            .reserve_stock(DASHBOARD_ACTOR, cart_id, &stock_lines, RESERVATION_SECS)
+            .reserve_stock(
+                DASHBOARD_ACTOR,
+                cart_id,
+                &holds.stock_lines,
+                RESERVATION_SECS,
+            )
             .await
         {
             Ok(()) => {}
+            // What it held of the goods went back with the refusal of the
+            // last thing: the discount's use is left.
             Err(CatalogError::OutOfStock { .. }) => {
-                if refuse(OUT_OF_STOCK).await? && holds_are_ours().await? {
-                    release_discount().await;
-                }
+                let discount_only = CheckoutHolds {
+                    stock_lines: Vec::new(),
+                    ..holds
+                };
+                refuse_and_give_back(
+                    &self.store,
+                    tenant_id,
+                    cart_id,
+                    request_id,
+                    OUT_OF_STOCK,
+                    Some(&discount_only),
+                )
+                .await?;
                 return Ok(());
             }
             Err(err) => return Err(err.into()),
         }
-        let release = async || {
-            release_discount().await;
-            if let Err(err) = catalog
-                .release_stock(DASHBOARD_ACTOR, cart_id, &stock_lines)
-                .await
-            {
-                tracing::warn!(%cart_id, %err, "cannot give back the stock a checkout held");
-            }
-        };
         let opened = payments
             .gateway
             .open_payment(
@@ -322,9 +312,15 @@ impl Checkouts {
             Err(err) if err.downcast_ref::<Busy>().is_some() => return Err(err),
             Err(err) => {
                 tracing::warn!(tenant = %tenant_id, %cart_id, %err, "Stripe refused to open a payment");
-                if refuse(PAYMENTS_UNAVAILABLE).await? && holds_are_ours().await? {
-                    release().await;
-                }
+                refuse_and_give_back(
+                    &self.store,
+                    tenant_id,
+                    cart_id,
+                    request_id,
+                    PAYMENTS_UNAVAILABLE,
+                    Some(&holds),
+                )
+                .await?;
                 return Ok(());
             }
         };
@@ -347,10 +343,64 @@ impl Checkouts {
             // and the reservation is held again for the same cart.
             Err(err @ (OrderError::Write(_) | OrderError::Other(_))) => Err(err.into()),
             Err(err) => {
-                release().await;
+                give_back(&self.store, tenant_id, cart_id, &holds).await;
                 tracing::warn!(%cart_id, %err, "a payment opened for a cart that cannot record it");
                 Ok(())
             }
         }
+    }
+}
+
+/// Refuses the request to pay with `code`. What its checkout holds
+/// (`holds`) goes back only when this refusal is the request's answer (a
+/// payment recorded meanwhile keeps it) and the request is still the cart's
+/// latest (a later one took the cart's holds on for itself). Whether this
+/// refusal answered it.
+pub(super) async fn refuse_and_give_back(
+    store: &Evento,
+    tenant_id: &str,
+    cart_id: &str,
+    request_id: &str,
+    code: &str,
+    holds: Option<&CheckoutHolds>,
+) -> anyhow::Result<bool> {
+    let orders = timada_orders::Command::new(store.clone(), tenant_id);
+    if !orders
+        .refuse_payment_request(DASHBOARD_ACTOR, cart_id, request_id, code)
+        .await?
+    {
+        return Ok(false);
+    }
+    let latest = orders
+        .load_cart(cart_id)
+        .await?
+        .is_some_and(|cart| cart.is_latest_request(request_id));
+    if latest && let Some(holds) = holds {
+        give_back(store, tenant_id, cart_id, holds).await;
+    }
+    Ok(true)
+}
+
+/// Gives back what the checkout of `cart_id` holds: the goods, the
+/// discount's use. A failure is only logged: a hold lapses on its own.
+pub(super) async fn give_back(
+    store: &Evento,
+    tenant_id: &str,
+    cart_id: &str,
+    holds: &CheckoutHolds,
+) {
+    if let Some(discount_id) = &holds.discount_id
+        && let Err(err) = timada_discounts::Command::new(store.clone(), tenant_id)
+            .release_use(DASHBOARD_ACTOR, discount_id, cart_id, &holds.email)
+            .await
+    {
+        tracing::warn!(%cart_id, %err, "cannot give a discount's use back");
+    }
+    if !holds.stock_lines.is_empty()
+        && let Err(err) = timada_catalog::Command::new(store.clone(), tenant_id)
+            .release_stock(DASHBOARD_ACTOR, cart_id, &holds.stock_lines)
+            .await
+    {
+        tracing::warn!(%cart_id, %err, "cannot give back the stock a checkout held");
     }
 }

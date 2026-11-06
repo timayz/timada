@@ -107,3 +107,20 @@ pub async fn paying_carts_before(
     )
     .await
 }
+
+/// The carts of every tenant with a request to pay asked at `before` (unix
+/// seconds) or earlier that nobody answered yet: the write model says
+/// whether a node still holds it. Oldest first.
+pub async fn unanswered_carts(
+    db: &Db,
+    before: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<crate::PaymentDue>> {
+    db.fetch_all(
+        "SELECT tenant_id, id FROM orders_carts
+         WHERE unanswered_since <= ?1
+         ORDER BY unanswered_since, tenant_id, id LIMIT ?2",
+        (before, limit),
+    )
+    .await
+}

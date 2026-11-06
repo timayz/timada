@@ -174,6 +174,8 @@ pub enum PaymentAnswer {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CheckoutRequest {
     pub request_id: String,
+    /// Unix seconds the shopper asked at.
+    pub requested_at: u64,
     pub email: String,
     pub shipping: ShippingAddress,
     pub note: Option<String>,
@@ -268,6 +270,19 @@ impl CartState {
         self.requests
             .last()
             .is_some_and(|request| request.request_id == request_id)
+    }
+
+    /// Unix seconds the oldest request nobody answered yet was asked at, on
+    /// a cart that is no order yet.
+    pub fn unanswered_since(&self) -> Option<u64> {
+        if self.is_checked_out() {
+            return None;
+        }
+        self.requests
+            .iter()
+            .filter(|request| request.answer.is_none())
+            .map(|request| request.requested_at)
+            .min()
     }
 
     /// The request whose open payment has that provider id.
@@ -415,6 +430,7 @@ async fn on_checkout_requested(
 ) -> anyhow::Result<()> {
     cart.requests.push(CheckoutRequest {
         request_id: event.data.request_id.to_owned(),
+        requested_at: event.timestamp,
         email: event.data.email.to_owned(),
         shipping: event.data.shipping.to_owned(),
         note: event.data.note.to_owned(),

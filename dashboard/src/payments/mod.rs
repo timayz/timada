@@ -12,7 +12,8 @@
 //! through Stripe first. A card form left open past the time its goods were
 //! held for is closed by [`lapsed`]'s sweep before it can be confirmed;
 //! what an order asked of Stripe and got no answer to is settled by
-//! [`pending`]'s.
+//! [`pending`]'s, and a request to pay its claimant never answered is
+//! refused by [`unanswered`]'s.
 //!
 //! The tenant's Stripe secrets are recorded sealed ([`Sealer`]) under the
 //! operator's `secrets.key`; without a
@@ -27,6 +28,7 @@ pub mod settle;
 mod setup;
 pub mod signature;
 mod subscription;
+mod unanswered;
 pub mod webhook;
 
 use std::sync::Arc;
@@ -38,6 +40,7 @@ pub use lapsed::*;
 pub use pending::*;
 pub use setup::*;
 pub use subscription::*;
+pub use unanswered::*;
 
 use timada_tenancy::{CompanyState, TenantState};
 
