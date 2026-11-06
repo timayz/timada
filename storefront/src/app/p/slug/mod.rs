@@ -13,7 +13,7 @@ use topcoat::{
 };
 
 use crate::app::cart::add::{OPTION_FIELD_PREFIX, add};
-use crate::app::{document, money, price_line, product_card, say};
+use crate::app::{delivery_days, document, money, price_line, product_card, say};
 
 module_param!(pub slug);
 
@@ -146,7 +146,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <button class="btn" disabled=(sold_out)>"Ajouter au panier"</button>
                         </form>
                         <ul class="reassure-list" data-reassure="">
-                            <li>"Livraison avec suivi"</li>
+                            if let Some(days) = product.delivery_days {
+                                <li data-delivery-days=(delivery_days(days))>"Livraison avec suivi en " (delivery_days(days))</li>
+                            } else {
+                                <li>"Livraison avec suivi"</li>
+                            }
                             <li>"14 jours satisfait ou remboursé"</li>
                             <li>"Un service client à votre écoute"</li>
                         </ul>

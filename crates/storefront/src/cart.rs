@@ -56,6 +56,7 @@ use anyhow::Context as _;
 use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
 
+use timada_catalog::DeliveryDays;
 use timada_invoicing::tax;
 use timada_orders::wire::{CartAnswer, DiscountCode, Refusal, RequestAnswer, Started};
 use timada_orders::{CartItem, CartLine, Command, PAYMENT_EXPIRED, PaymentAnswer};
@@ -131,6 +132,8 @@ pub struct CartLineView {
     pub quantity: u32,
     /// What kind of goods it is for VAT (`standard`, `books`, …).
     pub tax_category: String,
+    /// How long delivery takes; `None` when the shop does not say.
+    pub delivery_days: Option<DeliveryDays>,
     /// The price of one without any offer; `None` on a line that cannot be
     /// sold any more.
     pub unit_amount_cents: Option<u64>,
@@ -240,6 +243,9 @@ pub struct CartView {
     pub shipping_required: bool,
     /// Items on the lines that can be sold.
     pub item_count: u32,
+    /// When the goods would arrive, counted from the order
+    /// ([`DeliveryDays::window`]).
+    pub delivery_window: Option<DeliveryDays>,
     /// The order it became, once checked out.
     pub order_id: Option<String>,
     /// How the store writes an amount ([`Store::money`]): what every total
@@ -621,6 +627,7 @@ impl Store {
                 image_url: local.and_then(|p| picture(p, line.variant_id.as_deref())),
                 quantity: line.quantity,
                 tax_category: tax_category.to_owned(),
+                delivery_days: line.delivery_days,
                 unit_amount_cents: Some(
                     line_offer
                         .as_ref()
@@ -670,6 +677,7 @@ impl Store {
                     image_url: local.and_then(|p| picture(p, None)),
                     quantity: line.quantity,
                     tax_category: timada_catalog::TAX_CATEGORY_STANDARD.to_owned(),
+                    delivery_days: None,
                     unit_amount_cents: None,
                     amount_cents: None,
                     offer: None,
@@ -679,6 +687,7 @@ impl Store {
         Ok(Some(CartView {
             id: state.id.clone(),
             item_count: quote.item_count(),
+            delivery_window: quote.delivery_window(),
             lines,
             offers,
             unavailable,

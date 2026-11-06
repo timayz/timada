@@ -88,7 +88,7 @@ Each mail has its own variables, all listed in the editor:
 | Mail | Variables |
 | --- | --- |
 | Sign-in code | `shop.*`, `code`, `valid_minutes` |
-| Order confirmation | `shop.*`, `order.reference`, `order.email`, `order.lines` (`name`, `variant`, `quantity`, `amount`), `order.subtotal`, `order.discount` (`code`, `amount`), `order.shipping_method` (`name`, `amount`, `free`), `order.total`, `order.shipping_address` and `order.billing_address` (`name`, `line1`, `line2`, `postal_code`, `city`, `country`), `order.note`, `link`, `payment_held` |
+| Order confirmation | `shop.*`, `order.reference`, `order.email`, `order.lines` (`name`, `variant`, `quantity`, `amount`), `order.subtotal`, `order.discount` (`code`, `amount`), `order.shipping_method` (`name`, `amount`, `free`), `order.total`, `order.delivery` (`min_days`, `max_days`), `order.shipping_address` and `order.billing_address` (`name`, `line1`, `line2`, `postal_code`, `city`, `country`), `order.note`, `link`, `payment_held` |
 | Payment taken | the order confirmation's, without `payment_held` |
 | Order cancelled | the order confirmation's, with `refunded` instead of `payment_held` |
 | Review request | `shop.*`, `order.reference`, `products`, `link`, `valid_days` |

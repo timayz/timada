@@ -1,7 +1,7 @@
 //! What a storefront page reads: the published products of the local copy.
 
 use std::collections::BTreeMap;
-use timada_catalog::{TreeNode, TreeOf, tree_of};
+use timada_catalog::{DeliveryDays, TreeNode, TreeOf, tree_of};
 use timada_core::db::{Db, FromRow, Json, Row};
 
 use crate::money::MoneyFormat;
@@ -180,6 +180,8 @@ pub struct Product {
     pub stock: std::collections::BTreeMap<String, u32>,
     /// Whether anything of it can still be bought.
     pub in_stock: bool,
+    /// How long delivery takes: its own time, else the shop's default.
+    pub delivery_days: Option<DeliveryDays>,
 }
 
 impl FromRow for Product {
@@ -202,6 +204,16 @@ impl FromRow for Product {
             rating_x100: row.get("rating_x100")?,
             stock: row.get::<Json<_>>("stock_json")?.0,
             in_stock: row.get("in_stock")?,
+            delivery_days: match (
+                row.get::<Option<i64>>("delivery_min_days")?,
+                row.get::<Option<i64>>("delivery_max_days")?,
+            ) {
+                (Some(min), Some(max)) => Some(DeliveryDays {
+                    min: u16::try_from(min)?,
+                    max: u16::try_from(max)?,
+                }),
+                _ => None,
+            },
         })
     }
 }
@@ -545,7 +557,7 @@ macro_rules! products_page {
             "SELECT p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
                 p.updated_at, p.images_json, p.options_json, p.variants_json,
                 p.attributes_json, p.min_amount_cents, p.max_amount_cents, p.review_count,
-                p.rating_x100, p.stock_json, p.in_stock ",
+                p.rating_x100, p.stock_json, p.in_stock, p.delivery_min_days, p.delivery_max_days ",
             products_from!($from),
             products_where!(),
             $order,
@@ -634,7 +646,7 @@ macro_rules! category_page {
             "SELECT p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
                 p.updated_at, p.images_json, p.options_json, p.variants_json,
                 p.attributes_json, p.min_amount_cents, p.max_amount_cents, p.review_count,
-                p.rating_x100, p.stock_json, p.in_stock
+                p.rating_x100, p.stock_json, p.in_stock, p.delivery_min_days, p.delivery_max_days
              FROM storefront_category_products cp
              JOIN storefront_products p ON p.id = cp.product_id
              WHERE cp.category_id = ?1 ",
@@ -809,7 +821,8 @@ pub async fn published_product_by_slug(db: &Db, slug: &str) -> anyhow::Result<Op
     db.fetch_optional(
         "SELECT id, slug, name, description, amount_cents, currency, updated_at,
             images_json, options_json, variants_json, attributes_json,
-            min_amount_cents, max_amount_cents, review_count, rating_x100, stock_json, in_stock
+            min_amount_cents, max_amount_cents, review_count, rating_x100, stock_json, in_stock,
+            delivery_min_days, delivery_max_days
          FROM storefront_products WHERE slug = ?1 AND status = 'published'",
         (slug,),
     )
@@ -830,7 +843,8 @@ pub async fn published_products_by_ids(db: &Db, ids: &[&str]) -> anyhow::Result<
     let statement = format!(
         "SELECT id, slug, name, description, amount_cents, currency, updated_at,
             images_json, options_json, variants_json, attributes_json,
-            min_amount_cents, max_amount_cents, review_count, rating_x100, stock_json, in_stock
+            min_amount_cents, max_amount_cents, review_count, rating_x100, stock_json, in_stock,
+            delivery_min_days, delivery_max_days
          FROM storefront_products
          WHERE id IN ({}) AND status = 'published'",
         timada_core::db::placeholders(ids.len())
@@ -1575,7 +1589,7 @@ mod probe {
     const PRODUCT_COLUMNS: &str = "p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
         p.updated_at, p.images_json, p.options_json, p.variants_json, p.attributes_json,
         p.min_amount_cents, p.max_amount_cents, p.review_count, p.rating_x100, p.stock_json,
-        p.in_stock";
+        p.in_stock, p.delivery_min_days, p.delivery_max_days";
 
     #[tokio::test]
     #[ignore = "measures Turso's plans; run by hand with --ignored --nocapture"]

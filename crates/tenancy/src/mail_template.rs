@@ -105,7 +105,7 @@ const SHOPPER_CODE_VARIABLES: [MailVariable; 2] = [
 
 const ADDRESS_FIELDS: [&str; 6] = ["name", "line1", "line2", "postal_code", "city", "country"];
 
-const ORDER_VARIABLES: [MailVariable; 11] = [
+const ORDER_VARIABLES: [MailVariable; 12] = [
     MailVariable {
         name: "order.reference",
         description: "The order's reference.",
@@ -133,6 +133,12 @@ const ORDER_VARIABLES: [MailVariable; 11] = [
     MailVariable {
         name: "order.total",
         description: "The order's total, what the shopper pays.",
+    },
+    MailVariable {
+        name: "order.delivery",
+        description: "How many days delivery takes, when the shop says: \
+                      order.delivery.min_days and order.delivery.max_days (the same \
+                      number when the shop gives one). Check it with {% if order.delivery %}.",
     },
     MailVariable {
         name: "order.shipping_address",
@@ -369,6 +375,9 @@ impl ShopMailKind {
             for field in ["name", "amount", "free"] {
                 paths.insert(format!("order.shipping_method.{field}"));
             }
+            for field in ["min_days", "max_days"] {
+                paths.insert(format!("order.delivery.{field}"));
+            }
             for address in ["shipping_address", "billing_address"] {
                 for field in ADDRESS_FIELDS {
                     paths.insert(format!("order.{address}.{field}"));
@@ -559,6 +568,10 @@ fn sample_order(full: bool) -> OrderVars {
             free: false,
         }),
         total: if full { "108.40 €" } else { "115.00 €" }.to_owned(),
+        delivery: full.then_some(DeliveryVars {
+            min_days: 8,
+            max_days: 15,
+        }),
         shipping_address: address("Camille Martin"),
         billing_address: full.then(|| address("Martin & Fils SARL")),
         note: full.then(|| "Please leave it with the concierge.".to_owned()),
@@ -664,6 +677,7 @@ pub struct OrderVars {
     pub discount: Option<DiscountVars>,
     pub shipping_method: Option<ShippingMethodVars>,
     pub total: String,
+    pub delivery: Option<DeliveryVars>,
     pub shipping_address: AddressVars,
     pub billing_address: Option<AddressVars>,
     pub note: Option<String>,
@@ -675,6 +689,13 @@ pub struct LineVars {
     pub variant: Option<String>,
     pub quantity: u32,
     pub amount: String,
+}
+
+/// How many days delivery takes, counted from the order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeliveryVars {
+    pub min_days: u16,
+    pub max_days: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1225,6 +1246,12 @@ mod tests {
             "{}",
             held.html
         );
+        assert!(
+            held.html
+                .contains("Expected delivery: 8 to 15 days after your order."),
+            "{}",
+            held.html
+        );
         let taken = render_sample(ShopMailKind::OrderConfirmation, false);
         assert!(!taken.html.contains("Nothing is charged yet"));
 
@@ -1264,6 +1291,7 @@ mod tests {
             "Billing to",
             "Your note",
             "View your order",
+            "Expected delivery",
             "none",
         ] {
             assert!(!mail.html.contains(text), "unexpected {text:?}");

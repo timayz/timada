@@ -14,18 +14,19 @@
 //!
 //! And the shop's pages: a published one is copied, one unpublished or
 //! deleted leaves. And its announcements: the shown ones are copied whole.
+//! And its default delivery time, written into every product giving none.
 
 use evento::{
     Executor,
     metadata::RawEvent,
     subscription::{Context, SubscriptionBuilder},
 };
-use timada_catalog::aggregator::Product;
 use timada_catalog::aggregator::category::Category;
 use timada_catalog::aggregator::stock::StockItem;
+use timada_catalog::aggregator::{DeliveryDefault, Product};
 use timada_catalog::{
     CategoryLink, CategoryState, ProductState, StockState, StockSummary, category_counts,
-    category_projection, product_projection, stock_projection,
+    category_projection, delivery_default_projection, product_projection, stock_projection,
 };
 use timada_core::db::{
     Connection, Db, Value, execute, fetch_all, fetch_optional, params_from_iter, search_key,
@@ -47,6 +48,7 @@ pub fn catalog_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(on_review_event())
         .handler(crate::pages::on_page_event())
         .handler(crate::announcements::on_announcements_event())
+        .handler(on_delivery_default_event())
         .any_routing_key()
 }
 
@@ -67,6 +69,46 @@ async fn on_product_event<E: Executor>(
         return delete_product_rows(&db, &product.id).await;
     }
     upsert_product(&db, &product).await
+}
+
+#[evento::subscription_all]
+async fn on_delivery_default_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<DeliveryDefault>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let days = delivery_default_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+        .and_then(|state| state.days);
+    db.write(&days, |tx, days| {
+        Box::pin(async move {
+            execute(tx, "DELETE FROM storefront_delivery_default", ()).await?;
+            if let Some(days) = days {
+                execute(
+                    tx,
+                    "INSERT INTO storefront_delivery_default (id, min_days, max_days)
+                     VALUES (1, ?1, ?2)",
+                    (i64::from(days.min), i64::from(days.max)),
+                )
+                .await?;
+            }
+            execute(
+                tx,
+                "UPDATE storefront_products SET
+                    delivery_min_days = coalesce(own_delivery_min_days, ?1),
+                    delivery_max_days = coalesce(own_delivery_max_days, ?2)",
+                (
+                    days.map(|days| i64::from(days.min)),
+                    days.map(|days| i64::from(days.max)),
+                ),
+            )
+            .await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
 /// Drops every row of a deleted product (its own, its options, its category
@@ -328,8 +370,12 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                 "INSERT INTO storefront_products (id, slug, name, description, amount_cents,
                     currency, status, updated_at, images_json, options_json, variants_json,
                     attributes_json, min_amount_cents, max_amount_cents, slug_search,
-                    name_search)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                    name_search, own_delivery_min_days, own_delivery_max_days,
+                    delivery_min_days, delivery_max_days)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                    ?17, ?18,
+                    coalesce(?17, (SELECT min_days FROM storefront_delivery_default)),
+                    coalesce(?18, (SELECT max_days FROM storefront_delivery_default)))
                  ON CONFLICT (id) DO UPDATE SET
                     slug = excluded.slug, name = excluded.name, description = excluded.description,
                     amount_cents = excluded.amount_cents, currency = excluded.currency,
@@ -339,7 +385,11 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                     attributes_json = excluded.attributes_json,
                     min_amount_cents = excluded.min_amount_cents,
                     max_amount_cents = excluded.max_amount_cents,
-                    slug_search = excluded.slug_search, name_search = excluded.name_search",
+                    slug_search = excluded.slug_search, name_search = excluded.name_search,
+                    own_delivery_min_days = excluded.own_delivery_min_days,
+                    own_delivery_max_days = excluded.own_delivery_max_days,
+                    delivery_min_days = excluded.delivery_min_days,
+                    delivery_max_days = excluded.delivery_max_days",
                 params_from_iter([
                     Value::from(product.id.as_str()),
                     Value::from(product.slug.as_str()),
@@ -360,6 +410,8 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                     Value::from(product.price_range().map(|(_, max, _)| max as i64)),
                     Value::from(search_key(&product.slug)),
                     Value::from(search_key(&product.name)),
+                    Value::from(product.delivery_days.map(|days| i64::from(days.min))),
+                    Value::from(product.delivery_days.map(|days| i64::from(days.max))),
                 ]),
             )
             .await?;

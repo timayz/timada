@@ -94,6 +94,16 @@ pub fn money(cents: i64, currency: &str) -> String {
     }
 }
 
+/// How long delivery takes, as a shopper reads it: `8 à 15 jours`, `3 jours`.
+pub fn delivery_days(days: timada_storefront::DeliveryDays) -> String {
+    let unit = |n: u16| if n == 1 { "jour" } else { "jours" };
+    if days.min == days.max {
+        format!("{} {}", days.max, unit(days.max))
+    } else {
+        format!("{} à {} {}", days.min, days.max, unit(days.max))
+    }
+}
+
 /// A product's price line: `19,90€`, or `19,90€ – 29,90€` across its variants.
 pub fn price_line(product: &Product) -> String {
     match product.price_range() {

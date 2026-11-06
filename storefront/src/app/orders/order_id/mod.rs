@@ -24,7 +24,7 @@ use topcoat::{
 };
 
 use crate::app::account::sign_in::sign_in_url;
-use crate::app::{document, money, say};
+use crate::app::{delivery_days, document, money, say};
 use crate::shopper::holds_order;
 
 module_param!(pub order_id);
@@ -226,6 +226,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </p>
                 }
                 <p>"Total : " <strong class="price" data-order-total="">(money(order.total_cents as i64, &currency))</strong></p>
+                if let Some(days) = order.delivery_window() {
+                    <p data-order-delivery=(delivery_days(days))>"Livraison estimée : " (delivery_days(days)) " après la commande"</p>
+                }
                 <h2>"Adresse de livraison"</h2>
                 <address data-order-address="">
                     (&order.shipping.name) <br>

@@ -91,6 +91,10 @@ pub struct OrderLine {
     /// the product as it is now. Empty reads as `standard`
     /// ([`tax_category`](Self::tax_category)).
     pub tax_category: String,
+    /// How long delivery takes, as the shop said when it was sold: the
+    /// product's own time, else the shop's default; `None` when neither.
+    #[serde(default)]
+    pub delivery_days: Option<timada_catalog::DeliveryDays>,
 }
 
 /// The payment of an order: held on the shopper's card, then taken. Frozen

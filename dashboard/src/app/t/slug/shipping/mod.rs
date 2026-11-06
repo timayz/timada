@@ -4,12 +4,13 @@
 //! it is not, a shopper picks one of the methods that ship to their country.
 
 pub mod add;
+pub mod delivery_days;
 pub mod method_id;
 
 use std::collections::HashMap;
 
 use serde::Deserialize;
-use timada_catalog::{CURRENCIES, format_money, parse_amount};
+use timada_catalog::{CURRENCIES, MAX_DELIVERY_DAYS, format_money, parse_amount};
 use timada_orders::{
     Command, MAX_SHIPPING_NAME_LEN, NewShippingMethod, OrderError, ShippingMethod,
 };
@@ -190,6 +191,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .shipping_methods()
         .await
         .map_err(topcoat::Error::from_anyhow)?;
+    let default_days = crate::app::t::slug::products::catalog(&access)?
+        .load_default_delivery_days()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let title = format!("Shipping · {}", tenant.name);
@@ -230,6 +235,27 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     )
                 )
+            )
+
+            section_card(
+                title: Some("Default delivery time"),
+                description: Some("How long delivery takes for a product that gives no time of its own. Shoppers see it on the product page, in the cart, at checkout and with their order. Products imported from AliExpress take theirs from there."),
+                <form method="post" action=(href!(delivery_days::delivery_days, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4" data-default-delivery=(default_days.map(crate::ui::delivery_days_label).unwrap_or_default())>
+                    <fieldset class="grid gap-2">
+                        <legend class="text-sm font-medium">"Delivery time, in days"</legend>
+                        <div class="flex items-center gap-2">
+                            <label class="sr-only" for="default-delivery-min">"Shortest delivery, in days"</label>
+                            input(attrs: attributes! { id="default-delivery-min" name="min" type="number" min="1" max=(MAX_DELIVERY_DAYS) inputmode="numeric" class="w-24" value=(default_days.map(|days| days.min.to_string()).unwrap_or_default()) })
+                            <span aria-hidden="true">"to"</span>
+                            <label class="sr-only" for="default-delivery-max">"Longest delivery, in days"</label>
+                            input(attrs: attributes! { id="default-delivery-max" name="max" type="number" min="1" max=(MAX_DELIVERY_DAYS) inputmode="numeric" class="w-24" value=(default_days.map(|days| days.max.to_string()).unwrap_or_default()) })
+                        </div>
+                        <p class="text-sm text-muted-foreground">"Leave both empty to announce no delivery time."</p>
+                    </fieldset>
+                    <div>
+                        button(attrs: attributes! { type="submit" }, "Set default delivery time")
+                    </div>
+                </form>
             )
 
             section_card(

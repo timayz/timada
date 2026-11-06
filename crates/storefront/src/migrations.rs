@@ -24,7 +24,9 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         // `slug_search` and `name_search` are what a search finds a product
         // by: the slug and the name lowercased and stripped of accents,
         // under an index cut in runs of three characters so a search matches
-        // anywhere in a word as `LIKE '%q%'` would.
+        // anywhere in a word as `LIKE '%q%'` would. `own_delivery_*` is the
+        // product's own delivery time, `delivery_*` what a page shows: that
+        // one, else the shop's default (`storefront_delivery_default`).
         "CREATE TABLE storefront_products (
             id TEXT PRIMARY KEY,
             slug TEXT NOT NULL,
@@ -45,7 +47,11 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             stock_json TEXT NOT NULL DEFAULT '{}',
             in_stock INTEGER NOT NULL DEFAULT 1,
             slug_search TEXT NOT NULL,
-            name_search TEXT NOT NULL
+            name_search TEXT NOT NULL,
+            own_delivery_min_days INTEGER,
+            own_delivery_max_days INTEGER,
+            delivery_min_days INTEGER,
+            delivery_max_days INTEGER
         );
         CREATE UNIQUE INDEX storefront_products_slug ON storefront_products (slug)
             WHERE status <> 'archived';
@@ -161,6 +167,13 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             text TEXT NOT NULL,
             starts_at INTEGER,
             ends_at INTEGER
+        );
+        -- The shop's delivery time for a product that gives none: one row,
+        -- or none while the shop gives no default.
+        CREATE TABLE storefront_delivery_default (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            min_days INTEGER NOT NULL,
+            max_days INTEGER NOT NULL
         );",
     )],
 );
@@ -176,6 +189,7 @@ pub const TABLES: &[&str] = &[
     "storefront_stock",
     "storefront_pages",
     "storefront_announcements",
+    "storefront_delivery_default",
 ];
 
 /// Applies the library's pending migrations to the local database (evento's

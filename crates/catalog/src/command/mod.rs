@@ -9,6 +9,7 @@ mod categorize;
 mod category;
 mod category_slug_index;
 mod create;
+mod delivery;
 mod edit;
 mod image;
 mod lifecycle;
@@ -24,6 +25,7 @@ use std::ops::Deref;
 
 pub use category::*;
 pub use create::*;
+pub use delivery::*;
 pub use image::*;
 pub use option::*;
 pub use stock::*;
@@ -40,16 +42,17 @@ use crate::aggregator::category::{
 };
 use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
-    Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Created, Deleted, Described,
-    ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionHidden,
-    OptionLabelled, OptionRemoved, OptionRenamed, OptionShown, OptionValueLabelled,
-    OptionValuesChanged, Priced, Published, Released, Renamed, TaxCategorySet, Uncategorized,
-    Unpublished, VariantDefined, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged,
+    Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Created, Deleted,
+    DeliveryDaysSet, Described, ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered,
+    OptionDefined, OptionHidden, OptionLabelled, OptionRemoved, OptionRenamed, OptionShown,
+    OptionValueLabelled, OptionValuesChanged, Priced, Published, Released, Renamed, TaxCategorySet,
+    Uncategorized, Unpublished, VariantDefined, VariantImaged, VariantPriced, VariantRemoved,
+    VariantSkuChanged,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
-    MAX_CATEGORY_DEPTH, OptionSelection, category_slug_id, format_money, product_sku_id,
-    product_slug_id,
+    DeliveryDays, MAX_CATEGORY_DEPTH, OptionSelection, category_slug_id, format_money,
+    product_sku_id, product_slug_id,
 };
 
 /// The command gateway. Cheap to clone when `E` is.
@@ -273,6 +276,8 @@ pub struct ProductState {
     pub attributes: Vec<ProductAttribute>,
     /// What kind of goods it is for VAT; `None` is `standard`.
     pub tax_category: Option<String>,
+    /// How long delivery takes; `None` is the shop's default.
+    pub delivery_days: Option<DeliveryDays>,
     pub created_by: String,
     /// Unix seconds of `Created`.
     pub created_at: u64,
@@ -468,6 +473,7 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_attribute_set())
         .handler(on_attribute_removed())
         .handler(on_tax_category_set())
+        .handler(on_delivery_days_set())
         .strict()
 }
 
@@ -931,6 +937,16 @@ async fn on_tax_category_set(
     product: &mut ProductState,
 ) -> anyhow::Result<()> {
     product.tax_category = event.data.category.to_owned();
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_delivery_days_set(
+    event: Event<DeliveryDaysSet>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.delivery_days = event.data.days;
     product.updated_at = event.timestamp;
     Ok(())
 }

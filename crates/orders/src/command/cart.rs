@@ -261,6 +261,18 @@ impl<E: Executor> super::Command<E> {
             .await
     }
 
+    /// The shop's delivery time for a product that gives none.
+    pub(crate) async fn load_default_delivery_days(
+        &self,
+    ) -> anyhow::Result<Option<timada_catalog::DeliveryDays>> {
+        Ok(timada_catalog::delivery_default_projection()
+            .load(timada_catalog::delivery_default_id())
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await?
+            .and_then(|state| state.days))
+    }
+
     /// The cart, refused once it became an order.
     pub(crate) async fn require_open_cart(&self, cart_id: &str) -> Result<CartState, OrderError> {
         let cart = self.require_cart(cart_id).await?;

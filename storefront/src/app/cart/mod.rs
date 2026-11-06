@@ -15,7 +15,7 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::app::{document, money, say};
+use crate::app::{delivery_days, document, money, say};
 use crate::shopper::cart_id;
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -126,6 +126,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         if let Some(offer) = &line.offer {
                                             <div><small class="offer-note" data-line-offer=(&offer.offer_id)>"Offre : 1 à " (money(offer.unit_amount_cents as i64, &currency))</small></div>
                                         }
+                                        if let Some(days) = line.delivery_days {
+                                            <div><small class="delivery-note" data-line-delivery=(delivery_days(days))>"Livraison en " (delivery_days(days))</small></div>
+                                        }
                                         if line.unit_amount_cents.is_none() {
                                             <div><small>"Plus en vente : retirez-le pour commander le reste."</small></div>
                                         }
@@ -163,6 +166,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </tbody>
                     </table>
                     <p>"Sous-total : " <span data-cart-subtotal="">(cart.subtotal().unwrap_or_default())</span></p>
+                    if let Some(days) = cart.delivery_window {
+                        <p data-cart-delivery=(delivery_days(days))>"Livraison estimée : " (delivery_days(days)) " après la commande"</p>
+                    }
                     if let (Some(discount), Some(amount)) = (&cart.discount, cart.discount_amount()) {
                         <p data-cart-discount=(&discount.code)>"Code promo " <code>(&discount.code)</code> " : " <span data-discount-amount="">(amount)</span></p>
                     }
@@ -252,6 +258,9 @@ pub async fn summary_line(
                 if let Some(label) = &line.variant_label { <small class="variant">(label)</small> }
                 if let Some(offer) = &line.offer {
                     <small class="offer-note" data-line-offer=(&offer.offer_id)>"Offre : 1 à " (money(offer.unit_amount_cents as i64, currency))</small>
+                }
+                if let Some(days) = line.delivery_days {
+                    <small class="delivery-note" data-line-delivery=(delivery_days(days))>"Livraison en " (delivery_days(days))</small>
                 }
                 if line.amount_cents.is_some() {
                     <span class="qty">

@@ -153,6 +153,73 @@ pub struct TakenLine {
 /// The most a shop counts of one thing.
 pub const MAX_STOCK: u32 = 1_000_000;
 
+/// The longest delivery a shop can announce, in days.
+pub const MAX_DELIVERY_DAYS: u16 = 365;
+
+/// How long delivery takes, in days from the order: between `min` and `max`,
+/// the same number when the shop gives one.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub struct DeliveryDays {
+    pub min: u16,
+    pub max: u16,
+}
+
+impl DeliveryDays {
+    /// Checks 1 ≤ `min` ≤ `max` ≤ [`MAX_DELIVERY_DAYS`].
+    pub fn new(min: u16, max: u16) -> Result<Self, CatalogError> {
+        if min == 0 || min > max || max > MAX_DELIVERY_DAYS {
+            return Err(CatalogError::InvalidDeliveryDays);
+        }
+        Ok(Self { min, max })
+    }
+
+    /// Reads a form's two fields: both empty is `None`, one empty takes the
+    /// other's number.
+    pub fn parse(min: &str, max: &str) -> Result<Option<Self>, CatalogError> {
+        let read = |field: &str| -> Result<Option<u16>, CatalogError> {
+            match field.trim() {
+                "" => Ok(None),
+                text => text
+                    .parse()
+                    .map(Some)
+                    .map_err(|_| CatalogError::InvalidDeliveryDays),
+            }
+        };
+        match (read(min)?, read(max)?) {
+            (None, None) => Ok(None),
+            (Some(min), None) => Self::new(min, min).map(Some),
+            (None, Some(max)) => Self::new(max, max).map(Some),
+            (Some(min), Some(max)) => Self::new(min, max).map(Some),
+        }
+    }
+
+    /// The window an order of several things arrives in: the latest of the
+    /// earliest days and the latest of the latest ones. `None` when no line
+    /// says.
+    pub fn window(days: impl IntoIterator<Item = Option<Self>>) -> Option<Self> {
+        days.into_iter().flatten().reduce(|a, b| Self {
+            min: a.min.max(b.min),
+            max: a.max.max(b.max),
+        })
+    }
+}
+
+/// The stream of the shop's default delivery time: one per tenant store.
+pub fn delivery_default_id() -> String {
+    evento::hash_ids(vec!["delivery-default"])
+}
+
 /// What two codes are compared by: case and surrounding space do not make
 /// two different codes.
 pub fn sku_key(sku: &str) -> String {

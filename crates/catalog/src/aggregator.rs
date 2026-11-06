@@ -2,7 +2,7 @@
 //! a change of shape is a new variant, never a changed field. Each event
 //! carries who did it, so the stream is its own audit trail.
 
-use crate::value_object::OptionSelection;
+use crate::value_object::{DeliveryDays, OptionSelection};
 
 /// A product of the tenant's catalog. Its id is a ULID.
 #[evento::aggregate(name = "timada-catalog/Product")]
@@ -193,6 +193,23 @@ pub enum Product {
     /// `None` is `standard`.
     TaxCategorySet {
         category: Option<String>,
+        set_by: String,
+    },
+    /// How long delivery takes, set by the merchant or read from the
+    /// supplier; `None` falls back to the shop's default.
+    DeliveryDaysSet {
+        days: Option<DeliveryDays>,
+        set_by: String,
+    },
+}
+
+/// The delivery time of a product that gives none: one stream per tenant
+/// store, with the id [`delivery_default_id`](crate::delivery_default_id).
+#[evento::aggregate(name = "timada-catalog/DeliveryDefault")]
+pub enum DeliveryDefault {
+    /// `None` announces no delivery time.
+    DefaultDeliveryDaysSet {
+        days: Option<DeliveryDays>,
         set_by: String,
     },
 }
