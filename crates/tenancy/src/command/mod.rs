@@ -59,6 +59,12 @@ impl<E: Executor> Deref for Command<E> {
     }
 }
 
+/// Unix milliseconds of an event as the store stamped it, to order events of
+/// two streams.
+fn event_millis(event: &evento::Event) -> u64 {
+    event.timestamp * 1000 + u64::from(event.timestamp_subsec)
+}
+
 // =============================================================================
 // Tenant
 // =============================================================================
@@ -80,6 +86,9 @@ pub struct TenantState {
     pub suspended: Option<String>,
     /// `user id → role`, sorted so pages are stable.
     pub members: BTreeMap<String, String>,
+    /// When each former member was last removed, in unix milliseconds: an
+    /// invitation they accepted before that grants them nothing.
+    pub removed_members: BTreeMap<String, u64>,
     /// The custom roles, by name. `owner` is not among them: it is implicit
     /// and grants everything.
     pub roles: BTreeMap<String, RoleDef>,
@@ -407,6 +416,7 @@ async fn on_member_granted(
     tenant
         .members
         .insert(event.data.user_id.to_owned(), event.data.role.to_owned());
+    tenant.removed_members.remove(&event.data.user_id);
     Ok(())
 }
 
@@ -427,6 +437,9 @@ async fn on_member_revoked(
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     tenant.members.remove(&event.data.user_id);
+    tenant
+        .removed_members
+        .insert(event.data.user_id.to_owned(), event_millis(&event));
     Ok(())
 }
 
@@ -941,6 +954,9 @@ pub struct InvitationState {
     pub expires_at: u64,
     pub accepted_by: Option<String>,
     pub accepted_at: Option<u64>,
+    /// Unix milliseconds of `Accepted` as the store stamped it, which orders
+    /// it against the tenant's own events.
+    pub accepted_at_ms: Option<u64>,
     pub revoked: bool,
 }
 
@@ -982,6 +998,7 @@ async fn on_invitation_accepted(
 ) -> anyhow::Result<()> {
     invitation.accepted_by = Some(event.data.user_id.to_owned());
     invitation.accepted_at = Some(event.data.accepted_at);
+    invitation.accepted_at_ms = Some(event_millis(&event));
     Ok(())
 }
 

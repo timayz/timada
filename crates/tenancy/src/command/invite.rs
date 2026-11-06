@@ -14,6 +14,10 @@ use crate::value_object::{
 
 use super::{InvitationState, TenantState};
 
+/// Reload-and-retry budget for a seat granted while other writes of the
+/// tenant race it.
+const GRANT_ATTEMPTS: usize = 3;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InviteMember {
     pub tenant_id: String,
@@ -100,10 +104,12 @@ impl<E: Executor> super::Command<E> {
         Ok(SentInvitation { token, invitation })
     }
 
-    /// Joins the tenant the link belongs to. The grant is appended first and
-    /// the invitation marked second: a crash between the two leaves the link
-    /// open, and accepting it again converges (an existing member is not
-    /// granted twice). Returns the tenant joined.
+    /// Joins the tenant the link belongs to. Marking the invitation accepted,
+    /// at the version read, is the link's one use: a second person with a
+    /// forwarded link, or a revocation, racing it loses there and is granted
+    /// nothing. The seat is granted next, and by the invitation-grants
+    /// subscription should that fail; an account already in the tenant keeps
+    /// its seat. Returns the tenant joined.
     pub async fn accept_invitation(
         &self,
         cmd: AcceptInvitation,
@@ -117,25 +123,26 @@ impl<E: Executor> super::Command<E> {
             .ok_or(TenancyError::InvitationInvalid)?;
         let tenant_id = invitation.tenant_id.clone();
         let tenant = self.require_active(&tenant_id).await?;
-        if !tenant.members.contains_key(&cmd.user_id) {
-            self.grant(
-                &cmd.user_id,
-                tenant,
-                &cmd.user_id,
-                &invitation.role,
-                routing_key.clone(),
-            )
-            .await?;
+        // Refused before the link is used, so it stays open.
+        if !tenant.members.contains_key(&cmd.user_id) && !tenant.has_role(&invitation.role) {
+            return Err(TenancyError::UnknownRole);
         }
         invitation
             .write()?
-            .routing_key_opt(routing_key)
+            .routing_key_opt(routing_key.clone())
             .requested_by(cmd.user_id.clone())
             .event(&Accepted {
                 user_id: cmd.user_id,
                 accepted_at: now,
             })
             .commit(&self.0)
+            .await
+            .map_err(|err| match err {
+                // Used or revoked since it was read.
+                WriteError::InvalidOriginalVersion => TenancyError::InvitationInvalid,
+                err => err.into(),
+            })?;
+        self.grant_accepted_seat(&invitation.id, routing_key)
             .await?;
         self.require_tenant(&tenant_id).await
     }
@@ -167,7 +174,60 @@ impl<E: Executor> super::Command<E> {
                 revoked_by: actor_user_id.to_owned(),
             })
             .commit(&self.0)
-            .await?;
+            .await
+            .map_err(|err| match err {
+                // Accepted since it was read.
+                WriteError::InvalidOriginalVersion => TenancyError::InvitationInvalid,
+                err => err.into(),
+            })?;
         Ok(())
+    }
+}
+
+impl<E: Executor> super::Command<E> {
+    /// Grants the seat an accepted invitation promised, once: not to an
+    /// account already in the tenant, nor to one removed since it accepted
+    /// (an old link is no way back in). A role removed in between refuses
+    /// it. Retried against a fresh tenant while other writes race it; told
+    /// twice, nothing more happens.
+    pub(crate) async fn grant_accepted_seat(
+        &self,
+        invitation_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let Some(invitation) = self.load_invitation(invitation_id).await? else {
+            return Ok(());
+        };
+        let (Some(user_id), Some(accepted_at_ms)) =
+            (invitation.accepted_by.as_deref(), invitation.accepted_at_ms)
+        else {
+            return Ok(());
+        };
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let tenant = self.require_tenant(&invitation.tenant_id).await?;
+            let removed_since = tenant
+                .removed_members
+                .get(user_id)
+                .is_some_and(|removed_at_ms| *removed_at_ms >= accepted_at_ms);
+            if tenant.members.contains_key(user_id) || removed_since {
+                return Ok(());
+            }
+            match self
+                .grant(
+                    user_id,
+                    tenant,
+                    user_id,
+                    &invitation.role,
+                    routing_key.clone(),
+                )
+                .await
+            {
+                Err(TenancyError::Write(WriteError::InvalidOriginalVersion))
+                    if attempt < GRANT_ATTEMPTS => {}
+                outcome => return outcome,
+            }
+        }
     }
 }
