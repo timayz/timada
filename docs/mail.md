@@ -4,8 +4,9 @@ The dashboard sends two kinds of mail.
 
 - **Platform mail**: sign-up, sign-in and password-reset codes, and invitations to
   join a tenant. It always goes through the `[mail]` server, from `mail.from`.
-- **Shop mail**: what a shop sends its shoppers, meaning order confirmations, review
-  requests, storefront sign-in codes and newsletter confirmations. It goes through the
+- **Shop mail**: what a shop sends its shoppers, meaning order confirmations, payment
+  receipts and cancellations, review requests, storefront sign-in codes and newsletter
+  confirmations. It goes through the
   server the merchant picked for shop mails, and through the `[mail]` server when none
   is picked. The sender's name is the shop's either way.
 - **Marketing**: the shop's newsletter campaigns, and the test mail a merchant sends
@@ -56,13 +57,13 @@ could have several is listed as their first, picked for both.
 A server switched for marketing while a campaign goes out sends its next batches. A
 shop whose server stops accepting mail does not fall back to another one, nor to the
 platform's server. The send fails and is logged, so a broken setup shows instead of
-being hidden. Order confirmations and review requests are claimed before they are sent,
+being hidden. The order mails and review requests are claimed before they are sent,
 so one that fails is not retried.
 
 ## A shop's own wording
 
-Members with `mail:manage` can also reword the three shop mails, from "Mails to
-shoppers" on `/t/{slug}/mail`. Each mail has an editor per language the shop mails in
+Members with `mail:manage` can also reword the shop mails, from "Mails to shoppers" on
+`/t/{slug}/mail`. Each mail has an editor per language the shop mails in
 (see [Several languages](#several-languages)), with:
 
 - the subject and the whole HTML document;
@@ -87,8 +88,22 @@ Each mail has its own variables, all listed in the editor:
 | Mail | Variables |
 | --- | --- |
 | Sign-in code | `shop.*`, `code`, `valid_minutes` |
-| Order confirmation | `shop.*`, `order.reference`, `order.email`, `order.lines` (`name`, `variant`, `quantity`, `amount`), `order.subtotal`, `order.discount` (`code`, `amount`), `order.shipping_method` (`name`, `amount`, `free`), `order.total`, `order.shipping_address` and `order.billing_address` (`name`, `line1`, `line2`, `postal_code`, `city`, `country`), `order.note`, `link` |
+| Order confirmation | `shop.*`, `order.reference`, `order.email`, `order.lines` (`name`, `variant`, `quantity`, `amount`), `order.subtotal`, `order.discount` (`code`, `amount`), `order.shipping_method` (`name`, `amount`, `free`), `order.total`, `order.shipping_address` and `order.billing_address` (`name`, `line1`, `line2`, `postal_code`, `city`, `country`), `order.note`, `link`, `payment_held` |
+| Payment taken | the order confirmation's, without `payment_held` |
+| Order cancelled | the order confirmation's, with `refunded` instead of `payment_held` |
 | Review request | `shop.*`, `order.reference`, `products`, `link`, `valid_days` |
+
+The three order mails follow the order's money. The confirmation goes out once the
+order is placed: its card is only held, and `payment_held` is true when the money is
+taken later, once the order is placed with its supplier (see `docs/payments.md`). The
+payment mail goes out once the money is taken, after the invoice is issued, so the
+order's page it links to shows the invoice. An order from the shop's own stock is
+charged at once and gets both within seconds. The cancellation goes out once the order
+is cancelled, by the merchant, the shopper or AliExpress, with its money settled:
+`refunded` is true when the money had been taken and goes back, false when the hold on
+the card was given back. Each is sent once per order, an hour at most after what
+prompted it (a node catching up on older events mails nobody), and the order's page
+in the back office says when each went out.
 
 Every mail also has `shop.logo_url`, `shop.accent` and `shop.footer`. Set them under
 "Look of your mails" on the same page. Each is empty until set, so check it with

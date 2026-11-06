@@ -409,12 +409,8 @@ fn subscriptions(
             crate::automations::triggers::subscription(db.clone(), store.clone()),
         ),
         (
-            "order confirmations",
-            crate::confirmations::subscription(
-                store.clone(),
-                background_mail.clone(),
-                store.clone(),
-            ),
+            "order mails",
+            crate::order_mails::subscription(store.clone(), background_mail.clone(), store.clone()),
         ),
         (
             "message notices",
