@@ -18,8 +18,8 @@ use evento::{
 };
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem, Requested};
 use timada_aliexpress::{
-    AeError, AliexpressError, ForwardStatus, LinkState, PlaceItem, PlaceOrder, Placement,
-    choose_service, delivery_country, describe_options, forward_items, link_of_product,
+    ALIEXPRESS_SUPPLIER, AeError, AliexpressError, ForwardStatus, LinkState, PlaceItem, PlaceOrder,
+    Placement, choose_service, delivery_country, describe_options, forward_items, link_of_product,
     logistics_address,
 };
 use timada_orders::{OrderError, OrderLine, OrderStatus};
@@ -150,16 +150,11 @@ impl Aliexpress {
         let Some(order) = orders.load_order(order_id).await.map_err(failed)? else {
             return Err(Refusal("The order does not exist.".into()));
         };
-        match order.status {
-            OrderStatus::Authorized | OrderStatus::Paid => {}
-            OrderStatus::Fulfilled => {
-                return Err(Refusal("The order is already fulfilled.".into()));
-            }
-            OrderStatus::Cancelled => return Err(Refusal("The order is cancelled.".into())),
-        }
-        if order.pending_cancellation.is_some() {
-            return Err(Refusal("The order is being cancelled.".into()));
-        }
+        // Checked here to say why early; the fence below checks again, at
+        // the very moment AliExpress is asked.
+        order
+            .may_order_from_supplier(crate::auth::now())
+            .map_err(|err| not_placeable(err).unwrap_or_else(|err| failed(err.into())))?;
         let links = order_links(store, db, tenant_id, &order.lines)
             .await
             .map_err(failed)?;
@@ -292,16 +287,43 @@ impl Aliexpress {
             try_to_pay: settings.try_to_pay,
             pay_currency: settings.currency.clone(),
         };
-        let ae_order_ids = client.place_order(&request).await.map_err(|err| {
-            if err.may_have_placed() {
-                Refusal(
+        // The fence: written on the order at the version read, right before
+        // AliExpress is asked, so a shopper or merchant cancelling at the same
+        // moment either stops it here or finds it written.
+        orders
+            .begin_supplier_order(
+                ALIEXPRESS_ACTOR,
+                order_id,
+                ALIEXPRESS_SUPPLIER,
+                crate::auth::now(),
+            )
+            .await
+            .map_err(|err| not_placeable(err).unwrap_or_else(|err| failed(err.into())))?;
+        let ae_order_ids = match client.place_order(&request).await {
+            Ok(ids) => ids,
+            Err(err) if err.may_have_placed() => {
+                return Err(Refusal(
                     "AliExpress did not answer: look at the account's orders on AliExpress before placing this one again."
                         .to_owned(),
-                )
-            } else {
-                Refusal(format!("AliExpress refused the order: {}", describe(&err)))
+                ));
             }
-        })?;
+            Err(err) => {
+                let reason = format!("AliExpress refused the order: {}", describe(&err));
+                // It surely took nothing: the shopper may cancel again.
+                if let Err(err) = orders
+                    .record_supplier_refusal(
+                        ALIEXPRESS_ACTOR,
+                        order_id,
+                        ALIEXPRESS_SUPPLIER,
+                        &reason,
+                    )
+                    .await
+                {
+                    tracing::warn!(%tenant_id, %order_id, error = %err, "the order does not know AliExpress refused it");
+                }
+                return Err(Refusal(reason));
+            }
+        };
         Ok(Placement {
             ae_order_ids,
             items: bought,
@@ -312,7 +334,10 @@ impl Aliexpress {
 
     /// Reads a placed order's AliExpress orders again; once each has a
     /// parcel number and every line of the shop's order was bought there,
-    /// fulfils the shop's order with them. An order settled otherwise
+    /// fulfils the shop's order with them. Once AliExpress closed every one
+    /// of them shipping nothing (`closed` names the one its push said it
+    /// closed), the shop's order is to be cancelled: the payments sweep
+    /// gives the hold back, or the money. An order settled otherwise
     /// (fulfilled by hand, cancelled) or watched long enough is no longer
     /// read.
     ///
@@ -327,6 +352,7 @@ impl Aliexpress {
         tenant: &TenantState,
         company: &CompanyState,
         forward_id: &str,
+        closed: Option<&str>,
         now: u64,
     ) -> anyhow::Result<CheckResult> {
         let forwards = timada_aliexpress::Command::new(store.clone(), &tenant.id);
@@ -380,16 +406,35 @@ impl Aliexpress {
         let mut checked = Vec::new();
         let mut after = forward.clone();
         for ae_order in &forward.ae_orders {
+            let pushed_closed = closed == Some(ae_order.id.as_str());
             let read = match client.order(&ae_order.id).await {
                 Ok(read) => read,
+                // The push is signed: what it says stands while the order
+                // cannot be read.
+                Err(err) if pushed_closed && !ae_order.closed => {
+                    tracing::warn!(tenant = %tenant.id, ae_order = %ae_order.id, %err, "AliExpress order not read: closed as its push says");
+                    timada_aliexpress::AeOrder {
+                        status: ae_order.status.clone(),
+                        logistics_status: ae_order.logistics_status.clone(),
+                        tracking: ae_order.tracking.clone(),
+                    }
+                }
                 Err(err) => {
                     tracing::warn!(tenant = %tenant.id, ae_order = %ae_order.id, %err, "AliExpress order not read");
                     continue;
                 }
             };
+            // Closed shipping nothing: its push said so, or it finished
+            // with no parcel ever known.
+            let closed = ae_order.closed
+                || pushed_closed
+                || (read.status == AE_FINISHED
+                    && read.tracking.is_empty()
+                    && ae_order.tracking.is_empty());
             if read.status == ae_order.status
                 && read.logistics_status == ae_order.logistics_status
                 && read.tracking == ae_order.tracking
+                && closed == ae_order.closed
             {
                 continue;
             }
@@ -397,12 +442,14 @@ impl Aliexpress {
                 state.status = read.status.clone();
                 state.logistics_status = read.logistics_status.clone();
                 state.tracking = read.tracking.clone();
+                state.closed = closed;
             }
             checked.push(Checked {
                 ae_order_id: ae_order.id.clone(),
                 status: read.status,
                 logistics_status: read.logistics_status,
                 tracking: read.tracking,
+                closed,
             });
         }
         let version = match forwards
@@ -415,6 +462,28 @@ impl Aliexpress {
             }
             Err(err) => return Err(err.into()),
         };
+        // Nothing will ship of an order AliExpress alone was to fill: it is
+        // cancelled, its money given back by the payments sweep. A mixed
+        // order, or one only partly closed, is the merchant's to settle.
+        if after.complete && after.all_closed() {
+            match orders
+                .request_cancellation(
+                    ALIEXPRESS_ACTOR,
+                    &forward.order_id,
+                    CLOSED_BY_ALIEXPRESS.to_owned(),
+                    true,
+                )
+                .await
+            {
+                Ok(_) => {
+                    tracing::info!(tenant = %tenant.id, order = %forward.order_id, "AliExpress closed the order: the shop's order is cancelled");
+                }
+                // Its money is being taken, or it left: read again later.
+                Err(OrderError::CapturePending | OrderError::NotCancellable) => {}
+                Err(err) => return Err(err.into()),
+            }
+            return Ok(CheckResult::Checked { fulfilled: false });
+        }
         if !after.complete || !after.all_shipped() || !paid {
             return Ok(CheckResult::Checked { fulfilled: false });
         }
@@ -448,6 +517,31 @@ impl Aliexpress {
             Err(err) => Err(err.into()),
         }
     }
+}
+
+/// The status AliExpress gives an order it is done with: delivered, or
+/// closed.
+const AE_FINISHED: &str = "FINISH";
+
+/// Why a shop's order is cancelled when AliExpress closed every order of it.
+pub const CLOSED_BY_ALIEXPRESS: &str = "AliExpress closed the order without shipping it.";
+
+/// Why an order is not placed on AliExpress, for the merchant; the error
+/// back when it is no refusal of the order (the store failing).
+fn not_placeable(err: OrderError) -> Result<Refusal, OrderError> {
+    Ok(Refusal(
+        match err {
+            OrderError::OrderCancelled => "The order is cancelled.",
+            OrderError::OrderFulfilled => "The order is already fulfilled.",
+            OrderError::CancellationPending => "The order is being cancelled.",
+            OrderError::HoldExpiring => {
+                "The hold on the shopper's card ends too soon to buy the goods: take the payment first, then place it again."
+            }
+            OrderError::OrderNotFound => "The order does not exist.",
+            err => return Err(err),
+        }
+        .to_owned(),
+    ))
 }
 
 /// The parcel numbers, joined, as many as an order's tracking holds.
@@ -755,6 +849,8 @@ mod tests {
     struct StandIn {
         /// The parcel number of each order that shipped.
         shipped: Mutex<HashMap<String, String>>,
+        /// The orders AliExpress closed without shipping them.
+        closed: Mutex<Vec<String>>,
         /// Answers 503 to everything.
         down: AtomicBool,
         reads: AtomicUsize,
@@ -787,7 +883,12 @@ mod tests {
                 .find(|(name, _)| name == "order_id")
                 .map(|(_, id)| id.into_owned())
                 .unwrap_or_default();
+            let closed = self.closed.lock().unwrap().contains(&id);
             let result = match self.shipped.lock().unwrap().get(&id) {
+                None if closed => serde_json::json!({
+                    "order_status": "FINISH",
+                    "logistics_status": "NO_LOGISTICS",
+                }),
                 Some(parcel) => serde_json::json!({
                     "order_status": "WAIT_BUYER_ACCEPT_GOODS",
                     "logistics_status": "SELLER_SEND_GOODS",
@@ -911,6 +1012,11 @@ mod tests {
                     paid_by: "timada-dashboard".to_owned(),
                 });
             }
+            // What the forwarder writes before it asks AliExpress.
+            write.event(&timada_orders::aggregator::SupplierOrderStarted {
+                supplier: ALIEXPRESS_SUPPLIER.to_owned(),
+                started_by: ALIEXPRESS_ACTOR.to_owned(),
+            });
             write.commit(&self.store).await.unwrap();
             let forwards = timada_aliexpress::Command::new(self.store.clone(), TENANT);
             let id = forwards
@@ -946,6 +1052,14 @@ mod tests {
             self.stand_in.down.store(true, Ordering::SeqCst);
         }
 
+        fn closes(&self, ae_order_id: &str) {
+            self.stand_in
+                .closed
+                .lock()
+                .unwrap()
+                .push(ae_order_id.to_owned());
+        }
+
         fn reads(&self) -> usize {
             self.stand_in.reads.load(Ordering::SeqCst)
         }
@@ -958,7 +1072,7 @@ mod tests {
             now: u64,
         ) -> anyhow::Result<CheckResult> {
             self.aliexpress
-                .check_forward(store, &self.tenant, &self.company, forward_id, now)
+                .check_forward(store, &self.tenant, &self.company, forward_id, None, now)
                 .await
         }
 
@@ -1139,13 +1253,71 @@ mod tests {
         assert_eq!(shop.order().await.status, OrderStatus::Fulfilled);
     }
 
+    /// AliExpress closed every order of it, shipping nothing: the shop's
+    /// order is to be cancelled (the payments sweep gives its money back),
+    /// then the forward closes like any cancelled order's.
+    #[tokio::test]
+    async fn an_order_aliexpress_closed_is_cancelled() {
+        let shop = Shop::new().await;
+        let id = shop.placed_with(&["81", "82"], false).await;
+        shop.closes("81");
+
+        assert_eq!(
+            shop.check(&id).await,
+            CheckResult::Checked { fulfilled: false }
+        );
+        let order = shop.order().await;
+        assert!(order.pending_cancellation.is_none(), "one of two closed");
+        assert!(shop.forward(&id).await.ae_orders[0].closed);
+
+        shop.closes("82");
+        shop.check(&id).await;
+        let order = shop.order().await;
+        let asked = order
+            .pending_cancellation
+            .expect("its cancellation is asked");
+        assert_eq!(asked.reason, CLOSED_BY_ALIEXPRESS);
+        assert_eq!(asked.requested_by, ALIEXPRESS_ACTOR);
+        assert!(shop.forward(&id).await.all_closed());
+
+        // The payments sweep gave the hold back: the forward closes.
+        shop.orders()
+            .record_release("timada-dashboard", ORDER, "", "")
+            .await
+            .unwrap();
+        assert_eq!(shop.check(&id).await, CheckResult::Done);
+    }
+
+    /// The push is signed: an order it says AliExpress closed is closed even
+    /// while AliExpress cannot be read.
+    #[tokio::test]
+    async fn a_closing_push_stands_while_aliexpress_is_unreachable() {
+        let shop = Shop::new().await;
+        let id = shop.placed_with(&["81"], false).await;
+        shop.goes_down();
+
+        shop.aliexpress
+            .check_forward(
+                &shop.store,
+                &shop.tenant,
+                &shop.company,
+                &id,
+                Some("81"),
+                crate::auth::now(),
+            )
+            .await
+            .unwrap();
+        assert!(shop.forward(&id).await.all_closed());
+        assert!(shop.order().await.pending_cancellation.is_some());
+    }
+
     #[tokio::test]
     async fn a_cancelled_order_closes_the_forward_without_a_tracking() {
         let shop = Shop::new().await;
         let id = shop.placed(&["81"]).await;
         let orders = shop.orders();
         orders
-            .request_cancellation("user-alice", ORDER, "changed my mind".to_owned())
+            .request_cancellation("user-alice", ORDER, "changed my mind".to_owned(), true)
             .await
             .unwrap();
         let refund = orders

@@ -31,6 +31,8 @@ export type PlacedOrder = {
   items: { product_id: number; sku_attr: string; product_count: number; logistics_service_name: string }[];
   tryToPay: boolean;
   tracking?: string;
+  /// Closed by AliExpress without shipping.
+  closed?: boolean;
 };
 
 export class FakeAliexpress {
@@ -89,6 +91,12 @@ export class FakeAliexpress {
   /// The seller sends the parcel of an order.
   ship(orderId: string, tracking: string) {
     this.orders.find((order) => order.id === orderId)!.tracking = tracking;
+  }
+
+  /// AliExpress closes an order without shipping it (the seller cancelled,
+  /// or it was never paid).
+  close(orderId: string) {
+    this.orders.find((order) => order.id === orderId)!.closed = true;
   }
 
   /// AliExpress pushes an order's new status to the platform's webhook at
@@ -226,8 +234,14 @@ export class FakeAliexpress {
           rsp_code: "200",
           rsp_msg: "Call succeeds",
           result: {
-            order_status: order.tracking ? "WAIT_BUYER_ACCEPT_GOODS" : order.tryToPay ? "WAIT_SELLER_SEND_GOODS" : "PLACE_ORDER_SUCCESS",
-            logistics_status: order.tracking ? "SELLER_SEND_GOODS" : "WAIT_SELLER_SEND_GOODS",
+            order_status: order.tracking
+              ? "WAIT_BUYER_ACCEPT_GOODS"
+              : order.closed
+                ? "FINISH"
+                : order.tryToPay
+                  ? "WAIT_SELLER_SEND_GOODS"
+                  : "PLACE_ORDER_SUCCESS",
+            logistics_status: order.tracking ? "SELLER_SEND_GOODS" : order.closed ? "NO_LOGISTICS" : "WAIT_SELLER_SEND_GOODS",
             logistics_info_list: order.tracking
               ? { ae_order_logistics_info: [{ logistics_no: order.tracking, logistics_service: "CAINIAO_STANDARD" }] }
               : {},

@@ -49,7 +49,12 @@ pub async fn cancel(cx: &Cx, Form(form): Form<CancelForm>) -> Result<SeeOther> {
     };
     let gateway = orders(&access)?;
     let path = match gateway
-        .request_cancellation(&access.user_id, &order_id, reason)
+        .request_cancellation(
+            &access.user_id,
+            &order_id,
+            reason,
+            form.supplier_cancelled.is_some(),
+        )
         .await
     {
         Ok(path) => path,

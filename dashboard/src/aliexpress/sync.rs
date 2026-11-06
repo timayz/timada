@@ -185,7 +185,7 @@ impl AliexpressSync {
             }
             match self
                 .aliexpress
-                .check_forward(&store, &tenant, &company, &forward.id, now)
+                .check_forward(&store, &tenant, &company, &forward.id, None, now)
                 .await
             {
                 Ok(CheckResult::Checked { fulfilled: true }) => fulfilled += 1,
