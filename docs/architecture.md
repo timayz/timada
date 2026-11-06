@@ -239,9 +239,10 @@ by construction.
    payment to give back) is settled by the sweep `payments/pending.rs` a minute later,
    and a request to pay nobody answered is refused by `payments/unanswered.rs`. All of it
    needs the tenant's keys, so stopping payments (`Tenant::PaymentsStopped`) stops new
-   checkouts at once but keeps the keys, sealed, while anything is held or owed; the
-   sweep forgets them (`Tenant::PaymentsForgotten`) once nothing is, and saving keys again
-   takes payments again. Setting it up and testing it locally: `docs/payments.md`.
+   checkouts at once but keeps the keys, sealed, until the merchant forgets them
+   (`Tenant::PaymentsForgotten`): never before the stop is eight days old (past a card's
+   longest hold) nor while the orders read model shows anything held or owed, and no
+   sweep forgets them on a read model's word. Saving keys again takes payments again. Setting it up and testing it locally: `docs/payments.md`.
 5. **Shop mail** (`shop_mail.rs`). A merchant sets up SMTP servers of its own on
    `/t/{slug}/mail` (up to ten) and picks one for each kind of mail
    (`MailServersPicked`). The shop's mails to its shoppers (order mails, review

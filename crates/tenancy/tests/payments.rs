@@ -32,31 +32,46 @@ async fn stopped_payments_keep_their_keys_until_forgotten() {
     assert!(stopped.is_stopped());
     assert_eq!(stopped.secret_key_sealed, vec![1, 2, 3]);
 
+    // The keys go only when the merchant forgets them, and not before the
+    // stop is eight days old: a card holds money that long.
+    let stopped_at = stopped.stopped_at.unwrap();
+    let eight_days = timada_tenancy::FORGET_PAYMENTS_AFTER_SECS;
+    let err = cmd
+        .forget_payments(&alice, &tenant.id, stopped_at + eight_days - 1)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, TenancyError::PaymentsStoppedRecently),
+        "{err}"
+    );
+    let err = cmd
+        .forget_payments(&new_id(), &tenant.id, stopped_at + eight_days)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::Forbidden), "{err}");
+    assert!(payments_of(&tenant.id).await.is_some());
+
     // Saving keys again takes payments again: nothing to forget then.
     cmd.configure_payments(&alice, &tenant.id, stripe("pk_test_123"))
         .await
         .unwrap();
     assert!(!payments_of(&tenant.id).await.unwrap().is_stopped());
-    assert!(
-        !cmd.forget_payments("timada-dashboard", &tenant.id)
-            .await
-            .unwrap()
-    );
-    assert!(payments_of(&tenant.id).await.is_some());
+    let err = cmd
+        .forget_payments(&alice, &tenant.id, stopped_at + eight_days)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::PaymentsNotStopped), "{err}");
 
-    // Stopped again, then forgotten once nothing is held: once.
+    // Stopped again and, eight days on, forgotten.
     cmd.stop_payments(&alice, &tenant.id).await.unwrap();
-    assert!(
-        cmd.forget_payments("timada-dashboard", &tenant.id)
-            .await
-            .unwrap()
-    );
+    let stopped_at = payments_of(&tenant.id).await.unwrap().stopped_at.unwrap();
+    cmd.forget_payments(&alice, &tenant.id, stopped_at + eight_days)
+        .await
+        .unwrap();
     assert!(payments_of(&tenant.id).await.is_none());
-    assert!(
-        !cmd.forget_payments("timada-dashboard", &tenant.id)
-            .await
-            .unwrap()
-    );
+    cmd.forget_payments(&alice, &tenant.id, stopped_at + eight_days)
+        .await
+        .unwrap();
     // Nothing set up: stopping does nothing.
     cmd.stop_payments(&alice, &tenant.id).await.unwrap();
     assert!(payments_of(&tenant.id).await.is_none());

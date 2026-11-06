@@ -258,6 +258,13 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_webhook_secret" => "A webhook signing secret starts with whsec_.",
         "stripe_refused_key" => "Stripe did not accept this secret key.",
         "payments_disabled" => "Payments are not enabled on this platform.",
+        "money_owed" => {
+            "Payments are still held or owed: the keys stay until they are settled. Take the payments or cancel those orders first."
+        }
+        "payments_not_stopped" => "Payments are not stopped: stop them before forgetting the keys.",
+        "payments_stopped_recently" => {
+            "The keys can be forgotten only eight days after payments were stopped: a card may hold money that long."
+        }
         "account_in_use" => {
             "Payments are still held or owed under the current Stripe account: keep its keys until they are settled. A new secret key of the same account can be saved."
         }

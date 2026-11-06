@@ -324,6 +324,16 @@ pub async fn reconcile(
 /// Why a second payment of a cart that is an order already goes back.
 const DUPLICATE_PAYMENT: &str = "duplicate_payment";
 
+/// What Stripe answers a refund it will never make: asking again, whatever
+/// is fixed meanwhile, gets the same answer. A charge already refunded is not
+/// among them: asked again, nothing is left to refund and the return is
+/// recorded.
+const REFUND_REFUSED_FOR_GOOD: &[&str] = &[
+    "charge_disputed",
+    "refund_disputed_payment",
+    "charge_not_refundable",
+];
+
 /// Records the money Stripe says it took for an order; an order cancelled
 /// in between gets it back.
 async fn record_capture(
@@ -420,10 +430,16 @@ pub async fn give_payment_back(
     };
     let refund_id = match release_or_refund(payments, account, status).await {
         Ok(refund_id) => refund_id,
-        // Stripe will not, for good (a disputed charge, say): the return is
+        // Stripe will not, for good (a disputed charge): the return is
         // settled as refused, for the merchant to settle in Stripe, rather
-        // than asked again for ever.
-        Err(err) if err.downcast_ref::<Refused>().is_some() => {
+        // than asked again for ever. Any other refusal (a key that may not
+        // refund, an amount that moved meanwhile) stands for a retry.
+        Err(err)
+            if err
+                .downcast_ref::<Refused>()
+                .and_then(|refused| refused.code.as_deref())
+                .is_some_and(|code| REFUND_REFUSED_FOR_GOOD.contains(&code)) =>
+        {
             let reason = err.to_string();
             orders
                 .refuse_payment_return(DASHBOARD_ACTOR, cart_id, &status.payment_id, &reason)

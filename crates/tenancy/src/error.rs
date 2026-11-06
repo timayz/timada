@@ -16,6 +16,10 @@ pub enum TenancyError {
     Forbidden,
     #[error("a publishable key starts with pk_")]
     InvalidPublishableKey,
+    #[error("payments are not stopped: stop them before forgetting the keys")]
+    PaymentsNotStopped,
+    #[error("the keys can be forgotten only once payments have been stopped for eight days")]
+    PaymentsStoppedRecently,
     #[error("give a two-letter country, a three-letter currency and a two-letter language")]
     InvalidAliexpressMarket,
     #[error("a price rule multiplies by 1 to 100 and adds at most 10,000")]
@@ -146,6 +150,8 @@ impl TenancyError {
             Self::InvalidApiKeyScopes => "invalid_api_key_scopes",
             Self::ApiKeyInvalid => "api_key_invalid",
             Self::InvalidPublishableKey => "invalid_publishable_key",
+            Self::PaymentsNotStopped => "payments_not_stopped",
+            Self::PaymentsStoppedRecently => "payments_stopped_recently",
             Self::InvalidAliexpressMarket => "invalid_aliexpress_market",
             Self::InvalidPricingRule => "invalid_pricing_rule",
             Self::InvalidPriceTolerance => "invalid_price_tolerance",

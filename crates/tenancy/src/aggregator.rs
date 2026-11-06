@@ -65,14 +65,15 @@ pub enum Tenant {
     },
     /// The tenant takes no new payment: storefronts stop offering the card
     /// form and requests to pay are refused. The keys stay, sealed, so what
-    /// is still held or owed is settled; they are forgotten
-    /// (`PaymentsForgotten`) once nothing is. Saving keys again
-    /// (`PaymentsConfigured`) takes payments again.
+    /// is still held or owed is settled, until the merchant forgets them
+    /// (`PaymentsForgotten`). Saving keys again (`PaymentsConfigured`) takes
+    /// payments again.
     PaymentsStopped {
         stopped_by: String,
     },
-    /// The keys of a tenant that stopped taking payments are dropped:
-    /// nothing was held or owed any more. Written by the dashboard.
+    /// The merchant dropped the keys of a tenant that stopped taking
+    /// payments, eight days or more after the stop, nothing held or owed any
+    /// more as far as the dashboard could tell.
     PaymentsForgotten {
         forgotten_by: String,
     },

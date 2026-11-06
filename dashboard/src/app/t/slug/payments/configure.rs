@@ -27,8 +27,9 @@ pub struct ConfigureForm {
 }
 
 /// Saves the Stripe account once Stripe accepts its secret key; after a
-/// stop, it takes payments again. Another account (another publishable
-/// key) is refused while anything is held or owed under the current one.
+/// stop, it takes payments again. Another account is refused while anything
+/// is held or owed under the current one: another publishable key, or a
+/// secret key that cannot read a payment still held.
 #[route(POST)]
 pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
@@ -63,27 +64,6 @@ pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOt
             None,
         )));
     }
-    // What is still held or owed is settled under the account it was paid
-    // through: until it is, another account's keys would strand it. The
-    // same account's keys (a rolled secret key) are fine.
-    let other_account = access
-        .tenant
-        .payments
-        .as_ref()
-        .is_some_and(|current| current.publishable_key != form.publishable_key.trim());
-    if other_account
-        && timada_orders::money_owed(app_context::<Db>(cx), &access.tenant.id)
-            .await
-            .map_err(topcoat::Error::from_anyhow)?
-            > 0
-    {
-        return Ok(see_other(payments_url(
-            cx,
-            slug,
-            Some("account_in_use"),
-            None,
-        )));
-    }
     if let Err(err) = payments.gateway.check_key(secret_key).await {
         tracing::info!(tenant = slug, %err, "Stripe refused a secret key");
         return Ok(see_other(payments_url(
@@ -92,6 +72,36 @@ pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOt
             Some("stripe_refused_key"),
             None,
         )));
+    }
+    // What is still held or owed is settled under the account it was paid
+    // through: until it is, another account's keys would strand it. The
+    // same account's keys (a rolled secret key) are fine: the new key must
+    // read one of the payments still held, and keep the publishable key.
+    if let Some(current) = &access.tenant.payments {
+        let db = app_context::<Db>(cx);
+        let owed = timada_orders::money_owed(db, &access.tenant.id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        let other_account = owed > 0
+            && (current.publishable_key != form.publishable_key.trim()
+                || match timada_orders::owed_payment_id(db, &access.tenant.id)
+                    .await
+                    .map_err(topcoat::Error::from_anyhow)?
+                {
+                    Some(payment_id) => !payments
+                        .reads_payment(secret_key, &payment_id)
+                        .await
+                        .map_err(topcoat::Error::from_anyhow)?,
+                    None => false,
+                });
+        if other_account {
+            return Ok(see_other(payments_url(
+                cx,
+                slug,
+                Some("account_in_use"),
+                None,
+            )));
+        }
     }
     let cmd = ConfigurePayments {
         provider: PROVIDER_STRIPE.to_owned(),

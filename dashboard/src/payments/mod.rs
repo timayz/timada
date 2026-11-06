@@ -118,18 +118,20 @@ impl Payments {
         self.account_of(tenant)
     }
 
-    /// Forgets the keys of a tenant that stopped taking payments, the caller
-    /// having found nothing held or owed any more (`Tenant::PaymentsForgotten`):
-    /// whether this call forgot them.
-    pub async fn forget_keys(&self, tenant_id: &str) -> anyhow::Result<bool> {
-        Ok(timada_tenancy::Command(self.platform.clone())
-            .forget_payments(DASHBOARD_ACTOR, tenant_id)
-            .await?)
+    /// Whether `secret_key` reads the payment `payment_id`, one the tenant
+    /// still holds or owes: whether it opens the account that payment was
+    /// made through. Another account's key is told there is no such payment.
+    pub async fn reads_payment(&self, secret_key: &str, payment_id: &str) -> anyhow::Result<bool> {
+        match self.gateway.payment_status(secret_key, payment_id).await {
+            Ok(_) => Ok(true),
+            Err(err) if err.downcast_ref::<Refused>().is_some() => Ok(false),
+            Err(err) => Err(err),
+        }
     }
 
     /// The tenant's Stripe account, opened; `None` when it set up none or
     /// payments are off here. A tenant that stopped taking payments keeps
-    /// it until what is held or owed is settled.
+    /// it until the merchant forgets it, to settle what is held or owed.
     pub fn account_of(&self, tenant: &TenantState) -> anyhow::Result<Option<Account>> {
         let (Some(settings), Some(sealer)) = (&tenant.payments, &self.sealer) else {
             return Ok(None);

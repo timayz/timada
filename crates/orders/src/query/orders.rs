@@ -201,6 +201,23 @@ pub async fn money_owed(db: &Db, tenant_id: &str) -> anyhow::Result<i64> {
     .await
 }
 
+/// The provider's id of one payment the tenant's orders still hold or owe,
+/// if any: what a key is asked to read to show it opens the account those
+/// payments were made through.
+pub async fn owed_payment_id(db: &Db, tenant_id: &str) -> anyhow::Result<Option<String>> {
+    let row: Option<(String,)> = db
+        .fetch_optional(
+            "SELECT payment_id FROM orders_orders WHERE tenant_id = ?1
+               AND ((status = 'authorized' AND payment_state <> 'released')
+                    OR capture_requested_at IS NOT NULL OR cancel_requested_at IS NOT NULL
+                    OR refund_requested_at IS NOT NULL)
+             ORDER BY placed_at, id LIMIT 1",
+            (tenant_id,),
+        )
+        .await?;
+    Ok(row.map(|(payment_id,)| payment_id))
+}
+
 /// An order that left, across every tenant this node follows.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
 pub struct FulfilledOrder {

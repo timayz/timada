@@ -30,12 +30,9 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             company_id TEXT,
             series_code TEXT,
             slug_search TEXT NOT NULL,
-            name_search TEXT NOT NULL,
-            payments_stopped_at INTEGER
+            name_search TEXT NOT NULL
         );
         CREATE INDEX tenancy_tenants_list ON tenancy_tenants (name COLLATE NOCASE, id);
-        CREATE INDEX tenancy_tenants_payments_stopped ON tenancy_tenants (payments_stopped_at)
-            WHERE payments_stopped_at IS NOT NULL;
         CREATE INDEX tenancy_tenants_company ON tenancy_tenants (company_id);
         CREATE INDEX tenancy_tenants_fts ON tenancy_tenants
             USING fts(slug_search, name_search)

@@ -86,8 +86,8 @@ struct FakeStripe {
     opening: Mutex<std::collections::HashSet<String>>,
     /// That many calls to open a payment are answered 409 first.
     busy_opens: std::sync::atomic::AtomicUsize,
-    /// Refunds are refused for good (a disputed charge).
-    refuses_refund: std::sync::atomic::AtomicBool,
+    /// What refunds are refused with, when they are.
+    refund_refusal: Mutex<Option<Refused>>,
     /// Calls to refund, whatever their answer.
     refund_attempts: std::sync::atomic::AtomicUsize,
 }
@@ -200,9 +200,16 @@ impl PaymentGateway for FakeStripe {
 
     async fn payment_status(
         &self,
-        _secret_key: &str,
+        secret_key: &str,
         payment_id: &str,
     ) -> anyhow::Result<PaymentStatus> {
+        // Another account's key sees none of this account's payments.
+        if secret_key != "sk_test_good" {
+            return Err(anyhow::Error::new(Refused {
+                message: format!("No such payment_intent: '{payment_id}'"),
+                code: Some("resource_missing".into()),
+            }));
+        }
         let opened = self.opened.lock().unwrap();
         let (open, new) = opened
             .values()
@@ -241,10 +248,8 @@ impl PaymentGateway for FakeStripe {
         use std::sync::atomic::Ordering::SeqCst;
         self.refund_attempts.fetch_add(1, SeqCst);
         self.reachable()?;
-        if self.refuses_refund.load(SeqCst) {
-            return Err(anyhow::Error::new(Refused(
-                "This charge is disputed.".into(),
-            )));
+        if let Some(refused) = self.refund_refusal.lock().unwrap().clone() {
+            return Err(anyhow::Error::new(refused));
         }
         let mut refunds = self.refunds.lock().unwrap();
         refunds.push((payment_id.to_owned(), amount_cents));
@@ -2159,7 +2164,7 @@ async fn money_taken_for_a_cancelled_order_is_refunded_through_it() {
 }
 
 #[tokio::test]
-async fn stopped_payments_settle_what_is_held_then_forget_the_keys() {
+async fn stopped_payments_keep_their_keys_to_settle_until_forgotten() {
     let h = harness().await;
     let acme = h.create("acme").await;
     let acme = h.connect_stripe(&acme).await;
@@ -2167,10 +2172,6 @@ async fn stopped_payments_settle_what_is_held_then_forget_the_keys() {
     let sweep = PendingPayments::new(h.db.clone(), h.store(&acme), h.payments.clone());
     let read = async || {
         timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
-            .run_once(&h.platform.0)
-            .await
-            .unwrap();
-        timada_tenancy::read_model_subscription::<cluster::Executor>(h.db.clone())
             .run_once(&h.platform.0)
             .await
             .unwrap();
@@ -2206,12 +2207,67 @@ async fn stopped_payments_settle_what_is_held_then_forget_the_keys() {
         CancelOutcome::Cancelled
     );
 
-    // Nothing held any more: the next sweep forgets the keys.
+    // Nothing held any more: no sweep forgets the keys, only the merchant
+    // does, and not before the stop is eight days old.
     read().await;
     assert_eq!(timada_orders::money_owed(&h.db, &acme.id).await.unwrap(), 0);
     sweep.sweep(now() as u64).await.unwrap();
     let tenant = h.platform.load_tenant(&acme.id).await.unwrap().unwrap();
+    let stopped_at = tenant.payments.as_ref().unwrap().stopped_at.unwrap();
+    let err = h
+        .platform
+        .forget_payments("alice", &acme.id, now() as u64)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, timada_tenancy::TenancyError::PaymentsStoppedRecently),
+        "{err}"
+    );
+    h.platform
+        .forget_payments(
+            "alice",
+            &acme.id,
+            stopped_at + timada_tenancy::FORGET_PAYMENTS_AFTER_SECS,
+        )
+        .await
+        .unwrap();
+    let tenant = h.platform.load_tenant(&acme.id).await.unwrap().unwrap();
     assert!(tenant.payments.is_none(), "forgotten");
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_key_of_another_account_reads_none_of_the_payments_held() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    *h.goods.supplier.lock().unwrap() = Some("aliexpress".into());
+    let order_id = h.place(&acme, checkout(Some(2500))).await;
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    let held = timada_orders::owed_payment_id(&h.db, &acme.id)
+        .await
+        .unwrap()
+        .expect("a payment held");
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(held, order.payment.payment_id);
+    // The account's own key reads it; another account's is told no such
+    // payment: saving it is refused while the money is held.
+    assert!(
+        h.payments
+            .reads_payment("sk_test_good", &held)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !h.payments
+            .reads_payment("sk_test_another_account", &held)
+            .await
+            .unwrap()
+    );
     h.finish().await;
 }
 
@@ -2266,13 +2322,28 @@ async fn a_payment_given_back_refunds_what_is_left_or_settles_as_refused() {
         vec![(partly.clone(), 1000), (partly.clone(), 1500)]
     );
 
-    // Stripe will not refund the next one, for good: settled as refused,
-    // shown to the merchant, never asked again.
+    // A refusal Stripe may not repeat (a key that may not refund yet)
+    // leaves the return standing, for the next try.
     let (cart_id, disputed) = second_payment_taken(&h, &acme).await;
-    h.stripe
-        .refuses_refund
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    *h.stripe.refund_refusal.lock().unwrap() = Some(Refused {
+        message: "The provided key does not have the required permissions.".into(),
+        code: Some("secret_key_required".into()),
+    });
     let body = succeeded(&disputed);
+    assert!(h.try_webhook(&acme, &body, signed(&body)).await.is_err());
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert!(
+        cart.pending_return(&disputed).is_some(),
+        "still to give back"
+    );
+    assert_eq!(cart.return_refusal(&disputed), None);
+
+    // Asked again, Stripe will not refund it, for good: settled as refused,
+    // shown to the merchant, never asked again.
+    *h.stripe.refund_refusal.lock().unwrap() = Some(Refused {
+        message: "This charge is disputed.".into(),
+        code: Some("charge_disputed".into()),
+    });
     let refused = Outcome::NotReturned {
         reason: "This charge is disputed.".into(),
     };
@@ -2288,8 +2359,8 @@ async fn a_payment_given_back_refunds_what_is_left_or_settles_as_refused() {
         h.stripe
             .refund_attempts
             .load(std::sync::atomic::Ordering::SeqCst),
-        2,
-        "the refusal is settled: asked once"
+        3,
+        "the refusal for good is settled: asked no more"
     );
     timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
         .run_once(&h.platform.0)

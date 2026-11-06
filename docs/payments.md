@@ -111,10 +111,12 @@ order does not know yet, and the credit note follows.
   form and new requests to pay are refused. The keys stay, sealed, while anything is held
   or owed (an order's money held or being taken, cancelled or refunded, a card form still
   open, a request being answered, a payment being given back), so the sweeps and the
-  webhook settle it; the page says how many payments are left, and a sweep forgets the
-  keys once none is. Saving keys again takes payments again. Until then another Stripe
-  account (another publishable key) is refused; a new secret key of the same account is
-  fine.
+  webhook settle it; the page says how many payments are left. The keys stay until the
+  merchant forgets them ("Forget the keys"), which is refused before the stop is eight
+  days old (a card holds money for up to seven) and while anything is still counted as
+  held or owed. Saving keys again takes payments again. Meanwhile another Stripe account
+  is refused: another publishable key, or a secret key that cannot read a payment still
+  held. A new secret key of the same account is fine.
 
 - **Storefront.** Its API key needs `store:read` and `store:checkout`.
 

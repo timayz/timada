@@ -1,8 +1,8 @@
-use evento::{Executor, ProjectionAggregate, WriteError};
+use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{PaymentsConfigured, PaymentsForgotten, PaymentsStopped};
 use crate::error::TenancyError;
-use crate::value_object::PERMISSION_PAYMENTS_MANAGE;
+use crate::value_object::{FORGET_PAYMENTS_AFTER_SECS, PERMISSION_PAYMENTS_MANAGE};
 
 use super::PaymentSettings;
 
@@ -51,8 +51,8 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// Stops taking payments: no new payment is opened from now on. The keys
-    /// stay, sealed, so what is still held or owed is settled; they are
-    /// forgotten ([`forget_payments`](Self::forget_payments)) once nothing is.
+    /// stay, sealed, so what is still held or owed is settled, until the
+    /// merchant forgets them ([`forget_payments`](Self::forget_payments)).
     /// Nothing set up, or stopped already, is a no-op. Needs
     /// `payments:manage`.
     pub async fn stop_payments(
@@ -83,38 +83,42 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Forgets the keys of a tenant that stopped taking payments, once the
-    /// caller found nothing held or owed any more. Written at the version
-    /// read, so keys saved again meanwhile win. Whether they were forgotten:
-    /// not stopped (any more), or another node first, is `false`.
+    /// Forgets the keys of a tenant that stopped taking payments: the
+    /// merchant's call, once the dashboard found nothing held or owed any
+    /// more. Refused while payments are taken (`PaymentsNotStopped`) and
+    /// until the stop is [`FORGET_PAYMENTS_AFTER_SECS`] old at `now` (unix
+    /// seconds; `PaymentsStoppedRecently`): no card still holds money for a
+    /// payment confirmed before it. Written at the version read, so keys
+    /// saved again meanwhile win; nothing set up is a no-op. Needs
+    /// `payments:manage`.
     pub async fn forget_payments(
         &self,
-        actor: &str,
+        actor_user_id: &str,
         tenant_id: &str,
+        now: u64,
         routing_key: Option<String>,
-    ) -> Result<bool, TenancyError> {
-        let Some(tenant) = self.load_tenant(tenant_id).await? else {
-            return Ok(false);
-        };
-        if !tenant
-            .payments
-            .as_ref()
-            .is_some_and(PaymentSettings::is_stopped)
-        {
-            return Ok(false);
+    ) -> Result<(), TenancyError> {
+        let tenant = self.require_active(tenant_id).await?;
+        if !tenant.can(actor_user_id, PERMISSION_PAYMENTS_MANAGE) {
+            return Err(TenancyError::Forbidden);
         }
-        let written = tenant
+        let Some(payments) = &tenant.payments else {
+            return Ok(());
+        };
+        let Some(stopped_at) = payments.stopped_at else {
+            return Err(TenancyError::PaymentsNotStopped);
+        };
+        if now < stopped_at.saturating_add(FORGET_PAYMENTS_AFTER_SECS) {
+            return Err(TenancyError::PaymentsStoppedRecently);
+        }
+        tenant
             .write()?
             .routing_key_opt(routing_key)
             .event(&PaymentsForgotten {
-                forgotten_by: actor.to_owned(),
+                forgotten_by: actor_user_id.to_owned(),
             })
             .commit(&self.0)
-            .await;
-        match written {
-            Ok(_) => Ok(true),
-            Err(WriteError::InvalidOriginalVersion) => Ok(false),
-            Err(err) => Err(err.into()),
-        }
+            .await?;
+        Ok(())
     }
 }
