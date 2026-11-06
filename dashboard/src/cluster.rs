@@ -301,6 +301,12 @@ impl Cluster {
         Ok(())
     }
 
+    /// This node, as the work it claims names it (`node-2`): its id in the
+    /// cluster, the same across restarts.
+    pub fn node_name(&self) -> String {
+        format!("node-{}", self.node.id().0)
+    }
+
     /// This node's place among the nodes heard from within `within` (it
     /// counts itself), and how many they are: what work spread over the nodes
     /// goes by, so a node that stops is covered for once it has been silent

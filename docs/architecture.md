@@ -201,11 +201,15 @@ by construction.
    the webhook step) as authenticated data, so bytes copied into another owner's
    events open nothing. A storefront asks to pay through
    `POST /store/carts/{cart_id}/checkout`, which writes `Cart::CheckoutRequested`
-   and waits for the answer; the subscription `timada-dashboard/payments`
-   prices the cart from the store, opens a PaymentIntent with the tenant's key, held
-   only (manual capture; the request id is the idempotency key, so every node answering
-   opens one payment) and records it (`Cart::PaymentRequested`, with the supplier that
-   buys some of its goods once the order is placed, if any) or the refusal. The shopper
+   and waits for the answer; the subscription `timada-dashboard/payments`, on the
+   node that claims the request first (`Cart::CheckoutClaimed`, written at the version
+   read; the other nodes leave it alone, and the claimant goes on after an error or a
+   restart), holds the goods and the code, prices the cart from the store, opens a
+   PaymentIntent with the tenant's key, held only (manual capture; the request id is
+   the idempotency key, so a retry opens the same payment, and Stripe still opening it
+   (409) is asked again) and records it (`Cart::PaymentRequested`, with the supplier that
+   buys some of its goods once the order is placed, if any) or the refusal, which alone
+   gives the holds back. The shopper
    confirms with Stripe's card form, which holds the money; Stripe calls
    `POST /stripe/webhooks/{tenant_id}`, any node, which checks the signature, reads the
    payment back from Stripe and acts on its state (`payments/webhook.rs`): held, the
@@ -223,8 +227,10 @@ by construction.
    then gives the hold back (`PaymentReleased` with `Cancelled`), or refunds the money
    taken first (`Order::RefundRequested`, the idempotency key, then Stripe, `Refunded`,
    `Cancelled`); `charge.refunded` reconciles refunds Stripe holds that the order does not
-   know. No subscription handler fails on a Stripe answer: what Stripe could not be asked
-   at once is settled by the sweep `payments/pending.rs` a minute later. Setting it up and
+   know. No subscription handler fails on a Stripe answer, but for the checkout's 409
+   (Stripe still opening the payment under the same key), which it asks again in a
+   moment: what Stripe could not be asked at once is settled by the sweep
+   `payments/pending.rs` a minute later. Setting it up and
    testing it locally: `docs/payments.md`.
 5. **Shop mail** (`shop_mail.rs`). A merchant sets up SMTP servers of its own on
    `/t/{slug}/mail` (up to ten) and picks one for each kind of mail

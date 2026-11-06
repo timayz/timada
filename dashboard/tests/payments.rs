@@ -45,9 +45,9 @@ use cluster::Cluster;
 use payments::settle::{CancelOutcome, CaptureOutcome};
 use payments::webhook::{Outcome, receive};
 use payments::{
-    ASKED_SECS, Cancellation, CaptureAnswer, DASHBOARD_ACTOR, LapsedCheckouts, NewPayment,
-    OpenPayment, PaymentGateway, PaymentState, PaymentStatus, Payments, PendingPayments,
-    RECHECK_SECS, RefundRecord, ReleaseAnswer, SuppliedGoods, signature,
+    ASKED_SECS, Busy, Cancellation, CaptureAnswer, Checkouts, DASHBOARD_ACTOR, LapsedCheckouts,
+    NewPayment, OpenPayment, PaymentGateway, PaymentState, PaymentStatus, Payments,
+    PendingPayments, RECHECK_SECS, RefundRecord, ReleaseAnswer, SuppliedGoods, signature,
 };
 use timada_orders::{CaptureClaim, HOLD_EXPIRED_REASON, OrderLine, OrderStatus};
 
@@ -76,6 +76,15 @@ struct FakeStripe {
     refuses_capture: std::sync::atomic::AtomicBool,
     /// Taking or giving back a hold gets no answer.
     unreachable: std::sync::atomic::AtomicBool,
+    /// Calls to open a payment, whatever their answer.
+    open_calls: std::sync::atomic::AtomicUsize,
+    /// How long opening a payment takes, in milliseconds.
+    open_delay_ms: std::sync::atomic::AtomicU64,
+    /// The idempotency keys of the payments being opened: a second call
+    /// with one of them meanwhile is answered 409, as Stripe does.
+    opening: Mutex<std::collections::HashSet<String>>,
+    /// That many calls to open a payment are answered 409 first.
+    busy_opens: std::sync::atomic::AtomicUsize,
 }
 
 impl FakeStripe {
@@ -141,16 +150,35 @@ impl PaymentGateway for FakeStripe {
         secret_key: &str,
         payment: NewPayment,
     ) -> anyhow::Result<OpenPayment> {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.open_calls.fetch_add(1, SeqCst);
         anyhow::ensure!(secret_key == "sk_test_good", "invalid API key");
-        anyhow::ensure!(
-            !self.down.load(std::sync::atomic::Ordering::SeqCst),
-            "Stripe is down"
-        );
-        let mut opened = self.opened.lock().unwrap();
-        let count = opened.len();
-        let entry = opened
-            .entry(payment.idempotency_key.clone())
-            .or_insert_with(|| {
+        anyhow::ensure!(!self.down.load(SeqCst), "Stripe is down");
+        let in_use = || {
+            anyhow::Error::new(Busy(
+                "There is currently another in-progress request using this Stripe-Idempotency-Key"
+                    .into(),
+            ))
+        };
+        if self
+            .busy_opens
+            .try_update(SeqCst, SeqCst, |left| left.checked_sub(1))
+            .is_ok()
+        {
+            return Err(in_use());
+        }
+        let key = payment.idempotency_key.clone();
+        if !self.opening.lock().unwrap().insert(key.clone()) {
+            return Err(in_use());
+        }
+        let delay = self.open_delay_ms.load(SeqCst);
+        if delay > 0 {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+        }
+        let open = {
+            let mut opened = self.opened.lock().unwrap();
+            let count = opened.len();
+            let entry = opened.entry(key.clone()).or_insert_with(|| {
                 (
                     OpenPayment {
                         payment_id: format!("pi_{count}"),
@@ -159,7 +187,10 @@ impl PaymentGateway for FakeStripe {
                     payment,
                 )
             });
-        Ok(entry.0.clone())
+            entry.0.clone()
+        };
+        self.opening.lock().unwrap().remove(&key);
+        Ok(open)
     }
 
     async fn payment_status(
@@ -413,12 +444,13 @@ async fn harness_with<G: PaymentGateway + 'static>(stripe: Arc<G>, secret_key: &
     // every tenant.
     let mut subscriptions = Vec::new();
     for builder in [
-        payments::subscription(
+        payments::subscription(payments::Checkouts::new(
             subscribed.clone(),
             fake_rates(),
             goods.clone(),
             platform.clone(),
-        ),
+            "node-0",
+        )),
         payments::order_payments_subscription(subscribed.clone(), platform.clone()),
         timada_orders::discount_usage_subscription(platform.clone()),
         timada_orders::stock_usage_subscription(platform.clone()),
@@ -987,6 +1019,111 @@ async fn a_read_that_finds_nothing_lets_the_payment_go_at_the_price_the_shopper_
         PaymentAnswer::Requested(_)
     ));
     assert_eq!(h.goods.reads.lock().unwrap().len(), 1);
+    h.finish().await;
+}
+
+/// What the goods of the cart hold, and what is left for anyone else.
+async fn stock_of(
+    h: &Harness,
+    tenant: &TenantState,
+    product_id: &str,
+) -> timada_catalog::StockState {
+    timada_catalog::load_stock(&h.store(tenant), &tenant.id, product_id, None)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn nodes_answering_one_request_at_once_hold_and_open_once() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let (cart_id, mug) = h.cart(&acme).await;
+    timada_catalog::Command::new(h.store(&acme), &acme.id)
+        .set_stock("alice", &mug, None, 10)
+        .await
+        .unwrap();
+    // Stripe takes its time, and answers 409 to a second call with the key
+    // of a payment it is still opening.
+    h.stripe
+        .open_delay_ms
+        .store(300, std::sync::atomic::Ordering::SeqCst);
+
+    // This node's subscription and two other nodes answer the same request.
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let request_id = orders
+        .request_checkout(STOREFRONT_ACTOR, &cart_id, checkout(Some(2500)))
+        .await
+        .unwrap();
+    let node = |name: &str| {
+        Checkouts::new(
+            h.payments.clone(),
+            fake_rates(),
+            h.goods.clone(),
+            h.store(&acme),
+            name,
+        )
+    };
+    let (one, two) = (node("node-1"), node("node-2"));
+    let asked_at = now() as u64;
+    let (first, second) = tokio::join!(
+        one.answer(&acme.id, &cart_id, &request_id, asked_at),
+        two.answer(&acme.id, &cart_id, &request_id, asked_at),
+    );
+    first.unwrap();
+    second.unwrap();
+
+    let answer = eventually(async || {
+        let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+        cart.request(&request_id).unwrap().answer.clone()
+    })
+    .await;
+    assert!(matches!(answer, PaymentAnswer::Requested(_)), "{answer:?}");
+    assert_eq!(
+        h.stripe
+            .open_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "one node asked Stripe"
+    );
+    // The goods stay held for the payment.
+    let stock = stock_of(&h, &acme, &mug).await;
+    assert!(stock.holds.contains_key(&cart_id), "{stock:?}");
+    assert_eq!(stock.available_at(now() as u64), Some(8));
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_payment_stripe_is_still_opening_is_asked_for_again() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let (cart_id, mug) = h.cart(&acme).await;
+    timada_catalog::Command::new(h.store(&acme), &acme.id)
+        .set_stock("alice", &mug, None, 10)
+        .await
+        .unwrap();
+    // Stripe answers 409 once: a request with the same key is under way.
+    h.stripe
+        .busy_opens
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+
+    let answer = h.ask(&acme, &cart_id, Some(2500)).await;
+    assert!(
+        matches!(answer, PaymentAnswer::Requested(_)),
+        "not refused: {answer:?}"
+    );
+    assert_eq!(
+        h.stripe
+            .open_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "asked again"
+    );
+    let stock = stock_of(&h, &acme, &mug).await;
+    assert!(stock.holds.contains_key(&cart_id), "{stock:?}");
+    assert_eq!(stock.available_at(now() as u64), Some(8));
     h.finish().await;
 }
 
