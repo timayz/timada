@@ -421,7 +421,7 @@ impl Aliexpress {
             return Ok(SyncResult::Unlinked);
         }
         let product = match client
-            .product(&link.ae_product_id, &Self::market_of(settings))
+            .product_delivered(&link.ae_product_id, &Self::market_of(settings))
             .await
         {
             Ok(product) => Some(product),

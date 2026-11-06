@@ -15,6 +15,7 @@ use serde_json::Value;
 use sha2::Sha256;
 
 use crate::address::AddressTree;
+use crate::forwarding::{choose_service, describe_options};
 use crate::model::{AeOrder, AeProduct, FreightOption, Market, Tokens};
 
 /// AliExpress's own gateway.
@@ -416,6 +417,46 @@ impl Client {
             )
             .await?;
         AeProduct::from_response(product_id, &body)
+    }
+
+    /// [`product`](Self::product), each combination's cost with what delivery
+    /// to the market's country costs added: the service an order would ship
+    /// with ([`choose_service`]), asked once for one combination. Some sellers
+    /// list an item at a few cents and charge its price as delivery; a cost
+    /// without it would sell such an item at a loss. An item no longer sold
+    /// is left as read.
+    pub async fn product_delivered(
+        &self,
+        product_id: &str,
+        market: &Market,
+    ) -> Result<AeProduct, AeError> {
+        let mut product = self.product(product_id, market).await?;
+        if !product.on_sale() {
+            return Ok(product);
+        }
+        let Some(sku_id) = product
+            .delivery_sku(&market.currency)
+            .map(|sku| sku.id.clone())
+        else {
+            return Ok(product);
+        };
+        let country = &market.ship_to_country;
+        let options = self
+            .freight(product_id, &sku_id, 1, country, None, market)
+            .await?;
+        let Some(service) = choose_service(&options) else {
+            let message = if options.is_empty() {
+                format!("it delivers this item nowhere in {country}")
+            } else {
+                format!(
+                    "no delivery to {country} can be followed: {}",
+                    describe_options(&options, &market.currency)
+                )
+            };
+            return Err(AeError::new("freight", message));
+        };
+        product.add_delivery(service.cents, &market.currency);
+        Ok(product)
     }
 
     /// AliExpress's places in `country`, `None` for a country without a list.

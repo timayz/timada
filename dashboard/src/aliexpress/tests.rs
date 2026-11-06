@@ -2,7 +2,7 @@
 //! their own: what a read writes, which node reads, what the sweep asks for.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use evento::Evento;
@@ -46,6 +46,8 @@ struct StandIn {
     /// Lets a held answer go.
     answer: Notify,
     reads: AtomicUsize,
+    /// What delivering one costs, in cents; free by default.
+    delivery_cents: AtomicU64,
 }
 
 impl StandIn {
@@ -60,6 +62,7 @@ impl StandIn {
             holding: Notify::new(),
             answer: Notify::new(),
             reads: AtomicUsize::new(0),
+            delivery_cents: AtomicU64::new(0),
         })
     }
 
@@ -84,6 +87,22 @@ impl StandIn {
                             Ok(read) => request.extend_from_slice(&chunk[..read]),
                         }
                     }
+                    // A delivery lookup goes with each read: answered at
+                    // once, it is not one.
+                    let line = request
+                        .split(|byte| *byte == b'\n')
+                        .next()
+                        .unwrap_or_default();
+                    if String::from_utf8_lossy(line).contains("method=aliexpress.ds.freight.query")
+                    {
+                        let body = stand_in.freight().to_string();
+                        let answer = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        socket.write_all(answer.as_bytes()).await.unwrap();
+                        return;
+                    }
                     stand_in.reads.fetch_add(1, Ordering::SeqCst);
                     if stand_in.hung.load(Ordering::SeqCst) {
                         return std::future::pending::<()>().await;
@@ -106,6 +125,21 @@ impl StandIn {
             }
         });
         url
+    }
+
+    /// The answer to `aliexpress.ds.freight.query`: AliExpress ships it.
+    fn freight(&self) -> serde_json::Value {
+        let cents = self.delivery_cents.load(Ordering::SeqCst);
+        serde_json::json!({ "aliexpress_ds_freight_query_response": { "result": {
+            "success": true,
+            "delivery_options": { "delivery_option_d_t_o": [{
+                "code": "CAINIAO_STANDARD",
+                "free_shipping": cents == 0,
+                "shipping_fee_cent": cents.to_string(),
+                "shipping_fee_currency": "EUR",
+                "tracking": true,
+            }] },
+        } } })
     }
 
     /// The answer to `aliexpress.ds.product.get`.
@@ -511,6 +545,25 @@ async fn a_read_that_finds_a_new_cost_records_it_and_follows_the_rule() {
         .unwrap()
         .unwrap();
     assert_eq!(link.skus[0].cost_cents, 500);
+}
+
+#[tokio::test]
+async fn a_read_prices_the_delivery_aliexpress_charges_in() {
+    let shop = Shop::new().await;
+
+    shop.stand_in.delivery_cents.store(500, Ordering::SeqCst);
+    let result = shop.sync(SyncMode::Asked { by: ALICE }).await;
+
+    assert!(matches!(result, SyncResult::Synced { .. }), "{result:?}");
+    assert_eq!(shop.rose().await.0, 1862, "(4.31 + 5.00) × 2");
+    let link = shop
+        .links()
+        .load_link_by_id(&shop.link_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(link.skus[0].cost_cents, 931);
+    assert_eq!(shop.stand_in.reads(), 1, "the delivery lookup is no read");
 }
 
 #[tokio::test]
