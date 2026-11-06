@@ -119,10 +119,13 @@ impl<E: Executor> super::Command<E> {
     /// by another node, or an owner connected again) is left alone, and so
     /// is a company with no account any more.
     ///
-    /// The tokens are the only copy AliExpress handed out, and the host
-    /// renews once per access, so another write to the company landing
-    /// first (an owner added, the identity changed) does not lose them:
-    /// the company is read again and the tokens written again.
+    /// The tokens are the only copy AliExpress handed out, so another write
+    /// to the company landing first (an owner added, the identity changed)
+    /// does not lose them: the company is read again and the tokens written
+    /// again. So does a write whose outcome is unknown: read again, the
+    /// company tells whether it landed (its access no longer lapses at
+    /// `renewing`). A store not taking writes is the caller's to retry,
+    /// later, with the same tokens.
     pub async fn refresh_aliexpress(
         &self,
         actor: &str,
@@ -145,9 +148,9 @@ impl<E: Executor> super::Command<E> {
                 .write_authorization(actor, company, cmd.clone(), routing_key.clone())
                 .await;
             match written {
-                Err(TenancyError::Write(WriteError::InvalidOriginalVersion))
-                    if attempt < RENEWAL_ATTEMPTS =>
-                {
+                Err(TenancyError::Write(
+                    WriteError::InvalidOriginalVersion | WriteError::Unknown(_),
+                )) if attempt < RENEWAL_ATTEMPTS => {
                     attempt += 1;
                 }
                 written => return written,

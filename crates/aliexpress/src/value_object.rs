@@ -5,6 +5,22 @@ pub fn aliexpress_product_id(ae_product_id: &str) -> String {
 
 /// The stream that says which node renews the token of `company_id` lapsing
 /// at `expires_at` (unix seconds).
+/// How long a node's claim on a token renewal holds without the tokens
+/// AliExpress answered being recorded: past it, the node is taken to have
+/// stopped, and another takes the renewal over. Far beyond a call's timeout.
+pub const TOKEN_CLAIM_STALE_SECS: u64 = 10 * 60;
+
+/// The tokens a renewal got from AliExpress, sealed for the company, and
+/// when they lapse (unix seconds; `refresh_expires_at` 0 for never).
+#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct RenewedTokens {
+    pub access_token_sealed: Vec<u8>,
+    pub refresh_token_sealed: Vec<u8>,
+    pub expires_at: u64,
+    pub refresh_expires_at: u64,
+    pub account: String,
+}
+
 pub fn token_refresh_id(company_id: &str, expires_at: u64) -> String {
     evento::hash_ids(vec![
         "aliexpress-token-refresh",

@@ -1329,3 +1329,62 @@ async fn a_price_stays_within_the_tolerance_unless_a_member_asks() {
     shop.sync(SyncMode::Asked { by: ALICE }).await;
     assert_eq!(shop.rose().await.0, 880);
 }
+
+/// A node renewed the company's access and recorded AliExpress's tokens on
+/// its claim, then stopped before the company heard of them: the next sweep
+/// applies them, without asking AliExpress again (the stand-in answers no
+/// renewal, so asking would have failed).
+#[tokio::test]
+async fn recorded_tokens_reach_the_company_without_asking_again() {
+    let shop = Shop::new().await;
+    let now = crate::auth::now();
+    let company_id = shop.tenant.company.as_ref().unwrap().company_id.clone();
+    let tenancy = timada_tenancy::Command(shop.store.clone());
+    let due = now + 3_600;
+    tenancy
+        .authorize_aliexpress(
+            ALICE,
+            &company_id,
+            AuthorizeAliexpress {
+                access_token_sealed: shop.aliexpress.seal(&company_id, "token").unwrap(),
+                refresh_token_sealed: shop.aliexpress.seal(&company_id, "refresh").unwrap(),
+                expires_at: due,
+                refresh_expires_at: 0,
+                account: "shop@example.org".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let renewed = timada_aliexpress::RenewedTokens {
+        access_token_sealed: shop.aliexpress.seal(&company_id, "renewed").unwrap(),
+        refresh_token_sealed: shop
+            .aliexpress
+            .seal(&company_id, "renewed-refresh")
+            .unwrap(),
+        expires_at: now + 30 * 86_400,
+        refresh_expires_at: 0,
+        account: "shop@example.org".into(),
+    };
+    assert_eq!(
+        timada_aliexpress::claim_token_refresh(&shop.store, "node-gone", &company_id, due, now)
+            .await
+            .unwrap(),
+        timada_aliexpress::TokenRenewal::Claimed
+    );
+    timada_aliexpress::record_token_renewal(&shop.store, "node-gone", &company_id, due, &renewed)
+        .await
+        .unwrap();
+
+    let company = tenancy.load_company(&company_id).await.unwrap().unwrap();
+    let company = shop.aliexpress.refresh_if_due(company, now).await.unwrap();
+    let authorization = company.aliexpress.unwrap();
+    assert_eq!(authorization.expires_at, renewed.expires_at);
+    assert_eq!(
+        authorization.access_token_sealed,
+        renewed.access_token_sealed
+    );
+    // Told again, the access is no longer due: nothing changes.
+    let again = tenancy.load_company(&company_id).await.unwrap().unwrap();
+    let again = shop.aliexpress.refresh_if_due(again, now).await.unwrap();
+    assert_eq!(again.aliexpress.unwrap().expires_at, renewed.expires_at);
+}

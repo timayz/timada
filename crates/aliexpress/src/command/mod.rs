@@ -3,8 +3,10 @@
 //! orders placed on AliExpress.
 
 mod forward;
+mod token_refresh;
 
 pub use forward::*;
+pub use token_refresh::*;
 
 use std::ops::Deref;
 
@@ -700,31 +702,6 @@ impl<E: Executor> Command<E> {
             .commit(&self.executor)
             .await?;
         Ok(())
-    }
-}
-
-/// Takes the renewal of `company_id`'s token lapsing at `expires_at` on;
-/// `false` when another node did. The claim lives in the platform's own
-/// streams, next to the company, not under any tenant.
-pub async fn claim_token_refresh<E: Executor>(
-    executor: &E,
-    actor: &str,
-    company_id: &str,
-    expires_at: u64,
-) -> anyhow::Result<bool> {
-    let claimed = evento::append(crate::value_object::token_refresh_id(
-        company_id, expires_at,
-    ))
-    .original_version(0)
-    .event(&crate::aggregator::refresh::Claimed {
-        claimed_by: actor.to_owned(),
-    })
-    .commit(executor)
-    .await;
-    match claimed {
-        Ok(_) => Ok(true),
-        Err(WriteError::InvalidOriginalVersion) => Ok(false),
-        Err(err) => Err(err.into()),
     }
 }
 

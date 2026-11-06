@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use timada_aliexpress::{
-    AliexpressError, Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL, LinkState, Market, Share,
-    SyncRead,
+    AliexpressError, Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL, LinkState, Market,
+    RenewedTokens, Share, SyncRead, TokenRenewal,
 };
 use timada_tenancy::{AliexpressSettings, CompanyState, TenantState};
 
@@ -214,8 +214,13 @@ impl Aliexpress {
 
     /// Renews the company's tokens when the access token lapses within a
     /// day, on one node per token (the one that claims the renewal in the
-    /// platform store); the company as it then is. A renewal AliExpress
-    /// refuses is logged: an owner connects again.
+    /// platform store); the company as it then is. The tokens AliExpress
+    /// answers are recorded on the claim before the company hears of them,
+    /// so a node that stops in between, or a store not taking writes for a
+    /// while, leaves them for the next sweep to apply rather than losing
+    /// them. A renewal AliExpress refuses is logged and tried again once the
+    /// claim goes stale; one refused for good waits for an owner to connect
+    /// again.
     pub async fn refresh_if_due(
         &self,
         company: CompanyState,
@@ -231,38 +236,32 @@ impl Aliexpress {
             tracing::warn!(company = %company.id, "AliExpress access lapsed: an owner has to connect again");
             return Ok(company);
         }
-        if !timada_aliexpress::claim_token_refresh(
+        let renewing = authorization.expires_at;
+        let renewal = timada_aliexpress::claim_token_refresh(
             &self.platform,
             ALIEXPRESS_ACTOR,
             &company.id,
-            authorization.expires_at,
+            renewing,
+            now,
         )
-        .await?
-        {
-            return Ok(company);
-        }
-        let refresh_token = self
-            .sealer()?
-            .open_for(&company.id, &authorization.refresh_token_sealed)?;
-        let tokens = match self.app_client()?.refresh_token(&refresh_token).await {
-            Ok(tokens) => tokens,
-            Err(err) => {
-                tracing::warn!(company = %company.id, %err, "AliExpress refused to renew the access");
-                return Ok(company);
-            }
-        };
-        let account = if tokens.account.is_empty() {
-            authorization.account.clone()
-        } else {
-            tokens.account.chars().take(120).collect()
-        };
-        let tenancy = timada_tenancy::Command(self.platform.clone());
-        tenancy
-            .refresh_aliexpress(
-                ALIEXPRESS_ACTOR,
-                &company.id,
-                authorization.expires_at,
-                timada_tenancy::AuthorizeAliexpress {
+        .await?;
+        let tokens = match renewal {
+            TokenRenewal::Held => return Ok(company),
+            // A node that stopped, or could not write the company, after
+            // AliExpress answered: its tokens are what the company is owed.
+            TokenRenewal::Renewed(tokens) => tokens,
+            TokenRenewal::Claimed => {
+                let refresh_token = self
+                    .sealer()?
+                    .open_for(&company.id, &authorization.refresh_token_sealed)?;
+                let tokens = match self.app_client()?.refresh_token(&refresh_token).await {
+                    Ok(tokens) => tokens,
+                    Err(err) => {
+                        tracing::warn!(company = %company.id, %err, "AliExpress refused to renew the access");
+                        return Ok(company);
+                    }
+                };
+                let renewed = RenewedTokens {
                     access_token_sealed: self.seal(&company.id, &tokens.access_token)?,
                     refresh_token_sealed: self.seal(&company.id, &tokens.refresh_token)?,
                     expires_at: now + tokens.expires_in,
@@ -271,10 +270,49 @@ impl Aliexpress {
                     } else {
                         now + tokens.refresh_expires_in
                     },
-                    account,
-                },
-            )
-            .await?;
+                    account: if tokens.account.is_empty() {
+                        authorization.account.clone()
+                    } else {
+                        tokens.account.chars().take(120).collect()
+                    },
+                };
+                // Recorded first: whatever happens to the company's write,
+                // the next sweep finds them on the claim.
+                if let Err(err) = with_write_retries(|| {
+                    timada_aliexpress::record_token_renewal(
+                        &self.platform,
+                        ALIEXPRESS_ACTOR,
+                        &company.id,
+                        renewing,
+                        &renewed,
+                    )
+                })
+                .await
+                {
+                    tracing::error!(company = %company.id, error = %err, "renewed AliExpress tokens not recorded on their claim");
+                }
+                renewed
+            }
+        };
+        let tenancy = timada_tenancy::Command(self.platform.clone());
+        with_write_retries(|| async {
+            tenancy
+                .refresh_aliexpress(
+                    ALIEXPRESS_ACTOR,
+                    &company.id,
+                    renewing,
+                    timada_tenancy::AuthorizeAliexpress {
+                        access_token_sealed: tokens.access_token_sealed.clone(),
+                        refresh_token_sealed: tokens.refresh_token_sealed.clone(),
+                        expires_at: tokens.expires_at,
+                        refresh_expires_at: tokens.refresh_expires_at,
+                        account: tokens.account.clone(),
+                    },
+                )
+                .await
+                .map_err(anyhow::Error::from)
+        })
+        .await?;
         tracing::info!(company = %company.id, "AliExpress access renewed");
         Ok(tenancy.load_company(&company.id).await?.unwrap_or(company))
     }
@@ -580,4 +618,37 @@ impl Aliexpress {
             Err(err) => Err(err.into()),
         }
     }
+}
+
+/// Runs `write` again, after a growing pause, while the store refuses it
+/// for the moment or cannot tell whether it landed: some 16 seconds in all,
+/// after which the error is the caller's.
+async fn with_write_retries<T, F, Fut>(mut write: F) -> anyhow::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    let mut pause = Duration::from_millis(250);
+    for _ in 0..6 {
+        match write().await {
+            Err(err) if is_transient(&err) => {
+                tracing::debug!(error = %err, "store not taking the write yet, trying again");
+                tokio::time::sleep(pause).await;
+                pause *= 2;
+            }
+            done => return done,
+        }
+    }
+    write().await
+}
+
+/// Whether the store refused a write only for the moment, or could not
+/// tell whether it landed.
+fn is_transient(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<evento::WriteError>(),
+            Some(evento::WriteError::Unavailable(_) | evento::WriteError::Unknown(_))
+        )
+    })
 }
