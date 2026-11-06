@@ -22,7 +22,9 @@ struct SuspendForm {
 }
 
 /// Takes the tenant offline: the catalog records it, then its storefronts'
-/// connections to this node are ended (their reconnects are refused).
+/// connections to this node are ended (their reconnects are refused); the
+/// other nodes end theirs through their
+/// [`closing_subscription`](crate::store_api::closing_subscription).
 #[route(POST)]
 pub async fn suspend(cx: &Cx, Form(form): Form<SuspendForm>) -> Result<SeeOther> {
     require_admin(cx).await?;

@@ -10,16 +10,22 @@
 //! a key or changing its scopes ends its live connections through
 //! [`StoreConnections`] (a reconnect gets the new scopes); suspending the
 //! tenant ends every connection of the tenant, and their reconnects are
-//! refused.
+//! refused. Each node holds its own connections: the page that took the
+//! request ends its node's at once, and [`closing_subscription`] the other
+//! nodes'.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
+use evento::metadata::Event;
 use evento::remote::{
     Hello, Rejection, Resolver, ServerHandle, Session, serve_tls_with, serve_with,
 };
+use evento::subscription::{Context, SubscriptionBuilder};
+use timada_tenancy::aggregator::Suspended;
+use timada_tenancy::aggregator::api_key::{Revoked, Scoped};
 use timada_tenancy::{
     Command, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenancyError,
 };
@@ -40,9 +46,10 @@ struct Connection {
     close: watch::Sender<bool>,
 }
 
-/// The live store connections, so that revoking a key or suspending a
-/// tenant ends them now rather than at their next reconnect, and the pages
-/// can count them.
+/// This node's live store connections, so that revoking a key or
+/// suspending a tenant ends them now rather than at their next reconnect,
+/// and the pages can count them. A key or a tenant cut off on another node
+/// is ended here by [`closing_subscription`].
 #[derive(Default)]
 pub struct StoreConnections {
     live: Mutex<Vec<Connection>>,
@@ -212,6 +219,79 @@ impl Resolver for StoreResolver {
         );
         Ok(session.keep(guard).close_when(close))
     }
+}
+
+/// The label of [`closing_subscription`]; nothing is stored under it.
+pub const CLOSING_SUBSCRIPTION: &str = "timada-dashboard/store-closing";
+
+/// Ends this node's connections of a key revoked or re-scoped, and of a
+/// tenant suspended, whichever node took the request: each node holds its
+/// own connections, and a key is only checked when a connection opens. The
+/// page that took the request ends its own node's at once; this ends the
+/// others'. It runs on every node and follows every routing key from the
+/// moment the node starts, with its cursor in memory and no claim: a node
+/// holds no connection from before it started, so the history has nothing
+/// to end.
+pub fn closing_subscription<E: evento::Executor>(
+    connections: Arc<StoreConnections>,
+) -> SubscriptionBuilder<E> {
+    SubscriptionBuilder::new(CLOSING_SUBSCRIPTION)
+        .data(connections)
+        .handler(on_key_revoked())
+        .handler(on_key_scoped())
+        .handler(on_tenant_suspended())
+        .any_routing_key()
+        .ephemeral()
+        .start_from_latest()
+}
+
+#[evento::subscription]
+async fn on_key_revoked<E: evento::Executor>(
+    context: &Context<'_, E>,
+    event: Event<Revoked>,
+) -> anyhow::Result<()> {
+    let connections: Arc<StoreConnections> = context.extract();
+    let ended = connections.close_key(&event.aggregate_id);
+    if ended > 0 {
+        tracing::info!(
+            connections = ended,
+            "store connections ended by a key revocation"
+        );
+    }
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_key_scoped<E: evento::Executor>(
+    context: &Context<'_, E>,
+    event: Event<Scoped>,
+) -> anyhow::Result<()> {
+    let connections: Arc<StoreConnections> = context.extract();
+    let ended = connections.close_key(&event.aggregate_id);
+    if ended > 0 {
+        tracing::info!(
+            connections = ended,
+            "store connections ended by a key scope change"
+        );
+    }
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_tenant_suspended<E: evento::Executor>(
+    context: &Context<'_, E>,
+    event: Event<Suspended>,
+) -> anyhow::Result<()> {
+    let connections: Arc<StoreConnections> = context.extract();
+    let ended = connections.close_tenant(&event.aggregate_id);
+    if ended > 0 {
+        tracing::info!(
+            tenant = %event.aggregate_id,
+            connections = ended,
+            "store connections ended by a suspension"
+        );
+    }
+    Ok(())
 }
 
 /// Binds the store API and serves it; `None` when the section is absent.

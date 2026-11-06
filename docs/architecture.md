@@ -192,7 +192,12 @@ by construction.
    tenant, a shopper's sign-in challenge say, fails, and so does every write. Scopes are strings recorded with
    `ApiKey::Created` and replaced whole by `ApiKey::Scoped`. Revoking the key or
    changing its scopes ends its connections; suspending the tenant ends every
-   connection of the tenant, and reconnects are refused.
+   connection of the tenant, and reconnects are refused. Each node holds its own
+   connections and checks a key only when one opens, so this happens on every
+   node: the page that took the request ends its node's at once, and every node
+   runs `store_api::closing_subscription` for the others. It starts at the head
+   of the store with its cursor in memory (a node holds no connection from before
+   it started) and claims nothing.
 4. **Payments** (`payments/`). Each tenant connects its own Stripe account on
    `/t/{slug}/payments`; the secret key and the webhook signing secret are recorded
    in the tenant's platform events sealed with AES-256-GCM (`seal.rs`) under the
