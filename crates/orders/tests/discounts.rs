@@ -135,6 +135,27 @@ async fn a_discounted_payment_makes_a_discounted_order_and_spends_the_use() {
         usage.consumed_by_cart(&cart_id),
         Some(placed.order_id.as_str())
     );
+
+    // Cancelled before its money was taken: the use goes back, and the
+    // order no longer counts as a use (told twice, once).
+    cancel(&orders, &placed.order_id, "Changed my mind").await;
+    for _ in 0..2 {
+        discount_usage_subscription::<evento::Turso>(evento::Evento::new(executor.clone()))
+            .run_once(&executor)
+            .await
+            .unwrap();
+    }
+    let usage = discounts.load_usage(&id).await.unwrap().unwrap();
+    assert_eq!(usage.consumed_count, 0);
+    assert!(usage.returned_by(&placed.order_id));
+    read_model_subscription::<evento::Turso>(pool.clone())
+        .run_once(&executor)
+        .await
+        .unwrap();
+    let counts = timada_orders::discount_use_counts(&pool, "acme")
+        .await
+        .unwrap();
+    assert_eq!(counts.get(&id), None);
 }
 
 #[tokio::test]

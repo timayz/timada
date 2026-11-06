@@ -22,12 +22,14 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 
 use crate::aggregator::buyer::{
     Consumed as BuyerConsumed, Released as BuyerReleased, Reserved as BuyerReserved,
+    Returned as BuyerReturned,
 };
-use crate::aggregator::usage::{Consumed, Opened, Released, Reserved, Rolled};
+use crate::aggregator::spend::{Returned as SpendReturned, Spent};
+use crate::aggregator::usage::{Consumed, Opened, Released, Reserved, Returned, Rolled};
 use crate::error::DiscountError;
 use crate::value_object::{
-    CarriedUse, USAGE_CHUNK, discount_buyer_id, discount_usage_id, discount_usage_pointer_id,
-    unix_now,
+    CarriedUse, USAGE_CHUNK, discount_buyer_id, discount_spend_id, discount_usage_id,
+    discount_usage_pointer_id, unix_now,
 };
 
 use super::{
@@ -205,7 +207,9 @@ impl<E: Executor> super::Command<E> {
     /// Spends the use of the checkout of `cart_id` for `order_id`. Told
     /// twice, nothing more happens. An order whose reservation lapsed before
     /// the shopper paid is still recorded: they paid the price they were
-    /// shown, so the code may serve one order more than its cap says.
+    /// shown, so the code may serve one order more than its cap says. Once
+    /// the uses are written, the order's spend is (`DiscountSpend::Spent`),
+    /// which [`return_use`](Self::return_use) gives back from.
     pub async fn consume_use(
         &self,
         actor: &str,
@@ -313,11 +317,174 @@ impl<E: Executor> super::Command<E> {
                 }
             }
         }
-        Ok(())
+        let spent = evento::append(discount_spend_id(order_id))
+            .original_version(0)
+            .routing_key_opt(routing_key)
+            .event(&Spent {
+                discount_id: discount_id.to_owned(),
+                cart_id: cart_id.to_owned(),
+                email: email.to_owned(),
+                spent_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await;
+        match spent {
+            // Told at the same moment on another node: written once.
+            Ok(_) | Err(WriteError::InvalidOriginalVersion) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Gives back the use `order_id` spent, its order cancelled before its
+    /// money was taken: a capped code counts it no more, an e-mail good once
+    /// may use the code again. Told twice, nothing more happens; an order
+    /// that spent nothing is nothing to give back.
+    pub async fn return_use(
+        &self,
+        actor: &str,
+        order_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), DiscountError> {
+        let Some(spend) = self.load_spend(order_id).await? else {
+            return Ok(());
+        };
+        if spend.returned {
+            return Ok(());
+        }
+        if let Some(discount) = self.load_discount(&spend.discount_id).await? {
+            if discount.max_uses.is_some() {
+                self.return_usage(
+                    actor,
+                    &spend.discount_id,
+                    &spend.cart_id,
+                    order_id,
+                    &routing_key,
+                )
+                .await?;
+            }
+            if discount.once_per_email {
+                self.return_buyer(
+                    actor,
+                    &spend.discount_id,
+                    &spend.email,
+                    order_id,
+                    &routing_key,
+                )
+                .await?;
+            }
+        }
+        let returned = spend
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&SpendReturned {
+                returned_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await;
+        match returned {
+            Ok(_) | Err(WriteError::InvalidOriginalVersion) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
     }
 }
 
 impl<E: Executor> super::Command<E> {
+    /// Takes the use of `order_id` off the count of the code, unless the
+    /// generation remembers it given back (a delivery that stopped before
+    /// the order's spend recorded it).
+    async fn return_usage(
+        &self,
+        actor: &str,
+        discount_id: &str,
+        cart_id: &str,
+        order_id: &str,
+        routing_key: &Option<String>,
+    ) -> Result<(), DiscountError> {
+        let returned = Returned {
+            cart_id: cart_id.to_owned(),
+            order_id: order_id.to_owned(),
+            returned_by: actor.to_owned(),
+        };
+        for attempt in 1..=WRITE_ATTEMPTS {
+            let current = self
+                .current_generation(actor, discount_id, routing_key)
+                .await?;
+            if current
+                .state
+                .as_ref()
+                .is_some_and(|usage| usage.returned_by(order_id))
+            {
+                return Ok(());
+            }
+            let written = match current.state {
+                Some(usage) => {
+                    usage
+                        .write()?
+                        .routing_key_opt(routing_key.clone())
+                        .event(&returned)
+                        .tenant(&self.tenant)
+                        .commit(&self.executor)
+                        .await
+                }
+                None => {
+                    evento::append(&current.id)
+                        .original_version(0)
+                        .routing_key_opt(routing_key.clone())
+                        .event(&returned)
+                        .tenant(&self.tenant)
+                        .commit(&self.executor)
+                        .await
+                }
+            }
+            .map_err(DiscountError::from);
+            match written {
+                Ok(_) => return Ok(()),
+                Err(err) if is_conflict(&err) && attempt < WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
+    }
+
+    /// Frees the e-mail's use of a code good once, when `order_id` is the
+    /// order that spent it.
+    async fn return_buyer(
+        &self,
+        actor: &str,
+        discount_id: &str,
+        email: &str,
+        order_id: &str,
+        routing_key: &Option<String>,
+    ) -> Result<(), DiscountError> {
+        for attempt in 1..=WRITE_ATTEMPTS {
+            let Some(buyer) = self.load_buyer(discount_id, email).await? else {
+                return Ok(());
+            };
+            if buyer.order_id.as_deref() != Some(order_id) {
+                return Ok(());
+            }
+            let written = buyer
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&BuyerReturned {
+                    order_id: order_id.to_owned(),
+                    returned_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await
+                .map_err(DiscountError::from);
+            match written {
+                Ok(_) => return Ok(()),
+                Err(err) if is_conflict(&err) && attempt < WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
+    }
+
     /// The generation of a code's uses the next write goes to: the current
     /// one, or the one opened after it when it is full.
     async fn current_generation(
@@ -362,6 +529,7 @@ impl<E: Executor> super::Command<E> {
                     .map(|spent| CarriedUse {
                         cart_id: spent.cart_id.clone(),
                         order_id: spent.order_id.clone(),
+                        returned: spent.returned,
                     })
                     .collect(),
                 opened_by: actor.to_owned(),

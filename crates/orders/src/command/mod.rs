@@ -840,6 +840,18 @@ impl OrderState {
         self.status == OrderStatus::Authorized && self.supplier.is_some()
     }
 
+    /// Whether the shopper may still cancel it: its money only held, waiting
+    /// for goods a supplier buys once it is placed, nothing asked of the
+    /// supplier (or it surely refused), and nothing asked of the provider.
+    pub fn cancellable_by_shopper(&self) -> bool {
+        self.status == OrderStatus::Authorized
+            && self.supplier.is_some()
+            && self.supplier_order != SupplierOrder::Started
+            && self.pending_capture.is_none()
+            && self.pending_cancellation.is_none()
+            && self.released_at.is_none()
+    }
+
     /// Whether its goods may be ordered from the supplier at `now` (unix
     /// seconds): the order neither left, nor is cancelled or being so, and
     /// a payment only held still holds for long enough

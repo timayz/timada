@@ -23,14 +23,18 @@ use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::buyer::{
     Consumed as BuyerConsumed, Released as BuyerReleased, Reserved as BuyerReserved,
+    Returned as BuyerReturned,
 };
+use crate::aggregator::spend::{Returned as SpendReturned, Spent};
 use crate::aggregator::usage::{
-    Consumed, DiscountUsagePointer, Opened, Released as UsageReleased, Reserved, Rolled,
+    Consumed, DiscountUsagePointer, Opened, Released as UsageReleased, Reserved,
+    Returned as UsageReturned, Rolled,
 };
 use crate::aggregator::{Archived, Claimed, Created, Deactivated, Reactivated, Released};
 use crate::error::DiscountError;
 use crate::value_object::{
     DiscountValue, MIN_CHARGE_CENTS, RECENT_USES, discount_buyer_id, discount_code_id,
+    discount_spend_id,
 };
 
 /// The command gateway. Cheap to clone when `E` is.
@@ -287,6 +291,8 @@ pub struct Reservation {
 pub struct RecentUse {
     pub cart_id: String,
     pub order_id: String,
+    /// Given back since: the order was cancelled before it was paid.
+    pub returned: bool,
 }
 
 /// How many spent uses a generation remembers: [`RECENT_USES`], or two in
@@ -329,12 +335,20 @@ impl UsageState {
     }
 
     /// The order that spent the use of `cart_id`, as far as the generation
-    /// remembers.
+    /// remembers, unless it was given back.
     pub fn consumed_by_cart(&self, cart_id: &str) -> Option<&str> {
         self.recent
             .iter()
-            .find(|spent| spent.cart_id == cart_id)
+            .find(|spent| spent.cart_id == cart_id && !spent.returned)
             .map(|spent| spent.order_id.as_str())
+    }
+
+    /// Whether the use `order_id` spent was given back, as far as the
+    /// generation remembers.
+    pub fn returned_by(&self, order_id: &str) -> bool {
+        self.recent
+            .iter()
+            .any(|spent| spent.order_id == order_id && spent.returned)
     }
 
     /// The reservations not lapsed at `now`.
@@ -368,6 +382,7 @@ pub fn usage_projection<E: Executor>() -> Projection<E, UsageState> {
         .handler(on_usage_reserved())
         .handler(on_usage_released())
         .handler(on_usage_consumed())
+        .handler(on_usage_returned())
         .strict()
 }
 
@@ -395,6 +410,7 @@ async fn on_usage_opened(event: Event<Opened>, usage: &mut UsageState) -> anyhow
         .map(|spent| RecentUse {
             cart_id: spent.cart_id.clone(),
             order_id: spent.order_id.clone(),
+            returned: spent.returned,
         })
         .collect();
     Ok(())
@@ -454,6 +470,22 @@ async fn on_usage_consumed(event: Event<Consumed>, usage: &mut UsageState) -> an
     usage.remember(RecentUse {
         cart_id: event.data.cart_id.to_owned(),
         order_id: event.data.order_id.to_owned(),
+        returned: false,
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_usage_returned(
+    event: Event<UsageReturned>,
+    usage: &mut UsageState,
+) -> anyhow::Result<()> {
+    usage.id = event.aggregate_id.to_owned();
+    usage.consumed_count = usage.consumed_count.saturating_sub(1);
+    usage.remember(RecentUse {
+        cart_id: event.data.cart_id.to_owned(),
+        order_id: event.data.order_id.to_owned(),
+        returned: true,
     });
     Ok(())
 }
@@ -485,6 +517,7 @@ pub fn buyer_projection<E: Executor>() -> Projection<E, BuyerState> {
         .handler(on_buyer_reserved())
         .handler(on_buyer_released())
         .handler(on_buyer_consumed())
+        .handler(on_buyer_returned())
         .strict()
 }
 
@@ -518,6 +551,56 @@ async fn on_buyer_consumed(
     buyer.id = event.aggregate_id.to_owned();
     buyer.cart_id = Some(event.data.cart_id.to_owned());
     buyer.order_id = Some(event.data.order_id.to_owned());
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_buyer_returned(
+    event: Event<BuyerReturned>,
+    buyer: &mut BuyerState,
+) -> anyhow::Result<()> {
+    if buyer.order_id.as_deref() == Some(event.data.order_id.as_str()) {
+        buyer.cart_id = None;
+        buyer.order_id = None;
+    }
+    Ok(())
+}
+
+/// What one order spent of a code.
+#[evento::projection(id = id, name = "timada-discounts/SpendState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct SpendState {
+    pub id: String,
+    pub discount_id: String,
+    pub cart_id: String,
+    pub email: String,
+    /// Given back: the order was cancelled before it was paid.
+    pub returned: bool,
+}
+
+pub fn spend_projection<E: Executor>() -> Projection<E, SpendState> {
+    Projection::new::<crate::aggregator::spend::DiscountSpend>()
+        .handler(on_spent())
+        .handler(on_spend_returned())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_spent(event: Event<Spent>, spend: &mut SpendState) -> anyhow::Result<()> {
+    spend.id = event.aggregate_id.to_owned();
+    spend.discount_id = event.data.discount_id.to_owned();
+    spend.cart_id = event.data.cart_id.to_owned();
+    spend.email = event.data.email.to_owned();
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_spend_returned(
+    _event: Event<SpendReturned>,
+    spend: &mut SpendState,
+) -> anyhow::Result<()> {
+    spend.returned = true;
     Ok(())
 }
 
@@ -572,6 +655,15 @@ impl<E: Executor> Command<E> {
     /// The uses of a capped discount (`None` before the first one).
     pub async fn load_usage(&self, discount_id: &str) -> anyhow::Result<Option<UsageState>> {
         load_usage(&self.executor, &self.tenant, discount_id).await
+    }
+
+    /// What an order spent of a code, once its uses were written.
+    pub async fn load_spend(&self, order_id: &str) -> anyhow::Result<Option<SpendState>> {
+        spend_projection()
+            .load(discount_spend_id(order_id))
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await
     }
 
     /// One shopper's use of a discount good once per e-mail.

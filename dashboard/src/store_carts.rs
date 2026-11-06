@@ -64,7 +64,7 @@ fn not_found(code: &str) -> Answer {
 
 /// The refusal as its status and body, or the failure itself for one that is
 /// not the shopper's doing.
-fn refused(err: OrderError) -> anyhow::Result<Answer> {
+pub fn refused(err: OrderError) -> anyhow::Result<Answer> {
     match err {
         OrderError::CartNotFound => Ok(not_found("cart_not_found")),
         OrderError::OrderNotFound => Ok(not_found("order_not_found")),

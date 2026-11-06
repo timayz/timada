@@ -458,8 +458,8 @@ async function buyRoses(
   });
   expect(paid.status()).toBe(204);
   // The return page looks again on its own; only sent there when the
-  // browser left it (see shop.ts).
-  if (!page.url().includes("/checkout/complete")) {
+  // browser left it (see shop.ts), not when it already went on to the order.
+  if (!page.url().includes("/checkout/complete") && !/\/orders\/[0-9a-f]{64}$/.test(page.url())) {
     await page.goto(`${app.url}/checkout/complete?redirect_status=succeeded`);
   }
   await expect(page).toHaveURL(new RegExp(`${app.url}/orders/[0-9a-f]{64}$`), { timeout: 15_000 });
@@ -551,6 +551,66 @@ test("a shopper picks AliExpress's province and the order goes in its words", as
       zip: "99000",
       country: "IT",
     });
+  } finally {
+    await stripe.stop();
+    await aliexpress.stop();
+  }
+});
+
+test("a shopper cancels their order until the shop places it on AliExpress", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  await fakeStripeJs(page);
+  const aliexpress = new FakeAliexpress();
+  const stripe = new FakeStripe();
+  await aliexpress.start();
+  await stripe.start();
+  try {
+    const productUrl = await importedShop(page, aliexpress);
+    const slug = new URL(productUrl).pathname.split("/")[2];
+    await page.getByRole("button", { name: "Publish" }).click();
+    await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await app.start(request, await mintKey(page, slug, true), 1);
+
+    // Saved, the money held: the shopper cancels it, nothing is charged.
+    const first = await buyRoses(page, request, stripe, webhookUrl, 1);
+    const firstIntent = stripe.lastIntent()!;
+    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "authorized");
+    await page.getByText("Annuler ma commande").click();
+    await page.getByRole("button", { name: "Confirmer l'annulation" }).click();
+    await expect(page.locator("[data-order-cancel-notice]")).toHaveText(
+      "Votre commande est annulée : rien n'a été débité.",
+    );
+    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "cancelled");
+    await expect(page.locator("[data-order-cancel]")).toHaveCount(0);
+    expect(firstIntent.cancelled).toBe(true);
+    expect(firstIntent.captured).toBe(false);
+    expect(stripe.refunds).toEqual([]);
+    // The merchant sees it cancelled, its hold given back; it is not placed.
+    await page.goto(`/t/${slug}/orders/${first}`);
+    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "cancelled");
+    await expect(page.locator("[data-order-payment]")).toHaveAttribute("data-order-payment", "released");
+    await expect(page.getByRole("button", { name: "Place on AliExpress" })).toHaveCount(0);
+    expect(aliexpress.orders).toHaveLength(0);
+
+    // Placed on AliExpress by the merchant: too late to cancel, and paid.
+    const second = await buyRoses(page, request, stripe, webhookUrl, 1);
+    const secondShopOrder = page.url();
+    await expect(page.locator("[data-order-cancel]")).toBeVisible();
+    await page.goto(`/t/${slug}/orders/${second}`);
+    await page.getByRole("button", { name: "Place on AliExpress" }).click();
+    await forwardIs(page, `/t/${slug}/orders/${second}`, "placed");
+    await expect(async () => {
+      await page.goto(secondShopOrder);
+      await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(page.locator("[data-order-cancel]")).toHaveCount(0);
   } finally {
     await stripe.stop();
     await aliexpress.stop();

@@ -195,3 +195,113 @@ async fn a_spent_use_is_counted_once_over_a_roll() {
         .unwrap();
     assert_eq!(usage_of(&cmd, &id).await.consumed_count, 3);
 }
+
+/// An order cancelled before it was paid gives its use back: the cap counts
+/// it no more, over a roll too, and told twice it counts once.
+#[tokio::test]
+async fn a_use_given_back_counts_no_more() {
+    let cmd = command().await;
+    let id = capped(&cmd, "BACK", 1).await.id;
+    cmd.reserve_use(SHOP, &id, "cart-1", "x@example.com", RESERVATION_SECS)
+        .await
+        .unwrap();
+    cmd.consume_use(SHOP, &id, "cart-1", "x@example.com", "order-1")
+        .await
+        .unwrap();
+    let full = cmd
+        .reserve_use(SHOP, &id, "cart-2", "y@example.com", RESERVATION_SECS)
+        .await;
+    assert!(matches!(full, Err(DiscountError::Exhausted)), "{full:?}");
+
+    cmd.return_use(SHOP, "order-1").await.unwrap();
+    let usage = usage_of(&cmd, &id).await;
+    assert_eq!(usage.consumed_count, 0);
+    assert!(usage.returned_by("order-1"));
+    assert_eq!(usage.consumed_by_cart("cart-1"), None);
+    assert!(cmd.load_spend("order-1").await.unwrap().unwrap().returned);
+    // Told again: nothing more.
+    cmd.return_use(SHOP, "order-1").await.unwrap();
+    assert_eq!(usage_of(&cmd, &id).await.consumed_count, 0);
+    // An order that spent nothing: nothing to give back.
+    cmd.return_use(SHOP, "order-none").await.unwrap();
+
+    // The use serves another order; the generation (three events) rolls.
+    cmd.reserve_use(SHOP, &id, "cart-2", "y@example.com", RESERVATION_SECS)
+        .await
+        .unwrap();
+    assert_eq!(generation_of(&cmd, &id).await, 1);
+    let usage = usage_of(&cmd, &id).await;
+    assert!(usage.returned_by("order-1"), "carried over the roll");
+    assert_eq!(usage.taken_at(unix_now()), 1);
+}
+
+/// A delivery that stopped after the usage was given back, before the
+/// order's spend said so: told again, the generation remembers it.
+#[tokio::test]
+async fn a_use_given_back_twice_counts_once() {
+    let cmd = command().await;
+    let id = capped(&cmd, "TWICE", 5).await.id;
+    cmd.consume_use(SHOP, &id, "cart-1", "x@example.com", "order-1")
+        .await
+        .unwrap();
+    cmd.consume_use(SHOP, &id, "cart-2", "x@example.com", "order-2")
+        .await
+        .unwrap();
+    cmd.return_usage(SHOP, &id, "cart-1", "order-1", &None)
+        .await
+        .unwrap();
+    assert_eq!(usage_of(&cmd, &id).await.consumed_count, 1);
+    cmd.return_use(SHOP, "order-1").await.unwrap();
+    assert_eq!(usage_of(&cmd, &id).await.consumed_count, 1);
+}
+
+/// A code good once per e-mail, given back: the e-mail may use it again.
+#[tokio::test]
+async fn a_use_given_back_frees_the_email() {
+    let cmd = command().await;
+    let discount = cmd
+        .create_discount(
+            ALICE,
+            CreateDiscount {
+                code: "ONCE".to_owned(),
+                value: DiscountValue::Percent(1000),
+                once_per_email: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    cmd.reserve_use(
+        SHOP,
+        &discount.id,
+        "cart-1",
+        "x@example.com",
+        RESERVATION_SECS,
+    )
+    .await
+    .unwrap();
+    cmd.consume_use(SHOP, &discount.id, "cart-1", "x@example.com", "order-1")
+        .await
+        .unwrap();
+    let used = cmd
+        .reserve_use(
+            SHOP,
+            &discount.id,
+            "cart-2",
+            "x@example.com",
+            RESERVATION_SECS,
+        )
+        .await;
+    assert!(matches!(used, Err(DiscountError::AlreadyUsed)), "{used:?}");
+
+    cmd.return_use(SHOP, "order-1").await.unwrap();
+    cmd.reserve_use(
+        SHOP,
+        &discount.id,
+        "cart-2",
+        "x@example.com",
+        RESERVATION_SECS,
+    )
+    .await
+    .unwrap();
+}

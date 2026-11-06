@@ -133,6 +133,10 @@ impl Refusal {
             "missing_phone" => OrderError::MissingPhone,
             "invalid_note" => OrderError::InvalidNote,
             "order_not_found" => OrderError::OrderNotFound,
+            "order_cancelled" => OrderError::OrderCancelled,
+            "not_cancellable" => OrderError::NotCancellable,
+            "order_in_preparation" => OrderError::OrderInPreparation,
+            "cancellation_pending" => OrderError::CancellationPending,
             "shipping_method_not_found" => OrderError::ShippingMethodNotFound,
             "shipping_unavailable" => OrderError::ShippingUnavailable,
             crate::PAYMENTS_UNAVAILABLE

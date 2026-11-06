@@ -479,3 +479,97 @@ async fn a_hold_about_to_lapse_is_not_ordered_from_the_supplier() {
         .await;
     assert!(matches!(left, Err(OrderError::OrderFulfilled)), "{left:?}");
 }
+
+/// The shopper cancels a held order of goods a supplier buys, until the
+/// supplier may have it; asked twice, nothing more.
+#[tokio::test]
+async fn the_shopper_cancels_until_the_supplier_may_have_the_order() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let supplied = async || {
+        let cart_id = cart_with(&orders, &mug, 1).await;
+        let request_id = orders
+            .request_checkout(SHOPPER, &cart_id, checkout())
+            .await
+            .unwrap();
+        let mut pending = orders
+            .pending_payment(&cart_id, &request_id)
+            .await
+            .unwrap()
+            .unwrap();
+        pending.supplier = Some("aliexpress".into());
+        let payment = timada_orders::Payment {
+            provider: timada_orders::PROVIDER_STRIPE.into(),
+            payment_id: format!("pi_{request_id}"),
+            amount_cents: pending.total_cents,
+            currency: pending.currency.clone(),
+            capture_before: None,
+        };
+        orders
+            .record_payment_request(
+                DASHBOARD,
+                &cart_id,
+                pending,
+                timada_orders::OpenedPayment {
+                    provider: timada_orders::PROVIDER_STRIPE.into(),
+                    payment_id: payment.payment_id.clone(),
+                    client_secret: "secret".into(),
+                    publishable_key: "pk_test".into(),
+                },
+            )
+            .await
+            .unwrap();
+        orders
+            .place_order(DASHBOARD, &cart_id, payment)
+            .await
+            .unwrap()
+            .order_id
+    };
+
+    let order_id = supplied().await;
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert!(order.cancellable_by_shopper());
+    let path = orders
+        .request_shopper_cancellation(&order_id)
+        .await
+        .unwrap();
+    assert!(matches!(path, CancelPath::Release { .. }), "{path:?}");
+    let again = orders
+        .request_shopper_cancellation(&order_id)
+        .await
+        .unwrap();
+    assert_eq!(again, path);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    let asked = order.pending_cancellation.unwrap();
+    assert_eq!(asked.requested_by, SHOPPER);
+    assert_eq!(asked.reason, timada_orders::SHOPPER_CANCEL_REASON);
+
+    // Being placed with the supplier: too late.
+    let order_id = supplied().await;
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let late = orders.request_shopper_cancellation(&order_id).await;
+    assert!(
+        matches!(late, Err(OrderError::OrderInPreparation)),
+        "{late:?}"
+    );
+    // It surely refused: the shopper may cancel again.
+    orders
+        .record_supplier_refusal(DASHBOARD, &order_id, "aliexpress", "No delivery")
+        .await
+        .unwrap();
+    orders
+        .request_shopper_cancellation(&order_id)
+        .await
+        .unwrap();
+
+    // Goods the shop holds are paid for at once: no shopper's cancel.
+    let own = held(&orders, &catalog).await;
+    let refused = orders.request_shopper_cancellation(&own).await;
+    assert!(
+        matches!(refused, Err(OrderError::OrderInPreparation)),
+        "{refused:?}"
+    );
+}

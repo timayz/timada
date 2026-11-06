@@ -80,11 +80,18 @@ pub mod usage {
             cart_id: String,
             released_by: String,
         },
-        /// The order the checkout made: the use is spent for good.
+        /// The order the checkout made: the use is spent.
         Consumed {
             cart_id: String,
             order_id: String,
             consumed_by: String,
+        },
+        /// The order that spent a use was cancelled before its money was
+        /// taken: the use counts no more.
+        Returned {
+            cart_id: String,
+            order_id: String,
+            returned_by: String,
         },
     }
 
@@ -118,6 +125,31 @@ pub mod buyer {
             cart_id: String,
             order_id: String,
             consumed_by: String,
+        },
+        /// The order that spent it was cancelled before its money was
+        /// taken: the e-mail may use the code again.
+        Returned {
+            order_id: String,
+            returned_by: String,
+        },
+    }
+}
+
+/// What one order spent of a code it used: one stream per order, with the
+/// deterministic id [`discount_spend_id`](crate::discount_spend_id),
+/// written once the uses are, so giving the use back happens once however
+/// often it is told, long after the usage generations forgot the order.
+pub mod spend {
+    #[evento::aggregate(name = "timada-discounts/DiscountSpend")]
+    pub enum DiscountSpend {
+        Spent {
+            discount_id: String,
+            cart_id: String,
+            email: String,
+            spent_by: String,
+        },
+        Returned {
+            returned_by: String,
         },
     }
 }

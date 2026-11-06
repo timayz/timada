@@ -139,6 +139,8 @@ pub const HOLD_MARGIN_SECS: u64 = 12 * 60 * 60;
 /// before the money was taken.
 pub const HOLD_EXPIRED_REASON: &str =
     "The hold on the shopper's card expired before the payment was taken.";
+/// Why an order is cancelled when the shopper cancelled it.
+pub const SHOPPER_CANCEL_REASON: &str = "Cancelled by the shopper.";
 /// Why an order is cancelled when its hold was cancelled in the provider's
 /// own dashboard.
 pub const HOLD_CANCELLED_REASON: &str = "The payment was cancelled with the provider.";

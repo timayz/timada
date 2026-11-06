@@ -74,6 +74,8 @@ pub enum OrderError {
     HoldExpiring,
     #[error("the supplier may have this order already: say you will cancel it there")]
     SupplierOrdered,
+    #[error("the shop is preparing this order: it can no longer be cancelled")]
+    OrderInPreparation,
     #[error("the refund must be more than nothing and at most what is outstanding")]
     InvalidRefund,
     #[error("the tracking number is at most 200 characters")]
@@ -183,6 +185,7 @@ impl OrderError {
             Self::OrderFulfilled => "order_fulfilled",
             Self::HoldExpiring => "hold_expiring",
             Self::SupplierOrdered => "supplier_ordered",
+            Self::OrderInPreparation => "order_in_preparation",
             Self::InvalidRefund => "invalid_refund",
             Self::InvalidTracking => "invalid_tracking",
             Self::InvalidReason => "invalid_reason",

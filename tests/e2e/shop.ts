@@ -176,9 +176,13 @@ export async function confirmPayment(
     ).status(),
   ).toBe(204);
   // The return page looks again on its own every two seconds; sent there
-  // while it is already doing so, the browser would arrive after the order
-  // page took the cart's cookies with it.
-  if (!page.url().includes("/checkout/complete")) {
+  // while it is already doing so, or once it went on to the order, the
+  // browser would arrive after the order page took the cart's cookies with
+  // it.
+  if (
+    !page.url().includes("/checkout/complete") &&
+    !/\/orders\/[0-9a-f]{64}$/.test(page.url())
+  ) {
     await page.goto(`${shop}/checkout/complete?redirect_status=succeeded`);
   }
   await expect(page).toHaveURL(new RegExp(`${shop}/orders/[0-9a-f]{64}$`), {

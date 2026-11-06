@@ -5,7 +5,9 @@ use crate::aggregator::{
     PaymentReleased, RefundRequested, Refunded, SupplierOrderRefused, SupplierOrderStarted,
 };
 use crate::error::OrderError;
-use crate::value_object::{MAX_REASON_LEN, normalize_reason, normalize_tracking};
+use crate::value_object::{
+    MAX_REASON_LEN, SHOPPER_CANCEL_REASON, STOREFRONT_ACTOR, normalize_reason, normalize_tracking,
+};
 
 use super::{OrderState, OrderStatus, PendingCapture, PendingRefund, SupplierOrder};
 
@@ -265,6 +267,53 @@ impl<E: Executor> super::Command<E> {
                 .event(&CancellationRequested {
                     reason: reason.clone(),
                     requested_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(order.cancel_path()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(OrderError::Write(WriteError::InvalidOriginalVersion))
+    }
+
+    /// The shopper asks for their order to be cancelled, before the provider
+    /// gives the hold back; returns what is left to do. Only while
+    /// [`cancellable_by_shopper`](OrderState::cancellable_by_shopper) holds:
+    /// once the supplier may have it, or its money is being taken, the shop
+    /// is preparing it (`OrderInPreparation`); a fulfilled order is
+    /// `NotCancellable`. Asked again, the same path comes back.
+    pub async fn request_shopper_cancellation(
+        &self,
+        order_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<CancelPath, OrderError> {
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            match order.status {
+                OrderStatus::Cancelled => return Ok(CancelPath::Done),
+                OrderStatus::Fulfilled => return Err(OrderError::NotCancellable),
+                OrderStatus::Authorized | OrderStatus::Paid => {}
+            }
+            if order
+                .pending_cancellation
+                .as_ref()
+                .is_some_and(|asked| asked.requested_by == STOREFRONT_ACTOR)
+            {
+                return Ok(order.cancel_path());
+            }
+            if !order.cancellable_by_shopper() {
+                return Err(OrderError::OrderInPreparation);
+            }
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&CancellationRequested {
+                    reason: SHOPPER_CANCEL_REASON.to_owned(),
+                    requested_by: STOREFRONT_ACTOR.to_owned(),
                 })
                 .tenant(&self.tenant)
                 .commit(&self.executor)

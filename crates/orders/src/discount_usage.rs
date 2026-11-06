@@ -1,9 +1,13 @@
-//! Spends the use of a discount code once the order it priced is paid.
+//! Spends the use of a discount code once the order it priced is placed, and
+//! gives it back when that order is cancelled before its money was taken.
 //!
 //! The dashboard reserves the use before it asks the shopper to pay; this
 //! subscription turns the reservation into a spent use when the order is
 //! placed, so the reservation never lapses and gives back a use an order
-//! already took. Delivery may repeat: spending a use is idempotent.
+//! already took. A cancelled order whose hold went back, nothing taken,
+//! returns it: the shopper may use the code again. One whose money was taken
+//! keeps it spent. Delivery may repeat: spending and returning a use are
+//! idempotent.
 
 use evento::{
     Evento, Executor,
@@ -11,7 +15,7 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 
-use crate::aggregator::Discounted;
+use crate::aggregator::{Cancelled, Discounted};
 use crate::command::order_projection;
 
 /// The cursor identity of the subscription, in the store.
@@ -32,6 +36,7 @@ pub fn discount_usage_subscription<E: Executor>(store: Evento) -> SubscriptionBu
     SubscriptionBuilder::new(DISCOUNT_USAGE_SUBSCRIPTION)
         .data(Store(store))
         .handler(on_discounted())
+        .handler(on_cancelled())
         .any_routing_key()
         .retry(5)
 }
@@ -66,4 +71,27 @@ async fn on_discounted<E: Executor>(
         Err(timada_discounts::DiscountError::NotFound) => Ok(()),
         Err(err) => Err(err.into()),
     }
+}
+
+#[evento::subscription]
+async fn on_cancelled<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<Cancelled>,
+) -> anyhow::Result<()> {
+    let store: Store = context.extract();
+    let Some(order) = order_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    if order.discount.is_none() || order.released_at.is_none() {
+        return Ok(());
+    }
+    timada_discounts::Command::new(store.0, &event.tenant)
+        .return_use(ORDERS_ACTOR, &order.id)
+        .await?;
+    Ok(())
 }

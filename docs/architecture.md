@@ -182,8 +182,10 @@ by construction.
    behind `/store/carts/*` and `/store/orders/{order_id}`, authenticated with the
    same key, which must allow `store:checkout`): its cart priced, the items it adds,
    the code it enters, its request to pay and the answer, the order its cart became,
-   an order it remembers, and that order's invoice and credit notes
-   (`/store/orders/{order_id}/documents`, which the storefront draws as PDF itself).
+   an order it remembers, its shopper cancelling it while its goods are not bought from
+   the supplier yet (`/store/orders/{order_id}/cancel`), and that order's invoice and
+   credit notes (`/store/orders/{order_id}/documents`, which the storefront draws as PDF
+   itself).
    An id the tenant has no cart or order under, another tenant's included, is 404.
    What a shopper does is therefore written by the dashboard in the key's tenant, and
    a storefront's connection never appends: a read naming any other stream of the
