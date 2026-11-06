@@ -261,7 +261,7 @@ event timada-reviews/ReviewRequests::RequestDelaySet { days: u8, set_by: String 
 event timada-reviews/ReviewRequests::RequestsDisabled { disabled_by: String }
 event timada-shoppers/Shopper::AddressRemoved { address_id: String }
 event timada-shoppers/Shopper::AddressSaved { address_id: String, address: Vec<u8> }
-event timada-shoppers/Shopper::Forgotten { key_id: String, newsletter_subscriber: Option<String> }
+event timada-shoppers/Shopper::Forgotten { key_id: String, newsletter: Option<crate::value_object::NewsletterSubscription> }
 event timada-shoppers/Shopper::Registered { key_id: String, email: Vec<u8> }
 event timada-shoppers/Shopper::SessionsRevoked { except_session: Option<String> }
 event timada-shoppers/ShopperChallenge::AttemptFailed unit
@@ -344,6 +344,7 @@ type timada_orders::value_object::OrderLine { product_id: String, variant_id: Op
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String, capture_before: Option<u64> }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, region: Option<String>, country: String, phone: Option<String> }
 type timada_reviews::value_object::ReviewPhoto { id: String, ext: String, mime: String, size: u64, width: Option<u32>, height: Option<u32> }
+type timada_shoppers::value_object::NewsletterSubscription { subscriber_id: String, key_id: String }
 type timada_tenancy::value_object::PriceBand { up_to_cents: u64, rule: PricingRule }
 type timada_tenancy::value_object::Pricing { bands: Vec<PriceBand>, above: PricingRule }
 type timada_tenancy::value_object::PricingRule { multiplier_bps: u32, plus_cents: u64, rounding: Rounding }

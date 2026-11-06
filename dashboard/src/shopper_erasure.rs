@@ -7,6 +7,12 @@
 //! stopped right after the account was forgotten, or a newsletter write
 //! that failed, no longer leaves an address subscribed that nobody can name
 //! again.
+//!
+//! The event names the subscription by its stream and its key. The address
+//! may subscribe again on the same stream, under a new key, and every node
+//! hears of the deletion at its own pace (a node behind the others, or one
+//! copying its store back, hours later): erasing by key leaves that newer
+//! subscription alone.
 
 use std::sync::Arc;
 
@@ -16,7 +22,7 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use timada_core::keys::KeyRing;
-use timada_newsletter::NewsletterError;
+use timada_shoppers::NewsletterSubscription;
 use timada_shoppers::aggregator::Forgotten;
 
 /// The cursor identity of the subscription, in the store.
@@ -50,19 +56,31 @@ async fn on_forgotten<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Forgotten>,
 ) -> anyhow::Result<()> {
-    let Some(subscriber_id) = &event.data.newsletter_subscriber else {
+    let Some(subscription) = &event.data.newsletter else {
         return Ok(());
     };
     let TenantStore(store) = context.extract();
     let TenantKeys(keys) = context.extract();
-    let erased = timada_newsletter::Command::new(store, &event.tenant)
-        .forget_subscriber(&*keys.for_tenant(&event.tenant), ERASER, subscriber_id)
-        .await;
-    match erased {
-        // Erased already, or the address never subscribed.
-        Ok(()) | Err(NewsletterError::NotFound) => Ok(()),
-        Err(err) => Err(err.into()),
-    }
+    erase(store, &*keys, &event.tenant, subscription).await
+}
+
+/// Erases `subscription` in `tenant`, unless the address subscribed again
+/// since (under another key) or it is gone already.
+async fn erase(
+    store: Evento,
+    keys: &dyn KeyRing,
+    tenant: &str,
+    subscription: &NewsletterSubscription,
+) -> anyhow::Result<()> {
+    timada_newsletter::Command::new(store, tenant)
+        .forget_subscription(
+            &*keys.for_tenant(tenant),
+            ERASER,
+            &subscription.subscriber_id,
+            &subscription.key_id,
+        )
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -91,25 +109,12 @@ mod tests {
         ))
     }
 
-    /// The account of `email` forgotten, naming `subscriber`: the event the
-    /// saga follows (the account itself is not what it reads).
-    async fn forgotten(executor: &Turso, email: &str, subscriber: Option<String>) {
-        evento::append(shopper_id(email))
-            .original_version(0)
-            .event(&Forgotten {
-                key_id: "key-1".to_owned(),
-                newsletter_subscriber: subscriber,
-            })
-            .tenant(TENANT)
-            .commit(executor)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_deleted_account_takes_its_newsletter_subscription_with_it() {
-        let executor = Turso::in_memory_concurrent().await.unwrap();
-        let vault = vault();
+    /// Ada asks for the newsletter; the subscription, as an erasure names it.
+    async fn subscribe(
+        executor: &Turso,
+        vault: &Arc<KeyVault>,
+        now: u64,
+    ) -> NewsletterSubscription {
         let newsletter = timada_newsletter::Command::new(Evento::new(executor.clone()), TENANT);
         newsletter
             .request_subscription(
@@ -121,22 +126,77 @@ mod tests {
                     source: SOURCE_ACCOUNT.to_owned(),
                     time_zone: None,
                 },
-                1_800_000_000,
+                now,
             )
             .await
             .unwrap();
         let subscriber = newsletter.subscriber_of(ADA).await.unwrap().unwrap();
-        forgotten(&executor, ADA, Some(subscriber.id.clone())).await;
-        // Another account, deleted with no subscription to name.
-        forgotten(&executor, "bob@example.com", None).await;
+        NewsletterSubscription {
+            subscriber_id: subscriber.id,
+            key_id: subscriber.key_id,
+        }
+    }
 
-        // Told twice, as every node does: erased once.
-        for _ in 0..2 {
-            subscription::<Turso>(Evento::new(executor.clone()), vault.ring())
-                .run_once(&executor)
+    async fn subscribed(executor: &Turso) -> bool {
+        timada_newsletter::Command::new(Evento::new(executor.clone()), TENANT)
+            .subscriber_of(ADA)
+            .await
+            .unwrap()
+            .is_some()
+    }
+
+    #[tokio::test]
+    async fn a_deleted_account_takes_its_newsletter_subscription_with_it() {
+        let executor = Turso::in_memory_concurrent().await.unwrap();
+        let vault = vault();
+        let named = subscribe(&executor, &vault, 1_800_000_000).await;
+        for (email, newsletter) in [
+            (ADA, Some(named)),
+            // Another account, deleted with no subscription to name.
+            ("bob@example.com", None),
+        ] {
+            evento::append(shopper_id(email))
+                .original_version(0)
+                .event(&Forgotten {
+                    key_id: "key-1".to_owned(),
+                    newsletter,
+                })
+                .tenant(TENANT)
+                .commit(&executor)
                 .await
                 .unwrap();
         }
-        assert!(newsletter.subscriber_of(ADA).await.unwrap().is_none());
+        subscription::<Turso>(Evento::new(executor.clone()), vault.ring())
+            .run_once(&executor)
+            .await
+            .unwrap();
+        assert!(!subscribed(&executor).await);
+    }
+
+    /// Every node erases on its own: told twice, the second is nothing, and
+    /// a node hearing of the deletion after Ada subscribed again leaves the
+    /// new subscription alone.
+    #[tokio::test]
+    async fn an_erasure_heard_late_leaves_a_new_subscription_alone() {
+        let executor = Turso::in_memory_concurrent().await.unwrap();
+        let vault = vault();
+        let store = Evento::new(executor.clone());
+        let first = subscribe(&executor, &vault, 1_800_000_000).await;
+        for _ in 0..2 {
+            erase(store.clone(), &*vault.ring(), TENANT, &first)
+                .await
+                .unwrap();
+        }
+        assert!(!subscribed(&executor).await);
+
+        let again = subscribe(&executor, &vault, 1_800_000_600).await;
+        assert_eq!(again.subscriber_id, first.subscriber_id, "the same stream");
+        assert_ne!(again.key_id, first.key_id, "under a new key");
+        erase(store.clone(), &*vault.ring(), TENANT, &first)
+            .await
+            .unwrap();
+        assert!(subscribed(&executor).await, "the new subscription stays");
+        erase(store, &*vault.ring(), TENANT, &again).await.unwrap();
+        assert!(!subscribed(&executor).await);
     }
 }

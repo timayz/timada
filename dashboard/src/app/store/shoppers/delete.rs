@@ -12,7 +12,7 @@ use topcoat::{
 };
 
 use super::{
-    Answer, SIGNED_OUT, answer_error, newsletter_subscriber_of, refused, signed_in, status,
+    Answer, SIGNED_OUT, answer_error, newsletter_subscription_of, refused, signed_in, status,
 };
 
 #[route(POST)]
@@ -27,10 +27,10 @@ pub async fn delete(cx: &Cx) -> Result<Answer> {
     };
     let keys = super::keys(cx, &access.tenant.id);
     // Read before the key goes: the newsletter knows them by their address.
-    let subscriber =
-        newsletter_subscriber_of(cx, store.executor(), store.tenant_id(), &shopper).await?;
+    let newsletter =
+        newsletter_subscription_of(cx, store.executor(), store.tenant_id(), &shopper).await?;
     if let Err(err) = timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
-        .forget(&*keys, &shopper.id, subscriber.as_deref())
+        .forget(&*keys, &shopper.id, newsletter)
         .await
     {
         return answer_error(err);

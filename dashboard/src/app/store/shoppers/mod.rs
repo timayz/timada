@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use timada_core::{CodeVerifier, Keys};
-use timada_shoppers::{Shopper, ShopperError, ShopperState};
+use timada_shoppers::{NewsletterSubscription, Shopper, ShopperError, ShopperState};
 use topcoat::{
     Result,
     context::{Cx, app_context},
@@ -131,12 +131,12 @@ pub async fn opened(cx: &Cx, tenant_id: &str, shopper: &ShopperState) -> Result<
 /// The newsletter subscription of the shopper's address, if there is one:
 /// read while their key still opens the address, for the deletion of their
 /// account to name it ([`crate::shopper_erasure`] erases it).
-pub async fn newsletter_subscriber_of(
+pub async fn newsletter_subscription_of(
     cx: &Cx,
     store: &Executor,
     tenant_id: &str,
     shopper: &ShopperState,
-) -> Result<Option<String>> {
+) -> Result<Option<NewsletterSubscription>> {
     let Some(shopper) = opened(cx, tenant_id, shopper).await? else {
         return Ok(None);
     };
@@ -144,5 +144,8 @@ pub async fn newsletter_subscriber_of(
         .subscriber_of(&shopper.email)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    Ok(subscriber.map(|subscriber| subscriber.id))
+    Ok(subscriber.map(|subscriber| NewsletterSubscription {
+        subscriber_id: subscriber.id,
+        key_id: subscriber.key_id,
+    }))
 }
