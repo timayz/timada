@@ -32,6 +32,7 @@ use topcoat::{
 };
 
 use crate::auth::now;
+use crate::cluster::Executor;
 use crate::key_vault::KeyVault;
 
 /// The header a signed-in shopper's token travels in.
@@ -125,4 +126,23 @@ pub async fn opened(cx: &Cx, tenant_id: &str, shopper: &ShopperState) -> Result<
         .open_with(&*keys(cx, tenant_id))
         .await
         .map_err(topcoat::Error::from_anyhow)
+}
+
+/// The newsletter subscription of the shopper's address, if there is one:
+/// read while their key still opens the address, for the deletion of their
+/// account to name it ([`crate::shopper_erasure`] erases it).
+pub async fn newsletter_subscriber_of(
+    cx: &Cx,
+    store: &Executor,
+    tenant_id: &str,
+    shopper: &ShopperState,
+) -> Result<Option<String>> {
+    let Some(shopper) = opened(cx, tenant_id, shopper).await? else {
+        return Ok(None);
+    };
+    let subscriber = timada_newsletter::Command::new(store.clone(), tenant_id)
+        .subscriber_of(&shopper.email)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    Ok(subscriber.map(|subscriber| subscriber.id))
 }

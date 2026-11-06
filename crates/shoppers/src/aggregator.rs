@@ -37,8 +37,12 @@ pub enum Shopper {
     /// destroyed, so what it sealed is unreadable, and every session is
     /// void. Their orders stay with the shop. A later sign-in with the same
     /// address registers it afresh on this stream, under a new key.
+    /// `newsletter_subscriber` names the newsletter subscription of the
+    /// same address, erased with the account: the host reads it while the
+    /// key still opens the address, and erases it on reading the event.
     Forgotten {
         key_id: String,
+        newsletter_subscriber: Option<String>,
     },
 }
 

@@ -2,7 +2,8 @@
 //! shopper's account. Their key is destroyed, which leaves their personal
 //! data unreadable, and every session ends,
 //! this one included; the orders placed with the address stay with the shop.
-//! The address is erased from the shop's newsletter too. 204.
+//! The address is erased from the shop's newsletter too, by
+//! [`crate::shopper_erasure`], from what the account's deletion names. 204.
 
 use topcoat::{
     Result,
@@ -10,8 +11,9 @@ use topcoat::{
     router::{StatusCode, route},
 };
 
-use super::{Answer, SIGNED_OUT, answer_error, opened, refused, signed_in, status};
-use timada_orders::STOREFRONT_ACTOR;
+use super::{
+    Answer, SIGNED_OUT, answer_error, newsletter_subscriber_of, refused, signed_in, status,
+};
 
 #[route(POST)]
 pub async fn delete(cx: &Cx) -> Result<Answer> {
@@ -25,28 +27,13 @@ pub async fn delete(cx: &Cx) -> Result<Answer> {
     };
     let keys = super::keys(cx, &access.tenant.id);
     // Read before the key goes: the newsletter knows them by their address.
-    let email = opened(cx, &access.tenant.id, &shopper)
-        .await?
-        .map(|shopper| shopper.email);
+    let subscriber =
+        newsletter_subscriber_of(cx, store.executor(), store.tenant_id(), &shopper).await?;
     if let Err(err) = timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
-        .forget(&*keys, &shopper.id)
+        .forget(&*keys, &shopper.id, subscriber.as_deref())
         .await
     {
         return answer_error(err);
-    }
-    if let Some(email) = email {
-        let newsletter =
-            timada_newsletter::Command::new(store.executor().clone(), store.tenant_id());
-        if let Some(subscriber) = newsletter
-            .subscriber_of(&email)
-            .await
-            .map_err(topcoat::Error::from_anyhow)?
-        {
-            newsletter
-                .forget_subscriber(&*keys, STOREFRONT_ACTOR, &subscriber.id)
-                .await
-                .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
-        }
     }
     status(StatusCode::NO_CONTENT)
 }
