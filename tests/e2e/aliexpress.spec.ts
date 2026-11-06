@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { FakeAliexpress, PRODUCT_ID } from "./aliexpress";
-import { registerWithEmail, uniqueEmail } from "./email";
+import { mailCountOf, mailTo, registerWithEmail, uniqueEmail } from "./email";
 import { productTab } from "./forms";
 import { StorefrontApp, mintKey } from "./storefront";
 import { FakeStripe, fakeStripeJs, stripeSignature } from "./stripe";
@@ -581,7 +581,9 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
     // Saved, the money held: the shopper cancels it, nothing is charged.
     const first = await buyRoses(page, request, stripe, webhookUrl, 1);
     const firstIntent = stripe.lastIntent()!;
+    const firstReference = (await page.locator("[data-order-reference]").textContent()) ?? "";
     await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "authorized");
+    const cancelMails = await mailCountOf(request, "ada@example.org", "Cancelled: your ");
     await page.getByText("Annuler ma commande").click();
     await page.getByRole("button", { name: "Confirmer l'annulation" }).click();
     await expect(page.locator("[data-order-cancel-notice]")).toHaveText(
@@ -592,17 +594,24 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
     expect(firstIntent.cancelled).toBe(true);
     expect(firstIntent.captured).toBe(false);
     expect(stripe.refunds).toEqual([]);
+    // And is mailed so: the hold goes back, nothing to refund.
+    const cancelled = await mailTo(request, "ada@example.org", "Cancelled: your ", cancelMails);
+    expect(cancelled.subject).toContain(firstReference);
+    expect(cancelled.html).toContain("Nothing was charged");
     // The merchant sees it cancelled, its hold given back; it is not placed.
     await page.goto(`/t/${slug}/orders/${first}`);
     await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "cancelled");
     await expect(page.locator("[data-order-payment]")).toHaveAttribute("data-order-payment", "released");
+    await expect(page.locator('[data-order-mail="order_cancelled"]')).toHaveAttribute("data-mailed", "mailed");
     await expect(page.getByRole("button", { name: "Place on AliExpress" })).toHaveCount(0);
     expect(aliexpress.orders).toHaveLength(0);
 
     // Placed on AliExpress by the merchant: too late to cancel, and paid.
     const second = await buyRoses(page, request, stripe, webhookUrl, 1);
     const secondShopOrder = page.url();
+    const secondReference = (await page.locator("[data-order-reference]").textContent()) ?? "";
     await expect(page.locator("[data-order-cancel]")).toBeVisible();
+    const paidMails = await mailCountOf(request, "ada@example.org", "Payment received for your ");
     await page.goto(`/t/${slug}/orders/${second}`);
     await page.getByRole("button", { name: "Place on AliExpress" }).click();
     await forwardIs(page, `/t/${slug}/orders/${second}`, "placed");
@@ -611,6 +620,11 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
       await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid", { timeout: 1000 });
     }).toPass({ timeout: 15_000 });
     await expect(page.locator("[data-order-cancel]")).toHaveCount(0);
+    // The money taken, the shopper is mailed with the invoice's link.
+    const receipt = await mailTo(request, "ada@example.org", "Payment received for your ", paidMails);
+    expect(receipt.subject).toContain(secondReference);
+    await page.goto(`/t/${slug}/orders/${second}`);
+    await expect(page.locator('[data-order-mail="order_paid"]')).toHaveAttribute("data-mailed", "mailed");
   } finally {
     await stripe.stop();
     await aliexpress.stop();

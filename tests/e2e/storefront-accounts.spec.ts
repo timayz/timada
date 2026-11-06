@@ -863,9 +863,23 @@ test("a returning shopper signs in with a mailed code and finds their orders and
       `${SHOP}/orders/${guestOrderId}`,
     );
     expect(confirmation.html).toContain("Blue Mug");
+    // From the shop's own stock, it is charged at once: the payment mail
+    // follows, once its invoice exists, with the same link.
+    const receipt = await mailTo(
+      request,
+      shopper,
+      `Payment received for your ${name} order `,
+    );
+    expect(unescapeSlashes(receipt.html)).toContain(
+      `${SHOP}/orders/${guestOrderId}`,
+    );
+    expect(receipt.html).toContain("We have received the payment");
     await page.goto(`/t/${slug}/orders/${guestOrderId}`);
-    await expect(page.locator("[data-order-confirmation]")).toHaveAttribute(
-      "data-order-confirmation",
+    await expect(
+      page.locator('[data-order-mail="order_confirmation"]'),
+    ).toHaveAttribute("data-mailed", "mailed");
+    await expect(page.locator('[data-order-mail="order_paid"]')).toHaveAttribute(
+      "data-mailed",
       "mailed",
     );
 

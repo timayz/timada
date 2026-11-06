@@ -22,8 +22,9 @@ use timada_shoppers::CODE_TTL_SECS;
 use timada_tenancy::{
     AddressVars, AutomationCustomerVars, AutomationDiscountVars, AutomationOrderVars, DiscountVars,
     LineVars, MailVars, NewProductVars, NewsletterConfirmationVars, NewsletterVars,
-    OrderConfirmationVars, OrderVars, RenderedMail, ReviewOrderVars, ReviewRequestVars,
-    ShippingMethodVars, ShopMailKind, ShopVars, ShopperCodeVars, TenantState, render, render_text,
+    OrderCancelledVars, OrderConfirmationVars, OrderPaidVars, OrderVars, RenderedMail,
+    ReviewOrderVars, ReviewRequestVars, ShippingMethodVars, ShopMailKind, ShopVars,
+    ShopperCodeVars, TenantState, render, render_text,
 };
 
 use crate::auth::cookies::EmailFlowKind;
@@ -365,9 +366,9 @@ fn order_vars(order: &OrderState) -> OrderVars {
     }
 }
 
-/// Mails a shop's confirmation of a paid order to its shopper. `link` is
-/// the order's page on the shop's storefront, when the merchant said where
-/// it lives.
+/// Mails a shop's confirmation of an order just placed to its shopper,
+/// saying when the money only waits on their card. `link` is the order's
+/// page on the shop's storefront, when the merchant said where it lives.
 pub async fn send_order_confirmation(
     cx: &Cx,
     shop: &TenantState,
@@ -378,13 +379,57 @@ pub async fn send_order_confirmation(
         shop: shop_vars(cx, shop),
         order: order_vars(order),
         link: link.map(str::to_owned),
+        payment_held: order.supplier.is_some() && !order.is_paid(),
     }));
+    send_order_mail(cx, shop, order, &vars).await
+}
+
+/// Mails the shopper that the money of their order was taken; its page
+/// (`link`) holds the invoice.
+pub async fn send_order_paid(
+    cx: &Cx,
+    shop: &TenantState,
+    order: &OrderState,
+    link: Option<&str>,
+) -> Result<()> {
+    let vars = MailVars::OrderPaid(Box::new(OrderPaidVars {
+        shop: shop_vars(cx, shop),
+        order: order_vars(order),
+        link: link.map(str::to_owned),
+    }));
+    send_order_mail(cx, shop, order, &vars).await
+}
+
+/// Mails the shopper that their order is cancelled: whether money goes back
+/// to them, or nothing was charged.
+pub async fn send_order_cancelled(
+    cx: &Cx,
+    shop: &TenantState,
+    order: &OrderState,
+    link: Option<&str>,
+) -> Result<()> {
+    let vars = MailVars::OrderCancelled(Box::new(OrderCancelledVars {
+        shop: shop_vars(cx, shop),
+        order: order_vars(order),
+        link: link.map(str::to_owned),
+        refunded: order.refunded_cents > 0,
+    }));
+    send_order_mail(cx, shop, order, &vars).await
+}
+
+/// Sends one of the order's mails to its shopper, in their language.
+async fn send_order_mail(
+    cx: &Cx,
+    shop: &TenantState,
+    order: &OrderState,
+    vars: &MailVars,
+) -> Result<()> {
     send_shop_mail(
         cx,
         shop,
-        ShopMailKind::OrderConfirmation,
+        vars.kind(),
         &order.email,
-        &vars,
+        vars,
         order.language.as_deref(),
     )
     .await

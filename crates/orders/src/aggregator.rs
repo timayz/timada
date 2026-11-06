@@ -383,14 +383,16 @@ pub enum Storefront {
     },
 }
 
-/// The confirmation mailed to the shopper of one order. One stream per
-/// order, with the id [`order_confirmation_id`](crate::order_confirmation_id):
-/// the node that writes it first is the one that sends, so a shopper gets
-/// one mail however many nodes follow the tenant.
-#[evento::aggregate(name = "timada-orders/OrderConfirmation")]
-pub enum OrderConfirmation {
-    ConfirmationMailed {
+/// A mail sent to the shopper of one order (`mail` names it: its
+/// confirmation, its payment taken, its cancellation). One stream per order
+/// and mail, with the id [`order_mail_id`](crate::order_mail_id): the node
+/// that writes it first is the one that sends, so a shopper gets each mail
+/// once however many nodes follow the tenant.
+#[evento::aggregate(name = "timada-orders/OrderMail")]
+pub enum OrderMail {
+    Mailed {
         order_id: String,
+        mail: String,
         email: String,
         mailed_by: String,
     },

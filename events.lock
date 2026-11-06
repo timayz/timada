@@ -220,7 +220,7 @@ event timada-orders/Order::ShippingCharged { method_id: String, name: String, am
 event timada-orders/Order::SupplierOrderRefused { supplier: String, reason: String, refused_by: String }
 event timada-orders/Order::SupplierOrderStarted { supplier: String, started_by: String }
 event timada-orders/Order::TimeZoneSet { time_zone: String, set_by: String }
-event timada-orders/OrderConfirmation::ConfirmationMailed { order_id: String, email: String, mailed_by: String }
+event timada-orders/OrderMail::Mailed { order_id: String, mail: String, email: String, mailed_by: String }
 event timada-orders/OrderReference::Claimed { order_id: String }
 event timada-orders/PaymentMethod::PaymentsDisabled { disabled_by: String }
 event timada-orders/PaymentMethod::PaymentsEnabled { provider: String, publishable_key: String, enabled_by: String }

@@ -27,13 +27,13 @@ use evento::{Executor, Projection, metadata::Event};
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BusinessBuyersAccepted, BusinessBuyersRefused,
     BuyerIdentified, CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, CheckedOut,
-    CheckoutRequested, Claimed, ConfirmationMailed, Created, DiscountApplied, DiscountGranted,
-    DiscountRemoved, Discounted, Fulfilled, ItemAdded, ItemRemoved, LanguageGiven, LanguageSet,
-    MethodAdded, MethodChanged, MethodRemoved, NewsletterOptInSet, NewsletterOptedIn, Paid,
-    PaymentCancelled, PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturned,
-    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded,
-    ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
-    StorefrontAddressSet, SupplierOrderRefused, SupplierOrderStarted, TimeZoneGiven, TimeZoneSet,
+    CheckoutRequested, Claimed, Created, DiscountApplied, DiscountGranted, DiscountRemoved,
+    Discounted, Fulfilled, ItemAdded, ItemRemoved, LanguageGiven, LanguageSet, Mailed, MethodAdded,
+    MethodChanged, MethodRemoved, NewsletterOptInSet, NewsletterOptedIn, Paid, PaymentCancelled,
+    PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturned, PaymentsDisabled,
+    PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded, ShippingCharged,
+    ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet,
+    SupplierOrderRefused, SupplierOrderStarted, TimeZoneGiven, TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -1393,31 +1393,30 @@ async fn on_storefront_address_cleared(
 }
 
 // =============================================================================
-// OrderConfirmation
+// OrderMail
 // =============================================================================
 
-#[evento::projection(id = id, name = "timada-orders/OrderConfirmationState")]
+#[evento::projection(id = id, name = "timada-orders/OrderMailState")]
 #[evento::snapshot(none)]
 #[derive(Debug, PartialEq, Eq)]
-pub struct OrderConfirmationState {
+pub struct OrderMailState {
     pub id: String,
+    pub mail: String,
     pub email: String,
     /// Unix seconds.
     pub mailed_at: u64,
 }
 
-pub fn order_confirmation_projection<E: Executor>() -> Projection<E, OrderConfirmationState> {
-    Projection::new::<crate::aggregator::OrderConfirmation>()
-        .handler(on_confirmation_mailed())
+pub fn order_mail_projection<E: Executor>() -> Projection<E, OrderMailState> {
+    Projection::new::<crate::aggregator::OrderMail>()
+        .handler(on_order_mailed())
         .strict()
 }
 
 #[evento::handler]
-async fn on_confirmation_mailed(
-    event: Event<ConfirmationMailed>,
-    state: &mut OrderConfirmationState,
-) -> anyhow::Result<()> {
+async fn on_order_mailed(event: Event<Mailed>, state: &mut OrderMailState) -> anyhow::Result<()> {
     state.id = event.aggregate_id.to_owned();
+    state.mail = event.data.mail.clone();
     state.email = event.data.email.clone();
     state.mailed_at = event.timestamp;
     Ok(())
@@ -1460,13 +1459,14 @@ impl<E: Executor> Command<E> {
             .await
     }
 
-    /// The confirmation mailed for an order, if one was.
-    pub async fn load_order_confirmation(
+    /// The mail `mail` sent about an order, if it was.
+    pub async fn load_order_mail(
         &self,
         order_id: &str,
-    ) -> anyhow::Result<Option<OrderConfirmationState>> {
-        order_confirmation_projection()
-            .load(crate::value_object::order_confirmation_id(order_id))
+        mail: &str,
+    ) -> anyhow::Result<Option<OrderMailState>> {
+        order_mail_projection()
+            .load(crate::value_object::order_mail_id(order_id, mail))
             .tenant(&self.tenant)
             .execute(&self.executor)
             .await
