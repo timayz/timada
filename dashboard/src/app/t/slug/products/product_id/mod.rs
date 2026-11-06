@@ -1207,7 +1207,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 if let Some(link) = &link {
                     section_card(
                         title: Some("AliExpress"),
-                        description: Some("Imported from AliExpress: its stock, and its price when a rule prices it, are read again from there."),
+                        description: Some("Imported from AliExpress: its stock, and its price when a rule prices it, are read again from there. Its costs include what AliExpress charges to deliver one to the shop's country."),
                         <div data-product-aliexpress=(&link.ae_product_id) data-aliexpress-offline=(link.offline)>
                             facts(
                                 fact(term: "Item", <a class=(LINK) href=(format!("https://www.aliexpress.com/item/{}.html", link.ae_product_id)) rel="noopener noreferrer" target="_blank">(&link.ae_product_id)</a>)
