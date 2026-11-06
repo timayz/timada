@@ -261,6 +261,7 @@ impl Aliexpress {
             .refresh_aliexpress(
                 ALIEXPRESS_ACTOR,
                 &company.id,
+                authorization.expires_at,
                 timada_tenancy::AuthorizeAliexpress {
                     access_token_sealed: self.seal(&company.id, &tokens.access_token)?,
                     refresh_token_sealed: self.seal(&company.id, &tokens.refresh_token)?,

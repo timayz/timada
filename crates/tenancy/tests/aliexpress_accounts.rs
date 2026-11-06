@@ -119,9 +119,14 @@ async fn only_an_owner_connects_or_disconnects_the_account() {
     );
     // Disconnected twice is nothing; a host renewal of nothing is nothing.
     cmd.disconnect_aliexpress(&owner, &company).await.unwrap();
-    cmd.refresh_aliexpress("host", &company, tokens(NOW + 3 * DAY, 0))
-        .await
-        .unwrap();
+    cmd.refresh_aliexpress(
+        "host",
+        &company,
+        (NOW + DAY) as u64,
+        tokens(NOW + 3 * DAY, 0),
+    )
+    .await
+    .unwrap();
     assert!(
         cmd.load_company(&company)
             .await
@@ -141,9 +146,14 @@ async fn the_host_renews_without_owning() {
     cmd.authorize_aliexpress(&owner, &company, tokens(NOW + DAY, NOW + 30 * DAY))
         .await
         .unwrap();
-    cmd.refresh_aliexpress("host", &company, tokens(NOW + 3 * DAY, NOW + 40 * DAY))
-        .await
-        .unwrap();
+    cmd.refresh_aliexpress(
+        "host",
+        &company,
+        (NOW + DAY) as u64,
+        tokens(NOW + 3 * DAY, NOW + 40 * DAY),
+    )
+    .await
+    .unwrap();
     catch_up(&executor, &pool).await;
     assert!(due(&pool, NOW + 2 * DAY).await.is_empty());
     assert_eq!(due(&pool, NOW + 3 * DAY).await, vec![company.clone()]);
@@ -337,4 +347,85 @@ async fn the_market_is_the_shops_and_how_orders_go_is_kept_across_it() {
     cmd.remove_aliexpress(&owner, &tenant.id).await.unwrap();
     assert!(load().await.aliexpress.is_none());
     cmd.remove_aliexpress(&owner, &tenant.id).await.unwrap();
+}
+
+/// The host renews while an owner changes the company: the renewal is the
+/// only copy of the new tokens, so it lands whoever wrote first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_renewal_racing_another_write_still_lands() {
+    let (executor, _) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let owner = new_id();
+    let company = company(&cmd, &owner, "12002701600092").await;
+    cmd.authorize_aliexpress(&owner, &company, tokens(NOW + DAY, NOW + 30 * DAY))
+        .await
+        .unwrap();
+    for round in 1..=20 {
+        let renewing = (NOW + round * DAY) as u64;
+        let expires_at = NOW + (round + 1) * DAY;
+        let renewal = tokio::spawn({
+            let cmd = Command(executor.clone());
+            let company = company.clone();
+            async move {
+                cmd.refresh_aliexpress(
+                    "host",
+                    &company,
+                    renewing,
+                    tokens(expires_at, NOW + 60 * DAY),
+                )
+                .await
+            }
+        });
+        let other = tokio::spawn({
+            let cmd = Command(executor.clone());
+            let (owner, company) = (owner.clone(), company.clone());
+            async move { cmd.add_company_owner(&owner, &company, &new_id()).await }
+        });
+        renewal.await.unwrap().unwrap();
+        // The other write may lose: it is not the one under test.
+        let _ = other.await.unwrap();
+        let authorization = cmd
+            .load_company(&company)
+            .await
+            .unwrap()
+            .unwrap()
+            .aliexpress
+            .unwrap();
+        assert_eq!(authorization.expires_at, expires_at as u64, "round {round}");
+    }
+}
+
+/// A renewal finding the authorization it renews replaced (an owner
+/// connected again meanwhile) leaves the newer one alone.
+#[tokio::test]
+async fn a_renewal_never_replaces_a_later_authorization() {
+    let (executor, _) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let owner = new_id();
+    let company = company(&cmd, &owner, "12002701600092").await;
+    cmd.authorize_aliexpress(&owner, &company, tokens(NOW + DAY, NOW + 30 * DAY))
+        .await
+        .unwrap();
+    // The host starts renewing the access lapsing in a day; the owner
+    // connects again first.
+    cmd.authorize_aliexpress(&owner, &company, tokens(NOW + 5 * DAY, NOW + 30 * DAY))
+        .await
+        .unwrap();
+    cmd.refresh_aliexpress(
+        "host",
+        &company,
+        (NOW + DAY) as u64,
+        tokens(NOW + 2 * DAY, NOW + 40 * DAY),
+    )
+    .await
+    .unwrap();
+    let authorization = cmd
+        .load_company(&company)
+        .await
+        .unwrap()
+        .unwrap()
+        .aliexpress
+        .unwrap();
+    assert_eq!(authorization.expires_at, (NOW + 5 * DAY) as u64);
+    assert_eq!(authorization.authorized_by, owner);
 }
