@@ -66,7 +66,7 @@ async fn a_request_nobody_answered_is_listed_until_it_is() {
     };
     assert_eq!(
         listed(unanswered_carts(&db, asked_at as i64, 10).await.unwrap()),
-        [cart_id.clone()]
+        [cart_id.as_str()]
     );
     assert!(
         unanswered_carts(&db, asked_at as i64 - 1, 10)
