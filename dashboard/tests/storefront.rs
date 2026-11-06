@@ -1297,6 +1297,7 @@ async fn answer_as_dashboard(
                 payment_id: format!("pi_{request_id}"),
                 amount_cents: pending.total_cents,
                 currency: pending.currency.clone(),
+                capture_before: None,
             };
             merchant
                 .record_payment_request(
@@ -1570,15 +1571,16 @@ async fn a_store_with_a_checkout_key_sells() {
     );
     assert!(store.order_of_cart(&cart_id).await.unwrap().is_none());
 
-    // The provider confirms to the dashboard: the order exists, paid.
+    // The provider confirms to the dashboard: the order exists, its money
+    // held.
     let placed = merchant
-        .place_paid_order("timada-dashboard", &cart_id, payment)
+        .place_order("timada-dashboard", &cart_id, payment)
         .await
         .unwrap();
     let order = store.order_of_cart(&cart_id).await.unwrap().unwrap();
     assert_eq!(order.reference, placed.reference);
     assert_eq!(order.total_cents, 3900);
-    assert_eq!(order.status, timada_orders::OrderStatus::Paid);
+    assert_eq!(order.status, timada_orders::OrderStatus::Authorized);
     let cart = store.cart(&cart_id).await.unwrap().unwrap();
     assert_eq!(cart.order_id.as_deref(), Some(placed.order_id.as_str()));
     // A cart already ordered: the next add starts a new one.
@@ -1845,8 +1847,15 @@ async fn paid_order(
                 payment_id: format!("pi-{order_id}"),
                 amount_cents: 1000 * products.len() as u64,
                 currency: "EUR".into(),
+                capture_before: None,
             },
+            supplier: None,
             placed_by: "storefront".into(),
+        })
+        .event(&timada_orders::aggregator::Paid {
+            payment_id: format!("pi-{order_id}"),
+            amount_cents: 1000 * products.len() as u64,
+            paid_by: "timada-dashboard".into(),
         })
         .commit(executor)
         .await

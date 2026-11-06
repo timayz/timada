@@ -21,7 +21,8 @@ export async function connectStripe(page: Page, slug: string): Promise<string> {
   return webhookUrl;
 }
 
-/// Stripe telling the dashboard a payment went through, as its webhook does.
+/// Stripe telling the dashboard the shopper confirmed a payment, its money
+/// held, as its webhook does.
 export async function paymentSucceeded(
   request: APIRequestContext,
   webhookUrl: string,
@@ -30,7 +31,7 @@ export async function paymentSucceeded(
 ) {
   const body = JSON.stringify({
     id: `evt_${paymentId}`,
-    type: "payment_intent.succeeded",
+    type: "payment_intent.amount_capturable_updated",
     data: { object: { id: paymentId, object: "payment_intent" } },
   });
   return request.post(webhookUrl, {

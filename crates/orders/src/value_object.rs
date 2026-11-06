@@ -93,8 +93,8 @@ pub struct OrderLine {
     pub tax_category: String,
 }
 
-/// The payment that paid for an order. Frozen in `events.lock`: the fields
-/// never change.
+/// The payment of an order: held on the shopper's card, then taken. Frozen
+/// in `events.lock`: the fields never change.
 #[derive(
     Debug,
     Clone,
@@ -111,9 +111,13 @@ pub struct Payment {
     pub provider: String,
     /// The provider's id of the payment.
     pub payment_id: String,
-    /// What was charged, in minor units of `currency`.
+    /// What the shopper's card holds for the order, in minor units of
+    /// `currency`: what is taken when it is.
     pub amount_cents: u64,
     pub currency: String,
+    /// Unix seconds the hold lapses at, when the provider says (a card's
+    /// lasts a week): the money must be taken before.
+    pub capture_before: Option<u64>,
 }
 
 /// The payment provider the dashboard speaks to.
@@ -127,6 +131,13 @@ pub const INVOICING_NOT_CONFIGURED: &str = "invoicing_not_configured";
 /// The refusal a storefront reads for a payment the dashboard cancelled
 /// once what its checkout held had lapsed: the shopper asks to pay again.
 pub const PAYMENT_EXPIRED: &str = "payment_expired";
+/// Why an order is cancelled when the hold on the shopper's card lapsed
+/// before the money was taken.
+pub const HOLD_EXPIRED_REASON: &str =
+    "The hold on the shopper's card expired before the payment was taken.";
+/// Why an order is cancelled when its hold was cancelled in the provider's
+/// own dashboard.
+pub const HOLD_CANCELLED_REASON: &str = "The payment was cancelled with the provider.";
 /// The refusal of a request to pay for an EU distance sale, from a merchant
 /// not registered for the One-Stop Shop, in a currency the European Central
 /// Bank publishes no euro rate for: the sale cannot be counted against the

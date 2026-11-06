@@ -114,7 +114,8 @@ dir = "data/shopper-keys"
 # stripe_api_url = "http://localhost:12111"
 # # How often, in seconds, this node looks for card forms left open past
 # # the half hour their goods were held for, and closes them with Stripe so
-# # nothing is charged for goods that may be gone.
+# # nothing is charged for goods that may be gone; and for orders whose money
+# # Stripe was asked to take or give back without answering, and settles them.
 # cancel_check_secs = 60
 
 # Invoices. A business buyer's EU VAT number is checked with VIES, the

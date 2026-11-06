@@ -286,9 +286,18 @@ pub fn describe_error(code: &str) -> &'static str {
         }
         "payments_unavailable" => "This tenant has no payments set up.",
         "refund_failed" => {
-            "Stripe could not refund the payment: the order is not cancelled. Try again."
+            "Stripe could not give the money back yet: the order is not cancelled. Try again in a moment."
         }
         "not_cancellable" => "A fulfilled order cannot be cancelled.",
+        "capture_pending" => "The payment is being taken: try again in a moment.",
+        "cancellation_pending" => "The order is being cancelled.",
+        "payment_not_captured" => "The payment is only held on the shopper's card: take it first.",
+        "capture_failed" => {
+            "Stripe would not take the payment: see why on the order. You may try again, or cancel the order."
+        }
+        "hold_expired" => {
+            "The hold on the shopper's card had expired: nothing was taken, and the order is cancelled."
+        }
         "invalid_storefront_url" => {
             "A storefront address starts with https:// and is at most 200 characters."
         }

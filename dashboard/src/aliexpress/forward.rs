@@ -22,7 +22,7 @@ use timada_aliexpress::{
     choose_service, delivery_country, describe_options, forward_items, link_of_product,
     logistics_address,
 };
-use timada_orders::{OrderError, OrderState, OrderStatus};
+use timada_orders::{OrderError, OrderLine, OrderStatus};
 use timada_tenancy::{CompanyState, TenantState};
 
 use super::{ALIEXPRESS_ACTOR, Aliexpress};
@@ -151,13 +151,16 @@ impl Aliexpress {
             return Err(Refusal("The order does not exist.".into()));
         };
         match order.status {
-            OrderStatus::Paid => {}
+            OrderStatus::Authorized | OrderStatus::Paid => {}
             OrderStatus::Fulfilled => {
                 return Err(Refusal("The order is already fulfilled.".into()));
             }
             OrderStatus::Cancelled => return Err(Refusal("The order is cancelled.".into())),
         }
-        let links = order_links(store, db, tenant_id, &order)
+        if order.pending_cancellation.is_some() {
+            return Err(Refusal("The order is being cancelled.".into()));
+        }
+        let links = order_links(store, db, tenant_id, &order.lines)
             .await
             .map_err(failed)?;
         let plan = forward_items(&order.lines, &links);
@@ -338,9 +341,12 @@ impl Aliexpress {
         };
         let orders = timada_orders::Command::new(store.clone(), &tenant.id);
         let order = orders.load_order(&forward.order_id).await?;
-        let settled = order
+        let settled = order.as_ref().is_none_or(|order| order.is_settled());
+        // An order whose money is not taken yet is not fulfilled from here:
+        // its parcels wait in the reads until it is.
+        let paid = order
             .as_ref()
-            .is_none_or(|order| order.status != OrderStatus::Paid);
+            .is_some_and(|order| order.status == OrderStatus::Paid);
         let stale = forward
             .placed_at
             .is_some_and(|at| now.saturating_sub(at) > timada_aliexpress::FORWARD_WATCH_SECS);
@@ -409,7 +415,7 @@ impl Aliexpress {
             }
             Err(err) => return Err(err.into()),
         };
-        if !after.complete || !after.all_shipped() {
+        if !after.complete || !after.all_shipped() || !paid {
             return Ok(CheckResult::Checked { fulfilled: false });
         }
         let tracking = fit_tracking(&after.tracking());
@@ -419,6 +425,10 @@ impl Aliexpress {
         {
             Ok(()) => done(true, Some(tracking)),
             Err(OrderError::OrderCancelled | OrderError::OrderNotFound) => done(false, None),
+            // Not taken, or being cancelled, after all: read again later.
+            Err(OrderError::PaymentNotCaptured | OrderError::CancellationPending) => {
+                return Ok(CheckResult::Checked { fulfilled: false });
+            }
             Err(err) => return Err(err.into()),
         };
         let fulfilled = finished.fulfilled;
@@ -457,16 +467,17 @@ fn fit_tracking(numbers: &[String]) -> String {
     tracking
 }
 
-/// The linked AliExpress items an order's products were imported from.
+/// The linked AliExpress items the products of an order's lines were
+/// imported from.
 pub async fn order_links<E: evento::Executor + Clone>(
     store: &E,
     db: &Db,
     tenant_id: &str,
-    order: &OrderState,
+    lines: &[OrderLine],
 ) -> anyhow::Result<Vec<LinkState>> {
     let links = timada_aliexpress::Command::new(store.clone(), tenant_id);
     let mut found: Vec<LinkState> = Vec::new();
-    for line in &order.lines {
+    for line in lines {
         if found
             .iter()
             .any(|link| link.product_id.as_deref() == Some(line.product_id.as_str()))
@@ -532,7 +543,7 @@ async fn on_order_placed<E: Executor>(
     let Some(order) = orders.load_order(&event.aggregate_id).await? else {
         return Ok(());
     };
-    let links = order_links(&store.0, &db, &event.tenant, &order).await?;
+    let links = order_links(&store.0, &db, &event.tenant, &order.lines).await?;
     if forward_items(&order.lines, &links).items.is_empty() {
         return Ok(());
     }
@@ -570,8 +581,8 @@ mod tests {
 
     use evento::cursor::{Args, ReadResult, Value};
     use evento::{EventFilter, RoutingKey, SubscriberStatus, TenantFilter, WriteError};
-    use timada_aliexpress::{ForwardState, Placement};
-    use timada_orders::{Payment, ShippingAddress};
+    use timada_aliexpress::{ALIEXPRESS_SUPPLIER, ForwardState, Placement};
+    use timada_orders::{OrderState, Payment, ShippingAddress};
     use timada_tenancy::AliexpressAuthorization;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use ulid::Ulid;
@@ -870,7 +881,14 @@ mod tests {
 
         /// A paid order placed on AliExpress as `ae_order_ids`; its forward.
         async fn placed(&self, ae_order_ids: &[&str]) -> String {
-            evento::append(ORDER)
+            self.placed_with(ae_order_ids, true).await
+        }
+
+        /// An order placed on AliExpress as `ae_order_ids`, its money taken
+        /// (`paid`) or still held; its forward.
+        async fn placed_with(&self, ae_order_ids: &[&str], paid: bool) -> String {
+            let mut write = evento::append(ORDER);
+            write
                 .tenant(TENANT)
                 .original_version(0)
                 .event(&timada_orders::aggregator::Placed {
@@ -883,11 +901,17 @@ mod tests {
                     currency: "EUR".to_owned(),
                     total_cents: 1000,
                     payment: Payment::default(),
+                    supplier: Some(ALIEXPRESS_SUPPLIER.to_owned()),
                     placed_by: "storefront".to_owned(),
-                })
-                .commit(&self.store)
-                .await
-                .unwrap();
+                });
+            if paid {
+                write.event(&timada_orders::aggregator::Paid {
+                    payment_id: String::new(),
+                    amount_cents: 1000,
+                    paid_by: "timada-dashboard".to_owned(),
+                });
+            }
+            write.commit(&self.store).await.unwrap();
             let forwards = timada_aliexpress::Command::new(self.store.clone(), TENANT);
             let id = forwards
                 .request_forward(ALIEXPRESS_ACTOR, ORDER, false)
@@ -1085,14 +1109,54 @@ mod tests {
         assert_eq!(shop.order().await.tracking.as_deref(), Some("HAND1"));
     }
 
+    /// The parcels are known before the money is taken (the capture
+    /// failed, say): the order waits for it, then is fulfilled.
+    #[tokio::test]
+    async fn a_held_order_is_fulfilled_once_its_money_is_taken() {
+        let shop = Shop::new().await;
+        let id = shop.placed_with(&["81"], false).await;
+        shop.ships("81", "LP1");
+
+        assert_eq!(
+            shop.check(&id).await,
+            CheckResult::Checked { fulfilled: false }
+        );
+        assert_eq!(shop.order().await.status, OrderStatus::Authorized);
+        assert_eq!(shop.forward(&id).await.status, ForwardStatus::Placed);
+
+        shop.orders()
+            .request_capture("timada-dashboard", ORDER)
+            .await
+            .unwrap();
+        shop.orders()
+            .record_payment("timada-dashboard", ORDER, "", 1000)
+            .await
+            .unwrap();
+        assert_eq!(
+            shop.check(&id).await,
+            CheckResult::Checked { fulfilled: true }
+        );
+        assert_eq!(shop.order().await.status, OrderStatus::Fulfilled);
+    }
+
     #[tokio::test]
     async fn a_cancelled_order_closes_the_forward_without_a_tracking() {
         let shop = Shop::new().await;
         let id = shop.placed(&["81"]).await;
-        shop.orders()
-            .cancel_order("user-alice", ORDER, "changed my mind".to_owned())
+        let orders = shop.orders();
+        orders
+            .request_cancellation("user-alice", ORDER, "changed my mind".to_owned())
             .await
             .unwrap();
+        let refund = orders
+            .request_refund("user-alice", ORDER, 1000)
+            .await
+            .unwrap();
+        orders
+            .record_refund("timada-dashboard", ORDER, "re_1", refund.amount_cents)
+            .await
+            .unwrap();
+        orders.complete_cancellation(ORDER).await.unwrap();
 
         assert_eq!(shop.check(&id).await, CheckResult::Done);
         let forward = shop.forward(&id).await;

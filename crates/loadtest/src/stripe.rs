@@ -2,12 +2,13 @@
 //! (tests/e2e/stripe.ts): every call goes on to stripe-mock, so the
 //! dashboard reads answers shaped exactly as Stripe's, and what stripe-mock
 //! forgets is kept here (the amount and metadata a payment was opened with,
-//! the idempotency key that opened it, whether the shopper paid). Each call
-//! waits `latency` first, as a call across the internet would.
+//! the idempotency key that opened it, whether the shopper confirmed it,
+//! whether its money was then taken or its hold given back). Each call waits
+//! `latency` first, as a call across the internet would.
 //!
-//! Paying also does what Stripe does next: it tells the dashboard through
-//! the shop's webhook, a moment later, retrying while the dashboard asks to,
-//! and now and then twice, since Stripe delivers at least once.
+//! Confirming also does what Stripe does next: it tells the dashboard
+//! through the shop's webhook, a moment later, retrying while the dashboard
+//! asks to, and now and then twice, since Stripe delivers at least once.
 
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
@@ -35,7 +36,12 @@ struct Intent {
     amount: u64,
     currency: String,
     metadata: BTreeMap<String, String>,
-    paid: bool,
+    /// The shopper confirmed it: the money is held.
+    authorized: bool,
+    /// The money was taken.
+    captured: bool,
+    /// The hold was given back, or the form closed.
+    cancelled: bool,
 }
 
 pub struct FakeStripe {
@@ -177,7 +183,9 @@ impl FakeStripe {
                             amount,
                             currency,
                             metadata,
-                            paid: false,
+                            authorized: false,
+                            captured: false,
+                            cancelled: false,
                         },
                     );
                     if let Some(key) = key {
@@ -192,6 +200,39 @@ impl FakeStripe {
             && method == hyper::Method::GET
             && !id.contains('/')
         {
+            return Ok((200, self.patch(json, id)));
+        }
+        // Taking the held money, or giving the hold back: the state is kept
+        // here, stripe-mock answers any payment as it pleases.
+        if let Some(rest) = path.strip_prefix("/v1/payment_intents/")
+            && method == hyper::Method::POST
+            && let Some((id, action)) = rest.split_once('/')
+        {
+            let refused = {
+                let mut intents = self.intents.lock().unwrap();
+                match (intents.get_mut(id), action) {
+                    (Some(intent), "capture") if intent.authorized && !intent.cancelled => {
+                        intent.captured = true;
+                        false
+                    }
+                    (Some(intent), "cancel") if !intent.captured => {
+                        intent.cancelled = true;
+                        false
+                    }
+                    (Some(_), _) => true,
+                    (None, _) => return Ok((status, json)),
+                }
+            };
+            if refused {
+                self.metrics.anomaly(
+                    "payment_refused",
+                    format!("Stripe refused to {action} {id}"),
+                );
+                return Ok((
+                    400,
+                    json!({ "error": { "type": "invalid_request_error", "message": format!("This PaymentIntent could not be {action}d.") } }),
+                ));
+            }
             return Ok((200, self.patch(json, id)));
         }
         if method == hyper::Method::POST && path == "/v1/refunds" {
@@ -216,12 +257,21 @@ impl FakeStripe {
         json["id"] = json!(id);
         json["client_secret"] = json!(format!("{id}_secret_load"));
         json["amount"] = json!(intent.amount);
-        json["amount_received"] = json!(if intent.paid { intent.amount } else { 0 });
+        let held = intent.authorized && !intent.captured && !intent.cancelled;
+        json["amount_capturable"] = json!(if held { intent.amount } else { 0 });
+        json["amount_received"] = json!(if intent.captured { intent.amount } else { 0 });
         // stripe-mock answers with its fixture's currency.
         json["currency"] = json!(intent.currency);
         json["metadata"] = json!(intent.metadata);
-        json["status"] = json!(if intent.paid {
+        json["capture_method"] = json!("manual");
+        // stripe-mock's charge says nothing true about this payment.
+        json["latest_charge"] = Value::Null;
+        json["status"] = json!(if intent.captured {
             "succeeded"
+        } else if intent.cancelled {
+            "canceled"
+        } else if intent.authorized {
+            "requires_capture"
         } else {
             "requires_payment_method"
         });
@@ -239,8 +289,8 @@ impl FakeStripe {
             .map(|intent| intent.amount)
     }
 
-    /// The shopper paid: marks it so, then tells the dashboard. `false`
-    /// when no payment has that client secret.
+    /// The shopper confirmed the payment, its money held: marks it so, then
+    /// tells the dashboard. `false` when no payment has that client secret.
     pub fn pay(self: &Arc<Self>, client_secret: &str) -> bool {
         let Some(id) = client_secret.split("_secret_").next().map(str::to_owned) else {
             return false;
@@ -250,7 +300,7 @@ impl FakeStripe {
             let Some(intent) = intents.get_mut(&id) else {
                 return false;
             };
-            intent.paid = true;
+            intent.authorized = true;
             intent
                 .metadata
                 .get("tenant_id")
@@ -273,7 +323,7 @@ impl FakeStripe {
     async fn deliver(&self, tenant: &str, id: &str) {
         let body = json!({
             "id": format!("evt_{id}"),
-            "type": "payment_intent.succeeded",
+            "type": "payment_intent.amount_capturable_updated",
             "data": { "object": { "id": id, "object": "payment_intent" } },
         })
         .to_string();

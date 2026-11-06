@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use timada_core::db::Db;
-use timada_orders::aggregator::{Cancelled, Placed};
+use timada_orders::aggregator::{Cancelled, Paid, Placed};
 use timada_orders::{OrderLine, Payment, ShippingAddress};
 use timada_reviews::{Command, ReviewPhoto, ReviewState, SubmitReview};
 
@@ -65,8 +65,15 @@ pub async fn paid_order(executor: &evento::Turso, order_id: &str) {
                 payment_id: format!("pi-{order_id}"),
                 amount_cents: 2000,
                 currency: "EUR".to_owned(),
+                capture_before: None,
             },
+            supplier: None,
             placed_by: SHOPPER.to_owned(),
+        })
+        .event(&Paid {
+            payment_id: format!("pi-{order_id}"),
+            amount_cents: 2000,
+            paid_by: "timada-dashboard".to_owned(),
         })
         .tenant(TENANT)
         .commit(executor)
@@ -77,7 +84,7 @@ pub async fn paid_order(executor: &evento::Turso, order_id: &str) {
 /// Cancels the order made by [`paid_order`].
 pub async fn cancel(executor: &evento::Turso, order_id: &str) {
     evento::append(order_id)
-        .original_version(1)
+        .original_version(2)
         .event(&Cancelled {
             reason: "changed my mind".to_owned(),
             cancelled_by: ALICE.to_owned(),

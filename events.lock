@@ -192,19 +192,24 @@ event timada-orders/Cart::LanguageGiven { request_id: String, language: String, 
 event timada-orders/Cart::NewsletterOptedIn { request_id: String, opted_in_by: String }
 event timada-orders/Cart::PaymentCancelled { request_id: String, payment_id: String, cancelled_by: String }
 event timada-orders/Cart::PaymentRefused { request_id: String, code: String, refused_by: String }
-event timada-orders/Cart::PaymentRequested { request_id: String, provider: String, payment_id: String, client_secret: String, publishable_key: String, lines: Vec<OrderLine>, currency: String, total_cents: u64, requested_by: String }
-event timada-orders/Cart::PaymentReturned { request_id: String, payment_id: String, refund_id: String, amount_cents: u64, code: String, returned_by: String }
+event timada-orders/Cart::PaymentRequested { request_id: String, provider: String, payment_id: String, client_secret: String, publishable_key: String, lines: Vec<OrderLine>, currency: String, total_cents: u64, supplier: Option<String>, requested_by: String }
+event timada-orders/Cart::PaymentReturned { request_id: String, payment_id: String, code: String, returned_by: String }
 event timada-orders/Cart::QuantitySet { product_id: String, variant_id: Option<String>, quantity: u32, set_by: String }
 event timada-orders/Cart::ShippingGranted { request_id: String, method_id: String, name: String, amount_cents: u64, granted_by: String }
 event timada-orders/Cart::ShippingMethodChosen { request_id: String, method_id: String, chosen_by: String }
 event timada-orders/Cart::TimeZoneGiven { request_id: String, time_zone: String, given_by: String }
 event timada-orders/Order::BillingAddressSet { billing: ShippingAddress, set_by: String }
+event timada-orders/Order::CancellationRequested { reason: String, requested_by: String }
 event timada-orders/Order::Cancelled { reason: String, cancelled_by: String }
+event timada-orders/Order::CaptureFailed { payment_id: String, reason: String, failed_by: String }
+event timada-orders/Order::CaptureRequested { payment_id: String, amount_cents: u64, requested_by: String }
 event timada-orders/Order::Discounted { discount_id: String, code: String, subtotal_cents: u64, amount_cents: u64, discounted_by: String }
 event timada-orders/Order::Fulfilled { tracking: Option<String>, fulfilled_by: String }
 event timada-orders/Order::LanguageSet { language: String, set_by: String }
 event timada-orders/Order::NewsletterOptInSet { set_by: String }
-event timada-orders/Order::Placed { reference: String, cart_id: String, email: String, shipping: ShippingAddress, note: Option<String>, lines: Vec<OrderLine>, currency: String, total_cents: u64, payment: Payment, placed_by: String }
+event timada-orders/Order::Paid { payment_id: String, amount_cents: u64, paid_by: String }
+event timada-orders/Order::PaymentReleased { payment_id: String, released_by: String }
+event timada-orders/Order::Placed { reference: String, cart_id: String, email: String, shipping: ShippingAddress, note: Option<String>, lines: Vec<OrderLine>, currency: String, total_cents: u64, payment: Payment, supplier: Option<String>, placed_by: String }
 event timada-orders/Order::RefundRequested { payment_id: String, amount_cents: u64, idempotency_key: String, requested_by: String }
 event timada-orders/Order::Refunded { payment_id: String, refund_id: String, amount_cents: u64, refunded_by: String }
 event timada-orders/Order::ShippingCharged { method_id: String, name: String, amount_cents: u64, charged_by: String }
@@ -327,7 +332,7 @@ type timada_invoicing::value_object::InvoiceLine { name: String, variant_label: 
 type timada_invoicing::value_object::Seller { address: Address, legal_form: String, share_capital_cents: Option<u64>, siret: String, rcs_city: Option<String>, contact_email: String, vat_number: Option<String> }
 type timada_invoicing::value_object::VatSubtotal { rate_bps: u32, base_cents: u64, vat_cents: u64 }
 type timada_orders::value_object::OrderLine { product_id: String, variant_id: Option<String>, name: String, variant_label: Option<String>, sku: Option<String>, unit_amount_cents: u64, quantity: u32, tax_category: String }
-type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String }
+type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String, capture_before: Option<u64> }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, region: Option<String>, country: String, phone: Option<String> }
 type timada_reviews::value_object::ReviewPhoto { id: String, ext: String, mime: String, size: u64, width: Option<u32>, height: Option<u32> }
 type timada_tenancy::value_object::PriceBand { up_to_cents: u64, rule: PricingRule }

@@ -200,17 +200,30 @@ by construction.
    events open nothing. A storefront asks to pay through
    `POST /store/carts/{cart_id}/checkout`, which writes `Cart::CheckoutRequested`
    and waits for the answer; the subscription `timada-dashboard/payments`
-   prices the cart from the store, opens a PaymentIntent with the tenant's key (the
-   request id is the idempotency key, so every node answering opens one payment) and
-   records it (`Cart::PaymentRequested`) or the refusal. The shopper confirms with
-   Stripe's card form; Stripe calls `POST /stripe/webhooks/{tenant_id}`, any node,
-   which checks the signature, reads the payment back from Stripe and only then
-   creates the order (`place_paid_order`). A second payment of a cart is refunded; a
-   payment confirmed after the checkout's holds lapsed and went to someone else is given
-   back (`Cart::PaymentReturned`). Cancelling an order records the refund request first
-   (`Order::RefundRequested`, the idempotency key), then asks Stripe, records the refund
-   and cancels; `charge.refunded` reconciles refunds Stripe holds that the order does not
-   know. Setting it up and testing it locally: `docs/payments.md`.
+   prices the cart from the store, opens a PaymentIntent with the tenant's key, held
+   only (manual capture; the request id is the idempotency key, so every node answering
+   opens one payment) and records it (`Cart::PaymentRequested`, with the supplier that
+   buys some of its goods once the order is placed, if any) or the refusal. The shopper
+   confirms with Stripe's card form, which holds the money; Stripe calls
+   `POST /stripe/webhooks/{tenant_id}`, any node, which checks the signature, reads the
+   payment back from Stripe and acts on its state (`payments/webhook.rs`): held, the
+   order is placed (`place_order`, status `Authorized`); taken, it is recorded; dropped
+   (the week a card holds money ran out), the order is cancelled. A second payment of a
+   cart, and one confirmed after the checkout's holds lapsed and went to someone else
+   (`Cart::PaymentReturned`), are given back, nothing taken. The money is taken
+   (`payments/settle.rs`) once the order asks for it (`Order::CaptureRequested`): at
+   once by the subscription `timada-dashboard/payment-capture` when the shop holds every
+   good, once the AliExpress order is placed, or by the merchant; Stripe's answer is
+   `Order::Paid` (the invoice follows) or `Order::CaptureFailed`. Anything irreversible
+   (taking the money, giving it back, ordering from the supplier) is first written on the
+   order at the version read, so two of them never cross: a pending capture holds off a
+   cancellation and the other way round. Cancelling writes `Order::CancellationRequested`,
+   then gives the hold back (`PaymentReleased` with `Cancelled`), or refunds the money
+   taken first (`Order::RefundRequested`, the idempotency key, then Stripe, `Refunded`,
+   `Cancelled`); `charge.refunded` reconciles refunds Stripe holds that the order does not
+   know. No subscription handler fails on a Stripe answer: what Stripe could not be asked
+   at once is settled by the sweep `payments/pending.rs` a minute later. Setting it up and
+   testing it locally: `docs/payments.md`.
 5. **Shop mail** (`shop_mail.rs`). A merchant sets up SMTP servers of its own on
    `/t/{slug}/mail` (up to ten) and picks one for each kind of mail
    (`MailServersPicked`). The shop's mails to its shoppers (order confirmations,
@@ -361,8 +374,9 @@ Stock is held the way a capped discount code is:
   optimistic write on each stream before opening the payment. Two checkouts never take
   the last one twice. A refused or failed payment releases the hold; an abandoned one
   lapses after `RESERVATION_SECS` (its expiry is read, never scheduled).
-- The paid order consumes the hold (subscription `timada-orders/stock-usage`), and a
-  cancelled order puts its quantity back. Both are idempotent per order.
+- The order consumes the hold once placed, its money held (subscription
+  `timada-orders/stock-usage`), and a cancelled order puts its quantity back. Both are
+  idempotent per order.
 
 The read models (`catalog_stock`, `storefront_stock`, and the `stock_state` /
 `stock_json` / `in_stock` columns of the product rows) carry what is on the shelf,
@@ -400,7 +414,8 @@ so a node that missed a picture catches up the next time the tenant opens there.
 
 ## Reviews
 
-Only a buyer reviews: a review is written from a paid order, for a product on it, and
+Only a buyer reviews: a review is written from a paid order (its money taken, not only
+held), for a product on it, and
 its id derives from the two (`hash_ids(["review", order, product])`), so there is one
 per product and order. It is signed with the name the order was shipped to (`Ada L.`)
 and waits until the merchant publishes it on `/t/{slug}/reviews`; a rejected one is

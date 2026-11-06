@@ -142,16 +142,21 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     ));
 
     // A card form left open past the time its goods were held for is closed
-    // with Stripe before it can charge.
+    // with Stripe before it can be confirmed; what an order asked of Stripe
+    // and got no answer to is settled on the same beat.
+    let payments_every = std::time::Duration::from_secs(
+        config
+            .payments
+            .as_ref()
+            .map_or(60, |payments| payments.cancel_check_secs)
+            .max(1),
+    );
     let lapsed_checkouts =
         crate::payments::LapsedCheckouts::new(db.clone(), executor.clone(), payments.clone())
-            .start(std::time::Duration::from_secs(
-                config
-                    .payments
-                    .as_ref()
-                    .map_or(60, |payments| payments.cancel_check_secs)
-                    .max(1),
-            ));
+            .start(payments_every);
+    let pending_payments =
+        crate::payments::PendingPayments::new(db.clone(), executor.clone(), payments.clone())
+            .start(payments_every);
 
     // A campaign a merchant sent goes out a batch at a time.
     let newsletter_sends = crate::newsletter_sends::NewsletterSends::new(
@@ -230,6 +235,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     cluster_watch.abort();
     review_requests.abort();
     lapsed_checkouts.abort();
+    pending_payments.abort();
     newsletter_sends.abort();
     automation_runs.abort();
     aliexpress_sync.abort();
@@ -376,6 +382,10 @@ fn subscriptions(
                 )),
                 store.clone(),
             ),
+        ),
+        (
+            "payment capture",
+            crate::payments::capture_subscription(payments.clone(), store.clone()),
         ),
         (
             "discount usage",

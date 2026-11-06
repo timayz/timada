@@ -60,6 +60,12 @@ pub enum OrderError {
     NotCancellable,
     #[error("a refund is on its way: wait for it to be recorded")]
     RefundPending,
+    #[error("the payment is being taken: try again in a moment")]
+    CapturePending,
+    #[error("the order is being cancelled")]
+    CancellationPending,
+    #[error("the payment is only held on the shopper's card: take it first")]
+    PaymentNotCaptured,
     #[error("the refund must be more than nothing and at most what is outstanding")]
     InvalidRefund,
     #[error("the tracking number is at most 200 characters")]
@@ -163,6 +169,9 @@ impl OrderError {
             Self::OrderCancelled => "order_cancelled",
             Self::NotCancellable => "not_cancellable",
             Self::RefundPending => "refund_pending",
+            Self::CapturePending => "capture_pending",
+            Self::CancellationPending => "cancellation_pending",
+            Self::PaymentNotCaptured => "payment_not_captured",
             Self::InvalidRefund => "invalid_refund",
             Self::InvalidTracking => "invalid_tracking",
             Self::InvalidReason => "invalid_reason",

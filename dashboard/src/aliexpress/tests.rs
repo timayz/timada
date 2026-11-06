@@ -763,6 +763,7 @@ async fn the_read_model_hears_what_makes_a_product_matter() {
             currency: "EUR".to_owned(),
             total_cents: 862,
             payment: Default::default(),
+            supplier: Some(timada_aliexpress::ALIEXPRESS_SUPPLIER.to_owned()),
             placed_by: "storefront".to_owned(),
         })
         .commit(&shop.store)
@@ -838,7 +839,13 @@ impl Shop {
                 currency: "EUR".to_owned(),
                 total_cents: 862,
                 payment: Default::default(),
+                supplier: Some(timada_aliexpress::ALIEXPRESS_SUPPLIER.to_owned()),
                 placed_by: "storefront".to_owned(),
+            })
+            .event(&timada_orders::aggregator::Paid {
+                payment_id: String::new(),
+                amount_cents: 862,
+                paid_by: "timada-dashboard".to_owned(),
             })
             .commit(&self.store)
             .await

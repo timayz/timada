@@ -5,13 +5,28 @@ import type { Page } from "@playwright/test";
 // A stand-in for Stripe's API for the browser suite: every call goes on to
 // stripe-mock (compose.yml), so the dashboard reads answers shaped exactly as
 // Stripe's, and what stripe-mock forgets is kept here: the metadata and
-// amount a payment was opened with, the idempotency key that opened it, and
-// whether the shopper paid. config/e2e.toml points the dashboard at it.
+// amount a payment was opened with, the idempotency key that opened it,
+// whether the shopper confirmed it (its money held), and whether the money
+// was then taken or the hold given back. config/e2e.toml points the dashboard
+// at it.
 
 export const STRIPE_PORT = Number(process.env.E2E_STRIPE_PORT ?? 12112);
 const STRIPE_MOCK = process.env.E2E_STRIPE_MOCK_URL ?? "http://localhost:12111";
 
-type Intent = { id: string; amount: number; currency: string; metadata: Record<string, string>; paid: boolean };
+type Intent = {
+  id: string;
+  amount: number;
+  currency: string;
+  metadata: Record<string, string>;
+  /// The shopper confirmed it: the money is held on their card.
+  authorized: boolean;
+  /// The money was taken.
+  captured: boolean;
+  /// The hold was given back, or the form closed.
+  cancelled: boolean;
+  /// `manual`: held when the shopper pays, taken by the shop.
+  captureMethod: string;
+};
 
 export class FakeStripe {
   readonly intents = new Map<string, Intent>();
@@ -52,8 +67,9 @@ export class FakeStripe {
     return [...this.intents.values()].at(-1);
   }
 
+  /// The shopper confirms the payment: its money is held, to be taken.
   pay(id: string) {
-    this.intents.get(id)!.paid = true;
+    this.intents.get(id)!.authorized = true;
   }
 
   private async forward(req: http.IncomingMessage, body: string) {
@@ -87,7 +103,10 @@ export class FakeStripe {
           amount: Number(form.get("amount")),
           currency: String(form.get("currency")),
           metadata,
-          paid: false,
+          authorized: false,
+          captured: false,
+          cancelled: false,
+          captureMethod: String(form.get("capture_method")),
         });
         if (key) this.byKey.set(key, id);
       }
@@ -96,6 +115,29 @@ export class FakeStripe {
     const intent = /^\/v1\/payment_intents\/([^/]+)$/.exec(path);
     if (req.method === "GET" && intent) {
       return { status: 200, json: this.patch(answer.json, intent[1]) };
+    }
+    // Taking the held money, or giving the hold back: stripe-mock answers
+    // any payment as it pleases, the state is kept here.
+    const action = /^\/v1\/payment_intents\/([^/]+)\/(capture|cancel)$/.exec(path);
+    const acted = action ? this.intents.get(action[1]) : undefined;
+    if (req.method === "POST" && action && acted) {
+      if (action[2] === "capture") {
+        if (!acted.authorized || acted.cancelled) {
+          return {
+            status: 400,
+            json: { error: { type: "invalid_request_error", message: "This PaymentIntent could not be captured." } },
+          };
+        }
+        acted.captured = true;
+      } else if (acted.captured) {
+        return {
+          status: 400,
+          json: { error: { type: "invalid_request_error", message: "This PaymentIntent was captured." } },
+        };
+      } else {
+        acted.cancelled = true;
+      }
+      return { status: 200, json: this.patch(answer.json, acted.id) };
     }
     if (req.method === "POST" && path === "/v1/refunds") {
       const form = new URLSearchParams(body);
@@ -112,10 +154,21 @@ export class FakeStripe {
       id,
       client_secret: `${id}_secret_e2e`,
       amount: intent.amount,
-      amount_received: intent.paid ? intent.amount : 0,
+      amount_capturable: intent.authorized && !intent.captured && !intent.cancelled ? intent.amount : 0,
+      amount_received: intent.captured ? intent.amount : 0,
       currency: intent.currency,
       metadata: intent.metadata,
-      status: intent.paid ? "succeeded" : "requires_payment_method",
+      capture_method: "manual",
+      // stripe-mock's charge says nothing true about this payment.
+      latest_charge: null,
+      cancellation_reason: intent.cancelled ? "requested_by_customer" : null,
+      status: intent.captured
+        ? "succeeded"
+        : intent.cancelled
+          ? "canceled"
+          : intent.authorized
+            ? "requires_capture"
+            : "requires_payment_method",
     };
   }
 }
@@ -129,8 +182,8 @@ export function stripeSignature(body: string, secret: string): string {
 
 /// Stripe.js as the checkout page loads it, faked: the elements mount
 /// nothing (and offer no wallet), and confirming a payment goes straight to
-/// the return page as Stripe does once the shopper paid, with the payment's
-/// client secret in the address. What the page created the elements with is
+/// the return page as Stripe does once the shopper confirmed it, with the
+/// payment's client secret in the address. What the page created the elements with is
 /// kept on `window.__stripe`, the billing details it confirmed with in
 /// `sessionStorage.confirmed`.
 const STRIPE_JS = `

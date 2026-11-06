@@ -449,7 +449,7 @@ async function buyRoses(
   stripe.pay(intent.id);
   const body = JSON.stringify({
     id: `evt_${intent.id}`,
-    type: "payment_intent.succeeded",
+    type: "payment_intent.amount_capturable_updated",
     data: { object: { id: intent.id, object: "payment_intent" } },
   });
   const paid = await request.post(webhookUrl, {
@@ -643,6 +643,12 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     const auto = aliexpress.orders[1];
     expect(auto.tryToPay).toBe(true);
     expect(auto.items[0].product_count).toBe(2);
+    // Placed on AliExpress, its money is still only held: the merchant
+    // takes it.
+    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "authorized");
+    await expect(page.locator("[data-order-awaits-supplier]")).toBeVisible();
+    await page.getByRole("button", { name: "Take the payment" }).click();
+    await expect(page.getByRole("status")).toContainText("The payment was taken.");
     await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid");
 
     // AliExpress pushes the order's new status to the platform's webhook

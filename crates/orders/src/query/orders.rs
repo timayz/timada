@@ -32,6 +32,15 @@ pub struct OrderRow {
     pub discount_code: Option<String>,
     /// What the discount took off; `0` without one.
     pub discount_cents: i64,
+    /// Who supplies some of the goods once placed (`aliexpress`).
+    pub supplier: Option<String>,
+    /// `held`, `capturing`, `capture_failed`, `paid` or `released`
+    /// ([`OrderState::payment_state`](crate::OrderState::payment_state)).
+    pub payment_state: String,
+    /// Unix seconds the hold on the shopper's card lapses at, when known.
+    pub capture_before: Option<i64>,
+    /// Unix seconds the money was taken at.
+    pub paid_at: Option<i64>,
 }
 
 impl OrderRow {
@@ -79,7 +88,8 @@ pub async fn orders_of_tenant(
     db.fetch_all(
         "SELECT tenant_id, id, reference, cart_id, status, email, name, country, item_count,
             total_cents, currency, placed_at, updated_at, payment_id, refunded_cents,
-            discount_id, discount_code, discount_cents
+            discount_id, discount_code, discount_cents, supplier, payment_state, capture_before,
+            paid_at
          FROM orders_orders
          WHERE tenant_id = ?1 AND (?2 IS NULL OR status = ?2)
            AND (?3 IS NULL OR reference LIKE ?3 ESCAPE '\\' OR email LIKE ?3 ESCAPE '\\'
@@ -127,10 +137,40 @@ pub async fn orders_of_email(
     db.fetch_all(
         "SELECT tenant_id, id, reference, cart_id, status, email, name, country, item_count,
             total_cents, currency, placed_at, updated_at, payment_id, refunded_cents,
-            discount_id, discount_code, discount_cents
+            discount_id, discount_code, discount_cents, supplier, payment_state, capture_before,
+            paid_at
          FROM orders_orders WHERE tenant_id = ?1 AND email = ?2
          ORDER BY placed_at DESC, id DESC LIMIT ?3",
         (tenant_id, email, limit),
+    )
+    .await
+}
+
+/// An order whose money needs looking after, across every tenant.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+pub struct PaymentDue {
+    pub tenant_id: String,
+    pub id: String,
+}
+
+/// The orders of every tenant whose money needs looking after at `now`
+/// (Unix seconds): a capture or a cancellation asked before `asked_before`
+/// and still unanswered, a hold whose time ran out, or an order of goods the
+/// shop holds itself, placed before `asked_before` and still only held.
+/// Grouped by tenant, oldest first.
+pub async fn payments_due(
+    db: &Db,
+    now: i64,
+    asked_before: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<PaymentDue>> {
+    db.fetch_all(
+        "SELECT tenant_id, id FROM orders_orders
+         WHERE (status = 'authorized' OR cancel_requested_at IS NOT NULL)
+           AND (capture_requested_at < ?2 OR cancel_requested_at < ?2 OR capture_before < ?1
+                OR (supplier IS NULL AND payment_state = 'held' AND placed_at < ?2))
+         ORDER BY tenant_id, placed_at, id LIMIT ?3",
+        (now, asked_before, limit),
     )
     .await
 }
@@ -178,14 +218,15 @@ pub async fn order_by_id(db: &Db, tenant_id: &str, id: &str) -> anyhow::Result<O
     db.fetch_optional(
         "SELECT tenant_id, id, reference, cart_id, status, email, name, country, item_count,
             total_cents, currency, placed_at, updated_at, payment_id, refunded_cents,
-            discount_id, discount_code, discount_cents
+            discount_id, discount_code, discount_cents, supplier, payment_state, capture_before,
+            paid_at
          FROM orders_orders WHERE tenant_id = ?1 AND id = ?2",
         (tenant_id, id),
     )
     .await
 }
 
-/// How many orders each discount of the tenant was paid with, by discount id
+/// How many orders each discount of the tenant was used by, by discount id
 /// (cancelled ones too: the use was spent).
 pub async fn discount_use_counts(
     db: &Db,

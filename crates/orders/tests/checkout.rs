@@ -60,7 +60,7 @@ async fn a_paid_order_holds_what_the_payment_was_asked_for() {
     );
 
     // The catalog moves on before the payment lands: the order holds what
-    // was paid for.
+    // was bought.
     catalog
         .rename_product(ALICE, &mug, "Big mug")
         .await
@@ -71,14 +71,18 @@ async fn a_paid_order_holds_what_the_payment_was_asked_for() {
         .unwrap();
     assert!(orders.load_order_of_cart(&cart_id).await.unwrap().is_none());
     let placed = orders
-        .place_paid_order(DASHBOARD, &cart_id, payment.clone())
+        .place_order(DASHBOARD, &cart_id, payment.clone())
         .await
         .unwrap();
     assert_eq!(placed.order_id, order_id(&cart_id));
 
     let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
-    assert_eq!(order.status, OrderStatus::Paid);
+    // Held on the shopper's card, nothing taken yet.
+    assert_eq!(order.status, OrderStatus::Authorized);
     assert_eq!(order.payment, payment);
+    assert_eq!(order.payment_state(), "held");
+    assert_eq!(order.outstanding_cents(), 0);
+    assert_eq!(order.supplier, None);
     assert_eq!(order.total_cents, 2 * 1250 + 1000);
     assert_eq!(order.note.as_deref(), Some("Leave it at the door"));
     assert_eq!(order.email, "ada@example.org");
@@ -104,11 +108,11 @@ async fn the_same_payment_told_twice_is_one_order() {
     let (_, payment) = open_payment(&orders, &cart_id, checkout()).await;
 
     let first = orders
-        .place_paid_order(DASHBOARD, &cart_id, payment.clone())
+        .place_order(DASHBOARD, &cart_id, payment.clone())
         .await
         .unwrap();
     let again = orders
-        .place_paid_order(DASHBOARD, &cart_id, payment)
+        .place_order(DASHBOARD, &cart_id, payment)
         .await
         .unwrap();
     assert_eq!(first, again);
@@ -124,10 +128,10 @@ async fn a_second_payment_of_an_ordered_cart_is_a_duplicate() {
     let (_, second) = open_payment(&orders, &cart_id, checkout()).await;
 
     let placed = orders
-        .place_paid_order(DASHBOARD, &cart_id, first)
+        .place_order(DASHBOARD, &cart_id, first)
         .await
         .unwrap();
-    let duplicate = orders.place_paid_order(DASHBOARD, &cart_id, second).await;
+    let duplicate = orders.place_order(DASHBOARD, &cart_id, second).await;
     assert!(
         matches!(&duplicate, Err(OrderError::DuplicatePayment { order_id }) if *order_id == placed.order_id),
         "{duplicate:?}"
@@ -142,7 +146,7 @@ async fn a_payment_must_match_what_was_asked_for() {
     let (_, payment) = open_payment(&orders, &cart_id, checkout()).await;
 
     let short = orders
-        .place_paid_order(
+        .place_order(
             DASHBOARD,
             &cart_id,
             Payment {
@@ -156,7 +160,7 @@ async fn a_payment_must_match_what_was_asked_for() {
         "{short:?}"
     );
     let unknown = orders
-        .place_paid_order(
+        .place_order(
             DASHBOARD,
             &cart_id,
             Payment {
@@ -633,7 +637,7 @@ async fn a_payment_left_unconfirmed_is_cancelled_once_and_closes_the_request() {
     // Nor can the cancelled payment still place the order.
     assert!(matches!(
         orders
-            .place_paid_order(DASHBOARD, &cart_id, payment.clone())
+            .place_order(DASHBOARD, &cart_id, payment.clone())
             .await,
         Err(OrderError::PaymentNotFound)
     ));
@@ -641,7 +645,7 @@ async fn a_payment_left_unconfirmed_is_cancelled_once_and_closes_the_request() {
     // The shopper asks again and pays: that payment is no longer cancellable.
     let (_, again) = open_payment(&orders, &cart_id, checkout()).await;
     orders
-        .place_paid_order(DASHBOARD, &cart_id, again.clone())
+        .place_order(DASHBOARD, &cart_id, again.clone())
         .await
         .unwrap();
     assert!(matches!(

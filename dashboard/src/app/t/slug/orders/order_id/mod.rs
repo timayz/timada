@@ -1,9 +1,11 @@
-//! `/t/{slug}/orders/{order_id}`: one paid order, read from its own stream
-//! (so a change shows at once), with what the merchant does next: mark it
-//! fulfilled, or cancel it, and how its AliExpress items were placed there.
+//! `/t/{slug}/orders/{order_id}`: one order, read from its own stream (so a
+//! change shows at once), with where its money stands and what the merchant
+//! does next: take the payment, mark it fulfilled, or cancel it, and how
+//! its AliExpress items were placed there.
 
 pub mod aliexpress;
 pub mod cancel;
+pub mod capture;
 pub mod fulfil;
 
 use std::sync::Arc;
@@ -164,7 +166,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 &store,
                 app_context::<Db>(cx),
                 &access.tenant.id,
-                &order,
+                &order.lines,
             )
             .await
             .map_err(topcoat::Error::from_anyhow)?,
@@ -172,7 +174,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .items
         .is_empty();
     let can_forward = connected
-        && order.status == OrderStatus::Paid
+        && matches!(order.status, OrderStatus::Authorized | OrderStatus::Paid)
+        && order.pending_cancellation.is_none()
         && access.can(cx, PERMISSION_ALIEXPRESS_MANAGE).await?;
     let ae = (from_aliexpress || forward.is_some())
         .then(|| AliexpressCard::of(forward.as_ref(), can_forward, crate::auth::now()));
@@ -212,24 +215,51 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let billing = order.billing.clone();
     let order_id = order.id.clone();
 
-    let can_fulfil = can_manage && status == OrderStatus::Paid;
-    let payment = format!(
-        "{} · {}",
-        format_money(order.payment.amount_cents, &order.payment.currency),
-        order.payment.payment_id
-    );
+    let cancelling = order.pending_cancellation.clone();
+    let can_fulfil = can_manage && status == OrderStatus::Paid && cancelling.is_none();
+    let amount = format_money(order.payment.amount_cents, &order.payment.currency);
+    // Where the money stands: held on the card, being taken, taken, or
+    // given back.
+    let payment = match (order.paid_at, order.released_at, &order.pending_capture) {
+        (Some(at), _, _) => format!(
+            "{} taken {}",
+            format_money(order.paid_cents, &order.currency),
+            format_time(at)
+        ),
+        (None, Some(at), _) => format!("{amount} held, given back {}", format_time(at)),
+        (None, None, Some(pending)) => format!(
+            "{amount} held, being taken since {}",
+            format_time(pending.requested_at)
+        ),
+        (None, None, None) => match order.payment.capture_before {
+            Some(before) => format!("{amount} held on the card until {}", format_time(before)),
+            None => format!("{amount} held on the card"),
+        },
+    };
+    let payment = format!("{payment} · {}", order.payment.payment_id);
+    let awaits_supplier = order.awaits_supplier() && order.pending_capture.is_none();
     let refunded =
         (order.refunded_cents > 0).then(|| format_money(order.refunded_cents, &order.currency));
     let pending_refund = order
         .pending_refund
         .as_ref()
         .map(|pending| format_money(pending.amount_cents, &order.currency));
-    let cancel_label = if pending_refund.is_some() {
-        "Retry the refund and cancel"
-    } else {
+    let cancel_label = if cancelling.is_some() || pending_refund.is_some() {
+        "Retry the cancellation"
+    } else if order.is_paid() {
         "Cancel and refund"
+    } else {
+        "Cancel and release the hold"
     };
-    let can_cancel = can_manage && status == OrderStatus::Paid;
+    let can_cancel = can_manage
+        && matches!(status, OrderStatus::Authorized | OrderStatus::Paid)
+        && order.pending_capture.is_none();
+    let can_capture = can_manage && status == OrderStatus::Authorized && cancelling.is_none();
+    let capture_label = if order.capture_failure.is_some() {
+        "Take the payment again"
+    } else {
+        "Take the payment"
+    };
     let title = format!("Order {} · {}", order.reference, tenant.name);
     let heading = format!("Order {}", order.reference);
     let placed = format!("Placed {}", format_time(order.placed_at));
@@ -254,7 +284,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         status_badge(tone: order_tone(status), (status.label()))
                     )
                     fact(term: "Placed", <time datetime=(order.placed_at)>(format_time(order.placed_at))</time>)
-                    fact(term: "Payment", attrs: attributes! { data-order-payment="" }, (&payment))
+                    fact(term: "Payment", attrs: attributes! { data-order-payment=(order.payment_state()) }, (&payment))
+                    if awaits_supplier {
+                        fact(term: "Taken", attrs: attributes! { data-order-awaits-supplier="" }, "once its goods are bought from the supplier (" (order.supplier.as_deref().unwrap_or_default()) ")")
+                    }
+                    if let Some(failure) = &order.capture_failure {
+                        fact(term: "Payment not taken", attrs: attributes! { data-order-capture-failure="" }, (failure))
+                    }
+                    if let Some(asked) = &cancelling {
+                        fact(term: "Cancelling", attrs: attributes! { data-order-cancelling="" }, "asked " <time datetime=(asked.requested_at)>(format_time(asked.requested_at))</time> ", not settled with Stripe yet")
+                    }
                     if let Some(refunded) = &refunded {
                         fact(term: "Refunded", attrs: attributes! { data-order-refunded="" }, (refunded))
                     }
@@ -299,7 +338,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 title: Some("Invoices"),
                 attrs: attributes! { data-order-documents="" },
                 if documents.is_empty() {
-                    <p class="text-sm text-muted-foreground">"The invoice is being issued: reload in a moment."</p>
+                    <p class="text-sm text-muted-foreground">(if order.is_paid() {
+                        "The invoice is being issued: reload in a moment."
+                    } else if order.released_at.is_some() {
+                        "No invoice: nothing was taken."
+                    } else {
+                        "The invoice is issued once the payment is taken."
+                    })</p>
                 }
                 <ul class="space-y-1 text-sm">
                     for doc in &documents {
@@ -449,10 +494,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 )
             }
 
-            if can_fulfil || can_cancel {
+            if can_capture || can_fulfil || can_cancel {
                 section_card(
                     title: Some("Next step"),
                     <div class="grid gap-6 md:grid-cols-2">
+                        if can_capture {
+                            <form method="post" action=(href!(capture::capture, Slug(slug.clone()), OrderId(order_id.clone()))) class="flex flex-col gap-4">
+                                <p class="text-sm text-muted-foreground">(if awaits_supplier {
+                                    "Taken on its own once the goods are bought on AliExpress. Take it now when you buy them by hand."
+                                } else {
+                                    "The money is held on the shopper's card until it is taken."
+                                })</p>
+                                <div>
+                                    button(attrs: attributes! { type="submit" }, (capture_label))
+                                </div>
+                            </form>
+                        }
                         if can_fulfil {
                             <form method="post" action=(href!(fulfil::fulfil, Slug(slug.clone()), OrderId(order_id.clone()))) class="flex flex-col gap-4">
                                 field(

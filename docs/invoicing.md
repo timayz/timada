@@ -2,7 +2,9 @@
 
 Every paid order gets an invoice and every refund a credit note (*avoir*), issued by
 the merchant to the shopper under French rules. Nobody has to press a button: the
-dashboard issues them a moment after the payment or the refund.
+dashboard issues them a moment after the money is taken (`Order::Paid`) or the refund.
+An order whose money was only held on the shopper's card, then given back, has
+neither: nothing was sold.
 
 ## Before the first sale
 
@@ -76,7 +78,7 @@ the rates that were paid.
 
 The shopper always pays the catalog price: VAT is included and never added on top.
 What changes with the destination is how that price splits into base and tax. The
-invoice decides it when it is issued, seconds after the payment.
+invoice decides it when it is issued, seconds after the money is taken.
 
 | Where the goods go | Who buys | Regime | VAT on the invoice |
 |---|---|---|---|

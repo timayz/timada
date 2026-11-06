@@ -1,10 +1,13 @@
 //! `/checkout/complete`: where Stripe sends the browser back. The order
-//! exists once Stripe told the dashboard the payment went through, which may
-//! take a moment longer than the browser's way back: until then the page
-//! says so and looks again. A payment that came too late for what the
-//! checkout held is given back, and the page says so instead of waiting.
+//! exists once Stripe told the dashboard the shopper confirmed the payment,
+//! its money held, which may take a moment longer than the browser's way
+//! back: until then the page says so and looks again. Goods the shop holds
+//! are paid for at once, so the page waits for that too and the order shows
+//! paid; goods a supplier buys first wait for it, and the order shows
+//! saved. A payment that came too late for what the checkout held is given
+//! back, and the page says so instead of waiting.
 
-use timada_storefront::{menu, order_of_cart, payment_returned, returned_code};
+use timada_storefront::{OrderStatus, menu, order_of_cart, payment_returned, returned_code};
 use topcoat::{
     Result,
     context::Cx,
@@ -40,7 +43,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     if query.redirect_status.as_deref() == Some("failed") {
         return Err(redirect(checkout_url(cx, Some("payment_failed"))).into());
     }
-    if let Some(order) = order_of_cart(cx, &progress.cart_id).await? {
+    // An order the shop holds every good of is paid for in a moment: shown
+    // once it is (or the provider refused), not while it is being taken.
+    let order = order_of_cart(cx, &progress.cart_id).await?.filter(|order| {
+        order.status != OrderStatus::Authorized
+            || order.supplier.is_some()
+            || order.capture_failure.is_some()
+    });
+    if let Some(order) = order {
         remember_order(cx, &order.id)?;
         forget_cart(cx);
         forget_payment(cx);

@@ -12,7 +12,8 @@ use crate::value_object::{OrderLine, Payment, ShippingAddress};
 /// is asked for. Paying goes in turns: the shopper asks to pay
 /// (`CheckoutRequested`), the dashboard prices the cart and opens a payment
 /// with the provider (`PaymentRequested`) or says why it cannot
-/// (`PaymentRefused`); the order exists once the provider confirms.
+/// (`PaymentRefused`); the order exists once the provider holds the money on
+/// the shopper's card, and the money is taken later.
 #[evento::aggregate(name = "timada-orders/Cart")]
 pub enum Cart {
     Created {
@@ -69,6 +70,10 @@ pub enum Cart {
         lines: Vec<OrderLine>,
         currency: String,
         total_cents: u64,
+        /// Who supplies some of the goods once the order is placed
+        /// (`aliexpress`): the money is then taken once they are bought from
+        /// it. `None` when the shop holds everything: taken at once.
+        supplier: Option<String>,
         requested_by: String,
     },
     /// The shopper buys as a business with this VAT number (`DE123456789`),
@@ -86,17 +91,15 @@ pub enum Cart {
         code: String,
         refused_by: String,
     },
-    /// The payment of a request went through, but too late: what the
+    /// The payment of a request was authorized, but too late: what the
     /// checkout held (the goods, the discount's use) had lapsed and was
-    /// taken by someone else in between, so the money went back to the
-    /// shopper (`refund_id`, `amount_cents`) and no order was placed. `code`
-    /// says what was gone (`out_of_stock`, `discount_exhausted`,
+    /// taken by someone else in between, so the hold went back to the
+    /// shopper's card, nothing taken, and no order was placed. `code` says
+    /// what was gone (`out_of_stock`, `discount_exhausted`,
     /// `discount_already_used`). Written by the dashboard, never a shopper.
     PaymentReturned {
         request_id: String,
         payment_id: String,
-        refund_id: String,
-        amount_cents: u64,
         code: String,
         returned_by: String,
     },
@@ -183,9 +186,12 @@ pub enum Cart {
     },
 }
 
-/// A paid order. Its id derives from the cart it was placed from
-/// ([`order_id`](crate::order_id)); it exists only once its payment went
-/// through.
+/// An order. Its id derives from the cart it was placed from
+/// ([`order_id`](crate::order_id)); it exists once the provider holds its
+/// payment on the shopper's card, and the money is taken (`Paid`) at once,
+/// or once a supplier has the goods. Anything irreversible done outside the
+/// store (taking the money, giving it back, ordering from the supplier) is
+/// first asked for here, at the version read, so two of them never cross.
 #[evento::aggregate(name = "timada-orders/Order")]
 pub enum Order {
     /// Everything about the sale, copied at the moment it was made.
@@ -200,19 +206,58 @@ pub enum Order {
         lines: Vec<OrderLine>,
         /// The ISO-4217 code every line is priced in.
         currency: String,
-        /// What was paid, in minor units: the sum of the lines, less the
-        /// discount of a `Discounted` written with it.
+        /// What the shopper owes, in minor units: the sum of the lines, less
+        /// the discount of a `Discounted` written with it.
         total_cents: u64,
-        /// The payment that paid for it.
+        /// The payment holding it on the shopper's card.
         payment: Payment,
+        /// Who supplies some of its goods once placed (`aliexpress`): the
+        /// money is taken once they are bought from it. `None`: taken at
+        /// once.
+        supplier: Option<String>,
         placed_by: String,
+    },
+    /// The provider is about to be asked to take the held payment. Settled
+    /// by the `Paid` or `CaptureFailed` that follows; until then the order
+    /// is not cancelled.
+    CaptureRequested {
+        payment_id: String,
+        amount_cents: u64,
+        requested_by: String,
+    },
+    /// The held payment was taken: the order is paid.
+    Paid {
+        payment_id: String,
+        amount_cents: u64,
+        paid_by: String,
+    },
+    /// The provider would not take the held payment; `reason` is what it
+    /// said. It may be asked again.
+    CaptureFailed {
+        payment_id: String,
+        reason: String,
+        failed_by: String,
+    },
+    /// The order is to be cancelled. The money is settled first, the hold
+    /// released or what was taken refunded, and only then is the order
+    /// `Cancelled`; nothing else happens to it meanwhile.
+    CancellationRequested {
+        reason: String,
+        requested_by: String,
+    },
+    /// The hold on the shopper's card went back, nothing taken. Written
+    /// with the `Cancelled` it makes.
+    PaymentReleased {
+        payment_id: String,
+        released_by: String,
     },
     /// The goods left; `tracking` is a parcel number or link, if any.
     Fulfilled {
         tracking: Option<String>,
         fulfilled_by: String,
     },
-    /// Final.
+    /// Final, once the money is settled: the hold released (written with
+    /// `PaymentReleased`) or what was taken given back.
     Cancelled {
         reason: String,
         cancelled_by: String,

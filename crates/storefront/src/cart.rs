@@ -865,7 +865,8 @@ impl Store {
             PaymentAnswer::Refused(code) => {
                 Some(Err(OrderError::PaymentRefused { code: code.clone() }))
             }
-            // Paid too late and given back: nothing to confirm any more.
+            // Confirmed too late and its hold given back: nothing to
+            // confirm any more, nothing charged.
             PaymentAnswer::Returned(returned) => Some(Err(OrderError::PaymentRefused {
                 code: returned_code(&returned.code),
             })),
@@ -1036,9 +1037,10 @@ pub async fn payment_session(
         .map_err(Error::from_anyhow)
 }
 
-/// The order the cart became, once its payment went through. The provider
-/// tells the dashboard, not the shopper's browser, so a page coming back
-/// from the card form may have to wait a moment for it.
+/// The order the cart became, once the shopper confirmed its payment (the
+/// money held on their card). The provider tells the dashboard, not the
+/// shopper's browser, so a page coming back from the card form may have to
+/// wait a moment for it.
 pub async fn order_of_cart(cx: &Cx, cart_id: &str) -> Result<Option<OrderState>> {
     store(cx)
         .order_of_cart(cart_id)
@@ -1046,11 +1048,12 @@ pub async fn order_of_cart(cx: &Cx, cart_id: &str) -> Result<Option<OrderState>>
         .map_err(Error::from_anyhow)
 }
 
-/// The payment of a request that went through too late and was given back:
+/// The payment of a request that was confirmed too late and given back:
 /// what the checkout held (the goods, the discount's use) had lapsed and
-/// gone to someone else, so there is no order and the money is on its way
-/// back. A page waiting for the order checks this too, and words
-/// [`returned_code`] (`payment_returned_out_of_stock`, ...) to the shopper.
+/// gone to someone else, so there is no order and the hold went back to the
+/// shopper's card, nothing charged. A page waiting for the order checks this
+/// too, and words [`returned_code`] (`payment_returned_out_of_stock`, ...)
+/// to the shopper.
 pub async fn payment_returned(
     cx: &Cx,
     cart_id: &str,
@@ -1065,7 +1068,7 @@ pub async fn payment_returned(
 /// The refusal code a page words for a payment given back: the reason the
 /// store recorded (`out_of_stock`, `discount_exhausted`,
 /// `discount_already_used`) under the `payment_returned_` prefix, so the
-/// wording can say the money is on its way back.
+/// wording can say nothing was charged.
 pub fn returned_code(code: &str) -> String {
     format!("payment_returned_{code}")
 }

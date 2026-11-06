@@ -19,10 +19,9 @@ async fn orders_and_carts_are_listed() {
     let placed = pay(&orders, &ordered, checkout()).await;
     let cancelled_cart = cart_with(&orders, &mug, 1).await;
     let cancelled = pay(&orders, &cancelled_cart, checkout()).await;
-    orders
-        .cancel_order(ALICE, &cancelled.order_id, "Test".into())
-        .await
-        .unwrap();
+    cancel(&orders, &cancelled.order_id, "Test").await;
+    let held_cart = cart_with(&orders, &mug, 1).await;
+    let held = place(&orders, &held_cart, checkout()).await;
 
     // Twice: delivery may repeat without the rows drifting.
     for _ in 0..2 {
@@ -34,14 +33,25 @@ async fn orders_and_carts_are_listed() {
     let all = OrderFilter::default();
 
     let rows = orders_of_tenant(&pool, TENANT, &all, 0, 10).await.unwrap();
-    assert_eq!(rows.len(), 2);
+    assert_eq!(rows.len(), 3);
     let row = rows.iter().find(|row| row.id == placed.order_id).unwrap();
     assert_eq!(row.reference, placed.reference);
     assert_eq!(row.status(), OrderStatus::Paid);
+    assert_eq!(row.payment_state, "paid");
+    assert!(row.paid_at.is_some());
     assert!(row.payment_id.starts_with("pi_"));
     assert_eq!(row.total_label(), "25.00 €");
     assert_eq!(row.item_count, 2);
     assert_eq!(row.name, "Ada Lovelace");
+    let held_row = rows.iter().find(|row| row.id == held.order_id).unwrap();
+    assert_eq!(held_row.status(), OrderStatus::Authorized);
+    assert_eq!(held_row.payment_state, "held");
+    assert_eq!(held_row.paid_at, None);
+    let cancelled_row = rows
+        .iter()
+        .find(|row| row.id == cancelled.order_id)
+        .unwrap();
+    assert_eq!(cancelled_row.payment_state, "paid", "taken, then refunded");
 
     let only_cancelled = OrderFilter::default().status(Some(OrderStatus::Cancelled));
     let rows = orders_of_tenant(&pool, TENANT, &only_cancelled, 0, 10)
@@ -53,11 +63,11 @@ async fn orders_and_carts_are_listed() {
     let by_reference = OrderFilter::default().search(Some(&placed.reference));
     assert_eq!(count_orders(&pool, TENANT, &by_reference).await.unwrap(), 1);
     let by_email = OrderFilter::default().search(Some("ADA@example"));
-    assert_eq!(count_orders(&pool, TENANT, &by_email).await.unwrap(), 2);
+    assert_eq!(count_orders(&pool, TENANT, &by_email).await.unwrap(), 3);
     let of_email = orders_of_email(&pool, TENANT, &checkout().email.to_lowercase(), 10)
         .await
         .unwrap();
-    assert_eq!(of_email.len(), 2);
+    assert_eq!(of_email.len(), 3);
     assert!(
         orders_of_email(&pool, TENANT, "bob@example.com", 10)
             .await

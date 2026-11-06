@@ -406,6 +406,10 @@ pub struct PendingPayment {
     pub discount: Option<OrderDiscount>,
     /// The shipping to charge it with; `None` in a shop without methods.
     pub shipping: Option<OrderShipping>,
+    /// Who supplies some of the goods once the order is placed: the money
+    /// is then taken once they are bought from it. The orders know no
+    /// supplier: the dashboard says, before it records the payment.
+    pub supplier: Option<String>,
 }
 
 impl<E: Executor> super::Command<E> {
@@ -462,6 +466,7 @@ impl<E: Executor> super::Command<E> {
             total_cents,
             discount: quote.discount,
             shipping,
+            supplier: None,
         }))
     }
 
@@ -637,6 +642,7 @@ impl<E: Executor> super::Command<E> {
                     lines: pending.lines.clone(),
                     currency: pending.currency.clone(),
                     total_cents: pending.total_cents,
+                    supplier: pending.supplier.clone(),
                     requested_by: actor.to_owned(),
                 });
             if let Some(discount) = &pending.discount {
@@ -703,11 +709,11 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Records that the payment of a request went through too late (what
-    /// its checkout held had lapsed and gone) and was given back:
-    /// `returned` names the payment, the refund and what was gone. Told
-    /// twice, the second time is a no-op; a payment the cart never opened,
-    /// or that already made an order, is `PaymentNotFound`.
+    /// Records that the payment of a request was authorized too late (what
+    /// its checkout held had lapsed and gone) and its hold released:
+    /// `returned` names the payment and what was gone. Told twice, the
+    /// second time is a no-op; a payment the cart never opened, or that
+    /// already made an order, is `PaymentNotFound`.
     pub async fn return_payment(
         &self,
         actor: &str,
@@ -730,8 +736,6 @@ impl<E: Executor> super::Command<E> {
                 .event(&PaymentReturned {
                     request_id: request.request_id.clone(),
                     payment_id: returned.payment_id.clone(),
-                    refund_id: returned.refund_id.clone(),
-                    amount_cents: returned.amount_cents,
                     code: returned.code.clone(),
                     returned_by: actor.to_owned(),
                 })
@@ -788,12 +792,13 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// The provider says `payment` went through: the cart becomes the order,
-    /// with the lines, address and note of the request it paid for. Told
-    /// twice, the same order comes back. A second payment of a cart already
-    /// ordered is `DuplicatePayment` (the caller gives it back); one that
-    /// does not match what the cart was priced at is `AmountMismatch`.
-    pub async fn place_paid_order(
+    /// The provider holds `payment` on the shopper's card: the cart becomes
+    /// the order, with the lines, address and note of the request it pays
+    /// for, and the money is taken later. Told twice, the same order comes
+    /// back. A second payment of a cart already ordered is
+    /// `DuplicatePayment` (the caller releases it); one that does not hold
+    /// what the cart was priced at is `AmountMismatch`.
+    pub async fn place_order(
         &self,
         actor: &str,
         cart_id: &str,
@@ -838,6 +843,7 @@ impl<E: Executor> super::Command<E> {
                     currency: snapshot.currency.clone(),
                     ..payment.clone()
                 },
+                supplier: snapshot.supplier.clone(),
                 placed_by: actor.to_owned(),
             });
         if let Some(discount) = &snapshot.discount {

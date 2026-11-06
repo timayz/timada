@@ -98,7 +98,8 @@ storefront.migrate:
 # than https://timada.localhost, so the CLI does not trip over the mkcert certificate.
 stripe.listen:
 	@$(load_settings); \
-	stripe listen --events payment_intent.succeeded,charge.refunded \
+	stripe listen \
+		--events payment_intent.amount_capturable_updated,payment_intent.succeeded,payment_intent.canceled,charge.refunded \
 		--forward-to http://localhost:3000/stripe/webhooks/$${STORE_TENANT_ID:?run make seed first, or set it}
 
 # Browser tests on a fresh database behind the compose Traefik, with the compose

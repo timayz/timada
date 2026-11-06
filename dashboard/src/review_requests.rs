@@ -133,7 +133,8 @@ pub async fn ask_buyers<E: evento::Executor + Clone>(
         };
         let products = unreviewed(&reviews, &order).await?;
         if order.status != OrderStatus::Fulfilled
-            || order.refunded_cents >= order.total_cents
+            || !order.is_paid()
+            || order.refunded_cents >= order.paid_cents
             || products.is_empty()
         {
             continue;
@@ -187,7 +188,7 @@ async fn unreviewed<E: evento::Executor>(
 
 #[cfg(test)]
 mod tests {
-    use timada_orders::aggregator::{Fulfilled, Placed};
+    use timada_orders::aggregator::{Fulfilled, Paid, Placed};
     use timada_orders::{OrderLine, Payment, ShippingAddress};
     use timada_reviews::SubmitReview;
     use topcoat::context::CxTestBuilder;
@@ -245,7 +246,13 @@ mod tests {
                 currency: "EUR".to_owned(),
                 total_cents: 3000,
                 payment: Payment::default(),
+                supplier: None,
                 placed_by: "storefront".to_owned(),
+            })
+            .event(&Paid {
+                payment_id: String::new(),
+                amount_cents: 3000,
+                paid_by: "timada-dashboard".to_owned(),
             })
             .event(&Fulfilled {
                 tracking: None,

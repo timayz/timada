@@ -96,10 +96,7 @@ async fn a_paid_order_takes_its_share_and_a_cancelled_one_gives_it_back() {
     let stock = catalog.load_stock(&mug, None).await.unwrap().unwrap();
     assert_eq!(stock.on_hand, 1);
 
-    orders
-        .cancel_order(ALICE, &placed.order_id, "Damaged".into())
-        .await
-        .unwrap();
+    cancel(&orders, &placed.order_id, "Damaged").await;
     run().await;
     let stock = catalog.load_stock(&mug, None).await.unwrap().unwrap();
     assert_eq!(stock.on_hand, 3);

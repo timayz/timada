@@ -9,7 +9,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use timada_aliexpress::link_of_product;
+use timada_aliexpress::{ALIEXPRESS_SUPPLIER, forward_items, link_of_product};
+use timada_orders::OrderLine;
 use tokio::task::JoinSet;
 
 use super::{Aliexpress, SyncMode, SyncResult};
@@ -121,5 +122,20 @@ impl SuppliedGoods for AliexpressGoods {
         if let Err(err) = self.read(tenant_id, product_ids, crate::auth::now()).await {
             tracing::warn!(tenant = %tenant_id, error = %err, "AliExpress products not read before a payment: priced as last read");
         }
+    }
+
+    /// The lines the forwarder would buy on AliExpress, matched the way it
+    /// matches them, whether or not the shop is connected right now: the
+    /// merchant may buy them by hand.
+    async fn supplier_of(
+        &self,
+        tenant_id: &str,
+        lines: &[OrderLine],
+    ) -> anyhow::Result<Option<String>> {
+        let links = super::forward::order_links(&self.store, &self.db, tenant_id, lines).await?;
+        Ok(
+            (!forward_items(lines, &links).items.is_empty())
+                .then(|| ALIEXPRESS_SUPPLIER.to_owned()),
+        )
     }
 }

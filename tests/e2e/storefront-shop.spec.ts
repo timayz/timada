@@ -376,8 +376,14 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     const webhookUrl =
       (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
     expect(webhookUrl).toMatch(/\/stripe\/webhooks\/[0-9A-Z]{26}$/);
-    await expect(page.getByText("payment_intent.succeeded")).toBeVisible();
-    await expect(page.getByText("charge.refunded")).toBeVisible();
+    for (const event of [
+      "payment_intent.amount_capturable_updated",
+      "payment_intent.succeeded",
+      "payment_intent.canceled",
+      "charge.refunded",
+    ]) {
+      await expect(page.getByText(event, { exact: true })).toBeVisible();
+    }
     await page.getByLabel("Publishable key").fill("pk_test_e2e");
     await page.getByLabel("Secret key").fill("not-a-key");
     await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
@@ -402,7 +408,8 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await expect(form).toHaveAttribute("data-publishable-key", "pk_test_e2e");
     expect(await page.evaluate(() => (window as any).__stripe)).toMatchObject({
       key: "pk_test_e2e",
-      elements: { mode: "payment", amount: 2500, currency: "eur" },
+      // Held when the shopper pays, taken by the shop.
+      elements: { mode: "payment", amount: 2500, currency: "eur", captureMethod: "manual" },
       // Asked once, in the form: Stripe's card form asks no country again.
       payment: {
         fields: { billingDetails: "never" },
@@ -449,6 +456,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     const intent = stripe.lastIntent()!;
     expect(intent.amount).toBe(2500);
     expect(intent.currency).toBe("eur");
+    expect(intent.captureMethod).toBe("manual");
     expect(
       new URL(page.url()).searchParams.get("payment_intent_client_secret"),
     ).toBe(`${intent.id}_secret_e2e`);
@@ -473,7 +481,8 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     });
 
     // Stripe sends the browser back before it tells the dashboard: the page
-    // waits. A webhook that is not Stripe's is refused.
+    // waits, then waits for the money to be taken, as the shop holds the
+    // mugs. A webhook that is not Stripe's is refused.
     await page.goto(`${SHOP}/checkout/complete?redirect_status=succeeded`);
     await expect(page.locator("[data-payment-confirming]")).toBeVisible();
     stripe.pay(intent.id);
@@ -498,6 +507,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
       "data-order-status",
       "paid",
     );
+    expect(intent.captured).toBe(true);
     await expect(page.locator("[data-order-total]")).toHaveText("25,00€");
     // The dashboard invoices it a moment later; the shopper downloads it.
     const year = new Date().getUTCFullYear();

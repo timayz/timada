@@ -8,8 +8,11 @@
 //! payment is still open past the hold, and cancels the payment with the
 //! provider while nobody confirmed it (`Cart::PaymentCancelled`): the
 //! shopper asks to pay again, and nothing was charged. A payment the
-//! provider is settling, or paid already, is left to the webhook; the
-//! refund stays for the race the sweep cannot cover.
+//! provider is settling, or paid already, is left to the webhook. One the
+//! shopper confirmed, its money held, is what the webhook turns into the
+//! order: the sweep does it in the webhook's place ([`webhook::reconcile`]),
+//! so an order is placed even when the webhook was lost, or the merchant's
+//! endpoint does not send that event.
 //!
 //! The sweep goes shop by shop, a page of carts each, and the next sweep
 //! goes on where a page stopped: a shop with many such carts delays its own
@@ -184,6 +187,26 @@ impl LapsedCheckouts {
                             Err(OrderError::PaymentNotFound) => {}
                             Err(err) => return Err(err.into()),
                         }
+                    }
+                    // Confirmed, its webhook not come: the order is placed
+                    // from here, as the webhook would (a second placing is
+                    // the same order).
+                    Cancellation::Authorized => {
+                        let status = self
+                            .payments
+                            .gateway
+                            .payment_status(&account.secret_key, payment_id)
+                            .await?;
+                        let outcome = super::webhook::reconcile(
+                            &self.payments,
+                            &account,
+                            tenant_id,
+                            self.store.clone(),
+                            &cart.id,
+                            &status,
+                        )
+                        .await?;
+                        tracing::info!(%tenant_id, cart = %cart.id, payment = %payment_id, ?outcome, "a confirmed payment whose webhook did not come is settled");
                     }
                     // The webhook settles it; asked about again later if
                     // still open.
