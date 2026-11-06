@@ -4,6 +4,7 @@
 mod common;
 
 use common::*;
+use evento::WriteError;
 use timada_identity::aggregator::{
     EmailAccount, OAuth2Account, OAuth2AccountLinked, PasskeyAdded, PasskeyCredential, Released,
     Removed, Unlinked,
@@ -115,7 +116,7 @@ async fn the_subscription_frees_nothing_twice_nor_what_was_added_back() {
 }
 
 #[tokio::test]
-async fn an_entry_left_behind_is_taken_by_the_next_registration() {
+async fn an_entry_left_behind_is_held_until_released() {
     let store = executor().await;
     let cmd = Command::new(store.clone(), codes());
     let alice = register_via_oauth2(&cmd, "google", "alice").await;
@@ -128,6 +129,15 @@ async fn an_entry_left_behind_is_taken_by_the_next_registration() {
         .await
         .unwrap();
 
+    // Claimed moments ago, it is held for the grace: it signs nobody in,
+    // and nobody else takes it until it is released.
+    let err = cmd
+        .add_passkey(add_passkey(Some(&bob), &bob, "cred-1"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::AlreadyRegistered), "{err}");
+
+    release_indexes(&store).await;
     cmd.add_passkey(add_passkey(Some(&bob), &bob, "cred-1"))
         .await
         .unwrap();
@@ -136,16 +146,9 @@ async fn an_entry_left_behind_is_taken_by_the_next_registration() {
         .await
         .unwrap();
     assert_eq!(outcome.user_id, bob);
-
-    // Bob's now: the late release leaves it alone.
-    release_indexes(&store).await;
     assert_eq!(
         passkey_entry(&store, "cred-1").await,
-        ["Created", "Created"]
-    );
-    assert_eq!(
-        cmd.load_passkey("cred-1").await.unwrap().unwrap().user_id,
-        bob
+        ["Created", "Removed", "Created"]
     );
 }
 
@@ -180,7 +183,12 @@ async fn an_unlinked_identity_signs_nobody_in_and_registers_anew() {
         .unwrap_err();
     assert!(matches!(err, IdentityError::NotRegistered), "{err}");
 
-    // A new account gets the identity, and no stub is left over.
+    // Released, a new account gets the identity.
+    release_indexes(&store).await;
+    assert_eq!(
+        oauth2_entry(&store, "auth0", "alice").await,
+        ["Linked", "Unlinked"]
+    );
     let outcome = cmd
         .complete_oauth2(oauth2(
             OAuth2Mode::CreateUserOrLogin,
@@ -200,11 +208,6 @@ async fn an_unlinked_identity_signs_nobody_in_and_registers_anew() {
             .user_id,
         outcome.user_id
     );
-    release_indexes(&store).await;
-    assert_eq!(
-        oauth2_entry(&store, "auth0", "alice").await,
-        ["Linked", "Linked"]
-    );
     assert_eq!(
         cmd.load_user(&alice)
             .await
@@ -216,16 +219,22 @@ async fn an_unlinked_identity_signs_nobody_in_and_registers_anew() {
 }
 
 #[tokio::test]
-async fn a_failed_add_gives_the_passkey_back() {
+async fn a_refused_add_gives_the_passkey_back() {
     let store = executor().await;
     let cmd = Command::new(store.clone(), codes());
     let alice = register_via_oauth2(&cmd, "google", "alice").await;
 
-    let err = refusing_command(Refusing::new(store.clone()).refuse::<PasskeyAdded>())
+    let err = refusing_command(Refusing::new(store.clone()).lose_race::<PasskeyAdded>())
         .add_passkey(add_passkey(Some(&alice), &alice, "cred-1"))
         .await
         .unwrap_err();
-    assert!(matches!(err, IdentityError::Write(_)), "{err}");
+    assert!(
+        matches!(
+            err,
+            IdentityError::Write(WriteError::InvalidOriginalVersion)
+        ),
+        "{err}"
+    );
     assert_eq!(
         passkey_entry(&store, "cred-1").await,
         ["Created", "Removed"]
@@ -250,11 +259,76 @@ async fn a_failed_add_gives_the_passkey_back() {
 }
 
 #[tokio::test]
-async fn a_failed_link_gives_the_identity_back() {
+async fn an_add_whose_outcome_is_unknown_keeps_its_claim() {
+    let store = executor().await;
+    let cmd = Command::new(store.clone(), codes());
+    let alice = register_via_oauth2(&cmd, "google", "alice").await;
+    let bob = register_via_oauth2(&cmd, "google", "bob").await;
+
+    // The account write may still land: the claim stays, held for the grace.
+    let err = refusing_command(Refusing::new(store.clone()).refuse::<PasskeyAdded>())
+        .add_passkey(add_passkey(Some(&alice), &alice, "cred-1"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::Write(_)), "{err}");
+    assert_eq!(passkey_entry(&store, "cred-1").await, ["Created"]);
+    let err = cmd
+        .sign_in_passkey(sign_in_passkey("cred-1", None, None))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::UnknownCredential), "{err}");
+    let err = cmd
+        .add_passkey(add_passkey(Some(&bob), &bob, "cred-1"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::AlreadyRegistered), "{err}");
+
+    // Alice trying again finishes it.
+    cmd.add_passkey(add_passkey(Some(&alice), &alice, "cred-1"))
+        .await
+        .unwrap();
+    let outcome = cmd
+        .sign_in_passkey(sign_in_passkey("cred-1", None, None))
+        .await
+        .unwrap();
+    assert_eq!(outcome.user_id, alice);
+}
+
+#[tokio::test]
+async fn a_refused_link_gives_the_identity_back() {
     let store = executor().await;
     let cmd = Command::new(store.clone(), codes());
     let alice = register_via_oauth2(&cmd, "google", "alice").await;
 
+    let err = refusing_command(Refusing::new(store.clone()).lose_race::<OAuth2AccountLinked>())
+        .complete_oauth2(oauth2(
+            OAuth2Mode::AddToUser,
+            Some(&alice),
+            "auth0",
+            "alice",
+        ))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::InvalidState), "{err}");
+    assert_eq!(
+        oauth2_entry(&store, "auth0", "alice").await,
+        ["Linked", "Unlinked"]
+    );
+    let err = cmd
+        .complete_oauth2(oauth2(OAuth2Mode::Login, None, "auth0", "alice"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::NotRegistered), "{err}");
+}
+
+#[tokio::test]
+async fn a_link_on_its_way_keeps_the_identity_from_another_account() {
+    let store = executor().await;
+    let cmd = Command::new(store.clone(), codes());
+    let alice = register_via_oauth2(&cmd, "google", "alice").await;
+    let bob = register_via_oauth2(&cmd, "google", "bob").await;
+
+    // Alice links her Auth0 identity; the account write may still land.
     let err = refusing_command(Refusing::new(store.clone()).refuse::<OAuth2AccountLinked>())
         .complete_oauth2(oauth2(
             OAuth2Mode::AddToUser,
@@ -265,15 +339,37 @@ async fn a_failed_link_gives_the_identity_back() {
         .await
         .unwrap_err();
     assert!(matches!(err, IdentityError::Write(_)), "{err}");
-    assert_eq!(
-        oauth2_entry(&store, "auth0", "alice").await,
-        ["Linked", "Unlinked"]
+    assert_eq!(oauth2_entry(&store, "auth0", "alice").await, ["Linked"]);
+
+    // Meanwhile the identity takes no other account, nor signs anyone in.
+    let err = cmd
+        .complete_oauth2(oauth2(OAuth2Mode::AddToUser, Some(&bob), "auth0", "alice"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, IdentityError::AlreadyLinkedToOtherUser),
+        "{err}"
     );
     let err = cmd
         .complete_oauth2(oauth2(OAuth2Mode::Login, None, "auth0", "alice"))
         .await
         .unwrap_err();
     assert!(matches!(err, IdentityError::NotRegistered), "{err}");
+
+    // Alice trying again finishes the link.
+    cmd.complete_oauth2(oauth2(
+        OAuth2Mode::AddToUser,
+        Some(&alice),
+        "auth0",
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let outcome = cmd
+        .complete_oauth2(oauth2(OAuth2Mode::Login, None, "auth0", "alice"))
+        .await
+        .unwrap();
+    assert_eq!(outcome.user_id, alice);
 }
 
 #[tokio::test]
@@ -406,17 +502,12 @@ async fn the_subscription_leaves_an_entry_claimed_since_the_removal() {
         .await
         .unwrap();
 
-    // Alice adds it again: the entry is claimed afresh, and the node stops
-    // before her account lists it (an add on its way, as a late node sees
-    // it).
-    refusing_command(
-        Refusing::new(store.clone())
-            .refuse::<PasskeyAdded>()
-            .refuse::<Removed>(),
-    )
-    .add_passkey(add_passkey(Some(&alice), &alice, "cred-1"))
-    .await
-    .unwrap_err();
+    // Alice adds it again: the entry is claimed afresh, and her account
+    // write may still land (an add on its way, as a late node sees it).
+    refusing_command(Refusing::new(store.clone()).refuse::<PasskeyAdded>())
+        .add_passkey(add_passkey(Some(&alice), &alice, "cred-1"))
+        .await
+        .unwrap_err();
     assert_eq!(
         passkey_entry(&store, "cred-1").await,
         ["Created", "Created"]
@@ -429,17 +520,55 @@ async fn the_subscription_leaves_an_entry_claimed_since_the_removal() {
         ["Created", "Created"]
     );
 
-    // Listed nowhere, it still signs nobody in and goes to whoever adds it.
+    // Listed nowhere, it signs nobody in, and is held for the grace.
     let err = cmd
         .sign_in_passkey(sign_in_passkey("cred-1", None, None))
         .await
         .unwrap_err();
     assert!(matches!(err, IdentityError::UnknownCredential), "{err}");
-    cmd.add_passkey(add_passkey(Some(&bob), &bob, "cred-1"))
+    let err = cmd
+        .add_passkey(add_passkey(Some(&bob), &bob, "cred-1"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::AlreadyRegistered), "{err}");
+    cmd.add_passkey(add_passkey(Some(&alice), &alice, "cred-1"))
         .await
         .unwrap();
     assert_eq!(
         cmd.load_passkey("cred-1").await.unwrap().unwrap().user_id,
-        bob
+        alice
+    );
+}
+
+#[tokio::test]
+async fn the_free_after_a_removal_leaves_a_claim_made_since() {
+    let store = executor().await;
+    let cmd = Command::new(store.clone(), codes());
+    let alice = register_via_oauth2(&cmd, "google", "alice").await;
+    cmd.add_passkey(add_passkey(Some(&alice), &alice, "cred-1"))
+        .await
+        .unwrap();
+
+    // The removal reads the entry to free only once Alice, in another tab,
+    // has claimed it again for an add whose account write is on its way.
+    let staged = Refusing::new(store.clone())
+        .hold_first_read::<PasskeyCredential>()
+        .refuse::<PasskeyAdded>();
+    let removing = {
+        let cmd = refusing_command(staged.clone());
+        let alice = alice.clone();
+        tokio::spawn(async move { cmd.remove_passkey(&alice, "cred-1").await })
+    };
+    staged.parked().await;
+    refusing_command(staged)
+        .add_passkey(add_passkey(Some(&alice), &alice, "cred-1"))
+        .await
+        .unwrap_err();
+    removing.await.unwrap().unwrap();
+
+    // The claim made since the removal is not the removal's to free.
+    assert_eq!(
+        passkey_entry(&store, "cred-1").await,
+        ["Created", "Created"]
     );
 }

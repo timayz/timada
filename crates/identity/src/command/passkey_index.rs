@@ -5,7 +5,7 @@ use crate::aggregator::{Created, Removed};
 use crate::error::IdentityError;
 use crate::value_object::passkey_credential_id;
 
-use super::{Command, passkey_credential_projection, user_projection};
+use super::{Claiming, Command, passkey_credential_projection, user_projection};
 
 /// A credential the web layer has verified and serialized.
 #[derive(Debug, Clone)]
@@ -20,8 +20,10 @@ pub struct VerifiedPasskey {
 
 impl<E: Executor> Command<E> {
     /// Creates (or re-creates) the index entry for a passkey. Fails when
-    /// another user holds the credential; an entry nobody holds (removed, or
-    /// left behind by an account that let go of it) is taken over.
+    /// another account lists the credential, or claimed it within the grace
+    /// (its add may be committing); an entry nobody holds (removed, its
+    /// account deleted, or abandoned past the grace) is taken over. See
+    /// [`Command::claiming`].
     pub(crate) async fn create_passkey_index(
         &self,
         passkey: &VerifiedPasskey,
@@ -48,10 +50,19 @@ impl<E: Executor> Command<E> {
                 let Some(existing) = self.load_passkey_any(&passkey.credential_id).await? else {
                     return Err(IdentityError::InvalidState);
                 };
-                match self.passkey_holder(&existing).await? {
-                    Some(holder) if holder.id == user_id => Ok(()),
-                    Some(_) => Err(IdentityError::AlreadyRegistered),
-                    None => {
+                let claiming = self
+                    .claiming(
+                        existing.removed,
+                        &existing.user_id,
+                        existing.claimed_at_ms,
+                        user_id,
+                        |user| user.passkey(&passkey.credential_id).is_some(),
+                    )
+                    .await?;
+                match claiming {
+                    Claiming::Keep => Ok(()),
+                    Claiming::Refuse => Err(IdentityError::AlreadyRegistered),
+                    Claiming::Take => {
                         existing
                             .write()?
                             .event(&created)

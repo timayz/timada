@@ -28,24 +28,39 @@ impl<E: Executor> super::Command<E> {
             return Err(IdentityError::LastSignInMethod);
         }
 
-        self.append_user(user_id, routing_key, |user, builder| {
-            if !user.has_oauth2_account(provider, provider_user_id) {
-                return Err(IdentityError::Forbidden);
-            }
-            if user.sign_in_methods() <= 1 {
-                return Err(IdentityError::LastSignInMethod);
-            }
-            builder.event(&OAuth2AccountUnlinked {
-                provider: provider.to_owned(),
-                provider_user_id: provider_user_id.to_owned(),
-            });
-            Ok(())
-        })
-        .await?;
+        let before = self
+            .append_user(user_id, routing_key, |user, builder| {
+                if !user.has_oauth2_account(provider, provider_user_id) {
+                    return Err(IdentityError::Forbidden);
+                }
+                if user.sign_in_methods() <= 1 {
+                    return Err(IdentityError::LastSignInMethod);
+                }
+                builder.event(&OAuth2AccountUnlinked {
+                    provider: provider.to_owned(),
+                    provider_user_id: provider_user_id.to_owned(),
+                });
+                Ok(())
+            })
+            .await?;
 
-        if let Err(err) =
-            free_oauth2_index(&self.executor, user_id, provider, provider_user_id, None).await
-        {
+        // Only a claim older than the unlink is freed: one made since is a
+        // link of the same identity, on its way to the account.
+        let freed = match self.appended_at_ms(&before).await {
+            Ok(Some(unlinked_at)) => {
+                free_oauth2_index(
+                    &self.executor,
+                    user_id,
+                    provider,
+                    provider_user_id,
+                    Some(unlinked_at),
+                )
+                .await
+            }
+            Ok(None) => Ok(()),
+            Err(err) => Err(err.into()),
+        };
+        if let Err(err) = freed {
             tracing::warn!(%err, user_id, "the unlinked identity's index entry is freed later");
         }
         Ok(())

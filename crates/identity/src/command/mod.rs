@@ -159,12 +159,60 @@ impl SessionsRevocation {
         session.started_at_ms <= self.at_ms
             && self.except_session.as_deref() != Some(session.id.as_str())
     }
+
+    /// Whether the session was signed in before this revocation and not
+    /// spared by it: ended by it for sure. One started within the
+    /// revocation's own millisecond is not counted: stamps are milliseconds,
+    /// and it may be the session the asking browser signed in right after.
+    pub fn ended_before(&self, session: &SessionState) -> bool {
+        self.covers(session) && session.started_at_ms < self.at_ms
+    }
 }
 
 /// Unix milliseconds of an event, for cutoffs where a second is too coarse.
 pub(crate) fn event_millis(event: &evento::Event) -> u64 {
     event.timestamp * 1000 + u64::from(event.timestamp_subsec)
 }
+
+/// How long a claim on an index entry counts as held while the account it
+/// points at does not list it yet: the add that made it may be committing
+/// right now. Past this, a node stopped in between and the entry is anyone's.
+/// The claims of the other contexts give their holders the same five minutes.
+const CLAIM_GRACE_SECS: u64 = 300;
+
+/// Whether a claim stamped at `claimed_at_ms` may still be committing at
+/// `now` (unix seconds).
+fn claim_is_fresh(claimed_at_ms: u64, now: u64) -> bool {
+    now.saturating_sub(claimed_at_ms / 1000) < CLAIM_GRACE_SECS
+}
+
+/// What a claim does with an index entry that already exists.
+pub(crate) enum Claiming {
+    /// Write the claim: the entry is free, the claimant's own but not listed
+    /// (claimed afresh, so the release of an older removal leaves it), or
+    /// abandoned.
+    Take,
+    /// Nothing to write: the claimant's account lists it already.
+    Keep,
+    /// Another account lists it, or may be adding it right now.
+    Refuse,
+}
+
+/// Whether a user write that failed surely did not land, so what the command
+/// claimed for it may be given back. One the store could not settle
+/// (`Unknown`) or would not take right now (`Unavailable`) may still commit:
+/// its claim is kept, held for the grace, and anyone's after it should the
+/// account never list it.
+pub(crate) fn surely_not_written(err: &IdentityError) -> bool {
+    !matches!(
+        err,
+        IdentityError::Write(WriteError::Unknown(_) | WriteError::Unavailable(_))
+    )
+}
+
+/// How far back a command looks in a user's stream for the event it has just
+/// appended.
+const APPENDED_LOOKBACK: u16 = 8;
 
 #[evento::projection(id = id, name = "timada-identity/UserState")]
 #[evento::snapshot(none)]
@@ -894,6 +942,56 @@ impl<E: Executor> Command<E> {
             .filter(|user| user.has_email(&entry.email)))
     }
 
+    /// What a claim by `claimant_id` does with an existing entry that is
+    /// `freed` or points at `owner_id`, claimed at `claimed_at_ms`; `lists`
+    /// tells whether an account lists what the entry indexes.
+    pub(crate) async fn claiming(
+        &self,
+        freed: bool,
+        owner_id: &str,
+        claimed_at_ms: u64,
+        claimant_id: &str,
+        lists: impl Fn(&UserState) -> bool,
+    ) -> anyhow::Result<Claiming> {
+        if freed {
+            return Ok(Claiming::Take);
+        }
+        let owner = self.load_user(owner_id).await?;
+        let listed = owner.as_ref().is_some_and(&lists);
+        Ok(if owner_id == claimant_id {
+            if listed {
+                Claiming::Keep
+            } else {
+                Claiming::Take
+            }
+        } else if listed
+            || (owner.is_some() && claim_is_fresh(claimed_at_ms, timada_core::unix_now()))
+        {
+            Claiming::Refuse
+        } else {
+            Claiming::Take
+        })
+    }
+
+    /// When the event a command appended onto `user` (the state
+    /// [`Self::append_user`] returned) was stamped, in unix milliseconds:
+    /// what the release that follows compares claims with. `None` once later
+    /// writes buried it.
+    pub(crate) async fn appended_at_ms(&self, user: &UserState) -> anyhow::Result<Option<u64>> {
+        let Some(version) = user.aggregate_version()?.checked_add(1) else {
+            return Ok(None);
+        };
+        let tail = evento::read::<crate::aggregator::User>(&user.id)
+            .backward()
+            .limit(APPENDED_LOOKBACK)
+            .execute(&self.executor)
+            .await?;
+        Ok(tail
+            .iter()
+            .find(|event| event.version == version)
+            .map(event_millis))
+    }
+
     /// The index entry including released ones (needed to re-claim).
     pub(crate) async fn load_email_account_any(
         &self,
@@ -963,5 +1061,44 @@ impl<E: Executor> Command<E> {
                 Err(err) => return Err(err.into()),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_claim_stays_fresh_for_the_grace_only() {
+        let claimed_at_ms = 1_000_000;
+        assert!(claim_is_fresh(claimed_at_ms, 1_000));
+        assert!(claim_is_fresh(claimed_at_ms, 1_000 + CLAIM_GRACE_SECS - 1));
+        assert!(!claim_is_fresh(claimed_at_ms, 1_000 + CLAIM_GRACE_SECS));
+        // A clock behind the claim's stamp keeps it fresh.
+        assert!(claim_is_fresh(claimed_at_ms, 900));
+    }
+
+    #[test]
+    fn a_revocation_ends_the_sessions_started_before_its_millisecond() {
+        let revocation = SessionsRevocation {
+            at_ms: 5_000,
+            except_session: Some("spared".to_owned()),
+        };
+        let session = |id: &str, started_at_ms| SessionState {
+            id: id.to_owned(),
+            started_at_ms,
+            ..SessionState::default()
+        };
+        assert!(revocation.ended_before(&session("old", 4_999)));
+        assert!(
+            !revocation.ended_before(&session("spared", 4_999)),
+            "the one it spared"
+        );
+        assert!(revocation.covers(&session("tie", 5_000)));
+        assert!(
+            !revocation.ended_before(&session("tie", 5_000)),
+            "a tie may be the asking browser's new session"
+        );
+        assert!(!revocation.ended_before(&session("new", 5_001)));
     }
 }

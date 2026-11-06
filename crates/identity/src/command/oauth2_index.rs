@@ -5,13 +5,14 @@ use crate::aggregator::{Linked, Unlinked};
 use crate::error::IdentityError;
 use crate::value_object::{ProviderIdentity, oauth2_account_id};
 
-use super::{Command, oauth2_account_projection, user_projection};
+use super::{Claiming, Command, oauth2_account_projection, user_projection};
 
 impl<E: Executor> Command<E> {
     /// Points the provider identity at `user_id`, creating or re-linking the
-    /// index entry. Fails when another user holds it; an entry nobody holds
-    /// (unlinked, or left behind by an account that let go of it) is taken
-    /// over.
+    /// index entry. Fails when another account lists it, or claimed it within
+    /// the grace (its link may be committing); an entry nobody holds
+    /// (unlinked, its account deleted, or abandoned past the grace) is taken
+    /// over. See [`Command::claiming`].
     pub(crate) async fn link_oauth2_index(
         &self,
         identity: &ProviderIdentity,
@@ -41,10 +42,21 @@ impl<E: Executor> Command<E> {
                 else {
                     return Err(IdentityError::InvalidState);
                 };
-                match self.oauth2_holder(&existing).await? {
-                    Some(holder) if holder.id == user_id => Ok(()),
-                    Some(_) => Err(IdentityError::AlreadyLinkedToOtherUser),
-                    None => {
+                let claiming = self
+                    .claiming(
+                        existing.unlinked,
+                        &existing.user_id,
+                        existing.claimed_at_ms,
+                        user_id,
+                        |user| {
+                            user.has_oauth2_account(&identity.provider, &identity.provider_user_id)
+                        },
+                    )
+                    .await?;
+                match claiming {
+                    Claiming::Keep => Ok(()),
+                    Claiming::Refuse => Err(IdentityError::AlreadyLinkedToOtherUser),
+                    Claiming::Take => {
                         existing
                             .write()?
                             .event(&linked)

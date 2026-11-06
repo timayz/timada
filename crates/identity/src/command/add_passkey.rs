@@ -6,6 +6,7 @@ use crate::value_object::MAX_PASSKEYS_PER_USER;
 
 pub use super::passkey_index::VerifiedPasskey;
 use super::passkey_index::free_passkey_index;
+use super::surely_not_written;
 
 /// A finished registration ceremony for a signed-in user. Passkeys never
 /// create accounts: a person registers with a provider or an e-mail address
@@ -40,7 +41,8 @@ impl<E: Executor> super::Command<E> {
 
 impl<E: Executor> super::Command<E> {
     /// Index first (the uniqueness check), then the user's own record of it.
-    /// A failure after the claim gives the entry back, as `add_email` does.
+    /// A record refused after the claim gives the entry back, as `add_email`
+    /// does; one that may still land keeps it ([`surely_not_written`]).
     async fn attach_passkey(
         &self,
         user_id: &str,
@@ -74,7 +76,7 @@ impl<E: Executor> super::Command<E> {
         match result {
             // Already listed on the user: idempotent.
             Ok(_) | Err(IdentityError::InvalidState) => Ok(()),
-            Err(err) => {
+            Err(err) if surely_not_written(&err) => {
                 if let Err(free) =
                     free_passkey_index(&self.executor, user_id, &passkey.credential_id, None).await
                 {
@@ -82,6 +84,7 @@ impl<E: Executor> super::Command<E> {
                 }
                 Err(err)
             }
+            Err(err) => Err(err),
         }
     }
 }

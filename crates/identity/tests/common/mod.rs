@@ -1,14 +1,18 @@
 #![allow(dead_code)]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use evento::cursor::{Args, ReadResult, Value};
-use evento::{AggregateEvent, EventFilter, Executor, RoutingKey, TenantFilter, WriteError};
+use evento::{
+    Aggregate, AggregateEvent, EventFilter, Executor, RoutingKey, TenantFilter, WriteError,
+};
 use timada_core::db::Db;
 use timada_identity::{
     AddPasskey, ChallengePurpose, Command, CompleteOAuth2, LoginContext, OAuth2Mode,
     RegisterWithPassword, SignInPasskey, VerifiedPasskey, hash_password,
 };
+use tokio::sync::Notify;
 use ulid::Ulid;
 
 /// A fixed "now" for the commands that take one (unix seconds).
@@ -149,10 +153,30 @@ pub fn sign_in_passkey(
 
 /// The store of a node whose writes of some events fail, as if it stopped
 /// right there: a write holding one of them never lands, every other does.
+/// It can also hold a read back until a write lands, to stage a race.
 #[derive(Clone)]
 pub struct Refusing {
     pub store: evento::Turso,
-    refused: Vec<(&'static str, &'static str)>,
+    refused: Vec<(&'static str, &'static str, Refusal)>,
+    held_read: Option<Arc<HeldRead>>,
+}
+
+/// How a refused write fails.
+#[derive(Clone, Copy)]
+enum Refusal {
+    /// The store could not tell whether it landed.
+    Unknown,
+    /// It lost a version race: surely not written.
+    LostRace,
+}
+
+/// The first read of one aggregate type waits until a write to that type
+/// has landed.
+struct HeldRead {
+    aggregate_type: &'static str,
+    came: AtomicBool,
+    parked: Notify,
+    written: Notify,
 }
 
 impl Refusing {
@@ -160,31 +184,76 @@ impl Refusing {
         Self {
             store,
             refused: Vec::new(),
+            held_read: None,
         }
     }
 
-    /// Also refuses every write of `D`.
+    /// Also fails every write of `D`, its outcome unknown.
     pub fn refuse<D: AggregateEvent>(mut self) -> Self {
-        self.refused.push((D::aggregate_type(), D::event_name()));
+        self.refused
+            .push((D::aggregate_type(), D::event_name(), Refusal::Unknown));
         self
+    }
+
+    /// Also fails every write of `D` as a lost version race.
+    pub fn lose_race<D: AggregateEvent>(mut self) -> Self {
+        self.refused
+            .push((D::aggregate_type(), D::event_name(), Refusal::LostRace));
+        self
+    }
+
+    /// Holds the first read of an `A` stream until a write to one lands.
+    pub fn hold_first_read<A: Aggregate>(mut self) -> Self {
+        self.held_read = Some(Arc::new(HeldRead {
+            aggregate_type: A::aggregate_type(),
+            came: AtomicBool::new(false),
+            parked: Notify::new(),
+            written: Notify::new(),
+        }));
+        self
+    }
+
+    /// Resolves once the read [`Self::hold_first_read`] names is held.
+    pub async fn parked(&self) {
+        if let Some(held) = &self.held_read {
+            held.parked.notified().await;
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl Executor for Refusing {
     async fn write(&self, events: Vec<evento::Event>) -> Result<(), WriteError> {
-        if let Some(event) = events.iter().find(|event| {
-            self.refused
+        for event in &events {
+            let refusal = self
+                .refused
                 .iter()
-                .any(|(kind, name)| event.aggregate_type == *kind && event.name == *name)
-        }) {
-            return Err(WriteError::Unknown(anyhow::anyhow!(
-                "refused {}::{}",
-                event.aggregate_type,
-                event.name
-            )));
+                .find(|(kind, name, _)| event.aggregate_type == *kind && event.name == *name);
+            match refusal {
+                Some((_, _, Refusal::Unknown)) => {
+                    return Err(WriteError::Unknown(anyhow::anyhow!(
+                        "refused {}::{}",
+                        event.aggregate_type,
+                        event.name
+                    )));
+                }
+                Some((_, _, Refusal::LostRace)) => return Err(WriteError::InvalidOriginalVersion),
+                None => {}
+            }
         }
-        self.store.write(events).await
+        let held = self.held_read.as_ref().filter(|held| {
+            held.came.load(Ordering::SeqCst)
+                && events
+                    .iter()
+                    .any(|event| event.aggregate_type == held.aggregate_type)
+        });
+        let written = self.store.write(events).await;
+        if let Some(held) = held
+            && written.is_ok()
+        {
+            held.written.notify_one();
+        }
+        written
     }
 
     async fn read(
@@ -195,6 +264,17 @@ impl Executor for Refusing {
         args: Args,
         to_micros: Option<u64>,
     ) -> anyhow::Result<ReadResult<evento::Event>> {
+        if let Some(held) = &self.held_read {
+            let of_held_type = aggregators.as_deref().is_some_and(|filters| {
+                filters
+                    .iter()
+                    .any(|filter| filter.aggregate_type == held.aggregate_type)
+            });
+            if of_held_type && !held.came.swap(true, Ordering::SeqCst) {
+                held.parked.notify_one();
+                held.written.notified().await;
+            }
+        }
         self.store
             .read(aggregators, routing_key, tenant, args, to_micros)
             .await

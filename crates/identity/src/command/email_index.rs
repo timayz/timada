@@ -5,13 +5,14 @@ use crate::aggregator::{Claimed, Released};
 use crate::error::IdentityError;
 use crate::value_object::email_account_id;
 
-use super::{Command, email_account_projection, user_projection};
+use super::{Claiming, Command, email_account_projection, user_projection};
 
 impl<E: Executor> Command<E> {
     /// Points a normalized address at `user_id`, creating or re-claiming the
-    /// index entry. Fails when another user holds it; an entry nobody holds
-    /// (released, or left behind by an account that never recorded the
-    /// address or was deleted) is taken over.
+    /// index entry. Fails when another account signs in with it, or claimed
+    /// it within the grace (its add may be committing); an entry nobody holds
+    /// (released, its account deleted, or abandoned past the grace) is taken
+    /// over. See [`Command::claiming`].
     pub(crate) async fn claim_email_index(
         &self,
         email: &str,
@@ -34,10 +35,19 @@ impl<E: Executor> Command<E> {
                 let Some(existing) = self.load_email_account_any(email).await? else {
                     return Err(IdentityError::InvalidState);
                 };
-                match self.email_holder(&existing).await? {
-                    Some(holder) if holder.id == user_id => Ok(()),
-                    Some(_) => Err(IdentityError::AlreadyRegistered),
-                    None => {
+                let claiming = self
+                    .claiming(
+                        existing.released,
+                        &existing.user_id,
+                        existing.claimed_at_ms,
+                        user_id,
+                        |user| user.has_email(email),
+                    )
+                    .await?;
+                match claiming {
+                    Claiming::Keep => Ok(()),
+                    Claiming::Refuse => Err(IdentityError::AlreadyRegistered),
+                    Claiming::Take => {
                         existing
                             .write()?
                             .event(&claimed)

@@ -399,6 +399,72 @@ async fn a_reset_ends_every_session_in_the_same_write() {
 }
 
 #[tokio::test]
+async fn a_session_a_reset_ended_cannot_spare_itself() {
+    let cmd = command().await;
+    let alice = register_via_email(&cmd, "alice@example.com").await;
+    let stolen = [1u8; 32];
+    cmd.start_session(&stolen, &alice, NOW + 600, context())
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let issued = cmd
+        .issue_email_code(
+            "alice@example.com",
+            ChallengePurpose::ResetPassword,
+            NOW + 1,
+        )
+        .await
+        .unwrap();
+    cmd.reset_password(
+        ResetPassword {
+            email: "alice@example.com".to_owned(),
+            code: issued.code,
+            password_hash: hash_password("a brand new password").await.unwrap(),
+            context: context(),
+        },
+        NOW + 2,
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let fresh = [2u8; 32];
+    cmd.start_session(&fresh, &alice, NOW + 600, context())
+        .await
+        .unwrap();
+
+    // The stolen session asks to sign the others out after the reset (its
+    // page loaded before): it is ended, and spares nobody.
+    let err = cmd
+        .revoke_sessions(&alice, &alice, Some(&stolen))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IdentityError::Unauthorized), "{err}");
+    assert!(
+        cmd.resolve_session(&fresh, NOW + 2)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        cmd.resolve_session(&stolen, NOW + 2)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // The browser the reset signed in may still sign the others out.
+    cmd.revoke_sessions(&alice, &alice, Some(&fresh))
+        .await
+        .unwrap();
+    assert!(
+        cmd.resolve_session(&fresh, NOW + 2)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn a_change_ends_the_other_sessions_in_the_same_write() {
     let cmd = command().await;
     let alice = register_via_email(&cmd, "alice@example.com").await;

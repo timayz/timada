@@ -27,21 +27,31 @@ impl<E: Executor> super::Command<E> {
             return Err(IdentityError::LastSignInMethod);
         }
 
-        self.append_user(user_id, routing_key, |user, builder| {
-            if user.passkey(credential_id).is_none() {
-                return Err(IdentityError::Forbidden);
-            }
-            if user.sign_in_methods() <= 1 {
-                return Err(IdentityError::LastSignInMethod);
-            }
-            builder.event(&PasskeyRemoved {
-                credential_id: credential_id.to_owned(),
-            });
-            Ok(())
-        })
-        .await?;
+        let before = self
+            .append_user(user_id, routing_key, |user, builder| {
+                if user.passkey(credential_id).is_none() {
+                    return Err(IdentityError::Forbidden);
+                }
+                if user.sign_in_methods() <= 1 {
+                    return Err(IdentityError::LastSignInMethod);
+                }
+                builder.event(&PasskeyRemoved {
+                    credential_id: credential_id.to_owned(),
+                });
+                Ok(())
+            })
+            .await?;
 
-        if let Err(err) = free_passkey_index(&self.executor, user_id, credential_id, None).await {
+        // Only a claim older than the removal is freed: one made since is an
+        // add of the same key, on its way to the account.
+        let freed = match self.appended_at_ms(&before).await {
+            Ok(Some(removed_at)) => {
+                free_passkey_index(&self.executor, user_id, credential_id, Some(removed_at)).await
+            }
+            Ok(None) => Ok(()),
+            Err(err) => Err(err.into()),
+        };
+        if let Err(err) = freed {
             tracing::warn!(%err, user_id, "the removed passkey's index entry is freed later");
         }
         Ok(())

@@ -5,9 +5,9 @@ use crate::aggregator::{OAuth2AccountLinked, Registered, SignedIn};
 use crate::error::IdentityError;
 use crate::value_object::{LoginContext, OAuth2Mode, ProviderIdentity, SignInKind, SignInMethod};
 
-use super::UserState;
 use super::oauth2_index::free_oauth2_index;
 use super::sign_in::SignInFacts;
+use super::{UserState, surely_not_written};
 
 /// A verified OIDC callback.
 #[derive(Debug, Clone)]
@@ -167,8 +167,9 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// Links a provider identity to an existing user: index first (the
-    /// uniqueness check), then the user's own record of it. A failure after
-    /// the claim gives the entry back, as `add_email` does.
+    /// uniqueness check), then the user's own record of it. A record refused
+    /// after the claim gives the entry back, as `add_email` does; one that may
+    /// still land keeps it ([`surely_not_written`]).
     async fn link_oauth2(
         &self,
         user_id: &str,
@@ -201,14 +202,15 @@ impl<E: Executor> super::Command<E> {
             Err(IdentityError::InvalidState) => return Ok(user),
             Err(err) => err,
         };
-        if let Err(free) = free_oauth2_index(
-            &self.executor,
-            user_id,
-            &identity.provider,
-            &identity.provider_user_id,
-            None,
-        )
-        .await
+        if surely_not_written(&err)
+            && let Err(free) = free_oauth2_index(
+                &self.executor,
+                user_id,
+                &identity.provider,
+                &identity.provider_user_id,
+                None,
+            )
+            .await
         {
             tracing::error!(%free, user_id, "cannot give the identity back after a failed link");
         }
