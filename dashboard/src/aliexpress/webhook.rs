@@ -181,16 +181,19 @@ async fn on_claimed<E: Executor>(
 }
 
 /// Reads `forward`'s orders again for what was recorded at `at` (unix
-/// seconds), on the node it belongs to and while that is news. A read that
-/// fails is logged and left to the sweep, so one shop's trouble never stops
-/// the pushes of every other.
+/// seconds), on the node it belongs to and while that is news. The read runs
+/// beside the subscription, a few at a time ([`PUSH_READS`](super::PUSH_READS)),
+/// so a burst of pushes while AliExpress is slow neither holds the next ones
+/// past their time nor asks AliExpress all at once; the push is recorded, so a
+/// read that fails, or is lost with its node, is the sweep's to make. One
+/// shop's trouble never stops the pushes of every other.
 async fn read_again<E: Executor>(
     context: &Context<'_, E>,
     forward: Option<&ForwardRef>,
     at: u64,
     closed: Option<&str>,
 ) {
-    let Some(forward) = forward else {
+    let Some(forward) = forward.cloned() else {
         return;
     };
     let aliexpress: Arc<Aliexpress> = context.extract();
@@ -198,19 +201,26 @@ async fn read_again<E: Executor>(
     if now.saturating_sub(at) > PUSH_WINDOW_SECS || !aliexpress.share().owns(&forward.forward_id) {
         return;
     }
+    let Ok(turn) = aliexpress.push_reads.clone().acquire_owned().await else {
+        return;
+    };
     let db: Db = context.extract();
     let store: Store = context.extract();
-    if let Err(err) = check(
-        aliexpress,
-        &db,
-        store.0,
-        &forward.tenant_id,
-        &forward.forward_id,
-        closed,
-        now,
-    )
-    .await
-    {
-        tracing::warn!(tenant = %forward.tenant_id, forward = %forward.forward_id, error = %err, "AliExpress order not read after its push");
-    }
+    let closed = closed.map(str::to_owned);
+    tokio::spawn(async move {
+        let _turn = turn;
+        if let Err(err) = check(
+            aliexpress,
+            &db,
+            store.0,
+            &forward.tenant_id,
+            &forward.forward_id,
+            closed.as_deref(),
+            now,
+        )
+        .await
+        {
+            tracing::warn!(tenant = %forward.tenant_id, forward = %forward.forward_id, error = %err, "AliExpress order not read after its push");
+        }
+    });
 }

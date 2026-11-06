@@ -5,7 +5,7 @@ use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Ev
 
 use super::claim_ae_order;
 use crate::aggregator::forward::{
-    Checked, Done, Failed, Forward, ForwardItem, Placed, Requested, Started,
+    AlsoPlaced, Asking, Checked, Done, Failed, Forward, ForwardItem, Placed, Requested, Started,
 };
 use crate::error::AliexpressError;
 use crate::value_object::{FORWARD_STALL_SECS, forward_id};
@@ -74,6 +74,9 @@ pub struct ForwardState {
     pub last_error: Option<String>,
     /// The tracking the shop's order was fulfilled with, if it was.
     pub fulfilled_tracking: Option<String>,
+    /// AliExpress orders of an attempt that overlapped the one recorded: the
+    /// order was bought twice, and these are to cancel there.
+    pub also_placed: Vec<String>,
     /// Unix seconds of the last event.
     pub updated_at: u64,
 }
@@ -109,11 +112,33 @@ pub fn forward_projection<E: Executor>() -> Projection<E, ForwardState> {
     Projection::new::<Forward>()
         .handler(on_requested())
         .handler(on_started())
+        .handler(on_asking())
         .handler(on_placed())
+        .handler(on_also_placed())
         .handler(on_failed())
         .handler(on_checked())
         .handler(on_done())
         .strict()
+}
+
+#[evento::handler]
+async fn on_asking(event: Event<Asking>, forward: &mut ForwardState) -> anyhow::Result<()> {
+    forward.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_also_placed(
+    event: Event<AlsoPlaced>,
+    forward: &mut ForwardState,
+) -> anyhow::Result<()> {
+    for id in &event.data.ae_order_ids {
+        if !forward.also_placed.contains(id) {
+            forward.also_placed.push(id.to_owned());
+        }
+    }
+    forward.updated_at = event.timestamp;
+    Ok(())
 }
 
 #[evento::handler]
@@ -192,12 +217,23 @@ async fn on_done(event: Event<Done>, forward: &mut ForwardState) -> anyhow::Resu
 }
 
 /// What a placement recorded.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Placement {
     pub ae_order_ids: Vec<String>,
     pub items: Vec<ForwardItem>,
     pub pay_requested: bool,
     pub complete: bool,
+}
+
+/// What recording the orders AliExpress took came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlacedRecord {
+    /// The forward is placed as these orders (now, or already).
+    Placed,
+    /// The forward was placed as other orders, by an attempt that overlapped
+    /// this one: these are recorded beside them (`AlsoPlaced`), for the
+    /// merchant to cancel on AliExpress (now, or already).
+    AlsoPlaced,
 }
 
 #[evento::command]
@@ -287,21 +323,51 @@ impl<E: Executor> super::Command<E> {
         }
     }
 
+    /// Fences the forward right before AliExpress is asked for it: written
+    /// at `version`, the one the attempt took it on at, so an attempt
+    /// overtaken in between (asked for again, given up as stalled, placed by
+    /// another) asks nothing. Whether this attempt may ask.
+    pub async fn begin_asking(
+        &self,
+        actor: &str,
+        forward_id: &str,
+        version: u16,
+        routing_key: Option<String>,
+    ) -> Result<bool, AliexpressError> {
+        let written = evento::append(forward_id)
+            .original_version(version)
+            .routing_key_opt(routing_key)
+            .event(&Asking {
+                asked_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await;
+        match written {
+            Ok(_) => Ok(true),
+            Err(WriteError::InvalidOriginalVersion) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     /// Records the orders AliExpress took, then each in the platform's
     /// streams ([`claim_ae_order`]), so a push naming one finds the forward.
     /// AliExpress has them whatever the forward says meanwhile: another write
     /// in between is read again and written over, and a forward given up as
-    /// stalled is placed after all. Recorded already with these orders (a
-    /// retry after a write that landed), only what is left of the platform's
-    /// record is written; a forward placed as other orders refuses
-    /// (`AlreadyForwarded`).
+    /// stalled is placed after all. Recorded already (a retry after a write
+    /// that landed), only what is left of the platform's record is written.
+    /// A forward placed as other orders, by an attempt that overlapped this
+    /// one, gets these beside them ([`PlacedRecord::AlsoPlaced`]): AliExpress
+    /// bought it twice, and the merchant cancels these there. An order the
+    /// platform holds for another forward refuses its record
+    /// (`ClaimedElsewhere`), after the forward and the others are recorded.
     pub async fn record_placed(
         &self,
         actor: &str,
         forward_id: &str,
         placement: Placement,
         routing_key: Option<String>,
-    ) -> Result<(), AliexpressError> {
+    ) -> Result<PlacedRecord, AliexpressError> {
         let placed = Placed {
             ae_order_ids: placement.ae_order_ids,
             items: placement.items,
@@ -309,36 +375,55 @@ impl<E: Executor> super::Command<E> {
             complete: placement.complete,
             placed_by: actor.to_owned(),
         };
+        let mut record = PlacedRecord::Placed;
         for attempt in 1..=super::WRITE_ATTEMPTS {
             let forward = self.require_forward(forward_id).await?;
+            let mut write = forward.write()?;
+            write.routing_key_opt(routing_key.clone());
             if matches!(forward.status, ForwardStatus::Placed | ForwardStatus::Done) {
                 let same = forward
                     .ae_orders
                     .iter()
                     .map(|order| &order.id)
                     .eq(placed.ae_order_ids.iter());
-                if !same {
-                    return Err(AliexpressError::AlreadyForwarded);
+                if same {
+                    break;
                 }
-                break;
+                record = PlacedRecord::AlsoPlaced;
+                let known = placed
+                    .ae_order_ids
+                    .iter()
+                    .all(|id| forward.also_placed.contains(id));
+                if known {
+                    break;
+                }
+                write.event(&AlsoPlaced {
+                    ae_order_ids: placed.ae_order_ids.clone(),
+                    placed_by: actor.to_owned(),
+                });
+            } else {
+                write.event(&placed);
             }
-            let written = forward
-                .write()?
-                .routing_key_opt(routing_key.clone())
-                .event(&placed)
-                .tenant(&self.tenant)
-                .commit(&self.executor)
-                .await;
-            match written {
+            match write.tenant(&self.tenant).commit(&self.executor).await {
                 Ok(_) => break,
-                Err(WriteError::InvalidOriginalVersion) if attempt < super::WRITE_ATTEMPTS => {}
+                Err(WriteError::InvalidOriginalVersion) if attempt < super::WRITE_ATTEMPTS => {
+                    record = PlacedRecord::Placed;
+                }
                 Err(err) => return Err(err.into()),
             }
         }
+        let mut elsewhere = None;
         for ae_order_id in &placed.ae_order_ids {
-            claim_ae_order(&self.executor, ae_order_id, &self.tenant, forward_id).await?;
+            match claim_ae_order(&self.executor, ae_order_id, &self.tenant, forward_id).await {
+                Ok(()) => {}
+                Err(err @ AliexpressError::ClaimedElsewhere { .. }) => elsewhere = Some(err),
+                Err(err) => return Err(err),
+            }
         }
-        Ok(())
+        match elsewhere {
+            Some(err) => Err(err),
+            None => Ok(record),
+        }
     }
 
     /// Says AliExpress may have the order of a forward taken on and not

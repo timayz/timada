@@ -33,7 +33,8 @@ use crate::aggregator::{
     PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturned, PaymentsDisabled,
     PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded, ShippingCharged,
     ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet,
-    SupplierOrderRefused, SupplierOrderStarted, TimeZoneGiven, TimeZoneSet,
+    SupplierOrderRefused, SupplierOrderRuledOut, SupplierOrderStarted, SupplierOrderUncertain,
+    TimeZoneGiven, TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -732,6 +733,15 @@ pub struct OrderState {
     pub released_at: Option<u64>,
     /// Whether the goods were ordered from the supplier.
     pub supplier_order: SupplierOrder,
+    /// An order to the supplier never said how it went, and the merchant
+    /// has not ruled it out: the supplier may have the goods, whatever a
+    /// later order to it is told. The shop's business, not a storefront's.
+    #[serde(skip)]
+    pub supplier_uncertain: bool,
+    /// The order to the supplier begun last has said nothing since: it may
+    /// be asking now, or the supplier took it.
+    #[serde(skip)]
+    pub supplier_attempt_open: bool,
     /// The discount code it was paid with, if any.
     pub discount: Option<OrderDiscount>,
     /// The shipping it was paid with; `None` when shipping was included.
@@ -784,7 +794,8 @@ pub enum SupplierOrder {
     None,
     /// The supplier was asked, or is being asked: it may have the order.
     Started,
-    /// The supplier surely refused the last order.
+    /// The supplier surely refused the last order, and no earlier one may
+    /// have gone through.
     Refused,
 }
 
@@ -931,6 +942,8 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_payment_released())
         .handler(on_supplier_order_started())
         .handler(on_supplier_order_refused())
+        .handler(on_supplier_order_uncertain())
+        .handler(on_supplier_order_ruled_out())
         .handler(on_fulfilled())
         .handler(on_cancelled())
         .handler(on_refund_requested())
@@ -1023,6 +1036,7 @@ async fn on_supplier_order_started(
     order: &mut OrderState,
 ) -> anyhow::Result<()> {
     order.supplier_order = SupplierOrder::Started;
+    order.supplier_attempt_open = true;
     order.updated_at = event.timestamp;
     Ok(())
 }
@@ -1032,7 +1046,34 @@ async fn on_supplier_order_refused(
     event: Event<SupplierOrderRefused>,
     order: &mut OrderState,
 ) -> anyhow::Result<()> {
+    // An earlier order that may have gone through keeps the fence.
+    if !order.supplier_uncertain {
+        order.supplier_order = SupplierOrder::Refused;
+    }
+    order.supplier_attempt_open = false;
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_supplier_order_uncertain(
+    event: Event<SupplierOrderUncertain>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.supplier_order = SupplierOrder::Started;
+    order.supplier_uncertain = true;
+    order.supplier_attempt_open = false;
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_supplier_order_ruled_out(
+    event: Event<SupplierOrderRuledOut>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
     order.supplier_order = SupplierOrder::Refused;
+    order.supplier_uncertain = false;
     order.updated_at = event.timestamp;
     Ok(())
 }

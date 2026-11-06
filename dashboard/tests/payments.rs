@@ -2451,17 +2451,24 @@ async fn a_dropped_hold_leaves_an_order_aliexpress_may_have_to_the_merchant() {
     let unchanged = orders.load_order(&order_id).await.unwrap().unwrap();
     assert_eq!(unchanged, order);
 
-    // The merchant cancels it on AliExpress, then here.
+    // The merchant cancels it on AliExpress, then here: nothing is held, so
+    // Stripe is not asked (it could not even be reached).
     orders
         .request_cancellation("alice", &order_id, "Cancelled on AliExpress".into(), true)
         .await
         .unwrap();
+    h.stripe
+        .unreachable
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     assert_eq!(
         payments::settle::settle_cancellation(&h.payments, &account, &orders, &order_id)
             .await
             .unwrap(),
         CancelOutcome::Cancelled
     );
+    h.stripe
+        .unreachable
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     let order = orders.load_order(&order_id).await.unwrap().unwrap();
     assert_eq!(order.status, OrderStatus::Cancelled);
     assert_eq!(

@@ -3,8 +3,8 @@ use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem};
 use timada_aliexpress::{
     AddressTree, AeOrder, AeProduct, AliexpressError, ForwardRef, ForwardStatus, FreightOption,
-    LinkState, LogisticsAddress, PLACE_COUNTRIES, PlaceItem, PlaceOrder, Placement, PlannedItem,
-    choose_service, decode_places, delivery_country, describe_options, encode_places,
+    LinkState, LogisticsAddress, PLACE_COUNTRIES, PlaceItem, PlaceOrder, PlacedRecord, Placement,
+    PlannedItem, choose_service, decode_places, delivery_country, describe_options, encode_places,
     forward_items, freight_from_response, french_department, logistics_address,
     placed_orders_from_response, places_of, postal_code_awaited, province_of, split_phone,
 };
@@ -973,20 +973,92 @@ async fn the_orders_aliexpress_took_are_recorded_once_however_often_told() {
         );
     }
 
-    // Placed as other orders (placed again by hand meanwhile): refused, the
-    // forward keeps what it has.
-    let other = forwards.record_placed(ALICE, &id, placement(&["91"])).await;
-    assert!(
-        matches!(other, Err(AliexpressError::AlreadyForwarded)),
-        "{other:?}"
-    );
+    // AliExpress took it again, from an attempt that overlapped the one
+    // recorded: kept beside it for the merchant to cancel there, once.
+    for _ in 0..2 {
+        assert_eq!(
+            forwards
+                .record_placed(ALICE, &id, placement(&["91"]))
+                .await
+                .unwrap(),
+            PlacedRecord::AlsoPlaced
+        );
+    }
+    let placed = forwards.load_forward("order-1").await.unwrap().unwrap();
+    assert_eq!(placed.also_placed, vec!["91"]);
+    assert_eq!(placed.ae_orders.len(), 2, "what was placed first stays");
     assert_eq!(placed_events(&executor, &id).await, 1);
+    let also_placed = evento::read::<timada_aliexpress::aggregator::forward::Forward>(&id)
+        .tenant(TENANT)
+        .execute(&executor)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|event| event.name == "AlsoPlaced")
+        .count();
+    assert_eq!(also_placed, 1);
+    let extra = timada_aliexpress::load_ae_order(&executor, "91")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(extra.forward.unwrap().forward_id, id);
+}
+
+/// The forward's fence, written right before AliExpress is asked at the
+/// version the attempt took it on at: an attempt overtaken in between asks
+/// nothing.
+#[tokio::test]
+async fn an_attempt_overtaken_before_asking_is_fenced_out() {
+    let executor = executor().await;
+    let forwards = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let id = forwards
+        .request_forward(ALICE, "order-1", false)
+        .await
+        .unwrap();
+    assert!(forwards.start_forward(ALICE, &id).await.unwrap());
+    let (_, first) = forwards.load_forward_versioned(&id).await.unwrap().unwrap();
+
+    // The merchant asks again, another attempt takes it on.
+    forwards
+        .request_forward(ALICE, "order-1", true)
+        .await
+        .unwrap();
+    assert!(forwards.start_forward(ALICE, &id).await.unwrap());
+    let (_, second) = forwards.load_forward_versioned(&id).await.unwrap().unwrap();
+
+    assert!(!forwards.begin_asking(ALICE, &id, first).await.unwrap());
+    assert!(forwards.begin_asking(ALICE, &id, second).await.unwrap());
     assert!(
-        timada_aliexpress::load_ae_order(&executor, "91")
-            .await
-            .unwrap()
-            .is_none()
+        !forwards.begin_asking(ALICE, &id, second).await.unwrap(),
+        "asked once"
     );
+}
+
+/// The sweep giving a forward up as stalled and the late record of what
+/// AliExpress took, at the same moment: whichever lands first, the forward
+/// ends placed.
+#[tokio::test]
+async fn a_late_record_racing_the_stall_sweep_ends_placed() {
+    let executor = executor().await;
+    let forwards = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let id = forwards
+        .request_forward(ALICE, "order-1", false)
+        .await
+        .unwrap();
+    assert!(forwards.start_forward(ALICE, &id).await.unwrap());
+    let started = forwards.load_forward("order-1").await.unwrap().unwrap();
+    let stalled_at = started.updated_at + timada_aliexpress::FORWARD_STALL_SECS + 1;
+
+    let (failed, recorded) = tokio::join!(
+        forwards.fail_stalled_forward(ALICE, &id, "Look on AliExpress first.", stalled_at),
+        forwards.record_placed(ALICE, &id, placement(&["81"])),
+    );
+    failed.unwrap();
+    assert_eq!(recorded.unwrap(), PlacedRecord::Placed);
+    let forward = forwards.load_forward("order-1").await.unwrap().unwrap();
+    assert_eq!(forward.status, ForwardStatus::Placed);
+    assert_eq!(forward.ae_orders[0].id, "81");
+    assert!(forward.last_error.is_none());
 }
 
 /// A forward taken on and never heard of: once stalled, it says AliExpress
@@ -1086,13 +1158,17 @@ async fn a_push_before_the_forward_records_its_order_waits_for_that_record() {
     timada_aliexpress::claim_ae_order(&executor, "81", TENANT, "forward-1")
         .await
         .unwrap();
-    // Told again, or by another forward: the first record stands.
+    // Told again: nothing more. Told by another forward: refused, the first
+    // record stands.
     timada_aliexpress::claim_ae_order(&executor, "81", TENANT, "forward-1")
         .await
         .unwrap();
-    timada_aliexpress::claim_ae_order(&executor, "81", "another-shop", "forward-9")
-        .await
-        .unwrap();
+    let elsewhere =
+        timada_aliexpress::claim_ae_order(&executor, "81", "another-shop", "forward-9").await;
+    assert!(
+        matches!(elsewhere, Err(AliexpressError::ClaimedElsewhere { ref ae_order_id }) if ae_order_id == "81"),
+        "{elsewhere:?}"
+    );
     assert_eq!(
         timada_aliexpress::record_push(&executor, "81", "OrderShipped")
             .await

@@ -4,6 +4,8 @@
 
 event timada-aliexpress/AeOrder::Claimed { ae_order_id: String, tenant_id: String, forward_id: String }
 event timada-aliexpress/AeOrder::Pushed { ae_order_id: String, status: String }
+event timada-aliexpress/Forward::AlsoPlaced { ae_order_ids: Vec<String>, placed_by: String }
+event timada-aliexpress/Forward::Asking { asked_by: String }
 event timada-aliexpress/Forward::Checked { ae_order_id: String, status: String, logistics_status: String, tracking: Vec<String>, closed: bool }
 event timada-aliexpress/Forward::Done { tracking: Option<String>, fulfilled: bool }
 event timada-aliexpress/Forward::Failed { reason: String, failed_by: String }
@@ -222,7 +224,9 @@ event timada-orders/Order::RefundRequested { payment_id: String, amount_cents: u
 event timada-orders/Order::Refunded { payment_id: String, refund_id: String, amount_cents: u64, refunded_by: String }
 event timada-orders/Order::ShippingCharged { method_id: String, name: String, amount_cents: u64, charged_by: String }
 event timada-orders/Order::SupplierOrderRefused { supplier: String, reason: String, refused_by: String }
+event timada-orders/Order::SupplierOrderRuledOut { supplier: String, ruled_out_by: String }
 event timada-orders/Order::SupplierOrderStarted { supplier: String, started_by: String }
+event timada-orders/Order::SupplierOrderUncertain { supplier: String, reason: String, marked_by: String }
 event timada-orders/Order::TimeZoneSet { time_zone: String, set_by: String }
 event timada-orders/OrderMail::Mailed { order_id: String, mail: String, email: String, mailed_by: String }
 event timada-orders/OrderReference::Claimed { order_id: String }

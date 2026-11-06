@@ -531,6 +531,82 @@ async fn an_order_to_the_supplier_and_a_cancellation_never_cross() {
     assert!(matches!(path, CancelPath::Release { .. }), "{path:?}");
 }
 
+/// An order to the supplier that never said how it went may be there:
+/// a sure refusal of a later one does not lower the fence, and only the
+/// merchant, having looked, rules it out, once nothing is being asked.
+#[tokio::test]
+async fn an_order_that_may_be_at_the_supplier_keeps_its_fence_until_ruled_out() {
+    let (orders, catalog) = store().await;
+    let order_id = held(&orders, &catalog).await;
+    let fenced = async || {
+        matches!(
+            orders
+                .request_cancellation(ALICE, &order_id, "Out of stock".into(), false)
+                .await,
+            Err(OrderError::SupplierOrdered)
+        )
+    };
+
+    // Said uncertain with nothing begun: nothing to say.
+    orders
+        .record_supplier_uncertainty(DASHBOARD, &order_id, "aliexpress", "No answer")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert!(!order.supplier_uncertain);
+    assert_eq!(order.supplier_order, SupplierOrder::None);
+
+    // The first order gets no answer.
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    orders
+        .record_supplier_uncertainty(DASHBOARD, &order_id, "aliexpress", "No answer")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert!(order.supplier_uncertain);
+    assert!(!order.supplier_attempt_open);
+    let version = order.aggregate_version().unwrap();
+    orders
+        .record_supplier_uncertainty(DASHBOARD, &order_id, "aliexpress", "No answer")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.aggregate_version().unwrap(), version, "said once");
+
+    // Placed again, surely refused: the first may still be there.
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let asking = orders
+        .rule_out_supplier_order(ALICE, &order_id, "aliexpress")
+        .await;
+    assert!(
+        matches!(asking, Err(OrderError::SupplierAsking)),
+        "{asking:?}"
+    );
+    orders
+        .record_supplier_refusal(DASHBOARD, &order_id, "aliexpress", "Address refused")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.supplier_order, SupplierOrder::Started);
+    assert!(fenced().await);
+
+    // The merchant looked: nothing there. The fence goes.
+    orders
+        .rule_out_supplier_order(ALICE, &order_id, "aliexpress")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.supplier_order, SupplierOrder::Refused);
+    assert!(!order.supplier_uncertain);
+    assert!(!fenced().await);
+}
+
 /// The goods are not bought once the hold on the shopper's card is about to
 /// lapse: the money could not be taken after. Taken already, no hold limits it.
 #[tokio::test]

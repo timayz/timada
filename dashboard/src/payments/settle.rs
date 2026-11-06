@@ -140,6 +140,15 @@ pub async fn settle_cancellation(
         return Ok(CancelOutcome::Nothing);
     };
     if let CancelPath::Release { payment_id } = order.cancel_path() {
+        // Nothing is held any more (an order kept open once its hold went
+        // back, its supplier perhaps holding it): cancelled without asking
+        // the provider anything.
+        if order.released_at.is_some() {
+            orders
+                .record_release(DASHBOARD_ACTOR, order_id, &payment_id, &asked.reason)
+                .await?;
+            return Ok(CancelOutcome::Cancelled);
+        }
         let released = payments
             .gateway
             .release_payment(&account.secret_key, &payment_id)

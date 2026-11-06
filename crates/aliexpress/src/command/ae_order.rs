@@ -106,9 +106,10 @@ pub async fn load_ae_order_by_id<E: Executor>(
 }
 
 /// Records that the forward `forward_id` of the shop `tenant_id` placed the
-/// AliExpress order `ae_order_id`. Recorded already, nothing more is written;
-/// the first forward recorded stands (AliExpress never gives one number
-/// twice).
+/// AliExpress order `ae_order_id`. Recorded already, nothing more is written.
+/// One recorded for another forward stands, and this record is refused
+/// (`ClaimedElsewhere`): AliExpress never gives one number twice, so that is
+/// a mix-up for someone to look at.
 pub async fn claim_ae_order<E: Executor>(
     executor: &E,
     ae_order_id: &str,
@@ -120,9 +121,18 @@ pub async fn claim_ae_order<E: Executor>(
         tenant_id: tenant_id.to_owned(),
         forward_id: forward_id.to_owned(),
     };
+    let ours = ForwardRef {
+        tenant_id: tenant_id.to_owned(),
+        forward_id: forward_id.to_owned(),
+    };
     for attempt in 1..=WRITE_ATTEMPTS {
         let written = match load_ae_order(executor, ae_order_id).await? {
-            Some(order) if order.forward.is_some() => return Ok(()),
+            Some(order) if order.forward.as_ref() == Some(&ours) => return Ok(()),
+            Some(order) if order.forward.is_some() => {
+                return Err(AliexpressError::ClaimedElsewhere {
+                    ae_order_id: ae_order_id.to_owned(),
+                });
+            }
             Some(order) => order.write()?.event(&claimed).commit(executor).await,
             None => {
                 evento::append(ae_order_index_id(ae_order_id))

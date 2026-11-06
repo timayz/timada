@@ -1,8 +1,8 @@
 use timada_aliexpress::{
     AeOrderState, ForwardRow, ForwardState, ForwardStatus, LinkRow, LinkState, LinkStatus,
-    MIGRATIONS, Share, forwards_due, forwards_stalled, link_of_product, links_due,
-    note_forward_read, note_published, note_read, note_tried, note_wanted, upsert_forward,
-    upsert_link,
+    MIGRATIONS, Placement, Share, TABLES, forget_unrecorded, forwards_due, forwards_stalled,
+    keep_unrecorded, link_of_product, links_due, note_forward_read, note_published, note_read,
+    note_tried, note_unrecorded_try, note_wanted, unrecorded, upsert_forward, upsert_link,
 };
 use timada_core::db::{Db, Turso};
 
@@ -544,6 +544,69 @@ async fn orders_left_being_placed_are_found_once_silent_long_enough() {
             .len()
     };
     assert_eq!(on_node(0).await + on_node(1).await, 2, "each on one node");
+}
+
+/// What AliExpress took and the store would not record is kept on the node,
+/// oldest first, until recorded; a copy from a peer does not empty it.
+#[tokio::test]
+async fn what_aliexpress_took_is_kept_on_the_node_until_recorded() {
+    let db = database().await;
+    let placement = |id: &str| Placement {
+        ae_order_ids: vec![id.to_owned()],
+        items: Vec::new(),
+        pay_requested: true,
+        complete: true,
+    };
+    keep_unrecorded(
+        &db,
+        "acme",
+        "late",
+        "order-2",
+        &placement("82"),
+        200,
+        "paused",
+    )
+    .await
+    .unwrap();
+    keep_unrecorded(
+        &db,
+        "acme",
+        "early",
+        "order-1",
+        &placement("81"),
+        100,
+        "paused",
+    )
+    .await
+    .unwrap();
+    // Kept again: the first time stays.
+    keep_unrecorded(
+        &db,
+        "acme",
+        "early",
+        "order-1",
+        &placement("81"),
+        150,
+        "joining",
+    )
+    .await
+    .unwrap();
+    note_unrecorded_try(&db, "acme", "early", "still paused")
+        .await
+        .unwrap();
+
+    let kept = unrecorded(&db, 10).await.unwrap();
+    let ids: Vec<&str> = kept.iter().map(|row| row.forward_id.as_str()).collect();
+    assert_eq!(ids, ["early", "late"]);
+    assert_eq!(kept[0].placed_at, 100);
+    assert_eq!(kept[0].tries, 1);
+    assert_eq!(kept[0].last_error.as_deref(), Some("still paused"));
+    assert_eq!(kept[0].placement().unwrap(), placement("81"));
+
+    forget_unrecorded(&db, "acme", "early").await.unwrap();
+    let kept = unrecorded(&db, 10).await.unwrap();
+    assert_eq!(kept.len(), 1);
+    assert!(!TABLES.contains(&"aliexpress_unrecorded"));
 }
 
 #[tokio::test]

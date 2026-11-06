@@ -50,6 +50,20 @@ struct StandIn {
     delivery_cents: AtomicU64,
     /// The orders placed, each as [`PLACED_AE_ORDER`].
     placed: AtomicUsize,
+    /// How the next orders placed are answered, in turn; taken once none is
+    /// left.
+    place_answers: Mutex<std::collections::VecDeque<PlaceAnswer>>,
+}
+
+/// How the stand-in answers an order placed.
+#[derive(Debug, Clone, Copy)]
+enum PlaceAnswer {
+    /// Taken, as [`PLACED_AE_ORDER`].
+    Taken,
+    /// Taken, the answer saying no number: AliExpress may have it.
+    Lost,
+    /// Surely refused.
+    Refused,
 }
 
 /// The number AliExpress gives every order placed with the stand-in.
@@ -69,6 +83,7 @@ impl StandIn {
             reads: AtomicUsize::new(0),
             delivery_cents: AtomicU64::new(0),
             placed: AtomicUsize::new(0),
+            place_answers: Mutex::default(),
         })
     }
 
@@ -112,9 +127,28 @@ impl StandIn {
                     // Placing an order is no read either.
                     if String::from_utf8_lossy(line).contains("method=aliexpress.ds.order.create") {
                         stand_in.placed.fetch_add(1, Ordering::SeqCst);
-                        let body = serde_json::json!({ "aliexpress_ds_order_create_response": {
-                            "result": { "is_success": true, "order_list": { "number": [PLACED_AE_ORDER] } },
-                        } })
+                        let answer = stand_in
+                            .place_answers
+                            .lock()
+                            .unwrap()
+                            .pop_front()
+                            .unwrap_or(PlaceAnswer::Taken);
+                        let result = match answer {
+                            PlaceAnswer::Taken => serde_json::json!({
+                                "is_success": true, "order_list": { "number": [PLACED_AE_ORDER] },
+                            }),
+                            PlaceAnswer::Lost => {
+                                serde_json::json!({ "is_success": true, "order_list": [] })
+                            }
+                            PlaceAnswer::Refused => serde_json::json!({
+                                "is_success": false,
+                                "error_code": "B_DROPSHIPPER_DELIVERY_ADDRESS_VALIDATE_FAIL",
+                                "error_msg": "address",
+                            }),
+                        };
+                        let body = serde_json::json!({
+                            "aliexpress_ds_order_create_response": { "result": result },
+                        })
                         .to_string();
                         let answer = format!(
                             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -1350,30 +1384,40 @@ async fn a_price_stays_within_the_tolerance_unless_a_member_asks() {
     assert_eq!(shop.rose().await.0, 880);
 }
 
-/// The store of a node whose next `fails` writes of a forward's `Placed` are
-/// refused, as while writes are paused; everything else goes through.
+/// The store of a node whose next `fails` writes of the event `name` of the
+/// aggregate `aggregate_type` are refused, as while writes are paused;
+/// everything else goes through.
 #[derive(Clone)]
-struct RefusesPlaced {
+struct RefusesWrites {
     store: Evento,
+    aggregate_type: &'static str,
+    name: &'static str,
     fails: Arc<AtomicUsize>,
 }
 
-impl RefusesPlaced {
-    fn new(store: &Evento, fails: usize) -> Self {
+impl RefusesWrites {
+    /// Refuses the next `fails` records of what AliExpress took.
+    fn placed(store: &Evento, fails: usize) -> Self {
+        Self::new(store, "timada-aliexpress/Forward", "Placed", fails)
+    }
+
+    fn new(store: &Evento, aggregate_type: &'static str, name: &'static str, fails: usize) -> Self {
         Self {
             store: store.clone(),
+            aggregate_type,
+            name,
             fails: Arc::new(AtomicUsize::new(fails)),
         }
     }
 }
 
 #[async_trait::async_trait]
-impl evento::Executor for RefusesPlaced {
+impl evento::Executor for RefusesWrites {
     async fn write(&self, events: Vec<evento::Event>) -> Result<(), evento::WriteError> {
-        let placed = events.iter().any(|event| {
-            event.aggregate_type == "timada-aliexpress/Forward" && event.name == "Placed"
-        });
-        let refused = placed
+        let matched = events
+            .iter()
+            .any(|event| event.aggregate_type == self.aggregate_type && event.name == self.name);
+        let refused = matched
             && self
                 .fails
                 .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
@@ -1506,15 +1550,19 @@ impl Shop {
     /// delivers to a phone it can call, and its placing asked for: the
     /// forward.
     async fn order_to_place(&self) -> String {
+        self.order_to_place_with(true).await
+    }
+
+    /// The same, its money taken (`paid`) or only held.
+    async fn order_to_place_with(&self, paid: bool) -> String {
         let product = timada_catalog::Command::new(self.store.clone(), &self.tenant.id)
             .load_product(&self.product_id)
             .await
             .unwrap()
             .unwrap();
-        evento::append("an-order")
-            .tenant(&self.tenant.id)
-            .original_version(0)
-            .event(&timada_orders::aggregator::Placed {
+        let mut write = evento::append("an-order");
+        write.tenant(&self.tenant.id).original_version(0).event(
+            &timada_orders::aggregator::Placed {
                 reference: "K7Q4-MZP2".to_owned(),
                 cart_id: "a-cart".to_owned(),
                 email: "ada@example.com".to_owned(),
@@ -1539,17 +1587,38 @@ impl Shop {
                 payment: Default::default(),
                 supplier: Some(timada_aliexpress::ALIEXPRESS_SUPPLIER.to_owned()),
                 placed_by: "storefront".to_owned(),
-            })
-            .event(&timada_orders::aggregator::Paid {
+            },
+        );
+        if paid {
+            write.event(&timada_orders::aggregator::Paid {
                 payment_id: String::new(),
                 amount_cents: 862,
                 paid_by: "timada-dashboard".to_owned(),
-            })
-            .commit(&self.store)
-            .await
-            .unwrap();
+            });
+        }
+        write.commit(&self.store).await.unwrap();
         self.links()
             .request_forward(ALIEXPRESS_ACTOR, "an-order", false)
+            .await
+            .unwrap()
+    }
+
+    fn orders(&self) -> timada_orders::Command<Evento> {
+        timada_orders::Command::new(self.store.clone(), &self.tenant.id)
+    }
+
+    async fn order(&self) -> timada_orders::OrderState {
+        self.orders().load_order("an-order").await.unwrap().unwrap()
+    }
+
+    /// Places the forward, by a node writing to `store`.
+    async fn forward_on<E: evento::Executor + Clone>(
+        &self,
+        store: &E,
+        forward_id: &str,
+    ) -> super::forward::ForwardResult {
+        self.aliexpress
+            .forward_order(store, &self.db, &self.tenant.id, forward_id)
             .await
             .unwrap()
     }
@@ -1588,7 +1657,8 @@ impl Shop {
         .unwrap()
     }
 
-    /// The node's subscription catches up with the pushes.
+    /// The node's subscription catches up with the pushes, and the reads it
+    /// started end.
     async fn follow_pushes(&self) {
         super::webhook::pushes_subscription::<Evento>(
             self.aliexpress.clone(),
@@ -1598,6 +1668,7 @@ impl Shop {
         .run_once(&self.store)
         .await
         .unwrap();
+        self.aliexpress.pushes_read().await;
     }
 
     fn forward_ref(&self, forward_id: &str) -> timada_aliexpress::ForwardRef {
@@ -1615,13 +1686,9 @@ impl Shop {
 async fn an_order_aliexpress_took_is_recorded_once_the_store_takes_writes_again() {
     let shop = Shop::new().await;
     let forward_id = shop.order_to_place().await;
-    let paused = RefusesPlaced::new(&shop.store, 2);
+    let paused = RefusesWrites::placed(&shop.store, 2);
 
-    let placed = shop
-        .aliexpress
-        .forward_order(&paused, &shop.db, &shop.tenant.id, &forward_id)
-        .await
-        .unwrap();
+    let placed = shop.forward_on(&paused, &forward_id).await;
 
     assert_eq!(
         placed,
@@ -1638,59 +1705,238 @@ async fn an_order_aliexpress_took_is_recorded_once_the_store_takes_writes_again(
     assert_eq!(ae_order.forward, Some(shop.forward_ref(&forward_id)));
 }
 
-/// AliExpress took the order and the store never recorded it: the orders
-/// are logged, the forward stays taken on, and once it stalled the sweep
-/// says AliExpress may have it. Nothing places it again on its own, and the
-/// shopper can no longer cancel it.
+/// AliExpress took the order and the store refused its record for longer
+/// than placing waits (a node rejoining, say): what AliExpress took is kept
+/// on this node, and the sweep records it once the store takes writes again,
+/// however long that is, even after the forward was given up as stalled.
+/// Nothing places it twice meanwhile.
 #[tokio::test]
-async fn an_order_aliexpress_took_and_never_recorded_is_left_to_the_merchant() {
+async fn an_order_aliexpress_took_is_recorded_by_the_sweep_when_the_store_refused_it() {
     let shop = Shop::new().await;
     let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
     let forward_id = shop.order_to_place().await;
-    let paused = RefusesPlaced::new(&shop.store, usize::MAX);
-
-    let placed = shop
-        .aliexpress
-        .forward_order(&paused, &shop.db, &shop.tenant.id, &forward_id)
-        .await
-        .unwrap();
+    let paused = RefusesWrites::placed(&shop.store, usize::MAX);
 
     assert_eq!(
-        placed,
+        shop.forward_on(&paused, &forward_id).await,
         super::forward::ForwardResult::Unrecorded(vec![PLACED_AE_ORDER.to_owned()])
     );
     assert_eq!(shop.placed(), 1);
     let forward = shop.forward(&forward_id).await;
     assert_eq!(forward.status, timada_aliexpress::ForwardStatus::Started);
+    let kept = timada_aliexpress::unrecorded(&shop.db, 10).await.unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].forward_id, forward_id);
+    assert_eq!(
+        kept[0].placement().unwrap().ae_order_ids,
+        [PLACED_AE_ORDER.to_owned()]
+    );
     // Asked again, it is not placed twice.
     assert_eq!(
-        shop.aliexpress
-            .forward_order(&shop.store, &shop.db, &shop.tenant.id, &forward_id)
-            .await
-            .unwrap(),
+        shop.forward_on(&shop.store, &forward_id).await,
         super::forward::ForwardResult::Skipped
     );
     assert_eq!(shop.placed(), 1);
 
+    // Given up as stalled by the node it belongs to while the store still
+    // refused the record here.
     shop.follow_read_models().await;
-    let now = crate::auth::now();
-    assert_eq!(sweep.settle_stalled(now).await.unwrap(), 0, "being placed");
     let stalled = forward.updated_at + timada_aliexpress::FORWARD_STALL_SECS + 1;
     assert_eq!(sweep.settle_stalled(stalled).await.unwrap(), 1);
-    let forward = shop.forward(&forward_id).await;
-    assert_eq!(forward.status, timada_aliexpress::ForwardStatus::Failed);
     assert_eq!(
-        forward.last_error.as_deref(),
+        shop.forward(&forward_id).await.last_error.as_deref(),
         Some(super::forward::MAY_HAVE_PLACED)
     );
-    assert_eq!(sweep.settle_stalled(stalled).await.unwrap(), 0, "said once");
-    let order = timada_orders::Command::new(shop.store.clone(), &shop.tenant.id)
-        .load_order("an-order")
+
+    // The store takes writes: placed after all, its capture to follow.
+    assert_eq!(sweep.record_unrecorded().await.unwrap(), 1);
+    let forward = shop.forward(&forward_id).await;
+    assert_eq!(forward.status, timada_aliexpress::ForwardStatus::Placed);
+    assert_eq!(forward.ae_orders[0].id, PLACED_AE_ORDER);
+    assert!(
+        timada_aliexpress::unrecorded(&shop.db, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(sweep.record_unrecorded().await.unwrap(), 0);
+    assert_eq!(shop.placed(), 1);
+}
+
+/// An attempt that never said how it went may be on AliExpress: placed
+/// again and surely refused, the order keeps its fence, so the shopper still
+/// cannot cancel it and a dropped hold leaves it open. Once the merchant
+/// says it is not there, the fence goes.
+#[tokio::test]
+async fn a_refusal_after_an_attempt_that_may_have_placed_keeps_the_fence() {
+    let shop = Shop::new().await;
+    let forward_id = shop.order_to_place_with(false).await;
+    assert!(shop.order().await.cancellable_by_shopper());
+
+    shop.stand_in
+        .place_answers
+        .lock()
+        .unwrap()
+        .extend([PlaceAnswer::Lost, PlaceAnswer::Refused]);
+    assert_eq!(
+        shop.forward_on(&shop.store, &forward_id).await,
+        super::forward::ForwardResult::Failed(super::forward::MAY_HAVE_PLACED.to_owned())
+    );
+    let order = shop.order().await;
+    assert!(order.supplier_uncertain);
+    assert!(!order.cancellable_by_shopper());
+
+    // Placed again: surely refused, the first may be there all the same.
+    shop.links()
+        .request_forward(ALICE, "an-order", false)
+        .await
+        .unwrap();
+    let refused = shop.forward_on(&shop.store, &forward_id).await;
+    assert!(
+        matches!(&refused, super::forward::ForwardResult::Failed(reason) if reason.starts_with("AliExpress refused the order")),
+        "{refused:?}"
+    );
+    assert_eq!(shop.placed(), 2);
+    let order = shop.order().await;
+    assert_eq!(order.supplier_order, timada_orders::SupplierOrder::Started);
+    assert!(!order.cancellable_by_shopper());
+
+    // The merchant looked: it is not there. The shopper may cancel again.
+    shop.orders()
+        .rule_out_supplier_order(ALICE, "an-order", timada_aliexpress::ALIEXPRESS_SUPPLIER)
+        .await
+        .unwrap();
+    assert!(shop.order().await.cancellable_by_shopper());
+}
+
+/// A node that stopped while placing leaves the forward taken on: once it
+/// stalled, the sweep tells the order its supplier may have it before saying
+/// so on the forward, so a later attempt AliExpress refuses keeps the fence.
+#[tokio::test]
+async fn a_stalled_attempt_keeps_the_fence_against_a_later_refusal() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let forward_id = shop.order_to_place_with(false).await;
+    // What a node writes before asking AliExpress, then it stopped.
+    let forwards = shop.links();
+    assert!(
+        forwards
+            .start_forward(ALIEXPRESS_ACTOR, &forward_id)
+            .await
+            .unwrap()
+    );
+    let (_, version) = forwards
+        .load_forward_versioned(&forward_id)
         .await
         .unwrap()
         .unwrap();
+    assert!(
+        forwards
+            .begin_asking(ALIEXPRESS_ACTOR, &forward_id, version)
+            .await
+            .unwrap()
+    );
+    shop.orders()
+        .begin_supplier_order(
+            ALIEXPRESS_ACTOR,
+            "an-order",
+            timada_aliexpress::ALIEXPRESS_SUPPLIER,
+            crate::auth::now(),
+        )
+        .await
+        .unwrap();
+    shop.follow_read_models().await;
+
+    let stalled =
+        shop.forward(&forward_id).await.updated_at + timada_aliexpress::FORWARD_STALL_SECS + 1;
+    assert_eq!(sweep.settle_stalled(stalled).await.unwrap(), 1);
+    assert!(shop.order().await.supplier_uncertain);
+
+    shop.stand_in
+        .place_answers
+        .lock()
+        .unwrap()
+        .push_back(PlaceAnswer::Refused);
+    shop.links()
+        .request_forward(ALICE, "an-order", false)
+        .await
+        .unwrap();
+    shop.forward_on(&shop.store, &forward_id).await;
+    assert_eq!(
+        shop.placed(),
+        1,
+        "only the second attempt reached AliExpress here"
+    );
+    let order = shop.order().await;
     assert_eq!(order.supplier_order, timada_orders::SupplierOrder::Started);
-    assert_eq!(shop.placed(), 1);
+    assert!(!order.cancellable_by_shopper());
+}
+
+/// An attempt overtaken while it read what it needs (the merchant asked
+/// again, or the sweep gave it up) asks AliExpress nothing: the forward's
+/// fence, written at the version it took the forward on at, refuses it.
+#[tokio::test]
+async fn an_attempt_overtaken_before_asking_places_nothing() {
+    let shop = Arc::new(Shop::new().await);
+    let forward_id = shop.order_to_place().await;
+    shop.stand_in.held.store(true, Ordering::SeqCst);
+    let placing = tokio::spawn({
+        let shop = shop.clone();
+        let forward_id = forward_id.clone();
+        async move { shop.forward_on(&shop.store, &forward_id).await }
+    });
+    shop.stand_in.holding.notified().await;
+
+    // The merchant asks again while the first attempt reads the product.
+    shop.links()
+        .request_forward(ALICE, "an-order", true)
+        .await
+        .unwrap();
+    shop.stand_in.held.store(false, Ordering::SeqCst);
+    shop.stand_in.answer.notify_one();
+
+    assert_eq!(
+        placing.await.unwrap(),
+        super::forward::ForwardResult::Skipped
+    );
+    assert_eq!(shop.placed(), 0);
+    let order = shop.order().await;
+    assert_eq!(
+        order.supplier_order,
+        timada_orders::SupplierOrder::None,
+        "the order was not fenced for nothing"
+    );
+    assert_eq!(
+        shop.forward(&forward_id).await.status,
+        timada_aliexpress::ForwardStatus::Requested
+    );
+}
+
+/// A push the store does not record is not answered as taken: AliExpress
+/// sends it again.
+#[tokio::test]
+async fn a_push_the_store_does_not_record_is_an_error() {
+    let shop = Shop::new().await;
+    let paused = RefusesWrites::new(&shop.store, "timada-aliexpress/AeOrder", "Pushed", 1);
+    let body = br#"{"message_type":53,"data":{"orderId":"8100000000000001","orderStatus":"OrderShipped"}}"#;
+    let signature = timada_aliexpress::push_signature("key", "secret", body);
+
+    let refused = super::webhook::receive(&shop.aliexpress, &paused, body, Some(&signature)).await;
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(
+        timada_aliexpress::load_ae_order(&shop.store, "8100000000000001")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Sent again, recorded.
+    assert_eq!(
+        super::webhook::receive(&shop.aliexpress, &paused, body, Some(&signature))
+            .await
+            .unwrap(),
+        super::webhook::Outcome::Accepted { forward: None }
+    );
 }
 
 /// A push is recorded before it is answered, nothing read in the request;

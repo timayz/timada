@@ -2,7 +2,8 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 
 use crate::aggregator::{
     CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, Fulfilled, Paid,
-    PaymentReleased, RefundRequested, Refunded, SupplierOrderRefused, SupplierOrderStarted,
+    PaymentReleased, RefundRequested, Refunded, SupplierOrderRefused, SupplierOrderRuledOut,
+    SupplierOrderStarted, SupplierOrderUncertain,
 };
 use crate::error::OrderError;
 use crate::value_object::{
@@ -373,9 +374,89 @@ impl<E: Executor> super::Command<E> {
         Err(OrderError::Write(WriteError::InvalidOriginalVersion))
     }
 
+    /// Records that the order to `supplier` begun last never said how it
+    /// went (the supplier did not answer, or what asked it stopped or could
+    /// not record the answer): the supplier may have it, so the fence stays
+    /// whatever a later order to it is told, until the merchant rules it out
+    /// ([`rule_out_supplier_order`](Self::rule_out_supplier_order)). A no-op
+    /// unless that order is open: begun, and neither refused nor said
+    /// uncertain since.
+    pub async fn record_supplier_uncertainty(
+        &self,
+        actor: &str,
+        order_id: &str,
+        supplier: &str,
+        reason: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        let reason: String = reason.trim().chars().take(MAX_REASON_LEN).collect();
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            if !order.supplier_attempt_open {
+                return Ok(());
+            }
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&SupplierOrderUncertain {
+                    supplier: supplier.to_owned(),
+                    reason: reason.clone(),
+                    marked_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(OrderError::Write(WriteError::InvalidOriginalVersion))
+    }
+
+    /// The merchant looked at `supplier` and found no order there: it surely
+    /// has none, and the shopper may cancel again. Refused while an order to
+    /// it is open (`SupplierAsking`): it may be asking now, or the supplier
+    /// took it. A no-op when nothing is uncertain.
+    pub async fn rule_out_supplier_order(
+        &self,
+        actor: &str,
+        order_id: &str,
+        supplier: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            if !order.supplier_uncertain {
+                return Ok(());
+            }
+            if order.supplier_attempt_open {
+                return Err(OrderError::SupplierAsking);
+            }
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&SupplierOrderRuledOut {
+                    supplier: supplier.to_owned(),
+                    ruled_out_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(OrderError::Write(WriteError::InvalidOriginalVersion))
+    }
+
     /// Records that the supplier surely refused the order it was asked for
-    /// (it took nothing): the shopper may cancel again. A no-op unless an
-    /// order to the supplier stands.
+    /// (it took nothing): the shopper may cancel again, unless an earlier
+    /// order to it may have gone through and was not ruled out. A no-op
+    /// unless an order to the supplier is open.
     pub async fn record_supplier_refusal(
         &self,
         actor: &str,
@@ -387,7 +468,7 @@ impl<E: Executor> super::Command<E> {
         let reason: String = reason.trim().chars().take(MAX_REASON_LEN).collect();
         for attempt in 1..=ORDER_WRITE_ATTEMPTS {
             let order = self.require_order(order_id).await?;
-            if order.supplier_order != SupplierOrder::Started {
+            if !order.supplier_attempt_open {
                 return Ok(());
             }
             let written = order

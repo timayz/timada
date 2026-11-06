@@ -62,7 +62,13 @@ pub struct Aliexpress {
     budget: CallBudget,
     /// Which of the nodes up this one is, at the moment of asking.
     share: Arc<dyn Fn() -> Share + Send + Sync>,
+    /// The reads after pushes that may run at once ([`PUSH_READS`]).
+    push_reads: Arc<tokio::sync::Semaphore>,
 }
+
+/// How many reads after pushes run at once on a node: a burst of pushes
+/// waits its turn rather than all asking AliExpress together.
+const PUSH_READS: usize = 4;
 
 impl Aliexpress {
     pub fn new(
@@ -109,7 +115,14 @@ impl Aliexpress {
             order_read_every_secs: config.order_read_every_secs.max(1),
             budget: CallBudget::new(config.calls_per_day),
             share,
+            push_reads: Arc::new(tokio::sync::Semaphore::new(PUSH_READS)),
         }))
+    }
+
+    /// Waits for the reads after pushes under way to end.
+    #[cfg(test)]
+    pub(crate) async fn pushes_read(&self) {
+        let _all = self.push_reads.acquire_many(PUSH_READS as u32).await;
     }
 
     /// AliExpress's places in `country`, read at most once a day; `None`

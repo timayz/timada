@@ -99,7 +99,17 @@ pub mod refresh {
 /// there once. It lives under the tenant, next to the order.
 pub mod forward {
     /// One combination an order bought on AliExpress.
-    #[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Hash,
+        bitcode::Encode,
+        bitcode::Decode,
+        serde::Serialize,
+        serde::Deserialize,
+    )]
     pub struct ForwardItem {
         pub ae_product_id: String,
         pub sku_id: String,
@@ -118,6 +128,10 @@ pub mod forward {
         },
         /// One node took it on, so no other places it a second time.
         Started { started_by: String },
+        /// AliExpress is about to be asked for it, written at the version
+        /// the attempt took it on at: an attempt overtaken in between (asked
+        /// for again, given up as stalled) asks nothing.
+        Asking { asked_by: String },
         /// AliExpress took it: its order numbers (one per seller), what was
         /// bought, whether it was asked to charge the account, and whether
         /// every line of the shop's order was bought there.
@@ -126,6 +140,12 @@ pub mod forward {
             items: Vec<ForwardItem>,
             pay_requested: bool,
             complete: bool,
+            placed_by: String,
+        },
+        /// AliExpress took it a second time, as these orders, from an attempt
+        /// that overlapped the one recorded: the merchant cancels them there.
+        AlsoPlaced {
+            ae_order_ids: Vec<String>,
             placed_by: String,
         },
         /// Nothing was placed; `reason` says why, for the merchant.

@@ -263,11 +263,27 @@ pub enum Order {
         started_by: String,
     },
     /// The supplier surely refused the order (it did not take it):
-    /// the shopper may cancel again.
+    /// the shopper may cancel again, unless an earlier order to it may have
+    /// gone through (`SupplierOrderUncertain`).
     SupplierOrderRefused {
         supplier: String,
         reason: String,
         refused_by: String,
+    },
+    /// The order to `supplier` begun last never said how it went (the
+    /// supplier did not answer, or what asked it stopped or could not record
+    /// the answer): the supplier may have it, whatever a later order to it is
+    /// told, until the merchant rules it out.
+    SupplierOrderUncertain {
+        supplier: String,
+        reason: String,
+        marked_by: String,
+    },
+    /// The merchant looked at the supplier and found no order there: it
+    /// surely has none, and the shopper may cancel again.
+    SupplierOrderRuledOut {
+        supplier: String,
+        ruled_out_by: String,
     },
     /// The goods left; `tracking` is a parcel number or link, if any.
     Fulfilled {

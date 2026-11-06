@@ -308,6 +308,9 @@ pub fn describe_error(code: &str) -> &'static str {
         "supplier_ordered" => {
             "AliExpress may already have this order: tick that you cancel it there too."
         }
+        "supplier_asking" => {
+            "The order is being placed on AliExpress, or AliExpress took it: there is nothing to rule out."
+        }
         "invalid_storefront_url" => {
             "A storefront address starts with https:// and is at most 200 characters."
         }
