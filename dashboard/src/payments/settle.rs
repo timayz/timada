@@ -1,14 +1,15 @@
 //! Speaks to the provider about an order's money once the order asked for
-//! it: takes what is held (`Order::CaptureRequested`), or settles a
+//! it: takes what is held (`Order::CaptureRequested`), settles a
 //! cancellation (`Order::CancellationRequested`), the hold given back or what
-//! was taken refunded first. Whoever wrote the request calls these at once;
+//! was taken refunded first, or makes a refund (`Order::RefundRequested`).
+//! Whoever wrote the request calls these at once;
 //! the sweep ([`PendingPayments`](super::PendingPayments)) calls them again
 //! for any the provider could not be asked about then. Each reads the order
 //! first and the provider's answer is recorded, so asking twice (two nodes,
 //! a retry) does what asking once did.
 
 use timada_orders::{
-    CancelPath, HOLD_CANCELLED_REASON, HOLD_EXPIRED_REASON, OrderError, OrderStatus,
+    CancelPath, HOLD_CANCELLED_REASON, HOLD_EXPIRED_REASON, OrderError, OrderStatus, PendingRefund,
 };
 
 use super::{Account, CaptureAnswer, DASHBOARD_ACTOR, Payments, ReleaseAnswer};
@@ -184,4 +185,53 @@ pub async fn settle_cancellation(
     }
     orders.complete_cancellation(order_id).await?;
     Ok(CancelOutcome::Cancelled)
+}
+
+/// Makes the refund `pending` asked for (`Order::RefundRequested`) under the
+/// key the order fixed, so asking twice refunds once, and records it; the
+/// refund's id.
+pub async fn refund(
+    payments: &Payments,
+    account: &Account,
+    orders: &Orders,
+    order_id: &str,
+    pending: &PendingRefund,
+) -> anyhow::Result<String> {
+    let refund_id = payments
+        .gateway
+        .refund(
+            &account.secret_key,
+            &pending.payment_id,
+            pending.amount_cents,
+            &pending.idempotency_key,
+        )
+        .await?;
+    orders
+        .record_refund(DASHBOARD_ACTOR, order_id, &refund_id, pending.amount_cents)
+        .await?;
+    Ok(refund_id)
+}
+
+/// Makes a refund the order asked for and did not record (no answer from
+/// the provider then, a node that stopped): whether it is settled now.
+pub async fn settle_refund(
+    payments: &Payments,
+    account: &Account,
+    orders: &Orders,
+    order_id: &str,
+) -> anyhow::Result<bool> {
+    let Some(pending) = orders
+        .load_order(order_id)
+        .await?
+        .and_then(|order| order.pending_refund)
+    else {
+        return Ok(true);
+    };
+    match refund(payments, account, orders, order_id, &pending).await {
+        Ok(_) => Ok(true),
+        Err(err) => {
+            tracing::warn!(tenant = %orders.tenant(), order = %order_id, error = %err, "an order's refund could not be made now: tried again later");
+            Ok(false)
+        }
+    }
 }

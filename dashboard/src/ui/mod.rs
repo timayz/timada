@@ -258,6 +258,9 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_webhook_secret" => "A webhook signing secret starts with whsec_.",
         "stripe_refused_key" => "Stripe did not accept this secret key.",
         "payments_disabled" => "Payments are not enabled on this platform.",
+        "money_held" => {
+            "Some orders still hold money on a shopper's card, or have money on its way back: take the payment or cancel those orders first. Payments were not stopped."
+        }
         "mail_servers_disabled" => "Shop mail servers are not enabled on this platform.",
         "invalid_mail_server" => {
             "Give the server's host name, a port from 1 to 65535 and how the connection is secured, and a name of at most 80 characters."

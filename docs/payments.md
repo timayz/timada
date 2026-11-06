@@ -37,9 +37,12 @@ The goods and the discount's use are held from step 2 for thirty minutes. A paym
 confirmed after that (a card form left open, a slow bank, a webhook delivered late) has
 the dashboard take the holds again before it creates the order: nothing changes while
 they stand, and what is left is taken otherwise. When the last of it went to someone
-else in between, the hold is given back, the cart records it (`Cart::PaymentReturned`)
-and the storefront tells the shopper (`payment_returned_*` codes) instead of waiting for
-an order that will not come. Nothing is charged.
+else in between, the cart records that the payment goes back (`Cart::PaymentReturnRequested`),
+the hold is given back, the cart records that it went (`Cart::PaymentReturned`) and the
+storefront tells the shopper (`payment_returned_*` codes) instead of waiting for an
+order that will not come. Nothing is charged. A second payment of a cart that is an
+order already goes back the same way; one Stripe did not answer for is given back by the
+sweep a minute later.
 
 Most card forms left open never get that far: every `cancel_check_secs` (a minute by
 default) each node sweeps the checkouts whose payment is still unconfirmed once their
@@ -103,6 +106,10 @@ order does not know yet, and the credit note follows.
      `payment_intent.amount_capturable_updated`, `payment_intent.succeeded`,
      `payment_intent.canceled` and `charge.refunded`.
   3. Paste that endpoint's signing secret (`whsec_…`).
+
+  "Stop taking payments" is refused while an order still holds money on a shopper's
+  card or has money on its way back: taking it, giving it back and hearing from Stripe
+  about it all need the keys. Take the payment or cancel those orders first.
 
 - **Storefront.** Its API key needs `store:read` and `store:checkout`.
 

@@ -70,12 +70,13 @@ async fn on_order_event<E: Executor>(
 pub async fn upsert_cart(db: &Db, tenant_id: &str, cart: &CartState) -> anyhow::Result<()> {
     db.execute(
         "INSERT INTO orders_carts (tenant_id, id, order_id, line_count, item_count, created_at,
-            updated_at, status)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            updated_at, status, return_requested_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             order_id = excluded.order_id, line_count = excluded.line_count,
             status = excluded.status,
-            item_count = excluded.item_count, updated_at = excluded.updated_at",
+            item_count = excluded.item_count, updated_at = excluded.updated_at,
+            return_requested_at = excluded.return_requested_at",
         (
             tenant_id,
             cart.id.as_str(),
@@ -85,6 +86,7 @@ pub async fn upsert_cart(db: &Db, tenant_id: &str, cart: &CartState) -> anyhow::
             cart.created_at as i64,
             cart.updated_at as i64,
             cart.status(),
+            cart.return_requested_at().map(|at| at as i64),
         ),
     )
     .await?;
@@ -103,9 +105,9 @@ pub async fn upsert_order(db: &Db, tenant_id: &str, order: &OrderState) -> anyho
                     country, item_count, total_cents, currency, placed_at, updated_at, payment_id,
                     refunded_cents, discount_id, discount_code, discount_cents, fulfilled_at,
                     supplier, payment_state, capture_before, capture_requested_at,
-                    cancel_requested_at, paid_at)
+                    cancel_requested_at, paid_at, refund_requested_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                    ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+                    ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
                  ON CONFLICT (tenant_id, id) DO UPDATE SET
                     status = excluded.status, updated_at = excluded.updated_at,
                     refunded_cents = excluded.refunded_cents, discount_id = excluded.discount_id,
@@ -115,7 +117,8 @@ pub async fn upsert_order(db: &Db, tenant_id: &str, order: &OrderState) -> anyho
                     capture_before = excluded.capture_before,
                     capture_requested_at = excluded.capture_requested_at,
                     cancel_requested_at = excluded.cancel_requested_at,
-                    paid_at = excluded.paid_at",
+                    paid_at = excluded.paid_at,
+                    refund_requested_at = excluded.refund_requested_at",
                 params_from_iter([
                     Value::from(*tenant_id),
                     Value::from(order.id.as_str()),
@@ -152,6 +155,12 @@ pub async fn upsert_order(db: &Db, tenant_id: &str, order: &OrderState) -> anyho
                             .map(|pending| pending.requested_at as i64),
                     ),
                     Value::from(order.paid_at.map(|at| at as i64)),
+                    Value::from(
+                        order
+                            .pending_refund
+                            .as_ref()
+                            .map(|pending| pending.requested_at as i64),
+                    ),
                 ]),
             )
             .await?;

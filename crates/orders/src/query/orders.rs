@@ -154,10 +154,10 @@ pub struct PaymentDue {
 }
 
 /// The orders of every tenant whose money needs looking after at `now`
-/// (Unix seconds): a capture or a cancellation asked before `asked_before`
-/// and still unanswered, a hold whose time ran out, or an order of goods the
-/// shop holds itself, placed before `asked_before` and still only held.
-/// Grouped by tenant, oldest first.
+/// (Unix seconds): a capture, a cancellation or a refund asked before
+/// `asked_before` and still unanswered, a hold whose time ran out, or an
+/// order of goods the shop holds itself, placed before `asked_before` and
+/// still only held. Grouped by tenant, oldest first.
 pub async fn payments_due(
     db: &Db,
     now: i64,
@@ -166,13 +166,36 @@ pub async fn payments_due(
 ) -> anyhow::Result<Vec<PaymentDue>> {
     db.fetch_all(
         "SELECT tenant_id, id FROM orders_orders
-         WHERE (status = 'authorized' OR cancel_requested_at IS NOT NULL)
-           AND (capture_requested_at < ?2 OR cancel_requested_at < ?2 OR capture_before < ?1
+         WHERE (status = 'authorized' OR cancel_requested_at IS NOT NULL
+                OR refund_requested_at IS NOT NULL)
+           AND (capture_requested_at < ?2 OR cancel_requested_at < ?2
+                OR refund_requested_at < ?2 OR capture_before < ?1
                 OR (supplier IS NULL AND payment_state = 'held' AND placed_at < ?2))
          ORDER BY tenant_id, placed_at, id LIMIT ?3",
         (now, asked_before, limit),
     )
     .await
+}
+
+/// Whether the tenant has money held on a shopper's card, or on its way to
+/// or from one: an order whose payment is only held, or asked to be taken,
+/// cancelled or refunded, or a payment a cart is giving back. Settling any
+/// of it needs the tenant's provider account.
+pub async fn money_held(db: &Db, tenant_id: &str) -> anyhow::Result<bool> {
+    let held: i64 = db
+        .fetch_scalar(
+            "SELECT EXISTS (
+                SELECT 1 FROM orders_orders WHERE tenant_id = ?1
+                  AND (status = 'authorized' OR capture_requested_at IS NOT NULL
+                       OR cancel_requested_at IS NOT NULL OR refund_requested_at IS NOT NULL)
+             ) OR EXISTS (
+                SELECT 1 FROM orders_carts WHERE tenant_id = ?1
+                  AND return_requested_at IS NOT NULL
+             )",
+            (tenant_id,),
+        )
+        .await?;
+    Ok(held != 0)
 }
 
 /// An order that left, across every tenant this node follows.

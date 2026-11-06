@@ -615,6 +615,15 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
     const secondReference = (await page.locator("[data-order-reference]").textContent()) ?? "";
     await expect(page.locator("[data-order-cancel]")).toBeVisible();
     const paidMails = await mailCountOf(request, "ada@example.org", "Payment received for your ");
+    // Its money held, the shop cannot stop taking payments: the keys stay.
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders`);
+      await expect(page.locator(`[data-order="${secondReference.trim()}"]`)).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await page.goto(`/t/${slug}/payments`);
+    await page.getByRole("button", { name: "Stop taking payments" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "still hold money" })).toBeVisible();
+    await expect(page.locator('[data-payments="stripe"]')).toBeVisible();
     await page.goto(`/t/${slug}/orders/${second}`);
     await page.getByRole("button", { name: "Place on AliExpress" }).click();
     await forwardIs(page, `/t/${slug}/orders/${second}`, "placed");

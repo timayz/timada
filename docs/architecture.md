@@ -211,8 +211,12 @@ by construction.
    payment back from Stripe and acts on its state (`payments/webhook.rs`): held, the
    order is placed (`place_order`, status `Authorized`); taken, it is recorded; dropped
    (the week a card holds money ran out), the order is cancelled. A second payment of a
-   cart, and one confirmed after the checkout's holds lapsed and went to someone else
-   (`Cart::PaymentReturned`), are given back, nothing taken. The money is taken
+   cart, and one confirmed after the checkout's holds lapsed and went to someone else,
+   are given back, nothing taken: the cart records that the payment goes back and why
+   (`Cart::PaymentReturnRequested`) before Stripe is asked, and that it went
+   (`Cart::PaymentReturned`) after, and money Stripe took for an order cancelled
+   meanwhile goes back through the order (`Order::RefundRequested`, then Stripe,
+   `Refunded`). The money is taken
    (`payments/settle.rs`) once the order asks for it (`Order::CaptureRequested`): at
    once by the subscription `timada-dashboard/order-payments` when the shop holds every
    good, by the same once AliExpress took the order, or by the merchant; Stripe's answer is
@@ -224,8 +228,10 @@ by construction.
    taken first (`Order::RefundRequested`, the idempotency key, then Stripe, `Refunded`,
    `Cancelled`); `charge.refunded` reconciles refunds Stripe holds that the order does not
    know. No subscription handler fails on a Stripe answer: what Stripe could not be asked
-   at once is settled by the sweep `payments/pending.rs` a minute later. Setting it up and
-   testing it locally: `docs/payments.md`.
+   at once (a capture, a cancellation, a refund, a payment to give back) is settled by the
+   sweep `payments/pending.rs` a minute later. All of it needs the tenant's keys, so
+   stopping payments is refused while an order holds money or has some on its way back.
+   Setting it up and testing it locally: `docs/payments.md`.
 5. **Shop mail** (`shop_mail.rs`). A merchant sets up SMTP servers of its own on
    `/t/{slug}/mail` (up to ten) and picks one for each kind of mail
    (`MailServersPicked`). The shop's mails to its shoppers (order mails, review

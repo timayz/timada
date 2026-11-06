@@ -10,16 +10,28 @@
 //! form left open, a bank's slow 3-D Secure, a webhook delivered late) finds
 //! them lapsed, and someone else may have taken them. So before the order is
 //! placed the holds are taken again, which does nothing while they stand and
-//! takes what is left otherwise; when the last of it is gone the hold goes
-//! back ([`Outcome::Returned`]) and the cart records it
-//! (`Cart::PaymentReturned`): an order is never placed for goods already
+//! takes what is left otherwise; when the last of it is gone the payment goes
+//! back ([`Outcome::Returned`]): an order is never placed for goods already
 //! sold or a code already spent, and nothing is charged.
+//!
+//! A payment that buys nothing (that one, a second payment of a cart that is
+//! an order already, one that does not hold what the cart was priced at) is
+//! given back in three steps: the cart records that it goes back and why
+//! (`Cart::PaymentReturnRequested`), Stripe releases the hold (or refunds
+//! the money, had it been taken), and the cart records that it went
+//! (`Cart::PaymentReturned`). Whatever comes after a step that did not finish
+//! (Stripe telling again, its word that the hold went, the sweep
+//! [`PendingPayments`](super::PendingPayments)) finishes it under the reason
+//! recorded first.
 //!
 //! The dashboard takes the money itself (`settle`); Stripe saying so
 //! (`payment_intent.succeeded`) is recorded unless known already, so a
 //! capture whose recording failed, or one made in Stripe's own dashboard,
-//! reaches the order. A hold Stripe dropped (`payment_intent.canceled`:
-//! lapsed after a week, or cancelled in its dashboard) cancels the order.
+//! reaches the order; money taken for an order cancelled meanwhile goes back
+//! through the order, the refund recorded before Stripe is asked
+//! (`Order::RefundRequested`). A hold Stripe dropped
+//! (`payment_intent.canceled`: lapsed after a week, or cancelled in its
+//! dashboard) cancels the order.
 //!
 //! A `charge.refunded` is reconciled: the refunds Stripe holds for the
 //! payment (made here, or in Stripe's own dashboard) that the order does
@@ -31,9 +43,9 @@ use timada_catalog::CatalogError;
 use timada_discounts::{
     DISCOUNT_ALREADY_USED, DISCOUNT_EXHAUSTED, DiscountError, RESERVATION_SECS,
 };
-use timada_orders::{CartState, OrderError, PROVIDER_STRIPE, Payment, ReturnedPayment};
+use timada_orders::{CartState, OrderError, PROVIDER_STRIPE, Payment};
 
-use super::settle::release_reason;
+use super::settle::{self, release_reason};
 use super::{
     Account, DASHBOARD_ACTOR, PaymentState, PaymentStatus, Payments, ReleaseAnswer, signature,
 };
@@ -42,20 +54,20 @@ use crate::cluster::Executor;
 /// The refusal of a checkout that wants more than is left.
 pub const OUT_OF_STOCK: &str = "out_of_stock";
 
+/// The orders gateway of one tenant.
+type Orders = timada_orders::Command<Executor>;
+
 /// What the route answers Stripe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     /// The order exists (now, or already), its payment held or taken.
     Placed { order_id: String },
-    /// Held for nothing to sell (a second payment of a cart, an amount that
-    /// does not match): given back.
-    Released,
-    /// Taken for nothing to sell (in Stripe's own dashboard, for an order
-    /// cancelled or never placed): refunded.
+    /// Taken for an order cancelled meanwhile: refunded through the order.
     Refunded { refund_id: String },
-    /// Confirmed too late: what the checkout held had lapsed and gone to
-    /// someone else, so the hold went back and no order was placed (now, or
-    /// already). `code` says what was gone.
+    /// Given back, no order placed with it (now, or already): a second
+    /// payment of a cart, an amount that does not match, or confirmed too
+    /// late, what the checkout held having lapsed and gone to someone else.
+    /// `code` says which.
     Returned { code: String },
     /// The order's payment is taken (recorded now, or already).
     Paid { order_id: String },
@@ -141,9 +153,10 @@ pub async fn receive(
 
 /// Brings the cart a payment was opened for, and its order, in step with
 /// the payment as Stripe says it stands (`status`): a confirmed payment
-/// makes the order, a taken one is recorded, a dropped hold cancels it.
-/// What the webhook does for any of a payment's events, and what the sweep
-/// does for a confirmed payment whose webhook never came.
+/// makes the order, a taken one is recorded, a dropped hold cancels it, and
+/// one that buys nothing goes back. What the webhook does for any of a
+/// payment's events, and what the sweeps do for a payment whose webhook
+/// never came, or whose return did not finish.
 pub async fn reconcile(
     payments: &Payments,
     account: &Account,
@@ -177,16 +190,27 @@ pub async fn reconcile(
                     order_id: order.id.clone(),
                 });
             }
-            // No order: a payment given back already says so again;
+            // No order: a payment given back already says so again, one on
+            // its way back is recorded gone under the reason it went for;
             // otherwise the card form can confirm nothing any more.
-            if let Some(returned) = orders
-                .load_cart(cart_id)
-                .await?
+            let cart = orders.load_cart(cart_id).await?;
+            if let Some(returned) = cart
                 .as_ref()
                 .and_then(|cart| cart.returned_payment(&status.payment_id))
             {
                 return Ok(Outcome::Returned {
                     code: returned.code.clone(),
+                });
+            }
+            if let Some(pending) = cart
+                .as_ref()
+                .and_then(|cart| cart.pending_return(&status.payment_id))
+            {
+                orders
+                    .return_payment(DASHBOARD_ACTOR, cart_id, &status.payment_id, None)
+                    .await?;
+                return Ok(Outcome::Returned {
+                    code: pending.code.clone(),
                 });
             }
             match orders
@@ -212,12 +236,8 @@ pub async fn reconcile(
                 }
                 return record_capture(payments, account, &orders, &order.id, status).await;
             }
-            if let Some(order) = &order {
-                // The cart is an order already, paid by another payment.
-                tracing::warn!(%tenant_id, order = %order.id, payment = %status.payment_id, "a second payment of an ordered cart: given back");
-                return give_back(payments, account, status, "timada-unplaced").await;
-            }
-            // Given back already: the same answer, nothing more.
+            // Given back already: the same answer, nothing more. On its way
+            // back: given back under the reason it went for.
             let cart = orders.load_cart(cart_id).await?;
             if let Some(returned) = cart
                 .as_ref()
@@ -227,6 +247,26 @@ pub async fn reconcile(
                     code: returned.code.clone(),
                 });
             }
+            if let Some(pending) = cart
+                .as_ref()
+                .and_then(|cart| cart.pending_return(&status.payment_id))
+            {
+                let code = pending.code.clone();
+                return give_payment_back(payments, account, &orders, cart_id, status, &code).await;
+            }
+            if let Some(order) = &order {
+                // The cart is an order already, paid by another payment.
+                tracing::warn!(%tenant_id, order = %order.id, payment = %status.payment_id, "a second payment of an ordered cart: given back");
+                return give_payment_back(
+                    payments,
+                    account,
+                    &orders,
+                    cart_id,
+                    status,
+                    DUPLICATE_PAYMENT,
+                )
+                .await;
+            }
             // Not an order yet: the holds its checkout took may have lapsed
             // since, so they are taken again before the order is placed.
             if let Some(cart) = cart.as_ref()
@@ -234,20 +274,7 @@ pub async fn reconcile(
                     retake_holds(&store, tenant_id, cart, &status.payment_id).await?
             {
                 tracing::warn!(%tenant_id, payment = %status.payment_id, code = %gone, "a late payment finds what it held gone: given back");
-                give_back(payments, account, status, "timada-lapsed").await?;
-                orders
-                    .return_payment(
-                        DASHBOARD_ACTOR,
-                        cart_id,
-                        ReturnedPayment {
-                            payment_id: status.payment_id.clone(),
-                            code: gone.to_owned(),
-                        },
-                    )
-                    .await?;
-                return Ok(Outcome::Returned {
-                    code: gone.to_owned(),
-                });
+                return give_payment_back(payments, account, &orders, cart_id, status, gone).await;
             }
             let payment = Payment {
                 provider: PROVIDER_STRIPE.to_owned(),
@@ -269,7 +296,8 @@ pub async fn reconcile(
                 }),
                 Err(err @ (OrderError::DuplicatePayment { .. } | OrderError::AmountMismatch)) => {
                     tracing::warn!(%tenant_id, payment = %status.payment_id, %err, "giving a payment back");
-                    give_back(payments, account, status, "timada-unplaced").await
+                    let code = err.code().unwrap_or(DUPLICATE_PAYMENT);
+                    give_payment_back(payments, account, &orders, cart_id, status, code).await
                 }
                 Err(err) => {
                     tracing::error!(%tenant_id, payment = %status.payment_id, %err, "a confirmed payment could not become an order");
@@ -280,12 +308,15 @@ pub async fn reconcile(
     }
 }
 
+/// Why a second payment of a cart that is an order already goes back.
+const DUPLICATE_PAYMENT: &str = "duplicate_payment";
+
 /// Records the money Stripe says it took for an order; an order cancelled
 /// in between gets it back.
 async fn record_capture(
     payments: &Payments,
     account: &Account,
-    orders: &timada_orders::Command<Executor>,
+    orders: &Orders,
     order_id: &str,
     status: &PaymentStatus,
 ) -> anyhow::Result<Outcome> {
@@ -303,20 +334,90 @@ async fn record_capture(
         }),
         Err(OrderError::OrderCancelled) => {
             tracing::warn!(tenant = %orders.tenant(), order = %order_id, payment = %status.payment_id, "money taken for a cancelled order: refunded");
-            give_back(payments, account, status, "timada-cancelled").await
+            refund_cancelled(payments, account, orders, order_id, status).await
         }
         Err(err) => Err(err.into()),
     }
 }
 
-/// Gives a payment back that buys nothing: its hold released, or the money
-/// refunded under a key made of `key` and the payment, should it be taken.
-async fn give_back(
+/// Gives back money Stripe took for an order cancelled meanwhile, as a
+/// cancellation's refund is: asked for on the order first
+/// (`Order::RefundRequested`, which fixes the refund's key), then made, then
+/// recorded (`Order::Refunded`). One Stripe does not answer now stands for
+/// the sweep.
+async fn refund_cancelled(
+    payments: &Payments,
+    account: &Account,
+    orders: &Orders,
+    order_id: &str,
+    status: &PaymentStatus,
+) -> anyhow::Result<Outcome> {
+    let pending = orders
+        .request_cancelled_refund(
+            DASHBOARD_ACTOR,
+            order_id,
+            &status.payment_id,
+            status.amount_received,
+        )
+        .await?;
+    let Some(pending) = pending else {
+        // Gone back already: the same answer.
+        let refund_id = orders
+            .load_order(order_id)
+            .await?
+            .and_then(|order| order.refund_ids.last().cloned())
+            .unwrap_or_default();
+        return Ok(Outcome::Refunded { refund_id });
+    };
+    let refund_id = settle::refund(payments, account, orders, order_id, &pending).await?;
+    Ok(Outcome::Refunded { refund_id })
+}
+
+/// Gives back a payment of the cart that buys nothing, `code` saying why: the
+/// cart records that it goes back first (`Cart::PaymentReturnRequested`; a
+/// return asked already keeps its own reason), then Stripe gives it back,
+/// then the cart records that it went (`Cart::PaymentReturned`).
+pub async fn give_payment_back(
+    payments: &Payments,
+    account: &Account,
+    orders: &Orders,
+    cart_id: &str,
+    status: &PaymentStatus,
+    code: &str,
+) -> anyhow::Result<Outcome> {
+    let pending = orders
+        .request_payment_return(DASHBOARD_ACTOR, cart_id, &status.payment_id, code)
+        .await?;
+    let Some(pending) = pending else {
+        // Gone back already: the same answer.
+        let code = orders
+            .load_cart(cart_id)
+            .await?
+            .and_then(|cart| cart.returned_payment(&status.payment_id).cloned())
+            .map_or_else(|| code.to_owned(), |returned| returned.code);
+        return Ok(Outcome::Returned { code });
+    };
+    let refund_id = release_or_refund(
+        payments,
+        account,
+        status,
+        &format!("timada-return-{}", status.payment_id),
+    )
+    .await?;
+    orders
+        .return_payment(DASHBOARD_ACTOR, cart_id, &status.payment_id, refund_id)
+        .await?;
+    Ok(Outcome::Returned { code: pending.code })
+}
+
+/// Asks Stripe to give a payment back: its hold released, or the money
+/// refunded under `key`, had it been taken. The refund's id, when it was.
+async fn release_or_refund(
     payments: &Payments,
     account: &Account,
     status: &PaymentStatus,
     key: &str,
-) -> anyhow::Result<Outcome> {
+) -> anyhow::Result<Option<String>> {
     let mut amount_cents = status.amount_received;
     if status.state != PaymentState::Captured {
         match payments
@@ -324,7 +425,7 @@ async fn give_back(
             .release_payment(&account.secret_key, &status.payment_id)
             .await?
         {
-            ReleaseAnswer::Released => return Ok(Outcome::Released),
+            ReleaseAnswer::Released => return Ok(None),
             ReleaseAnswer::Captured {
                 amount_cents: taken,
             } => amount_cents = taken,
@@ -332,14 +433,9 @@ async fn give_back(
     }
     let refund_id = payments
         .gateway
-        .refund(
-            &account.secret_key,
-            &status.payment_id,
-            amount_cents,
-            &format!("{key}-{}", status.payment_id),
-        )
+        .refund(&account.secret_key, &status.payment_id, amount_cents, key)
         .await?;
-    Ok(Outcome::Refunded { refund_id })
+    Ok(Some(refund_id))
 }
 
 /// Records the refunds Stripe holds for `payment_id` that the order made

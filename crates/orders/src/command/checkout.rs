@@ -3,12 +3,13 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 use timada_discounts::{Offer, OfferItem, OffersState, offers_id, offers_projection};
 use ulid::Ulid;
 
-use super::ReturnedPayment;
+use super::PendingReturn;
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BuyerIdentified, CheckedOut, CheckoutRequested,
     Claimed, DiscountGranted, Discounted, LanguageGiven, LanguageSet, NewsletterOptInSet,
-    NewsletterOptedIn, PaymentCancelled, PaymentRefused, PaymentRequested, PaymentReturned, Placed,
-    ShippingCharged, ShippingGranted, ShippingMethodChosen, TimeZoneGiven, TimeZoneSet,
+    NewsletterOptedIn, PaymentCancelled, PaymentRefused, PaymentRequested, PaymentReturnRequested,
+    PaymentReturned, Placed, ShippingCharged, ShippingGranted, ShippingMethodChosen, TimeZoneGiven,
+    TimeZoneSet,
 };
 use crate::error::OrderError;
 use crate::value_object::{
@@ -723,34 +724,100 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Records that the payment of a request was authorized too late (what
-    /// its checkout held had lapsed and gone) and its hold released:
-    /// `returned` names the payment and what was gone. Told twice, the
-    /// second time is a no-op; a payment the cart never opened, or that
-    /// already made an order, is `PaymentNotFound`.
+    /// Asks for the payment `payment_id` of the cart to go back to the
+    /// shopper, before the provider is asked: `code` says why
+    /// (`Cart::PaymentReturnRequested`). Asked again while it stands, the
+    /// return asked first comes back, with its own code; `None` once the
+    /// payment went back. A payment the cart never opened, or the one its
+    /// order was placed with, is `PaymentNotFound`.
+    pub async fn request_payment_return(
+        &self,
+        actor: &str,
+        cart_id: &str,
+        payment_id: &str,
+        code: &str,
+        routing_key: Option<String>,
+    ) -> Result<Option<PendingReturn>, OrderError> {
+        for attempt in 1..=CART_WRITE_ATTEMPTS {
+            let cart = self.require_cart(cart_id).await?;
+            if cart.returned_payment(payment_id).is_some() {
+                return Ok(None);
+            }
+            if let Some(pending) = cart.pending_return(payment_id) {
+                return Ok(Some(pending.clone()));
+            }
+            let request = cart
+                .request_paid_by(payment_id)
+                .ok_or(OrderError::PaymentNotFound)?;
+            // The payment of the order goes back with the order, never so.
+            let ordered = self
+                .load_order(&order_id(cart_id))
+                .await?
+                .is_some_and(|order| order.payment.payment_id == payment_id);
+            if ordered {
+                return Err(OrderError::PaymentNotFound);
+            }
+            let written = cart
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&PaymentReturnRequested {
+                    request_id: request.request_id.clone(),
+                    payment_id: payment_id.to_owned(),
+                    code: code.to_owned(),
+                    requested_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => {
+                    let cart = self.require_cart(cart_id).await?;
+                    return Ok(cart.pending_return(payment_id).cloned());
+                }
+                Err(WriteError::InvalidOriginalVersion) if attempt < CART_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(None)
+    }
+
+    /// Records that the payment `payment_id` of the cart went back to the
+    /// shopper as [`request_payment_return`](Self::request_payment_return)
+    /// asked, under the code it was asked with: `refund_id` when the money
+    /// had been taken and was refunded. Told twice, the second time is a
+    /// no-op; a payment nobody asked to give back is `PaymentNotFound`.
     pub async fn return_payment(
         &self,
         actor: &str,
         cart_id: &str,
-        returned: ReturnedPayment,
+        payment_id: &str,
+        refund_id: Option<String>,
         routing_key: Option<String>,
     ) -> Result<(), OrderError> {
         for attempt in 1..=CART_WRITE_ATTEMPTS {
             let cart = self.require_cart(cart_id).await?;
-            if cart.returned_payment(&returned.payment_id).is_some() {
+            if cart.returned_payment(payment_id).is_some() {
                 return Ok(());
             }
-            let request = cart
-                .request_paid_by(&returned.payment_id)
-                .filter(|_| !cart.is_checked_out())
+            let (request_id, code) = cart
+                .requests
+                .iter()
+                .find_map(|request| {
+                    request
+                        .returning
+                        .as_ref()
+                        .filter(|pending| pending.payment_id == payment_id)
+                        .map(|pending| (request.request_id.clone(), pending.code.clone()))
+                })
                 .ok_or(OrderError::PaymentNotFound)?;
             let written = cart
                 .write()?
                 .routing_key_opt(routing_key.clone())
                 .event(&PaymentReturned {
-                    request_id: request.request_id.clone(),
-                    payment_id: returned.payment_id.clone(),
-                    code: returned.code.clone(),
+                    request_id,
+                    payment_id: payment_id.to_owned(),
+                    code,
+                    refund_id: refund_id.clone(),
                     returned_by: actor.to_owned(),
                 })
                 .tenant(&self.tenant)
@@ -811,7 +878,8 @@ impl<E: Executor> super::Command<E> {
     /// for, and the money is taken later. Told twice, the same order comes
     /// back. A second payment of a cart already ordered is
     /// `DuplicatePayment` (the caller releases it); one that does not hold
-    /// what the cart was priced at is `AmountMismatch`.
+    /// what the cart was priced at is `AmountMismatch`; one on its way back
+    /// is `PaymentNotFound`.
     pub async fn place_order(
         &self,
         actor: &str,
@@ -828,6 +896,7 @@ impl<E: Executor> super::Command<E> {
         }
         let request = cart
             .request_paid_by(&payment.payment_id)
+            .filter(|request| request.returning.is_none())
             .ok_or(OrderError::PaymentNotFound)?
             .clone();
         let Some(snapshot) = request.payment() else {

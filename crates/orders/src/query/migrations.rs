@@ -36,12 +36,14 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 capture_before INTEGER,
                 capture_requested_at INTEGER,
                 cancel_requested_at INTEGER,
+                refund_requested_at INTEGER,
                 paid_at INTEGER,
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX orders_orders_placed ON orders_orders (tenant_id, placed_at);
         CREATE INDEX orders_orders_payment_due ON orders_orders (tenant_id, placed_at)
-                WHERE status = 'authorized' OR cancel_requested_at IS NOT NULL;
+                WHERE status = 'authorized' OR cancel_requested_at IS NOT NULL
+                    OR refund_requested_at IS NOT NULL;
         CREATE INDEX orders_orders_status ON orders_orders (tenant_id, status, placed_at);
         CREATE INDEX orders_orders_discount ON orders_orders (tenant_id, discount_id)
                 WHERE discount_id IS NOT NULL;
@@ -57,10 +59,13 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 item_count INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
+                return_requested_at INTEGER,
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX orders_carts_open ON orders_carts (tenant_id, updated_at)
                 WHERE order_id IS NULL;
+        CREATE INDEX orders_carts_returning ON orders_carts (return_requested_at)
+                WHERE return_requested_at IS NOT NULL;
         CREATE TABLE orders_order_products (
                 tenant_id TEXT NOT NULL,
                 product_id TEXT NOT NULL,

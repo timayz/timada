@@ -91,16 +91,17 @@ pub enum Cart {
         code: String,
         refused_by: String,
     },
-    /// The payment of a request was authorized, but too late: what the
-    /// checkout held (the goods, the discount's use) had lapsed and was
-    /// taken by someone else in between, so the hold went back to the
-    /// shopper's card, nothing taken, and no order was placed. `code` says
-    /// what was gone (`out_of_stock`, `discount_exhausted`,
-    /// `discount_already_used`). Written by the dashboard, never a shopper.
+    /// The payment of a request went back to the shopper, as its
+    /// `PaymentReturnRequested` asked: the hold released, nothing taken, or
+    /// the money refunded (`refund_id`) had it been taken meanwhile. No order
+    /// was placed with it. `code` is the reason the return was asked with.
+    /// Written by the dashboard, never a shopper.
     PaymentReturned {
         request_id: String,
         payment_id: String,
         code: String,
+        /// The provider's id of the refund, when the money had been taken.
+        refund_id: Option<String>,
         returned_by: String,
     },
     /// The shopper enters a discount code (normalized), replacing any other:
@@ -183,6 +184,23 @@ pub enum Cart {
         request_id: String,
         payment_id: String,
         cancelled_by: String,
+    },
+    /// The payment of a request is to go back to the shopper, before the
+    /// provider is asked: it buys nothing. `code` says why: a second payment
+    /// of a cart that is an order already (`duplicate_payment`), one that
+    /// does not hold what the cart was priced at (`amount_mismatch`), or one
+    /// authorized too late, what its checkout held (the goods, the discount's
+    /// use) having lapsed and gone to someone else (`out_of_stock`,
+    /// `discount_exhausted`, `discount_already_used`). Settled by the
+    /// `PaymentReturned` that follows; meanwhile the payment makes no order,
+    /// and whoever comes next (the provider telling again, its word that the
+    /// hold went, the sweep) gives it back under this code. Written by the
+    /// dashboard, never a shopper.
+    PaymentReturnRequested {
+        request_id: String,
+        payment_id: String,
+        code: String,
+        requested_by: String,
     },
 }
 
