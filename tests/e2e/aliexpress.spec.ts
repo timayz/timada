@@ -634,7 +634,7 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
   }
 });
 
-test("an order AliExpress may have stays out of the shopper's hands until the merchant rules it out", async ({ page, request }) => {
+test("an order AliExpress may have stays out of the shopper's hands", async ({ page, request }) => {
   test.setTimeout(150_000);
   await fakeStripeJs(page);
   const aliexpress = new FakeAliexpress();
@@ -669,7 +669,10 @@ test("an order AliExpress may have stays out of the shopper's hands until the me
     await expect(page.locator("[data-order-aliexpress-error]")).toContainText(
       "look at the account's orders on AliExpress before placing this one again",
     );
-    await expect(page.locator("[data-order-aliexpress-rule-out]")).toBeVisible();
+    // AliExpress's list may not show it yet: the merchant is asked to rule
+    // it out only half an hour later.
+    await expect(page.locator("[data-order-aliexpress-rule-out-soon]")).toBeVisible();
+    await expect(page.locator("[data-order-aliexpress-rule-out]")).toHaveCount(0);
 
     // Placed again, AliExpress refuses outright: the first may be there all
     // the same, so the shopper still cannot cancel.
@@ -683,15 +686,8 @@ test("an order AliExpress may have stays out of the shopper's hands until the me
     await page.goto(shopperOrder);
     await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "authorized");
     await expect(page.locator("[data-order-cancel]")).toHaveCount(0);
-
-    // The merchant looked on AliExpress: it is not there. The shopper may
-    // cancel again.
     await page.goto(merchantOrder);
-    await page.getByRole("button", { name: "Not on AliExpress" }).click();
-    await expect(page.getByRole("status")).toContainText("Noted: the order is not on AliExpress");
-    await expect(page.locator("[data-order-aliexpress-rule-out]")).toHaveCount(0);
-    await page.goto(shopperOrder);
-    await expect(page.locator("[data-order-cancel]")).toBeVisible();
+    await expect(page.locator("[data-order-aliexpress-rule-out-soon]")).toBeVisible();
     expect(aliexpress.orders).toHaveLength(1);
   } finally {
     await stripe.stop();

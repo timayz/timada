@@ -591,21 +591,39 @@ async fn what_aliexpress_took_is_kept_on_the_node_until_recorded() {
     )
     .await
     .unwrap();
-    note_unrecorded_try(&db, "acme", "early", "still paused")
+    // A second placement of the same forward keeps the first's numbers.
+    keep_unrecorded(
+        &db,
+        "acme",
+        "early",
+        "order-1",
+        &placement("91"),
+        300,
+        "paused",
+    )
+    .await
+    .unwrap();
+    let kept = unrecorded(&db, 10).await.unwrap();
+    note_unrecorded_try(&db, &kept[0], "still paused")
         .await
         .unwrap();
 
     let kept = unrecorded(&db, 10).await.unwrap();
-    let ids: Vec<&str> = kept.iter().map(|row| row.forward_id.as_str()).collect();
-    assert_eq!(ids, ["early", "late"]);
+    let ids: Vec<(&str, &str)> = kept
+        .iter()
+        .map(|row| (row.forward_id.as_str(), row.ae_order_ids.as_str()))
+        .collect();
+    assert_eq!(ids, [("early", "81"), ("late", "82"), ("early", "91")]);
     assert_eq!(kept[0].placed_at, 100);
     assert_eq!(kept[0].tries, 1);
     assert_eq!(kept[0].last_error.as_deref(), Some("still paused"));
     assert_eq!(kept[0].placement().unwrap(), placement("81"));
+    assert_eq!(kept[2].tries, 0);
 
-    forget_unrecorded(&db, "acme", "early").await.unwrap();
+    forget_unrecorded(&db, &kept[0]).await.unwrap();
     let kept = unrecorded(&db, 10).await.unwrap();
-    assert_eq!(kept.len(), 1);
+    assert_eq!(kept.len(), 2);
+    assert!(kept.iter().all(|row| row.ae_order_ids != "81"));
     assert!(!TABLES.contains(&"aliexpress_unrecorded"));
 }
 

@@ -257,7 +257,8 @@ pub enum Order {
     /// written at the version read just before it is asked, on every try:
     /// a cancellation landing first refuses it, one landing after finds it.
     /// From then on the supplier may have the order, and the shopper no
-    /// longer cancels it.
+    /// longer cancels it. Begun again while the one before never said how
+    /// it went, that one may be there: the order counts it uncertain.
     SupplierOrderStarted {
         supplier: String,
         started_by: String,

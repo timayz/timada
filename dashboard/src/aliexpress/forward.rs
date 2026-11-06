@@ -398,35 +398,38 @@ impl Aliexpress {
         }
         let ae_order_ids = match prepared.client.place_order(&prepared.request).await {
             Ok(ids) => ids,
+            // Either way the order is told before the forward is, tried like
+            // a placement's record: an attempt left open on a failed forward
+            // would keep the fence for good. One the store never takes leaves
+            // the forward taken on, for the stall sweep, which tells the order
+            // AliExpress may have it.
             Err(err) if err.may_have_placed() => {
-                // Kept on the order first: a later attempt that AliExpress
-                // refuses must not take the fence down while this one may be
-                // there.
-                orders
-                    .record_supplier_uncertainty(
+                // A later attempt that AliExpress refuses must not take the
+                // fence down while this one may be there.
+                order_write(order_id, || {
+                    orders.record_supplier_uncertainty(
                         ALIEXPRESS_ACTOR,
                         order_id,
                         ALIEXPRESS_SUPPLIER,
                         MAY_HAVE_PLACED,
                     )
-                    .await?;
+                })
+                .await?;
                 return Ok(Err(Refusal(MAY_HAVE_PLACED.to_owned())));
             }
             Err(err) => {
                 let reason = format!("AliExpress refused the order: {}", describe(&err));
                 // It surely took nothing: the shopper may cancel again, unless
                 // an earlier attempt may be there.
-                if let Err(err) = orders
-                    .record_supplier_refusal(
+                order_write(order_id, || {
+                    orders.record_supplier_refusal(
                         ALIEXPRESS_ACTOR,
                         order_id,
                         ALIEXPRESS_SUPPLIER,
                         &reason,
                     )
-                    .await
-                {
-                    tracing::warn!(%tenant_id, %order_id, error = %err, "the order does not know AliExpress refused it");
-                }
+                })
+                .await?;
                 return Ok(Err(Refusal(reason)));
             }
         };
@@ -656,6 +659,32 @@ fn not_placeable(err: OrderError) -> Result<Refusal, OrderError> {
         }
         .to_owned(),
     ))
+}
+
+/// Writes to the shop's order with `write`, trying again while the store
+/// does not take it, as a placement's record is; the last error once every
+/// try failed. A refusal of the order itself is not tried again.
+async fn order_write<F, Fut>(order_id: &str, mut write: F) -> Result<(), OrderError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), OrderError>>,
+{
+    let mut pause = RECORD_RETRY_PAUSE;
+    let mut attempt = 1;
+    loop {
+        match write().await {
+            Ok(()) => return Ok(()),
+            Err(err @ (OrderError::Write(_) | OrderError::Other(_)))
+                if attempt < RECORD_ATTEMPTS =>
+            {
+                tracing::warn!(order = %order_id, attempt, error = %err, "the order is not told how placing it went yet: trying again");
+                tokio::time::sleep(pause).await;
+                pause *= 2;
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 /// What placing asks AliExpress for, once all it needs was read.

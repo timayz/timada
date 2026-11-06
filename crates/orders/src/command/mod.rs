@@ -738,6 +738,10 @@ pub struct OrderState {
     /// later order to it is told. The shop's business, not a storefront's.
     #[serde(skip)]
     pub supplier_uncertain: bool,
+    /// Unix seconds that became so: the supplier's own list may take a while
+    /// to show an order it took.
+    #[serde(skip)]
+    pub supplier_uncertain_at: Option<u64>,
     /// The order to the supplier begun last has said nothing since: it may
     /// be asking now, or the supplier took it.
     #[serde(skip)]
@@ -1035,6 +1039,11 @@ async fn on_supplier_order_started(
     event: Event<SupplierOrderStarted>,
     order: &mut OrderState,
 ) -> anyhow::Result<()> {
+    // The one begun before never said how it went: it may be there.
+    if order.supplier_attempt_open {
+        order.supplier_uncertain = true;
+        order.supplier_uncertain_at = Some(event.timestamp);
+    }
     order.supplier_order = SupplierOrder::Started;
     order.supplier_attempt_open = true;
     order.updated_at = event.timestamp;
@@ -1062,6 +1071,7 @@ async fn on_supplier_order_uncertain(
 ) -> anyhow::Result<()> {
     order.supplier_order = SupplierOrder::Started;
     order.supplier_uncertain = true;
+    order.supplier_uncertain_at = Some(event.timestamp);
     order.supplier_attempt_open = false;
     order.updated_at = event.timestamp;
     Ok(())
@@ -1074,6 +1084,7 @@ async fn on_supplier_order_ruled_out(
 ) -> anyhow::Result<()> {
     order.supplier_order = SupplierOrder::Refused;
     order.supplier_uncertain = false;
+    order.supplier_uncertain_at = None;
     order.updated_at = event.timestamp;
     Ok(())
 }

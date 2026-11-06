@@ -51,12 +51,13 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         CREATE TABLE aliexpress_unrecorded (
                 tenant_id TEXT NOT NULL,
                 forward_id TEXT NOT NULL,
+                ae_order_ids TEXT NOT NULL,
                 order_id TEXT NOT NULL,
                 placement TEXT NOT NULL,
                 placed_at INTEGER NOT NULL,
                 tries INTEGER NOT NULL,
                 last_error TEXT,
-                PRIMARY KEY (tenant_id, forward_id)
+                PRIMARY KEY (tenant_id, forward_id, ae_order_ids)
             );",
     )],
 );

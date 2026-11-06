@@ -21,6 +21,7 @@
 //! tested without one.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use evento::{
     Evento, Executor,
@@ -201,26 +202,29 @@ async fn read_again<E: Executor>(
     if now.saturating_sub(at) > PUSH_WINDOW_SECS || !aliexpress.share().owns(&forward.forward_id) {
         return;
     }
-    let Ok(turn) = aliexpress.push_reads.clone().acquire_owned().await else {
-        return;
-    };
     let db: Db = context.extract();
     let store: Store = context.extract();
     let closed = closed.map(str::to_owned);
+    // Counted before it is spawned, its turn taken inside: the subscription
+    // never waits for a read.
+    aliexpress.push_reads_running.fetch_add(1, Ordering::SeqCst);
     tokio::spawn(async move {
-        let _turn = turn;
-        if let Err(err) = check(
-            aliexpress,
-            &db,
-            store.0,
-            &forward.tenant_id,
-            &forward.forward_id,
-            closed.as_deref(),
-            now,
-        )
-        .await
+        if let Ok(_turn) = aliexpress.push_reads.acquire().await
+            && let Err(err) = check(
+                aliexpress.clone(),
+                &db,
+                store.0,
+                &forward.tenant_id,
+                &forward.forward_id,
+                closed.as_deref(),
+                crate::auth::now(),
+            )
+            .await
         {
             tracing::warn!(tenant = %forward.tenant_id, forward = %forward.forward_id, error = %err, "AliExpress order not read after its push");
+        }
+        if aliexpress.push_reads_running.fetch_sub(1, Ordering::SeqCst) == 1 {
+            aliexpress.push_reads_idle.notify_waiters();
         }
     });
 }

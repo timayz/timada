@@ -355,6 +355,9 @@ pub fn describe_error(code: &str) -> &'static str {
             "This order is being placed on AliExpress. If it stays so, look at the account's orders on AliExpress, then place it again."
         }
         "aliexpress_nothing_to_forward" => "No item of this order comes from AliExpress.",
+        "aliexpress_list_catching_up" => {
+            "AliExpress's list of orders may not show an order it just took: look there again in half an hour."
+        }
         "aliexpress_sync_failed" => "AliExpress did not answer. The product is read again later.",
         "secrets_disabled" => {
             "No secret can be kept on this platform: the operator has to set secrets.key first."

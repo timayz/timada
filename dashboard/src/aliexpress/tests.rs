@@ -1872,6 +1872,104 @@ async fn a_stalled_attempt_keeps_the_fence_against_a_later_refusal() {
     assert!(!order.cancellable_by_shopper());
 }
 
+/// The merchant places a stuck order again before the sweep came round: the
+/// attempt before never said how it went, so the order counts it uncertain
+/// as the new one begins, and the new one's sure refusal keeps the fence.
+#[tokio::test]
+async fn an_order_placed_again_before_the_sweep_keeps_the_fence() {
+    let shop = Shop::new().await;
+    let forward_id = shop.order_to_place_with(false).await;
+    // What a node writes before asking AliExpress, then it stopped.
+    let forwards = shop.links();
+    assert!(
+        forwards
+            .start_forward(ALIEXPRESS_ACTOR, &forward_id)
+            .await
+            .unwrap()
+    );
+    let (_, version) = forwards
+        .load_forward_versioned(&forward_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        forwards
+            .begin_asking(ALIEXPRESS_ACTOR, &forward_id, version)
+            .await
+            .unwrap()
+    );
+    shop.orders()
+        .begin_supplier_order(
+            ALIEXPRESS_ACTOR,
+            "an-order",
+            timada_aliexpress::ALIEXPRESS_SUPPLIER,
+            crate::auth::now(),
+        )
+        .await
+        .unwrap();
+
+    shop.links()
+        .request_forward(ALICE, "an-order", true)
+        .await
+        .unwrap();
+    shop.stand_in
+        .place_answers
+        .lock()
+        .unwrap()
+        .push_back(PlaceAnswer::Refused);
+    let refused = shop.forward_on(&shop.store, &forward_id).await;
+    assert!(
+        matches!(&refused, super::forward::ForwardResult::Failed(reason) if reason.starts_with("AliExpress refused the order")),
+        "{refused:?}"
+    );
+    let order = shop.order().await;
+    assert!(order.supplier_uncertain);
+    assert_eq!(order.supplier_order, timada_orders::SupplierOrder::Started);
+    assert!(!order.cancellable_by_shopper());
+}
+
+/// AliExpress refused the order and the store would not tell the order so:
+/// tried again, then left taken on, so the stall sweep tells the order its
+/// supplier may have it, rather than an attempt staying open on a failed
+/// forward for good.
+#[tokio::test]
+async fn a_refusal_the_order_never_hears_of_is_left_to_the_stall_sweep() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let forward_id = shop.order_to_place_with(false).await;
+    shop.stand_in
+        .place_answers
+        .lock()
+        .unwrap()
+        .push_back(PlaceAnswer::Refused);
+    let paused = RefusesWrites::new(
+        &shop.store,
+        "timada-orders/Order",
+        "SupplierOrderRefused",
+        usize::MAX,
+    );
+
+    let placed = shop
+        .aliexpress
+        .forward_order(&paused, &shop.db, &shop.tenant.id, &forward_id)
+        .await;
+    assert!(placed.is_err(), "{placed:?}");
+    let forward = shop.forward(&forward_id).await;
+    assert_eq!(forward.status, timada_aliexpress::ForwardStatus::Started);
+    assert!(shop.order().await.supplier_attempt_open);
+
+    shop.follow_read_models().await;
+    let stalled = forward.updated_at + timada_aliexpress::FORWARD_STALL_SECS + 1;
+    assert_eq!(sweep.settle_stalled(stalled).await.unwrap(), 1);
+    let order = shop.order().await;
+    assert!(order.supplier_uncertain);
+    assert!(!order.supplier_attempt_open);
+    assert_eq!(
+        shop.forward(&forward_id).await.last_error.as_deref(),
+        Some(super::forward::MAY_HAVE_PLACED)
+    );
+}
+
 /// An attempt overtaken while it read what it needs (the merchant asked
 /// again, or the sweep gave it up) asks AliExpress nothing: the forward's
 /// fence, written at the version it took the forward on at, refuses it.

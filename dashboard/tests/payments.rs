@@ -2502,6 +2502,58 @@ async fn a_dropped_hold_leaves_an_order_aliexpress_may_have_to_the_merchant() {
     h.finish().await;
 }
 
+/// The shop took its Stripe keys away: an order kept open once its hold went
+/// back holds nothing, so its cancellation is still settled, by the sweep,
+/// without them.
+#[tokio::test]
+async fn an_order_kept_open_without_its_hold_is_cancelled_without_the_shops_keys() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let sweep = PendingPayments::new(h.db.clone(), h.store(&acme), h.payments.clone());
+    *h.goods.supplier.lock().unwrap() = Some("aliexpress".into());
+    let order_id = h.place(&acme, checkout(Some(2500))).await;
+    orders
+        .begin_supplier_order("timada-aliexpress", &order_id, "aliexpress", now() as u64)
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    h.stripe.lapse(&order.payment.payment_id);
+    let body = canceled(&order.payment.payment_id);
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::HoldDropped {
+            order_id: order_id.clone()
+        }
+    );
+
+    h.platform.remove_payments("alice", &acme.id).await.unwrap();
+    orders
+        .request_cancellation("alice", &order_id, "Cancelled on AliExpress".into(), true)
+        .await
+        .unwrap();
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    assert_eq!(sweep.sweep(now() as u64 + 3_600).await.unwrap(), 1);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Cancelled);
+    assert_eq!(
+        order.cancel_reason.as_deref(),
+        Some("Cancelled on AliExpress")
+    );
+    // Settled already: nothing more for a second call.
+    assert_eq!(
+        payments::settle::settle_released_cancellation(&orders, &order_id)
+            .await
+            .unwrap(),
+        None
+    );
+    h.finish().await;
+}
+
 /// Stripe did not answer when it was asked: the capture or the cancellation
 /// stands on the order, and the sweep settles it once Stripe answers.
 #[tokio::test]

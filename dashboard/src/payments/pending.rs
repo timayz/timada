@@ -10,7 +10,9 @@
 //! and settles each with the provider. Two nodes doing it at once ask the
 //! provider twice; its answer is recorded once.
 //!
-//! A shop that is suspended or took its provider account away is skipped.
+//! A shop that is suspended is skipped; one that took its provider account
+//! away still settles what asks the provider nothing: the cancellation of an
+//! order whose hold went back already.
 //! An order the provider would not answer for is asked about again only
 //! after [`RECHECK_SECS`](super::RECHECK_SECS).
 
@@ -110,13 +112,12 @@ impl PendingPayments {
     }
 
     async fn sweep_tenant(&self, tenant_id: &str, ids: &[&str], now: u64) -> anyhow::Result<usize> {
-        let account = match self.payments.active_tenant(tenant_id).await? {
-            Some(tenant) => self.payments.account_of(&tenant)?,
-            None => None,
-        };
-        let Some(account) = account else {
+        let Some(tenant) = self.payments.active_tenant(tenant_id).await? else {
             return Ok(0);
         };
+        // A shop without its provider account still settles what asks the
+        // provider nothing: the cancellations of orders whose hold went back.
+        let account = self.payments.account_of(&tenant)?;
         let orders = timada_orders::Command::new(self.store.clone(), tenant_id);
         let mut settled = 0;
         for order_id in ids {
@@ -126,14 +127,24 @@ impl PendingPayments {
             if left_alone {
                 continue;
             }
+            if settle::settle_released_cancellation(&orders, order_id)
+                .await?
+                .is_some()
+            {
+                settled += 1;
+                continue;
+            }
+            let Some(account) = &account else {
+                continue;
+            };
             let Some(order) = orders.load_order(order_id).await? else {
                 continue;
             };
             let answered = if order.pending_cancellation.is_some() {
-                settle::settle_cancellation(&self.payments, &account, &orders, order_id).await?
+                settle::settle_cancellation(&self.payments, account, &orders, order_id).await?
                     == CancelOutcome::Cancelled
             } else if order.pending_capture.is_some() {
-                settle::capture(&self.payments, &account, &orders, order_id).await?
+                settle::capture(&self.payments, account, &orders, order_id).await?
                     != CaptureOutcome::Unanswered
             } else if order.status != OrderStatus::Authorized || order.released_at.is_some() {
                 // Settled, or kept open without its hold for the merchant:
@@ -145,7 +156,7 @@ impl PendingPayments {
                 .is_some_and(|before| before <= now)
             {
                 self.read_hold(
-                    &account,
+                    account,
                     tenant_id,
                     &order.cart_id,
                     &order.payment.payment_id,

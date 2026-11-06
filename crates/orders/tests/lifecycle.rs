@@ -466,15 +466,7 @@ async fn an_order_to_the_supplier_and_a_cancellation_never_cross() {
         .unwrap();
     let order = orders.load_order(&order_id).await.unwrap().unwrap();
     assert_eq!(order.supplier_order, SupplierOrder::Started);
-    // Placed again (after a failure that may have placed it): written again,
-    // so a cancellation in between would have refused it.
-    let version = order.aggregate_version().unwrap();
-    orders
-        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
-        .await
-        .unwrap();
-    let order = orders.load_order(&order_id).await.unwrap().unwrap();
-    assert_eq!(order.aggregate_version().unwrap(), version + 1);
+    assert!(!order.supplier_uncertain);
 
     // The supplier may have it: cancelling without saying so is refused.
     let unsaid = orders
@@ -605,6 +597,54 @@ async fn an_order_that_may_be_at_the_supplier_keeps_its_fence_until_ruled_out() 
     assert_eq!(order.supplier_order, SupplierOrder::Refused);
     assert!(!order.supplier_uncertain);
     assert!(!fenced().await);
+}
+
+/// Begun again while the order before never said how it went (its node
+/// stopped, and the merchant placed it again before any sweep): that one may
+/// be there, so a sure refusal of the new one keeps the fence.
+#[tokio::test]
+async fn an_order_begun_over_one_that_never_answered_keeps_the_fence() {
+    let (orders, catalog) = store().await;
+    let order_id = held(&orders, &catalog).await;
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let version = orders
+        .load_order(&order_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .aggregate_version()
+        .unwrap();
+
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(
+        order.aggregate_version().unwrap(),
+        version + 1,
+        "written again, so a cancellation in between would have refused it"
+    );
+    assert!(order.supplier_uncertain);
+    assert!(order.supplier_uncertain_at.is_some());
+
+    orders
+        .record_supplier_refusal(DASHBOARD, &order_id, "aliexpress", "Address refused")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.supplier_order, SupplierOrder::Started);
+    assert!(!order.supplier_attempt_open);
+    let unsaid = orders
+        .request_cancellation(ALICE, &order_id, "Out of stock".into(), false)
+        .await;
+    assert!(
+        matches!(unsaid, Err(OrderError::SupplierOrdered)),
+        "{unsaid:?}"
+    );
 }
 
 /// The goods are not bought once the hold on the shopper's card is about to

@@ -200,15 +200,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let mut ae = (from_aliexpress || forward.is_some())
         .then(|| AliexpressCard::of(forward.as_ref(), can_forward, crate::auth::now()));
     // An attempt never said how it went, and nothing is being placed: the
-    // merchant who looked on AliExpress says it is not there.
-    if let Some(ae) = ae.as_mut() {
-        ae.rule_out = manages_aliexpress
-            && open
-            && order.supplier_uncertain
-            && !order.supplier_attempt_open
-            && forward
-                .as_ref()
-                .is_some_and(|forward| forward.status == ForwardStatus::Failed);
+    // merchant who looked on AliExpress says it is not there, once its list
+    // had time to show it.
+    if let Some(ae) = ae.as_mut()
+        && manages_aliexpress
+        && order.supplier_uncertain
+        && forward
+            .as_ref()
+            .is_some_and(|forward| forward.status == ForwardStatus::Failed)
+    {
+        ae.rule_out =
+            match not_on_aliexpress::rule_out_refusal(&order, forward.as_ref(), crate::auth::now())
+            {
+                None => Some(true),
+                Some("aliexpress_list_catching_up") => Some(false),
+                Some(_) => None,
+            };
     }
     // Cancelled here, still open there: no API cancels it for the merchant.
     let open_on_aliexpress = forward
@@ -548,7 +555,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, (label))
                         </form>
                     }
-                    if ae.rule_out {
+                    if ae.rule_out == Some(false) {
+                        <p class="mt-3 text-sm text-muted-foreground" data-order-aliexpress-rule-out-soon="">"An attempt never said how it went, so the shopper cannot cancel this order. AliExpress's list of orders may take a while to show it: in half an hour, look there and say so here if it is not there."</p>
+                    }
+                    if ae.rule_out == Some(true) {
                         <form method="post" class="mt-3" data-order-aliexpress-rule-out="" action=(href!(not_on_aliexpress::not_on_aliexpress, Slug(slug.clone()), OrderId(order_id.clone())))>
                             <p class="mb-3 text-sm text-muted-foreground">"An attempt never said how it went, so the shopper cannot cancel this order: look at the account's orders on AliExpress, and say so if it is not there."</p>
                             button(size: ButtonSize::Sm, variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, "Not on AliExpress")
@@ -623,9 +633,11 @@ struct AliexpressCard {
     /// AliExpress orders of an attempt that overlapped the one recorded: to
     /// cancel there.
     also_placed: Vec<String>,
-    /// Whether the merchant may say the order is not on AliExpress: an
-    /// attempt never said how it went, and nothing is being placed now.
-    rule_out: bool,
+    /// Whether the merchant may say the order is not on AliExpress (an
+    /// attempt never said how it went, and nothing is being placed now):
+    /// `Some(true)` now, `Some(false)` once AliExpress's list had time to
+    /// show it, `None` when there is nothing to say.
+    rule_out: Option<bool>,
 }
 
 impl AliexpressCard {
@@ -639,7 +651,7 @@ impl AliexpressCard {
                 notes: Vec::new(),
                 action: can_forward.then_some(("Place on AliExpress", false)),
                 also_placed: Vec::new(),
-                rule_out: false,
+                rule_out: None,
             };
         };
         let mut shown = Self {
@@ -650,7 +662,7 @@ impl AliexpressCard {
             notes: Vec::new(),
             action: None,
             also_placed: forward.also_placed.clone(),
-            rule_out: false,
+            rule_out: None,
         };
         match forward.status {
             ForwardStatus::Requested | ForwardStatus::Started => {

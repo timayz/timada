@@ -63,7 +63,11 @@ pub struct Aliexpress {
     /// Which of the nodes up this one is, at the moment of asking.
     share: Arc<dyn Fn() -> Share + Send + Sync>,
     /// The reads after pushes that may run at once ([`PUSH_READS`]).
-    push_reads: Arc<tokio::sync::Semaphore>,
+    push_reads: tokio::sync::Semaphore,
+    /// The reads after pushes under way or waiting their turn.
+    push_reads_running: std::sync::atomic::AtomicUsize,
+    /// Told when the last of them ends.
+    push_reads_idle: tokio::sync::Notify,
 }
 
 /// How many reads after pushes run at once on a node: a burst of pushes
@@ -115,14 +119,26 @@ impl Aliexpress {
             order_read_every_secs: config.order_read_every_secs.max(1),
             budget: CallBudget::new(config.calls_per_day),
             share,
-            push_reads: Arc::new(tokio::sync::Semaphore::new(PUSH_READS)),
+            push_reads: tokio::sync::Semaphore::new(PUSH_READS),
+            push_reads_running: std::sync::atomic::AtomicUsize::new(0),
+            push_reads_idle: tokio::sync::Notify::new(),
         }))
     }
 
-    /// Waits for the reads after pushes under way to end.
+    /// Waits for the reads after pushes under way, or waiting their turn, to
+    /// end.
     #[cfg(test)]
     pub(crate) async fn pushes_read(&self) {
-        let _all = self.push_reads.acquire_many(PUSH_READS as u32).await;
+        use std::sync::atomic::Ordering;
+        loop {
+            let idle = self.push_reads_idle.notified();
+            tokio::pin!(idle);
+            idle.as_mut().enable();
+            if self.push_reads_running.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            idle.await;
+        }
     }
 
     /// AliExpress's places in `country`, read at most once a day; `None`

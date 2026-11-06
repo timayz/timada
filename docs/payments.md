@@ -58,7 +58,8 @@ once AliExpress may have the order (`Order::SupplierOrderStarted`, no cancellati
 asked) cancels nothing, as AliExpress may be shipping it: the order records the hold
 gone (`Order::PaymentReleased` alone) and stays open for the merchant, who settles it
 with the shopper and cancels it, saying they cancelled it on AliExpress too. That
-cancellation asks Stripe nothing: nothing is held any more.
+cancellation asks Stripe nothing, as nothing is held any more, and it is settled even
+once the shop took its Stripe keys away.
 
 The shopper may cancel an order of goods a supplier buys after the sale until the
 shop asks the supplier for them (`/store/orders/{order_id}/cancel`): its hold goes back,

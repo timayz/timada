@@ -122,14 +122,48 @@ pub async fn capture(
     }
 }
 
+/// Settles the standing cancellation of an order whose hold went back
+/// already, kept open because its supplier may have had it: nothing is held,
+/// so no provider is asked, and none need be there (the shop's keys may be
+/// gone, or be another account's that never saw the payment). `None` for
+/// any other order, which [`settle_cancellation`] settles with the provider.
+pub async fn settle_released_cancellation(
+    orders: &Orders,
+    order_id: &str,
+) -> anyhow::Result<Option<CancelOutcome>> {
+    let Some(order) = orders.load_order(order_id).await? else {
+        return Ok(None);
+    };
+    let Some(asked) = order.pending_cancellation.clone() else {
+        return Ok(None);
+    };
+    if order.released_at.is_none() || order.is_paid() || order.status == OrderStatus::Cancelled {
+        return Ok(None);
+    }
+    orders
+        .record_release(
+            DASHBOARD_ACTOR,
+            order_id,
+            &order.payment.payment_id,
+            &asked.reason,
+        )
+        .await?;
+    Ok(Some(CancelOutcome::Cancelled))
+}
+
 /// Settles a standing cancellation: the hold given back, or what was taken
-/// refunded (under the key the order fixed), then the order cancelled.
+/// refunded (under the key the order fixed), then the order cancelled. One
+/// whose hold went back already asks the provider nothing
+/// ([`settle_released_cancellation`]).
 pub async fn settle_cancellation(
     payments: &Payments,
     account: &Account,
     orders: &Orders,
     order_id: &str,
 ) -> anyhow::Result<CancelOutcome> {
+    if let Some(settled) = settle_released_cancellation(orders, order_id).await? {
+        return Ok(settled);
+    }
     let Some(order) = orders.load_order(order_id).await? else {
         return Ok(CancelOutcome::Nothing);
     };
@@ -140,15 +174,6 @@ pub async fn settle_cancellation(
         return Ok(CancelOutcome::Nothing);
     };
     if let CancelPath::Release { payment_id } = order.cancel_path() {
-        // Nothing is held any more (an order kept open once its hold went
-        // back, its supplier perhaps holding it): cancelled without asking
-        // the provider anything.
-        if order.released_at.is_some() {
-            orders
-                .record_release(DASHBOARD_ACTOR, order_id, &payment_id, &asked.reason)
-                .await?;
-            return Ok(CancelOutcome::Cancelled);
-        }
         let released = payments
             .gateway
             .release_payment(&account.secret_key, &payment_id)

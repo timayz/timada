@@ -294,9 +294,11 @@ A failure is shown on the card with *Place again*. One node takes each order on
 forward at the version it took it on at: an attempt overtaken in between (asked for
 again, given up as stalled) asks nothing. What AliExpress took is recorded at once,
 tried again for a few seconds while the store refuses writes; past that it is kept on
-the node that placed it (`aliexpress_unrecorded`, in the read-model database, which a
-copy from a peer leaves alone) and recorded by that node's sweep once the store takes
-writes again, however long that is. An attempt whose orders land on a forward an
+the node that placed it (`aliexpress_unrecorded`, one row per placement, in the
+read-model database, which a copy from a peer leaves alone) and recorded by that node's
+sweep once the store takes writes again, however long that is. The stall sweep may give
+up a forward whose node is only slow (it does not know which node asks); what that node
+records later still places it. An attempt whose orders land on a forward an
 overlapping attempt placed meanwhile records them beside it (`AlsoPlaced`), and the
 card asks the merchant to cancel them on AliExpress. If AliExpress did not answer, or a
 node stopped, the order may be on AliExpress anyway: a forward taken on and not heard
@@ -313,11 +315,19 @@ can no longer cancel, and the merchant ticks that they cancel it on AliExpress t
 again; an attempt that may have placed the order (`SupplierOrderUncertain`) does not,
 and keeps the fence whatever a later attempt is told, until the merchant, having looked
 on AliExpress, presses *Not on AliExpress* on the card (`SupplierOrderRuledOut`). An
-order whose card hold lapses within twelve hours is not placed: the merchant takes the
-payment first. A hold that lapses anyway while AliExpress may have the order cancels
-nothing: the order records the hold gone and stays open, for the merchant to settle
-with the shopper and cancel (Stripe is not asked again, nothing being held). Once every
-parcel of such an order is known it is no longer read.
+attempt begun while the one before never said how it went counts that one uncertain
+too. The card offers *Not on AliExpress* only once the forward failed, and half an hour
+after the order became uncertain, as AliExpress's list of orders may take that long to
+show one it took. The order is told how an attempt went before the forward is, tried
+again while the store refuses; an attempt the order never hears of leaves the forward
+taken on, for the stall sweep. An order whose card hold lapses within twelve hours is
+not placed: the merchant takes the payment first. A hold that lapses anyway while
+AliExpress may have the order cancels nothing: the order records the hold gone and
+stays open, for the merchant to settle with the shopper and cancel. Nothing is held, so
+that cancellation asks Stripe nothing, and it settles even when the shop took its
+Stripe keys away. Once every parcel of such an order is known, its forward closes and
+is no longer read, so a later change on AliExpress (the delivery, a refund to the
+account) does not show on its card.
 
 AliExpress pushes each status change of an order to `/aliexpress/webhook` (message type
 53, the body signed with the app's key and secret in `Authorization`). The push is

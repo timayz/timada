@@ -178,25 +178,19 @@ impl AliexpressSync {
             {
                 Ok(_) => {
                     tracing::info!(tenant = %row.tenant_id, order = %row.order_id, forward = %row.forward_id, ae_orders = ?placement.ae_order_ids, "order placed on AliExpress recorded at last");
-                    forget_unrecorded(&self.db, &row.tenant_id, &row.forward_id).await?;
+                    forget_unrecorded(&self.db, &row).await?;
                     recorded += 1;
                 }
                 // On the forward, one of its numbers held for another: told
                 // once, nothing a later try changes.
                 Err(err @ AliexpressError::ClaimedElsewhere { .. }) => {
                     tracing::error!(tenant = %row.tenant_id, order = %row.order_id, forward = %row.forward_id, ae_orders = ?placement.ae_order_ids, error = %err, "an AliExpress order of this forward is recorded for another one");
-                    forget_unrecorded(&self.db, &row.tenant_id, &row.forward_id).await?;
+                    forget_unrecorded(&self.db, &row).await?;
                     recorded += 1;
                 }
                 Err(err) => {
                     tracing::warn!(tenant = %row.tenant_id, order = %row.order_id, forward = %row.forward_id, ae_orders = ?placement.ae_order_ids, tries = row.tries + 1, error = %err, "order placed on AliExpress still not recorded");
-                    note_unrecorded_try(
-                        &self.db,
-                        &row.tenant_id,
-                        &row.forward_id,
-                        &err.to_string(),
-                    )
-                    .await?;
+                    note_unrecorded_try(&self.db, &row, &err.to_string()).await?;
                 }
             }
         }
