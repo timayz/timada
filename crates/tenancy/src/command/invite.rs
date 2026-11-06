@@ -5,18 +5,22 @@
 
 use evento::{Executor, ProjectionAggregate, WriteError};
 
-use crate::aggregator::{Accepted, Revoked, Sent};
+use crate::aggregator::{Accepted, Revoked, SeatGranted, SeatRefused, Sent};
 use crate::error::TenancyError;
 use crate::value_object::{
     INVITATION_TTL_SECS, PERMISSION_MEMBERS_MANAGE, generate_invitation_token, invitation_id,
     normalize_email,
 };
 
-use super::{InvitationState, TenantState};
+use super::{InvitationState, Seat, TenantState};
 
-/// Reload-and-retry budget for a seat granted while other writes of the
-/// tenant race it.
-const GRANT_ATTEMPTS: usize = 3;
+/// Reload-and-retry budget for settling a seat while other writes of the
+/// tenant or of the invitation race it.
+const SEAT_ATTEMPTS: usize = 3;
+
+/// The code a seat is refused with when the invitation's role was removed
+/// before the grant: [`TenancyError::UnknownRole`]'s.
+const ROLE_GONE: &str = "unknown_role";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InviteMember {
@@ -47,6 +51,17 @@ pub struct AcceptInvitation {
     pub token: String,
     /// The signed-in user accepting.
     pub user_id: String,
+}
+
+/// What accepting an invitation came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Joined {
+    /// The tenant joined.
+    pub tenant: TenantState,
+    /// The invitation is the account's, but its seat could not be settled
+    /// right away: it follows in a moment (the invitation-grants
+    /// subscription).
+    pub seat_pending: bool,
 }
 
 #[evento::command]
@@ -107,15 +122,16 @@ impl<E: Executor> super::Command<E> {
     /// Joins the tenant the link belongs to. Marking the invitation accepted,
     /// at the version read, is the link's one use: a second person with a
     /// forwarded link, or a revocation, racing it loses there and is granted
-    /// nothing. The seat is granted next, and by the invitation-grants
-    /// subscription should that fail; an account already in the tenant keeps
-    /// its seat. Returns the tenant joined.
+    /// nothing. The seat is settled next ([`Self::settle_seat`]); should that
+    /// fail, the acceptance stands and the invitation-grants subscription
+    /// settles it ([`Joined::seat_pending`]). A role removed between the two
+    /// refuses the seat: `UnknownRole`.
     pub async fn accept_invitation(
         &self,
         cmd: AcceptInvitation,
         now: u64,
         routing_key: Option<String>,
-    ) -> Result<TenantState, TenancyError> {
+    ) -> Result<Joined, TenancyError> {
         let invitation = self
             .load_invitation_by_token(&cmd.token)
             .await?
@@ -142,9 +158,24 @@ impl<E: Executor> super::Command<E> {
                 WriteError::InvalidOriginalVersion => TenancyError::InvitationInvalid,
                 err => err.into(),
             })?;
-        self.grant_accepted_seat(&invitation.id, routing_key)
-            .await?;
-        self.require_tenant(&tenant_id).await
+        match self.settle_seat(&invitation.id, routing_key).await {
+            Ok(Some(Seat::Granted)) => Ok(Joined {
+                tenant: self.require_tenant(&tenant_id).await?,
+                seat_pending: false,
+            }),
+            Ok(Some(Seat::Refused(_))) => Err(TenancyError::UnknownRole),
+            Ok(None) => Ok(Joined {
+                tenant,
+                seat_pending: true,
+            }),
+            Err(err) => {
+                tracing::warn!(%err, invitation = %invitation.id, "the seat follows from the invitation-grants subscription");
+                Ok(Joined {
+                    tenant,
+                    seat_pending: true,
+                })
+            }
+        }
     }
 
     /// Withdraws an open invitation. Needs `members:manage` on its tenant.
@@ -185,48 +216,77 @@ impl<E: Executor> super::Command<E> {
 }
 
 impl<E: Executor> super::Command<E> {
-    /// Grants the seat an accepted invitation promised, once: not to an
-    /// account already in the tenant, nor to one removed since it accepted
-    /// (an old link is no way back in). A role removed in between refuses
-    /// it. Retried against a fresh tenant while other writes race it; told
-    /// twice, nothing more happens.
-    pub(crate) async fn grant_accepted_seat(
+    /// Settles the seat an accepted invitation owes, once, and records the
+    /// answer on the invitation (`SeatGranted`, `SeatRefused`) so every node
+    /// follows it, however late it gets there. Recorded already, that answer
+    /// stands. Otherwise an account already in the tenant, or removed since
+    /// it accepted (an old link is no way back in), holds its seat; a role
+    /// removed in between refuses it; anyone else is granted the seat, then
+    /// the grant is recorded. Retried against fresh reads while other writes
+    /// race it. `None` for an invitation not accepted.
+    pub(crate) async fn settle_seat(
         &self,
         invitation_id: &str,
         routing_key: Option<String>,
-    ) -> Result<(), TenancyError> {
-        let Some(invitation) = self.load_invitation(invitation_id).await? else {
-            return Ok(());
-        };
-        let (Some(user_id), Some(accepted_at_ms)) =
-            (invitation.accepted_by.as_deref(), invitation.accepted_at_ms)
-        else {
-            return Ok(());
-        };
+    ) -> Result<Option<Seat>, TenancyError> {
         let mut attempt = 0;
         loop {
             attempt += 1;
+            let Some(invitation) = self.load_invitation(invitation_id).await? else {
+                return Ok(None);
+            };
+            if let Some(seat) = &invitation.seat {
+                return Ok(Some(seat.clone()));
+            }
+            let (Some(user_id), Some(accepted_at_ms)) =
+                (invitation.accepted_by.as_deref(), invitation.accepted_at_ms)
+            else {
+                return Ok(None);
+            };
             let tenant = self.require_tenant(&invitation.tenant_id).await?;
             let removed_since = tenant
                 .removed_members
                 .get(user_id)
                 .is_some_and(|removed_at_ms| *removed_at_ms >= accepted_at_ms);
-            if tenant.members.contains_key(user_id) || removed_since {
-                return Ok(());
-            }
-            match self
-                .grant(
-                    user_id,
-                    tenant,
-                    user_id,
-                    &invitation.role,
-                    routing_key.clone(),
-                )
-                .await
-            {
-                Err(TenancyError::Write(WriteError::InvalidOriginalVersion))
-                    if attempt < GRANT_ATTEMPTS => {}
-                outcome => return outcome,
+            let seat = if tenant.members.contains_key(user_id) || removed_since {
+                Seat::Granted
+            } else if !tenant.has_role(&invitation.role) {
+                Seat::Refused(ROLE_GONE.to_owned())
+            } else {
+                match self
+                    .grant(
+                        user_id,
+                        tenant,
+                        user_id,
+                        &invitation.role,
+                        routing_key.clone(),
+                    )
+                    .await
+                {
+                    Ok(()) => Seat::Granted,
+                    Err(TenancyError::Write(WriteError::InvalidOriginalVersion))
+                        if attempt < SEAT_ATTEMPTS =>
+                    {
+                        continue;
+                    }
+                    Err(err) => return Err(err),
+                }
+            };
+            let mut record = invitation.write()?;
+            record
+                .routing_key_opt(routing_key.clone())
+                .requested_by(user_id);
+            match &seat {
+                Seat::Granted => record.event(&SeatGranted),
+                Seat::Refused(reason) => record.event(&SeatRefused {
+                    reason: reason.clone(),
+                }),
+            };
+            match record.commit(&self.0).await {
+                Ok(_) => return Ok(Some(seat)),
+                // Settled elsewhere meanwhile: read it back and follow it.
+                Err(WriteError::InvalidOriginalVersion) if attempt < SEAT_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
             }
         }
     }

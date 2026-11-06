@@ -1,11 +1,12 @@
-//! Grants the seat an accepted invitation promised, should the command that
+//! Settles the seat an accepted invitation promised, should the command that
 //! accepted it not have: a crash or a failed write between marking the
-//! invitation accepted and granting the seat.
+//! invitation accepted and settling the seat.
 //!
 //! Delivery may repeat and every node runs the subscription at its own pace,
-//! a node that was away long after the fact: the seat goes only to an
-//! account that is not a member and was not removed since it accepted, so an
-//! old link is never a way back in.
+//! a node that was away long after the fact. The first answer is recorded on
+//! the invitation and every node follows it: a seat refused because the role
+//! was gone stays refused should the role come back, and a seat granted is
+//! not granted again to an account removed since.
 
 use evento::{
     Evento, Executor,
@@ -47,12 +48,12 @@ async fn on_accepted<E: Executor>(
     }
     let store: Store = context.extract();
     match Command(store.0)
-        .grant_accepted_seat(&event.aggregate_id, None)
+        .settle_seat(&event.aggregate_id, None)
         .await
     {
-        Ok(()) => Ok(()),
-        // The role or the tenant is gone: there is no seat to give, for good.
-        Err(err @ (TenancyError::UnknownRole | TenancyError::NotFound)) => {
+        Ok(_) => Ok(()),
+        // The tenant is gone: there is no seat to give, for good.
+        Err(err @ TenancyError::NotFound) => {
             tracing::warn!(%err, invitation = %event.aggregate_id, "an accepted invitation grants no seat");
             Ok(())
         }

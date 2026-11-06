@@ -4,7 +4,7 @@ use common::*;
 use timada_tenancy::aggregator::{Invitation, MemberGranted};
 use timada_tenancy::{
     AcceptInvitation, Command, DefineRole, INVITATION_TTL_SECS, InviteMember,
-    PERMISSION_MEMBERS_MANAGE, ROLE_OWNER, SentInvitation, TenancyError, TenantState,
+    PERMISSION_MEMBERS_MANAGE, ROLE_OWNER, Seat, SentInvitation, TenancyError, TenantState,
     invitation_id,
 };
 
@@ -88,8 +88,9 @@ async fn an_invitation_is_sent_accepted_once_and_grants_its_role() {
         .accept_invitation(accept(&sent.token, &bob), NOW + 60)
         .await
         .unwrap();
-    assert_eq!(joined.id, tenant.id);
-    assert_eq!(joined.role_of(&bob), Some("support"));
+    assert_eq!(joined.tenant.id, tenant.id);
+    assert_eq!(joined.tenant.role_of(&bob), Some("support"));
+    assert!(!joined.seat_pending);
     let state = cmd
         .load_invitation(&sent.invitation.id)
         .await
@@ -97,6 +98,7 @@ async fn an_invitation_is_sent_accepted_once_and_grants_its_role() {
         .unwrap();
     assert_eq!(state.accepted_by.as_deref(), Some(bob.as_str()));
     assert_eq!(state.accepted_at, Some(NOW + 60));
+    assert_eq!(state.seat, Some(Seat::Granted), "the seat is recorded");
     assert!(!state.is_open_at(NOW + 61));
 
     // Used, unknown or expired links are all "invalid".
@@ -194,8 +196,8 @@ async fn owner_invitations_need_an_owner_and_revocation_closes_the_link() {
         .accept_invitation(accept(&sent.token, &carol), NOW)
         .await
         .unwrap();
-    assert!(joined.is_owner(&carol));
-    assert_eq!(joined.owners(), 2);
+    assert!(joined.tenant.is_owner(&carol));
+    assert_eq!(joined.tenant.owners(), 2);
 }
 
 #[tokio::test]
@@ -261,7 +263,7 @@ async fn accepting_converges_when_the_role_vanished_or_the_user_is_already_in() 
         .accept_invitation(accept(&sent.token, &bob), NOW)
         .await
         .unwrap();
-    assert!(joined.is_owner(&bob));
+    assert!(joined.tenant.is_owner(&bob));
     assert!(
         !cmd.load_invitation(&sent.invitation.id)
             .await
@@ -338,14 +340,13 @@ async fn two_people_with_one_link_get_one_seat() {
         None,
         "the losing acceptance grants nothing"
     );
-    assert_eq!(
-        cmd.load_invitation(&sent.invitation.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .accepted_by,
-        Some(eve)
-    );
+    let invitation = cmd
+        .load_invitation(&sent.invitation.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(invitation.accepted_by, Some(eve));
+    assert_eq!(invitation.seat, Some(Seat::Granted));
 }
 
 #[tokio::test]
@@ -406,24 +407,97 @@ async fn the_subscription_grants_the_seat_a_crash_left_owed() {
     let (tenant, sent) = acme_with_invitation(&cmd, &alice).await;
     let bob = new_id();
 
-    // The node stops between the acceptance and the seat.
-    let err = Command(Rigged::new(store.clone()).refuse::<MemberGranted>())
+    // The seat cannot be written right after the acceptance: Bob has joined,
+    // and is told his access follows.
+    let joined = Command(Rigged::new(store.clone()).refuse::<MemberGranted>())
         .accept_invitation(accept(&sent.token, &bob), NOW + 1)
         .await
-        .unwrap_err();
-    assert!(matches!(err, TenancyError::Write(_)), "{err}");
+        .unwrap();
+    assert!(joined.seat_pending);
+    assert_eq!(joined.tenant.id, tenant.id);
     let invitation = cmd
         .load_invitation(&sent.invitation.id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(invitation.accepted_by.as_deref(), Some(bob.as_str()));
+    assert_eq!(invitation.seat, None);
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
     assert_eq!(state.role_of(&bob), None);
 
     grant_owed_seats(&store).await;
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
     assert_eq!(state.role_of(&bob), Some("support"));
+    let invitation = cmd
+        .load_invitation(&sent.invitation.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(invitation.seat, Some(Seat::Granted));
+}
+
+#[tokio::test]
+async fn every_node_follows_the_seat_first_settled() {
+    let (store, _) = executor_with_pool().await;
+    let cmd = Command(store.clone());
+    let alice = new_id();
+    let (tenant, sent) = acme_with_invitation(&cmd, &alice).await;
+    let bob = new_id();
+    let carol = new_id();
+
+    // Bob accepts but his seat is not written; the role goes away before
+    // the first node settles it.
+    let joined = Command(Rigged::new(store.clone()).refuse::<MemberGranted>())
+        .accept_invitation(accept(&sent.token, &bob), NOW + 1)
+        .await
+        .unwrap();
+    assert!(joined.seat_pending);
+    cmd.remove_role(&alice, &tenant.id, "support")
+        .await
+        .unwrap();
+    grant_owed_seats(&store).await;
+    let invitation = cmd
+        .load_invitation(&sent.invitation.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        invitation.seat,
+        Some(Seat::Refused("unknown_role".to_owned()))
+    );
+
+    // The role comes back, and Carol accepts another link the first node
+    // has not seen yet.
+    cmd.define_role(
+        &alice,
+        &tenant.id,
+        DefineRole {
+            role: "support".to_owned(),
+            label: "Support".to_owned(),
+            permissions: vec![],
+        },
+    )
+    .await
+    .unwrap();
+    let other = cmd
+        .invite_member(
+            &alice,
+            invite(&tenant.id, "carol@example.com", "support"),
+            NOW,
+        )
+        .await
+        .unwrap();
+    Command(Rigged::new(store.clone()).refuse::<MemberGranted>())
+        .accept_invitation(accept(&other.token, &carol), NOW + 2)
+        .await
+        .unwrap();
+
+    // A node that gets to both acceptances only now follows the refusal
+    // recorded for Bob, and settles Carol's seat itself.
+    grant_owed_seats_on(&store, "late-node").await;
+    let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(state.role_of(&bob), None);
+    assert_eq!(state.role_of(&carol), Some("support"));
 }
 
 #[tokio::test]
@@ -476,10 +550,11 @@ async fn a_member_removed_before_accepting_again_is_owed_the_seat() {
         .unwrap();
     cmd.revoke_member(&alice, &tenant.id, &bob).await.unwrap();
 
-    Command(Rigged::new(store.clone()).refuse::<MemberGranted>())
+    let joined = Command(Rigged::new(store.clone()).refuse::<MemberGranted>())
         .accept_invitation(accept(&sent.token, &bob), NOW + 1)
         .await
-        .unwrap_err();
+        .unwrap();
+    assert!(joined.seat_pending);
     grant_owed_seats(&store).await;
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
     assert_eq!(state.role_of(&bob), Some("support"));

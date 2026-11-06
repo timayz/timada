@@ -41,7 +41,8 @@ use crate::aggregator::{
     MailBrandingSet, MailLanguagesSet, MailServerAdded, MailServerChanged, MailServerDeleted,
     MailServersPicked, MailTemplateReset, MailTemplateSaved, MailTemplateTextSaved, MemberGranted,
     MemberRevoked, MemberRoleChanged, PaymentsConfigured, PaymentsRemoved, Released, Renamed,
-    Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
+    Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, SeatGranted, SeatRefused, Sent,
+    Suspended,
 };
 use crate::value_object::{
     ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id, tenant_slug_id,
@@ -958,6 +959,19 @@ pub struct InvitationState {
     /// it against the tenant's own events.
     pub accepted_at_ms: Option<u64>,
     pub revoked: bool,
+    /// What the acceptance came to, once settled ([`Command::settle_seat`]):
+    /// every node follows this answer.
+    pub seat: Option<Seat>,
+}
+
+/// What an accepted invitation came to, recorded on it once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Seat {
+    /// The invitee holds the seat: granted by the invitation, or held
+    /// already.
+    Granted,
+    /// No seat; the refusal's code (see `SeatRefused`).
+    Refused(String),
 }
 
 impl InvitationState {
@@ -973,6 +987,8 @@ pub fn invitation_projection<E: Executor>() -> Projection<E, InvitationState> {
         .handler(on_invitation_sent())
         .handler(on_invitation_accepted())
         .handler(on_invitation_revoked())
+        .handler(on_seat_granted())
+        .handler(on_seat_refused())
         .strict()
 }
 
@@ -1008,6 +1024,24 @@ async fn on_invitation_revoked(
     invitation: &mut InvitationState,
 ) -> anyhow::Result<()> {
     invitation.revoked = true;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_seat_granted(
+    _event: Event<SeatGranted>,
+    invitation: &mut InvitationState,
+) -> anyhow::Result<()> {
+    invitation.seat = Some(Seat::Granted);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_seat_refused(
+    event: Event<SeatRefused>,
+    invitation: &mut InvitationState,
+) -> anyhow::Result<()> {
+    invitation.seat = Some(Seat::Refused(event.data.reason.to_owned()));
     Ok(())
 }
 

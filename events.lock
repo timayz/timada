@@ -288,6 +288,8 @@ event timada-tenancy/CompanySiren::Claimed { company_id: String }
 event timada-tenancy/CompanySiren::Released { released_by: String }
 event timada-tenancy/Invitation::Accepted { user_id: String, accepted_at: u64 }
 event timada-tenancy/Invitation::Revoked { revoked_by: String }
+event timada-tenancy/Invitation::SeatGranted unit
+event timada-tenancy/Invitation::SeatRefused { reason: String }
 event timada-tenancy/Invitation::Sent { tenant_id: String, email: String, role: String, invited_by: String, sent_at: u64, expires_at: u64 }
 event timada-tenancy/Tenant::AliexpressConfigured { ship_to_country: String, currency: String, language: String, configured_by: String }
 event timada-tenancy/Tenant::AliexpressForwardingSet { auto_forward: bool, try_to_pay: bool, set_by: String }
