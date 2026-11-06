@@ -82,6 +82,8 @@ pub enum CatalogError {
     TooManyAttributes,
     #[error("unknown tax category")]
     InvalidTaxCategory,
+    #[error("a delivery time is 1 to 365 days, the shortest first")]
+    InvalidDeliveryDays,
     #[error("a stock is a whole number between 0 and 1,000,000")]
     InvalidStock,
     #[error("only {available} left")]
@@ -153,6 +155,7 @@ impl CatalogError {
             Self::InvalidAttribute => "invalid_attribute",
             Self::TooManyAttributes => "too_many_attributes",
             Self::InvalidTaxCategory => "invalid_tax_category",
+            Self::InvalidDeliveryDays => "invalid_delivery_days",
             Self::InvalidStock => "invalid_stock",
             Self::OutOfStock { .. } => "out_of_stock",
             Self::Write(err) => return timada_core::write_refusal(err),

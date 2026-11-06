@@ -8,6 +8,7 @@ authors.workspace = true
 evento.workspace = true
 timada-core = { path = "../core" }
 bitcode.workspace = true
+serde.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

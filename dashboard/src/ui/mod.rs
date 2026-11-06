@@ -315,6 +315,7 @@ pub fn describe_error(code: &str) -> &'static str {
             "A French VAT number is FR, a two-digit key and the SIREN (the SIRET's first nine digits)."
         }
         "invalid_tax_category" => "Choose one of the tax categories.",
+        "invalid_delivery_days" => "A delivery time is 1 to 365 days, the shortest first.",
         "invalid_stock" => "A stock is a whole number from 0 to 1,000,000.",
         "out_of_stock" => "There is not enough of it left.",
         "invalid_aliexpress_market" => {
@@ -382,6 +383,19 @@ pub fn describe_error(code: &str) -> &'static str {
             "Changes are temporarily not accepted while a node is away. Please try again in a few minutes."
         }
         _ => "Something went wrong. Please try again.",
+    }
+}
+
+/// A delivery time as the back office shows it: `8–15 days`, `3 days`.
+pub fn delivery_days_label(days: timada_catalog::DeliveryDays) -> String {
+    if days.min == days.max {
+        format!(
+            "{} {}",
+            days.max,
+            if days.max == 1 { "day" } else { "days" }
+        )
+    } else {
+        format!("{}–{} days", days.min, days.max)
     }
 }
 

@@ -810,6 +810,12 @@ pub struct PendingCancellation {
 }
 
 impl OrderState {
+    /// When the goods arrive, counted from the order, as the shop said when
+    /// they were sold.
+    pub fn delivery_window(&self) -> Option<timada_catalog::DeliveryDays> {
+        timada_catalog::DeliveryDays::window(self.lines.iter().map(|line| line.delivery_days))
+    }
+
     /// What was taken and not given back yet: nothing while the payment is
     /// only held.
     pub fn outstanding_cents(&self) -> u64 {

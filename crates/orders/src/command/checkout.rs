@@ -108,6 +108,11 @@ pub struct Quote {
 }
 
 impl Quote {
+    /// When the goods arrive, counted from the order ([`DeliveryDays::window`]).
+    pub fn delivery_window(&self) -> Option<timada_catalog::DeliveryDays> {
+        timada_catalog::DeliveryDays::window(self.lines.iter().map(|line| line.delivery_days))
+    }
+
     pub fn item_count(&self) -> u32 {
         self.lines.iter().map(|line| line.quantity).sum()
     }
@@ -163,6 +168,8 @@ impl<E: Executor> super::Command<E> {
     pub(crate) async fn quote(&self, cart: &CartState) -> Result<Quote, OrderError> {
         let mut quote = Quote::default();
         let mut priced: Vec<OrderLine> = Vec::new();
+        // Read once, the first time a product gives no time of its own.
+        let mut default_days = None;
         for line in &cart.lines {
             let item = CartItem {
                 product_id: line.product_id.clone(),
@@ -226,6 +233,13 @@ impl<E: Executor> super::Command<E> {
                 unit_amount_cents: price.amount_cents,
                 quantity: line.quantity,
                 tax_category: product.tax_category().to_owned(),
+                delivery_days: match product.delivery_days {
+                    Some(days) => Some(days),
+                    None => match default_days {
+                        Some(days) => days,
+                        None => *default_days.insert(self.load_default_delivery_days().await?),
+                    },
+                },
             });
         }
         self.price_offers(&mut quote, priced).await?;

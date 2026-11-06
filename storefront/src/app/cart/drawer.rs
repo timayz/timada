@@ -133,6 +133,10 @@ pub async fn cart_drawer(cx: &Cx, #[default] cart: Option<&CartView>) -> Result<
                                     <dt>"Code promo " <code>(&discount.code)</code></dt>
                                     <dd data-drawer-discount=(&discount.code)>(amount)</dd>
                                 }
+                                if let Some(days) = cart.delivery_window {
+                                    <dt>"Délai de livraison"</dt>
+                                    <dd data-drawer-delivery=(crate::app::delivery_days(days))>(crate::app::delivery_days(days))</dd>
+                                }
                                 <dt class="total">"Total"</dt>
                                 <dd class="total"><strong class="price" data-drawer-total="">(&total)</strong></dd>
                             </dl>

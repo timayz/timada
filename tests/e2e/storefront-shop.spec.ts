@@ -1125,6 +1125,83 @@ test("a shopper picks a delivery method that ships to their country, and pays fo
   }
 });
 
+test("a shopper sees how long delivery takes, the product's own or the shop's default", async ({
+  page,
+  request,
+}) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Delay Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    const lamp = await publishProduct(page, slug, "Floor Lamp", "30.00");
+    await setLegalIdentity(page, slug);
+    const webhookUrl = await connectStripe(page, slug);
+
+    // The lamp takes 8 to 15 days; everything else the shop's 2 to 4.
+    await page.goto(lamp);
+    await page.getByLabel("Shortest delivery, in days").fill("8");
+    await page.getByLabel("Longest delivery, in days").fill("15");
+    await page.getByRole("button", { name: "Set delivery time" }).click();
+    await expect(page.getByRole("status")).toContainText("Delivery time set.");
+    await page.goto(`/t/${slug}/shipping`);
+    await page.getByLabel("Shortest delivery, in days").fill("4");
+    await page.getByLabel("Longest delivery, in days").fill("2");
+    await page.getByRole("button", { name: "Set default delivery time" }).click();
+    await expect(page.getByRole("alert")).toContainText("the shortest first");
+    await page.getByLabel("Shortest delivery, in days").fill("2");
+    await page.getByLabel("Longest delivery, in days").fill("4");
+    await page.getByRole("button", { name: "Set default delivery time" }).click();
+    await expect(page.getByRole("status")).toContainText(
+      "Default delivery time set.",
+    );
+    await app.start(request, await mintKey(page, slug, true), 1);
+
+    await page.goto(`${SHOP}/p/floor-lamp`);
+    await expect(page.locator("[data-delivery-days]")).toHaveText(
+      "Livraison avec suivi en 8 à 15 jours",
+    );
+    await addToCart(page);
+    await page.goto(`${SHOP}/p/blue-mug`);
+    await expect(page.locator("[data-delivery-days]")).toHaveText(
+      "Livraison avec suivi en 2 à 4 jours",
+    );
+    await addToCart(page);
+
+    // The cart says each line's time, and the order's: the longest.
+    await page.goto(`${SHOP}/cart`);
+    await expect(
+      page.locator("[data-cart-line='Floor Lamp'] [data-line-delivery]"),
+    ).toHaveText("Livraison en 8 à 15 jours");
+    await expect(
+      page.locator("[data-cart-line='Blue Mug'] [data-line-delivery]"),
+    ).toHaveText("Livraison en 2 à 4 jours");
+    await expect(page.locator("[data-cart-delivery]")).toContainText(
+      "8 à 15 jours",
+    );
+    await page.getByRole("link", { name: "Commander" }).click();
+    await expect(page.locator("[data-checkout-delivery]")).toHaveText(
+      "8 à 15 jours",
+    );
+
+    // The order keeps the time it was sold with.
+    await fillCheckout(page, true);
+    await payButton(page).click();
+    await expect(page).toHaveURL(
+      /\/checkout\/complete\?.*redirect_status=succeeded/,
+      { timeout: 30_000 },
+    );
+    await confirmPayment(page, request, SHOP, stripe, webhookUrl);
+    await expect(page.locator("[data-order-delivery]")).toContainText(
+      "8 à 15 jours",
+    );
+  } finally {
+    await stripe.stop();
+  }
+});
+
 /// Opens the offers page once the products' read model lists `item` in
 /// the picker: it is a moment behind the write.
 async function openOffers(page: Page, slug: string, item: string) {

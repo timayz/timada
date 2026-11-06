@@ -2606,3 +2606,80 @@ async fn a_store_shows_the_announcements_whose_window_is_open() {
 
     store.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_product_shows_its_own_delivery_time_else_the_shops_default() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme);
+    let mut ids = Vec::new();
+    for name in ["Blue Mug", "Floor Lamp"] {
+        let product = catalog
+            .create_product(
+                "alice",
+                CreateProduct {
+                    name: name.into(),
+                    slug: None,
+                },
+            )
+            .await
+            .unwrap();
+        catalog
+            .price_product("alice", &product.id, 1250, "EUR")
+            .await
+            .unwrap();
+        catalog.publish_product("alice", &product.id).await.unwrap();
+        ids.push(product.id);
+    }
+    let days = |min, max| timada_catalog::DeliveryDays::new(min, max).unwrap();
+    catalog
+        .set_product_delivery_days("alice", &ids[1], Some(days(8, 15)))
+        .await
+        .unwrap();
+
+    let db = h.local_db("acme-shop").await;
+    let _store = Store::connect(h.config(&token), db.clone()).await.unwrap();
+    let shown = async |slug: &str| {
+        published_product_by_slug(&db, slug)
+            .await
+            .unwrap()
+            .and_then(|product| product.delivery_days)
+    };
+    eventually("the lamp's own time reaches the copy", async || {
+        shown("floor-lamp").await == Some(days(8, 15))
+    })
+    .await;
+    assert_eq!(shown("blue-mug").await, None);
+
+    // The default fills the products giving none, set before or after it.
+    catalog
+        .set_default_delivery_days("alice", Some(days(2, 4)))
+        .await
+        .unwrap();
+    eventually("the default reaches the mug", async || {
+        shown("blue-mug").await == Some(days(2, 4))
+    })
+    .await;
+    assert_eq!(shown("floor-lamp").await, Some(days(8, 15)));
+
+    // Clearing the lamp's own time falls back to the default.
+    catalog
+        .set_product_delivery_days("alice", &ids[1], None)
+        .await
+        .unwrap();
+    eventually("the lamp falls back to the default", async || {
+        shown("floor-lamp").await == Some(days(2, 4))
+    })
+    .await;
+
+    // No default: nothing is shown.
+    catalog
+        .set_default_delivery_days("alice", None)
+        .await
+        .unwrap();
+    eventually("the default leaves", async || {
+        shown("blue-mug").await.is_none() && shown("floor-lamp").await.is_none()
+    })
+    .await;
+}

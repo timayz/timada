@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use evento::ProjectionAggregate;
-use timada_catalog::{CatalogError, Price};
+use timada_catalog::{CatalogError, DeliveryDays, Price};
 
 #[tokio::test]
 async fn edits_update_the_state_and_repeat_as_no_ops() {
@@ -194,4 +194,80 @@ async fn the_tax_category_is_a_known_one_or_standard() {
         .unwrap();
     let standard = cmd.load_product(id).await.unwrap().unwrap();
     assert_eq!(standard.tax_category, None);
+}
+
+#[tokio::test]
+async fn the_delivery_time_is_a_range_of_days_or_the_shops_default() {
+    let cmd = command().await;
+    let product = create_product(&cmd, "Lamp").await;
+    let id = product.id.as_str();
+    assert_eq!(product.delivery_days, None);
+
+    let days = DeliveryDays::new(8, 15).unwrap();
+    cmd.set_product_delivery_days(ALICE, id, Some(days))
+        .await
+        .unwrap();
+    let set = cmd.load_product(id).await.unwrap().unwrap();
+    assert_eq!(set.delivery_days, Some(days));
+
+    // The same days write nothing.
+    cmd.set_product_delivery_days(ALICE, id, Some(days))
+        .await
+        .unwrap();
+    let again = cmd.load_product(id).await.unwrap().unwrap();
+    assert_eq!(
+        again.aggregate_version().unwrap(),
+        set.aggregate_version().unwrap()
+    );
+
+    let backwards = DeliveryDays { min: 15, max: 8 };
+    let err = cmd
+        .set_product_delivery_days(ALICE, id, Some(backwards))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CatalogError::InvalidDeliveryDays), "{err}");
+
+    cmd.set_product_delivery_days(ALICE, id, None)
+        .await
+        .unwrap();
+    let cleared = cmd.load_product(id).await.unwrap().unwrap();
+    assert_eq!(cleared.delivery_days, None);
+
+    assert_eq!(cmd.load_default_delivery_days().await.unwrap(), None);
+    cmd.set_default_delivery_days(ALICE, Some(days))
+        .await
+        .unwrap();
+    cmd.set_default_delivery_days(ALICE, Some(days))
+        .await
+        .unwrap();
+    assert_eq!(cmd.load_default_delivery_days().await.unwrap(), Some(days));
+    cmd.set_default_delivery_days(ALICE, None).await.unwrap();
+    assert_eq!(cmd.load_default_delivery_days().await.unwrap(), None);
+}
+
+#[test]
+fn delivery_days_read_from_a_form_and_make_a_window() {
+    let days = |min, max| DeliveryDays::new(min, max).unwrap();
+    assert_eq!(DeliveryDays::parse("", " ").unwrap(), None);
+    assert_eq!(DeliveryDays::parse("3", "7").unwrap(), Some(days(3, 7)));
+    assert_eq!(DeliveryDays::parse("5", "").unwrap(), Some(days(5, 5)));
+    assert_eq!(DeliveryDays::parse("", "9").unwrap(), Some(days(9, 9)));
+    for (min, max) in [("0", "3"), ("7", "3"), ("1", "366"), ("two", "3")] {
+        assert!(
+            matches!(
+                DeliveryDays::parse(min, max),
+                Err(CatalogError::InvalidDeliveryDays)
+            ),
+            "{min}–{max}"
+        );
+    }
+    assert_eq!(
+        DeliveryDays::window([Some(days(3, 5)), None, Some(days(8, 15))]),
+        Some(days(8, 15))
+    );
+    assert_eq!(
+        DeliveryDays::window([Some(days(10, 12)), Some(days(8, 15))]),
+        Some(days(10, 15))
+    );
+    assert_eq!(DeliveryDays::window([None, None]), None);
 }

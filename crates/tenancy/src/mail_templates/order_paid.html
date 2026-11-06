@@ -31,6 +31,9 @@
     <td style="text-align: right;"><strong>{{ order.total }}</strong></td>
   </tr>
 </table>
+{% if order.delivery %}
+<p>Expected delivery: {% if order.delivery.min_days == order.delivery.max_days %}{{ order.delivery.max_days }}{% else %}{{ order.delivery.min_days }} to {{ order.delivery.max_days }}{% endif %} days after your order.</p>
+{% endif %}
 {% if link %}
 <p><a href="{{ link }}"{% if shop.accent %} style="color: {{ shop.accent }};"{% endif %}>View your order and its invoice</a></p>
 {% endif %}

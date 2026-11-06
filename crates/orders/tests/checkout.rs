@@ -655,3 +655,51 @@ async fn a_payment_left_unconfirmed_is_cancelled_once_and_closes_the_request() {
         Err(OrderError::PaymentNotFound)
     ));
 }
+
+#[tokio::test]
+async fn a_line_keeps_its_products_delivery_time_else_the_shops_default() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let lamp = product(&catalog, "Lamp", 3000, "EUR").await;
+    let days = |min, max| timada_catalog::DeliveryDays::new(min, max).unwrap();
+    let cart_id = cart_with(&orders, &mug, 1).await;
+    orders
+        .add_to_cart(SHOPPER, &cart_id, item(&lamp, None, 1))
+        .await
+        .unwrap();
+
+    // Nothing said: no line, nor the order, gives a time.
+    let quote = orders.quote_cart(&cart_id).await.unwrap();
+    assert!(quote.lines.iter().all(|line| line.delivery_days.is_none()));
+    assert_eq!(quote.delivery_window(), None);
+
+    catalog
+        .set_default_delivery_days(ALICE, Some(days(2, 4)))
+        .await
+        .unwrap();
+    catalog
+        .set_product_delivery_days(ALICE, &lamp, Some(days(8, 15)))
+        .await
+        .unwrap();
+    let quote = orders.quote_cart(&cart_id).await.unwrap();
+    let of = |id: &str| {
+        quote
+            .lines
+            .iter()
+            .find(|line| line.product_id == id)
+            .unwrap()
+            .delivery_days
+    };
+    assert_eq!(of(&mug), Some(days(2, 4)));
+    assert_eq!(of(&lamp), Some(days(8, 15)));
+    assert_eq!(quote.delivery_window(), Some(days(8, 15)));
+
+    // The order keeps what was said when it sold.
+    let placed = pay(&orders, &cart_id, checkout()).await;
+    catalog
+        .set_product_delivery_days(ALICE, &lamp, Some(days(20, 30)))
+        .await
+        .unwrap();
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert_eq!(order.delivery_window(), Some(days(8, 15)));
+}
