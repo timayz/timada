@@ -7533,6 +7533,7 @@ name = "timada-orders"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bitcode",
  "evento",
  "rand 0.9.5",
@@ -7543,6 +7544,7 @@ dependencies = [
  "timada-core",
  "timada-discounts",
  "tokio",
+ "tracing",
  "ulid",
 ]
 

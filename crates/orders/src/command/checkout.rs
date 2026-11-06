@@ -5,10 +5,11 @@ use ulid::Ulid;
 
 use super::ReturnedPayment;
 use crate::aggregator::{
-    BillingAddressGiven, BillingAddressSet, BuyerIdentified, CheckedOut, CheckoutRequested,
-    Claimed, DiscountGranted, Discounted, LanguageGiven, LanguageSet, NewsletterOptInSet,
-    NewsletterOptedIn, PaymentCancelled, PaymentRefused, PaymentRequested, PaymentReturned, Placed,
-    ShippingCharged, ShippingGranted, ShippingMethodChosen, TimeZoneGiven, TimeZoneSet,
+    BillingAddressGiven, BillingAddressSet, BuyerIdentified, CheckedOut, CheckoutClaimed,
+    CheckoutRequested, Claimed, DiscountGranted, Discounted, LanguageGiven, LanguageSet,
+    NewsletterOptInSet, NewsletterOptedIn, PaymentCancelled, PaymentRefused, PaymentRequested,
+    PaymentReturned, Placed, Released, ShippingCharged, ShippingGranted, ShippingMethodChosen,
+    TimeZoneGiven, TimeZoneSet,
 };
 use crate::error::OrderError;
 use crate::value_object::{
@@ -513,7 +514,8 @@ impl<E: Executor> super::Command<E> {
         }))
     }
 
-    /// The order a reference names, if any.
+    /// The order a reference names, if any. A reference claimed for an order
+    /// placed under another one names nothing.
     pub async fn load_order_by_reference(
         &self,
         reference: &str,
@@ -523,11 +525,28 @@ impl<E: Executor> super::Command<E> {
             .tenant(&self.tenant)
             .execute(&self.executor)
             .await?
+            .filter(|index| !index.released)
         else {
             return Ok(None);
         };
-        self.load_order(&index.order_id).await
+        Ok(self
+            .load_order(&index.order_id)
+            .await?
+            .filter(|order| order.reference == reference))
     }
+}
+
+/// Who answers a request to pay, as [`Command::claim_checkout`](super::Command::claim_checkout) says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutClaim {
+    /// The claimant answers it: it took it now, or holds it already (told
+    /// the request again, it goes on).
+    Taken,
+    /// Another node took it on and its claim holds: left to it.
+    Held,
+    /// Nothing to answer: answered already, the cart ordered, or no such
+    /// request.
+    Answered,
 }
 
 #[evento::command]
@@ -628,6 +647,61 @@ impl<E: Executor> super::Command<E> {
         Ok(request_id)
     }
 
+    /// Takes the request to pay on for `claimant` (a node), so one node
+    /// holds the goods and the code, opens the payment and answers: written
+    /// at the version read, so of two nodes claiming at once one is
+    /// refused, reads again and finds the other's claim. While a claim
+    /// holds ([`CHECKOUT_CLAIM_SECS`](crate::CHECKOUT_CLAIM_SECS)) its
+    /// claimant goes on with the request (told it again after an error or a
+    /// restart) and every other node leaves it alone; a lapsed claim is
+    /// taken again the same way, its claimant's own included.
+    pub async fn claim_checkout(
+        &self,
+        actor: &str,
+        cart_id: &str,
+        request_id: &str,
+        claimant: &str,
+        routing_key: Option<String>,
+    ) -> Result<CheckoutClaim, OrderError> {
+        for attempt in 1..=CART_WRITE_ATTEMPTS {
+            let Some(cart) = self.load_cart(cart_id).await? else {
+                return Ok(CheckoutClaim::Answered);
+            };
+            let Some(request) = cart.request(request_id) else {
+                return Ok(CheckoutClaim::Answered);
+            };
+            if request.answer.is_some() || cart.is_checked_out() {
+                return Ok(CheckoutClaim::Answered);
+            }
+            if let Some(claim) = &request.claim
+                && claim.holds_at(timada_discounts::unix_now())
+            {
+                return Ok(if claim.claimant == claimant {
+                    CheckoutClaim::Taken
+                } else {
+                    CheckoutClaim::Held
+                });
+            }
+            let written = cart
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&CheckoutClaimed {
+                    request_id: request_id.to_owned(),
+                    claimant: claimant.to_owned(),
+                    claimed_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(CheckoutClaim::Taken),
+                Err(WriteError::InvalidOriginalVersion) if attempt < CART_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(CheckoutClaim::Held)
+    }
+
     /// Records the payment opened for a request, priced as `pending` says.
     /// A request answered already (by another node, say) is left alone.
     pub async fn record_payment_request(
@@ -689,7 +763,8 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// Records why a request to pay cannot go ahead; `code` is what the
-    /// storefront words. A request answered already is left alone.
+    /// storefront words. A request answered already is left alone: whether
+    /// this refusal is its answer.
     pub async fn refuse_payment_request(
         &self,
         actor: &str,
@@ -697,11 +772,11 @@ impl<E: Executor> super::Command<E> {
         request_id: &str,
         code: &str,
         routing_key: Option<String>,
-    ) -> Result<(), OrderError> {
+    ) -> Result<bool, OrderError> {
         for attempt in 1..=CART_WRITE_ATTEMPTS {
             let cart = self.require_cart(cart_id).await?;
             if cart.request(request_id).is_none_or(|r| r.answer.is_some()) {
-                return Ok(());
+                return Ok(false);
             }
             let written = cart
                 .write()?
@@ -715,12 +790,12 @@ impl<E: Executor> super::Command<E> {
                 .commit(&self.executor)
                 .await;
             match written {
-                Ok(_) => return Ok(()),
+                Ok(_) => return Ok(true),
                 Err(WriteError::InvalidOriginalVersion) if attempt < CART_WRITE_ATTEMPTS => {}
                 Err(err) => return Err(err.into()),
             }
         }
-        Ok(())
+        Ok(false)
     }
 
     /// Records that the payment of a request was authorized too late (what
@@ -845,7 +920,7 @@ impl<E: Executor> super::Command<E> {
             .original_version(0)
             .routing_key_opt(routing_key.clone())
             .event(&Placed {
-                reference,
+                reference: reference.clone(),
                 cart_id: cart_id.to_owned(),
                 email: request.email.clone(),
                 shipping: request.shipping.clone(),
@@ -903,9 +978,12 @@ impl<E: Executor> super::Command<E> {
         let placed = write.tenant(&self.tenant).commit(&self.executor).await;
         match placed {
             Ok(_) => {}
-            // Told at the same moment on another node: that one stands, and
-            // says whether this payment is the same.
+            // Told at the same moment on another node: that one stands, under
+            // the reference it claimed, and says whether this payment is the
+            // same. The reference claimed here names nothing: given back.
             Err(WriteError::InvalidOriginalVersion) => {
+                self.release_reference(&reference, actor, routing_key.clone())
+                    .await;
                 let order = self.require_order(&order_id).await?;
                 return self
                     .settle_existing(cart, &order, &payment, actor, routing_key)
@@ -963,6 +1041,26 @@ impl<E: Executor> super::Command<E> {
             }
         }
         Err(anyhow::anyhow!("no free order reference after {REFERENCE_ATTEMPTS} attempts").into())
+    }
+
+    /// Gives back a reference [`claim_reference`](Self::claim_reference)
+    /// just claimed, for an order placed under another one. A reference
+    /// left claimed names nothing either
+    /// ([`load_order_by_reference`](Self::load_order_by_reference) checks the
+    /// order carries it), so a failure is only logged.
+    async fn release_reference(&self, reference: &str, actor: &str, routing_key: Option<String>) {
+        let released = evento::append(order_reference_id(reference))
+            .original_version(1)
+            .routing_key_opt(routing_key)
+            .event(&Released {
+                released_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await;
+        if let Err(err) = released {
+            tracing::warn!(tenant = %self.tenant, %reference, %err, "cannot give back an order reference");
+        }
     }
 
     /// Marks the cart as the order, unless it already is. A shopper changing
