@@ -290,6 +290,13 @@ fn subscriptions(
             "identity",
             timada_identity::read_model_subscription(db.clone()),
         ),
+        // Not a read model, but the same lifecycle: it frees the index
+        // entries of the sign-in identities a user let go of, should the
+        // command not have.
+        (
+            "identity indexes",
+            timada_identity::index_release_subscription(),
+        ),
         (
             "tenancy",
             timada_tenancy::read_model_subscription(db.clone()),

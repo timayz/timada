@@ -46,8 +46,8 @@ impl<E: Executor> super::Command<E> {
             routing_key.clone(),
         )
         .await?;
-        match self.load_email_account(&email).await? {
-            Some(owner) if owner.user_id == cmd.user_id => {}
+        match self.email_user(&email).await? {
+            Some(owner) if owner.id == cmd.user_id => {}
             _ => return Err(IdentityError::InvalidState),
         }
         let user = self

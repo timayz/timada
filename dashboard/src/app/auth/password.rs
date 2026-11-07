@@ -42,25 +42,21 @@ pub async fn change(cx: &Cx, Form(form): Form<PasswordForm>) -> Result<SeeOther>
         }
         Err(err) => return Err(err.into()),
     };
+    let current = session::token_hash(cx).await?;
     let changed = identity(cx)
         .change_password(ChangePassword {
             user_id: user.id.clone(),
             current_password: form.current_password,
             new_password_hash,
+            session_token_hash: current.as_deref().copied(),
         })
         .await;
     match changed {
-        Ok(()) => {
-            let current = session::token_hash(cx).await?;
-            identity(cx)
-                .revoke_sessions(&user.id, &user.id, current.as_deref())
-                .await?;
-            Ok(see_other(account_url(
-                cx,
-                None,
-                Some("Password changed. Other browsers were signed out."),
-            )))
-        }
+        Ok(()) => Ok(see_other(account_url(
+            cx,
+            None,
+            Some("Password changed. Other browsers were signed out."),
+        ))),
         Err(err) if err.is_user_facing() => {
             Ok(see_other(account_url(cx, Some(error_code(&err)), None)))
         }

@@ -83,7 +83,11 @@ Recurring patterns:
   themselves are freed by a release subscription per context (`timada-catalog/releases`,
   `timada-discounts/releases`, `timada-pages/releases`) on what gives a value up, from
   the holder as it is now: only what it holds no more and claimed before the event, so
-  a value taken back since stays its own.
+  a value taken back since stays its own. An entry for something another stream also
+  records (a user's sign-in identity) counts only while that stream lists it: the
+  entry is claimed first and given back if the record fails, the record goes first
+  on the way out, and a subscription frees what a crash in between left behind
+  (`timada_identity::index_release_subscription`).
 - **Every event says who did it** (`*_by` fields). Authorisation lives in the host.
 - **Write-side state** is a strict projection with `#[evento::snapshot(none)]`, so
   commands observe the exact version they write against.
