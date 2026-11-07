@@ -135,9 +135,9 @@ pub enum ReleaseAnswer {
     Captured { amount_cents: u64 },
 }
 
-/// A request the provider refused (a 4xx answer other than 429): asking
-/// again the same way gets the same answer. Any other error (no answer, a
-/// 5xx, a 429) is worth asking again later.
+/// A request the provider refused (a 4xx answer other than 409 and 429):
+/// asking again the same way gets the same answer. Any other error (no
+/// answer, a 5xx, a 429, a [`Busy`]) is worth asking again later.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Refused(pub String);
 
@@ -148,6 +148,21 @@ impl std::fmt::Display for Refused {
 }
 
 impl std::error::Error for Refused {}
+
+/// A request the provider could not take at that moment, another one being
+/// under way on the same thing (a 409: a request with the same idempotency
+/// key not answered yet, or the object locked by another): asked again in a
+/// moment, it is answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Busy(pub String);
+
+impl std::fmt::Display for Busy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Busy {}
 
 #[async_trait::async_trait]
 pub trait PaymentGateway: Send + Sync {
@@ -338,6 +353,11 @@ where
     }
     Box::pin(async move {
         let value = request.send(client).await.map_err(|err| match err {
+            StripeError::Stripe(errors, 409) => anyhow::Error::new(Busy(
+                errors
+                    .message
+                    .unwrap_or_else(|| "Stripe is busy with another request (409)".to_owned()),
+            )),
             StripeError::Stripe(errors, status)
                 if (400..500).contains(&status) && status != 429 =>
             {
@@ -525,7 +545,110 @@ impl PaymentGateway for StripeGateway {
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     use super::*;
+
+    /// Stripe answering every request with `status` and the error `body`;
+    /// its address.
+    async fn stand_in(status: &'static str, body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                read_request(&mut socket).await;
+                let answer = format!(
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(answer.as_bytes()).await;
+            }
+        });
+        url
+    }
+
+    /// Reads a request through to the end of its body.
+    async fn read_request(socket: &mut tokio::net::TcpStream) {
+        let mut request = Vec::new();
+        let mut chunk = [0; 4096];
+        loop {
+            if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                let head = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+                let length = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if request.len() >= end + 4 + length {
+                    return;
+                }
+            }
+            match socket.read(&mut chunk).await {
+                Ok(0) | Err(_) => return,
+                Ok(read) => request.extend_from_slice(&chunk[..read]),
+            }
+        }
+    }
+
+    fn payment() -> NewPayment {
+        NewPayment {
+            amount_cents: 2500,
+            currency: "EUR".into(),
+            idempotency_key: "timada-request".into(),
+            metadata: HashMap::new(),
+            receipt_email: None,
+            description: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn stripe_busy_with_the_same_key_is_asked_again_not_refused() {
+        let busy = StripeGateway::new(Some(
+            stand_in(
+                "409 Conflict",
+                r#"{"error":{"type":"idempotency_error","code":"idempotency_key_in_use","message":"There is currently another in-progress request using this Stripe-Idempotency-Key"}}"#,
+            )
+            .await,
+        ));
+        let err = busy
+            .open_payment("sk_test_123", payment())
+            .await
+            .unwrap_err();
+        assert!(err.downcast_ref::<Busy>().is_some(), "{err:#}");
+        assert!(refusal(&err).is_none(), "{err:#}");
+
+        // Any other 4xx is still Stripe's refusal.
+        let declined = StripeGateway::new(Some(
+            stand_in(
+                "402 Payment Required",
+                r#"{"error":{"type":"card_error","code":"card_declined","message":"Your card was declined."}}"#,
+            )
+            .await,
+        ));
+        let err = declined
+            .open_payment("sk_test_123", payment())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refusal(&err),
+            Some(&Refused("Your card was declined.".into()))
+        );
+
+        // Too many requests: worth asking again later, but not busy.
+        let limited = StripeGateway::new(Some(
+            stand_in(
+                "429 Too Many Requests",
+                r#"{"error":{"type":"invalid_request_error","message":"Too many requests."}}"#,
+            )
+            .await,
+        ));
+        let err = limited
+            .open_payment("sk_test_123", payment())
+            .await
+            .unwrap_err();
+        assert!(refusal(&err).is_none(), "{err:#}");
+        assert!(err.downcast_ref::<Busy>().is_none(), "{err:#}");
+    }
 
     #[test]
     fn a_payment_is_cancelled_unless_confirmed() {

@@ -135,6 +135,11 @@ pub const INVOICING_NOT_CONFIGURED: &str = "invoicing_not_configured";
 /// The refusal a storefront reads for a payment the dashboard cancelled
 /// once what its checkout held had lapsed: the shopper asks to pay again.
 pub const PAYMENT_EXPIRED: &str = "payment_expired";
+/// How long a node that took a request to pay on is the only one to answer
+/// it, in seconds (`Cart::CheckoutClaimed`): its own retries, and a restart,
+/// go on under the claim meanwhile. Past it, another node may take the
+/// request on; by then nobody waits for the answer any more.
+pub const CHECKOUT_CLAIM_SECS: u64 = 15 * 60;
 /// How long before the hold on the shopper's card lapses its goods are no
 /// longer ordered from a supplier: buying them and taking the money must both
 /// happen before, even with the provider slow to answer.
