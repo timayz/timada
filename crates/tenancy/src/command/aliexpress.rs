@@ -1,4 +1,4 @@
-use evento::{Executor, ProjectionAggregate};
+use evento::{Executor, ProjectionAggregate, WriteError};
 
 use crate::aggregator::company::{AliexpressAuthorized, AliexpressDisconnected};
 use crate::aggregator::{
@@ -8,6 +8,10 @@ use crate::aggregator::{
 use crate::command::CompanyState;
 use crate::error::TenancyError;
 use crate::value_object::{MAX_PRICE_TOLERANCE_BPS, PERMISSION_ALIEXPRESS_MANAGE, Pricing};
+
+/// How many times renewed tokens are written again when another write to
+/// the company landed between reading it and writing them.
+const RENEWAL_ATTEMPTS: usize = 5;
 
 /// What the shop buys on AliExpress.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,21 +114,48 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// Records tokens the host refreshed on its own: no owner asked, so no
-    /// ownership applies; `actor` names the host's job. A company with no
-    /// account any more is left alone.
+    /// ownership applies; `actor` names the host's job. `renewing` is when
+    /// the renewed access lapses: an authorization changed since (renewed
+    /// by another node, or an owner connected again) is left alone, and so
+    /// is a company with no account any more.
+    ///
+    /// The tokens are the only copy AliExpress handed out, so another write
+    /// to the company landing first (an owner added, the identity changed)
+    /// does not lose them: the company is read again and the tokens written
+    /// again. So does a write whose outcome is unknown: read again, the
+    /// company tells whether it landed (its access no longer lapses at
+    /// `renewing`). A store not taking writes is the caller's to retry,
+    /// later, with the same tokens.
     pub async fn refresh_aliexpress(
         &self,
         actor: &str,
         company_id: &str,
+        renewing: u64,
         cmd: AuthorizeAliexpress,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
-        let company = self.require_company(company_id).await?;
-        if company.aliexpress.is_none() {
-            return Ok(());
+        let mut attempt = 1;
+        loop {
+            let company = self.require_company(company_id).await?;
+            if company
+                .aliexpress
+                .as_ref()
+                .is_none_or(|current| current.expires_at != renewing)
+            {
+                return Ok(());
+            }
+            let written = self
+                .write_authorization(actor, company, cmd.clone(), routing_key.clone())
+                .await;
+            match written {
+                Err(TenancyError::Write(
+                    WriteError::InvalidOriginalVersion | WriteError::Unknown(_),
+                )) if attempt < RENEWAL_ATTEMPTS => {
+                    attempt += 1;
+                }
+                written => return written,
+            }
         }
-        self.write_authorization(actor, company, cmd, routing_key)
-            .await
     }
 
     /// Forgets the company's AliExpress account; none is a no-op. Owners

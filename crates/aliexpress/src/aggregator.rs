@@ -88,9 +88,21 @@ pub enum AliexpressProduct {
 /// deterministic id [`token_refresh_id`](crate::token_refresh_id), so a
 /// single node renews it (AliExpress may retire a refresh token once used).
 pub mod refresh {
+    /// The renewal of one company token: one stream per token, with the
+    /// deterministic id [`token_refresh_id`](crate::token_refresh_id), in
+    /// the platform's own streams.
     #[evento::aggregate(name = "timada-aliexpress/TokenRefresh")]
     pub enum TokenRefresh {
+        /// A node takes the renewal on, or takes it over from one that went
+        /// quiet before AliExpress answered it.
         Claimed { claimed_by: String },
+        /// What AliExpress handed back, recorded before the company hears
+        /// of it: the only copy of the new tokens never lives in one node's
+        /// memory alone.
+        Renewed {
+            tokens: crate::value_object::RenewedTokens,
+            renewed_by: String,
+        },
     }
 }
 
