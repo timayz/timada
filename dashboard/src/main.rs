@@ -28,6 +28,7 @@ mod read_only_store;
 mod review_requests;
 mod seal;
 mod shop_mail;
+mod shopper_erasure;
 mod shopper_keys;
 mod store_api;
 mod store_carts;
