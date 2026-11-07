@@ -224,11 +224,17 @@ pub async fn submit(cx: &Cx, Form(form): Form<VerifyForm>) -> Result<SeeOther> {
             email_flow(cx).remove();
             sign_in_as(cx, &done.user_id).await?;
             if done.reset {
-                // After the new session exists, so the cutoff spares it.
+                // The reset itself ended every session of the user. The new
+                // one is spared by name, in case it started within the
+                // reset's millisecond; should that fail, the browser signs
+                // in again.
                 let current = session::token_hash(cx).await?;
-                identity(cx)
+                if let Err(err) = identity(cx)
                     .revoke_sessions(&done.user_id, &done.user_id, current.as_deref())
-                    .await?;
+                    .await
+                {
+                    tracing::warn!(%err, "cannot spare the session a password reset started");
+                }
                 return Ok(see_other(home_url_with_message(
                     cx,
                     "Password changed. Other browsers were signed out.",

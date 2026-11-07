@@ -45,6 +45,10 @@ pub use resolve_session::*;
 pub use sign_in_passkey::*;
 pub use sign_in_with_password::*;
 
+pub(crate) use admin::free_indexes;
+pub(crate) use oauth2_index::free_oauth2_index;
+pub(crate) use passkey_index::free_passkey_index;
+
 use evento::{
     Executor, Projection, ProjectionAggregate, WriteBuilder, WriteError, metadata::Event,
 };
@@ -155,12 +159,60 @@ impl SessionsRevocation {
         session.started_at_ms <= self.at_ms
             && self.except_session.as_deref() != Some(session.id.as_str())
     }
+
+    /// Whether the session was signed in before this revocation and not
+    /// spared by it: ended by it for sure. One started within the
+    /// revocation's own millisecond is not counted: stamps are milliseconds,
+    /// and it may be the session the asking browser signed in right after.
+    pub fn ended_before(&self, session: &SessionState) -> bool {
+        self.covers(session) && session.started_at_ms < self.at_ms
+    }
 }
 
 /// Unix milliseconds of an event, for cutoffs where a second is too coarse.
-fn event_millis(event: &evento::Event) -> u64 {
+pub(crate) fn event_millis(event: &evento::Event) -> u64 {
     event.timestamp * 1000 + u64::from(event.timestamp_subsec)
 }
+
+/// How long a claim on an index entry counts as held while the account it
+/// points at does not list it yet: the add that made it may be committing
+/// right now. Past this, a node stopped in between and the entry is anyone's.
+/// The claims of the other contexts give their holders the same five minutes.
+const CLAIM_GRACE_SECS: u64 = 300;
+
+/// Whether a claim stamped at `claimed_at_ms` may still be committing at
+/// `now` (unix seconds).
+fn claim_is_fresh(claimed_at_ms: u64, now: u64) -> bool {
+    now.saturating_sub(claimed_at_ms / 1000) < CLAIM_GRACE_SECS
+}
+
+/// What a claim does with an index entry that already exists.
+pub(crate) enum Claiming {
+    /// Write the claim: the entry is free, the claimant's own but not listed
+    /// (claimed afresh, so the release of an older removal leaves it), or
+    /// abandoned.
+    Take,
+    /// Nothing to write: the claimant's account lists it already.
+    Keep,
+    /// Another account lists it, or may be adding it right now.
+    Refuse,
+}
+
+/// Whether a user write that failed surely did not land, so what the command
+/// claimed for it may be given back. One the store could not settle
+/// (`Unknown`) or would not take right now (`Unavailable`) may still commit:
+/// its claim is kept, held for the grace, and anyone's after it should the
+/// account never list it.
+pub(crate) fn surely_not_written(err: &IdentityError) -> bool {
+    !matches!(
+        err,
+        IdentityError::Write(WriteError::Unknown(_) | WriteError::Unavailable(_))
+    )
+}
+
+/// How far back a command looks in a user's stream for the event it has just
+/// appended.
+const APPENDED_LOOKBACK: u16 = 8;
 
 #[evento::projection(id = id, name = "timada-identity/UserState")]
 #[evento::snapshot(none)]
@@ -202,6 +254,11 @@ impl UserState {
         self.passkeys
             .iter()
             .find(|p| p.credential_id == credential_id)
+    }
+
+    /// Whether the e-mail + password method is for this normalized address.
+    pub fn has_email(&self, email: &str) -> bool {
+        self.password.as_ref().is_some_and(|p| p.email == email)
     }
 
     pub fn last_sign_in(&self) -> Option<&SignInRecord> {
@@ -445,6 +502,8 @@ pub struct OAuth2AccountState {
     pub provider: String,
     pub provider_user_id: String,
     pub unlinked: bool,
+    /// Unix milliseconds of the latest `Linked`.
+    pub claimed_at_ms: u64,
 }
 
 pub fn oauth2_account_projection<E: Executor>() -> Projection<E, OAuth2AccountState> {
@@ -461,6 +520,7 @@ async fn on_linked(event: Event<Linked>, state: &mut OAuth2AccountState) -> anyh
     state.provider = event.data.provider.to_owned();
     state.provider_user_id = event.data.provider_user_id.to_owned();
     state.unlinked = false;
+    state.claimed_at_ms = event_millis(&event);
     Ok(())
 }
 
@@ -489,6 +549,8 @@ pub struct PasskeyCredentialState {
     pub rp_id: String,
     pub name: String,
     pub removed: bool,
+    /// Unix milliseconds of the latest `Created`.
+    pub claimed_at_ms: u64,
 }
 
 pub fn passkey_credential_projection<E: Executor>() -> Projection<E, PasskeyCredentialState> {
@@ -512,6 +574,7 @@ async fn on_passkey_created(
     state.rp_id = event.data.rp_id.to_owned();
     state.name = event.data.name.to_owned();
     state.removed = false;
+    state.claimed_at_ms = event_millis(&event);
     Ok(())
 }
 
@@ -545,6 +608,8 @@ pub struct EmailAccountState {
     pub user_id: String,
     pub email: String,
     pub released: bool,
+    /// Unix milliseconds of the latest `Claimed`.
+    pub claimed_at_ms: u64,
 }
 
 pub fn email_account_projection<E: Executor>() -> Projection<E, EmailAccountState> {
@@ -563,6 +628,7 @@ async fn on_email_claimed(
     state.user_id = event.data.user_id.to_owned();
     state.email = event.data.email.to_owned();
     state.released = false;
+    state.claimed_at_ms = event_millis(&event);
     Ok(())
 }
 
@@ -757,16 +823,37 @@ impl<E: Executor> Command<E> {
         user_projection().load(id).execute(&self.executor).await
     }
 
-    /// The currently linked index entry for a provider identity.
+    /// The index entry a provider identity signs in through: linked, and
+    /// listed on the account it points at.
     pub async fn load_oauth2_account(
         &self,
         provider: &str,
         provider_user_id: &str,
     ) -> anyhow::Result<Option<OAuth2AccountState>> {
-        Ok(self
+        let Some(entry) = self
             .load_oauth2_account_any(provider, provider_user_id)
             .await?
-            .filter(|a| !a.unlinked))
+        else {
+            return Ok(None);
+        };
+        Ok(self.oauth2_holder(&entry).await?.map(|_| entry))
+    }
+
+    /// The live user an entry points at, if their account lists the provider
+    /// identity. An entry unlinked, or left behind by an account that let go
+    /// of the identity (unlinked or deleted, the entry not freed yet) or never
+    /// recorded it (a crash in between), holds nobody.
+    pub(crate) async fn oauth2_holder(
+        &self,
+        entry: &OAuth2AccountState,
+    ) -> anyhow::Result<Option<UserState>> {
+        if entry.unlinked {
+            return Ok(None);
+        }
+        Ok(self
+            .load_user(&entry.user_id)
+            .await?
+            .filter(|user| user.has_oauth2_account(&entry.provider, &entry.provider_user_id)))
     }
 
     /// The index entry including unlinked ones (needed to re-link).
@@ -781,15 +868,31 @@ impl<E: Executor> Command<E> {
             .await
     }
 
-    /// The registered passkey for a base64url credential id.
+    /// The registered passkey for a base64url credential id: its index
+    /// entry, while the account it points at lists it.
     pub async fn load_passkey(
         &self,
         credential_id: &str,
     ) -> anyhow::Result<Option<PasskeyCredentialState>> {
+        let Some(entry) = self.load_passkey_any(credential_id).await? else {
+            return Ok(None);
+        };
+        Ok(self.passkey_holder(&entry).await?.map(|_| entry))
+    }
+
+    /// The live user an entry points at, if their account lists the passkey;
+    /// see [`Self::oauth2_holder`].
+    pub(crate) async fn passkey_holder(
+        &self,
+        entry: &PasskeyCredentialState,
+    ) -> anyhow::Result<Option<UserState>> {
+        if entry.removed {
+            return Ok(None);
+        }
         Ok(self
-            .load_passkey_any(credential_id)
+            .load_user(&entry.user_id)
             .await?
-            .filter(|p| !p.removed))
+            .filter(|user| user.passkey(&entry.credential_id).is_some()))
     }
 
     pub(crate) async fn load_passkey_any(
@@ -802,15 +905,91 @@ impl<E: Executor> Command<E> {
             .await
     }
 
-    /// The currently claimed index entry for a normalized address.
+    /// The index entry a normalized address signs in through: claimed, and
+    /// the address of the e-mail + password method of the account it points
+    /// at.
     pub async fn load_email_account(
         &self,
         email: &str,
     ) -> anyhow::Result<Option<EmailAccountState>> {
+        let Some(entry) = self.load_email_account_any(email).await? else {
+            return Ok(None);
+        };
+        Ok(self.email_holder(&entry).await?.map(|_| entry))
+    }
+
+    /// The live user a normalized address signs in as, through
+    /// [`Self::load_email_account`]'s entry.
+    pub(crate) async fn email_user(&self, email: &str) -> anyhow::Result<Option<UserState>> {
+        let Some(entry) = self.load_email_account_any(email).await? else {
+            return Ok(None);
+        };
+        self.email_holder(&entry).await
+    }
+
+    /// The live user an entry points at, if the address is the one of their
+    /// e-mail + password method; see [`Self::oauth2_holder`].
+    pub(crate) async fn email_holder(
+        &self,
+        entry: &EmailAccountState,
+    ) -> anyhow::Result<Option<UserState>> {
+        if entry.released {
+            return Ok(None);
+        }
         Ok(self
-            .load_email_account_any(email)
+            .load_user(&entry.user_id)
             .await?
-            .filter(|a| !a.released))
+            .filter(|user| user.has_email(&entry.email)))
+    }
+
+    /// What a claim by `claimant_id` does with an existing entry that is
+    /// `freed` or points at `owner_id`, claimed at `claimed_at_ms`; `lists`
+    /// tells whether an account lists what the entry indexes.
+    pub(crate) async fn claiming(
+        &self,
+        freed: bool,
+        owner_id: &str,
+        claimed_at_ms: u64,
+        claimant_id: &str,
+        lists: impl Fn(&UserState) -> bool,
+    ) -> anyhow::Result<Claiming> {
+        if freed {
+            return Ok(Claiming::Take);
+        }
+        let owner = self.load_user(owner_id).await?;
+        let listed = owner.as_ref().is_some_and(&lists);
+        Ok(if owner_id == claimant_id {
+            if listed {
+                Claiming::Keep
+            } else {
+                Claiming::Take
+            }
+        } else if listed
+            || (owner.is_some() && claim_is_fresh(claimed_at_ms, timada_core::unix_now()))
+        {
+            Claiming::Refuse
+        } else {
+            Claiming::Take
+        })
+    }
+
+    /// When the event a command appended onto `user` (the state
+    /// [`Self::append_user`] returned) was stamped, in unix milliseconds:
+    /// what the release that follows compares claims with. `None` once later
+    /// writes buried it.
+    pub(crate) async fn appended_at_ms(&self, user: &UserState) -> anyhow::Result<Option<u64>> {
+        let Some(version) = user.aggregate_version()?.checked_add(1) else {
+            return Ok(None);
+        };
+        let tail = evento::read::<crate::aggregator::User>(&user.id)
+            .backward()
+            .limit(APPENDED_LOOKBACK)
+            .execute(&self.executor)
+            .await?;
+        Ok(tail
+            .iter()
+            .find(|event| event.version == version)
+            .map(event_millis))
     }
 
     /// The index entry including released ones (needed to re-claim).
@@ -882,5 +1061,44 @@ impl<E: Executor> Command<E> {
                 Err(err) => return Err(err.into()),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_claim_stays_fresh_for_the_grace_only() {
+        let claimed_at_ms = 1_000_000;
+        assert!(claim_is_fresh(claimed_at_ms, 1_000));
+        assert!(claim_is_fresh(claimed_at_ms, 1_000 + CLAIM_GRACE_SECS - 1));
+        assert!(!claim_is_fresh(claimed_at_ms, 1_000 + CLAIM_GRACE_SECS));
+        // A clock behind the claim's stamp keeps it fresh.
+        assert!(claim_is_fresh(claimed_at_ms, 900));
+    }
+
+    #[test]
+    fn a_revocation_ends_the_sessions_started_before_its_millisecond() {
+        let revocation = SessionsRevocation {
+            at_ms: 5_000,
+            except_session: Some("spared".to_owned()),
+        };
+        let session = |id: &str, started_at_ms| SessionState {
+            id: id.to_owned(),
+            started_at_ms,
+            ..SessionState::default()
+        };
+        assert!(revocation.ended_before(&session("old", 4_999)));
+        assert!(
+            !revocation.ended_before(&session("spared", 4_999)),
+            "the one it spared"
+        );
+        assert!(revocation.covers(&session("tie", 5_000)));
+        assert!(
+            !revocation.ended_before(&session("tie", 5_000)),
+            "a tie may be the asking browser's new session"
+        );
+        assert!(!revocation.ended_before(&session("new", 5_001)));
     }
 }

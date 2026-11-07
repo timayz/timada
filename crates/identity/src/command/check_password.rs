@@ -24,10 +24,7 @@ impl<E: Executor> super::Command<E> {
             verify_dummy_password(password.to_owned()).await?;
             return Err(IdentityError::InvalidCredentials);
         };
-        let owner = match self.load_email_account(&email).await? {
-            Some(owner) => self.load_user(&owner.user_id).await?,
-            None => None,
-        };
+        let owner = self.email_user(&email).await?;
         let Some(hash) = owner.as_ref().and_then(|u| u.password.as_ref()) else {
             verify_dummy_password(password.to_owned()).await?;
             return Err(IdentityError::InvalidCredentials);

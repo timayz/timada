@@ -1,11 +1,11 @@
 use evento::ProjectionAggregate;
 use evento::{Executor, WriteError};
 
-use crate::aggregator::Created;
+use crate::aggregator::{Created, Removed};
 use crate::error::IdentityError;
 use crate::value_object::passkey_credential_id;
 
-use super::Command;
+use super::{Claiming, Command, passkey_credential_projection, user_projection};
 
 /// A credential the web layer has verified and serialized.
 #[derive(Debug, Clone)]
@@ -19,8 +19,11 @@ pub struct VerifiedPasskey {
 }
 
 impl<E: Executor> Command<E> {
-    /// Creates (or re-creates after a removal) the index entry for a passkey.
-    /// Fails when the credential is already registered to someone else.
+    /// Creates (or re-creates) the index entry for a passkey. Fails when
+    /// another account lists the credential, or claimed it within the grace
+    /// (its add may be committing); an entry nobody holds (removed, its
+    /// account deleted, or abandoned past the grace) is taken over. See
+    /// [`Command::claiming`].
     pub(crate) async fn create_passkey_index(
         &self,
         passkey: &VerifiedPasskey,
@@ -47,20 +50,62 @@ impl<E: Executor> Command<E> {
                 let Some(existing) = self.load_passkey_any(&passkey.credential_id).await? else {
                     return Err(IdentityError::InvalidState);
                 };
-                if existing.removed {
-                    existing
-                        .write()?
-                        .event(&created)
-                        .commit(&self.executor)
-                        .await?;
-                    Ok(())
-                } else if existing.user_id == user_id {
-                    Ok(())
-                } else {
-                    Err(IdentityError::AlreadyRegistered)
+                let claiming = self
+                    .claiming(
+                        existing.removed,
+                        &existing.user_id,
+                        existing.claimed_at_ms,
+                        user_id,
+                        |user| user.passkey(&passkey.credential_id).is_some(),
+                    )
+                    .await?;
+                match claiming {
+                    Claiming::Keep => Ok(()),
+                    Claiming::Refuse => Err(IdentityError::AlreadyRegistered),
+                    Claiming::Take => {
+                        existing
+                            .write()?
+                            .event(&created)
+                            .commit(&self.executor)
+                            .await?;
+                        Ok(())
+                    }
                 }
             }
             Err(err) => Err(err.into()),
         }
     }
+}
+
+/// Frees the index entry of a passkey `user_id` let go of (removed it, or was
+/// deleted), so the credential can be registered again. An entry already
+/// free, another user's, or listed on the account again is left alone, so
+/// telling it twice changes nothing; so is one claimed at or after
+/// `let_go_at_ms`, which a later add made. One attempt: a race with another
+/// writer of the entry is a [`WriteError::InvalidOriginalVersion`].
+pub(crate) async fn free_passkey_index<E: Executor>(
+    executor: &E,
+    user_id: &str,
+    credential_id: &str,
+    let_go_at_ms: Option<u64>,
+) -> Result<(), IdentityError> {
+    let Some(entry) = passkey_credential_projection()
+        .load(passkey_credential_id(credential_id))
+        .execute(executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    if entry.removed
+        || entry.user_id != user_id
+        || let_go_at_ms.is_some_and(|at| entry.claimed_at_ms >= at)
+    {
+        return Ok(());
+    }
+    let user = user_projection().load(user_id).execute(executor).await?;
+    if user.is_some_and(|user| !user.deleted && user.passkey(credential_id).is_some()) {
+        return Ok(());
+    }
+    entry.write()?.event(&Removed).commit(executor).await?;
+    Ok(())
 }

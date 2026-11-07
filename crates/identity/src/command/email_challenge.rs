@@ -46,11 +46,7 @@ impl<E: Executor> super::Command<E> {
         routing_key: Option<String>,
     ) -> Result<IssuedCode, IdentityError> {
         let email = normalize_email(email)?;
-        let owner = self.load_email_account(&email).await?;
-        let registered = match owner {
-            Some(owner) => self.load_user(&owner.user_id).await?.is_some(),
-            None => false,
-        };
+        let registered = self.email_user(&email).await?.is_some();
         match purpose {
             ChallengePurpose::Register if registered => {
                 return Err(IdentityError::AlreadyRegistered);
