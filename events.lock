@@ -26,6 +26,7 @@ event timada-aliexpress/Product::SyncRequested { requested_by: String }
 event timada-aliexpress/Product::Synced { skus: Vec<SkuLink>, offline: bool, synced_by: String }
 event timada-aliexpress/Product::Unlinked { unlinked_by: String }
 event timada-aliexpress/TokenRefresh::Claimed { claimed_by: String }
+event timada-aliexpress/TokenRefresh::Renewed { tokens: crate::value_object::RenewedTokens, renewed_by: String }
 event timada-automations/AbandonedCheckout::Detected { cart_id: String, request_id: String, detected_by: String }
 event timada-automations/MailClaim::Claimed { scenario_id: String, claimed_by: String }
 event timada-automations/OptOut::OptedOut { opted_out_by: String }
@@ -340,6 +341,7 @@ event timada-tenancy/TenantSlug::Released unit
 type timada_aliexpress::aggregator::NewSku { sku_id: String, selections: Vec<(String, String)>, cost_cents: u64, available: u32, image: Option<String> }
 type timada_aliexpress::aggregator::SkuLink { sku_id: String, variant_id: Option<String>, cost_cents: u64 }
 type timada_aliexpress::aggregator::forward::ForwardItem { ae_product_id: String, sku_id: String, quantity: u32, service_name: String }
+type timada_aliexpress::value_object::RenewedTokens { access_token_sealed: Vec<u8>, refresh_token_sealed: Vec<u8>, expires_at: u64, refresh_expires_at: u64, account: String }
 type timada_catalog::value_object::CarriedHold { cart_id: String, quantity: u32, expires_at: u64 }
 type timada_catalog::value_object::CarriedTake { order_id: String, cart_id: Option<String>, restored: bool }
 type timada_catalog::value_object::DeliveryDays { min: u16, max: u16 }
