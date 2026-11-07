@@ -19,8 +19,9 @@ pub struct CreateProduct {
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Creates a draft product: claims its slug, then appends `Created`. A
-    /// product stream that cannot be created after the claim gives the slug
-    /// back (best effort: a failure there only leaves the slug reserved).
+    /// creation that fails keeps the claim, as its write may land yet (the
+    /// store could not tell): a claim whose product never got written is
+    /// taken over once it is no longer fresh.
     pub async fn create_product(
         &self,
         actor: &str,
@@ -33,33 +34,27 @@ impl<E: Executor> super::Command<E> {
         let slug = match cmd.slug.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             Some(given) => {
                 let slug = normalize_slug(given)?;
-                self.claim_slug(&slug, &product_id, routing_key.clone())
+                self.claim_slug(&slug, &product_id, 0, routing_key.clone())
                     .await?;
                 slug
             }
             None => {
-                self.claim_derived_slug(slugify(&name), &product_id, routing_key.clone())
+                self.claim_derived_slug(slugify(&name), &product_id, 0, routing_key.clone())
                     .await?
             }
         };
 
-        let created = evento::append(&product_id)
+        evento::append(&product_id)
             .original_version(0)
-            .routing_key_opt(routing_key.clone())
+            .routing_key_opt(routing_key)
             .event(&Created {
-                slug: slug.clone(),
+                slug,
                 name,
                 created_by: actor.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
-            .await;
-        if let Err(err) = created {
-            if let Err(release) = self.release_slug(&slug, &product_id, routing_key).await {
-                tracing::warn!(%slug, %release, "cannot give the slug back after a failed creation");
-            }
-            return Err(err.into());
-        }
+            .await?;
 
         self.load_product(&product_id)
             .await?

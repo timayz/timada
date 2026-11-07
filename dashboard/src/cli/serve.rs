@@ -256,9 +256,11 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 /// read-model database (the catalogs, the orders and carts, the customers,
 /// the invoices, the reviews, the support messages), this node's copies of
 /// the product pictures, review photos and personal-data keys, the answers
-/// the dashboard writes back (payments, invoices), the order confirmations it
-/// mails and the notices of contact messages it mails the members. Every
-/// bounded context registers its subscription here.
+/// the dashboard writes back (payments, invoices), the slugs and codes the
+/// catalog, the discounts and the pages give back once their holder let go
+/// of them, the order confirmations it mails and the notices of contact
+/// messages it mails the members. Every bounded context registers its
+/// subscription here.
 #[allow(clippy::too_many_arguments)]
 fn subscriptions(
     db: db::Db,
@@ -394,6 +396,18 @@ fn subscriptions(
         (
             "stock usage",
             timada_orders::stock_usage_subscription(store.clone()),
+        ),
+        (
+            "catalog releases",
+            timada_catalog::release_subscription(store.clone()),
+        ),
+        (
+            "discount releases",
+            timada_discounts::release_subscription(store.clone()),
+        ),
+        (
+            "page releases",
+            timada_pages::release_subscription(store.clone()),
         ),
         (
             "newsletter opt-ins",

@@ -896,6 +896,8 @@ async fn on_company_unlinked(
 pub struct TenantSlugState {
     pub id: String,
     pub tenant_id: String,
+    /// Unix seconds of the last claim.
+    pub claimed_at: u64,
     pub released: bool,
 }
 
@@ -910,6 +912,7 @@ pub fn tenant_slug_projection<E: Executor>() -> Projection<E, TenantSlugState> {
 async fn on_slug_claimed(event: Event<Claimed>, index: &mut TenantSlugState) -> anyhow::Result<()> {
     index.id = event.aggregate_id.to_owned();
     index.tenant_id = event.data.tenant_id.to_owned();
+    index.claimed_at = event.timestamp;
     index.released = false;
     Ok(())
 }

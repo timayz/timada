@@ -12,10 +12,11 @@ use super::Price;
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Changes the display name and moves the product to the slug the new
-    /// name gives, with a suffix when that one is taken; the old slug is freed
-    /// once the product has moved. A new name giving the slug of the old name
-    /// (only the case or the accents differ) keeps the slug as it is. The same
-    /// name is a no-op.
+    /// name gives, with a suffix when that one is taken; the old slug is free
+    /// to any claim once the product has moved, and the release
+    /// subscription frees its entry. A new name giving the slug of the old
+    /// name (only the case or the accents differ) keeps the slug as it is.
+    /// The same name is a no-op.
     pub async fn rename_product(
         &self,
         actor: &str,
@@ -28,11 +29,12 @@ impl<E: Executor> super::Command<E> {
         if product.name == name {
             return Ok(());
         }
+        let version = product.aggregate_version()?;
         let base = slugify(&name);
         let slug = if base == slugify(&product.name) {
             product.slug.clone()
         } else {
-            self.claim_derived_slug(base, &product.id, routing_key.clone())
+            self.claim_derived_slug(base, &product.id, version, routing_key.clone())
                 .await?
         };
         let moved = slug != product.slug;
@@ -48,18 +50,14 @@ impl<E: Executor> super::Command<E> {
             .commit(&self.executor)
             .await;
         if let Err(err) = renamed {
-            if moved && let Err(release) = self.release_slug(&slug, &product.id, routing_key).await
+            if moved
+                && let Err(release) = self
+                    .release_slug_claim(&slug, &product.id, version, routing_key)
+                    .await
             {
                 tracing::warn!(%slug, %release, "cannot give the slug back after a failed rename");
             }
             return Err(err.into());
-        }
-        if moved
-            && let Err(release) = self
-                .release_slug(&product.slug, &product.id, routing_key)
-                .await
-        {
-            tracing::warn!(slug = %product.slug, %release, "cannot give the old slug back after a rename");
         }
         Ok(())
     }

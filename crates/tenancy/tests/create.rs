@@ -86,3 +86,45 @@ async fn unknown_slugs_resolve_to_nothing() {
     let cmd = command().await;
     assert_eq!(cmd.load_tenant_by_slug("nobody").await.unwrap(), None);
 }
+
+/// Writes a claim on `slug` for a tenant that never got written, stamped
+/// `age_secs` ago: what a node dying between the claim and the tenant
+/// leaves behind.
+async fn dangling_claim(cmd: &timada_tenancy::Command<evento::Turso>, slug: &str, age_secs: u64) {
+    use evento::{Aggregate, AggregateEvent, Executor};
+    use timada_tenancy::aggregator::Claimed;
+    let data = Claimed {
+        tenant_id: new_id(),
+    };
+    cmd.0
+        .replicate(vec![evento::Event {
+            id: ulid::Ulid::generate(),
+            aggregate_id: timada_tenancy::tenant_slug_id(slug),
+            aggregate_type: Claimed::aggregate_type().to_owned(),
+            version: 1,
+            name: Claimed::event_name().to_owned(),
+            data: bitcode::encode(&data),
+            timestamp: timada_core::unix_now() - age_secs,
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_slug_whose_tenant_was_never_written_is_held_while_the_claim_is_fresh() {
+    let cmd = command().await;
+    // The tenant may as well be committing right now.
+    dangling_claim(&cmd, "acme", 1).await;
+    let suffixed = create_tenant(&cmd, "Acme", &new_id()).await;
+    assert_ne!(suffixed.slug, "acme");
+
+    // Past the grace, a node died between the claim and the tenant.
+    dangling_claim(&cmd, "globex", timada_core::claim::CLAIM_GRACE_SECS + 1).await;
+    let globex = create_tenant(&cmd, "Globex", &new_id()).await;
+    assert_eq!(globex.slug, "globex", "a dangling claim is taken over");
+    assert_eq!(
+        cmd.load_tenant_by_slug("globex").await.unwrap().unwrap().id,
+        globex.id
+    );
+}

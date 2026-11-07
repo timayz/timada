@@ -15,6 +15,7 @@ mod image;
 mod lifecycle;
 mod option;
 mod ordered;
+mod release;
 mod sku_index;
 mod slug_index;
 mod stock;
@@ -54,8 +55,12 @@ use crate::aggregator::{
 use crate::error::CatalogError;
 use crate::value_object::{
     DeliveryDays, MAX_CATEGORY_DEPTH, OptionSelection, category_slug_id, format_money,
-    product_sku_id, product_slug_id,
+    product_sku_id, product_slug_id, sku_key,
 };
+
+/// How many times a claim or a release reads its index entry again after
+/// losing a race for it.
+const CLAIM_ATTEMPTS: usize = 3;
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor> {
@@ -307,6 +312,21 @@ impl ProductState {
 
     pub fn is_deleted(&self) -> bool {
         self.deleted
+    }
+
+    /// Whether the product still goes by `slug`: live, and that is its slug.
+    pub fn holds_slug(&self, slug: &str) -> bool {
+        !self.is_archived() && self.slug == slug
+    }
+
+    /// Whether one of its variants still goes by stock code `sku`, in any
+    /// case: the product is live and the variant is there with that code.
+    pub fn holds_sku(&self, variant_id: &str, sku: &str) -> bool {
+        !self.is_archived()
+            && self
+                .variant(variant_id)
+                .and_then(|variant| variant.sku.as_deref())
+                .is_some_and(|held| sku_key(held) == sku_key(sku))
     }
 
     /// The currency everything about this product is priced in, once
@@ -580,6 +600,10 @@ async fn on_uncategorized(
 pub struct ProductSlugState {
     pub id: String,
     pub product_id: String,
+    /// The version of the product the last claim was made at.
+    pub product_version: u16,
+    /// Unix seconds of the last claim.
+    pub claimed_at: u64,
     pub released: bool,
 }
 
@@ -597,6 +621,8 @@ async fn on_slug_claimed(
 ) -> anyhow::Result<()> {
     index.id = event.aggregate_id.to_owned();
     index.product_id = event.data.product_id.to_owned();
+    index.product_version = event.data.product_version;
+    index.claimed_at = event.timestamp;
     index.released = false;
     Ok(())
 }
@@ -964,6 +990,10 @@ pub struct ProductSkuState {
     pub id: String,
     pub product_id: String,
     pub variant_id: String,
+    /// The version of the product the last claim was made at.
+    pub product_version: u16,
+    /// Unix seconds of the last claim.
+    pub claimed_at: u64,
     pub released: bool,
 }
 
@@ -982,6 +1012,8 @@ async fn on_sku_claimed(
     index.id = event.aggregate_id.to_owned();
     index.product_id = event.data.product_id.to_owned();
     index.variant_id = event.data.variant_id.to_owned();
+    index.product_version = event.data.product_version;
+    index.claimed_at = event.timestamp;
     index.released = false;
     Ok(())
 }
@@ -1142,6 +1174,8 @@ async fn on_category_shown_in_menu(
 pub struct CategorySlugState {
     pub id: String,
     pub category_id: String,
+    /// Unix seconds of the last claim.
+    pub claimed_at: u64,
     pub released: bool,
 }
 
@@ -1159,6 +1193,7 @@ async fn on_category_slug_claimed(
 ) -> anyhow::Result<()> {
     index.id = event.aggregate_id.to_owned();
     index.category_id = event.data.category_id.to_owned();
+    index.claimed_at = event.timestamp;
     index.released = false;
     Ok(())
 }
@@ -1195,12 +1230,17 @@ impl<E: Executor> Command<E> {
             .await
     }
 
-    /// The product a (normalized) slug points at, if any.
+    /// The product a (normalized) slug points at, if any. A product that has
+    /// let go of the slug (archived, or moved to another one) is not
+    /// returned, even while its entry waits to be released.
     pub async fn load_product_by_slug(&self, slug: &str) -> anyhow::Result<Option<ProductState>> {
         let Some(index) = self.load_slug_index(slug).await? else {
             return Ok(None);
         };
-        self.load_product(&index.product_id).await
+        Ok(self
+            .load_product(&index.product_id)
+            .await?
+            .filter(|product| product.holds_slug(slug)))
     }
 
     /// The live index entry of a slug (released ones are `None`).
@@ -1249,12 +1289,16 @@ impl<E: Executor> Command<E> {
             .await
     }
 
-    /// The category a (normalized) slug points at, if any.
+    /// The category a (normalized) slug points at, if any. An archived one
+    /// is not returned, even while its entry waits to be released.
     pub async fn load_category_by_slug(&self, slug: &str) -> anyhow::Result<Option<CategoryState>> {
         let Some(index) = self.load_category_slug_index(slug).await? else {
             return Ok(None);
         };
-        self.load_category(&index.category_id).await
+        Ok(self
+            .load_category(&index.category_id)
+            .await?
+            .filter(|category| !category.archived))
     }
 
     /// The live index entry of a category slug (released ones are `None`).

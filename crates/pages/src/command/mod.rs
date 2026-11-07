@@ -108,6 +108,12 @@ pub struct PageState {
 }
 
 impl PageState {
+    /// Whether the page still goes by `slug`: not deleted, and that is its
+    /// slug.
+    pub fn holds_slug(&self, slug: &str) -> bool {
+        !self.deleted && self.slug == slug
+    }
+
     /// The title search engines show: the page's own unless one was set.
     pub fn seo_title(&self) -> &str {
         if self.meta_title.is_empty() {
@@ -216,6 +222,10 @@ async fn on_deleted(event: Event<Deleted>, page: &mut PageState) -> anyhow::Resu
 pub struct PageSlugState {
     pub id: String,
     pub page_id: String,
+    /// The version of the page the last claim was made at.
+    pub page_version: u16,
+    /// Unix seconds of the last claim.
+    pub claimed_at: u64,
     pub released: bool,
 }
 
@@ -230,6 +240,8 @@ pub fn page_slug_projection<E: Executor>() -> Projection<E, PageSlugState> {
 async fn on_slug_claimed(event: Event<Claimed>, index: &mut PageSlugState) -> anyhow::Result<()> {
     index.id = event.aggregate_id.to_owned();
     index.page_id = event.data.page_id.to_owned();
+    index.page_version = event.data.page_version;
+    index.claimed_at = event.timestamp;
     index.released = false;
     Ok(())
 }
@@ -260,12 +272,16 @@ impl<E: Executor> Command<E> {
             .await
     }
 
-    /// The page a slug names, published or not.
+    /// The page a slug names, published or not. A page moved to another
+    /// slug is not returned, even while the old one waits to be released.
     pub async fn load_page_by_slug(&self, slug: &str) -> anyhow::Result<Option<PageState>> {
         let Some(index) = self.load_page_slug_index(slug).await? else {
             return Ok(None);
         };
-        self.load_page(&index.page_id).await
+        Ok(self
+            .load_page(&index.page_id)
+            .await?
+            .filter(|page| page.holds_slug(slug)))
     }
 
     /// The live index entry of a slug (released ones are `None`).

@@ -64,7 +64,13 @@ pub enum Page {
 /// [`page_slug_id`](crate::page_slug_id).
 #[evento::aggregate(name = "timada-pages/PageSlug")]
 pub enum PageSlug {
-    Claimed { page_id: String },
+    /// `page_version` is the version of the page the claim was made at: the
+    /// page's next write moves it to the slug or fails, so a page past it
+    /// has used the claim or never will.
+    Claimed {
+        page_id: String,
+        page_version: u16,
+    },
     Released,
 }
 

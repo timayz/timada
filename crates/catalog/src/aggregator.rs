@@ -220,9 +220,13 @@ pub enum DeliveryDefault {
 pub mod sku {
     #[evento::aggregate(name = "timada-catalog/ProductSku")]
     pub enum ProductSku {
+        /// `product_version` is the version of the product the claim was
+        /// made at: the product's next write gives the variant the code or
+        /// fails, so a product past it has used the claim or never will.
         Claimed {
             product_id: String,
             variant_id: String,
+            product_version: u16,
         },
         Released,
     }
@@ -232,7 +236,13 @@ pub mod sku {
 /// [`product_slug_id`](crate::product_slug_id).
 #[evento::aggregate(name = "timada-catalog/ProductSlug")]
 pub enum ProductSlug {
-    Claimed { product_id: String },
+    /// `product_version` is the version of the product the claim was made
+    /// at: the product's next write moves it to the slug or fails, so a
+    /// product past it has used the claim or never will.
+    Claimed {
+        product_id: String,
+        product_version: u16,
+    },
     Released,
 }
 

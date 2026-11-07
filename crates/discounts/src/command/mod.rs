@@ -246,6 +246,8 @@ async fn on_archived(event: Event<Archived>, discount: &mut DiscountState) -> an
 pub struct DiscountCodeState {
     pub id: String,
     pub discount_id: String,
+    /// Unix seconds of the last claim.
+    pub claimed_at: u64,
     pub released: bool,
 }
 
@@ -263,6 +265,7 @@ async fn on_code_claimed(
 ) -> anyhow::Result<()> {
     index.id = event.aggregate_id.to_owned();
     index.discount_id = event.data.discount_id.to_owned();
+    index.claimed_at = event.timestamp;
     index.released = false;
     Ok(())
 }
