@@ -15,6 +15,7 @@
 pub mod aggregator;
 mod command;
 mod error;
+mod invitation_grants;
 mod languages;
 mod mail_template;
 mod query;
@@ -22,6 +23,7 @@ mod value_object;
 
 pub use command::*;
 pub use error::*;
+pub use invitation_grants::*;
 pub use languages::*;
 pub use mail_template::*;
 pub use query::*;

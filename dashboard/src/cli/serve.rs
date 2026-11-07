@@ -316,6 +316,12 @@ fn subscriptions(
             "payment setup",
             crate::payments::setup_subscription(payments.clone(), store.clone()),
         ),
+        // Nor this: it grants the seat an accepted invitation promised,
+        // should the command not have.
+        (
+            "invitation grants",
+            timada_tenancy::invitation_grants_subscription(store.clone()),
+        ),
         // Nor this: it fetches the shops' mail logos this node lacks.
         ("mail logos", crate::media::logo_subscription(media.clone())),
         (
