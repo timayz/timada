@@ -31,7 +31,7 @@ use timada_catalog::CatalogError;
 use timada_discounts::{
     DISCOUNT_ALREADY_USED, DISCOUNT_EXHAUSTED, DiscountError, RESERVATION_SECS,
 };
-use timada_orders::{CartState, OrderError, PROVIDER_STRIPE, Payment, ReturnedPayment};
+use timada_orders::{CartState, OrderError, PROVIDER_STRIPE, Payment, Released, ReturnedPayment};
 
 use super::settle::release_reason;
 use super::{
@@ -61,6 +61,9 @@ pub enum Outcome {
     Paid { order_id: String },
     /// The order's hold was dropped by Stripe: it is cancelled.
     Cancelled { order_id: String },
+    /// The order's hold was dropped by Stripe while its supplier may have
+    /// the goods: recorded, and the order left open for the merchant.
+    HoldDropped { order_id: String },
     /// A `charge.refunded` matched against what the order knows: that many
     /// refunds Stripe holds were not recorded yet and are now.
     Reconciled { recorded: usize },
@@ -161,10 +164,10 @@ pub async fn reconcile(
         PaymentState::Open | PaymentState::Processing => Ok(Outcome::Ignored),
         PaymentState::Cancelled => {
             if let Some(order) = own {
-                if order.is_paid() || order.is_settled() {
+                if order.is_paid() || order.is_settled() || order.released_at.is_some() {
                     return Ok(Outcome::Ignored);
                 }
-                orders
+                let released = orders
                     .record_release(
                         DASHBOARD_ACTOR,
                         &order.id,
@@ -172,9 +175,18 @@ pub async fn reconcile(
                         release_reason(status.lapsed),
                     )
                     .await?;
-                tracing::info!(%tenant_id, order = %order.id, lapsed = status.lapsed, "an order's hold was dropped by Stripe: cancelled");
-                return Ok(Outcome::Cancelled {
-                    order_id: order.id.clone(),
+                let order_id = order.id.clone();
+                return Ok(match released {
+                    Released::Cancelled => {
+                        tracing::info!(%tenant_id, order = %order_id, lapsed = status.lapsed, "an order's hold was dropped by Stripe: cancelled");
+                        Outcome::Cancelled { order_id }
+                    }
+                    // The supplier may be shipping it: cancelling it is the
+                    // merchant's call, who settles it with the shopper.
+                    Released::KeptOpen => {
+                        tracing::error!(%tenant_id, order = %order_id, lapsed = status.lapsed, "an order's hold was dropped by Stripe and its supplier may have it: left open for the merchant");
+                        Outcome::HoldDropped { order_id }
+                    }
                 });
             }
             // No order: a payment given back already says so again;

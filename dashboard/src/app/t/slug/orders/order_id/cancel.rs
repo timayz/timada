@@ -16,7 +16,7 @@ use super::{CancelForm, OrderId, order_url};
 use crate::app::t::slug::orders::orders;
 use crate::app::t::slug::require_tenant;
 use crate::payments::Payments;
-use crate::payments::settle::{CancelOutcome, settle_cancellation};
+use crate::payments::settle::{CancelOutcome, settle_cancellation, settle_released_cancellation};
 
 /// Calls off an order that has not left. The cancellation is asked for on
 /// the order first, then settled with Stripe: a payment only held is given
@@ -24,7 +24,10 @@ use crate::payments::settle::{CancelOutcome, settle_cancellation};
 /// first, which fixes the idempotency key), and only then is the order
 /// cancelled. A Stripe that refuses, or does not answer, leaves the
 /// cancellation standing: posting again retries under the same key, so
-/// Stripe never refunds twice, and the sweep settles it otherwise.
+/// Stripe never refunds twice, and the sweep settles it otherwise. An order
+/// whose hold went back already (kept open, AliExpress perhaps holding it)
+/// holds nothing: it is cancelled without Stripe, the shop's keys there or
+/// not.
 #[route(POST)]
 pub async fn cancel(cx: &Cx, Form(form): Form<CancelForm>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
@@ -41,13 +44,20 @@ pub async fn cancel(cx: &Cx, Form(form): Form<CancelForm>) -> Result<SeeOther> {
         Err(err) => return Ok(back(err.code(), None)),
     };
     let payments = app_context::<Arc<Payments>>(cx);
-    let Some(account) = payments
+    let account = payments
         .account_of(&access.tenant)
-        .map_err(topcoat::Error::from_anyhow)?
-    else {
-        return Ok(back(Some("payments_unavailable"), None));
-    };
+        .map_err(topcoat::Error::from_anyhow)?;
     let gateway = orders(&access)?;
+    // Nothing is held of an order kept open once its hold went back: it is
+    // cancelled without the provider, its keys there or not.
+    let holds_nothing = gateway
+        .load_order(&order_id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .is_some_and(|order| order.released_at.is_some() && !order.is_paid());
+    if account.is_none() && !holds_nothing {
+        return Ok(back(Some("payments_unavailable"), None));
+    }
     let path = match gateway
         .request_cancellation(
             &access.user_id,
@@ -63,6 +73,16 @@ pub async fn cancel(cx: &Cx, Form(form): Form<CancelForm>) -> Result<SeeOther> {
             Some(code) => return Ok(back(Some(code), None)),
             None => return Err(topcoat::Error::from_anyhow(err.into())),
         },
+    };
+    if settle_released_cancellation(&gateway, &order_id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .is_some()
+    {
+        return Ok(back(None, Some("Order cancelled.")));
+    }
+    let Some(account) = account else {
+        return Ok(back(Some("payments_unavailable"), None));
     };
     let settled = settle_cancellation(payments, &account, &gateway, &order_id)
         .await

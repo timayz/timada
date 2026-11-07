@@ -252,16 +252,23 @@ pub async fn forwards_due(
     .await
 }
 
-/// The forward that bought `ae_order_id` on AliExpress, whichever tenant's,
-/// as the read model has it (a push may arrive before the row does).
-pub async fn forward_of_ae_order(db: &Db, ae_order_id: &str) -> anyhow::Result<Option<ForwardRow>> {
-    db.fetch_optional(
+/// The forwards of every shop that `share` holds, taken on before `before`
+/// (unix seconds) and not heard of since: what the sweep says AliExpress may
+/// have, the node placing them having stopped or failed to record the outcome.
+/// The longest silent first; the write model decides.
+pub async fn forwards_stalled(
+    db: &Db,
+    before: i64,
+    share: Share,
+    limit: i64,
+) -> anyhow::Result<Vec<ForwardRow>> {
+    db.fetch_all(
         "SELECT tenant_id, id, order_id, status, ae_order_ids, tracking, last_error,
             placed_at, updated_at
          FROM aliexpress_forwards
-         WHERE ' ' || ae_order_ids || ' ' LIKE '% ' || ?1 || ' %'
-         ORDER BY updated_at DESC LIMIT 1",
-        (ae_order_id,),
+         WHERE status = 'started' AND updated_at < ?1 AND shard % ?3 = ?4
+         ORDER BY updated_at, tenant_id, id LIMIT ?2",
+        (before, limit, share.of as i64, share.index as i64),
     )
     .await
 }

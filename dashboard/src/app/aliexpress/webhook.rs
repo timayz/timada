@@ -2,9 +2,11 @@
 //! (its message push, registered once on the platform's app;
 //! [`crate::aliexpress::webhook`] does the work). Any node may take it.
 //!
-//! Answers: 200 when accepted or ignored, as AliExpress wants (anything else
-//! is retried twelve times); 400 for a body that is not a push; 401 for a
-//! signature that does not check out; 404 when the platform has no app.
+//! Answers: 200 once the push is recorded, or for another topic, as
+//! AliExpress wants (anything else is retried twelve times, so a push the
+//! store did not take is an error and comes again); 400 for a body that is
+//! not a push; 401 for a signature that does not check out; 404 when the
+//! platform has no app.
 
 use std::sync::Arc;
 
@@ -18,21 +20,18 @@ use topcoat::{
 use crate::aliexpress::Aliexpress;
 use crate::aliexpress::webhook::{Outcome, receive as handle};
 use crate::cluster::Executor;
-use crate::db::Db;
 
 #[route(POST)]
 pub async fn receive(cx: &Cx, body: Bytes) -> Result<StatusCode> {
-    let aliexpress = app_context::<Arc<Aliexpress>>(cx).clone();
+    let aliexpress = app_context::<Arc<Aliexpress>>(cx);
     let authorization = headers(cx)
         .get("authorization")
         .and_then(|value| value.to_str().ok());
     let outcome = handle(
         aliexpress,
-        app_context::<Db>(cx),
-        app_context::<Executor>(cx).clone(),
+        app_context::<Executor>(cx),
         &body,
         authorization,
-        crate::auth::now(),
     )
     .await
     .map_err(topcoat::Error::from_anyhow)?;

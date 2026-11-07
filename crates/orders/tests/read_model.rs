@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use timada_orders::{
     Command, OrderFilter, OrderStatus, count_orders, fulfilled_between, open_carts,
-    orders_of_email, orders_of_tenant, product_ever_ordered, read_model_subscription,
+    orders_of_email, orders_of_tenant, payments_due, product_ever_ordered, read_model_subscription,
 };
 
 #[tokio::test]
@@ -145,4 +145,67 @@ async fn fulfilled_orders_are_found_by_when_they_left() {
             .is_empty()
     );
     assert!(found.iter().all(|order| order.id != paid.order_id));
+}
+
+/// A hold the provider dropped while the supplier may have the order leaves
+/// nothing to settle with the provider: the sweep passes it over until the
+/// merchant asks to cancel it.
+#[tokio::test]
+async fn an_order_kept_open_without_its_hold_waits_for_the_merchant() {
+    let (executor, pool) = executor_with_pool().await;
+    let orders = Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    // Two holds whose time ran out at 100,000.
+    let lapsed = async || {
+        let cart_id = cart_with(&orders, &mug, 1).await;
+        let (_, mut payment) = open_payment(&orders, &cart_id, checkout()).await;
+        payment.capture_before = Some(100_000);
+        orders
+            .place_order(DASHBOARD, &cart_id, payment)
+            .await
+            .unwrap()
+            .order_id
+    };
+    let unread = lapsed().await;
+    let kept = lapsed().await;
+    orders
+        .begin_supplier_order(DASHBOARD, &kept, "aliexpress", 0)
+        .await
+        .unwrap();
+    let payment_id = orders
+        .load_order(&kept)
+        .await
+        .unwrap()
+        .unwrap()
+        .payment
+        .payment_id;
+    orders
+        .record_release(DASHBOARD, &kept, &payment_id, "")
+        .await
+        .unwrap();
+    let due = async || {
+        read_model_subscription::<evento::Turso>(pool.clone())
+            .run_once(&executor)
+            .await
+            .unwrap();
+        let mut ids: Vec<String> = payments_due(&pool, 200_000, 200_000, 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
+        ids.sort();
+        ids
+    };
+
+    assert_eq!(due().await, std::slice::from_ref(&unread));
+
+    orders
+        .request_cancellation(ALICE, &kept, "Cancelled on AliExpress".into(), true)
+        .await
+        .unwrap();
+    let mut both = vec![unread, kept];
+    both.sort();
+    assert_eq!(due().await, both);
 }

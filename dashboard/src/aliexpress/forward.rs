@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::db::Db;
 use evento::{
@@ -18,9 +19,9 @@ use evento::{
 };
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem, Requested};
 use timada_aliexpress::{
-    ALIEXPRESS_SUPPLIER, AeError, AliexpressError, ForwardStatus, LinkState, PlaceItem, PlaceOrder,
-    Placement, choose_service, delivery_country, describe_options, forward_items, link_of_product,
-    logistics_address,
+    ALIEXPRESS_SUPPLIER, AeError, AliexpressError, Client, ForwardStatus, LinkState, PlaceItem,
+    PlaceOrder, PlacedRecord, Placement, choose_service, delivery_country, describe_options,
+    forward_items, link_of_product, logistics_address,
 };
 use timada_orders::{OrderError, OrderLine, OrderStatus};
 use timada_tenancy::{CompanyState, TenantState};
@@ -37,11 +38,31 @@ const ORDER_WINDOW_SECS: u64 = 60 * 60;
 /// A request older than this is history being replayed.
 const REQUEST_WINDOW_SECS: u64 = 10 * 60;
 
+/// How many times what AliExpress took is written before it is only logged,
+/// and the pause before the second try, doubled each time after: writes
+/// paused for a moment, a node rejoining, another write at the same moment.
+const RECORD_ATTEMPTS: u32 = 5;
+#[cfg(not(test))]
+const RECORD_RETRY_PAUSE: Duration = Duration::from_millis(500);
+#[cfg(test)]
+const RECORD_RETRY_PAUSE: Duration = Duration::from_millis(5);
+
+/// Why a forward failed when AliExpress may have the order all the same: it
+/// did not answer the order, or the node placing it stopped, or could not
+/// record the answer. Never placed again on its own.
+pub const MAY_HAVE_PLACED: &str = "AliExpress did not answer: look at the account's orders on AliExpress before placing this one again.";
+
 /// How placing one order went.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForwardResult {
     /// AliExpress took it, as these orders.
     Placed(Vec<String>),
+    /// AliExpress took it a second time, as these orders, for a forward an
+    /// overlapping attempt placed: recorded beside them, to cancel there.
+    AlsoPlaced(Vec<String>),
+    /// AliExpress took it, as these orders, and the store would not record
+    /// them: kept on this node (and in the log) until the sweep records them.
+    Unrecorded(Vec<String>),
     /// Another node took it on, or it is no longer to place.
     Skipped,
     /// Nothing was placed; recorded on the forward.
@@ -95,18 +116,70 @@ impl Aliexpress {
         if !forwards.start_forward(ALIEXPRESS_ACTOR, forward_id).await? {
             return Ok(ForwardResult::Skipped);
         }
-        let Some(forward) = forwards.load_forward_by_id(forward_id).await? else {
+        let Some((forward, version)) = forwards.load_forward_versioned(forward_id).await? else {
             return Ok(ForwardResult::Skipped);
         };
-        let placed = self.place(store, db, tenant_id, &forward.order_id).await;
+        let placed = match self.prepare(store, db, tenant_id, &forward.order_id).await {
+            Ok(prepared) => {
+                // The forward's fence, at the version this attempt took it
+                // on at: one overtaken meanwhile (asked for again, given up
+                // as stalled) asks AliExpress nothing.
+                if !forwards
+                    .begin_asking(ALIEXPRESS_ACTOR, forward_id, version)
+                    .await?
+                {
+                    tracing::warn!(tenant = %tenant_id, order = %forward.order_id, forward = %forward_id, "placing an order on AliExpress was overtaken: this attempt asks nothing");
+                    return Ok(ForwardResult::Skipped);
+                }
+                self.ask(store, tenant_id, &forward.order_id, prepared)
+                    .await?
+            }
+            Err(refusal) => Err(refusal),
+        };
         match placed {
             Ok(placement) => {
                 let ae_order_ids = placement.ae_order_ids.clone();
-                forwards
-                    .record_placed(ALIEXPRESS_ACTOR, forward_id, placement)
-                    .await?;
-                tracing::info!(tenant = %tenant_id, order = %forward.order_id, ae_orders = ?ae_order_ids, "order placed on AliExpress");
-                Ok(ForwardResult::Placed(ae_order_ids))
+                match record_placement(&forwards, forward_id, placement.clone()).await {
+                    Ok(PlacedRecord::Placed) => {
+                        tracing::info!(tenant = %tenant_id, order = %forward.order_id, ae_orders = ?ae_order_ids, "order placed on AliExpress");
+                        Ok(ForwardResult::Placed(ae_order_ids))
+                    }
+                    Ok(PlacedRecord::AlsoPlaced) => {
+                        tracing::error!(tenant = %tenant_id, order = %forward.order_id, forward = %forward_id, ae_orders = ?ae_order_ids, "AliExpress took an order already placed there a second time: recorded on the forward, to cancel there");
+                        Ok(ForwardResult::AlsoPlaced(ae_order_ids))
+                    }
+                    Err(err) if forward_holds(&forwards, forward_id, &ae_order_ids).await => {
+                        // On the forward: only the platform's record of the
+                        // numbers failed, which pushes find it by. The sweep
+                        // reads the order meanwhile.
+                        if matches!(err, AliexpressError::ClaimedElsewhere { .. }) {
+                            tracing::error!(tenant = %tenant_id, order = %forward.order_id, forward = %forward_id, ae_orders = ?ae_order_ids, error = %err, "an AliExpress order of this forward is recorded for another one");
+                        } else {
+                            tracing::warn!(tenant = %tenant_id, order = %forward.order_id, forward = %forward_id, ae_orders = ?ae_order_ids, error = %err, "AliExpress orders recorded on the forward but not for its pushes: read by the sweep");
+                        }
+                        Ok(ForwardResult::Placed(ae_order_ids))
+                    }
+                    Err(err) => {
+                        // AliExpress has the order and the store would not
+                        // take its record: kept on this node until the sweep
+                        // records it, and in the log.
+                        tracing::error!(tenant = %tenant_id, order = %forward.order_id, forward = %forward_id, ae_orders = ?ae_order_ids, error = %err, "order placed on AliExpress but not recorded yet: kept on this node for the sweep");
+                        if let Err(kept) = timada_aliexpress::keep_unrecorded(
+                            db,
+                            tenant_id,
+                            forward_id,
+                            &forward.order_id,
+                            &placement,
+                            crate::auth::now(),
+                            &err.to_string(),
+                        )
+                        .await
+                        {
+                            tracing::error!(tenant = %tenant_id, order = %forward.order_id, forward = %forward_id, ae_orders = ?ae_order_ids, error = %kept, "nor kept on this node: look for these AliExpress orders before placing it again");
+                        }
+                        Ok(ForwardResult::Unrecorded(ae_order_ids))
+                    }
+                }
             }
             Err(Refusal(reason)) => {
                 tracing::warn!(tenant = %tenant_id, order = %forward.order_id, %reason, "order not placed on AliExpress");
@@ -118,14 +191,15 @@ impl Aliexpress {
         }
     }
 
-    /// Buys an order's AliExpress items for the shopper.
-    async fn place<E: evento::Executor + Clone>(
+    /// Reads all that buying an order's AliExpress items for the shopper
+    /// needs, and what to ask AliExpress for; or why it cannot be bought.
+    async fn prepare<E: evento::Executor + Clone>(
         &self,
         store: &E,
         db: &Db,
         tenant_id: &str,
         order_id: &str,
-    ) -> Result<Placement, Refusal> {
+    ) -> Result<Prepared, Refusal> {
         let failed = |err: anyhow::Error| {
             tracing::error!(%tenant_id, %order_id, error = %err, "AliExpress forward failed");
             Refusal("Placing the order failed on our side; try again.".to_owned())
@@ -150,7 +224,7 @@ impl Aliexpress {
         let Some(order) = orders.load_order(order_id).await.map_err(failed)? else {
             return Err(Refusal("The order does not exist.".into()));
         };
-        // Checked here to say why early; the fence below checks again, at
+        // Checked here to say why early; the order's fence checks again, at
         // the very moment AliExpress is asked.
         order
             .may_order_from_supplier(crate::auth::now())
@@ -281,16 +355,34 @@ impl Aliexpress {
                     .to_owned(),
             ));
         }
-        let request = PlaceOrder {
-            address,
-            items,
-            try_to_pay: settings.try_to_pay,
-            pay_currency: settings.currency.clone(),
-        };
+        Ok(Prepared {
+            client,
+            request: PlaceOrder {
+                address,
+                items,
+                try_to_pay: settings.try_to_pay,
+                pay_currency: settings.currency.clone(),
+            },
+            bought,
+            complete: plan.complete,
+        })
+    }
+
+    /// Asks AliExpress for a prepared order: what it took, or why nothing
+    /// was placed. An error is a store that would not record that AliExpress
+    /// may have the order: the forward is left taken on, for the sweep.
+    async fn ask<E: evento::Executor + Clone>(
+        &self,
+        store: &E,
+        tenant_id: &str,
+        order_id: &str,
+        prepared: Prepared,
+    ) -> anyhow::Result<Result<Placement, Refusal>> {
+        let orders = timada_orders::Command::new(store.clone(), tenant_id);
         // The fence: written on the order at the version read, right before
         // AliExpress is asked, so a shopper or merchant cancelling at the same
         // moment either stops it here or finds it written.
-        orders
+        if let Err(err) = orders
             .begin_supplier_order(
                 ALIEXPRESS_ACTOR,
                 order_id,
@@ -298,38 +390,55 @@ impl Aliexpress {
                 crate::auth::now(),
             )
             .await
-            .map_err(|err| not_placeable(err).unwrap_or_else(|err| failed(err.into())))?;
-        let ae_order_ids = match client.place_order(&request).await {
+        {
+            return Ok(Err(not_placeable(err).unwrap_or_else(|err| {
+                tracing::error!(%tenant_id, %order_id, error = %err, "AliExpress forward failed");
+                Refusal("Placing the order failed on our side; try again.".to_owned())
+            })));
+        }
+        let ae_order_ids = match prepared.client.place_order(&prepared.request).await {
             Ok(ids) => ids,
+            // Either way the order is told before the forward is, tried like
+            // a placement's record: an attempt left open on a failed forward
+            // would keep the fence for good. One the store never takes leaves
+            // the forward taken on, for the stall sweep, which tells the order
+            // AliExpress may have it.
             Err(err) if err.may_have_placed() => {
-                return Err(Refusal(
-                    "AliExpress did not answer: look at the account's orders on AliExpress before placing this one again."
-                        .to_owned(),
-                ));
+                // A later attempt that AliExpress refuses must not take the
+                // fence down while this one may be there.
+                order_write(order_id, || {
+                    orders.record_supplier_uncertainty(
+                        ALIEXPRESS_ACTOR,
+                        order_id,
+                        ALIEXPRESS_SUPPLIER,
+                        MAY_HAVE_PLACED,
+                    )
+                })
+                .await?;
+                return Ok(Err(Refusal(MAY_HAVE_PLACED.to_owned())));
             }
             Err(err) => {
                 let reason = format!("AliExpress refused the order: {}", describe(&err));
-                // It surely took nothing: the shopper may cancel again.
-                if let Err(err) = orders
-                    .record_supplier_refusal(
+                // It surely took nothing: the shopper may cancel again, unless
+                // an earlier attempt may be there.
+                order_write(order_id, || {
+                    orders.record_supplier_refusal(
                         ALIEXPRESS_ACTOR,
                         order_id,
                         ALIEXPRESS_SUPPLIER,
                         &reason,
                     )
-                    .await
-                {
-                    tracing::warn!(%tenant_id, %order_id, error = %err, "the order does not know AliExpress refused it");
-                }
-                return Err(Refusal(reason));
+                })
+                .await?;
+                return Ok(Err(Refusal(reason)));
             }
         };
-        Ok(Placement {
+        Ok(Ok(Placement {
             ae_order_ids,
-            items: bought,
-            pay_requested: settings.try_to_pay,
-            complete: plan.complete,
-        })
+            items: prepared.bought,
+            pay_requested: prepared.request.try_to_pay,
+            complete: prepared.complete,
+        }))
     }
 
     /// Reads a placed order's AliExpress orders again; once each has a
@@ -338,8 +447,8 @@ impl Aliexpress {
     /// of them shipping nothing (`closed` names the one its push said it
     /// closed), the shop's order is to be cancelled: the payments sweep
     /// gives the hold back, or the money. An order settled otherwise
-    /// (fulfilled by hand, cancelled) or watched long enough is no longer
-    /// read.
+    /// (fulfilled by hand, cancelled), watched long enough, or kept open
+    /// without its hold once every parcel is known is no longer read.
     ///
     /// Written in three steps, as the shop's order is another stream: what
     /// was read, the shop's order, then `Done`. A node stopping in between
@@ -376,6 +485,14 @@ impl Aliexpress {
         let stale = forward
             .placed_at
             .is_some_and(|at| now.saturating_sub(at) > timada_aliexpress::FORWARD_WATCH_SECS);
+        // Every parcel known of an order whose hold went back with nothing
+        // taken (kept open for the merchant): it can neither be fulfilled
+        // from here nor closed by AliExpress any more, so nothing a read
+        // finds changes anything.
+        let unpayable = order
+            .as_ref()
+            .is_some_and(|order| order.released_at.is_some() && !order.is_paid());
+        let shipped_unpayable = forward.complete && forward.all_shipped() && unpayable;
         let done = |fulfilled: bool, tracking: Option<String>| Done {
             tracking,
             fulfilled,
@@ -400,7 +517,7 @@ impl Aliexpress {
             tracing::info!(tenant = %tenant.id, order = %forward.order_id, "order already fulfilled from AliExpress, closing its forward");
             return finish(done(true, order.tracking)).await;
         }
-        if settled || stale {
+        if settled || stale || shipped_unpayable {
             return finish(done(false, None)).await;
         }
         let mut checked = Vec::new();
@@ -542,6 +659,85 @@ fn not_placeable(err: OrderError) -> Result<Refusal, OrderError> {
         }
         .to_owned(),
     ))
+}
+
+/// Writes to the shop's order with `write`, trying again while the store
+/// does not take it, as a placement's record is; the last error once every
+/// try failed. A refusal of the order itself is not tried again.
+async fn order_write<F, Fut>(order_id: &str, mut write: F) -> Result<(), OrderError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), OrderError>>,
+{
+    let mut pause = RECORD_RETRY_PAUSE;
+    let mut attempt = 1;
+    loop {
+        match write().await {
+            Ok(()) => return Ok(()),
+            Err(err @ (OrderError::Write(_) | OrderError::Other(_)))
+                if attempt < RECORD_ATTEMPTS =>
+            {
+                tracing::warn!(order = %order_id, attempt, error = %err, "the order is not told how placing it went yet: trying again");
+                tokio::time::sleep(pause).await;
+                pause *= 2;
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+/// What placing asks AliExpress for, once all it needs was read.
+struct Prepared {
+    client: Client,
+    request: PlaceOrder,
+    bought: Vec<ForwardItem>,
+    /// Every line of the shop's order is bought there.
+    complete: bool,
+}
+
+/// Whether the forward holds every one of `ae_order_ids`, placed or beside
+/// what was; `false` when it cannot be read.
+async fn forward_holds<E: evento::Executor>(
+    forwards: &timada_aliexpress::Command<E>,
+    forward_id: &str,
+    ae_order_ids: &[String],
+) -> bool {
+    let Ok(Some(forward)) = forwards.load_forward_by_id(forward_id).await else {
+        return false;
+    };
+    ae_order_ids.iter().all(|id| {
+        forward.ae_orders.iter().any(|order| &order.id == id) || forward.also_placed.contains(id)
+    })
+}
+
+/// Records the orders AliExpress took, trying again while the store does not
+/// take the write (each try reads the forward again); the last error once
+/// every try failed. A refusal of the forward itself is not tried again.
+async fn record_placement<E: evento::Executor>(
+    forwards: &timada_aliexpress::Command<E>,
+    forward_id: &str,
+    placement: Placement,
+) -> Result<PlacedRecord, AliexpressError> {
+    let mut pause = RECORD_RETRY_PAUSE;
+    let mut attempt = 1;
+    loop {
+        match forwards
+            .record_placed(ALIEXPRESS_ACTOR, forward_id, placement.clone())
+            .await
+        {
+            Ok(record) => return Ok(record),
+            Err(err @ (AliexpressError::Write(_) | AliexpressError::Other(_)))
+                if attempt < RECORD_ATTEMPTS =>
+            {
+                tracing::warn!(forward = %forward_id, attempt, error = %err, "orders AliExpress took not recorded yet: trying again");
+                tokio::time::sleep(pause).await;
+                pause *= 2;
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
 }
 
 /// The parcel numbers, joined, as many as an order's tracking holds.
@@ -1309,6 +1505,37 @@ mod tests {
             .unwrap();
         assert!(shop.forward(&id).await.all_closed());
         assert!(shop.order().await.pending_cancellation.is_some());
+    }
+
+    /// The hold went back while AliExpress had the order: kept open for the
+    /// merchant. Once every parcel is known nothing a read finds changes
+    /// anything, so the forward closes and AliExpress is asked no more.
+    #[tokio::test]
+    async fn an_order_kept_open_without_its_hold_is_not_read_once_every_parcel_is_known() {
+        let shop = Shop::new().await;
+        let id = shop.placed_with(&["81"], false).await;
+        let released = shop
+            .orders()
+            .record_release("timada-dashboard", ORDER, "", "The hold lapsed.")
+            .await
+            .unwrap();
+        assert_eq!(released, timada_orders::Released::KeptOpen);
+        shop.ships("81", "LP1");
+
+        assert_eq!(
+            shop.check(&id).await,
+            CheckResult::Checked { fulfilled: false }
+        );
+        let reads = shop.reads();
+        assert_eq!(shop.check(&id).await, CheckResult::Done);
+        assert_eq!(shop.reads(), reads, "nothing left to ask AliExpress");
+        let order = shop.order().await;
+        assert_eq!(
+            order.status,
+            OrderStatus::Authorized,
+            "the merchant settles it"
+        );
+        assert_eq!(shop.forward(&id).await.fulfilled_tracking, None);
     }
 
     #[tokio::test]

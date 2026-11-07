@@ -57,6 +57,7 @@ pub async fn capture(cx: &Cx) -> Result<SeeOther> {
             back(None, Some("The payment was taken."))
         }
         CaptureOutcome::Released => back(Some("hold_expired"), None),
+        CaptureOutcome::KeptOpen => back(Some("hold_expired_supplier_ordered"), None),
         CaptureOutcome::Refused(_) => back(Some("capture_failed"), None),
         CaptureOutcome::Unanswered => back(Some("payments_unavailable"), None),
     })

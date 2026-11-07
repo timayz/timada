@@ -24,6 +24,12 @@ export const PRODUCT_ID = "1005006123456789";
 
 type Sku = { id: string; colour: string; price: string; stock: number; shipsFrom?: string };
 type Freight = { service_name: string; cents: number; tracking: boolean };
+/// The number of the next order placed, whichever stand-in takes it:
+/// AliExpress never gives one number twice, and the platform finds a push's
+/// shop by it. Started from the clock, so a worker started again does not
+/// hand out the numbers of the one before.
+let nextOrder = 8_100_000_000_000_001 + (Date.now() % 100_000_000) * 10;
+
 /// An order placed: what was asked for, and its parcel once shipped.
 export type PlacedOrder = {
   id: string;
@@ -59,7 +65,10 @@ export class FakeAliexpress {
   ];
   /// The orders placed, in order.
   readonly orders: PlacedOrder[] = [];
-  private nextOrder = 8_100_000_000_000_001;
+  /// How the next orders placed are answered, in turn: `lost` takes the
+  /// order and answers with no number (AliExpress may have it), `refused`
+  /// refuses it outright. Taken as usual once none is left.
+  readonly placeAnswers: ("lost" | "refused")[] = [];
   private server?: http.Server;
 
   async start() {
@@ -219,8 +228,17 @@ export class FakeAliexpress {
         json({ aliexpress_trade_buy_placeorder_response: { result: { is_success: false, error_code: "B_DROPSHIPPER_DELIVERY_ADDRESS_VALIDATE_FAIL", error_msg: "address" } } });
         return;
       }
-      const id = String(this.nextOrder++);
+      const answer = this.placeAnswers.shift();
+      if (answer === "refused") {
+        json({ aliexpress_trade_buy_placeorder_response: { result: { is_success: false, error_code: "B_DROPSHIPPER_DELIVERY_ADDRESS_VALIDATE_FAIL", error_msg: "address" } } });
+        return;
+      }
+      const id = String(nextOrder++);
       this.orders.push({ id, address, items, tryToPay: extend.payment?.try_to_pay === "true" });
+      if (answer === "lost") {
+        json({ aliexpress_trade_buy_placeorder_response: { result: { is_success: true, order_list: [] } } });
+        return;
+      }
       json({ aliexpress_trade_buy_placeorder_response: { result: { is_success: true, order_list: { number: [Number(id)] } } } });
       return;
     }

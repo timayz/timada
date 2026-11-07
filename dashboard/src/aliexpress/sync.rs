@@ -7,19 +7,26 @@
 //! What sales spend comes out of it, so the sweep gets what they leave.
 //!
 //! On a timer of its own, the sweep renews every connected company's access a
-//! day before it lapses, whether or not its shops have anything imported, and
-//! reads the orders of this node's share placed on AliExpress that no push came
-//! for in a while (see [`super::forward`], [`super::webhook`]).
+//! day before it lapses, whether or not its shops have anything imported,
+//! records what this node placed on AliExpress while the store refused the
+//! record, says of the orders of this node's share left being placed that
+//! AliExpress may have them, and reads the orders of this node's share placed
+//! on AliExpress that no push came for in a while (see [`super::forward`],
+//! [`super::webhook`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::db::Db;
-use timada_aliexpress::{ForwardRow, forwards_due, links_due, note_forward_read, note_tried};
+use timada_aliexpress::{
+    ALIEXPRESS_SUPPLIER, AliexpressError, FORWARD_STALL_SECS, ForwardRow, ForwardStatus,
+    forget_unrecorded, forwards_due, forwards_stalled, links_due, note_forward_read, note_tried,
+    note_unrecorded_try, unrecorded,
+};
 use tokio::task::JoinHandle;
 
-use super::forward::CheckResult;
+use super::forward::{CheckResult, MAY_HAVE_PLACED};
 
 use super::{ALIEXPRESS_ACTOR, Aliexpress};
 use crate::cluster::Executor;
@@ -134,15 +141,117 @@ impl AliexpressSync {
         Ok(due.len())
     }
 
-    /// Renews the access that lapses within a day, then reads the open orders
-    /// of this node's share that are due.
+    /// Renews the access that lapses within a day, records what this node
+    /// placed on AliExpress and could not record then, says of the orders of
+    /// this node's share left being placed that AliExpress may have them,
+    /// then reads the open orders of this node's share that are due.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
         if !self.aliexpress.enabled() {
             return Ok(());
         }
         self.renew_due(now).await?;
+        self.record_unrecorded().await?;
+        self.settle_stalled(now).await?;
         self.check_forwards(now).await?;
         Ok(())
+    }
+
+    /// Records what this node placed on AliExpress while the store would not
+    /// take the record ([`keep_unrecorded`](timada_aliexpress::keep_unrecorded)),
+    /// however long ago: a forward given up as stalled meanwhile is placed
+    /// after all, and its capture asked. Returns how many it recorded; one
+    /// still refused stays for the next sweep.
+    pub async fn record_unrecorded(&self) -> anyhow::Result<usize> {
+        let mut recorded = 0;
+        for row in unrecorded(&self.db, SWEEP_LIMIT).await? {
+            let placement = match row.placement() {
+                Ok(placement) => placement,
+                Err(err) => {
+                    tracing::error!(tenant = %row.tenant_id, order = %row.order_id, forward = %row.forward_id, placement = %row.placement, error = %err, "a placement kept on this node cannot be read");
+                    continue;
+                }
+            };
+            let forwards = timada_aliexpress::Command::new(self.store.clone(), &row.tenant_id);
+            match forwards
+                .record_placed(ALIEXPRESS_ACTOR, &row.forward_id, placement.clone())
+                .await
+            {
+                Ok(_) => {
+                    tracing::info!(tenant = %row.tenant_id, order = %row.order_id, forward = %row.forward_id, ae_orders = ?placement.ae_order_ids, "order placed on AliExpress recorded at last");
+                    forget_unrecorded(&self.db, &row).await?;
+                    recorded += 1;
+                }
+                // On the forward, one of its numbers held for another: told
+                // once, nothing a later try changes.
+                Err(err @ AliexpressError::ClaimedElsewhere { .. }) => {
+                    tracing::error!(tenant = %row.tenant_id, order = %row.order_id, forward = %row.forward_id, ae_orders = ?placement.ae_order_ids, error = %err, "an AliExpress order of this forward is recorded for another one");
+                    forget_unrecorded(&self.db, &row).await?;
+                    recorded += 1;
+                }
+                Err(err) => {
+                    tracing::warn!(tenant = %row.tenant_id, order = %row.order_id, forward = %row.forward_id, ae_orders = ?placement.ae_order_ids, tries = row.tries + 1, error = %err, "order placed on AliExpress still not recorded");
+                    note_unrecorded_try(&self.db, &row, &err.to_string()).await?;
+                }
+            }
+        }
+        Ok(recorded)
+    }
+
+    /// Fails each forward of this node's share taken on and not heard of for
+    /// [`FORWARD_STALL_SECS`]: its node stopped, or could not record what
+    /// AliExpress answered, so AliExpress may have the order and it is never
+    /// placed again on its own ([`MAY_HAVE_PLACED`]). The shop's order is told
+    /// first that its supplier may have it, so a later attempt AliExpress
+    /// refuses keeps its fence. Returns how many it failed. The forward's own
+    /// state decides; the read model only says which to look at.
+    pub async fn settle_stalled(&self, now: u64) -> anyhow::Result<usize> {
+        let before = now.saturating_sub(FORWARD_STALL_SECS) as i64;
+        let stalled =
+            forwards_stalled(&self.db, before, self.aliexpress.share(), SWEEP_LIMIT).await?;
+        let mut failed = 0;
+        for row in &stalled {
+            let forwards = timada_aliexpress::Command::new(self.store.clone(), &row.tenant_id);
+            let still = forwards.load_forward_by_id(&row.id).await.map(|forward| {
+                forward.is_some_and(|forward| {
+                    forward.status == ForwardStatus::Started
+                        && now.saturating_sub(forward.updated_at) > FORWARD_STALL_SECS
+                })
+            });
+            match still {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(err) => {
+                    tracing::error!(tenant = %row.tenant_id, forward = %row.id, error = %err, "a stalled AliExpress order not settled");
+                    continue;
+                }
+            }
+            if let Err(err) = timada_orders::Command::new(self.store.clone(), &row.tenant_id)
+                .record_supplier_uncertainty(
+                    ALIEXPRESS_ACTOR,
+                    &row.order_id,
+                    ALIEXPRESS_SUPPLIER,
+                    MAY_HAVE_PLACED,
+                )
+                .await
+            {
+                tracing::error!(tenant = %row.tenant_id, order = %row.order_id, forward = %row.id, error = %err, "a stalled AliExpress order not settled: its order not told");
+                continue;
+            }
+            match forwards
+                .fail_stalled_forward(ALIEXPRESS_ACTOR, &row.id, MAY_HAVE_PLACED, now)
+                .await
+            {
+                Ok(true) => {
+                    tracing::warn!(tenant = %row.tenant_id, order = %row.order_id, forward = %row.id, "placing an order on AliExpress never said how it went: the merchant looks there");
+                    failed += 1;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    tracing::error!(tenant = %row.tenant_id, forward = %row.id, error = %err, "a stalled AliExpress order not settled");
+                }
+            }
+        }
+        Ok(failed)
     }
 
     /// Reads the orders of this node's share placed on AliExpress that are due,
