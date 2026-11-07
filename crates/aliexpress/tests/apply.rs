@@ -165,20 +165,69 @@ async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
 
 #[tokio::test]
 async fn one_node_renews_a_token() {
+    use timada_aliexpress::{RenewedTokens, TOKEN_CLAIM_STALE_SECS, TokenRenewal};
+
     let executor = executor().await;
-    let claim = |actor: &'static str, company: &'static str, expires_at: u64| {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claim = |actor: &'static str, company: &'static str, expires_at: u64, at: u64| {
         let executor = executor.clone();
         async move {
-            timada_aliexpress::claim_token_refresh(&executor, actor, company, expires_at)
+            timada_aliexpress::claim_token_refresh(&executor, actor, company, expires_at, at)
                 .await
                 .unwrap()
         }
     };
-    assert!(claim("node-a", "company-1", 1_700_000_000).await);
-    assert!(!claim("node-b", "company-1", 1_700_000_000).await);
+    let tokens = |access: u8| RenewedTokens {
+        access_token_sealed: vec![access],
+        refresh_token_sealed: vec![access, 1],
+        expires_at: now + 86_400,
+        refresh_expires_at: 0,
+        account: "buyer".to_owned(),
+    };
+    assert_eq!(
+        claim("node-a", "company-1", 1_700_000_000, now).await,
+        TokenRenewal::Claimed
+    );
+    assert_eq!(
+        claim("node-b", "company-1", 1_700_000_000, now).await,
+        TokenRenewal::Held
+    );
     // The next token is a renewal of its own, and so is another company's.
-    assert!(claim("node-b", "company-1", 1_700_086_400).await);
-    assert!(claim("node-b", "company-2", 1_700_000_000).await);
+    assert_eq!(
+        claim("node-b", "company-1", 1_700_086_400, now).await,
+        TokenRenewal::Claimed
+    );
+    assert_eq!(
+        claim("node-b", "company-2", 1_700_000_000, now).await,
+        TokenRenewal::Claimed
+    );
+
+    // Node a went quiet before recording anything: b takes over once the
+    // claim is stale, and a, answered late, records nothing over b's.
+    let stale = now + TOKEN_CLAIM_STALE_SECS + 1;
+    assert_eq!(
+        claim("node-b", "company-1", 1_700_000_000, stale).await,
+        TokenRenewal::Claimed
+    );
+    for (actor, access) in [("node-b", 2), ("node-a", 1)] {
+        timada_aliexpress::record_token_renewal(
+            &executor,
+            actor,
+            "company-1",
+            1_700_000_000,
+            &tokens(access),
+        )
+        .await
+        .unwrap();
+    }
+    // Whoever finds the access due next applies b's tokens, asking nothing.
+    assert_eq!(
+        claim("node-c", "company-1", 1_700_000_000, stale + 3_600).await,
+        TokenRenewal::Renewed(tokens(2))
+    );
 }
 
 /// Imports the fixture as a draft; the link's id and the product's.
