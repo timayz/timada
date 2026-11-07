@@ -157,7 +157,9 @@ pub struct PaymentDue {
 /// (Unix seconds): a capture or a cancellation asked before `asked_before`
 /// and still unanswered, a hold whose time ran out, or an order of goods the
 /// shop holds itself, placed before `asked_before` and still only held.
-/// Grouped by tenant, oldest first.
+/// Grouped by tenant, oldest first. An order whose hold went back and that
+/// stays open (its supplier may have it) waits for the merchant: nothing is
+/// left to settle with the provider until they ask to cancel it.
 pub async fn payments_due(
     db: &Db,
     now: i64,
@@ -167,6 +169,7 @@ pub async fn payments_due(
     db.fetch_all(
         "SELECT tenant_id, id FROM orders_orders
          WHERE (status = 'authorized' OR cancel_requested_at IS NOT NULL)
+           AND (payment_state <> 'released' OR cancel_requested_at IS NOT NULL)
            AND (capture_requested_at < ?2 OR cancel_requested_at < ?2 OR capture_before < ?1
                 OR (supplier IS NULL AND payment_state = 'held' AND placed_at < ?2))
          ORDER BY tenant_id, placed_at, id LIMIT ?3",
