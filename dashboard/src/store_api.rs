@@ -283,9 +283,13 @@ struct Closing {
 
 impl Closing {
     /// The node's connections, unless `event` was written before the
-    /// subscription started.
+    /// subscription started, or outside the platform's own streams (the
+    /// default tenant), where the keys and tenants live: a shop's store key
+    /// can write the same event in the shop's own tenant, under any
+    /// `aggregate_id`, and must not end another shop's connections.
     fn connections_for(&self, event: &evento::Event) -> Option<&StoreConnections> {
-        (event.timestamp_micros() >= self.since_micros).then_some(&*self.connections)
+        (event.tenant.is_empty() && event.timestamp_micros() >= self.since_micros)
+            .then_some(&*self.connections)
     }
 }
 
@@ -437,5 +441,45 @@ mod tests {
             .unwrap();
         assert_eq!(connections.count("k1"), 0);
         assert!(*closed.borrow());
+    }
+
+    /// A shop's store key can write the same events in the shop's own
+    /// tenant, naming any key or tenant: they end nothing.
+    #[tokio::test]
+    async fn an_event_in_a_shops_tenant_ends_no_connection() {
+        let store = evento::Turso::in_memory_concurrent().await.unwrap();
+        for (id, tenant) in [("k1", "zeta"), ("k2", "zeta")] {
+            evento::append(id)
+                .original_version(0)
+                .event(&Scoped {
+                    scopes: vec![SCOPE_STORE_READ.to_owned()],
+                    scoped_by: "mallory".to_owned(),
+                    scoped_at: 0,
+                })
+                .tenant(tenant)
+                .commit(&store)
+                .await
+                .unwrap();
+        }
+        evento::append("acme")
+            .original_version(0)
+            .event(&Suspended {
+                reason: "forged".to_owned(),
+            })
+            .tenant("zeta")
+            .commit(&store)
+            .await
+            .unwrap();
+        let connections = StoreConnections::new();
+        let (_k1, closed_k1) = connections.register("k1", "acme");
+        let (_k2, closed_k2) = connections.register("k2", "acme");
+
+        closing_handlers::<evento::Turso>(connections.clone(), 0)
+            .ephemeral()
+            .run_once(&store)
+            .await
+            .unwrap();
+        assert_eq!(connections.count("k1") + connections.count("k2"), 2);
+        assert!(!*closed_k1.borrow() && !*closed_k2.borrow());
     }
 }

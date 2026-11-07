@@ -18,11 +18,12 @@ executor (`remote`), and a consensus-replicated executor (`evento-accord`, alpha
 
 ## Setup
 
-2.x is a pre-release — pin the exact version (a bare `"2"` won't resolve):
+2.x is a pre-release — follow the `alpha` branch (a bare `"2"` won't resolve;
+pinning a tag such as `=2.0.0-alpha.38` works when a release is wanted):
 
 ```toml
 [dependencies]
-evento = { version = "=2.0.0-alpha.38", features = ["turso"] }  # or "sqlite", "postgres", "mysql", "fjall", "remote"
+evento = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["turso"] }  # or "sqlite", "postgres", "mysql", "fjall", "remote"
 bitcode = "0.6"
 anyhow = "1"
 tokio = { version = "1", features = ["full"] }
