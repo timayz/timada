@@ -134,6 +134,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         )),
         background_mail.clone(),
         url.clone(),
+        cluster.node_name(),
     ) {
         read_models.push(start_read_model(name, builder, &executor).await?);
     }
@@ -153,7 +154,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 
     // A card form left open past the time its goods were held for is closed
     // with Stripe before it can be confirmed; what an order asked of Stripe
-    // and got no answer to is settled on the same beat.
+    // and got no answer to is settled, and a request to pay nobody answered
+    // is refused, on the same beat.
     let payments_every = std::time::Duration::from_secs(
         config
             .payments
@@ -166,6 +168,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             .start(payments_every);
     let pending_payments =
         crate::payments::PendingPayments::new(db.clone(), executor.clone(), payments.clone())
+            .start(payments_every);
+    let unanswered_checkouts =
+        crate::payments::UnansweredCheckouts::new(db.clone(), executor.clone())
             .start(payments_every);
 
     // A campaign a merchant sent goes out a batch at a time.
@@ -246,6 +251,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     review_requests.abort();
     lapsed_checkouts.abort();
     pending_payments.abort();
+    unanswered_checkouts.abort();
     newsletter_sends.abort();
     automation_runs.abort();
     aliexpress_sync.abort();
@@ -283,6 +289,7 @@ fn subscriptions(
     euro_rates: Arc<dyn crate::ecb::EuroRates>,
     background_mail: Arc<topcoat::context::AppContext>,
     base_url: String,
+    node: String,
 ) -> Vec<(&'static str, SubscriptionBuilder<Executor>)> {
     let ring = keys.ring();
     vec![
@@ -411,7 +418,7 @@ fn subscriptions(
         ),
         (
             "payments",
-            crate::payments::subscription(
+            crate::payments::subscription(crate::payments::Checkouts::new(
                 payments.clone(),
                 euro_rates.clone(),
                 Arc::new(crate::aliexpress::payment_reads::AliexpressGoods::new(
@@ -420,7 +427,8 @@ fn subscriptions(
                     store.clone(),
                 )),
                 store.clone(),
-            ),
+                node,
+            )),
         ),
         (
             "order payments",

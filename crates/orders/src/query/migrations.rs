@@ -57,10 +57,13 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 item_count INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
+                unanswered_since INTEGER,
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX orders_carts_open ON orders_carts (tenant_id, updated_at)
                 WHERE order_id IS NULL;
+        CREATE INDEX orders_carts_unanswered ON orders_carts (unanswered_since)
+                WHERE unanswered_since IS NOT NULL;
         CREATE TABLE orders_order_products (
                 tenant_id TEXT NOT NULL,
                 product_id TEXT NOT NULL,

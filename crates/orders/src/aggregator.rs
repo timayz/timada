@@ -184,6 +184,19 @@ pub enum Cart {
         payment_id: String,
         cancelled_by: String,
     },
+    /// A node took the request on: only `claimant` holds the goods and the
+    /// code, opens the payment and answers, so the other nodes following the
+    /// tenant leave it alone. Unanswered after
+    /// [`CHECKOUT_CLAIM_SECS`](crate::CHECKOUT_CLAIM_SECS), the claim lapses
+    /// and another node may take it on. Written by the dashboard, never a
+    /// shopper.
+    CheckoutClaimed {
+        request_id: String,
+        /// The node, as the dashboard names it (`node-2`): told the request
+        /// again, after an error or a restart, it goes on under its claim.
+        claimant: String,
+        claimed_by: String,
+    },
 }
 
 /// An order. Its id derives from the cart it was placed from
@@ -354,7 +367,14 @@ pub enum Order {
 /// deterministic id [`order_reference_id`](crate::order_reference_id).
 #[evento::aggregate(name = "timada-orders/OrderReference")]
 pub enum OrderReference {
-    Claimed { order_id: String },
+    Claimed {
+        order_id: String,
+    },
+    /// Given back: the order it was claimed for was placed at the same
+    /// moment elsewhere, under another reference.
+    Released {
+        released_by: String,
+    },
 }
 
 /// How the tenant's shoppers pay, as their browsers need to know it before
