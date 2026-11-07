@@ -168,8 +168,13 @@ async fn a_spent_use_is_counted_once_over_a_roll() {
         .await
         .unwrap();
     assert_eq!(version_of(&cmd, &id, 0).await, Some(3));
-    // Told again over the roll: the new generation still remembers it.
+    // Told again: the order's spend says so before any generation is read.
     cmd.consume_use(SHOP, &id, "cart-1", "x@example.com", "order-1")
+        .await
+        .unwrap();
+    assert_eq!(generation_of(&cmd, &id).await, 0, "nothing was written");
+    // Over the roll, the new generation still remembers the cart spent it.
+    cmd.reserve_use(SHOP, &id, "cart-1", "x@example.com", RESERVATION_SECS)
         .await
         .unwrap();
     assert_eq!(generation_of(&cmd, &id).await, 1);
@@ -253,6 +258,98 @@ async fn a_use_given_back_twice_counts_once() {
     assert_eq!(usage_of(&cmd, &id).await.consumed_count, 1);
     cmd.return_use(SHOP, "order-1").await.unwrap();
     assert_eq!(usage_of(&cmd, &id).await.consumed_count, 1);
+}
+
+/// A node behind the others hears of the order after another node gave its
+/// use back: told to spend it again, nothing is spent, and the e-mail stays
+/// free.
+#[tokio::test]
+async fn a_use_given_back_is_not_spent_again_by_a_late_delivery() {
+    let cmd = command().await;
+    let discount = cmd
+        .create_discount(
+            ALICE,
+            CreateDiscount {
+                code: "LATE".to_owned(),
+                value: DiscountValue::Percent(1000),
+                max_uses: Some(1),
+                once_per_email: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let id = discount.id;
+    cmd.reserve_use(SHOP, &id, "cart-1", "x@example.com", RESERVATION_SECS)
+        .await
+        .unwrap();
+    cmd.consume_use(SHOP, &id, "cart-1", "x@example.com", "order-1")
+        .await
+        .unwrap();
+    cmd.return_use(SHOP, "order-1").await.unwrap();
+    assert_eq!(usage_of(&cmd, &id).await.consumed_count, 0);
+
+    // The late node: the order's placing, then its cancellation.
+    cmd.consume_use(SHOP, &id, "cart-1", "x@example.com", "order-1")
+        .await
+        .unwrap();
+    cmd.return_use(SHOP, "order-1").await.unwrap();
+    let usage = usage_of(&cmd, &id).await;
+    assert_eq!(usage.consumed_count, 0, "the use stays given back");
+    assert_eq!(usage.consumed_by_cart("cart-1"), None);
+    assert!(
+        cmd.load_buyer(&id, "x@example.com")
+            .await
+            .unwrap()
+            .is_none_or(|buyer| buyer.order_id.is_none()),
+        "the e-mail stays free"
+    );
+    cmd.reserve_use(SHOP, &id, "cart-2", "x@example.com", RESERVATION_SECS)
+        .await
+        .unwrap();
+}
+
+/// Two nodes catching up at once: node B finds no spend, then node A spends
+/// the use and gives it back before B reads the streams. B, reading the
+/// spend again before each write, spends nothing.
+#[tokio::test]
+async fn a_use_given_back_meanwhile_is_not_spent_again() {
+    let cmd = command().await;
+    let discount = cmd
+        .create_discount(
+            ALICE,
+            CreateDiscount {
+                code: "RACE".to_owned(),
+                value: DiscountValue::Percent(1000),
+                max_uses: Some(1),
+                once_per_email: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let id = discount.id;
+    cmd.reserve_use(SHOP, &id, "cart-1", "x@example.com", RESERVATION_SECS)
+        .await
+        .unwrap();
+    // Node A, all the way through.
+    cmd.consume_use(SHOP, &id, "cart-1", "x@example.com", "order-1")
+        .await
+        .unwrap();
+    cmd.return_use(SHOP, "order-1").await.unwrap();
+    // Node B, past its first look at the spend.
+    cmd.consume_unspent(SHOP, &id, "cart-1", "x@example.com", "order-1", None)
+        .await
+        .unwrap();
+    let usage = usage_of(&cmd, &id).await;
+    assert_eq!(usage.consumed_count, 0, "the use stays given back");
+    assert!(
+        cmd.load_buyer(&id, "x@example.com")
+            .await
+            .unwrap()
+            .is_none_or(|buyer| buyer.order_id.is_none()),
+        "the e-mail stays free"
+    );
 }
 
 /// A code good once per e-mail, given back: the e-mail may use it again.
