@@ -9,7 +9,7 @@ use evento::{
 };
 use timada_orders::PaymentSetup;
 use timada_tenancy::TenantState;
-use timada_tenancy::aggregator::{PaymentsConfigured, PaymentsRemoved, Resumed};
+use timada_tenancy::aggregator::{PaymentsConfigured, PaymentsForgotten, PaymentsStopped, Resumed};
 
 use super::{DASHBOARD_ACTOR, Payments};
 use crate::cluster::Executor;
@@ -35,7 +35,8 @@ pub fn setup_subscription(
         .data(payments)
         .data(Store(store))
         .handler(on_payments_configured())
-        .handler(on_payments_removed())
+        .handler(on_payments_stopped())
+        .handler(on_payments_forgotten())
         .handler(on_tenant_resumed())
         .any_routing_key()
         .retry(5)
@@ -50,9 +51,17 @@ async fn on_payments_configured<E: evento::Executor>(
 }
 
 #[evento::subscription]
-async fn on_payments_removed<E: evento::Executor>(
+async fn on_payments_stopped<E: evento::Executor>(
     context: &Context<'_, E>,
-    event: Event<PaymentsRemoved>,
+    event: Event<PaymentsStopped>,
+) -> anyhow::Result<()> {
+    sync(context, &event.aggregate_id).await
+}
+
+#[evento::subscription]
+async fn on_payments_forgotten<E: evento::Executor>(
+    context: &Context<'_, E>,
+    event: Event<PaymentsForgotten>,
 ) -> anyhow::Result<()> {
     sync(context, &event.aggregate_id).await
 }
@@ -89,10 +98,12 @@ pub async fn publish_setup(
     tenant: &TenantState,
     executor: Executor,
 ) -> anyhow::Result<()> {
+    // A tenant that stopped taking payments offers no card form, its keys
+    // kept only to settle what is held or owed.
     let setup = tenant
         .payments
         .as_ref()
-        .filter(|_| payments.enabled())
+        .filter(|settings| !settings.is_stopped() && payments.enabled())
         .map(|settings| PaymentSetup {
             provider: settings.provider.clone(),
             publishable_key: settings.publishable_key.clone(),

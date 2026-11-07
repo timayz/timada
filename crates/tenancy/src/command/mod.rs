@@ -40,9 +40,9 @@ use crate::aggregator::{
     Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MailBrandingCleared,
     MailBrandingSet, MailLanguagesSet, MailServerAdded, MailServerChanged, MailServerDeleted,
     MailServersPicked, MailTemplateReset, MailTemplateSaved, MailTemplateTextSaved, MemberGranted,
-    MemberRevoked, MemberRoleChanged, PaymentsConfigured, PaymentsRemoved, Released, Renamed,
-    Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, SeatGranted, SeatRefused, Sent,
-    Suspended,
+    MemberRevoked, MemberRoleChanged, PaymentsConfigured, PaymentsForgotten, PaymentsStopped,
+    Released, Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, SeatGranted,
+    SeatRefused, Sent, Suspended,
 };
 use crate::value_object::{
     ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id, tenant_slug_id,
@@ -265,6 +265,17 @@ pub struct PaymentSettings {
     pub configured_by: String,
     /// Unix seconds.
     pub configured_at: u64,
+    /// Unix seconds the merchant stopped taking payments at: the keys stay
+    /// only to settle what is still held or owed.
+    pub stopped_at: Option<u64>,
+}
+
+impl PaymentSettings {
+    /// Whether the tenant stopped taking payments, its keys kept only to
+    /// settle what is still held or owed.
+    pub fn is_stopped(&self) -> bool {
+        self.stopped_at.is_some()
+    }
 }
 
 /// A custom role as the tenant defined it.
@@ -350,7 +361,8 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_role_updated())
         .handler(on_role_removed())
         .handler(on_payments_configured())
-        .handler(on_payments_removed())
+        .handler(on_payments_stopped())
+        .handler(on_payments_forgotten())
         .handler(on_company_linked())
         .handler(on_company_unlinked())
         .handler(on_mail_server_added())
@@ -492,13 +504,25 @@ async fn on_payments_configured(
         webhook_secret_sealed: event.data.webhook_secret_sealed.to_owned(),
         configured_by: event.data.configured_by.to_owned(),
         configured_at: event.timestamp,
+        stopped_at: None,
     });
     Ok(())
 }
 
 #[evento::handler]
-async fn on_payments_removed(
-    _event: Event<PaymentsRemoved>,
+async fn on_payments_stopped(
+    event: Event<PaymentsStopped>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    if let Some(payments) = &mut tenant.payments {
+        payments.stopped_at = Some(event.timestamp);
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_payments_forgotten(
+    _event: Event<PaymentsForgotten>,
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     tenant.payments = None;

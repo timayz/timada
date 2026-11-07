@@ -83,11 +83,12 @@ Recurring patterns:
   themselves are freed by a release subscription per context (`timada-catalog/releases`,
   `timada-discounts/releases`, `timada-pages/releases`) on what gives a value up, from
   the holder as it is now: only what it holds no more and claimed before the event, so
-  a value taken back since stays its own. An entry for something another stream also
-  records (a user's sign-in identity) counts only while that stream lists it: the
-  entry is claimed first and given back if the record fails, the record goes first
-  on the way out, and a subscription frees what a crash in between left behind
-  (`timada_identity::index_release_subscription`).
+  a value taken back since stays its own.
+  An entry for
+  something another stream also records (a user's sign-in identity) counts only while
+  that stream lists it: the entry is claimed first and given back if the record
+  fails, the record goes first on the way out, and a subscription frees what a crash
+  in between left behind (`timada_identity::index_release_subscription`).
 - **Every event says who did it** (`*_by` fields). Authorisation lives in the host.
 - **Write-side state** is a strict projection with `#[evento::snapshot(none)]`, so
   commands observe the exact version they write against.
@@ -242,8 +243,14 @@ by construction.
    (the week a card holds money ran out), the order is cancelled, unless the supplier may
    have it (its fence written, no cancellation asked): the hold is then recorded gone
    and the order left open for the merchant. A second payment of a
-   cart, and one confirmed after the checkout's holds lapsed and went to someone else
-   (`Cart::PaymentReturned`), are given back, nothing taken. The money is taken
+   cart, and one confirmed after the checkout's holds lapsed and went to someone else,
+   are given back, nothing taken: the cart records that the payment goes back and why
+   (`Cart::PaymentReturnRequested`) before Stripe is asked, and that it went
+   (`Cart::PaymentReturned`) after, only what Stripe has not refunded yet being refunded
+   (a refusal for good settles it too, `Cart::PaymentReturnRefused`, shown on the order
+   for the merchant to settle in Stripe), and money Stripe took for an order cancelled
+   meanwhile goes back through the order (`Order::RefundRequested`, then Stripe,
+   `Refunded`). The money is taken
    (`payments/settle.rs`) once the order asks for it (`Order::CaptureRequested`): at
    once by the subscription `timada-dashboard/order-payments` when the shop holds every
    good, by the same once AliExpress took the order, or by the merchant; Stripe's answer is
@@ -256,9 +263,14 @@ by construction.
    `Cancelled`); `charge.refunded` reconciles refunds Stripe holds that the order does not
    know. No subscription handler fails on a Stripe answer, but for the checkout's 409
    (Stripe still opening the payment under the same key), which it asks again in a
-   moment: what Stripe could not be asked at once is settled by the sweep
-   `payments/pending.rs` a minute later. Setting it up and
-   testing it locally: `docs/payments.md`.
+   moment: what Stripe could not be asked at once (a capture, a cancellation, a refund, a
+   payment to give back) is settled by the sweep `payments/pending.rs` a minute later,
+   and a request to pay nobody answered is refused by `payments/unanswered.rs`. All of it
+   needs the tenant's keys, so stopping payments (`Tenant::PaymentsStopped`) stops new
+   checkouts at once but keeps the keys, sealed, until the merchant forgets them
+   (`Tenant::PaymentsForgotten`): never before the stop is eight days old (past a card's
+   longest hold) nor while the orders read model shows anything held or owed, and no
+   sweep forgets them on a read model's word. Saving keys again takes payments again. Setting it up and testing it locally: `docs/payments.md`.
 5. **Shop mail** (`shop_mail.rs`). A merchant sets up SMTP servers of its own on
    `/t/{slug}/mail` (up to ten) and picks one for each kind of mail
    (`MailServersPicked`). The shop's mails to its shoppers (order mails, review

@@ -47,8 +47,8 @@ use payments::webhook::{Outcome, receive};
 use payments::{
     ASKED_SECS, Busy, Cancellation, CaptureAnswer, Checkouts, DASHBOARD_ACTOR, LapsedCheckouts,
     NewPayment, OpenPayment, PaymentGateway, PaymentState, PaymentStatus, Payments,
-    PendingPayments, RECHECK_SECS, RefundRecord, ReleaseAnswer, SuppliedGoods, UnansweredCheckouts,
-    signature,
+    PendingPayments, RECHECK_SECS, RefundRecord, Refused, ReleaseAnswer, SuppliedGoods,
+    UnansweredCheckouts, signature,
 };
 use timada_orders::{CaptureClaim, HOLD_EXPIRED_REASON, OrderLine, OrderStatus};
 
@@ -86,6 +86,10 @@ struct FakeStripe {
     opening: Mutex<std::collections::HashSet<String>>,
     /// That many calls to open a payment are answered 409 first.
     busy_opens: std::sync::atomic::AtomicUsize,
+    /// What refunds are refused with, when they are.
+    refund_refusal: Mutex<Option<Refused>>,
+    /// Calls to refund, whatever their answer.
+    refund_attempts: std::sync::atomic::AtomicUsize,
 }
 
 impl FakeStripe {
@@ -196,9 +200,16 @@ impl PaymentGateway for FakeStripe {
 
     async fn payment_status(
         &self,
-        _secret_key: &str,
+        secret_key: &str,
         payment_id: &str,
     ) -> anyhow::Result<PaymentStatus> {
+        // Another account's key sees none of this account's payments.
+        if secret_key != "sk_test_good" {
+            return Err(anyhow::Error::new(Refused {
+                message: format!("No such payment_intent: '{payment_id}'"),
+                code: Some("resource_missing".into()),
+            }));
+        }
         let opened = self.opened.lock().unwrap();
         let (open, new) = opened
             .values()
@@ -234,6 +245,12 @@ impl PaymentGateway for FakeStripe {
         amount_cents: u64,
         _idempotency_key: &str,
     ) -> anyhow::Result<String> {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.refund_attempts.fetch_add(1, SeqCst);
+        self.reachable()?;
+        if let Some(refused) = self.refund_refusal.lock().unwrap().clone() {
+            return Err(anyhow::Error::new(refused));
+        }
         let mut refunds = self.refunds.lock().unwrap();
         refunds.push((payment_id.to_owned(), amount_cents));
         Ok(format!("re_{}", refunds.len()))
@@ -684,6 +701,16 @@ impl<G: PaymentGateway + 'static> Harness<G> {
     }
 
     async fn webhook(&self, tenant: &TenantState, body: &str, header: Option<String>) -> Outcome {
+        self.try_webhook(tenant, body, header).await.unwrap()
+    }
+
+    /// The same, an error kept: Stripe is told to try again.
+    async fn try_webhook(
+        &self,
+        tenant: &TenantState,
+        body: &str,
+        header: Option<String>,
+    ) -> anyhow::Result<Outcome> {
         let tenant = self
             .platform
             .load_tenant(&tenant.id)
@@ -701,7 +728,6 @@ impl<G: PaymentGateway + 'static> Harness<G> {
             now(),
         )
         .await
-        .unwrap()
     }
 
     /// Waits for the money of the order to be taken; the order then.
@@ -1911,13 +1937,441 @@ async fn a_second_payment_of_a_cart_is_given_back() {
     let body = authorized(&second.payment_id);
     assert_eq!(
         h.webhook(&acme, &body, signed(&body)).await,
-        Outcome::Released
+        Outcome::Returned {
+            code: "duplicate_payment".into()
+        }
     );
     assert_eq!(
         *h.stripe.cancelled.lock().unwrap(),
         vec![second.payment_id.clone()]
     );
     assert!(h.stripe.refunds.lock().unwrap().is_empty(), "nothing taken");
+    // The cart says so, and told again, nothing more happens.
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(
+        cart.returned_payment(&second.payment_id)
+            .map(|returned| returned.code.as_str()),
+        Some("duplicate_payment")
+    );
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Returned {
+            code: "duplicate_payment".into()
+        }
+    );
+    assert_eq!(h.stripe.cancelled.lock().unwrap().len(), 1);
+    h.finish().await;
+}
+
+/// A cart of two mugs asked to pay, whose holds then lapsed with the shelf
+/// emptied meanwhile: its payment, confirmed now, buys nothing. Stripe does
+/// not answer when asked to give it back.
+async fn late_payment_stripe_cannot_give_back(
+    h: &Harness,
+    tenant: &TenantState,
+) -> (String, String) {
+    let (cart_id, mug) = h.cart(tenant).await;
+    let catalog = timada_catalog::Command::new(h.store(tenant), &tenant.id);
+    catalog.set_stock("alice", &mug, None, 2).await.unwrap();
+    let PaymentAnswer::Requested(payment) = h.ask(tenant, &cart_id, None).await else {
+        panic!("a payment is opened");
+    };
+    catalog
+        .release_stock(
+            DASHBOARD_ACTOR,
+            &cart_id,
+            &[StockLine {
+                product_id: mug.clone(),
+                variant_id: None,
+                quantity: 2,
+            }],
+        )
+        .await
+        .unwrap();
+    catalog.set_stock("alice", &mug, None, 0).await.unwrap();
+    h.stripe
+        .unreachable
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    h.stripe.authorize(&payment.payment_id);
+    let body = authorized(&payment.payment_id);
+    assert!(
+        h.try_webhook(tenant, &body, signed(&body)).await.is_err(),
+        "Stripe should be asked again"
+    );
+    (cart_id, payment.payment_id.clone())
+}
+
+#[tokio::test]
+async fn a_payment_given_back_is_recorded_before_stripe_is_asked() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let (cart_id, payment_id) = late_payment_stripe_cannot_give_back(&h, &acme).await;
+
+    // The cart says the payment goes back, and why, before Stripe is asked.
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(
+        cart.pending_return(&payment_id).map(|p| p.code.as_str()),
+        Some("out_of_stock")
+    );
+    assert!(h.stripe.cancelled.lock().unwrap().is_empty());
+
+    // Stripe did give the hold back, its answer lost on the way: its word
+    // that the hold went records the return, for the reason it was asked.
+    h.stripe
+        .unreachable
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    h.stripe.cancelled.lock().unwrap().push(payment_id.clone());
+    let body = canceled(&payment_id);
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Returned {
+            code: "out_of_stock".into()
+        }
+    );
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(
+        cart.returned_payment(&payment_id).map(|r| r.code.as_str()),
+        Some("out_of_stock")
+    );
+    assert!(
+        !cart.is_payment_cancelled(&payment_id),
+        "not a card form closed"
+    );
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_payment_stripe_did_not_give_back_is_given_back_by_the_sweep() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let sweep = PendingPayments::new(h.db.clone(), h.store(&acme), h.payments.clone());
+    let (cart_id, payment_id) = late_payment_stripe_cannot_give_back(&h, &acme).await;
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    assert_eq!(timada_orders::money_owed(&h.db, &acme.id).await.unwrap(), 1);
+
+    let now = now() as u64;
+    // Whoever asked has a minute to finish it; Stripe still silent after.
+    assert_eq!(sweep.sweep(now).await.unwrap(), 0);
+    let later = now + ASKED_SECS + 1;
+    assert_eq!(sweep.sweep(later).await.unwrap(), 0);
+    h.stripe
+        .unreachable
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        sweep.sweep(later).await.unwrap(),
+        0,
+        "asked again only later"
+    );
+    assert_eq!(sweep.sweep(later + RECHECK_SECS).await.unwrap(), 1);
+    assert_eq!(
+        *h.stripe.cancelled.lock().unwrap(),
+        vec![payment_id.clone()]
+    );
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(
+        cart.returned_payment(&payment_id).map(|r| r.code.as_str()),
+        Some("out_of_stock")
+    );
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    assert_eq!(timada_orders::money_owed(&h.db, &acme.id).await.unwrap(), 0);
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn money_taken_for_a_cancelled_order_is_refunded_through_it() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let sweep = PendingPayments::new(h.db.clone(), h.store(&acme), h.payments.clone());
+    let account = h.account(&acme).await;
+    // Goods a supplier buys: the money stays held. The merchant cancels.
+    *h.goods.supplier.lock().unwrap() = Some("aliexpress".into());
+    let order_id = h.place(&acme, checkout(Some(2500))).await;
+    orders
+        .request_cancellation("alice", &order_id, "Out of stock".into(), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        payments::settle::settle_cancellation(&h.payments, &account, &orders, &order_id)
+            .await
+            .unwrap(),
+        CancelOutcome::Cancelled
+    );
+    let payment_id = orders
+        .load_order(&order_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .payment
+        .payment_id;
+
+    // Taken by hand in Stripe's dashboard all the same; Stripe then does not
+    // answer when asked to refund it.
+    h.stripe
+        .cancelled
+        .lock()
+        .unwrap()
+        .retain(|id| *id != payment_id);
+    h.stripe.captured.lock().unwrap().push(payment_id.clone());
+    h.stripe
+        .unreachable
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let body = succeeded(&payment_id);
+    assert!(h.try_webhook(&acme, &body, signed(&body)).await.is_err());
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    let pending = order.pending_refund.clone().expect("asked for first");
+    assert_eq!(pending.amount_cents, 2500);
+    assert_eq!(order.status, OrderStatus::Cancelled);
+
+    // The sweep makes it, under the key the order fixed.
+    h.stripe
+        .unreachable
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    assert_eq!(timada_orders::money_owed(&h.db, &acme.id).await.unwrap(), 1);
+    assert_eq!(sweep.sweep(now() as u64 + ASKED_SECS + 1).await.unwrap(), 1);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.refunded_cents, 2500);
+    assert_eq!(order.pending_refund, None);
+    assert_eq!(
+        *h.stripe.refunds.lock().unwrap(),
+        vec![(payment_id.clone(), 2500)]
+    );
+    // Stripe telling again changes nothing.
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Refunded {
+            refund_id: order.refund_ids[0].clone()
+        }
+    );
+    assert_eq!(h.stripe.refunds.lock().unwrap().len(), 1);
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn stopped_payments_keep_their_keys_to_settle_until_forgotten() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let sweep = PendingPayments::new(h.db.clone(), h.store(&acme), h.payments.clone());
+    let read = async || {
+        timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
+            .run_once(&h.platform.0)
+            .await
+            .unwrap();
+    };
+    // Goods a supplier buys: the order's money stays held.
+    *h.goods.supplier.lock().unwrap() = Some("aliexpress".into());
+    let order_id = h.place(&acme, checkout(Some(2500))).await;
+
+    // The merchant stops taking payments: a new request to pay is refused,
+    // the keys stay while the order's money is held.
+    h.platform.stop_payments("alice", &acme.id).await.unwrap();
+    let (cart_id, _) = h.cart(&acme).await;
+    assert_eq!(
+        h.ask(&acme, &cart_id, None).await,
+        PaymentAnswer::Refused("payments_unavailable".into())
+    );
+    read().await;
+    assert_eq!(timada_orders::money_owed(&h.db, &acme.id).await.unwrap(), 1);
+    sweep.sweep(now() as u64).await.unwrap();
+    let tenant = h.platform.load_tenant(&acme.id).await.unwrap().unwrap();
+    assert!(tenant.payments.as_ref().unwrap().is_stopped(), "kept");
+
+    // What is held is still settled with them: the merchant cancels.
+    let account = h.payments.account_of(&tenant).unwrap().expect("kept");
+    orders
+        .request_cancellation("alice", &order_id, "Out of stock".into(), false)
+        .await
+        .unwrap();
+    assert_eq!(
+        payments::settle::settle_cancellation(&h.payments, &account, &orders, &order_id)
+            .await
+            .unwrap(),
+        CancelOutcome::Cancelled
+    );
+
+    // Nothing held any more: no sweep forgets the keys, only the merchant
+    // does, and not before the stop is eight days old.
+    read().await;
+    assert_eq!(timada_orders::money_owed(&h.db, &acme.id).await.unwrap(), 0);
+    sweep.sweep(now() as u64).await.unwrap();
+    let tenant = h.platform.load_tenant(&acme.id).await.unwrap().unwrap();
+    let stopped_at = tenant.payments.as_ref().unwrap().stopped_at.unwrap();
+    let err = h
+        .platform
+        .forget_payments("alice", &acme.id, now() as u64)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, timada_tenancy::TenancyError::PaymentsStoppedRecently),
+        "{err}"
+    );
+    h.platform
+        .forget_payments(
+            "alice",
+            &acme.id,
+            stopped_at + timada_tenancy::FORGET_PAYMENTS_AFTER_SECS,
+        )
+        .await
+        .unwrap();
+    let tenant = h.platform.load_tenant(&acme.id).await.unwrap().unwrap();
+    assert!(tenant.payments.is_none(), "forgotten");
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_key_of_another_account_reads_none_of_the_payments_held() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    *h.goods.supplier.lock().unwrap() = Some("aliexpress".into());
+    let order_id = h.place(&acme, checkout(Some(2500))).await;
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    let held = timada_orders::owed_payment_id(&h.db, &acme.id)
+        .await
+        .unwrap()
+        .expect("a payment held");
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(held, order.payment.payment_id);
+    // The account's own key reads it; another account's is told no such
+    // payment: saving it is refused while the money is held.
+    assert!(
+        h.payments
+            .reads_payment("sk_test_good", &held)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !h.payments
+            .reads_payment("sk_test_another_account", &held)
+            .await
+            .unwrap()
+    );
+    h.finish().await;
+}
+
+/// Two tabs, two payments, both confirmed: the cart is an order paid by the
+/// first, and the second is taken in Stripe's own dashboard all the same.
+async fn second_payment_taken(h: &Harness, tenant: &TenantState) -> (String, String) {
+    let (cart_id, _) = h.cart(tenant).await;
+    let PaymentAnswer::Requested(first) = h.ask(tenant, &cart_id, None).await else {
+        panic!("a payment is opened");
+    };
+    let PaymentAnswer::Requested(second) = h.ask(tenant, &cart_id, None).await else {
+        panic!("a payment is opened");
+    };
+    h.stripe.authorize(&first.payment_id);
+    let body = authorized(&first.payment_id);
+    assert!(matches!(
+        h.webhook(tenant, &body, signed(&body)).await,
+        Outcome::Placed { .. }
+    ));
+    h.stripe.authorize(&second.payment_id);
+    h.stripe
+        .captured
+        .lock()
+        .unwrap()
+        .push(second.payment_id.clone());
+    (cart_id, second.payment_id.clone())
+}
+
+#[tokio::test]
+async fn a_payment_given_back_refunds_what_is_left_or_settles_as_refused() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+
+    // 10.00 € of it went back by hand in Stripe: the rest goes back now.
+    let (_, partly) = second_payment_taken(&h, &acme).await;
+    h.stripe
+        .refunds
+        .lock()
+        .unwrap()
+        .push((partly.clone(), 1000));
+    let body = succeeded(&partly);
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Returned {
+            code: "duplicate_payment".into()
+        }
+    );
+    assert_eq!(
+        *h.stripe.refunds.lock().unwrap(),
+        vec![(partly.clone(), 1000), (partly.clone(), 1500)]
+    );
+
+    // A refusal Stripe may not repeat (a key that may not refund yet)
+    // leaves the return standing, for the next try.
+    let (cart_id, disputed) = second_payment_taken(&h, &acme).await;
+    *h.stripe.refund_refusal.lock().unwrap() = Some(Refused {
+        message: "The provided key does not have the required permissions.".into(),
+        code: Some("secret_key_required".into()),
+    });
+    let body = succeeded(&disputed);
+    assert!(h.try_webhook(&acme, &body, signed(&body)).await.is_err());
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert!(
+        cart.pending_return(&disputed).is_some(),
+        "still to give back"
+    );
+    assert_eq!(cart.return_refusal(&disputed), None);
+
+    // Asked again, Stripe will not refund it, for good: settled as refused,
+    // shown to the merchant, never asked again.
+    *h.stripe.refund_refusal.lock().unwrap() = Some(Refused {
+        message: "This charge is disputed.".into(),
+        code: Some("charge_disputed".into()),
+    });
+    let refused = Outcome::NotReturned {
+        reason: "This charge is disputed.".into(),
+    };
+    assert_eq!(h.webhook(&acme, &body, signed(&body)).await, refused);
+    let cart = orders.load_cart(&cart_id).await.unwrap().unwrap();
+    assert_eq!(
+        cart.return_refusal(&disputed),
+        Some("This charge is disputed.")
+    );
+    assert_eq!(cart.pending_return(&disputed), None);
+    assert_eq!(h.webhook(&acme, &body, signed(&body)).await, refused);
+    assert_eq!(
+        h.stripe
+            .refund_attempts
+            .load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "the refusal for good is settled: asked no more"
+    );
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    assert!(
+        timada_orders::returns_due(&h.db, i64::MAX, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     h.finish().await;
 }
 
@@ -2164,7 +2618,7 @@ async fn the_tenant_store_learns_how_its_shoppers_pay() {
     );
 
     // Stopped: the storefronts stop showing the payment form.
-    h.platform.remove_payments("alice", &acme.id).await.unwrap();
+    h.platform.stop_payments("alice", &acme.id).await.unwrap();
     follow().await;
     assert_eq!(orders.payment_setup().await.unwrap(), None);
     h.finish().await;
@@ -2199,7 +2653,7 @@ async fn the_store_is_told_the_same_setup_twice_at_once() {
 
     // The same when the stream exists already: the merchant stops payments
     // and two nodes tell the store at once.
-    h.platform.remove_payments("alice", &acme.id).await.unwrap();
+    h.platform.stop_payments("alice", &acme.id).await.unwrap();
     let (first, second) = tokio::join!(
         orders.set_payment_method("timada-dashboard", None),
         orders.set_payment_method("timada-dashboard", None),
@@ -2830,7 +3284,17 @@ async fn an_order_kept_open_without_its_hold_is_cancelled_without_the_shops_keys
         }
     );
 
-    h.platform.remove_payments("alice", &acme.id).await.unwrap();
+    // Stopped, then forgotten once the merchant may (a kept-open order holds
+    // nothing, so nothing is owed).
+    h.platform.stop_payments("alice", &acme.id).await.unwrap();
+    h.platform
+        .forget_payments(
+            "alice",
+            &acme.id,
+            now() as u64 + timada_tenancy::FORGET_PAYMENTS_AFTER_SECS + 1,
+        )
+        .await
+        .unwrap();
     orders
         .request_cancellation("alice", &order_id, "Cancelled on AliExpress".into(), true)
         .await

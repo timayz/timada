@@ -12,8 +12,11 @@ use super::{payments_url, publish_setup};
 use crate::app::t::slug::require_tenant;
 use crate::app::tenants::{error_code, tenancy};
 
-/// Stops taking payments: storefronts are refused from the next request to
-/// pay. Orders already paid stay as they are.
+/// Stops taking payments: storefronts stop offering the card form at once
+/// and new requests to pay are refused. The keys stay, sealed, while an
+/// order holds money or anything is owed, so the sweeps and Stripe's
+/// webhook still settle it; a sweep forgets them once nothing is. Saving
+/// keys again takes payments again.
 #[route(POST)]
 pub async fn remove(cx: &Cx) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
@@ -22,7 +25,7 @@ pub async fn remove(cx: &Cx) -> Result<SeeOther> {
         .await?;
     let slug = access.tenant.slug.as_str();
     match tenancy(cx)
-        .remove_payments(&access.user_id, &access.tenant.id)
+        .stop_payments(&access.user_id, &access.tenant.id)
         .await
     {
         Ok(()) => {

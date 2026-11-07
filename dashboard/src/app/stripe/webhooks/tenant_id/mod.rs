@@ -58,9 +58,9 @@ pub async fn receive(cx: &Cx, body: Bytes) -> Result<StatusCode> {
     .map_err(topcoat::Error::from_anyhow)?;
     Ok(match outcome {
         Outcome::Placed { .. }
-        | Outcome::Released
         | Outcome::Refunded { .. }
         | Outcome::Returned { .. }
+        | Outcome::NotReturned { .. }
         | Outcome::Paid { .. }
         | Outcome::Cancelled { .. }
         | Outcome::HoldDropped { .. }

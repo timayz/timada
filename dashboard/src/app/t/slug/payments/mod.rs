@@ -5,6 +5,7 @@
 //! address shown here.
 
 pub mod configure;
+pub mod forget;
 pub mod remove;
 
 use std::sync::Arc;
@@ -25,6 +26,7 @@ use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
 use crate::config::Config;
+use crate::db::Db;
 use crate::payments::Payments;
 use crate::ui::{
     Shell, Tone, document, fact, facts, format_time, icons, notice, page_header, section_card,
@@ -81,6 +83,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let webhook = webhook_url(cx, &tenant.id);
     let slug = tenant.slug.clone();
     let settings = tenant.payments.clone();
+    // Stopped, the keys stay until the merchant forgets them: how many
+    // payments are still held or owed, and from when that is allowed.
+    let stopped = match settings.as_ref().and_then(|settings| settings.stopped_at) {
+        Some(stopped_at) => Some(Stopped {
+            owed: timada_orders::money_owed(app_context::<Db>(cx), &tenant.id)
+                .await
+                .map_err(topcoat::Error::from_anyhow)?,
+            forgettable_at: stopped_at + timada_tenancy::FORGET_PAYMENTS_AFTER_SECS,
+        }),
+        None => None,
+    };
     let title = format!("Payments · {}", tenant.name);
 
     Ok(view! {
@@ -104,23 +117,44 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 if let Some(settings) = &settings {
                     <div class="mb-4" data-payments="stripe">
                         facts(
-                            fact(term: "Status", status_badge(tone: Tone::Success, "Connected"))
+                            if stopped.is_some() {
+                                fact(term: "Status", status_badge(tone: Tone::Warning, attrs: attributes! { data-payments-stopped="" }, "Stopped"))
+                            } else {
+                                fact(term: "Status", status_badge(tone: Tone::Success, "Connected"))
+                            }
                             fact(term: "Publishable key", <code data-publishable-key="">(&settings.publishable_key)</code>)
                             fact(term: "Secret key", "Saved, never shown again")
                             fact(term: "Webhook signing secret", "Saved, never shown again")
                             fact(term: "Since", <time datetime=(settings.configured_at)>(format_time(settings.configured_at))</time>)
                         )
                     </div>
-                    <form method="post" action=(href!(remove::remove, Slug(slug.clone())))>
-                        button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop taking payments")
-                    </form>
+                    if let Some(stopped) = &stopped {
+                        <p class="mb-4 text-sm text-muted-foreground" data-payments-forgetting="">
+                            "Payments stopped. The keys stay until you forget them, to settle what is still held. "
+                            (stopped.owed_note())
+                            " They can be forgotten from "
+                            <time datetime=(stopped.forgettable_at)>(format_time(stopped.forgettable_at))</time>
+                            ", once nothing is held or owed."
+                        </p>
+                        <form method="post" action=(href!(forget::forget, Slug(slug.clone())))>
+                            button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Forget the keys")
+                        </form>
+                    } else {
+                        <form method="post" action=(href!(remove::remove, Slug(slug.clone())))>
+                            button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop taking payments")
+                        </form>
+                    }
                 } else {
                     <p class="text-sm text-muted-foreground" data-payments="none">"Not set up: shoppers cannot pay yet."</p>
                 }
             )
 
             section_card(
-                title: Some(if settings.is_some() { "Replace the keys" } else { "Connect a Stripe account" }),
+                title: Some(match &settings {
+                    Some(_) if stopped.is_some() => "Take payments again",
+                    Some(_) => "Replace the keys",
+                    None => "Connect a Stripe account",
+                }),
                 <ol class="mb-4 list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
                     <li>"In the Stripe dashboard, under Developers › API keys, copy the publishable and the secret key."</li>
                     <li>
@@ -160,4 +194,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             )
         )
     })
+}
+
+/// A tenant that stopped taking payments, as its page tells it.
+struct Stopped {
+    /// Payments still held or owed, as the orders read model counts them.
+    owed: i64,
+    /// Unix seconds from which the keys may be forgotten.
+    forgettable_at: u64,
+}
+
+impl Stopped {
+    fn owed_note(&self) -> String {
+        match self.owed {
+            0 => "Nothing is held or owed any more.".to_owned(),
+            1 => "One payment is still held or owed.".to_owned(),
+            n => format!("{n} payments are still held or owed."),
+        }
+    }
 }
