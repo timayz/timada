@@ -6,6 +6,11 @@
 //! the hold never lapses and gives back what an order already took. Delivery
 //! may repeat: an order takes its share, and gives it back, once (the
 //! catalog keeps what each order took in a stream of the order's own).
+//!
+//! A placed order also marks each of its products ordered, so the catalog
+//! refuses to delete them: they stay on record, archived at most.
+
+use std::collections::BTreeSet;
 
 use evento::{
     Evento, Executor,
@@ -66,9 +71,21 @@ async fn on_placed<E: Executor>(
     event: Event<Placed>,
 ) -> anyhow::Result<()> {
     let store: Store = context.extract();
+    let catalog = timada_catalog::Command::new(store.0, &event.tenant);
+    let products: BTreeSet<&str> = event
+        .data
+        .lines
+        .iter()
+        .map(|line| line.product_id.as_str())
+        .collect();
+    for product_id in products {
+        catalog
+            .mark_ordered(ORDERS_ACTOR, product_id, &event.aggregate_id)
+            .await?;
+    }
     let lines = stock_lines(&event.data.lines);
     settled(
-        timada_catalog::Command::new(store.0, &event.tenant)
+        catalog
             .consume_stock(
                 ORDERS_ACTOR,
                 &event.data.cart_id,

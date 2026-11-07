@@ -380,6 +380,21 @@ pub mod stock {
     }
 }
 
+pub mod ordered {
+    /// That somebody ordered a product: one stream per product, with the
+    /// deterministic id [`product_ordered_id`](crate::product_ordered_id),
+    /// written by the first order that sold it and never again. A product
+    /// ordered once stays on record: it may be archived, not deleted.
+    #[evento::aggregate(name = "timada-catalog/ProductOrdered")]
+    pub enum ProductOrdered {
+        /// `order_id` is the first order that sold it.
+        Ordered {
+            order_id: String,
+            ordered_by: String,
+        },
+    }
+}
+
 pub mod stock_take {
     use crate::value_object::TakenLine;
 

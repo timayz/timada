@@ -112,6 +112,11 @@ pub fn stock_take_id(order_id: &str) -> String {
     evento::hash_ids(vec!["stock-take", order_id])
 }
 
+/// The stream saying a product was ordered.
+pub fn product_ordered_id(product_id: &str) -> String {
+    evento::hash_ids(vec!["product-ordered", product_id])
+}
+
 /// How many events a stock generation holds before the next one is opened:
 /// well inside a stream's 65 535 versions, and short enough that loading a
 /// thing's stock stays cheap.

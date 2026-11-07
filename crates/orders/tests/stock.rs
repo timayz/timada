@@ -101,3 +101,28 @@ async fn a_paid_order_takes_its_share_and_a_cancelled_one_gives_it_back() {
     let stock = catalog.load_stock(&mug, None).await.unwrap().unwrap();
     assert_eq!(stock.on_hand, 3);
 }
+
+#[tokio::test]
+async fn a_placed_order_marks_its_products_ordered() {
+    let (executor, _) = executor_with_pool().await;
+    let orders = timada_orders::Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    // No stock counted: it is marked all the same.
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let plate = product(&catalog, "Plate", 900, "EUR").await;
+    let cart_id = cart_with(&orders, &mug, 2).await;
+    let placed = pay(&orders, &cart_id, checkout()).await;
+
+    stock_usage_subscription::<evento::Turso>(evento::Evento::new(executor.clone()))
+        .run_once(&executor)
+        .await
+        .unwrap();
+    let ordered = catalog.load_ordered(&mug).await.unwrap().unwrap();
+    assert_eq!(ordered.order_id, placed.order_id);
+    assert!(matches!(
+        catalog.delete_product(ALICE, &mug).await,
+        Err(timada_catalog::CatalogError::Ordered)
+    ));
+    assert!(catalog.load_ordered(&plate).await.unwrap().is_none());
+    catalog.delete_product(ALICE, &plate).await.unwrap();
+}
