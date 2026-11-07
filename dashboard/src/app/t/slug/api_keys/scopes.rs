@@ -18,9 +18,11 @@ use crate::auth::now;
 use crate::store_api::StoreConnections;
 
 /// Replaces a key's scopes with the ones ticked (`key_id` and one `scope:…`
-/// field per scope). Its live store connections are ended: a connection
-/// keeps the scopes it was opened with, so the stores reconnect under the
-/// new ones.
+/// field per scope). Its live store connections are ended (this node's at
+/// once, the other nodes' by their
+/// [`closing_subscription`](crate::store_api::closing_subscription)): a
+/// connection keeps the scopes it was opened with, so the stores reconnect
+/// under the new ones.
 #[route(POST)]
 pub async fn scopes(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;

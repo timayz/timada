@@ -2,7 +2,8 @@
 //! on every node in that tenant's streams only, a node that missed writes
 //! catches up on its own, a node away longer than its peers wait for it is
 //! told so and copies the store back at its next start, a node at its write
-//! backlog refuses writes, and the nodes up know who they are.
+//! backlog refuses writes, the nodes up know who they are, and a key cut off
+//! through one node loses its store connections on another.
 //!
 //! The dashboard is a binary crate, so the runtime is reached through the
 //! binary's own test harness (`#[path]` includes of the modules under test),
@@ -15,17 +16,26 @@ mod cluster;
 mod config;
 #[path = "../src/db.rs"]
 mod db;
+#[path = "../src/read_only_store.rs"]
+mod read_only_store;
+#[path = "../src/store_api.rs"]
+mod store_api;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use evento::remote::{Client, ServerHandle};
 use timada_catalog::{CreateProduct, ProductState};
-use timada_tenancy::{Command, CreateTenant, read_model_subscription};
+use timada_tenancy::{
+    Command, CreateApiKey, CreateTenant, SCOPE_STORE_READ, SCOPE_STORE_WRITE,
+    read_model_subscription,
+};
 
 use cluster::{Cluster, Executor, Files};
-use config::ClusterConfig;
+use config::{ClusterConfig, StoreApiConfig};
+use store_api::StoreConnections;
 
 struct Node {
     cluster: Arc<Cluster>,
@@ -419,6 +429,188 @@ async fn a_node_at_its_write_backlog_refuses_writes() {
     assert_eq!(limit, 3);
     assert!(kept >= 3, "{kept}");
     for node in [n0, n1] {
+        node.stop().await;
+    }
+}
+
+/// A store API on one node, with the subscription that ends its
+/// connections when a key or a tenant is cut off on any node.
+struct StoreApi {
+    connections: Arc<StoreConnections>,
+    addr: SocketAddr,
+    server: ServerHandle,
+    closing: evento::subscription::Subscription,
+}
+
+impl StoreApi {
+    async fn start(node: &Node) -> Self {
+        let connections = StoreConnections::new();
+        // Before the listener, as `serve` starts it: no connection is older.
+        let closing = store_api::closing_subscription::<Executor>(connections.clone())
+            .start(&node.store)
+            .await
+            .unwrap();
+        // The ephemeral port is only known from a listener.
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = probe.local_addr().unwrap();
+        drop(probe);
+        let config = StoreApiConfig {
+            listen: addr,
+            public_addr: None,
+            tls_cert: None,
+            tls_key: None,
+        };
+        let server = store_api::serve(Some(&config), node.store.clone(), connections.clone())
+            .await
+            .unwrap()
+            .unwrap();
+        Self {
+            connections,
+            addr,
+            server,
+            closing,
+        }
+    }
+
+    /// Connects with `token`, once the node knows the key.
+    async fn connect(&self, token: &str) -> Client {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            match Client::builder(self.addr).token(token).connect().await {
+                Ok(client) => return client,
+                Err(err) => assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "never connected: {err:#}"
+                ),
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// The error a new connection with `token` is refused with.
+    async fn refused(&self, token: &str) -> String {
+        match Client::builder(self.addr).token(token).connect().await {
+            Ok(_) => panic!("the connection must be refused"),
+            Err(err) => format!("{err:#}"),
+        }
+    }
+
+    async fn stop(self) {
+        self.closing.stop();
+        self.closing.stopped().await;
+        self.server.shutdown().await;
+    }
+}
+
+/// Waits up to thirty seconds for `ok`.
+async fn eventually(what: &str, mut ok: impl AsyncFnMut() -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !ok().await {
+        assert!(tokio::time::Instant::now() < deadline, "timed out: {what}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// What reading the tenant's own streams through `client` says: a key that
+/// may write reads them, one that may only read is told it may not.
+async fn reads_tenant_streams(client: &Client) -> Result<usize, String> {
+    use evento::{Aggregate as _, Executor as _};
+    let tenant = timada_tenancy::aggregator::Tenant::aggregate_type();
+    client
+        .read(
+            Some(Arc::from(vec![evento::EventFilter {
+                aggregate_type: tenant.to_owned(),
+                aggregate_id: None,
+                name: None,
+            }])),
+            None,
+            evento::TenantFilter::All,
+            evento::cursor::Args::forward(10, None),
+            None,
+        )
+        .await
+        .map(|page| page.edges.len())
+        .map_err(|err| format!("{err:#}"))
+}
+
+/// A storefront connects to node 1 while the merchant and the operator work
+/// on node 0: what they cut off there ends the connection on node 1, which
+/// is checked only when a connection opens.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_key_cut_off_through_one_node_ends_its_connections_on_another() {
+    let root = temp_root("store-api");
+    let addrs = free_addrs().await;
+    let nodes = start_all(&root, &addrs, Tuning::default()).await;
+    let acme = create_everywhere(&nodes, "acme").await;
+    let api = StoreApi::start(&nodes[1]).await;
+    let platform = Command(nodes[0].store.clone());
+    let new_key = async |scope: &str| {
+        platform
+            .create_api_key(
+                "alice",
+                CreateApiKey {
+                    tenant_id: acme.id.clone(),
+                    label: "Shop".into(),
+                    scopes: vec![scope.to_owned()],
+                },
+                1_800_000_000,
+            )
+            .await
+            .unwrap()
+    };
+
+    let writer = new_key(SCOPE_STORE_WRITE).await;
+    let client = api.connect(&writer.token).await;
+    assert_eq!(api.connections.count(&writer.key.id), 1);
+    assert_eq!(reads_tenant_streams(&client).await, Ok(0));
+
+    // Narrowed to reading on node 0: node 1 ends the connection, and the
+    // store comes back under the new scopes.
+    platform
+        .change_api_key_scopes(
+            "alice",
+            &writer.key.id,
+            vec![SCOPE_STORE_READ.into()],
+            1_800_000_001,
+        )
+        .await
+        .unwrap();
+    eventually("the connection comes back read-only", async || {
+        reads_tenant_streams(&client)
+            .await
+            .is_err_and(|err| err.contains("may not read"))
+    })
+    .await;
+
+    // Revoked on node 0: node 1 ends the connection for good.
+    platform
+        .revoke_api_key("alice", &writer.key.id, 1_800_000_002)
+        .await
+        .unwrap();
+    eventually("node 1 ends the revoked key's connection", async || {
+        api.connections.count(&writer.key.id) == 0
+    })
+    .await;
+    drop(client);
+    let err = api.refused(&writer.token).await;
+    assert!(err.contains("unauthorized"), "{err}");
+
+    // Suspended on node 0: node 1 ends every connection of the tenant.
+    let reader = new_key(SCOPE_STORE_READ).await;
+    let client = api.connect(&reader.token).await;
+    assert_eq!(api.connections.count_tenant(&acme.id), 1);
+    platform.suspend_tenant(&acme.id, "unpaid").await.unwrap();
+    eventually(
+        "node 1 ends the suspended tenant's connections",
+        async || api.connections.count_tenant(&acme.id) == 0,
+    )
+    .await;
+    drop(client);
+    let err = api.refused(&reader.token).await;
+    assert!(err.contains("suspended"), "{err}");
+
+    api.stop().await;
+    for node in nodes {
         node.stop().await;
     }
 }
