@@ -85,6 +85,7 @@ event timada-catalog/Product::VariantImaged { variant_id: String, image_id: Opti
 event timada-catalog/Product::VariantPriced { variant_id: String, amount_cents: u64, currency: String, priced_by: String }
 event timada-catalog/Product::VariantRemoved { variant_id: String, removed_by: String }
 event timada-catalog/Product::VariantSkuChanged { variant_id: String, sku: Option<String>, changed_by: String }
+event timada-catalog/ProductOrdered::Ordered { order_id: String, ordered_by: String }
 event timada-catalog/ProductSku::Claimed { product_id: String, variant_id: String, product_version: u16 }
 event timada-catalog/ProductSku::Released unit
 event timada-catalog/ProductSlug::Claimed { product_id: String, product_version: u16 }
