@@ -654,6 +654,62 @@ impl<E: Executor> super::Command<E> {
             }))
     }
 
+    /// Asks for money the provider took for the payment of an order
+    /// cancelled without it (`amount_cents` taken: by hand in the provider's
+    /// own dashboard, say) to go back, before the provider is asked, as
+    /// [`request_refund`](Self::request_refund) does for a paid order: the
+    /// key comes back, the same while the refund is pending. `None` once that
+    /// much went back. Only for a cancelled order whose money was never
+    /// recorded taken (`InvalidRefund` otherwise) and its own payment
+    /// (`PaymentNotFound`). Settled by [`record_refund`](Self::record_refund).
+    pub async fn request_cancelled_refund(
+        &self,
+        actor: &str,
+        order_id: &str,
+        payment_id: &str,
+        amount_cents: u64,
+        routing_key: Option<String>,
+    ) -> Result<Option<PendingRefund>, OrderError> {
+        let order = self.require_order(order_id).await?;
+        if order.payment.payment_id != payment_id {
+            return Err(OrderError::PaymentNotFound);
+        }
+        if let Some(pending) = &order.pending_refund {
+            return Ok(Some(pending.clone()));
+        }
+        if order.status != OrderStatus::Cancelled || order.is_paid() {
+            return Err(OrderError::InvalidRefund);
+        }
+        if order.refunded_cents >= amount_cents {
+            return Ok(None);
+        }
+        let idempotency_key = format!("timada-refund-{order_id}-{}", order.refund_ids.len() + 1);
+        let requested = RefundRequested {
+            payment_id: payment_id.to_owned(),
+            amount_cents: amount_cents - order.refunded_cents,
+            idempotency_key: idempotency_key.clone(),
+            requested_by: actor.to_owned(),
+        };
+        order
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&requested)
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await?;
+        Ok(Some(
+            self.require_order(order_id)
+                .await?
+                .pending_refund
+                .unwrap_or(PendingRefund {
+                    payment_id: requested.payment_id,
+                    amount_cents: requested.amount_cents,
+                    idempotency_key,
+                    requested_at: 0,
+                }),
+        ))
+    }
+
     /// Records money the provider gave back for the order's payment; the same
     /// refund recorded twice is a no-op. Settles the pending request, if any.
     pub async fn record_refund(

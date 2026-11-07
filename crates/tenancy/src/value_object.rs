@@ -81,6 +81,11 @@ pub const PERMISSION_PRODUCTS_MANAGE: &str = "products:manage";
 pub const PERMISSION_ORDERS_READ: &str = "orders:read";
 pub const PERMISSION_ORDERS_MANAGE: &str = "orders:manage";
 pub const PERMISSION_PAYMENTS_MANAGE: &str = "payments:manage";
+
+/// How long after payments were stopped their keys may be forgotten, in
+/// seconds: longer than a card holds money (seven days at Stripe), so no
+/// payment confirmed before the stop is still held.
+pub const FORGET_PAYMENTS_AFTER_SECS: u64 = 8 * 24 * 60 * 60;
 pub const PERMISSION_DISCOUNTS_READ: &str = "discounts:read";
 pub const PERMISSION_DISCOUNTS_MANAGE: &str = "discounts:manage";
 pub const PERMISSION_REVIEWS_READ: &str = "reviews:read";

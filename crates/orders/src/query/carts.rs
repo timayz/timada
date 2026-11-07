@@ -108,6 +108,24 @@ pub async fn paying_carts_before(
     .await
 }
 
+/// The carts of every tenant giving a payment back whose return was asked
+/// for before `asked_before` (unix seconds) and is not settled yet: the
+/// provider did not answer, or the node asking stopped. Grouped by tenant,
+/// oldest first.
+pub async fn returns_due(
+    db: &Db,
+    asked_before: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<crate::PaymentDue>> {
+    db.fetch_all(
+        "SELECT tenant_id, id FROM orders_carts
+         WHERE return_requested_at < ?1
+         ORDER BY tenant_id, return_requested_at, id LIMIT ?2",
+        (asked_before, limit),
+    )
+    .await
+}
+
 /// The carts of every tenant with a request to pay asked at `before` (unix
 /// seconds) or earlier that nobody answered yet: the write model says
 /// whether a node still holds it. Oldest first.

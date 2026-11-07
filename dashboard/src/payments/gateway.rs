@@ -139,11 +139,16 @@ pub enum ReleaseAnswer {
 /// asking again the same way gets the same answer. Any other error (no
 /// answer, a 5xx, a 429, a [`Busy`]) is worth asking again later.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Refused(pub String);
+pub struct Refused {
+    /// What the provider said.
+    pub message: String,
+    /// Its code for the refusal (`charge_disputed`), when it gave one.
+    pub code: Option<String>,
+}
 
 impl std::fmt::Display for Refused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 
@@ -361,11 +366,13 @@ where
             StripeError::Stripe(errors, status)
                 if (400..500).contains(&status) && status != 429 =>
             {
-                anyhow::Error::new(Refused(
-                    errors
+                let errors = *errors;
+                anyhow::Error::new(Refused {
+                    message: errors
                         .message
                         .unwrap_or_else(|| format!("Stripe refused the request ({status})")),
-                ))
+                    code: errors.code.map(|code| code.as_str().to_owned()),
+                })
             }
             err => anyhow::anyhow!("{err}"),
         })?;
@@ -511,7 +518,7 @@ impl PaymentGateway for StripeGateway {
             PaymentState::Cancelled => CaptureAnswer::Cancelled {
                 lapsed: status.lapsed,
             },
-            _ => CaptureAnswer::Refused(refused.0),
+            _ => CaptureAnswer::Refused(refused.message),
         })
     }
 
@@ -631,7 +638,10 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             refusal(&err),
-            Some(&Refused("Your card was declined.".into()))
+            Some(&Refused {
+                message: "Your card was declined.".into(),
+                code: Some("card_declined".into()),
+            })
         );
 
         // Too many requests: worth asking again later, but not busy.

@@ -16,6 +16,7 @@ use topcoat::{
 use super::{payments_url, publish_setup};
 use crate::app::t::slug::require_tenant;
 use crate::app::tenants::{error_code, tenancy};
+use crate::db::Db;
 use crate::payments::Payments;
 
 #[derive(Deserialize)]
@@ -25,7 +26,10 @@ pub struct ConfigureForm {
     webhook_secret: String,
 }
 
-/// Saves the Stripe account once Stripe accepts its secret key.
+/// Saves the Stripe account once Stripe accepts its secret key; after a
+/// stop, it takes payments again. Another account is refused while anything
+/// is held or owed under the current one: another publishable key, or a
+/// secret key that cannot read a payment still held.
 #[route(POST)]
 pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
@@ -68,6 +72,36 @@ pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOt
             Some("stripe_refused_key"),
             None,
         )));
+    }
+    // What is still held or owed is settled under the account it was paid
+    // through: until it is, another account's keys would strand it. The
+    // same account's keys (a rolled secret key) are fine: the new key must
+    // read one of the payments still held, and keep the publishable key.
+    if let Some(current) = &access.tenant.payments {
+        let db = app_context::<Db>(cx);
+        let owed = timada_orders::money_owed(db, &access.tenant.id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        let other_account = owed > 0
+            && (current.publishable_key != form.publishable_key.trim()
+                || match timada_orders::owed_payment_id(db, &access.tenant.id)
+                    .await
+                    .map_err(topcoat::Error::from_anyhow)?
+                {
+                    Some(payment_id) => !payments
+                        .reads_payment(secret_key, &payment_id)
+                        .await
+                        .map_err(topcoat::Error::from_anyhow)?,
+                    None => false,
+                });
+        if other_account {
+            return Ok(see_other(payments_url(
+                cx,
+                slug,
+                Some("account_in_use"),
+                None,
+            )));
+        }
     }
     let cmd = ConfigurePayments {
         provider: PROVIDER_STRIPE.to_owned(),

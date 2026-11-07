@@ -154,12 +154,13 @@ pub struct PaymentDue {
 }
 
 /// The orders of every tenant whose money needs looking after at `now`
-/// (Unix seconds): a capture or a cancellation asked before `asked_before`
-/// and still unanswered, a hold whose time ran out, or an order of goods the
-/// shop holds itself, placed before `asked_before` and still only held.
-/// Grouped by tenant, oldest first. An order whose hold went back and that
-/// stays open (its supplier may have it) waits for the merchant: nothing is
-/// left to settle with the provider until they ask to cancel it.
+/// (Unix seconds): a capture, a cancellation or a refund asked before
+/// `asked_before` and still unanswered, a hold whose time ran out, or an
+/// order of goods the shop holds itself, placed before `asked_before` and
+/// still only held. Grouped by tenant, oldest first. An order whose hold
+/// went back and that stays open (its supplier may have it) waits for the
+/// merchant: nothing is left to settle with the provider until they ask to
+/// cancel it, or a refund is asked.
 pub async fn payments_due(
     db: &Db,
     now: i64,
@@ -168,14 +169,58 @@ pub async fn payments_due(
 ) -> anyhow::Result<Vec<PaymentDue>> {
     db.fetch_all(
         "SELECT tenant_id, id FROM orders_orders
-         WHERE (status = 'authorized' OR cancel_requested_at IS NOT NULL)
-           AND (payment_state <> 'released' OR cancel_requested_at IS NOT NULL)
-           AND (capture_requested_at < ?2 OR cancel_requested_at < ?2 OR capture_before < ?1
+         WHERE (status = 'authorized' OR cancel_requested_at IS NOT NULL
+                OR refund_requested_at IS NOT NULL)
+           AND (payment_state <> 'released' OR cancel_requested_at IS NOT NULL
+                OR refund_requested_at IS NOT NULL)
+           AND (capture_requested_at < ?2 OR cancel_requested_at < ?2
+                OR refund_requested_at < ?2 OR capture_before < ?1
                 OR (supplier IS NULL AND payment_state = 'held' AND placed_at < ?2))
          ORDER BY tenant_id, placed_at, id LIMIT ?3",
         (now, asked_before, limit),
     )
     .await
+}
+
+/// How many payments the tenant still holds or owes, each needing its
+/// provider account to settle:
+/// - orders whose money is held on the shopper's card (an authorized order
+///   whose hold went back holds nothing), or asked to be taken, cancelled or
+///   refunded;
+/// - carts with a payment open (a card form that may still confirm), one on
+///   its way back, or a request to pay being answered.
+pub async fn money_owed(db: &Db, tenant_id: &str) -> anyhow::Result<i64> {
+    db.fetch_scalar(
+        "SELECT (
+            SELECT count(*) FROM orders_orders WHERE tenant_id = ?1
+              AND ((status = 'authorized' AND payment_state <> 'released')
+                   OR capture_requested_at IS NOT NULL OR cancel_requested_at IS NOT NULL
+                   OR refund_requested_at IS NOT NULL)
+         ) + (
+            SELECT count(*) FROM orders_carts WHERE tenant_id = ?1
+              AND (status = 'paying' OR return_requested_at IS NOT NULL
+                   OR unanswered_since IS NOT NULL)
+         )",
+        (tenant_id,),
+    )
+    .await
+}
+
+/// The provider's id of one payment the tenant's orders still hold or owe,
+/// if any: what a key is asked to read to show it opens the account those
+/// payments were made through.
+pub async fn owed_payment_id(db: &Db, tenant_id: &str) -> anyhow::Result<Option<String>> {
+    let row: Option<(String,)> = db
+        .fetch_optional(
+            "SELECT payment_id FROM orders_orders WHERE tenant_id = ?1
+               AND ((status = 'authorized' AND payment_state <> 'released')
+                    OR capture_requested_at IS NOT NULL OR cancel_requested_at IS NOT NULL
+                    OR refund_requested_at IS NOT NULL)
+             ORDER BY placed_at, id LIMIT 1",
+            (tenant_id,),
+        )
+        .await?;
+    Ok(row.map(|(payment_id,)| payment_id))
 }
 
 /// An order that left, across every tenant this node follows.

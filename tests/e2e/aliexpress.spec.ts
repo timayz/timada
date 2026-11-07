@@ -615,6 +615,25 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
     const secondReference = (await page.locator("[data-order-reference]").textContent()) ?? "";
     await expect(page.locator("[data-order-cancel]")).toBeVisible();
     const paidMails = await mailCountOf(request, "ada@example.org", "Payment received for your ");
+    // Stopped while its money is held: no new payment, the keys kept until
+    // the merchant forgets them. Saving them again takes payments again.
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders`);
+      await expect(page.locator(`[data-order="${secondReference.trim()}"]`)).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await page.goto(`/t/${slug}/payments`);
+    await page.getByRole("button", { name: "Stop taking payments" }).click();
+    await expect(page.getByRole("status")).toContainText("Payments stopped.");
+    await expect(page.locator("[data-payments-stopped]")).toBeVisible();
+    await expect(page.locator("[data-payments-forgetting]")).toContainText("The keys stay until you forget them");
+    await expect(page.locator("[data-payments-forgetting]")).toContainText("still held or owed");
+    await expect(page.getByRole("button", { name: "Forget the keys" })).toBeVisible();
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await expect(page.locator("[data-payments-stopped]")).toHaveCount(0);
     await page.goto(`/t/${slug}/orders/${second}`);
     await page.getByRole("button", { name: "Place on AliExpress" }).click();
     await forwardIs(page, `/t/${slug}/orders/${second}`, "placed");

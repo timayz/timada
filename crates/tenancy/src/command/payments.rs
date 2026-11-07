@@ -1,8 +1,10 @@
 use evento::{Executor, ProjectionAggregate};
 
-use crate::aggregator::{PaymentsConfigured, PaymentsRemoved};
+use crate::aggregator::{PaymentsConfigured, PaymentsForgotten, PaymentsStopped};
 use crate::error::TenancyError;
-use crate::value_object::PERMISSION_PAYMENTS_MANAGE;
+use crate::value_object::{FORGET_PAYMENTS_AFTER_SECS, PERMISSION_PAYMENTS_MANAGE};
+
+use super::PaymentSettings;
 
 /// The merchant's account with the payment provider, its secrets sealed by
 /// the host.
@@ -16,7 +18,8 @@ pub struct ConfigurePayments {
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Sets (or replaces) how shoppers pay. Needs `payments:manage`.
+    /// Sets (or replaces) how shoppers pay, and takes payments again after
+    /// a stop. Needs `payments:manage`.
     pub async fn configure_payments(
         &self,
         actor_user_id: &str,
@@ -47,9 +50,12 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Stops taking payments; nothing set up is a no-op. Needs
+    /// Stops taking payments: no new payment is opened from now on. The keys
+    /// stay, sealed, so what is still held or owed is settled, until the
+    /// merchant forgets them ([`forget_payments`](Self::forget_payments)).
+    /// Nothing set up, or stopped already, is a no-op. Needs
     /// `payments:manage`.
-    pub async fn remove_payments(
+    pub async fn stop_payments(
         &self,
         actor_user_id: &str,
         tenant_id: &str,
@@ -59,14 +65,57 @@ impl<E: Executor> super::Command<E> {
         if !tenant.can(actor_user_id, PERMISSION_PAYMENTS_MANAGE) {
             return Err(TenancyError::Forbidden);
         }
-        if tenant.payments.is_none() {
+        if tenant
+            .payments
+            .as_ref()
+            .is_none_or(PaymentSettings::is_stopped)
+        {
             return Ok(());
         }
         tenant
             .write()?
             .routing_key_opt(routing_key)
-            .event(&PaymentsRemoved {
-                removed_by: actor_user_id.to_owned(),
+            .event(&PaymentsStopped {
+                stopped_by: actor_user_id.to_owned(),
+            })
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Forgets the keys of a tenant that stopped taking payments: the
+    /// merchant's call, once the dashboard found nothing held or owed any
+    /// more. Refused while payments are taken (`PaymentsNotStopped`) and
+    /// until the stop is [`FORGET_PAYMENTS_AFTER_SECS`] old at `now` (unix
+    /// seconds; `PaymentsStoppedRecently`): no card still holds money for a
+    /// payment confirmed before it. Written at the version read, so keys
+    /// saved again meanwhile win; nothing set up is a no-op. Needs
+    /// `payments:manage`.
+    pub async fn forget_payments(
+        &self,
+        actor_user_id: &str,
+        tenant_id: &str,
+        now: u64,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let tenant = self.require_active(tenant_id).await?;
+        if !tenant.can(actor_user_id, PERMISSION_PAYMENTS_MANAGE) {
+            return Err(TenancyError::Forbidden);
+        }
+        let Some(payments) = &tenant.payments else {
+            return Ok(());
+        };
+        let Some(stopped_at) = payments.stopped_at else {
+            return Err(TenancyError::PaymentsNotStopped);
+        };
+        if now < stopped_at.saturating_add(FORGET_PAYMENTS_AFTER_SECS) {
+            return Err(TenancyError::PaymentsStoppedRecently);
+        }
+        tenant
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&PaymentsForgotten {
+                forgotten_by: actor_user_id.to_owned(),
             })
             .commit(&self.0)
             .await?;

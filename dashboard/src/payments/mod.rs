@@ -105,8 +105,33 @@ impl Payments {
         self.sealer()?.seal_for(tenant_id, plain)
     }
 
+    /// The account new payments open with: none once the tenant stopped
+    /// taking payments, whose keys only settle what is held or owed.
+    pub fn checkout_account_of(&self, tenant: &TenantState) -> anyhow::Result<Option<Account>> {
+        let stopped = tenant
+            .payments
+            .as_ref()
+            .is_some_and(timada_tenancy::PaymentSettings::is_stopped);
+        if stopped {
+            return Ok(None);
+        }
+        self.account_of(tenant)
+    }
+
+    /// Whether `secret_key` reads the payment `payment_id`, one the tenant
+    /// still holds or owes: whether it opens the account that payment was
+    /// made through. Another account's key is told there is no such payment.
+    pub async fn reads_payment(&self, secret_key: &str, payment_id: &str) -> anyhow::Result<bool> {
+        match self.gateway.payment_status(secret_key, payment_id).await {
+            Ok(_) => Ok(true),
+            Err(err) if err.downcast_ref::<Refused>().is_some() => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+
     /// The tenant's Stripe account, opened; `None` when it set up none or
-    /// payments are off here.
+    /// payments are off here. A tenant that stopped taking payments keeps
+    /// it until the merchant forgets it, to settle what is held or owed.
     pub fn account_of(&self, tenant: &TenantState) -> anyhow::Result<Option<Account>> {
         let (Some(settings), Some(sealer)) = (&tenant.payments, &self.sealer) else {
             return Ok(None);
