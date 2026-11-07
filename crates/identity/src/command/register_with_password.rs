@@ -51,9 +51,7 @@ impl<E: Executor> super::Command<E> {
             routing_key.clone(),
         )
         .await?;
-        if let Some(owner) = self.load_email_account(&email).await?
-            && self.load_user(&owner.user_id).await?.is_some()
-        {
+        if self.email_user(&email).await?.is_some() {
             return Err(IdentityError::AlreadyRegistered);
         }
 

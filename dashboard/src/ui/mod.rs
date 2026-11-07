@@ -308,12 +308,18 @@ pub fn describe_error(code: &str) -> &'static str {
         "hold_expired" => {
             "The hold on the shopper's card had expired: nothing was taken, and the order is cancelled."
         }
+        "hold_expired_supplier_ordered" => {
+            "The hold on the shopper's card had expired: nothing was taken. AliExpress may have the order, so it stays open: settle it with the shopper, then cancel it."
+        }
         "order_fulfilled" => "This order has left already.",
         "hold_expiring" => {
             "The hold on the shopper's card ends too soon to buy the goods: take the payment first."
         }
         "supplier_ordered" => {
             "AliExpress may already have this order: tick that you cancel it there too."
+        }
+        "supplier_asking" => {
+            "The order is being placed on AliExpress, or AliExpress took it: there is nothing to rule out."
         }
         "invalid_storefront_url" => {
             "A storefront address starts with https:// and is at most 200 characters."
@@ -359,6 +365,9 @@ pub fn describe_error(code: &str) -> &'static str {
             "This order is being placed on AliExpress. If it stays so, look at the account's orders on AliExpress, then place it again."
         }
         "aliexpress_nothing_to_forward" => "No item of this order comes from AliExpress.",
+        "aliexpress_list_catching_up" => {
+            "AliExpress's list of orders may not show an order it just took: look there again in half an hour."
+        }
         "aliexpress_sync_failed" => "AliExpress did not answer. The product is read again later.",
         "secrets_disabled" => {
             "No secret can be kept on this platform: the operator has to set secrets.key first."

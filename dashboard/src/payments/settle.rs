@@ -10,6 +10,7 @@
 
 use timada_orders::{
     CancelPath, HOLD_CANCELLED_REASON, HOLD_EXPIRED_REASON, OrderError, OrderStatus, PendingRefund,
+    Released,
 };
 
 use super::{Account, CaptureAnswer, DASHBOARD_ACTOR, Payments, ReleaseAnswer};
@@ -29,6 +30,9 @@ pub enum CaptureOutcome {
     /// The hold was gone (it lapsed, or was cancelled in the provider's
     /// dashboard): the order is cancelled, nothing taken.
     Released,
+    /// The hold was gone and the supplier may have the order: nothing taken,
+    /// the hold recorded gone, and the order left open for the merchant.
+    KeptOpen,
     /// The provider could not be reached: the request stands, and is asked
     /// again later.
     Unanswered,
@@ -87,16 +91,24 @@ pub async fn capture(
             Ok(CaptureOutcome::Paid)
         }
         Ok(CaptureAnswer::Cancelled { lapsed }) => {
-            orders
+            match orders
                 .record_release(
                     DASHBOARD_ACTOR,
                     order_id,
                     &pending.payment_id,
                     release_reason(lapsed),
                 )
-                .await?;
-            tracing::warn!(tenant = %orders.tenant(), order = %order_id, lapsed, "an order's hold was gone when its payment was taken: cancelled");
-            Ok(CaptureOutcome::Released)
+                .await?
+            {
+                Released::Cancelled => {
+                    tracing::warn!(tenant = %orders.tenant(), order = %order_id, lapsed, "an order's hold was gone when its payment was taken: cancelled");
+                    Ok(CaptureOutcome::Released)
+                }
+                Released::KeptOpen => {
+                    tracing::error!(tenant = %orders.tenant(), order = %order_id, lapsed, "an order's hold was gone when its payment was taken, and its supplier may have it: left open for the merchant");
+                    Ok(CaptureOutcome::KeptOpen)
+                }
+            }
         }
         Ok(CaptureAnswer::Refused(reason)) => {
             orders
@@ -112,14 +124,48 @@ pub async fn capture(
     }
 }
 
+/// Settles the standing cancellation of an order whose hold went back
+/// already, kept open because its supplier may have had it: nothing is held,
+/// so no provider is asked, and none need be there (the shop's keys may be
+/// gone, or be another account's that never saw the payment). `None` for
+/// any other order, which [`settle_cancellation`] settles with the provider.
+pub async fn settle_released_cancellation(
+    orders: &Orders,
+    order_id: &str,
+) -> anyhow::Result<Option<CancelOutcome>> {
+    let Some(order) = orders.load_order(order_id).await? else {
+        return Ok(None);
+    };
+    let Some(asked) = order.pending_cancellation.clone() else {
+        return Ok(None);
+    };
+    if order.released_at.is_none() || order.is_paid() || order.status == OrderStatus::Cancelled {
+        return Ok(None);
+    }
+    orders
+        .record_release(
+            DASHBOARD_ACTOR,
+            order_id,
+            &order.payment.payment_id,
+            &asked.reason,
+        )
+        .await?;
+    Ok(Some(CancelOutcome::Cancelled))
+}
+
 /// Settles a standing cancellation: the hold given back, or what was taken
-/// refunded (under the key the order fixed), then the order cancelled.
+/// refunded (under the key the order fixed), then the order cancelled. One
+/// whose hold went back already asks the provider nothing
+/// ([`settle_released_cancellation`]).
 pub async fn settle_cancellation(
     payments: &Payments,
     account: &Account,
     orders: &Orders,
     order_id: &str,
 ) -> anyhow::Result<CancelOutcome> {
+    if let Some(settled) = settle_released_cancellation(orders, order_id).await? {
+        return Ok(settled);
+    }
     let Some(order) = orders.load_order(order_id).await? else {
         return Ok(CancelOutcome::Nothing);
     };

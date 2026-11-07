@@ -17,12 +17,49 @@ impl<E: Executor> super::Command<E> {
         subscriber_id: &str,
         routing_key: Option<String>,
     ) -> Result<(), NewsletterError> {
+        self.forget(keys, actor, subscriber_id, None, routing_key)
+            .await
+    }
+
+    /// Erases the subscription sealed under `key_id`, as the deletion of a
+    /// shopper account names it. The address may have subscribed again
+    /// since, on the same stream under a new key: that newer subscription
+    /// is left alone. Already erased, or unknown, is a no-op.
+    pub async fn forget_subscription(
+        &self,
+        keys: &dyn Keys,
+        actor: &str,
+        subscriber_id: &str,
+        key_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), NewsletterError> {
+        match self
+            .forget(keys, actor, subscriber_id, Some(key_id), routing_key)
+            .await
+        {
+            Err(NewsletterError::NotFound) => Ok(()),
+            done => done,
+        }
+    }
+}
+
+impl<E: Executor> super::Command<E> {
+    /// Erases the subscriber, when `key_id` is `None` or the key it is
+    /// sealed under now.
+    async fn forget(
+        &self,
+        keys: &dyn Keys,
+        actor: &str,
+        subscriber_id: &str,
+        key_id: Option<&str>,
+        routing_key: Option<String>,
+    ) -> Result<(), NewsletterError> {
         loop {
             let state = self
                 .load_subscriber_any(subscriber_id)
                 .await?
                 .ok_or(NewsletterError::NotFound)?;
-            if state.forgotten {
+            if state.forgotten || key_id.is_some_and(|key_id| key_id != state.key_id) {
                 return Ok(());
             }
             match state

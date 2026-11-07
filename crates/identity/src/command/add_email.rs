@@ -4,6 +4,9 @@ use crate::aggregator::EmailAdded;
 use crate::error::IdentityError;
 use crate::value_object::{ChallengePurpose, normalize_email};
 
+use super::email_index::free_email_index;
+use super::surely_not_written;
+
 /// The e-mail + password method for a user who signed up with a provider or
 /// a passkey, once the address was proven with a mailed code. The web layer
 /// hashes the password when the form is submitted and carries the hash until
@@ -37,8 +40,9 @@ impl<E: Executor> super::Command<E> {
     /// address whose mail the person reads). A user who already has an
     /// address keeps it: the address of the method is set once. The index is
     /// claimed first so that a lost race never leaves a user with an address
-    /// that belongs to someone else; a failure after the claim releases it
-    /// again.
+    /// that belongs to someone else; a record refused after the claim
+    /// releases it again, one that may still land keeps it
+    /// ([`super::surely_not_written`]).
     pub async fn add_email(
         &self,
         cmd: AddEmail,
@@ -64,9 +68,7 @@ impl<E: Executor> super::Command<E> {
             routing_key.clone(),
         )
         .await?;
-        if let Some(owner) = self.load_email_account(&email).await?
-            && self.load_user(&owner.user_id).await?.is_some()
-        {
+        if self.email_user(&email).await?.is_some() {
             return Err(IdentityError::AlreadyRegistered);
         }
 
@@ -85,9 +87,8 @@ impl<E: Executor> super::Command<E> {
             })
             .await;
         if let Err(err) = added {
-            if let Err(release) = self
-                .release_email_index(&user_id, &email, routing_key)
-                .await
+            if surely_not_written(&err)
+                && let Err(release) = free_email_index(&self.executor, &user_id, &email, None).await
             {
                 tracing::error!(%release, user_id, "cannot release the address after a failed add");
             }

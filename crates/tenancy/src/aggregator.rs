@@ -268,6 +268,14 @@ pub enum Invitation {
     Revoked {
         revoked_by: String,
     },
+    /// What the acceptance came to, settled once: the invitee holds the seat
+    /// it promised (granted by it, or held already).
+    SeatGranted,
+    /// The acceptance grants no seat; `reason` is the refusal's code
+    /// (`unknown_role`: the role it carried was removed before the grant).
+    SeatRefused {
+        reason: String,
+    },
 }
 
 /// The store API key events, in their own module: the macro names an event

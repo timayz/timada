@@ -14,6 +14,9 @@ use sha2::Sha256;
 /// AliExpress documents it (and warns it may change).
 pub const ORDER_STATUS_MESSAGE_TYPE: i64 = 53;
 
+/// What a push says of an order AliExpress closed without shipping it.
+pub const ORDER_CLOSED: &str = "OrderClosed";
+
 /// Whether `authorization` signs `body` for the app: HMAC-SHA256 of the app
 /// key followed by the raw body, keyed by the app secret, in hex (either
 /// case), compared in constant time.

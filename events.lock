@@ -2,6 +2,10 @@
 # `event` and `type` lines are frozen — add a new variant instead of editing
 # one. A `view` line may change when its projection's `.revision(n)` grows.
 
+event timada-aliexpress/AeOrder::Claimed { ae_order_id: String, tenant_id: String, forward_id: String }
+event timada-aliexpress/AeOrder::Pushed { ae_order_id: String, status: String }
+event timada-aliexpress/Forward::AlsoPlaced { ae_order_ids: Vec<String>, placed_by: String }
+event timada-aliexpress/Forward::Asking { asked_by: String }
 event timada-aliexpress/Forward::Checked { ae_order_id: String, status: String, logistics_status: String, tracking: Vec<String>, closed: bool }
 event timada-aliexpress/Forward::Done { tracking: Option<String>, fulfilled: bool }
 event timada-aliexpress/Forward::Failed { reason: String, failed_by: String }
@@ -85,9 +89,10 @@ event timada-catalog/Product::VariantImaged { variant_id: String, image_id: Opti
 event timada-catalog/Product::VariantPriced { variant_id: String, amount_cents: u64, currency: String, priced_by: String }
 event timada-catalog/Product::VariantRemoved { variant_id: String, removed_by: String }
 event timada-catalog/Product::VariantSkuChanged { variant_id: String, sku: Option<String>, changed_by: String }
-event timada-catalog/ProductSku::Claimed { product_id: String, variant_id: String }
+event timada-catalog/ProductOrdered::Ordered { order_id: String, ordered_by: String }
+event timada-catalog/ProductSku::Claimed { product_id: String, variant_id: String, product_version: u16 }
 event timada-catalog/ProductSku::Released unit
-event timada-catalog/ProductSlug::Claimed { product_id: String }
+event timada-catalog/ProductSlug::Claimed { product_id: String, product_version: u16 }
 event timada-catalog/ProductSlug::Released unit
 event timada-catalog/StockItem::Consumed { cart_id: String, order_id: String, quantity: u32, consumed_by: String }
 event timada-catalog/StockItem::OnHandSet { on_hand: u32, set_by: String }
@@ -223,7 +228,9 @@ event timada-orders/Order::RefundRequested { payment_id: String, amount_cents: u
 event timada-orders/Order::Refunded { payment_id: String, refund_id: String, amount_cents: u64, refunded_by: String }
 event timada-orders/Order::ShippingCharged { method_id: String, name: String, amount_cents: u64, charged_by: String }
 event timada-orders/Order::SupplierOrderRefused { supplier: String, reason: String, refused_by: String }
+event timada-orders/Order::SupplierOrderRuledOut { supplier: String, ruled_out_by: String }
 event timada-orders/Order::SupplierOrderStarted { supplier: String, started_by: String }
+event timada-orders/Order::SupplierOrderUncertain { supplier: String, reason: String, marked_by: String }
 event timada-orders/Order::TimeZoneSet { time_zone: String, set_by: String }
 event timada-orders/OrderMail::Mailed { order_id: String, mail: String, email: String, mailed_by: String }
 event timada-orders/OrderReference::Claimed { order_id: String }
@@ -250,7 +257,7 @@ event timada-pages/Page::Published { published_by: String }
 event timada-pages/Page::Renamed { slug: String, renamed_by: String }
 event timada-pages/Page::SeoSet { meta_title: String, meta_description: String, set_by: String }
 event timada-pages/Page::Unpublished { unpublished_by: String }
-event timada-pages/PageSlug::Claimed { page_id: String }
+event timada-pages/PageSlug::Claimed { page_id: String, page_version: u16 }
 event timada-pages/PageSlug::Released unit
 event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }
 event timada-reviews/Review::Published { published_by: String }
@@ -265,7 +272,7 @@ event timada-reviews/ReviewRequests::RequestDelaySet { days: u8, set_by: String 
 event timada-reviews/ReviewRequests::RequestsDisabled { disabled_by: String }
 event timada-shoppers/Shopper::AddressRemoved { address_id: String }
 event timada-shoppers/Shopper::AddressSaved { address_id: String, address: Vec<u8> }
-event timada-shoppers/Shopper::Forgotten { key_id: String }
+event timada-shoppers/Shopper::Forgotten { key_id: String, newsletter: Option<crate::value_object::NewsletterSubscription> }
 event timada-shoppers/Shopper::Registered { key_id: String, email: Vec<u8> }
 event timada-shoppers/Shopper::SessionsRevoked { except_session: Option<String> }
 event timada-shoppers/ShopperChallenge::AttemptFailed unit
@@ -292,6 +299,8 @@ event timada-tenancy/CompanySiren::Claimed { company_id: String }
 event timada-tenancy/CompanySiren::Released { released_by: String }
 event timada-tenancy/Invitation::Accepted { user_id: String, accepted_at: u64 }
 event timada-tenancy/Invitation::Revoked { revoked_by: String }
+event timada-tenancy/Invitation::SeatGranted unit
+event timada-tenancy/Invitation::SeatRefused { reason: String }
 event timada-tenancy/Invitation::Sent { tenant_id: String, email: String, role: String, invited_by: String, sent_at: u64, expires_at: u64 }
 event timada-tenancy/Tenant::AliexpressConfigured { ship_to_country: String, currency: String, language: String, configured_by: String }
 event timada-tenancy/Tenant::AliexpressForwardingSet { auto_forward: bool, try_to_pay: bool, set_by: String }
@@ -349,6 +358,7 @@ type timada_orders::value_object::OrderLine { product_id: String, variant_id: Op
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String, capture_before: Option<u64> }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, region: Option<String>, country: String, phone: Option<String> }
 type timada_reviews::value_object::ReviewPhoto { id: String, ext: String, mime: String, size: u64, width: Option<u32>, height: Option<u32> }
+type timada_shoppers::value_object::NewsletterSubscription { subscriber_id: String, key_id: String }
 type timada_tenancy::value_object::PriceBand { up_to_cents: u64, rule: PricingRule }
 type timada_tenancy::value_object::Pricing { bands: Vec<PriceBand>, above: PricingRule }
 type timada_tenancy::value_object::PricingRule { multiplier_bps: u32, plus_cents: u64, rounding: Rounding }

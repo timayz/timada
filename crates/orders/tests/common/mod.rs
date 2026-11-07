@@ -236,10 +236,12 @@ pub async fn cancel(orders: &Orders, order_id: &str, reason: &str) {
         .await
         .unwrap()
     {
-        CancelPath::Release { payment_id } => orders
-            .record_release(DASHBOARD, order_id, &payment_id, "")
-            .await
-            .unwrap(),
+        CancelPath::Release { payment_id } => {
+            orders
+                .record_release(DASHBOARD, order_id, &payment_id, "")
+                .await
+                .unwrap();
+        }
         CancelPath::Refund => {
             let outstanding = orders
                 .load_order(order_id)

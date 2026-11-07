@@ -56,7 +56,13 @@ sweep, as the webhook would.
 A card holds the money for a week. Stripe drops a hold nobody took
 (`payment_intent.canceled`): the order is cancelled, nothing taken, its goods back on
 the shelf. The order page shows until when the card holds it, and the AliExpress
-forwarder does not place an order whose hold ends within twelve hours.
+forwarder does not place an order whose hold ends within twelve hours. A hold dropped
+once AliExpress may have the order (`Order::SupplierOrderStarted`, no cancellation
+asked) cancels nothing, as AliExpress may be shipping it: the order records the hold
+gone (`Order::PaymentReleased` alone) and stays open for the merchant, who settles it
+with the shopper and cancels it, saying they cancelled it on AliExpress too. That
+cancellation asks Stripe nothing, as nothing is held any more, and it is settled even
+once the shop took its Stripe keys away.
 
 The shopper may cancel an order of goods a supplier buys after the sale until the
 shop asks the supplier for them (`/store/orders/{order_id}/cancel`): its hold goes back,

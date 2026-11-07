@@ -41,7 +41,8 @@ use crate::aggregator::{
     MailBrandingSet, MailLanguagesSet, MailServerAdded, MailServerChanged, MailServerDeleted,
     MailServersPicked, MailTemplateReset, MailTemplateSaved, MailTemplateTextSaved, MemberGranted,
     MemberRevoked, MemberRoleChanged, PaymentsConfigured, PaymentsForgotten, PaymentsStopped,
-    Released, Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, Sent, Suspended,
+    Released, Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, SeatGranted,
+    SeatRefused, Sent, Suspended,
 };
 use crate::value_object::{
     ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id, tenant_slug_id,
@@ -57,6 +58,12 @@ impl<E: Executor> Deref for Command<E> {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
+}
+
+/// Unix milliseconds of an event as the store stamped it, to order events of
+/// two streams.
+fn event_millis(event: &evento::Event) -> u64 {
+    event.timestamp * 1000 + u64::from(event.timestamp_subsec)
 }
 
 // =============================================================================
@@ -80,6 +87,9 @@ pub struct TenantState {
     pub suspended: Option<String>,
     /// `user id → role`, sorted so pages are stable.
     pub members: BTreeMap<String, String>,
+    /// When each former member was last removed, in unix milliseconds: an
+    /// invitation they accepted before that grants them nothing.
+    pub removed_members: BTreeMap<String, u64>,
     /// The custom roles, by name. `owner` is not among them: it is implicit
     /// and grants everything.
     pub roles: BTreeMap<String, RoleDef>,
@@ -419,6 +429,7 @@ async fn on_member_granted(
     tenant
         .members
         .insert(event.data.user_id.to_owned(), event.data.role.to_owned());
+    tenant.removed_members.remove(&event.data.user_id);
     Ok(())
 }
 
@@ -439,6 +450,9 @@ async fn on_member_revoked(
     tenant: &mut TenantState,
 ) -> anyhow::Result<()> {
     tenant.members.remove(&event.data.user_id);
+    tenant
+        .removed_members
+        .insert(event.data.user_id.to_owned(), event_millis(&event));
     Ok(())
 }
 
@@ -920,6 +934,8 @@ async fn on_company_unlinked(
 pub struct TenantSlugState {
     pub id: String,
     pub tenant_id: String,
+    /// Unix seconds of the last claim.
+    pub claimed_at: u64,
     pub released: bool,
 }
 
@@ -934,6 +950,7 @@ pub fn tenant_slug_projection<E: Executor>() -> Projection<E, TenantSlugState> {
 async fn on_slug_claimed(event: Event<Claimed>, index: &mut TenantSlugState) -> anyhow::Result<()> {
     index.id = event.aggregate_id.to_owned();
     index.tenant_id = event.data.tenant_id.to_owned();
+    index.claimed_at = event.timestamp;
     index.released = false;
     Ok(())
 }
@@ -965,7 +982,23 @@ pub struct InvitationState {
     pub expires_at: u64,
     pub accepted_by: Option<String>,
     pub accepted_at: Option<u64>,
+    /// Unix milliseconds of `Accepted` as the store stamped it, which orders
+    /// it against the tenant's own events.
+    pub accepted_at_ms: Option<u64>,
     pub revoked: bool,
+    /// What the acceptance came to, once settled ([`Command::settle_seat`]):
+    /// every node follows this answer.
+    pub seat: Option<Seat>,
+}
+
+/// What an accepted invitation came to, recorded on it once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Seat {
+    /// The invitee holds the seat: granted by the invitation, or held
+    /// already.
+    Granted,
+    /// No seat; the refusal's code (see `SeatRefused`).
+    Refused(String),
 }
 
 impl InvitationState {
@@ -981,6 +1014,8 @@ pub fn invitation_projection<E: Executor>() -> Projection<E, InvitationState> {
         .handler(on_invitation_sent())
         .handler(on_invitation_accepted())
         .handler(on_invitation_revoked())
+        .handler(on_seat_granted())
+        .handler(on_seat_refused())
         .strict()
 }
 
@@ -1006,6 +1041,7 @@ async fn on_invitation_accepted(
 ) -> anyhow::Result<()> {
     invitation.accepted_by = Some(event.data.user_id.to_owned());
     invitation.accepted_at = Some(event.data.accepted_at);
+    invitation.accepted_at_ms = Some(event_millis(&event));
     Ok(())
 }
 
@@ -1015,6 +1051,24 @@ async fn on_invitation_revoked(
     invitation: &mut InvitationState,
 ) -> anyhow::Result<()> {
     invitation.revoked = true;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_seat_granted(
+    _event: Event<SeatGranted>,
+    invitation: &mut InvitationState,
+) -> anyhow::Result<()> {
+    invitation.seat = Some(Seat::Granted);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_seat_refused(
+    event: Event<SeatRefused>,
+    invitation: &mut InvitationState,
+) -> anyhow::Result<()> {
+    invitation.seat = Some(Seat::Refused(event.data.reason.to_owned()));
     Ok(())
 }
 

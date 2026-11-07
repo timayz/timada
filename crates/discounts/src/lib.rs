@@ -9,7 +9,8 @@
 //!
 //! A code is unique within the tenant through an index aggregate with a
 //! deterministic id (the same create-unless-exists as a product slug).
-//! Archiving a discount gives its code back.
+//! Archiving a discount gives its code back: free at once to the next claim,
+//! its entry freed by the release subscription ([`release_subscription`]).
 //!
 //! Uses are counted where they cannot overrun: a code with a cap keeps a
 //! usage stream (in generations of at most [`USAGE_CHUNK`] events, so a popular
@@ -23,9 +24,11 @@ pub mod aggregator;
 mod command;
 mod error;
 mod query;
+mod releases;
 mod value_object;
 
 pub use command::*;
 pub use error::*;
 pub use query::*;
+pub use releases::*;
 pub use value_object::*;
