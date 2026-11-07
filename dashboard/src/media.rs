@@ -353,22 +353,33 @@ async fn on_mail_branding_set<E: Executor>(
     context: &Context<'_, E>,
     event: Event<MailBrandingSet>,
 ) -> anyhow::Result<()> {
-    let media: Arc<Media> = context.extract();
-    let Some(file) = event.data.logo_file.as_deref() else {
+    // Tenants live in the platform's own streams, the default tenant. A
+    // shop's store key can write the same event in the shop's own tenant,
+    // under any `aggregate_id`: nothing is fetched into another tenant's
+    // media for it, and nothing is taken from the event but the stream it
+    // names. The branding fetched is the one the tenant holds now.
+    if !event.tenant.is_empty() || event.data.logo_file.is_none() {
         return Ok(());
-    };
-    let still_there = tenant_projection()
+    }
+    let media: Arc<Media> = context.extract();
+    let Some(branding) = tenant_projection()
         .load(&event.aggregate_id)
-        .tenant(&event.tenant)
         .execute(context.executor)
         .await?
         .and_then(|tenant| tenant.mail_branding)
-        .is_some_and(|branding| branding.logo_file.as_deref() == Some(file));
-    let Some((id, ext)) = file.split_once('.').filter(|_| still_there) else {
+    else {
+        return Ok(());
+    };
+    let Some((id, ext)) = branding
+        .logo_file
+        .as_deref()
+        .filter(|file| Some(*file) == event.data.logo_file.as_deref())
+        .and_then(|file| file.split_once('.'))
+    else {
         return Ok(());
     };
     media
-        .fetch(&event.aggregate_id, id, ext, event.data.logo_size)
+        .fetch(&event.aggregate_id, id, ext, branding.logo_size)
         .await
 }
 
@@ -805,5 +816,39 @@ mod tests {
         media.store("t1", "i1", "png", PNG).await.unwrap();
         media.remove("t1", "i1.png").await;
         assert!(!media.dir.join("t1/i1.png").exists());
+    }
+
+    /// Tenants live in the platform's streams. A shop's store key can write a
+    /// `MailBrandingSet` in the shop's own tenant under another tenant's id:
+    /// nothing is fetched into that tenant's media for it.
+    #[tokio::test]
+    async fn a_branding_in_a_shops_tenant_fetches_nothing() {
+        let store = evento::Turso::in_memory_concurrent().await.unwrap();
+        evento::append("victim")
+            .original_version(0)
+            .event(&MailBrandingSet {
+                logo_file: Some("i1.png".to_owned()),
+                logo_size: PNG.len() as u64,
+                accent: None,
+                footer: None,
+                set_by: "mallory".to_owned(),
+            })
+            .tenant("zeta")
+            .commit(&store)
+            .await
+            .unwrap();
+        let has_it = peer(200, PNG).await;
+        let media = Arc::new(media(vec![has_it], 1));
+
+        logo_subscription::<evento::Turso>(media.clone())
+            .ephemeral()
+            .run_once(&store)
+            .await
+            .unwrap();
+        assert!(
+            tokio::fs::metadata(media.path_of("victim", "i1", "png").unwrap())
+                .await
+                .is_err()
+        );
     }
 }

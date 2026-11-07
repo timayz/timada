@@ -7,6 +7,12 @@
 //! started on an existing log, it writes the whole history. The account
 //! behind a member change is the commit's `requested_by`; invitation events
 //! name it themselves.
+//!
+//! Tenants and invitations live in the platform's own streams, the default
+//! tenant. The subscription follows every tenant, and a shop's store key may
+//! append any event into the shop's own streams, naming any tenant: only an
+//! event of the platform tenant writes a row, the same event in a shop's
+//! streams is nobody's history.
 
 use evento::{
     Executor,
@@ -84,6 +90,14 @@ pub async fn member_audit_of_tenant(
     .await
 }
 
+/// Whether the event lives in the platform's own streams (the default
+/// tenant), where the `Tenant` and `Invitation` aggregates are written. A
+/// shop's store key can write the same event, under any `aggregate_id` and
+/// payload, only in the shop's own tenant.
+fn is_platform(event: &evento::Event) -> bool {
+    event.tenant.is_empty()
+}
+
 struct Entry<'a> {
     tenant_id: &'a str,
     action: &'static str,
@@ -119,6 +133,9 @@ async fn on_member_granted<E: Executor>(
     context: &Context<'_, E>,
     event: Event<MemberGranted>,
 ) -> anyhow::Result<()> {
+    if !is_platform(&event) {
+        return Ok(());
+    }
     let db: Db = context.extract();
     let actor = event.metadata.requested_by()?;
     let entry = Entry {
@@ -137,6 +154,9 @@ async fn on_member_role_changed<E: Executor>(
     context: &Context<'_, E>,
     event: Event<MemberRoleChanged>,
 ) -> anyhow::Result<()> {
+    if !is_platform(&event) {
+        return Ok(());
+    }
     let db: Db = context.extract();
     let actor = event.metadata.requested_by()?;
     let entry = Entry {
@@ -155,6 +175,9 @@ async fn on_member_revoked<E: Executor>(
     context: &Context<'_, E>,
     event: Event<MemberRevoked>,
 ) -> anyhow::Result<()> {
+    if !is_platform(&event) {
+        return Ok(());
+    }
     let db: Db = context.extract();
     let actor = event.metadata.requested_by()?;
     let entry = Entry {
@@ -173,6 +196,9 @@ async fn on_invitation_sent<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Sent>,
 ) -> anyhow::Result<()> {
+    if !is_platform(&event) {
+        return Ok(());
+    }
     let db: Db = context.extract();
     let entry = Entry {
         tenant_id: &event.data.tenant_id,
@@ -190,6 +216,9 @@ async fn on_invitation_accepted<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Accepted>,
 ) -> anyhow::Result<()> {
+    if !is_platform(&event) {
+        return Ok(());
+    }
     let db: Db = context.extract();
     let Some(invitation) = invitation_projection()
         .load(&event.aggregate_id)
@@ -214,6 +243,9 @@ async fn on_invitation_revoked<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Revoked>,
 ) -> anyhow::Result<()> {
+    if !is_platform(&event) {
+        return Ok(());
+    }
     let db: Db = context.extract();
     let Some(invitation) = invitation_projection()
         .load(&event.aggregate_id)

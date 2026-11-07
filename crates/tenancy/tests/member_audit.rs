@@ -250,3 +250,75 @@ async fn a_repeated_delivery_records_nothing_twice() {
         .unwrap();
     assert_eq!(rows.len(), 1);
 }
+
+/// A shop's store key may append any event into the shop's own streams. The
+/// tenant and invitation streams live in the platform tenant: the same
+/// events in a shop's tenant, naming another shop, are nobody's history.
+#[tokio::test]
+async fn an_event_in_a_shops_tenant_records_nothing() {
+    use timada_tenancy::aggregator::{Accepted, MemberGranted, Sent};
+
+    let (executor, pool) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let alice = new_id();
+    let mallory = new_id();
+    let victim = create_tenant(&cmd, "Acme", &alice).await;
+    let forger = create_tenant(&cmd, "Zeta", &mallory).await;
+    let sent = cmd
+        .invite_member(&alice, invite(&victim.id, "bob@example.com", "owner"), NOW)
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+    let before = member_audit_of_tenant(&pool, &victim.id, None, 50)
+        .await
+        .unwrap();
+    assert_eq!(before.len(), 2);
+
+    // A member granted on the victim's stream, written in the forger's tenant.
+    evento::append(&victim.id)
+        .original_version(0)
+        .requested_by(alice.clone())
+        .event(&MemberGranted {
+            user_id: mallory.clone(),
+            role: "owner".to_owned(),
+        })
+        .tenant(&forger.id)
+        .commit(&executor)
+        .await
+        .unwrap();
+    // An invitation that names the victim, and the acceptance of the real one.
+    evento::append(invitation_id("forged"))
+        .original_version(0)
+        .event(&Sent {
+            tenant_id: victim.id.clone(),
+            email: "mallory@example.com".to_owned(),
+            role: "owner".to_owned(),
+            invited_by: alice.clone(),
+            sent_at: NOW,
+            expires_at: NOW + 3600,
+        })
+        .tenant(&forger.id)
+        .commit(&executor)
+        .await
+        .unwrap();
+    evento::append(invitation_id(&sent.token))
+        .original_version(0)
+        .event(&Accepted {
+            user_id: mallory.clone(),
+            accepted_at: NOW,
+        })
+        .tenant(&forger.id)
+        .commit(&executor)
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+
+    let after = member_audit_of_tenant(&pool, &victim.id, None, 50)
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+    let theirs = member_audit_of_tenant(&pool, &forger.id, None, 50)
+        .await
+        .unwrap();
+    assert_eq!(theirs.len(), 1);
+}

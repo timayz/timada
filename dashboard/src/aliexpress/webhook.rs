@@ -143,6 +143,15 @@ pub fn pushes_subscription<E: Executor>(
         .retry(5)
 }
 
+/// Whether the event lives in the platform's own streams (the default
+/// tenant), where the AliExpress order index is written. A shop's store key
+/// can write the same event, under any `aggregate_id` and payload, only in
+/// the shop's own tenant: taken for real, a few forged `Pushed` naming a
+/// real order closed would have another shop's order cancelled and refunded.
+fn is_platform(event: &evento::Event) -> bool {
+    event.tenant.is_empty()
+}
+
 /// A push of an order a forward recorded: read again. One that came first
 /// waits for that record.
 #[evento::subscription]
@@ -150,6 +159,9 @@ async fn on_pushed<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Pushed>,
 ) -> anyhow::Result<()> {
+    if !is_platform(&event) {
+        return Ok(());
+    }
     let store: Store = context.extract();
     let Some(order) = load_ae_order_by_id(&store.0, &event.aggregate_id).await? else {
         return Ok(());
@@ -157,7 +169,7 @@ async fn on_pushed<E: Executor>(
     if order.waited(event.version) {
         return Ok(());
     }
-    let closed = (event.data.status == ORDER_CLOSED).then_some(event.data.ae_order_id.as_str());
+    let closed = (event.data.status == ORDER_CLOSED).then_some(order.ae_order_id.as_str());
     read_again(context, order.forward.as_ref(), event.timestamp, closed).await;
     Ok(())
 }
@@ -169,6 +181,9 @@ async fn on_claimed<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Claimed>,
 ) -> anyhow::Result<()> {
+    if !is_platform(&event) {
+        return Ok(());
+    }
     let store: Store = context.extract();
     let Some(order) = load_ae_order_by_id(&store.0, &event.aggregate_id).await? else {
         return Ok(());
@@ -176,7 +191,7 @@ async fn on_claimed<E: Executor>(
     if order.waiting == 0 {
         return Ok(());
     }
-    let closed = order.closed.then_some(event.data.ae_order_id.as_str());
+    let closed = order.closed.then_some(order.ae_order_id.as_str());
     read_again(context, order.forward.as_ref(), event.timestamp, closed).await;
     Ok(())
 }
@@ -227,4 +242,73 @@ async fn read_again<E: Executor>(
             aliexpress.push_reads_idle.notify_waiters();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+
+    use evento::Evento;
+    use timada_aliexpress::{Share, ae_order_index_id, claim_ae_order};
+
+    use super::*;
+    use crate::config::AliexpressConfig;
+    use crate::seal::Sealer;
+
+    /// The AliExpress order index lives in the platform's streams. A shop's
+    /// store key can write a `Pushed` in the shop's own tenant under the
+    /// index id of another shop's order, saying it closed: nothing is read
+    /// again for it, so nothing cancels that order.
+    #[tokio::test]
+    async fn a_push_in_a_shops_tenant_reads_nothing_again() {
+        let store = evento::Turso::in_memory_concurrent().await.unwrap();
+        let config = AliexpressConfig {
+            app_key: Some("key".to_owned()),
+            app_secret: Some("secret".to_owned()),
+            api_url: Some("http://127.0.0.1:9/".to_owned()),
+            authorize_url: None,
+            sync_check_secs: 1,
+            sync_every_secs: 1,
+            order_read_every_secs: 86_400,
+            calls_per_day: 86_400,
+            read_fresh_secs: 60,
+        };
+        let aliexpress = Aliexpress::new(
+            Some(Sealer::new("aliexpress-test", "secret")),
+            &config,
+            true,
+            Evento::new(store.clone()),
+            Arc::new(|| Share::ALONE),
+        )
+        .unwrap();
+        // The victim's forward placed the AliExpress order 8001.
+        claim_ae_order(&store, "8001", "acme", "forward-1")
+            .await
+            .unwrap();
+        // The forger says it closed, from the forger's own tenant.
+        let index = ae_order_index_id("8001");
+        for version in 1..=3 {
+            evento::append(&index)
+                .original_version(version - 1)
+                .event(&Pushed {
+                    ae_order_id: "8001".to_owned(),
+                    status: ORDER_CLOSED.to_owned(),
+                })
+                .tenant("zeta")
+                .commit(&store)
+                .await
+                .unwrap();
+        }
+
+        pushes_subscription::<evento::Turso>(
+            aliexpress.clone(),
+            Db::from(store.clone()),
+            Evento::new(store.clone()),
+        )
+        .ephemeral()
+        .run_once(&store)
+        .await
+        .unwrap();
+        assert_eq!(aliexpress.push_reads_running.load(Ordering::SeqCst), 0);
+    }
 }
