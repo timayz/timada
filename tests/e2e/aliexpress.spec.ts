@@ -634,6 +634,67 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
   }
 });
 
+test("an order AliExpress may have stays out of the shopper's hands", async ({ page, request }) => {
+  test.setTimeout(150_000);
+  await fakeStripeJs(page);
+  const aliexpress = new FakeAliexpress();
+  const stripe = new FakeStripe();
+  await aliexpress.start();
+  await stripe.start();
+  try {
+    const productUrl = await importedShop(page, aliexpress);
+    const slug = new URL(productUrl).pathname.split("/")[2];
+    await page.getByRole("button", { name: "Publish" }).click();
+    await expect(page.locator("[data-product-status]")).toHaveAttribute("data-product-status", "published");
+    await page.goto(`/t/${slug}/payments`);
+    const webhookUrl = (await page.locator("[data-webhook-url]").textContent())?.trim() ?? "";
+    await page.getByLabel("Publishable key").fill("pk_test_e2e");
+    await page.getByLabel("Secret key").fill("sk_test_e2e");
+    await page.getByLabel("Webhook signing secret").fill("whsec_e2e");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("status")).toContainText("Stripe connected.");
+    await app.start(request, await mintKey(page, slug, true), 1);
+
+    const order = await buyRoses(page, request, stripe, webhookUrl, 1);
+    const shopperOrder = page.url();
+    const merchantOrder = `/t/${slug}/orders/${order}`;
+    await expect(page.locator("[data-order-cancel]")).toBeVisible();
+
+    // AliExpress takes the order but its answer carries no number: it may
+    // have it, and the shopper can no longer cancel.
+    aliexpress.placeAnswers.push("lost", "refused");
+    await page.goto(merchantOrder);
+    await page.getByRole("button", { name: "Place on AliExpress" }).click();
+    await forwardIs(page, merchantOrder, "failed");
+    await expect(page.locator("[data-order-aliexpress-error]")).toContainText(
+      "look at the account's orders on AliExpress before placing this one again",
+    );
+    // AliExpress's list may not show it yet: the merchant is asked to rule
+    // it out only half an hour later.
+    await expect(page.locator("[data-order-aliexpress-rule-out-soon]")).toBeVisible();
+    await expect(page.locator("[data-order-aliexpress-rule-out]")).toHaveCount(0);
+
+    // Placed again, AliExpress refuses outright: the first may be there all
+    // the same, so the shopper still cannot cancel.
+    await page.getByRole("button", { name: "Place again" }).click();
+    await expect(async () => {
+      await page.goto(merchantOrder);
+      await expect(page.locator("[data-order-aliexpress-error]")).toContainText("AliExpress refused the order", {
+        timeout: 1000,
+      });
+    }).toPass({ timeout: 20_000 });
+    await page.goto(shopperOrder);
+    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "authorized");
+    await expect(page.locator("[data-order-cancel]")).toHaveCount(0);
+    await page.goto(merchantOrder);
+    await expect(page.locator("[data-order-aliexpress-rule-out-soon]")).toBeVisible();
+    expect(aliexpress.orders).toHaveLength(1);
+  } finally {
+    await stripe.stop();
+    await aliexpress.stop();
+  }
+});
+
 test("a shop places its paid orders on AliExpress and fulfils them with the tracking", async ({ page, request }) => {
   test.setTimeout(150_000);
   await fakeStripeJs(page);

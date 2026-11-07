@@ -321,14 +321,17 @@ async fn forgetting_a_shopper_ends_every_session_and_the_next_sign_in_starts_afr
     let key = shoppers.keys.get(&first_key).await.unwrap().unwrap();
 
     shoppers
-        .forget(&shoppers.keys, &one.shopper_id)
+        .forget(&shoppers.keys, &one.shopper_id, None)
         .await
         .unwrap();
     shoppers
-        .forget(&shoppers.keys, &one.shopper_id)
+        .forget(&shoppers.keys, &one.shopper_id, None)
         .await
         .unwrap();
-    shoppers.forget(&shoppers.keys, "unknown").await.unwrap();
+    shoppers
+        .forget(&shoppers.keys, "unknown", None)
+        .await
+        .unwrap();
     for token in [&one.token, &two.token] {
         assert!(
             shoppers
@@ -420,7 +423,7 @@ async fn address_ids_are_keyed_by_the_registration() {
     assert_eq!(save(&ada).await, first, "the same address, the same entry");
     assert_ne!(save(&bob).await, first, "another shopper, another id");
 
-    shoppers.forget(&shoppers.keys, &ada).await.unwrap();
+    shoppers.forget(&shoppers.keys, &ada, None).await.unwrap();
     next_millisecond().await;
     let ada = signed_in(&shoppers, EMAIL, NOW + CODE_RESEND_AFTER_SECS)
         .await

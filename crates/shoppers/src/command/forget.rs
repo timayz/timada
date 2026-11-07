@@ -2,6 +2,7 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 
 use crate::aggregator::Forgotten;
 use crate::error::ShopperError;
+use crate::value_object::NewsletterSubscription;
 use timada_core::Keys as ShopperKeys;
 
 #[evento::command]
@@ -9,11 +10,14 @@ impl<E: Executor> super::Command<E> {
     /// Deletes the shopper's account: their key is destroyed, which leaves
     /// what it sealed unreadable, and every session is void. The orders
     /// placed with the address stay with the shop. Unknown or already
-    /// forgotten is a no-op.
+    /// forgotten is a no-op. `newsletter` is the newsletter subscription of
+    /// the same address, if any: the event names it, so the host erases it
+    /// too however the request ends.
     pub async fn forget(
         &self,
         keys: &dyn ShopperKeys,
         shopper_id: &str,
+        newsletter: Option<NewsletterSubscription>,
         routing_key: Option<String>,
     ) -> Result<(), ShopperError> {
         loop {
@@ -25,6 +29,7 @@ impl<E: Executor> super::Command<E> {
                 .routing_key_opt(routing_key.clone())
                 .event(&Forgotten {
                     key_id: shopper.key_id.clone(),
+                    newsletter: newsletter.clone(),
                 })
                 .tenant(&self.tenant)
                 .commit(&self.executor)

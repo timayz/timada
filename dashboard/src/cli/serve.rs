@@ -389,10 +389,24 @@ fn subscriptions(
                 store.clone(),
             ),
         ),
+        (
+            "AliExpress pushes",
+            crate::aliexpress::webhook::pushes_subscription(
+                aliexpress.clone(),
+                db.clone(),
+                store.clone(),
+            ),
+        ),
         ("pictures", crate::media::subscription(media.clone())),
         (
             "shopper keys",
             crate::shopper_keys::subscription(keys.clone()),
+        ),
+        // Nor this: it erases the newsletter subscription a deleted
+        // account names.
+        (
+            "shopper erasure",
+            crate::shopper_erasure::subscription(store.clone(), ring.clone()),
         ),
         (
             "message keys",

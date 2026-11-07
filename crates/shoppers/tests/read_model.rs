@@ -156,7 +156,7 @@ async fn a_forgotten_shopper_leaves_the_list_until_signing_in_again() {
     catch_up(&executor, &pool).await;
     assert_eq!(count_shoppers(&pool, TENANT).await.unwrap(), 2);
 
-    shoppers.forget(&**KEYS, &ada).await.unwrap();
+    shoppers.forget(&**KEYS, &ada, None).await.unwrap();
     catch_up(&executor, &pool).await;
     let rows = shoppers_of_tenant(&pool, TENANT, 10, 0).await.unwrap();
     assert_eq!(rows.len(), 1);

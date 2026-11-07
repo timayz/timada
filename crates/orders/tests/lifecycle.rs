@@ -4,7 +4,7 @@ use common::*;
 use evento::ProjectionAggregate;
 use timada_orders::{
     CancelPath, CaptureClaim, HOLD_EXPIRED_REASON, HOLD_MARGIN_SECS, OrderError, OrderStatus,
-    SupplierOrder,
+    Released, SupplierOrder,
 };
 
 async fn held(orders: &Orders, catalog: &Catalog) -> String {
@@ -237,6 +237,104 @@ async fn a_lapsed_hold_cancels_the_order() {
     );
 }
 
+/// The provider dropped the hold while the supplier may have the order: it
+/// may be shipping, so nothing cancels the order but the merchant. The hold
+/// is recorded gone, once, and the cancellation they ask for settles it.
+#[tokio::test]
+async fn a_dropped_hold_leaves_an_order_the_supplier_may_have_to_the_merchant() {
+    let (orders, catalog) = store().await;
+    let order_id = held(&orders, &catalog).await;
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    let payment_id = order.payment.payment_id.clone();
+
+    let released = orders
+        .record_release(DASHBOARD, &order_id, &payment_id, HOLD_EXPIRED_REASON)
+        .await
+        .unwrap();
+    assert_eq!(released, Released::KeptOpen);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Authorized, "not cancelled");
+    assert!(order.released_at.is_some());
+    assert_eq!(order.payment_state(), "released");
+    assert_eq!(order.cancel_reason, None);
+    let version = order.aggregate_version().unwrap();
+
+    // Told again (the webhook, the sweep): nothing more.
+    let again = orders
+        .record_release(DASHBOARD, &order_id, &payment_id, HOLD_EXPIRED_REASON)
+        .await
+        .unwrap();
+    assert_eq!(again, Released::KeptOpen);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.aggregate_version().unwrap(), version);
+    // Nothing is held any more: nothing to take, nothing to buy with it.
+    let taken = orders.request_capture(DASHBOARD, &order_id).await;
+    assert!(
+        matches!(taken, Err(OrderError::OrderCancelled)),
+        "{taken:?}"
+    );
+    let bought = orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await;
+    assert!(
+        matches!(bought, Err(OrderError::OrderCancelled)),
+        "{bought:?}"
+    );
+
+    // The merchant settles it with the supplier and cancels it.
+    let path = orders
+        .request_cancellation(ALICE, &order_id, "Cancelled on AliExpress".into(), true)
+        .await
+        .unwrap();
+    assert_eq!(
+        path,
+        CancelPath::Release {
+            payment_id: payment_id.clone()
+        }
+    );
+    let released = orders
+        .record_release(DASHBOARD, &order_id, &payment_id, "")
+        .await
+        .unwrap();
+    assert_eq!(released, Released::Cancelled);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Cancelled);
+    assert_eq!(
+        order.cancel_reason.as_deref(),
+        Some("Cancelled on AliExpress")
+    );
+    assert!(order.pending_cancellation.is_none());
+
+    // The supplier surely refused it: a dropped hold cancels the order again.
+    let order_id = held(&orders, &catalog).await;
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    orders
+        .record_supplier_refusal(DASHBOARD, &order_id, "aliexpress", "No delivery to FR")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    let released = orders
+        .record_release(
+            DASHBOARD,
+            &order_id,
+            &order.payment.payment_id,
+            HOLD_EXPIRED_REASON,
+        )
+        .await
+        .unwrap();
+    assert_eq!(released, Released::Cancelled);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Cancelled);
+    assert_eq!(order.cancel_reason.as_deref(), Some(HOLD_EXPIRED_REASON));
+}
+
 /// The provider is asked one thing at a time: a cancellation waits for a
 /// capture in flight, then takes the refund path.
 #[tokio::test]
@@ -368,15 +466,7 @@ async fn an_order_to_the_supplier_and_a_cancellation_never_cross() {
         .unwrap();
     let order = orders.load_order(&order_id).await.unwrap().unwrap();
     assert_eq!(order.supplier_order, SupplierOrder::Started);
-    // Placed again (after a failure that may have placed it): written again,
-    // so a cancellation in between would have refused it.
-    let version = order.aggregate_version().unwrap();
-    orders
-        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
-        .await
-        .unwrap();
-    let order = orders.load_order(&order_id).await.unwrap().unwrap();
-    assert_eq!(order.aggregate_version().unwrap(), version + 1);
+    assert!(!order.supplier_uncertain);
 
     // The supplier may have it: cancelling without saying so is refused.
     let unsaid = orders
@@ -431,6 +521,130 @@ async fn an_order_to_the_supplier_and_a_cancellation_never_cross() {
         .await
         .unwrap();
     assert!(matches!(path, CancelPath::Release { .. }), "{path:?}");
+}
+
+/// An order to the supplier that never said how it went may be there:
+/// a sure refusal of a later one does not lower the fence, and only the
+/// merchant, having looked, rules it out, once nothing is being asked.
+#[tokio::test]
+async fn an_order_that_may_be_at_the_supplier_keeps_its_fence_until_ruled_out() {
+    let (orders, catalog) = store().await;
+    let order_id = held(&orders, &catalog).await;
+    let fenced = async || {
+        matches!(
+            orders
+                .request_cancellation(ALICE, &order_id, "Out of stock".into(), false)
+                .await,
+            Err(OrderError::SupplierOrdered)
+        )
+    };
+
+    // Said uncertain with nothing begun: nothing to say.
+    orders
+        .record_supplier_uncertainty(DASHBOARD, &order_id, "aliexpress", "No answer")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert!(!order.supplier_uncertain);
+    assert_eq!(order.supplier_order, SupplierOrder::None);
+
+    // The first order gets no answer.
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    orders
+        .record_supplier_uncertainty(DASHBOARD, &order_id, "aliexpress", "No answer")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert!(order.supplier_uncertain);
+    assert!(!order.supplier_attempt_open);
+    let version = order.aggregate_version().unwrap();
+    orders
+        .record_supplier_uncertainty(DASHBOARD, &order_id, "aliexpress", "No answer")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.aggregate_version().unwrap(), version, "said once");
+
+    // Placed again, surely refused: the first may still be there.
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let asking = orders
+        .rule_out_supplier_order(ALICE, &order_id, "aliexpress")
+        .await;
+    assert!(
+        matches!(asking, Err(OrderError::SupplierAsking)),
+        "{asking:?}"
+    );
+    orders
+        .record_supplier_refusal(DASHBOARD, &order_id, "aliexpress", "Address refused")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.supplier_order, SupplierOrder::Started);
+    assert!(fenced().await);
+
+    // The merchant looked: nothing there. The fence goes.
+    orders
+        .rule_out_supplier_order(ALICE, &order_id, "aliexpress")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.supplier_order, SupplierOrder::Refused);
+    assert!(!order.supplier_uncertain);
+    assert!(!fenced().await);
+}
+
+/// Begun again while the order before never said how it went (its node
+/// stopped, and the merchant placed it again before any sweep): that one may
+/// be there, so a sure refusal of the new one keeps the fence.
+#[tokio::test]
+async fn an_order_begun_over_one_that_never_answered_keeps_the_fence() {
+    let (orders, catalog) = store().await;
+    let order_id = held(&orders, &catalog).await;
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let version = orders
+        .load_order(&order_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .aggregate_version()
+        .unwrap();
+
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(
+        order.aggregate_version().unwrap(),
+        version + 1,
+        "written again, so a cancellation in between would have refused it"
+    );
+    assert!(order.supplier_uncertain);
+    assert!(order.supplier_uncertain_at.is_some());
+
+    orders
+        .record_supplier_refusal(DASHBOARD, &order_id, "aliexpress", "Address refused")
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.supplier_order, SupplierOrder::Started);
+    assert!(!order.supplier_attempt_open);
+    let unsaid = orders
+        .request_cancellation(ALICE, &order_id, "Out of stock".into(), false)
+        .await;
+    assert!(
+        matches!(unsaid, Err(OrderError::SupplierOrdered)),
+        "{unsaid:?}"
+    );
 }
 
 /// The goods are not bought once the hold on the shopper's card is about to

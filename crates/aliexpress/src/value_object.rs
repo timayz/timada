@@ -18,8 +18,20 @@ pub fn forward_id(order_id: &str) -> String {
     evento::hash_ids(vec!["aliexpress-forward", order_id])
 }
 
+/// The platform's stream of the AliExpress order `ae_order_id`: the forward
+/// that placed it, and the pushes for it.
+pub fn ae_order_index_id(ae_order_id: &str) -> String {
+    evento::hash_ids(vec!["aliexpress-order", ae_order_id])
+}
+
 /// How long an order placed on AliExpress is read again for tracking.
 pub const FORWARD_WATCH_SECS: u64 = 60 * 24 * 60 * 60;
+
+/// How long a forward may stay taken on with no word of how placing it went:
+/// past it, the node placing it stopped, or could not record what AliExpress
+/// answered, and AliExpress may have the order. Well above what placing takes,
+/// a couple of calls per item each given twenty seconds.
+pub const FORWARD_STALL_SECS: u64 = 30 * 60;
 
 /// How long before an access token lapses it is renewed.
 pub const REFRESH_MARGIN_SECS: u64 = 24 * 60 * 60;

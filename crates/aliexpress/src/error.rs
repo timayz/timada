@@ -20,6 +20,8 @@ pub enum AliexpressError {
     Forwarding,
     #[error("this order has no AliExpress item")]
     NothingToForward,
+    #[error("AliExpress order {ae_order_id} is recorded for another order")]
+    ClaimedElsewhere { ae_order_id: String },
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -45,6 +47,7 @@ impl AliexpressError {
             Self::AlreadyForwarded => "aliexpress_already_forwarded",
             Self::Forwarding => "aliexpress_forwarding",
             Self::NothingToForward => "aliexpress_nothing_to_forward",
+            Self::ClaimedElsewhere { .. } => "aliexpress_order_claimed_elsewhere",
             Self::Write(_) | Self::Other(_) => return None,
         })
     }
