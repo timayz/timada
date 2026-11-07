@@ -47,10 +47,23 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 settling INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, id)
             );
-        CREATE INDEX aliexpress_forwards_due ON aliexpress_forwards (status, last_read_at);",
+        CREATE INDEX aliexpress_forwards_due ON aliexpress_forwards (status, last_read_at);
+        CREATE TABLE aliexpress_unrecorded (
+                tenant_id TEXT NOT NULL,
+                forward_id TEXT NOT NULL,
+                ae_order_ids TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                placement TEXT NOT NULL,
+                placed_at INTEGER NOT NULL,
+                tries INTEGER NOT NULL,
+                last_error TEXT,
+                PRIMARY KEY (tenant_id, forward_id, ae_order_ids)
+            );",
     )],
 );
 
-/// The tables the migration creates: what a node empties before copying its
-/// store from a peer, so the subscriptions fill them again.
+/// The read-model tables the migration creates: what a node empties before
+/// copying its store from a peer, so the subscriptions fill them again.
+/// `aliexpress_unrecorded` is not one: it is this node's own record of what
+/// AliExpress took and the store would not take yet, which no peer holds.
 pub const TABLES: &[&str] = &["aliexpress_products", "aliexpress_forwards"];

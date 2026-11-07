@@ -70,7 +70,24 @@ Recurring patterns:
 - **Uniqueness without a unique index.** A slug, an e-mail address, a session or API
   token is an *index aggregate* with a deterministic id (`hash_ids([kind, value])`).
   Appending its first event at version 0 is an atomic create-unless-exists, and loading
-  it reads the event store directly, so a lookup sees its own writes.
+  it reads the event store directly, so a lookup sees its own writes. A command claims
+  the value, then writes its holder; a node may die in between, so a claim never waits
+  for a release: a slug or a code whose holder is gone for good (archived, deleted),
+  wrote past the claim without taking it, or never got written within
+  `timada_core::claim::CLAIM_GRACE_SECS`, is taken over by the next claim. A product's
+  and a page's claim record the holder's version it was made at for that. The grace
+  compares the claim's stamp, which the cluster sets, with the clock of the node
+  asking: the nodes' clocks must agree to well within it (they run NTP). A holder
+  write that failed keeps its claim unless the holder has since been written past
+  it, since a write the store could not answer for may still land. The entries
+  themselves are freed by a release subscription per context (`timada-catalog/releases`,
+  `timada-discounts/releases`, `timada-pages/releases`) on what gives a value up, from
+  the holder as it is now: only what it holds no more and claimed before the event, so
+  a value taken back since stays its own. An entry for something another stream also
+  records (a user's sign-in identity) counts only while that stream lists it: the
+  entry is claimed first and given back if the record fails, the record goes first
+  on the way out, and a subscription frees what a crash in between left behind
+  (`timada_identity::index_release_subscription`).
 - **Every event says who did it** (`*_by` fields). Authorisation lives in the host.
 - **Write-side state** is a strict projection with `#[evento::snapshot(none)]`, so
   commands observe the exact version they write against.
@@ -192,7 +209,15 @@ by construction.
    tenant, a shopper's sign-in challenge say, fails, and so does every write. Scopes are strings recorded with
    `ApiKey::Created` and replaced whole by `ApiKey::Scoped`. Revoking the key or
    changing its scopes ends its connections; suspending the tenant ends every
-   connection of the tenant, and reconnects are refused.
+   connection of the tenant, and reconnects are refused. Each node holds its own
+   connections and checks a key only when one opens, so this happens on every
+   node: the page that took the request ends its node's at once, and every node
+   runs `store_api::closing_subscription` for the others. It starts before the
+   store API takes a connection, reads from the head of the store with its cursor
+   in memory, and claims nothing. An event written before it started (less a
+   margin for the clocks) is already in every connection's key, so it is skipped:
+   right after the whole cluster restarts, the store may not know its head yet,
+   and the subscription then reads from the beginning.
 4. **Payments** (`payments/`). Each tenant connects its own Stripe account on
    `/t/{slug}/payments`; the secret key and the webhook signing secret are recorded
    in the tenant's platform events sealed with AES-256-GCM (`seal.rs`) under the
@@ -210,7 +235,9 @@ by construction.
    `POST /stripe/webhooks/{tenant_id}`, any node, which checks the signature, reads the
    payment back from Stripe and acts on its state (`payments/webhook.rs`): held, the
    order is placed (`place_order`, status `Authorized`); taken, it is recorded; dropped
-   (the week a card holds money ran out), the order is cancelled. A second payment of a
+   (the week a card holds money ran out), the order is cancelled, unless the supplier may
+   have it (its fence written, no cancellation asked): the hold is then recorded gone
+   and the order left open for the merchant. A second payment of a
    cart, and one confirmed after the checkout's holds lapsed and went to someone else
    (`Cart::PaymentReturned`), are given back, nothing taken. The money is taken
    (`payments/settle.rs`) once the order asks for it (`Order::CaptureRequested`): at
@@ -295,9 +322,9 @@ A member renames a product on `/t/{slug}/products/{id}`:
 2. `timada_catalog::Command::new(store, tenant_id)` is the catalog gateway in the
    tenant's streams.
 3. `rename_product` loads the product's write-side state in that tenant, checks the
-   invariants, claims the slug of the new name and commits
-   `Renamed { name, slug, renamed_by }` at the observed version, then frees the old
-   slug.
+   invariants, claims the slug of the new name at the product's version and commits
+   `Renamed { name, slug, renamed_by }` at that version. The old slug is free to the
+   next claim at once; the subscription `timada-catalog/releases` frees its entry.
 4. The commit goes through the Accord node and lands in `data/timada.db`, in the
    tenant's stream of that product.
 5. The `catalog` subscription writes the new name and slug into `catalog_products`, under the
@@ -331,7 +358,7 @@ one variant, which the shop sells with nothing to pick.
 
 Codes are unique across a tenant through the same index-aggregate pattern as slugs
 (`timada-catalog/ProductSku`), compared without regard to case. A variant that goes,
-and an archived product, give their codes back.
+one whose code changes, and an archived product, give their codes back.
 
 A product leaves the catalog one of two ways. `Archived` is final and keeps it on
 record: no more edits, its slug and codes free again, its row still listed as

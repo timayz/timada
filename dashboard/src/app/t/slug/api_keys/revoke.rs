@@ -22,7 +22,9 @@ struct RevokeForm {
     key_id: String,
 }
 
-/// Revokes a key for good; its live store connections are ended and a
+/// Revokes a key for good; its live store connections are ended (this
+/// node's at once, the other nodes' by their
+/// [`closing_subscription`](crate::store_api::closing_subscription)) and a
 /// storefront presenting it is refused from now on.
 #[route(POST)]
 pub async fn revoke(cx: &Cx, Form(form): Form<RevokeForm>) -> Result<SeeOther> {

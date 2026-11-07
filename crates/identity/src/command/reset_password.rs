@@ -1,6 +1,6 @@
 use evento::Executor;
 
-use crate::aggregator::{PasswordChanged, SignedInWithPassword};
+use crate::aggregator::{PasswordChanged, SessionsRevoked, SignedInWithPassword};
 use crate::error::IdentityError;
 use crate::value_object::{ChallengePurpose, LoginContext, normalize_email};
 
@@ -30,8 +30,11 @@ pub struct PasswordReset {
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Burns the reset code, replaces the password and signs the user in.
-    /// The web layer then ends the user's other sessions (after the new one
-    /// exists, so the cutoff never catches it).
+    /// Every session of the user ends in the same write, so whoever held the
+    /// old password is out the moment it stops working. The web layer starts
+    /// the new session afterwards; one started within the reset's own
+    /// millisecond counts as revoked, so it is spared by name
+    /// ([`Self::revoke_sessions`]).
     pub async fn reset_password(
         &self,
         cmd: ResetPassword,
@@ -47,16 +50,19 @@ impl<E: Executor> super::Command<E> {
             routing_key.clone(),
         )
         .await?;
-        let Some(owner) = self.load_email_account(&email).await? else {
+        let Some(owner) = self.email_user(&email).await? else {
             return Err(IdentityError::NotRegistered);
         };
         let user = self
-            .append_user(&owner.user_id, routing_key.clone(), |user, builder| {
+            .append_user(&owner.id, routing_key.clone(), |user, builder| {
                 if user.password.is_none() {
                     return Err(IdentityError::NotRegistered);
                 }
                 builder.event(&PasswordChanged {
                     password_hash: cmd.password_hash.clone(),
+                });
+                builder.event(&SessionsRevoked {
+                    except_session: None,
                 });
                 builder.event(&SignedInWithPassword {
                     user_agent: cmd.context.user_agent.clone(),

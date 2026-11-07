@@ -98,3 +98,13 @@ mod tests {
         assert_ne!(generate_token(), generate_token());
     }
 }
+
+/// A newsletter subscription the deletion of an account takes with it: its
+/// stream and the key it is sealed under. The address may subscribe again
+/// later, on the same stream under a new key, and a node hearing of the
+/// deletion late must leave that newer subscription alone.
+#[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct NewsletterSubscription {
+    pub subscriber_id: String,
+    pub key_id: String,
+}

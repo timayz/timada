@@ -56,8 +56,9 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Retires the product for good and frees its slug and the codes of its
-    /// variants. Already archived is a no-op.
+    /// Retires the product for good. Its slug and the codes of its variants
+    /// are free again at once to any claim, and the release subscription
+    /// frees their entries. Already archived is a no-op.
     pub async fn archive_product(
         &self,
         actor: &str,
@@ -71,24 +72,24 @@ impl<E: Executor> super::Command<E> {
         };
         product
             .write()?
-            .routing_key_opt(routing_key.clone())
+            .routing_key_opt(routing_key)
             .event(&Archived {
                 archived_by: actor.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
             .await?;
-        self.release_codes(&product, routing_key, "archiving").await;
         Ok(())
     }
 
     /// Deletes the product for good: it leaves every listing, its slug and
-    /// the codes of its variants are free again, and the host deletes its
-    /// pictures' files. Archived or not, any product can go; one that is
-    /// gone already is `NotFound`. Only a product nobody ever ordered may be
-    /// deleted, and that is the host's to check before calling: the catalog
-    /// cannot see the orders. Returns what the product was, for the host to
-    /// clean up after it.
+    /// the codes of its variants are free again (the release subscription
+    /// frees their entries), and the host deletes its pictures' files.
+    /// Archived or not, any product can go; one that is gone already is
+    /// `NotFound`. Only a product nobody ever ordered may be deleted: one
+    /// marked ordered ([`mark_ordered`](Self::mark_ordered)) is `Ordered`.
+    /// Returns what the product was, for the host to clean up
+    /// after it.
     pub async fn delete_product(
         &self,
         actor: &str,
@@ -99,48 +100,18 @@ impl<E: Executor> super::Command<E> {
             .load_product(product_id)
             .await?
             .ok_or(CatalogError::NotFound)?;
+        if self.load_ordered(product_id).await?.is_some() {
+            return Err(CatalogError::Ordered);
+        }
         product
             .write()?
-            .routing_key_opt(routing_key.clone())
+            .routing_key_opt(routing_key)
             .event(&Deleted {
                 deleted_by: actor.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
             .await?;
-        // An archived product gave its codes back already.
-        if !product.is_archived() {
-            self.release_codes(&product, routing_key, "deleting").await;
-        }
         Ok(product)
-    }
-}
-
-impl<E: Executor> super::Command<E> {
-    /// Gives the slug and the variants' codes of a retired product back. A
-    /// failure is logged, not returned: the product is retired whatever
-    /// happens to its codes, and a code left claimed is a nuisance, not a
-    /// fault.
-    async fn release_codes(
-        &self,
-        product: &ProductState,
-        routing_key: Option<String>,
-        after: &str,
-    ) {
-        if let Err(release) = self
-            .release_slug(&product.slug, &product.id, routing_key.clone())
-            .await
-        {
-            tracing::warn!(slug = %product.slug, %release, "cannot give the slug back after {after}");
-        }
-        for variant in &product.variants {
-            if let Some(sku) = &variant.sku
-                && let Err(release) = self
-                    .release_sku(sku, &variant.id, routing_key.clone())
-                    .await
-            {
-                tracing::warn!(%sku, %release, "cannot give a code back after {after}");
-            }
-        }
     }
 }

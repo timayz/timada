@@ -130,14 +130,21 @@ async fn on_cancellation_requested<E: Executor>(
     }
     let payments: Arc<Payments> = context.extract();
     let store: Store = context.extract();
-    let account = match payments.active_tenant(&event.tenant).await? {
-        Some(tenant) => payments.account_of(&tenant)?,
-        None => None,
-    };
-    let Some(account) = account else {
+    let Some(tenant) = payments.active_tenant(&event.tenant).await? else {
         return Ok(());
     };
     let orders = timada_orders::Command::new(store.0.clone(), &event.tenant);
+    // Nothing held (its hold went back already): settled without the
+    // provider, the shop's keys there or not.
+    if settle::settle_released_cancellation(&orders, &event.aggregate_id)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let Some(account) = payments.account_of(&tenant)? else {
+        return Ok(());
+    };
     settle::settle_cancellation(&payments, &account, &orders, &event.aggregate_id).await?;
     Ok(())
 }

@@ -115,3 +115,29 @@ async fn an_archived_product_can_still_be_deleted() {
         "the slug was freed once, by archiving, and stays free"
     );
 }
+
+#[tokio::test]
+async fn an_ordered_product_is_never_deleted() {
+    let cmd = command().await;
+    let mug = create_product(&cmd, "Blue Mug").await;
+    assert!(cmd.load_ordered(&mug.id).await.unwrap().is_none());
+    cmd.mark_ordered(ALICE, &mug.id, "order-1").await.unwrap();
+    // Told again, and by a later order: the first order stays the mark.
+    cmd.mark_ordered(ALICE, &mug.id, "order-1").await.unwrap();
+    cmd.mark_ordered(ALICE, &mug.id, "order-2").await.unwrap();
+    let ordered = cmd.load_ordered(&mug.id).await.unwrap().unwrap();
+    assert_eq!(ordered.order_id, "order-1");
+    assert_eq!(ordered.aggregate_version().unwrap(), 1, "written once");
+
+    assert!(matches!(
+        cmd.delete_product(ALICE, &mug.id).await,
+        Err(CatalogError::Ordered)
+    ));
+    assert!(cmd.load_product(&mug.id).await.unwrap().is_some());
+    // It may still be archived.
+    cmd.archive_product(ALICE, &mug.id).await.unwrap();
+    assert!(matches!(
+        cmd.delete_product(ALICE, &mug.id).await,
+        Err(CatalogError::Ordered)
+    ));
+}

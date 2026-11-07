@@ -34,6 +34,8 @@ pub struct PasskeySignIn {
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Records a verified assertion. Returns the user to start a session for.
+    /// A credential its account no longer lists is unknown, whatever its
+    /// index entry still says.
     pub async fn sign_in_passkey(
         &self,
         cmd: SignInPasskey,

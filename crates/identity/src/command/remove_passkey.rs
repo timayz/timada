@@ -1,11 +1,16 @@
 use evento::Executor;
-use evento::ProjectionAggregate;
 
-use crate::aggregator::{PasskeyRemoved, Removed};
+use crate::aggregator::PasskeyRemoved;
 use crate::error::IdentityError;
+
+use super::passkey_index::free_passkey_index;
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
+    /// Removes a passkey from the user's account. The user keeps at least one
+    /// way to sign in. The account is written first: from then on the passkey
+    /// signs nobody in, whatever its index entry says. The entry is freed
+    /// next, and by the index-release subscription should that fail.
     pub async fn remove_passkey(
         &self,
         user_id: &str,
@@ -22,46 +27,32 @@ impl<E: Executor> super::Command<E> {
             return Err(IdentityError::LastSignInMethod);
         }
 
-        self.remove_passkey_index(user_id, credential_id, routing_key.clone())
+        let before = self
+            .append_user(user_id, routing_key, |user, builder| {
+                if user.passkey(credential_id).is_none() {
+                    return Err(IdentityError::Forbidden);
+                }
+                if user.sign_in_methods() <= 1 {
+                    return Err(IdentityError::LastSignInMethod);
+                }
+                builder.event(&PasskeyRemoved {
+                    credential_id: credential_id.to_owned(),
+                });
+                Ok(())
+            })
             .await?;
 
-        self.append_user(user_id, routing_key, |user, builder| {
-            if user.passkey(credential_id).is_none() {
-                return Err(IdentityError::Forbidden);
+        // Only a claim older than the removal is freed: one made since is an
+        // add of the same key, on its way to the account.
+        let freed = match self.appended_at_ms(&before).await {
+            Ok(Some(removed_at)) => {
+                free_passkey_index(&self.executor, user_id, credential_id, Some(removed_at)).await
             }
-            if user.sign_in_methods() <= 1 {
-                return Err(IdentityError::LastSignInMethod);
-            }
-            builder.event(&PasskeyRemoved {
-                credential_id: credential_id.to_owned(),
-            });
-            Ok(())
-        })
-        .await?;
-        Ok(())
-    }
-}
-
-impl<E: Executor> super::Command<E> {
-    /// Frees the index entry of a passkey owned by `user_id`, so the
-    /// credential can be registered again. A missing or already freed entry
-    /// is fine; one owned by someone else is `Forbidden`.
-    pub(crate) async fn remove_passkey_index(
-        &self,
-        user_id: &str,
-        credential_id: &str,
-        routing_key: Option<String>,
-    ) -> Result<(), IdentityError> {
-        if let Some(index) = self.load_passkey(credential_id).await? {
-            if index.user_id != user_id {
-                return Err(IdentityError::Forbidden);
-            }
-            index
-                .write()?
-                .routing_key_opt(routing_key)
-                .event(&Removed)
-                .commit(&self.executor)
-                .await?;
+            Ok(None) => Ok(()),
+            Err(err) => Err(err.into()),
+        };
+        if let Err(err) = freed {
+            tracing::warn!(%err, user_id, "the removed passkey's index entry is freed later");
         }
         Ok(())
     }

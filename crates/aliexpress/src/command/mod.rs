@@ -1,10 +1,13 @@
 //! Write side: the link between an AliExpress item and the catalog product
-//! it filled, and its history of reads; and (in [`forward`]) the shop's
-//! orders placed on AliExpress.
+//! it filled, and its history of reads; (in [`forward`]) the shop's orders
+//! placed on AliExpress; and (in [`ae_order`]) the platform's record of the
+//! orders AliExpress holds, which a push names.
 
+mod ae_order;
 mod forward;
 mod token_refresh;
 
+pub use ae_order::*;
 pub use forward::*;
 pub use token_refresh::*;
 

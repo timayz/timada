@@ -290,9 +290,21 @@ What is bought:
   every country.
 
 A failure is shown on the card with *Place again*. One node takes each order on
-(`Started`, like an import). If AliExpress did not answer, or a node stopped before
-recording the outcome, the order may be on AliExpress anyway. It is then never placed
-again on its own: the merchant checks the account's orders on AliExpress first.
+(`Started`, like an import), and right before asking AliExpress writes `Asking` on the
+forward at the version it took it on at: an attempt overtaken in between (asked for
+again, given up as stalled) asks nothing. What AliExpress took is recorded at once,
+tried again for a few seconds while the store refuses writes; past that it is kept on
+the node that placed it (`aliexpress_unrecorded`, one row per placement, in the
+read-model database, which a copy from a peer leaves alone) and recorded by that node's
+sweep once the store takes writes again, however long that is. The stall sweep may give
+up a forward whose node is only slow (it does not know which node asks); what that node
+records later still places it. An attempt whose orders land on a forward an
+overlapping attempt placed meanwhile records them beside it (`AlsoPlaced`), and the
+card asks the merchant to cancel them on AliExpress. If AliExpress did not answer, or a
+node stopped, the order may be on AliExpress anyway: a forward taken on and not heard
+of for half an hour fails saying so (the sweep of the node it belongs to), and the card
+offers *Place again* for a forward taken on that long. It is then never placed again on
+its own: the merchant checks the account's orders on AliExpress first.
 
 Right before AliExpress is asked, the forwarder writes `Order::SupplierOrderStarted` on
 the shop's order, at the version it read, on every try. A cancellation (the shopper's,
@@ -300,18 +312,42 @@ the merchant's) landing first refuses it, so nothing is bought for a cancelled o
 one landing after finds it, and then knows AliExpress may have the order: the shopper
 can no longer cancel, and the merchant ticks that they cancel it on AliExpress too
 (there is no API to). A sure refusal (`SupplierOrderRefused`) lets the shopper cancel
-again; a call that may have placed the order does not. An order whose card hold lapses
-within twelve hours is not placed: the merchant takes the payment first.
+again; an attempt that may have placed the order (`SupplierOrderUncertain`) does not,
+and keeps the fence whatever a later attempt is told, until the merchant, having looked
+on AliExpress, presses *Not on AliExpress* on the card (`SupplierOrderRuledOut`). An
+attempt begun while the one before never said how it went counts that one uncertain
+too. The card offers *Not on AliExpress* only once the forward failed, and half an hour
+after the order became uncertain, as AliExpress's list of orders may take that long to
+show one it took. The order is told how an attempt went before the forward is, tried
+again while the store refuses; an attempt the order never hears of leaves the forward
+taken on, for the stall sweep. An order whose card hold lapses within twelve hours is
+not placed: the merchant takes the payment first. A hold that lapses anyway while
+AliExpress may have the order cancels nothing: the order records the hold gone and
+stays open, for the merchant to settle with the shopper and cancel. Nothing is held, so
+that cancellation asks Stripe nothing, and it settles even when the shop took its
+Stripe keys away. Once every parcel of such an order is known, its forward closes and
+is no longer read, so a later change on AliExpress (the delivery, a refund to the
+account) does not show on its card.
 
 AliExpress pushes each status change of an order to `/aliexpress/webhook` (message type
-53, the body signed with the app's key and secret in `Authorization`), and the order is
-read at once (`aliexpress.trade.ds.order.get`). A push is answered before the read,
-within the half second AliExpress allows, and may come twice: the read records against
-the version it started from, so a second push changes nothing.
+53, the body signed with the app's key and secret in `Authorization`). The push is
+recorded in the platform's stream of that AliExpress order (`timada-aliexpress/AeOrder`)
+and answered, within the half second AliExpress allows; one the store did not take is
+answered with an error, and AliExpress sends it again. The subscription
+`timada-dashboard/aliexpress-pushes` then reads the order again
+(`aliexpress.trade.ds.order.get`) on the node the order belongs to. A push may come
+twice: the read records against the version it started from, so a second one changes
+nothing. Each forward records its AliExpress orders in those streams as AliExpress
+answers (`Claimed`), so a push finds its shop without a read model; one that came first
+(AliExpress pushing as it answers) waits there, and is read once the record lands. The
+reads run beside the subscription, a few at a time, so a burst of pushes while
+AliExpress is slow holds none of them up. A number already recorded for another
+forward is refused and logged as an error.
 
-A push can still be lost, past its twelve retries half an hour apart, or arrive before
-the order is in the read model. So the node an order belongs to also reads it once it
-has gone unread for `[aliexpress] order_read_every_secs` (a day), the shops taking
+A push can still be lost, past its twelve retries half an hour apart, and a node
+catching up leaves the reads of pushes older than ten minutes. So the node an order
+belongs to also reads it once it has gone unread for
+`[aliexpress] order_read_every_secs` (a day), the shops taking
 turns, oldest read first. Without the callback registered, tracking arrives that late:
 lower the setting.
 
@@ -354,7 +390,11 @@ fulfilled with, whether AliExpress answers or not.
 - **Tenant store (`timada-aliexpress/Forward`).** One stream per order placed on
   AliExpress: the request, the claim, what was bought and the AliExpress orders, each
   read that changed something, and the end. The `aliexpress_forwards` read model
-  lists the ones the sweep still reads.
+  lists the ones the sweep still reads, and those left being placed.
+- **Platform store (`timada-aliexpress/AeOrder`).** One stream per order AliExpress
+  holds for a company's account, by its AliExpress number: the forward that placed it
+  (`Claimed`, with its tenant) and every push for it (`Pushed`). A push names nothing
+  else, so this is where it finds its shop.
 - **Calls.** These are signed like moh3a/ae_sdk: HMAC-SHA256 over the API path (for
   path calls), then every parameter sorted by name as `name` + `value`, in upper-case
   hex. Dotted methods go to `/sync` and path methods to `/rest<path>`. The response

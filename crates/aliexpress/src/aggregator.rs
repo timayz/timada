@@ -111,7 +111,17 @@ pub mod refresh {
 /// there once. It lives under the tenant, next to the order.
 pub mod forward {
     /// One combination an order bought on AliExpress.
-    #[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Hash,
+        bitcode::Encode,
+        bitcode::Decode,
+        serde::Serialize,
+        serde::Deserialize,
+    )]
     pub struct ForwardItem {
         pub ae_product_id: String,
         pub sku_id: String,
@@ -130,6 +140,10 @@ pub mod forward {
         },
         /// One node took it on, so no other places it a second time.
         Started { started_by: String },
+        /// AliExpress is about to be asked for it, written at the version
+        /// the attempt took it on at: an attempt overtaken in between (asked
+        /// for again, given up as stalled) asks nothing.
+        Asking { asked_by: String },
         /// AliExpress took it: its order numbers (one per seller), what was
         /// bought, whether it was asked to charge the account, and whether
         /// every line of the shop's order was bought there.
@@ -138,6 +152,12 @@ pub mod forward {
             items: Vec<ForwardItem>,
             pay_requested: bool,
             complete: bool,
+            placed_by: String,
+        },
+        /// AliExpress took it a second time, as these orders, from an attempt
+        /// that overlapped the one recorded: the merchant cancels them there.
+        AlsoPlaced {
+            ae_order_ids: Vec<String>,
             placed_by: String,
         },
         /// Nothing was placed; `reason` says why, for the merchant.
@@ -159,5 +179,27 @@ pub mod forward {
             tracking: Option<String>,
             fulfilled: bool,
         },
+    }
+}
+
+/// One order AliExpress holds for a company's account, by its AliExpress
+/// number: which shop's forward placed it, and what AliExpress pushed of it.
+/// A push names the order and nothing else, so these streams are the
+/// platform's own (no tenant), one per AliExpress order, with the
+/// deterministic id [`ae_order_index_id`](crate::ae_order_index_id). Both
+/// sides write to the one stream, so a push that comes before the forward
+/// recorded its orders is found by that record, and the other way round.
+pub mod ae_order {
+    #[evento::aggregate(name = "timada-aliexpress/AeOrder")]
+    pub enum AeOrder {
+        /// The forward `forward_id` of the shop `tenant_id` placed it.
+        Claimed {
+            ae_order_id: String,
+            tenant_id: String,
+            forward_id: String,
+        },
+        /// AliExpress pushed its new status (`OrderShipped`, `OrderClosed`…),
+        /// recorded before the push is answered.
+        Pushed { ae_order_id: String, status: String },
     }
 }
