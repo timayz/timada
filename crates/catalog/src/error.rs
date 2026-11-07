@@ -18,6 +18,8 @@ pub enum CatalogError {
     NotFound,
     #[error("this product is archived")]
     Archived,
+    #[error("this product was ordered, so it stays on record: archive it instead")]
+    Ordered,
     #[error("a product needs a price before it is published")]
     NotPriced,
     #[error("category not found")]
@@ -123,6 +125,7 @@ impl CatalogError {
             Self::InvalidCurrency => "invalid_currency",
             Self::NotFound => "product_not_found",
             Self::Archived => "product_archived",
+            Self::Ordered => "product_ordered",
             Self::NotPriced => "product_not_priced",
             Self::CategoryNotFound => "category_not_found",
             Self::CategoryArchived => "category_archived",

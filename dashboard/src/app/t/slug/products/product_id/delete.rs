@@ -1,6 +1,6 @@
 //! `POST /t/{slug}/products/{product_id}/delete`: deletes a product nobody
 //! ever ordered, for good. One that was ordered stays on record (archive it
-//! instead): the check is here, since the catalog cannot see the orders.
+//! instead): the catalog refuses it, from the mark the orders leave on it.
 
 use std::sync::Arc;
 
@@ -20,9 +20,6 @@ use crate::app::t::slug::require_tenant;
 use crate::db::Db;
 use crate::media::Media;
 
-/// The query-string code of a delete refused because the product was ordered.
-pub const PRODUCT_ORDERED: &str = "product_ordered";
-
 #[route(POST)]
 pub async fn delete(cx: &Cx) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
@@ -31,19 +28,6 @@ pub async fn delete(cx: &Cx) -> Result<SeeOther> {
         .await?;
     let product_id = path_param::<ProductId>(cx).to_owned();
     let slug = access.tenant.slug.clone();
-    let db = app_context::<Db>(cx);
-    if timada_orders::product_ever_ordered(db, &access.tenant.id, &product_id)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?
-    {
-        return Ok(see_other(product_url(
-            cx,
-            &slug,
-            &product_id,
-            Some(PRODUCT_ORDERED),
-            None,
-        )));
-    }
     let gateway = catalog(&access)?;
     let product = match gateway.delete_product(&access.user_id, &product_id).await {
         Ok(product) => product,
@@ -67,6 +51,7 @@ pub async fn delete(cx: &Cx) -> Result<SeeOther> {
     // Like an archived product, a deleted one is no longer kept in step
     // with the AliExpress item it came from, so the item can be imported
     // again.
+    let db = app_context::<Db>(cx);
     let link = timada_aliexpress::link_of_product(db, &access.tenant.id, &product_id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
