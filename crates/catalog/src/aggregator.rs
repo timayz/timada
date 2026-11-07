@@ -220,9 +220,13 @@ pub enum DeliveryDefault {
 pub mod sku {
     #[evento::aggregate(name = "timada-catalog/ProductSku")]
     pub enum ProductSku {
+        /// `product_version` is the version of the product the claim was
+        /// made at: the product's next write gives the variant the code or
+        /// fails, so a product past it has used the claim or never will.
         Claimed {
             product_id: String,
             variant_id: String,
+            product_version: u16,
         },
         Released,
     }
@@ -232,7 +236,13 @@ pub mod sku {
 /// [`product_slug_id`](crate::product_slug_id).
 #[evento::aggregate(name = "timada-catalog/ProductSlug")]
 pub enum ProductSlug {
-    Claimed { product_id: String },
+    /// `product_version` is the version of the product the claim was made
+    /// at: the product's next write moves it to the slug or fails, so a
+    /// product past it has used the claim or never will.
+    Claimed {
+        product_id: String,
+        product_version: u16,
+    },
     Released,
 }
 
@@ -377,6 +387,21 @@ pub mod stock {
     #[evento::aggregate(name = "timada-catalog/StockPointer")]
     pub enum StockPointer {
         Rolled { generation: u32, rolled_by: String },
+    }
+}
+
+pub mod ordered {
+    /// That somebody ordered a product: one stream per product, with the
+    /// deterministic id [`product_ordered_id`](crate::product_ordered_id),
+    /// written by the first order that sold it and never again. A product
+    /// ordered once stays on record: it may be archived, not deleted.
+    #[evento::aggregate(name = "timada-catalog/ProductOrdered")]
+    pub enum ProductOrdered {
+        /// `order_id` is the first order that sold it.
+        Ordered {
+            order_id: String,
+            ordered_by: String,
+        },
     }
 }
 

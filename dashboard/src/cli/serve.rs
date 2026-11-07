@@ -90,6 +90,17 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         Arc::new(app)
     };
     let connections = StoreConnections::new();
+    // This node's store connections of a key revoked or re-scoped, or of a
+    // tenant suspended, on any node, end through this subscription. It starts
+    // before the store API takes a connection, so none is older than it.
+    let mut read_models = vec![
+        start_read_model(
+            "store connections",
+            store_api::closing_subscription(connections.clone()),
+            &executor,
+        )
+        .await?,
+    ];
     let store_api = store_api::serve(
         config.store_api.as_ref(),
         executor.clone(),
@@ -108,7 +119,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // Read models catch up from their saved cursor before the router takes
     // requests, then follow the stream. A failed worker is logged and the
     // pages fall back to stale rows; the node keeps serving.
-    let mut read_models = Vec::new();
     for (name, builder) in subscriptions(
         db.clone(),
         executor.clone(),
@@ -256,9 +266,11 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 /// read-model database (the catalogs, the orders and carts, the customers,
 /// the invoices, the reviews, the support messages), this node's copies of
 /// the product pictures, review photos and personal-data keys, the answers
-/// the dashboard writes back (payments, invoices), the order confirmations it
-/// mails and the notices of contact messages it mails the members. Every
-/// bounded context registers its subscription here.
+/// the dashboard writes back (payments, invoices), the slugs and codes the
+/// catalog, the discounts and the pages give back once their holder let go
+/// of them, the order confirmations it mails and the notices of contact
+/// messages it mails the members. Every bounded context registers its
+/// subscription here.
 #[allow(clippy::too_many_arguments)]
 fn subscriptions(
     db: db::Db,
@@ -401,6 +413,18 @@ fn subscriptions(
         (
             "stock usage",
             timada_orders::stock_usage_subscription(store.clone()),
+        ),
+        (
+            "catalog releases",
+            timada_catalog::release_subscription(store.clone()),
+        ),
+        (
+            "discount releases",
+            timada_discounts::release_subscription(store.clone()),
+        ),
+        (
+            "page releases",
+            timada_pages::release_subscription(store.clone()),
         ),
         (
             "newsletter opt-ins",

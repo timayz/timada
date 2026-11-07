@@ -19,6 +19,16 @@ pub async fn command() -> Command<evento::Turso> {
     Command::new(executor_with_pool().await.0, TENANT)
 }
 
+/// Runs the release subscription over everything written so far, as the
+/// dashboard does in the background.
+pub async fn run_releases(cmd: &Command<evento::Turso>) {
+    let store = cmd.executor().clone();
+    timada_catalog::release_subscription::<evento::Turso>(evento::Evento::new(store.clone()))
+        .run_once(&store)
+        .await
+        .unwrap();
+}
+
 /// The tenant the tests act in.
 pub const TENANT: &str = "acme";
 

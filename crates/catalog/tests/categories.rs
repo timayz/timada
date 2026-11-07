@@ -280,7 +280,7 @@ async fn an_archived_category_leaves_its_slug_and_takes_no_edits() {
             .await
             .unwrap()
             .is_none(),
-        "the index entry is released"
+        "an archived category answers to its slug no more"
     );
 
     let second = create_category(&cmd, "Bedding").await;

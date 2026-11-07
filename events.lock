@@ -85,9 +85,10 @@ event timada-catalog/Product::VariantImaged { variant_id: String, image_id: Opti
 event timada-catalog/Product::VariantPriced { variant_id: String, amount_cents: u64, currency: String, priced_by: String }
 event timada-catalog/Product::VariantRemoved { variant_id: String, removed_by: String }
 event timada-catalog/Product::VariantSkuChanged { variant_id: String, sku: Option<String>, changed_by: String }
-event timada-catalog/ProductSku::Claimed { product_id: String, variant_id: String }
+event timada-catalog/ProductOrdered::Ordered { order_id: String, ordered_by: String }
+event timada-catalog/ProductSku::Claimed { product_id: String, variant_id: String, product_version: u16 }
 event timada-catalog/ProductSku::Released unit
-event timada-catalog/ProductSlug::Claimed { product_id: String }
+event timada-catalog/ProductSlug::Claimed { product_id: String, product_version: u16 }
 event timada-catalog/ProductSlug::Released unit
 event timada-catalog/StockItem::Consumed { cart_id: String, order_id: String, quantity: u32, consumed_by: String }
 event timada-catalog/StockItem::OnHandSet { on_hand: u32, set_by: String }
@@ -246,7 +247,7 @@ event timada-pages/Page::Published { published_by: String }
 event timada-pages/Page::Renamed { slug: String, renamed_by: String }
 event timada-pages/Page::SeoSet { meta_title: String, meta_description: String, set_by: String }
 event timada-pages/Page::Unpublished { unpublished_by: String }
-event timada-pages/PageSlug::Claimed { page_id: String }
+event timada-pages/PageSlug::Claimed { page_id: String, page_version: u16 }
 event timada-pages/PageSlug::Released unit
 event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }
 event timada-reviews/Review::Published { published_by: String }
