@@ -58,8 +58,9 @@ impl<E: Executor> super::Command<E> {
         }
 
         let variant_id = new_part_id();
+        let version = product.aggregate_version()?;
         if let Some(sku) = &sku {
-            self.claim_sku(sku, product_id, &variant_id, routing_key.clone())
+            self.claim_sku(sku, product_id, &variant_id, version, routing_key.clone())
                 .await?;
         }
         let defined = product
@@ -79,7 +80,9 @@ impl<E: Executor> super::Command<E> {
             .await;
         if let Err(err) = defined {
             if let Some(sku) = &sku
-                && let Err(release) = self.release_sku(sku, &variant_id, routing_key).await
+                && let Err(release) = self
+                    .release_sku_claim(sku, product_id, &variant_id, version, routing_key)
+                    .await
             {
                 tracing::warn!(%sku, %release, "cannot give the code back after a failed variant");
             }
@@ -126,7 +129,9 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// Sets or clears the merchant's code for one combination. The new code
-    /// is claimed before the change and the old one given back after.
+    /// is claimed before the change and given back if the commit fails; the
+    /// old one is free to any claim once the change is made, and the release
+    /// subscription frees its entry.
     pub async fn change_variant_sku(
         &self,
         actor: &str,
@@ -141,15 +146,15 @@ impl<E: Executor> super::Command<E> {
         let variant = product
             .variant(variant_id)
             .ok_or(CatalogError::VariantNotFound)?;
-        let previous = variant.sku.clone();
-        if previous == sku {
+        if variant.sku == sku {
             return Ok(());
         }
+        let version = product.aggregate_version()?;
         if let Some(sku) = &sku {
-            self.claim_sku(sku, product_id, variant_id, routing_key.clone())
+            self.claim_sku(sku, product_id, variant_id, version, routing_key.clone())
                 .await?;
         }
-        product
+        let changed = product
             .write()?
             .routing_key_opt(routing_key.clone())
             .event(&VariantSkuChanged {
@@ -159,11 +164,16 @@ impl<E: Executor> super::Command<E> {
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
-            .await?;
-        if let Some(previous) = previous
-            && let Err(release) = self.release_sku(&previous, variant_id, routing_key).await
-        {
-            tracing::warn!(sku = %previous, %release, "cannot give the old code back");
+            .await;
+        if let Err(err) = changed {
+            if let Some(sku) = &sku
+                && let Err(release) = self
+                    .release_sku_claim(sku, product_id, variant_id, version, routing_key)
+                    .await
+            {
+                tracing::warn!(%sku, %release, "cannot give the code back after a failed change");
+            }
+            return Err(err.into());
         }
         Ok(())
     }
@@ -204,8 +214,9 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Stops selling a combination and gives its code back. One that is not
-    /// there is a no-op.
+    /// Stops selling a combination. Its code is free to any claim at once,
+    /// and the release subscription frees its entry. One that is not there
+    /// is a no-op.
     pub async fn remove_variant(
         &self,
         actor: &str,
@@ -214,13 +225,12 @@ impl<E: Executor> super::Command<E> {
         routing_key: Option<String>,
     ) -> Result<(), CatalogError> {
         let product = self.require_editable(product_id).await?;
-        let Some(variant) = product.variant(variant_id) else {
+        if product.variant(variant_id).is_none() {
             return Ok(());
-        };
-        let sku = variant.sku.clone();
+        }
         product
             .write()?
-            .routing_key_opt(routing_key.clone())
+            .routing_key_opt(routing_key)
             .event(&VariantRemoved {
                 variant_id: variant_id.to_owned(),
                 removed_by: actor.to_owned(),
@@ -228,11 +238,6 @@ impl<E: Executor> super::Command<E> {
             .tenant(&self.tenant)
             .commit(&self.executor)
             .await?;
-        if let Some(sku) = sku
-            && let Err(release) = self.release_sku(&sku, variant_id, routing_key).await
-        {
-            tracing::warn!(%sku, %release, "cannot give the code back after removing a variant");
-        }
         Ok(())
     }
 }

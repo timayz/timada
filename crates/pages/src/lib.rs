@@ -2,7 +2,10 @@
 //! terms of sale, privacy policy, about us).
 //!
 //! A page is a title and a body the merchant writes in Markdown, under a
-//! slug unique in the shop. The storefront decides which pages it has, and
+//! slug unique in the shop (a slug a page moved from, or a deleted page's,
+//! is free at once to the next claim, and the release subscription,
+//! [`release_subscription`], frees its entry). The storefront decides which
+//! pages it has, and
 //! where (`/mentions-legales`), and reads each one's text by its slug. A
 //! page stays a draft, seen in the back office only, until it is published,
 //! and carries the title and description search engines show. Its pictures
@@ -25,6 +28,7 @@ mod command;
 mod error;
 mod markdown;
 mod query;
+mod releases;
 mod value_object;
 
 pub use announcement::*;
@@ -32,4 +36,5 @@ pub use command::*;
 pub use error::*;
 pub use markdown::*;
 pub use query::*;
+pub use releases::*;
 pub use value_object::*;

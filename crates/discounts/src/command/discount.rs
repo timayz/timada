@@ -28,8 +28,9 @@ pub struct CreateDiscount {
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Creates an active discount: claims its code, then appends `Created`.
-    /// A discount stream that cannot be created after the claim gives the
-    /// code back (best effort: a failure there only leaves it reserved).
+    /// A creation that fails keeps the claim, as its write may land yet (the
+    /// store could not tell): a claim whose discount never got written is
+    /// taken over once it is no longer fresh.
     pub async fn create_discount(
         &self,
         actor: &str,
@@ -104,8 +105,9 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
-    /// Retires the discount for good and frees its code. Already archived is
-    /// a no-op.
+    /// Retires the discount for good. Its code is free to any claim at once,
+    /// and the release subscription frees its entry. Already archived is a
+    /// no-op.
     pub async fn archive_discount(
         &self,
         actor: &str,
@@ -119,15 +121,14 @@ impl<E: Executor> super::Command<E> {
         };
         discount
             .write()?
-            .routing_key_opt(routing_key.clone())
+            .routing_key_opt(routing_key)
             .event(&Archived {
                 archived_by: actor.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
             .await?;
-        self.release_code(&discount.code, discount_id, routing_key)
-            .await
+        Ok(())
     }
 }
 
@@ -167,9 +168,9 @@ impl<E: Executor> super::Command<E> {
             .await?;
         let created = evento::append(discount_id)
             .original_version(0)
-            .routing_key_opt(routing_key.clone())
+            .routing_key_opt(routing_key)
             .event(&Created {
-                code: code.clone(),
+                code,
                 percent_bps,
                 amount_cents,
                 currency,
@@ -187,12 +188,7 @@ impl<E: Executor> super::Command<E> {
         {
             return Ok(existing);
         }
-        if let Err(err) = created {
-            if let Err(release) = self.release_code(&code, discount_id, routing_key).await {
-                tracing::warn!(%code, %release, "cannot give the code back after a failed creation");
-            }
-            return Err(err.into());
-        }
+        created?;
 
         self.load_discount(discount_id)
             .await?
