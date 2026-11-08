@@ -6,9 +6,11 @@
 //! node for every tenant, silently. So every worker runs under a supervisor
 //! that starts it again from its saved cursor after a growing delay (it
 //! resumes at the event that failed: a cursor is acknowledged only past the
-//! handlers that ran) and records how it stands, for `/admin/cluster`.
-//! Ported from the storefront's catalog supervisor
-//! (`crates/storefront/src/store.rs`).
+//! handlers that ran) and records how it stands, for `/admin/cluster`. The
+//! delay keeps growing while the restarted worker fails again soon after
+//! (the same event, still poison): the wait and the count are forgotten
+//! only once a restart lived longer than the longest delay. Ported from the
+//! storefront's catalog supervisor (`crates/storefront/src/store.rs`).
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,7 +23,8 @@ use tokio::task::JoinHandle;
 use crate::cluster::Executor;
 
 /// The wait before the first restart of a worker that failed, doubling up to
-/// [`MAX_RESTART_DELAY`] while it keeps failing.
+/// [`MAX_RESTART_DELAY`] while it keeps failing. A restarted worker that ran
+/// for longer than the longest delay counts as recovered.
 const FIRST_RESTART_DELAY: Duration = Duration::from_secs(1);
 const MAX_RESTART_DELAY: Duration = Duration::from_secs(5 * 60);
 
@@ -32,7 +35,7 @@ pub enum WorkerState {
     /// The worker ended on a failure and is started again from its cursor
     /// after a delay. `since` is when it first failed (unix seconds) and
     /// `attempts` how many restarts were tried since, the one being waited
-    /// for included.
+    /// for included; a restart that failed again soon after counts on.
     Restarting {
         error: String,
         since: u64,
@@ -72,7 +75,9 @@ impl Worker {
         *self.state.lock().unwrap() = state;
     }
 
-    /// Signals the worker to stop, without waiting for it.
+    /// Signals the worker to stop, without waiting for it. The supervisor
+    /// holds the worker, so dropping the handles alone stops nothing: stop
+    /// it.
     pub fn stop(&self) {
         let _ = self.stop.send(true);
     }
@@ -121,10 +126,14 @@ where
 /// the read models are empty until their subscriptions caught up.
 pub async fn catch_up(
     name: &str,
-    mut builder: SubscriptionBuilder<Executor>,
+    builder: SubscriptionBuilder<Executor>,
     executor: &Executor,
 ) -> Result<()> {
+    // One more try at a failing pass, no more: a store that stays away or an
+    // event a handler cannot deal with is for the supervised worker, which
+    // resumes at the cursor the pass left.
     builder
+        .retry(1)
         .run_once(executor)
         .await
         .with_context(|| format!("the {name} subscription cannot catch up"))
@@ -141,9 +150,13 @@ async fn supervise<F>(
 {
     let name = worker.name.clone();
     let mut delay = FIRST_RESTART_DELAY;
+    // The first failure of the current run of failures, and how many
+    // restarts it took so far; forgotten once a restart held up.
+    let mut since = 0;
+    let mut attempts = 0;
+    let mut restarted_at: Option<std::time::Instant> = None;
     loop {
         let reason = tokio::select! {
-            // A closed channel means the handle was dropped: stop as well.
             _ = stop.changed() => {
                 handle.shutdown().await.ok();
                 worker.set(WorkerState::Stopped { reason: StopReason::Shutdown.to_string() });
@@ -160,8 +173,14 @@ async fn supervise<F>(
         }
         let error = reason.to_string();
         tracing::error!(%error, "the {name} subscription stopped; restarting it");
-        let since = crate::auth::now();
-        let mut attempts = 1;
+        if restarted_at.is_none_or(|at| at.elapsed() >= MAX_RESTART_DELAY) {
+            // Fresh trouble, or the last restart held up long enough to
+            // count as recovered: the wait starts short again.
+            delay = FIRST_RESTART_DELAY;
+            since = crate::auth::now();
+            attempts = 0;
+        }
+        attempts += 1;
         worker.set(WorkerState::Restarting {
             error,
             since,
@@ -191,7 +210,7 @@ async fn supervise<F>(
                 }
             }
         };
-        delay = FIRST_RESTART_DELAY;
+        restarted_at = Some(std::time::Instant::now());
         worker.set(WorkerState::Running);
         tracing::info!("the {name} subscription is running again");
     }
@@ -344,6 +363,52 @@ mod tests {
                 reason: "shutdown requested".to_owned()
             }
         );
+    }
+
+    /// A worker that fails again right after its restart is waited for
+    /// longer each time, and the page sees one run of failures, not a new
+    /// one every half minute.
+    #[tokio::test]
+    async fn a_worker_failing_again_at_once_waits_longer_and_counts_on() {
+        let store = Evento::new(Turso::in_memory_concurrent().await.unwrap());
+        let seen = Seen::default();
+        seen.failures_left.store(2, Ordering::SeqCst);
+        let worker = start(
+            "created",
+            {
+                let seen = seen.clone();
+                move || builder(seen.clone())
+            },
+            &store,
+        )
+        .await
+        .unwrap();
+        create(&store, "poison").await;
+        let first = tokio::time::Instant::now();
+        eventually("the first failure is seen", async || {
+            matches!(worker.state(), WorkerState::Restarting { attempts: 1, .. })
+        })
+        .await;
+        let WorkerState::Restarting { since, .. } = worker.state() else {
+            unreachable!()
+        };
+        // Restarted after 1 s, fails again at once: 2 s before the next.
+        eventually("the second failure counts on", async || {
+            matches!(worker.state(), WorkerState::Restarting { attempts: 2, .. })
+        })
+        .await;
+        assert!(matches!(worker.state(), WorkerState::Restarting { since: s, .. } if s == since));
+        eventually("the third start gets past the event", async || {
+            seen.names.lock().unwrap().len() == 1
+        })
+        .await;
+        assert!(
+            first.elapsed() >= Duration::from_secs(3),
+            "1 s then 2 s of waiting, not 1 s twice"
+        );
+        assert_eq!(worker.state(), WorkerState::Running);
+        worker.stop();
+        worker.stopped().await;
     }
 
     /// A shutdown during the restart wait ends the supervisor at once.

@@ -825,10 +825,10 @@ impl ServerConfig {
             ));
         }
         for (i, served) in self.also_serves.iter().enumerate() {
-            if served.trim().is_empty() {
-                return Err(ConfigError::Message(
-                    "server.also_serves: a region name is empty".into(),
-                ));
+            if served.trim().is_empty() || served.trim() != served {
+                return Err(ConfigError::Message(format!(
+                    "server.also_serves: '{served}' is empty or has spaces around it"
+                )));
             }
             if self.region.as_deref() == Some(served.as_str()) {
                 return Err(ConfigError::Message(format!(
@@ -1000,6 +1000,7 @@ mod tests {
         let err = regions(Some("eu"), &["us", "us"]).validate().unwrap_err();
         assert!(err.to_string().contains("twice"), "{err}");
         assert!(regions(Some("eu"), &[" "]).validate().is_err());
+        assert!(regions(Some("eu"), &[" us"]).validate().is_err());
     }
 
     #[test]

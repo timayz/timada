@@ -90,7 +90,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let connections = StoreConnections::new();
     // This node's store connections of a key revoked or re-scoped, or of a
     // tenant suspended, on any node, end through this subscription. It starts
-    // before the store API takes a connection, so none is older than it.
+    // before the store API takes a connection, so none is older than it. It
+    // follows from the head and keeps no cursor, so a restart after a failure
+    // misses what was revoked in between: those connections last until the
+    // key is next checked, as they did when the worker simply died.
     let mut all_workers = vec![
         workers::start(
             "store connections",
@@ -144,9 +147,17 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     if catch_up_first {
         tracing::info!("the store was copied from a peer: the read models catch up before serving");
     }
-    for (name, make) in planned(&config.server) {
-        if catch_up_first {
-            workers::catch_up(&name, make(&deps), &executor).await?;
+    for (name, kind, make) in planned(&config.server) {
+        // The read models alone: a saga resumes from its cursor as it would
+        // after any restart, and nothing it does is waited for. A pass that
+        // cannot get through the copied history is not the node's end: its
+        // worker starts anyway, supervised, at the cursor the pass left, and
+        // the cluster page says so.
+        if catch_up_first
+            && kind == Kind::ReadModel
+            && let Err(err) = workers::catch_up(&name, make(&deps), &executor).await
+        {
+            tracing::error!(error = %format!("{err:#}"), "the {name} subscription did not catch up before serving");
         }
         let deps = deps.clone();
         all_workers.push(workers::start(name, move || make(&deps), &executor).await?);
@@ -315,16 +326,21 @@ type Make = fn(&Deps) -> SubscriptionBuilder<Executor>;
 /// for a region this node also serves, filtered on that region's key.
 type Planned = (
     String,
+    Kind,
     Box<dyn Fn(&Deps) -> SubscriptionBuilder<Executor> + Send + Sync>,
 );
 
-/// What a subscription follows.
+/// What a subscription follows, and what it is for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
-    /// Every region's events: a read model, or an effect each node has for
-    /// itself (its store connections, its copies of pictures and keys). The
-    /// builder says `.any_routing_key()`.
-    Everywhere,
+    /// Every region's events, into the read-model tables. The builder says
+    /// `.any_routing_key()`. After a start that copied the store from a
+    /// peer, these catch up before the router takes requests.
+    ReadModel,
+    /// Every region's events, for an effect each node has for itself: its
+    /// copies of pictures, logos and keys. The builder says
+    /// `.any_routing_key()`.
+    PerNode,
     /// The node's own region (the executor's default routing key, which the
     /// builder leaves alone), and each region of `server.also_serves` as a
     /// worker of its own: a saga, whose work a region's nodes do for it.
@@ -342,12 +358,13 @@ fn planned(server: &crate::config::ServerConfig) -> Vec<Planned> {
     );
     let mut planned: Vec<Planned> = Vec::new();
     for (name, kind, make) in SUBSCRIPTIONS {
-        planned.push((name.to_string(), Box::new(make)));
+        planned.push((name.to_string(), *kind, Box::new(make)));
         if *kind == Kind::Sharded {
             for region in &server.also_serves {
                 let region = region.clone();
                 planned.push((
                     format!("{name} for {region}"),
+                    *kind,
                     Box::new(move |deps: &Deps| make(deps).routing_key(region.clone())),
                 ));
             }
@@ -369,7 +386,7 @@ fn planned(server: &crate::config::ServerConfig) -> Vec<Planned> {
 /// subscription here, under the name the cluster page shows, saying whether
 /// it follows every region or the node's own ([`Kind`]).
 const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
-    ("identity", Kind::Everywhere, |d| {
+    ("identity", Kind::ReadModel, |d| {
         timada_identity::read_model_subscription(d.db.clone())
     }),
     // Not a read model, but the same lifecycle: it frees the index entries
@@ -378,13 +395,13 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     ("identity indexes", Kind::Sharded, |_| {
         timada_identity::index_release_subscription()
     }),
-    ("tenancy", Kind::Everywhere, |d| {
+    ("tenancy", Kind::ReadModel, |d| {
         timada_tenancy::read_model_subscription(d.db.clone())
     }),
-    ("members history", Kind::Everywhere, |d| {
+    ("members history", Kind::ReadModel, |d| {
         timada_tenancy::member_audit_subscription(d.db.clone())
     }),
-    ("AliExpress access", Kind::Everywhere, |d| {
+    ("AliExpress access", Kind::ReadModel, |d| {
         timada_tenancy::aliexpress_accounts_subscription(d.db.clone())
     }),
     // Not a read model, but the same lifecycle: it copies how each tenant's
@@ -399,40 +416,40 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
         timada_tenancy::invitation_grants_subscription(d.store.clone())
     }),
     // Nor this: it fetches the shops' mail logos this node lacks.
-    ("mail logos", Kind::Everywhere, |d| {
+    ("mail logos", Kind::PerNode, |d| {
         crate::media::logo_subscription(d.media.clone())
     }),
-    ("catalog", Kind::Everywhere, |d| {
+    ("catalog", Kind::ReadModel, |d| {
         timada_catalog::read_model_subscription(d.db.clone())
     }),
-    ("orders", Kind::Everywhere, |d| {
+    ("orders", Kind::ReadModel, |d| {
         timada_orders::read_model_subscription(d.db.clone())
     }),
-    ("shoppers", Kind::Everywhere, |d| {
+    ("shoppers", Kind::ReadModel, |d| {
         timada_shoppers::read_model_subscription(d.db.clone(), d.keys.ring())
     }),
-    ("discounts", Kind::Everywhere, |d| {
+    ("discounts", Kind::ReadModel, |d| {
         timada_discounts::read_model_subscription(d.db.clone())
     }),
-    ("reviews", Kind::Everywhere, |d| {
+    ("reviews", Kind::ReadModel, |d| {
         timada_reviews::read_model_subscription(d.db.clone())
     }),
-    ("support", Kind::Everywhere, |d| {
+    ("support", Kind::ReadModel, |d| {
         timada_support::read_model_subscription(d.db.clone(), d.keys.ring())
     }),
-    ("newsletter", Kind::Everywhere, |d| {
+    ("newsletter", Kind::ReadModel, |d| {
         timada_newsletter::read_model_subscription(d.db.clone(), d.keys.ring())
     }),
-    ("automations", Kind::Everywhere, |d| {
+    ("automations", Kind::ReadModel, |d| {
         timada_automations::read_model_subscription(d.db.clone())
     }),
-    ("pages", Kind::Everywhere, |d| {
+    ("pages", Kind::ReadModel, |d| {
         timada_pages::read_model_subscription(d.db.clone())
     }),
-    ("invoicing", Kind::Everywhere, |d| {
+    ("invoicing", Kind::ReadModel, |d| {
         timada_invoicing::read_model_subscription(d.db.clone())
     }),
-    ("AliExpress", Kind::Everywhere, |d| {
+    ("AliExpress", Kind::ReadModel, |d| {
         timada_aliexpress::read_model_subscription(d.db.clone())
     }),
     ("AliExpress orders", Kind::Sharded, |d| {
@@ -464,10 +481,10 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
             d.store.clone(),
         )
     }),
-    ("pictures", Kind::Everywhere, |d| {
+    ("pictures", Kind::PerNode, |d| {
         crate::media::subscription(d.media.clone())
     }),
-    ("shopper keys", Kind::Everywhere, |d| {
+    ("shopper keys", Kind::PerNode, |d| {
         crate::shopper_keys::subscription(d.keys.clone())
     }),
     // Nor this: it erases the newsletter subscription a deleted account
@@ -475,10 +492,10 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     ("shopper erasure", Kind::Sharded, |d| {
         crate::shopper_erasure::subscription(d.store.clone(), d.keys.ring())
     }),
-    ("message keys", Kind::Everywhere, |d| {
+    ("message keys", Kind::PerNode, |d| {
         crate::message_keys::subscription(d.keys.clone())
     }),
-    ("newsletter keys", Kind::Everywhere, |d| {
+    ("newsletter keys", Kind::PerNode, |d| {
         crate::newsletter_keys::subscription(d.keys.clone())
     }),
     ("payments", Kind::Sharded, |d| {
@@ -568,7 +585,10 @@ mod tests {
     }
 
     fn names(server: &ServerConfig) -> Vec<String> {
-        planned(server).into_iter().map(|(name, _)| name).collect()
+        planned(server)
+            .into_iter()
+            .map(|(name, _, _)| name)
+            .collect()
     }
 
     /// Without a region, or without other regions to serve, the table as it
@@ -626,11 +646,8 @@ mod tests {
                 "newsletter keys",
             ]
             .contains(name);
-            assert_eq!(
-                *kind == Kind::Everywhere,
-                read_model || per_node,
-                "{name} is {kind:?}"
-            );
+            assert_eq!(*kind == Kind::ReadModel, read_model, "{name} is {kind:?}");
+            assert_eq!(*kind == Kind::PerNode, per_node, "{name} is {kind:?}");
         }
     }
 }
