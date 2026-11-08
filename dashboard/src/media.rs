@@ -337,14 +337,18 @@ pub fn subscription<E: Executor>(media: Arc<Media>) -> SubscriptionBuilder<E> {
 /// The cursor identity of [`logo_subscription`], in the platform store.
 pub const LOGO_SUBSCRIPTION: &str = "timada-dashboard/mail-logos";
 
-/// Follows the tenants in the platform store and fetches each mail logo
-/// this node lacks. A logo replaced since is skipped, as a removed product
-/// picture is. A replaced logo's file stays on disk, unreferenced.
+/// Follows the tenants in the platform store (the default tenant, where they
+/// live: a shop's store key can write the same event in the shop's own
+/// tenant, under any `aggregate_id`, and such an event is never read) and
+/// fetches each mail logo this node lacks. A logo replaced since is skipped,
+/// as a removed product picture is. A replaced logo's file stays on disk,
+/// unreferenced.
 pub fn logo_subscription<E: Executor>(media: Arc<Media>) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(LOGO_SUBSCRIPTION)
         .data(media)
         .handler(on_mail_branding_set())
         .any_routing_key()
+        .tenant("")
         .retry(u8::MAX)
 }
 
@@ -353,12 +357,9 @@ async fn on_mail_branding_set<E: Executor>(
     context: &Context<'_, E>,
     event: Event<MailBrandingSet>,
 ) -> anyhow::Result<()> {
-    // Tenants live in the platform's own streams, the default tenant. A
-    // shop's store key can write the same event in the shop's own tenant,
-    // under any `aggregate_id`: nothing is fetched into another tenant's
-    // media for it, and nothing is taken from the event but the stream it
-    // names. The branding fetched is the one the tenant holds now.
-    if !event.tenant.is_empty() || event.data.logo_file.is_none() {
+    // Nothing is taken from the event but the stream it names: the branding
+    // fetched is the one the tenant holds now.
+    if event.data.logo_file.is_none() {
         return Ok(());
     }
     let media: Arc<Media> = context.extract();

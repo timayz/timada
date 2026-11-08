@@ -365,6 +365,7 @@ async fn notify_deposit<E: Executor>(
 let sub = SubscriptionBuilder::<evento::Sqlite>::new("notifier") // unique key = cursor scope
     .handler(notify_deposit())
     .routing_key("accounts")   // .any_routing_key() for every key; default = only NULL routing key
+    .tenant("")                // one tenant's events only; default = every tenant
     .chunk_size(100)
     .retry(5)                  // exponential backoff; .no_retry() to disable
     .shutdown_grace(Duration::from_secs(10)) // bound on waiting for the pass in flight (default 30s); .no_shutdown_grace() waits forever
@@ -380,6 +381,8 @@ sub.shutdown().await?;
   (retries exhausted, no `.continue_on_error()`), or `Panicked`. Await it to notice a
   dead subscription instead of discovering a stale read model later.
 - `.strict()` fails on an unhandled event; `.continue_on_error()` keeps going after a handler error.
+- A payload that does not decode as the handled event is poison, not a handler error: logged,
+  acknowledged and skipped by default; `.on_undecodable(Undecodable::Stop)` stops on it instead.
 - **Live bridge (SSE, WebSocket, fanout):** `.live(exec)` is the whole shape in one call —
   `.ephemeral().start_from_latest().start(exec)`. `.ephemeral()` keeps the cursor in memory — no
   subscriber row, no fence, no acknowledge, reads only — and `.start_from_latest()` begins at
@@ -441,10 +444,11 @@ aggregate type as a string; it has no `.decode()`.
 - **Tenants are part of stream identity** (`(tenant, type, id)`, default tenant `""`).
   Writes, loads and reads act in the default tenant unless the builder says
   `.tenant(t)` (writes, `Projection::load`, `evento::read`); `has_event` /
-  `original_version` read the default tenant. Subscriptions have no tenant option:
-  they read every tenant, handlers see `event.tenant` (write back with
-  `.tenant(&event.tenant)`), and a projection subscription loads each event in its
-  own tenant.
+  `original_version` read the default tenant. A subscription reads every tenant
+  unless the builder says `.tenant(t)` (`.tenant("")` for a platform's own aggregates,
+  on a store shared with tenants that may append any event under the same type and
+  name); handlers see `event.tenant` (write back with `.tenant(&event.tenant)`), and a
+  projection subscription loads each event in its own tenant.
 - **The subscription key is the cursor identity.** Reusing a key across two different
   subscriptions makes them share (and corrupt) one cursor. Keep keys unique — except under
   `.ephemeral()`, where nothing is stored under the key and any number of subscriptions may

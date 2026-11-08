@@ -22,9 +22,9 @@ pub const SETUP_SUBSCRIPTION: &str = "timada-dashboard/payment-setup";
 #[derive(Clone)]
 struct Store(Executor);
 
-/// Follows the tenants' payment settings (the platform's streams) and copies
-/// the public part (the provider and the publishable key) into each tenant's
-/// own streams. Every node runs it; writing what is there already is a
+/// Follows the tenants' payment settings (the platform's streams, in the
+/// default tenant) and copies the public part (the provider and the
+/// publishable key) into each tenant's own streams. Every node runs it; writing what is there already is a
 /// no-op. A fresh node, or this subscription's first run, replays every
 /// tenant's history, which brings the tenants set up before it in step.
 pub fn setup_subscription(
@@ -39,6 +39,7 @@ pub fn setup_subscription(
         .handler(on_payments_forgotten())
         .handler(on_tenant_resumed())
         .any_routing_key()
+        .tenant("")
         .retry(5)
 }
 

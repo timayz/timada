@@ -24,9 +24,9 @@ use crate::command::{
 /// The cursor identity of the read-model subscription. One per node.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-tenancy/read-models";
 
-/// Builds the subscription over every routing key (the catalog is
-/// platform-wide). Start it with `.start(&executor)` and keep the handle for
-/// shutdown.
+/// Builds the subscription over every routing key of the platform tenant
+/// (the catalog is platform-wide, and lives in the default tenant). Start it
+/// with `.start(&executor)` and keep the handle for shutdown.
 pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
         .data(db)
@@ -35,6 +35,7 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(on_api_key_event())
         .handler(on_company_event())
         .any_routing_key()
+        .tenant("")
 }
 
 #[evento::subscription_all]

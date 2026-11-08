@@ -26,13 +26,15 @@ pub const INVITATION_GRANTS_SUBSCRIPTION: &str = "timada-tenancy/invitation-gran
 #[derive(Clone)]
 struct Store(Evento);
 
-/// Builds the subscription over every routing key; `store` is the store it
-/// follows, which it grants the seats in.
+/// Builds the subscription over every routing key of the platform tenant,
+/// where invitations live; `store` is the store it follows, which it grants
+/// the seats in.
 pub fn invitation_grants_subscription<E: Executor>(store: Evento) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(INVITATION_GRANTS_SUBSCRIPTION)
         .data(Store(store))
         .handler(on_accepted())
         .any_routing_key()
+        .tenant("")
         .retry(5)
 }
 
@@ -41,11 +43,6 @@ async fn on_accepted<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Accepted>,
 ) -> anyhow::Result<()> {
-    // Invitations live in the platform's own streams, the default tenant:
-    // the same event in a shop's streams grants nothing.
-    if !event.tenant.is_empty() {
-        return Ok(());
-    }
     let store: Store = context.extract();
     match Command(store.0)
         .settle_seat(&event.aggregate_id, None)
