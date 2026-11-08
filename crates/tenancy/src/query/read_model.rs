@@ -13,6 +13,7 @@ use evento::{
 use timada_core::db::{Db, execute, fetch_optional, search_key};
 
 use super::api_keys::join_scopes;
+use super::invitations::InvitationMailState;
 use crate::aggregator::api_key::ApiKey;
 use crate::aggregator::company::Company;
 use crate::aggregator::{Invitation, Tenant};
@@ -197,11 +198,11 @@ async fn on_invitation_event<E: Executor>(
 async fn upsert_invitation(db: &Db, invitation: &InvitationState) -> anyhow::Result<()> {
     db.execute(
         "INSERT INTO tenancy_invitations (id, tenant_id, email, role, invited_by, sent_at,
-            expires_at, accepted_by, accepted_at, revoked)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            expires_at, accepted_by, accepted_at, revoked, mail)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT (id) DO UPDATE SET
             accepted_by = excluded.accepted_by, accepted_at = excluded.accepted_at,
-            revoked = excluded.revoked",
+            revoked = excluded.revoked, mail = excluded.mail",
         (
             invitation.id.as_str(),
             invitation.tenant_id.as_str(),
@@ -213,6 +214,7 @@ async fn upsert_invitation(db: &Db, invitation: &InvitationState) -> anyhow::Res
             invitation.accepted_by.as_deref(),
             invitation.accepted_at.map(|at| at as i64),
             invitation.revoked,
+            InvitationMailState::of(&invitation.mail).as_str(),
         ),
     )
     .await?;

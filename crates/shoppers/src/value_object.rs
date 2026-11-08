@@ -61,13 +61,6 @@ pub fn address_id(key: &ShopperKey, address: &ShippingAddress) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
 }
 
-/// A uniformly random six-digit code, zero-padded.
-pub(crate) fn generate_code() -> String {
-    use rand::Rng;
-
-    format!("{:06}", rand::rng().random_range(0..1_000_000u32))
-}
-
 /// A fresh session token: 32 random bytes as URL-safe base64 without padding
 /// (43 characters).
 pub(crate) fn generate_token() -> String {
@@ -82,15 +75,6 @@ pub(crate) fn generate_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn codes_are_six_digits() {
-        for _ in 0..100 {
-            let code = generate_code();
-            assert_eq!(code.len(), 6);
-            assert!(code.bytes().all(|b| b.is_ascii_digit()));
-        }
-    }
 
     #[test]
     fn tokens_differ() {

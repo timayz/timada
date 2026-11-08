@@ -3,8 +3,8 @@
 //!
 //! A saga that sends mail records the first kind (`Undeliverable`) and moves
 //! on; it returns the second kind, so the saga retries under its supervisor
-//! (#427, stage 3 of the CQRS plan). Nothing calls this before the mail
-//! sagas land.
+//! (#427, stage 3 of the CQRS plan). [`SendFailure::of`] tells the two
+//! apart for the sagas.
 
 use std::error::Error as _;
 
@@ -25,10 +25,6 @@ use topcoat::mail::AddressError;
 /// formatting it into a message does not. `lettre` is pinned to the 0.11
 /// line topcoat-mail wraps: a topcoat upgrade that changes the wrapped type
 /// fails this module's tests.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the mail sagas (#427, stage 3)")
-)]
 pub fn is_customer_address_fault(err: &topcoat::Error) -> bool {
     err.chain().any(|cause| {
         cause.is::<AddressError>()
@@ -36,6 +32,43 @@ pub fn is_customer_address_fault(err: &topcoat::Error) -> bool {
                 .downcast_ref::<SmtpError>()
                 .is_some_and(recipient_refused)
     })
+}
+
+/// How long of what the server said a stream keeps.
+const REASON_LEN: usize = 200;
+
+/// What a saga does with a send that failed.
+#[derive(Debug)]
+pub enum SendFailure {
+    /// The recipient's address is at fault: record it, with what the
+    /// server said, and move on.
+    Undeliverable(String),
+    /// Anything else: return it, so the saga retries.
+    Retry(topcoat::Error),
+}
+
+impl SendFailure {
+    pub fn of(err: topcoat::Error) -> Self {
+        if is_customer_address_fault(&err) {
+            Self::Undeliverable(reason(&err))
+        } else {
+            Self::Retry(err)
+        }
+    }
+}
+
+/// What the server (or the address parser) said, in one line of at most
+/// [`REASON_LEN`] characters: the innermost cause, which is the SMTP reply.
+fn reason(err: &topcoat::Error) -> String {
+    let cause = err
+        .chain()
+        .last()
+        .map_or_else(|| err.to_string(), ToString::to_string);
+    let line: String = cause.split_whitespace().collect::<Vec<_>>().join(" ");
+    match line.char_indices().nth(REASON_LEN) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line,
+    }
 }
 
 /// A permanent reply about the recipient: 550 (mailbox unavailable), 551
@@ -79,24 +112,19 @@ fn enhanced_status(message: &str) -> Option<(u16, u16)> {
     (class == "5" && parts.next().is_none()).then_some((subject, detail))
 }
 
+/// A mail server of our own, for the tests of the sagas: it answers every
+/// `RCPT TO` with the reply it was given, and takes anything else.
 #[cfg(test)]
-mod tests {
+pub(crate) mod fake_smtp {
     use std::{
         io::{BufRead as _, BufReader, Write as _},
         net::TcpListener,
         thread,
-        time::Duration,
     };
 
-    use lettre::{Message, SmtpTransport, Transport as _};
-    use topcoat::mail::{Mailbox, SendError};
-
-    use super::*;
-
-    /// A mail sent to a server of our own that answers `reply` to
-    /// `RCPT TO`, with the failure as the transports hand it over: the
-    /// lettre error inside `SendError::Delivery` inside a `topcoat::Error`.
-    fn refused_with(reply: &'static str) -> topcoat::Error {
+    /// Serves one connection on a loopback port, answering `reply` to
+    /// `RCPT TO`; returns the port.
+    pub(crate) fn serve(reply: &'static str) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
         let port = listener.local_addr().expect("the port").port();
         thread::spawn(move || {
@@ -127,6 +155,37 @@ mod tests {
                 }
             }
         });
+        port
+    }
+
+    /// A port nothing listens on any more.
+    pub(crate) fn closed_port() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
+        listener.local_addr().expect("the port").port()
+    }
+
+    /// A topcoat transport to the server at `port`, in clear.
+    pub(crate) fn transport(port: u16) -> topcoat::mail::SmtpTransport {
+        topcoat::mail::SmtpTransport::from_url(&format!("smtp://127.0.0.1:{port}"))
+            .expect("a loopback address")
+            .build()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use lettre::{Message, SmtpTransport, Transport as _};
+    use topcoat::mail::{Mailbox, SendError};
+
+    use super::*;
+
+    /// A mail sent to a server of our own that answers `reply` to
+    /// `RCPT TO`, with the failure as the transports hand it over: the
+    /// lettre error inside `SendError::Delivery` inside a `topcoat::Error`.
+    fn refused_with(reply: &'static str) -> topcoat::Error {
+        let port = fake_smtp::serve(reply);
         let transport = SmtpTransport::builder_dangerous("127.0.0.1")
             .port(port)
             .timeout(Some(Duration::from_secs(5)))
@@ -180,13 +239,9 @@ mod tests {
 
     #[test]
     fn a_server_that_cannot_be_reached_is_not_the_customers_fault() {
-        let port = {
-            let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
-            listener.local_addr().expect("the port").port()
-        };
         // Nothing listens there any more.
         let transport = SmtpTransport::builder_dangerous("127.0.0.1")
-            .port(port)
+            .port(fake_smtp::closed_port())
             .timeout(Some(Duration::from_secs(5)))
             .build();
         let err = transport.send(&hello()).expect_err("nobody listens");
@@ -215,6 +270,32 @@ mod tests {
         assert!(!is_customer_address_fault(&topcoat::Error::msg(
             "no mailer configured"
         )));
+    }
+
+    #[test]
+    fn a_failure_is_recorded_or_retried_with_what_the_server_said() {
+        match SendFailure::of(refused_with("550 5.1.1 no such user")) {
+            SendFailure::Undeliverable(reason) => {
+                assert!(reason.contains("5.1.1 no such user"), "{reason}");
+                assert!(reason.len() < 120, "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            SendFailure::of(refused_with("450 4.2.0 try again later")),
+            SendFailure::Retry(_)
+        ));
+        let err: topcoat::Error = Mailbox::new("ada at example.org")
+            .expect_err("not an address")
+            .into();
+        assert!(matches!(
+            SendFailure::of(err.context("sign-in code")),
+            SendFailure::Undeliverable(_)
+        ));
+        let long = reason(&topcoat::Error::msg("x".repeat(500)));
+        assert_eq!(long.chars().count(), REASON_LEN + 1);
+        assert!(long.ends_with('…'));
+        assert_eq!(reason(&topcoat::Error::msg("two\n  lines")), "two lines");
     }
 
     #[test]

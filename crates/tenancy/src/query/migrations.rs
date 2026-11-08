@@ -59,7 +59,8 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             expires_at INTEGER NOT NULL,
             accepted_by TEXT,
             accepted_at INTEGER,
-            revoked INTEGER NOT NULL
+            revoked INTEGER NOT NULL,
+            mail TEXT NOT NULL
         );
         CREATE INDEX tenancy_invitations_tenant ON tenancy_invitations (tenant_id);
         CREATE INDEX tenancy_invitations_tenant_sent ON tenancy_invitations (tenant_id, sent_at);

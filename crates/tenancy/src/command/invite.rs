@@ -1,15 +1,20 @@
-//! Invitations: a member with `members:manage` mails a link; whoever opens it
-//! signed in joins with the role it carries. The stream is keyed by the hash
-//! of the token, so the store never holds anything a link could be rebuilt
-//! from.
+//! Invitations: a member with `members:manage` has a link mailed; whoever
+//! opens it signed in joins with the role it carries. The stream is keyed by
+//! the hash of the token and keeps only the nonce the token derives from
+//! under a key the host holds ([`TokenDeriver`]), so the store never holds
+//! anything a link could be rebuilt from without that key. A subscription on
+//! every node mails the link, after taking the send on the stream so one
+//! node mails, and records how it went.
 
 use evento::{Executor, ProjectionAggregate, WriteError};
+use timada_core::{Claim, Claimant, LEASE_SECS, TokenDeriver, new_nonce};
 
-use crate::aggregator::{Accepted, Revoked, SeatGranted, SeatRefused, Sent};
+use crate::aggregator::{
+    Accepted, MailClaimed, MailSent, MailUndeliverable, Revoked, SeatGranted, SeatRefused, Sent,
+};
 use crate::error::TenancyError;
 use crate::value_object::{
-    INVITATION_TTL_SECS, PERMISSION_MEMBERS_MANAGE, generate_invitation_token, invitation_id,
-    normalize_email,
+    INVITATION_TTL_SECS, PERMISSION_MEMBERS_MANAGE, invitation_id, normalize_email,
 };
 
 use super::{InvitationState, Seat, TenantState};
@@ -17,6 +22,10 @@ use super::{InvitationState, Seat, TenantState};
 /// Reload-and-retry budget for settling a seat while other writes of the
 /// tenant or of the invitation race it.
 const SEAT_ATTEMPTS: usize = 3;
+
+/// Reload-and-retry budget for a write on an invitation that raced another
+/// (a revocation landing while the mail is claimed, say).
+const MAIL_WRITE_ATTEMPTS: usize = 3;
 
 /// The code a seat is refused with when the invitation's role was removed
 /// before the grant: [`TenancyError::UnknownRole`]'s.
@@ -46,6 +55,23 @@ impl std::fmt::Debug for SentInvitation {
     }
 }
 
+/// What the node that took the sending of an invitation puts in the mail.
+#[derive(Clone, PartialEq, Eq)]
+pub struct InvitationMail {
+    pub invitation: InvitationState,
+    /// The token of the link.
+    pub token: String,
+}
+
+impl std::fmt::Debug for InvitationMail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InvitationMail")
+            .field("invitation", &self.invitation)
+            .field("token", &"******")
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceptInvitation {
     pub token: String,
@@ -66,12 +92,15 @@ pub struct Joined {
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Records an invitation and returns the token for the link. Needs
-    /// `members:manage`, and a role the actor may hand out (owners any,
-    /// others a role whose permissions they hold, never `owner`:
-    /// [`TenantState::may_hand_out`]). Mailing the link is the caller's job.
+    /// Records an invitation and returns the token for the link, derived
+    /// from a fresh nonce by `tokens`. Needs `members:manage`, and a role the
+    /// actor may hand out (owners any, others a role whose permissions they
+    /// hold, never `owner`: [`TenantState::may_hand_out`]). The link is
+    /// mailed by the subscription that follows the stream
+    /// ([`Self::claim_invitation_mail`]).
     pub async fn invite_member(
         &self,
+        tokens: &dyn TokenDeriver,
         actor_user_id: &str,
         cmd: InviteMember,
         now: u64,
@@ -89,7 +118,8 @@ impl<E: Executor> super::Command<E> {
             return Err(TenancyError::Forbidden);
         }
 
-        let token = generate_invitation_token();
+        let nonce = new_nonce();
+        let token = tokens.derive_token("", &nonce);
         let id = invitation_id(&token);
         evento::append(&id)
             .original_version(0)
@@ -100,6 +130,7 @@ impl<E: Executor> super::Command<E> {
                 email,
                 role: cmd.role,
                 invited_by: actor_user_id.to_owned(),
+                nonce,
                 sent_at: now,
                 expires_at: now + INVITATION_TTL_SECS,
             })
@@ -117,6 +148,77 @@ impl<E: Executor> super::Command<E> {
             .await?
             .ok_or_else(|| anyhow::anyhow!("invitation {id} vanished after creation"))?;
         Ok(SentInvitation { token, invitation })
+    }
+
+    /// Takes, for `claimant`, the sending of the invitation
+    /// `invitation_id`'s link: what to mail, with the token derived again by
+    /// `tokens`, or `None` when this node mails nothing (the outcome is
+    /// recorded, another node is sending, or the link is no longer open). A
+    /// node that holds the claim gets the mail again, to send it again after
+    /// a failure worth a retry.
+    pub async fn claim_invitation_mail(
+        &self,
+        tokens: &dyn TokenDeriver,
+        invitation_id: &str,
+        claimant: Claimant<'_>,
+        routing_key: Option<String>,
+    ) -> Result<Option<InvitationMail>, TenancyError> {
+        let Claimant { node, now } = claimant;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let Some(invitation) = self.load_invitation(invitation_id).await? else {
+                return Ok(None);
+            };
+            if !invitation.is_open_at(now) {
+                return Ok(None);
+            }
+            match invitation.mail.claim(node, now) {
+                Claim::Leave => return Ok(None),
+                Claim::Held => return Ok(Some(invitation_mail(tokens, invitation))),
+                Claim::Take => {}
+            }
+            let claimed = invitation
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&MailClaimed {
+                    by: node.to_owned(),
+                    until: now + LEASE_SECS,
+                })
+                .commit(&self.0)
+                .await;
+            match claimed {
+                Ok(_) => return Ok(Some(invitation_mail(tokens, invitation))),
+                // Another node claimed it, or it was withdrawn: decide again
+                // on the fresh state.
+                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
+    /// Records that the invitation's link was handed to the mail server.
+    /// Nothing is written once the outcome is recorded already.
+    pub async fn record_invitation_mail_sent(
+        &self,
+        invitation_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        self.record_invitation_mail(invitation_id, None, routing_key)
+            .await
+    }
+
+    /// Records that the mail server refused the address for good (or that it
+    /// does not parse), with what it said: the members page shows it, and
+    /// the inviter sends a corrected one.
+    pub async fn record_invitation_mail_undeliverable(
+        &self,
+        invitation_id: &str,
+        reason: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        self.record_invitation_mail(invitation_id, Some(reason), routing_key)
+            .await
     }
 
     /// Joins the tenant the link belongs to. Marking the invitation accepted,
@@ -215,7 +317,45 @@ impl<E: Executor> super::Command<E> {
     }
 }
 
+/// The mail of an invitation, its token derived again from the nonce.
+fn invitation_mail(tokens: &dyn TokenDeriver, invitation: InvitationState) -> InvitationMail {
+    let token = tokens.derive_token("", &invitation.nonce);
+    InvitationMail { invitation, token }
+}
+
 impl<E: Executor> super::Command<E> {
+    async fn record_invitation_mail(
+        &self,
+        invitation_id: &str,
+        undeliverable: Option<&str>,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let Some(invitation) = self.load_invitation(invitation_id).await? else {
+                return Ok(());
+            };
+            if invitation.mail.is_settled() {
+                return Ok(());
+            }
+            let mut writer = invitation.write()?;
+            writer.routing_key_opt(routing_key.clone());
+            match undeliverable {
+                Some(reason) => writer.event(&MailUndeliverable {
+                    reason: reason.to_owned(),
+                }),
+                None => writer.event(&MailSent),
+            };
+            match writer.commit(&self.0).await {
+                Ok(_) => return Ok(()),
+                // Accepted or withdrawn meanwhile: write past it.
+                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
     /// Settles the seat an accepted invitation owes, once, and records the
     /// answer on the invitation (`SeatGranted`, `SeatRefused`) so every node
     /// follows it, however late it gets there. Recorded already, that answer

@@ -1,6 +1,8 @@
 mod common;
 
 use common::*;
+use evento::ProjectionAggregate;
+use timada_core::Claimant;
 use timada_newsletter::{
     CONFIRM_TTL_SECS, ConfirmOutcome, NewsletterError, RESEND_AFTER_SECS, RequestOutcome,
     RequestSubscription, SubscriberStatus, subscriber_id,
@@ -364,4 +366,222 @@ async fn erasing_kills_the_address_and_its_links() {
     let fresh = newsletter.load_subscriber(&id).await.unwrap().unwrap();
     assert_ne!(fresh.key_id, state.key_id);
     assert_eq!(fresh.status, SubscriberStatus::Pending);
+}
+
+#[tokio::test]
+async fn a_confirmations_mail_is_taken_by_one_node_with_the_link_derived_again() {
+    let newsletter = command().await;
+    let keys = MemoryKeys::default();
+    let RequestOutcome::ToConfirm {
+        subscriber_id: id,
+        token,
+        ..
+    } = newsletter
+        .request_subscription(&keys, VISITOR, ask(EMAIL), now())
+        .await
+        .unwrap()
+    else {
+        panic!("nothing to mail");
+    };
+    let state = newsletter.load_subscriber(&id).await.unwrap().unwrap();
+    assert_eq!(state.mail, timada_core::Sending::Pending);
+    let version = state.requested_version;
+
+    let mail = newsletter
+        .claim_confirmation_mail(
+            &keys,
+            &id,
+            version,
+            Claimant {
+                node: "node-a",
+                now: now(),
+            },
+        )
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+    assert_eq!(mail.email, EMAIL);
+    assert_eq!(mail.language.as_deref(), Some("fr"));
+    assert_eq!(mail.token, token, "the same link, derived again");
+    assert!(
+        newsletter
+            .claim_confirmation_mail(
+                &keys,
+                &id,
+                version,
+                Claimant {
+                    node: "node-b",
+                    now: now()
+                }
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "node-b leaves it"
+    );
+    assert!(
+        newsletter
+            .claim_confirmation_mail(
+                &keys,
+                &id,
+                version,
+                Claimant {
+                    node: "node-a",
+                    now: now()
+                }
+            )
+            .await
+            .unwrap()
+            .is_some(),
+        "the holder retries"
+    );
+    newsletter
+        .record_confirmation_mail_sent(&id, version)
+        .await
+        .unwrap();
+    let state = newsletter.load_subscriber(&id).await.unwrap().unwrap();
+    assert_eq!(state.mail, timada_core::Sending::Sent);
+    // Replayed: nothing more.
+    assert!(
+        newsletter
+            .claim_confirmation_mail(
+                &keys,
+                &id,
+                version,
+                Claimant {
+                    node: "node-a",
+                    now: now()
+                }
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    newsletter
+        .record_confirmation_mail_sent(&id, version)
+        .await
+        .unwrap();
+    assert_eq!(
+        newsletter
+            .load_subscriber(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .aggregate_version()
+            .unwrap(),
+        3,
+        "requested, claimed, sent: nothing more"
+    );
+    // Confirmed through the link: the request is no longer pending, and a
+    // late node mails nothing.
+    newsletter
+        .confirm_subscription(&keys, VISITOR, &mail.token, now())
+        .await
+        .unwrap();
+    assert!(
+        newsletter
+            .claim_confirmation_mail(
+                &keys,
+                &id,
+                version,
+                Claimant {
+                    node: "node-c",
+                    now: now() + timada_core::LEASE_SECS,
+                },
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn an_undeliverable_confirmation_frees_the_resend_window() {
+    let newsletter = command().await;
+    let keys = MemoryKeys::default();
+    let (id, _) = request(&newsletter, &keys, EMAIL).await;
+    let first = newsletter.load_subscriber(&id).await.unwrap().unwrap();
+    newsletter
+        .claim_confirmation_mail(
+            &keys,
+            &id,
+            first.requested_version,
+            Claimant {
+                node: "node-a",
+                now: now(),
+            },
+        )
+        .await
+        .unwrap()
+        .expect("taken");
+    assert_eq!(
+        newsletter
+            .request_subscription(&keys, VISITOR, ask(EMAIL), now() + 10)
+            .await
+            .unwrap(),
+        RequestOutcome::RecentlyRequested
+    );
+    newsletter
+        .record_confirmation_mail_undeliverable(&id, first.requested_version, "550 no such user")
+        .await
+        .unwrap();
+    // Refused for good: asked again at once, under the same key.
+    let RequestOutcome::ToConfirm { token, .. } = newsletter
+        .request_subscription(&keys, VISITOR, ask(EMAIL), now() + 10)
+        .await
+        .unwrap()
+    else {
+        panic!("nothing to mail");
+    };
+    let second = newsletter.load_subscriber(&id).await.unwrap().unwrap();
+    assert_eq!(second.mail, timada_core::Sending::Pending);
+    assert_eq!(second.key_id, first.key_id);
+    assert_ne!(second.requested_version, first.requested_version);
+    // The first request's event, replayed, mails nothing; the second's does.
+    assert!(
+        newsletter
+            .claim_confirmation_mail(
+                &keys,
+                &id,
+                first.requested_version,
+                Claimant {
+                    node: "node-a",
+                    now: now() + 11
+                }
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mail = newsletter
+        .claim_confirmation_mail(
+            &keys,
+            &id,
+            second.requested_version,
+            Claimant {
+                node: "node-a",
+                now: now() + 11,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("the second request is mailed");
+    assert_eq!(mail.token, token);
+    // Erased meanwhile: the key is gone, nothing is mailed.
+    keys.lose_all();
+    assert!(
+        newsletter
+            .claim_confirmation_mail(
+                &keys,
+                &id,
+                second.requested_version,
+                Claimant {
+                    node: "node-b",
+                    now: now() + 12
+                }
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

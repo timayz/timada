@@ -106,6 +106,7 @@ async fn the_history_names_who_did_what_newest_first() {
     tick().await;
     let sent = cmd
         .invite_member(
+            &tokens(),
             &alice,
             invite(&tenant.id, "bob@example.com", "support"),
             NOW,
@@ -129,6 +130,7 @@ async fn the_history_names_who_did_what_newest_first() {
     tick().await;
     let withdrawn = cmd
         .invite_member(
+            &tokens(),
             &bob,
             invite(&tenant.id, "eve@example.com", "support"),
             NOW + 2,
@@ -265,7 +267,12 @@ async fn an_event_in_a_shops_tenant_records_nothing() {
     let victim = create_tenant(&cmd, "Acme", &alice).await;
     let forger = create_tenant(&cmd, "Zeta", &mallory).await;
     let sent = cmd
-        .invite_member(&alice, invite(&victim.id, "bob@example.com", "owner"), NOW)
+        .invite_member(
+            &tokens(),
+            &alice,
+            invite(&victim.id, "bob@example.com", "owner"),
+            NOW,
+        )
         .await
         .unwrap();
     catch_up(&executor, &pool).await;
@@ -294,6 +301,7 @@ async fn an_event_in_a_shops_tenant_records_nothing() {
             email: "mallory@example.com".to_owned(),
             role: "owner".to_owned(),
             invited_by: alice.clone(),
+            nonce: timada_core::new_nonce(),
             sent_at: NOW,
             expires_at: NOW + 3600,
         })

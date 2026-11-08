@@ -1,19 +1,33 @@
 //! The one-time codes mailed to prove an address. The domain issues a code
-//! and remembers only its MAC under the host's key ([`CodeVerifier`]); the
-//! caller mails the plaintext. Guesses are counted on the stream, so nothing
-//! a client holds can reset them, and the stream alone gives the code away
-//! to nobody.
+//! and remembers only the nonce it derives from under the host's key
+//! ([`CodeVerifier`]); a subscription on every node mails the plaintext,
+//! after taking the send on the stream so one node mails, and records how
+//! it went. Guesses are counted on the stream, so nothing a client holds
+//! can reset them, and the stream alone gives the code away to nobody.
+//!
+//! The address the code goes to is personal data: the stream keeps it sealed
+//! under the address's own key, drawn by its first code and kept by the
+//! caller ([`ShopperKeys`]). The account the address registers takes the
+//! same key ([`Command::sign_in`](super::Command::sign_in)), so deleting the
+//! account leaves the challenge's addresses unreadable too.
 
 use evento::{Executor, ProjectionAggregate, WriteError};
-use timada_core::CodeVerifier;
+use timada_core::keys::{self as key, Key as ShopperKey, Keys as ShopperKeys, new_key_id};
+use timada_core::{Claim, Claimant, CodeVerifier, LEASE_SECS, new_nonce};
 
-use crate::aggregator::{AttemptFailed, CodeConsumed, CodeIssued};
-use crate::error::ShopperError;
-use crate::value_object::{
-    CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, challenge_id, generate_code,
+use crate::aggregator::{
+    AttemptFailed, CodeConsumed, CodeIssued, MailClaimed, MailSent, MailUndeliverable,
 };
+use crate::error::ShopperError;
+use crate::value_object::{CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, challenge_id};
 
-/// A code to mail. The plaintext exists only in this value.
+use super::{ChallengeState, challenge_email_aad};
+
+/// Reload-and-retry budget for a write on a challenge that raced another
+/// (a guess landing while the mail is claimed, say).
+const MAIL_WRITE_ATTEMPTS: usize = 3;
+
+/// A code issued. The plaintext exists only in this value and in the mail.
 #[derive(Clone, PartialEq, Eq)]
 pub struct IssuedCode {
     /// The normalized address the code is for.
@@ -30,6 +44,26 @@ impl std::fmt::Debug for IssuedCode {
     }
 }
 
+/// What the node that took the sending of a code puts in the mail.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CodeMail {
+    /// The normalized address, opened.
+    pub email: String,
+    /// The primary subtag of the shopper's language, when known.
+    pub language: Option<String>,
+    pub code: String,
+}
+
+impl std::fmt::Debug for CodeMail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodeMail")
+            .field("email", &self.email)
+            .field("language", &self.language)
+            .field("code", &"******")
+            .finish()
+    }
+}
+
 /// The canonical form of an address, as the orders context keeps it, so an
 /// account finds the orders placed with it.
 pub fn normalize_email(email: &str) -> Result<String, ShopperError> {
@@ -39,13 +73,20 @@ pub fn normalize_email(email: &str) -> Result<String, ShopperError> {
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Issues a fresh code for `email`, replacing any earlier one; `now` is
-    /// unix seconds. Any address gets one: the first sign-in creates the
-    /// account. Another code within [`CODE_RESEND_AFTER_SECS`] of a live one
-    /// is refused.
+    /// unix seconds, `language` the shopper's (a tag or a whole
+    /// `Accept-Language` value) for the mail. Any address gets one: the
+    /// first sign-in creates the account. Another code within
+    /// [`CODE_RESEND_AFTER_SECS`] of a live one is refused, unless that one
+    /// could not be delivered: then the shopper may try again at once. The
+    /// first code of an address draws its key, which `keys` holds before the
+    /// event names it; later ones reseal the address under the same key
+    /// while it is readable.
     pub async fn issue_code(
         &self,
+        keys: &dyn ShopperKeys,
         codes: &dyn CodeVerifier,
         email: &str,
+        language: Option<&str>,
         now: u64,
         routing_key: Option<String>,
     ) -> Result<IssuedCode, ShopperError> {
@@ -55,17 +96,37 @@ impl<E: Executor> super::Command<E> {
         if let Some(existing) = &existing
             && !existing.consumed
             && now < existing.issued_at + CODE_RESEND_AFTER_SECS
+            && !existing.mail.is_undeliverable()
         {
             return Err(ShopperError::CodeRecentlySent);
         }
 
-        let code = generate_code();
+        let (key_id, key, fresh) = match &existing {
+            Some(existing) if !existing.key_id.is_empty() => {
+                match keys.get(&existing.key_id).await? {
+                    Some(key) => (existing.key_id.clone(), key, false),
+                    // The account was deleted: the address starts afresh,
+                    // under a new key.
+                    None => draw_key(keys).await?,
+                }
+            }
+            _ => draw_key(keys).await?,
+        };
+        let nonce = new_nonce();
+        let code = codes.derive_code(&self.tenant, &challenge_id, &nonce);
         let issued = CodeIssued {
-            code_tag: codes.tag(&self.tenant, &challenge_id, &code),
+            key_id: key_id.clone(),
+            email: key::seal(
+                &key,
+                &challenge_email_aad(&challenge_id, &key_id),
+                email.as_bytes(),
+            )?,
+            nonce,
+            language: language.and_then(timada_core::primary_language),
             issued_at: now,
             expires_at: now + CODE_TTL_SECS,
         };
-        match existing {
+        let committed = match existing {
             Some(existing) => {
                 existing
                     .write()?
@@ -73,32 +134,178 @@ impl<E: Executor> super::Command<E> {
                     .event(&issued)
                     .tenant(&self.tenant)
                     .commit(&self.executor)
-                    .await?;
+                    .await
             }
             None => {
-                let created = evento::append(&challenge_id)
+                evento::append(&challenge_id)
                     .original_version(0)
                     .routing_key_opt(routing_key)
                     .event(&issued)
                     .tenant(&self.tenant)
                     .commit(&self.executor)
-                    .await;
-                match created {
-                    Ok(_) => {}
-                    // Two first requests at once: the other one's code is
-                    // in the mail.
-                    Err(WriteError::InvalidOriginalVersion) => {
-                        return Err(ShopperError::CodeRecentlySent);
-                    }
-                    Err(err) => return Err(err.into()),
-                }
+                    .await
             }
+        };
+        if let Err(err) = committed {
+            if fresh {
+                // Nothing names the key: drop it rather than keep it unused.
+                let _ = keys.delete(&key_id).await;
+            }
+            return Err(match err {
+                // Two requests at once: the other one's code is in the mail.
+                WriteError::InvalidOriginalVersion => ShopperError::CodeRecentlySent,
+                err => err.into(),
+            });
         }
         Ok(IssuedCode { email, code })
     }
+
+    /// Takes, for `claimant`, the sending of the code that `CodeIssued`
+    /// at `issued_version` of the challenge `challenge_id` recorded: what to
+    /// mail, with the address opened by its key from `keys`, or `None` when
+    /// this node mails nothing (the outcome is recorded, another node is
+    /// sending, the code was replaced or expired, or the key is destroyed).
+    /// A node that holds the claim gets the mail again, to send it again
+    /// after a failure worth a retry.
+    pub async fn claim_code_mail(
+        &self,
+        keys: &dyn ShopperKeys,
+        codes: &dyn CodeVerifier,
+        challenge_id: &str,
+        issued_version: u16,
+        claimant: Claimant<'_>,
+        routing_key: Option<String>,
+    ) -> Result<Option<CodeMail>, ShopperError> {
+        let Claimant { node, now } = claimant;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let Some(challenge) = self.load_challenge_by_id(challenge_id).await? else {
+                return Ok(None);
+            };
+            if challenge.issued_version != issued_version
+                || challenge.consumed
+                || now >= challenge.expires_at
+            {
+                return Ok(None);
+            }
+            match challenge.mail.claim(node, now) {
+                Claim::Leave => return Ok(None),
+                Claim::Held => return self.code_mail(keys, codes, &challenge).await,
+                Claim::Take => {}
+            }
+            // Opened before the claim: a key gone leaves nothing to claim.
+            let Some(mail) = self.code_mail(keys, codes, &challenge).await? else {
+                return Ok(None);
+            };
+            let claimed = challenge
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&MailClaimed {
+                    by: node.to_owned(),
+                    until: now + LEASE_SECS,
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match claimed {
+                Ok(_) => return Ok(Some(mail)),
+                // Another node claimed it, or a guess landed: decide again
+                // on the fresh state.
+                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
+    /// Records that the code `CodeIssued` at `issued_version` recorded was
+    /// handed to the mail server. Nothing is written once the code was
+    /// replaced, or the outcome recorded already.
+    pub async fn record_code_mail_sent(
+        &self,
+        challenge_id: &str,
+        issued_version: u16,
+        routing_key: Option<String>,
+    ) -> Result<(), ShopperError> {
+        self.record_code_mail(challenge_id, issued_version, None, routing_key)
+            .await
+    }
+
+    /// Records that the mail server refused the address for good (or that it
+    /// does not parse), with what it said. The next code for the address may
+    /// then be issued at once.
+    pub async fn record_code_mail_undeliverable(
+        &self,
+        challenge_id: &str,
+        issued_version: u16,
+        reason: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), ShopperError> {
+        self.record_code_mail(challenge_id, issued_version, Some(reason), routing_key)
+            .await
+    }
+}
+
+/// A fresh key for an address, held in `keys` before anything names it.
+async fn draw_key(keys: &dyn ShopperKeys) -> Result<(String, ShopperKey, bool), ShopperError> {
+    let key_id = new_key_id();
+    let key = ShopperKey::generate();
+    keys.put(&key_id, &key).await?;
+    Ok((key_id, key, true))
 }
 
 impl<E: Executor> super::Command<E> {
+    /// The mail of a challenge's current code: `None` when its key is
+    /// destroyed; an error when the key cannot be read yet.
+    async fn code_mail(
+        &self,
+        keys: &dyn ShopperKeys,
+        codes: &dyn CodeVerifier,
+        challenge: &ChallengeState,
+    ) -> Result<Option<CodeMail>, ShopperError> {
+        let Some(key) = keys.get(&challenge.key_id).await? else {
+            return Ok(None);
+        };
+        Ok(Some(CodeMail {
+            email: challenge.open_email(&key)?,
+            language: challenge.language.clone(),
+            code: codes.derive_code(&self.tenant, &challenge.id, &challenge.nonce),
+        }))
+    }
+
+    async fn record_code_mail(
+        &self,
+        challenge_id: &str,
+        issued_version: u16,
+        undeliverable: Option<&str>,
+        routing_key: Option<String>,
+    ) -> Result<(), ShopperError> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let Some(challenge) = self.load_challenge_by_id(challenge_id).await? else {
+                return Ok(());
+            };
+            if challenge.issued_version != issued_version || challenge.mail.is_settled() {
+                return Ok(());
+            }
+            let mut writer = challenge.write()?;
+            writer.routing_key_opt(routing_key.clone());
+            match undeliverable {
+                Some(reason) => writer.event(&MailUndeliverable {
+                    reason: reason.to_owned(),
+                }),
+                None => writer.event(&MailSent),
+            };
+            match writer.tenant(&self.tenant).commit(&self.executor).await {
+                Ok(_) => return Ok(()),
+                // A guess landed meanwhile: write past it.
+                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
     /// Checks `code` against the live code of a normalized address and burns
     /// it. A wrong guess is recorded; the fifth kills the code. Callers act
     /// *after* this returns, so a code is never reusable.
@@ -122,7 +329,7 @@ impl<E: Executor> super::Command<E> {
         if now >= challenge.expires_at {
             return Err(ShopperError::CodeExpired);
         }
-        let matches = codes.verify(&self.tenant, &challenge.id, code, &challenge.code_tag);
+        let matches = codes.verify(&self.tenant, &challenge.id, &challenge.nonce, code);
         let outcome = if matches {
             challenge
                 .write()?

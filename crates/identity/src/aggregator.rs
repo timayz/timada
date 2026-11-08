@@ -143,16 +143,36 @@ pub enum EmailAccount {
 /// address (id [`crate::email_challenge_id`]). A new `CodeIssued` replaces
 /// the previous code; attempts are counted here so that no client-held state
 /// can reset them. Times are unix seconds.
+///
+/// The code itself never enters the store: the event keeps a random `nonce`,
+/// and the code is derived from it under a key the host holds
+/// ([`timada_core::CodeVerifier`]), by the node that mails it and again by
+/// the one that checks the guess. The mail is sent by a subscription, which
+/// records how it went on the stream (`MailClaimed`, `MailSent`,
+/// `MailUndeliverable`; see [`timada_core::Sending`]).
 #[evento::aggregate(name = "timada-identity/EmailChallenge")]
 pub enum EmailChallenge {
-    /// `code_tag` is the code's MAC under a key the host holds
-    /// ([`timada_core::CodeVerifier`]): the code never enters the store.
+    /// `email` is the normalized address the code goes to.
     CodeIssued {
         purpose: ChallengePurpose,
-        code_tag: Vec<u8>,
+        email: String,
+        nonce: Vec<u8>,
         issued_at: u64,
         expires_at: u64,
     },
     AttemptFailed,
     Consumed,
+    /// Node `by` took the sending of the latest code, until `until` should
+    /// it never say how it went.
+    MailClaimed {
+        by: String,
+        until: u64,
+    },
+    /// The latest code was handed to the mail server.
+    MailSent,
+    /// The mail server refused the address for good; `reason` is what it
+    /// said.
+    MailUndeliverable {
+        reason: String,
+    },
 }

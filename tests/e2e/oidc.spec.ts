@@ -100,7 +100,7 @@ test("a provider user adds an e-mail address and a password, once", async ({ pag
   await section.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await section.getByRole("button", { name: "Add e-mail address" }).click();
   await expect(page).toHaveURL(/\/auth\/email\/verify$/);
-  await expect(page.getByText("We sent a 6-digit code to")).toContainText(email);
+  await expect(page.getByText(/We (are sending|sent) a 6-digit code to/)).toContainText(email);
   await expect(page.getByRole("link", { name: "Back to your account" })).toBeVisible();
   await enterCode(page, await latestCode(page.request, email, before));
   await expect(page).toHaveURL(/\/auth\/account\?message=/);

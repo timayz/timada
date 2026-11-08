@@ -244,18 +244,25 @@ pub enum TenantSlug {
     Released,
 }
 
-/// An invitation to join a tenant, mailed as a link carrying a random token.
-/// One stream per token, id = [`invitation_id`](crate::invitation_id): the
-/// token never leaves the e-mail, the stream only knows its hash. Whoever
-/// opens the link while signed in joins (the token is the credential).
+/// An invitation to join a tenant, mailed as a link carrying a token. One
+/// stream per token, id = [`invitation_id`](crate::invitation_id): the token
+/// never leaves the e-mail, the stream only knows its hash and the random
+/// `nonce` the token derives from under a key the host holds
+/// ([`timada_core::TokenDeriver`]), so the node that mails the link derives
+/// it again and whoever reads the stream cannot. Whoever opens the link
+/// while signed in joins (the token is the credential). The mail is sent by
+/// a subscription, which records how it went on the stream
+/// ([`timada_core::Sending`]).
 #[evento::aggregate(name = "timada-tenancy/Invitation")]
 pub enum Invitation {
     Sent {
         tenant_id: String,
-        /// The address the link was mailed to (normalized), for the pages.
+        /// The address the link goes to (normalized), for the pages and the
+        /// mail.
         email: String,
         role: String,
         invited_by: String,
+        nonce: Vec<u8>,
         /// Unix seconds.
         sent_at: u64,
         /// Unix seconds; the link is refused from then on.
@@ -274,6 +281,19 @@ pub enum Invitation {
     /// The acceptance grants no seat; `reason` is the refusal's code
     /// (`unknown_role`: the role it carried was removed before the grant).
     SeatRefused {
+        reason: String,
+    },
+    /// Node `by` took the sending of the link, until `until` should it
+    /// never say how it went.
+    MailClaimed {
+        by: String,
+        until: u64,
+    },
+    /// The link was handed to the mail server.
+    MailSent,
+    /// The mail server refused the address for good; `reason` is what it
+    /// said.
+    MailUndeliverable {
         reason: String,
     },
 }
