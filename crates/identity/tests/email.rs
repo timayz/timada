@@ -1,6 +1,8 @@
 mod common;
 
 use common::*;
+use evento::ProjectionAggregate;
+use timada_core::Claimant;
 use timada_identity::{
     AddEmail, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, ChallengePurpose, ChangePassword,
     IdentityError, RegisterWithPassword, ResetPassword, SignInKind, SignInWithPassword,
@@ -726,16 +728,24 @@ async fn a_code_checks_only_under_the_key_it_was_issued_with() {
         .await
         .unwrap()
         .unwrap();
-    // Neither the code nor a plain hash of it is in the stream.
+    // Neither the code nor a plain hash of it is in the stream: a nonce the
+    // code derives from under the key, and the address the mail goes to.
+    assert_eq!(challenge.email, "alice@example.com");
+    assert_eq!(challenge.nonce.len(), timada_core::codes::NONCE_LEN);
     assert!(
         !challenge
-            .code_tag
+            .nonce
             .windows(issued.code.len())
             .any(|window| window == issued.code.as_bytes())
     );
     assert_ne!(
-        challenge.code_tag,
+        challenge.nonce,
         evento::hash_ids(vec!["email-code", &challenge.id, &issued.code]).into_bytes()
+    );
+    assert_eq!(
+        codes().derive_code("", &challenge.id, &challenge.nonce),
+        issued.code,
+        "the node that mails derives the same code from the nonce"
     );
     // Without the key, the right code is a wrong guess, and counts as one.
     assert!(matches!(
@@ -753,4 +763,241 @@ async fn a_code_checks_only_under_the_key_it_was_issued_with() {
     cmd.register_with_password(registration("alice@example.com", &issued.code, &hash), NOW)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn a_codes_mail_is_taken_by_one_node_and_recorded_once() {
+    let executor = executor().await;
+    let node_a = timada_identity::Command::new(executor.clone(), codes());
+    let node_b = timada_identity::Command::new(executor.clone(), codes());
+    let issued = node_a
+        .issue_email_code("alice@example.com", ChallengePurpose::Register, NOW)
+        .await
+        .unwrap();
+    let challenge = node_a
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(challenge.mail, timada_core::Sending::Pending);
+    let version = challenge.issued_version;
+
+    // Both nodes see the event; the first claim wins and gets the mail.
+    let mail = node_a
+        .claim_code_mail(
+            &challenge.id,
+            version,
+            Claimant {
+                node: "node-a",
+                now: NOW,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+    assert_eq!(mail.email, "alice@example.com");
+    assert_eq!(mail.purpose, ChallengePurpose::Register);
+    assert_eq!(mail.code, issued.code);
+    assert!(
+        node_b
+            .claim_code_mail(
+                &challenge.id,
+                version,
+                Claimant {
+                    node: "node-b",
+                    now: NOW + 1
+                }
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "node-b leaves it"
+    );
+    // The holder, retrying a failed send, gets the mail again.
+    assert!(
+        node_a
+            .claim_code_mail(
+                &challenge.id,
+                version,
+                Claimant {
+                    node: "node-a",
+                    now: NOW + 2
+                }
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+    // Once the lease lapsed, node-b takes over.
+    let late = NOW + timada_core::LEASE_SECS;
+    assert!(
+        node_b
+            .claim_code_mail(
+                &challenge.id,
+                version,
+                Claimant {
+                    node: "node-b",
+                    now: late
+                }
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+    node_b
+        .record_code_mail_sent(&challenge.id, version)
+        .await
+        .unwrap();
+    let challenge = node_a
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(challenge.mail, timada_core::Sending::Sent);
+    // Replayed: nothing to send, nothing to record.
+    assert!(
+        node_a
+            .claim_code_mail(
+                &challenge.id,
+                version,
+                Claimant {
+                    node: "node-a",
+                    now: late + 1
+                }
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    node_a
+        .record_code_mail_sent(&challenge.id, version)
+        .await
+        .unwrap();
+    assert_eq!(
+        node_a
+            .load_email_challenge("alice@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .aggregate_version()
+            .unwrap(),
+        4,
+        "issued, claimed twice, sent: nothing more"
+    );
+    // The code still signs the person up.
+    let hash = hash_password(PASSWORD).await.unwrap();
+    node_a
+        .register_with_password(registration("alice@example.com", &issued.code, &hash), NOW)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn an_undeliverable_code_frees_the_resend_window_and_a_stale_event_mails_nothing() {
+    let cmd = command().await;
+    cmd.issue_email_code("alice@example.com", ChallengePurpose::Register, NOW)
+        .await
+        .unwrap();
+    let first = cmd
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    cmd.claim_code_mail(
+        &first.id,
+        first.issued_version,
+        Claimant {
+            node: "node-a",
+            now: NOW,
+        },
+    )
+    .await
+    .unwrap()
+    .expect("taken");
+    // Within the minute, another code is refused.
+    assert!(matches!(
+        cmd.issue_email_code("alice@example.com", ChallengePurpose::Register, NOW + 10)
+            .await,
+        Err(IdentityError::CodeRecentlySent)
+    ));
+    cmd.record_code_mail_undeliverable(&first.id, first.issued_version, "550 no such user")
+        .await
+        .unwrap();
+    let refused = cmd
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        refused.mail,
+        timada_core::Sending::Undeliverable {
+            reason: "550 no such user".to_owned()
+        }
+    );
+    // Refused for good: the person may try again at once.
+    let second = cmd
+        .issue_email_code("alice@example.com", ChallengePurpose::Register, NOW + 10)
+        .await
+        .unwrap();
+    let state = cmd
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.mail, timada_core::Sending::Pending);
+    assert_ne!(state.issued_version, first.issued_version);
+    // The first code's event, replayed, mails nothing: the second owns the
+    // stream now.
+    assert!(
+        cmd.claim_code_mail(
+            &first.id,
+            first.issued_version,
+            Claimant {
+                node: "node-a",
+                now: NOW + 11
+            }
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    cmd.record_code_mail_sent(&first.id, first.issued_version)
+        .await
+        .unwrap();
+    assert_eq!(
+        cmd.load_email_challenge("alice@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .mail,
+        timada_core::Sending::Pending,
+        "the stale record is dropped"
+    );
+    let mail = cmd
+        .claim_code_mail(
+            &state.id,
+            state.issued_version,
+            Claimant {
+                node: "node-a",
+                now: NOW + 11,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("the second code is mailed");
+    assert_eq!(mail.code, second.code);
+    // An expired code is not mailed any more.
+    assert!(
+        cmd.claim_code_mail(
+            &state.id,
+            state.issued_version,
+            Claimant {
+                node: "node-b",
+                now: NOW + 10 + CODE_TTL_SECS,
+            },
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
 }

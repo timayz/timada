@@ -14,7 +14,7 @@ use crate::auth::{
     now,
 };
 
-/// Mails another code for the flow in progress and keeps the flow alive.
+/// Issues another code for the flow in progress and keeps the flow alive.
 #[route(POST)]
 pub async fn resend(cx: &Cx) -> Result<SeeOther> {
     let store = email_flow(cx);
@@ -32,7 +32,7 @@ pub async fn resend(cx: &Cx) -> Result<SeeOther> {
         Ok(Started::AlreadySent) => Ok(see_other(verify_url(cx, Some("code_recently_sent"), None))),
         // A reset for an address nobody registered: the first step said "if
         // an account exists"; keep saying so.
-        Ok(Started::Sent) | Err("not_registered") => {
+        Ok(Started::Sending) | Err("not_registered") => {
             email_flow(cx)
                 .set(crate::auth::cookies::EmailFlow {
                     issued_at: now(),
@@ -42,7 +42,7 @@ pub async fn resend(cx: &Cx) -> Result<SeeOther> {
             Ok(see_other(verify_url(
                 cx,
                 None,
-                Some("A new code was sent."),
+                Some("A new code is on its way."),
             )))
         }
         Err(code) => Ok(see_other(verify_url(cx, Some(code), None))),

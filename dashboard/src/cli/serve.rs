@@ -85,6 +85,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         app.insert(shop_mail.clone());
         // Where the shops' logos are loaded from.
         app.insert(media.clone());
+        // The keys the mailed codes and the invitation links derive from.
+        app.insert(crate::seal::email_codes(&config));
+        app.insert(crate::seal::shopper_codes(&config));
+        app.insert(crate::seal::invitation_tokens(&config));
         Arc::new(app)
     };
     let connections = StoreConnections::new();
@@ -262,6 +266,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         limits,
         email_codes: crate::seal::email_codes(&config),
         shopper_codes: crate::seal::shopper_codes(&config),
+        invitation_tokens: crate::seal::invitation_tokens(&config),
         payments,
         shop_mail,
         aliexpress,
@@ -530,12 +535,7 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
         timada_pages::release_subscription(d.store.clone())
     }),
     ("newsletter opt-ins", Kind::Sharded, |d| {
-        crate::newsletter::subscription(
-            d.store.clone(),
-            d.background_mail.clone(),
-            d.keys.clone(),
-            d.store.clone(),
-        )
+        crate::newsletter::subscription(d.keys.clone(), d.store.clone())
     }),
     ("automation triggers", Kind::Sharded, |d| {
         crate::automations::triggers::subscription(d.db.clone(), d.store.clone())
@@ -564,6 +564,42 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
             d.vies.clone(),
             d.euro_rates.clone(),
             d.store.clone(),
+        )
+    }),
+    // The mails a command owes are sent from here, after the intent is
+    // recorded: the sign-in codes of the platform and of the shops, the
+    // invitations, the newsletter confirmations.
+    ("platform code mails", Kind::Sharded, |d| {
+        crate::code_mails::platform_subscription(
+            d.store.clone(),
+            d.background_mail.clone(),
+            d.node.clone(),
+        )
+    }),
+    ("shopper code mails", Kind::Sharded, |d| {
+        crate::code_mails::shopper_subscription(
+            d.store.clone(),
+            d.background_mail.clone(),
+            d.keys.clone(),
+            d.store.clone(),
+            d.node.clone(),
+        )
+    }),
+    ("invitation mails", Kind::Sharded, |d| {
+        crate::invitation_mails::subscription(
+            d.store.clone(),
+            d.background_mail.clone(),
+            d.base_url.clone(),
+            d.node.clone(),
+        )
+    }),
+    ("newsletter confirmations", Kind::Sharded, |d| {
+        crate::newsletter_confirmations::subscription(
+            d.store.clone(),
+            d.background_mail.clone(),
+            d.keys.clone(),
+            d.store.clone(),
+            d.node.clone(),
         )
     }),
 ];

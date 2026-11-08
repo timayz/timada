@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use timada_core::Sending;
 use timada_identity::{
     AddEmail, IdentityError, RegisterWithPassword, ResetPassword, SignInWithPassword, hash_password,
 };
@@ -50,6 +51,38 @@ pub async fn verify(cx: &Cx) -> Result<impl View> {
     };
     let query = query_params::<VerifyQuery>(cx)?;
     let kind = flow.kind;
+    // Where the latest code's mail stands: the subscription that sends it
+    // records it on the challenge, so the page can say when the address
+    // refused it. Not for a password reset: the first step said "if an
+    // account exists", and an address nobody registered has no challenge,
+    // so saying "sending" or "couldn't deliver" would tell a stranger which
+    // addresses have an account. That flow reads "sent" whatever happened.
+    let mail = if kind == EmailFlowKind::ResetPassword {
+        None
+    } else {
+        identity(cx)
+            .load_email_challenge(&flow.email)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+            .map(|challenge| challenge.mail)
+    };
+    let (state, lead, tail) = match mail {
+        Some(Sending::Undeliverable { .. }) => (
+            "undeliverable",
+            "We couldn't deliver a code to ",
+            ". Check the address and ask for a new code.",
+        ),
+        Some(Sending::Pending | Sending::Claimed { .. }) => (
+            "sending",
+            "We are sending a 6-digit code to ",
+            ". It is valid for 10 minutes.",
+        ),
+        Some(Sending::Sent) | None => (
+            "sent",
+            "We sent a 6-digit code to ",
+            ". It is valid for 10 minutes.",
+        ),
+    };
     let (title, action) = match kind {
         EmailFlowKind::Register => ("Confirm your e-mail address", "Create account"),
         EmailFlowKind::SignIn => ("Check your e-mail", "Sign in"),
@@ -63,8 +96,8 @@ pub async fn verify(cx: &Cx) -> Result<impl View> {
             <div class=(class!(CARD, "gap-5 px-6"))>
                 <div class="text-center">
                     <h1 class="text-2xl font-bold tracking-tight">(title)</h1>
-                    <p class="mt-1 text-sm text-muted-foreground">
-                        "We sent a 6-digit code to " <strong class="text-foreground">(&flow.email)</strong> ". It is valid for 10 minutes."
+                    <p class="mt-1 text-sm text-muted-foreground" data-mail-state=(state)>
+                        (lead) <strong class="text-foreground">(&flow.email)</strong> (tail)
                     </p>
                 </div>
                 notice(error: query.error.as_deref(), message: query.message.as_deref())

@@ -475,15 +475,19 @@ mod tests {
     }
 
     #[test]
-    fn invitation_tokens_are_random_and_hashed() {
-        let token = generate_invitation_token();
+    fn invitation_tokens_are_derived_and_hashed() {
+        use timada_core::{TokenDeriver as _, new_nonce};
+
+        let tokens = timada_core::HmacCodeVerifier::new([7; 32]);
+        let nonce = new_nonce();
+        let token = tokens.derive_token("", &nonce);
         assert_eq!(token.len(), 43, "{token}");
         assert!(
             token
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         );
-        assert_ne!(token, generate_invitation_token());
+        assert_ne!(token, tokens.derive_token("", &new_nonce()));
         assert_eq!(invitation_id(&token).len(), 64);
         assert_ne!(invitation_id("a"), invitation_id("b"));
     }

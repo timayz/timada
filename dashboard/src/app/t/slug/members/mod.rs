@@ -11,8 +11,8 @@ pub mod revoke;
 pub mod revoke_invitation;
 
 use timada_tenancy::{
-    MAX_EMAIL_LEN, PERMISSION_MEMBERS_MANAGE, PERMISSION_MEMBERS_READ, ROLE_OWNER,
-    open_invitations_of_tenant,
+    InvitationMailState, MAX_EMAIL_LEN, PERMISSION_MEMBERS_MANAGE, PERMISSION_MEMBERS_READ,
+    ROLE_OWNER, open_invitations_of_tenant,
 };
 use topcoat::{
     Result,
@@ -47,6 +47,15 @@ pub fn members_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&st
     href!(index, Slug(slug.to_owned()))
         .query(Flash { error, message })
         .resolve(cx)
+}
+
+/// How the row words where the invitation's mail stands.
+fn mail_state(mail: InvitationMailState) -> &'static str {
+    match mail {
+        InvitationMailState::Sending => "sending…",
+        InvitationMailState::Sent => "mailed",
+        InvitationMailState::Undeliverable => "could not be delivered: check the address",
+    }
 }
 
 #[page]
@@ -195,6 +204,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         (role_label(&tenant, &invitation.role))
                                         " · invited by " (&labels[&invitation.invited_by])
                                         " · expires " <time datetime=(invitation.expires_at)>(format_time(invitation.expires_at as u64))</time>
+                                        " · " <span data-invitation-mail=(invitation.mail().as_str())>(mail_state(invitation.mail()))</span>
                                     </span>
                                 </span>
                                 if can_manage {

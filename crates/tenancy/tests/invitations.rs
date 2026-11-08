@@ -1,6 +1,8 @@
 mod common;
 
 use common::*;
+use evento::ProjectionAggregate;
+use timada_core::Claimant;
 use timada_tenancy::aggregator::{Invitation, MemberGranted};
 use timada_tenancy::{
     AcceptInvitation, Command, DefineRole, INVITATION_TTL_SECS, InviteMember,
@@ -44,23 +46,39 @@ async fn an_invitation_is_sent_accepted_once_and_grants_its_role() {
     .unwrap();
 
     let err = cmd
-        .invite_member(&alice, invite(&tenant.id, "not an address", "support"), NOW)
+        .invite_member(
+            &tokens(),
+            &alice,
+            invite(&tenant.id, "not an address", "support"),
+            NOW,
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::InvalidEmail), "{err}");
     let err = cmd
-        .invite_member(&alice, invite(&tenant.id, "bob@example.com", "ghost"), NOW)
+        .invite_member(
+            &tokens(),
+            &alice,
+            invite(&tenant.id, "bob@example.com", "ghost"),
+            NOW,
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::UnknownRole), "{err}");
     let err = cmd
-        .invite_member(&bob, invite(&tenant.id, "bob@example.com", "support"), NOW)
+        .invite_member(
+            &tokens(),
+            &bob,
+            invite(&tenant.id, "bob@example.com", "support"),
+            NOW,
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::Forbidden), "{err}");
 
     let sent = cmd
         .invite_member(
+            &tokens(),
             &alice,
             invite(&tenant.id, " Bob@Example.com ", "support"),
             NOW,
@@ -114,6 +132,7 @@ async fn an_invitation_is_sent_accepted_once_and_grants_its_role() {
     assert!(matches!(err, TenancyError::InvitationInvalid), "{err}");
     let late = cmd
         .invite_member(
+            &tokens(),
             &alice,
             invite(&tenant.id, "late@example.com", "support"),
             NOW,
@@ -149,12 +168,22 @@ async fn owner_invitations_need_an_owner_and_revocation_closes_the_link() {
         .unwrap();
 
     let err = cmd
-        .invite_member(&bob, invite(&tenant.id, "x@example.com", ROLE_OWNER), NOW)
+        .invite_member(
+            &tokens(),
+            &bob,
+            invite(&tenant.id, "x@example.com", ROLE_OWNER),
+            NOW,
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::Forbidden), "{err}");
     let sent = cmd
-        .invite_member(&bob, invite(&tenant.id, "x@example.com", "manager"), NOW)
+        .invite_member(
+            &tokens(),
+            &bob,
+            invite(&tenant.id, "x@example.com", "manager"),
+            NOW,
+        )
         .await
         .unwrap();
 
@@ -185,6 +214,7 @@ async fn owner_invitations_need_an_owner_and_revocation_closes_the_link() {
     // An owner may invite another owner.
     let sent = cmd
         .invite_member(
+            &tokens(),
             &alice,
             invite(&tenant.id, "co@example.com", ROLE_OWNER),
             NOW,
@@ -219,6 +249,7 @@ async fn accepting_converges_when_the_role_vanished_or_the_user_is_already_in() 
     .unwrap();
     let sent = cmd
         .invite_member(
+            &tokens(),
             &alice,
             invite(&tenant.id, "bob@example.com", "support"),
             NOW,
@@ -274,7 +305,12 @@ async fn accepting_converges_when_the_role_vanished_or_the_user_is_already_in() 
 
     // A suspended tenant refuses the link without consuming it.
     let sent = cmd
-        .invite_member(&alice, invite(&tenant.id, "c@example.com", "support"), NOW)
+        .invite_member(
+            &tokens(),
+            &alice,
+            invite(&tenant.id, "c@example.com", "support"),
+            NOW,
+        )
         .await
         .unwrap();
     cmd.suspend_tenant(&tenant.id, "unpaid").await.unwrap();
@@ -303,7 +339,12 @@ async fn acme_with_invitation(
     .await
     .unwrap();
     let sent = cmd
-        .invite_member(owner, invite(&tenant.id, "bob@example.com", "support"), NOW)
+        .invite_member(
+            &tokens(),
+            owner,
+            invite(&tenant.id, "bob@example.com", "support"),
+            NOW,
+        )
         .await
         .unwrap();
     (tenant, sent)
@@ -377,6 +418,7 @@ async fn a_revocation_racing_an_acceptance_lets_one_of_them_win() {
     let carol = new_id();
     let sent = cmd
         .invite_member(
+            &tokens(),
             &alice,
             invite(&tenant.id, "carol@example.com", "support"),
             NOW,
@@ -481,6 +523,7 @@ async fn every_node_follows_the_seat_first_settled() {
     .unwrap();
     let other = cmd
         .invite_member(
+            &tokens(),
             &alice,
             invite(&tenant.id, "carol@example.com", "support"),
             NOW,
@@ -519,6 +562,7 @@ async fn an_old_acceptance_never_lets_a_removed_member_back() {
         .unwrap();
     let again = cmd
         .invite_member(
+            &tokens(),
             &alice,
             invite(&tenant.id, "carol@example.com", "support"),
             NOW,
@@ -558,4 +602,229 @@ async fn a_member_removed_before_accepting_again_is_owed_the_seat() {
     grant_owed_seats(&store).await;
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
     assert_eq!(state.role_of(&bob), Some("support"));
+}
+
+#[tokio::test]
+async fn an_invitations_mail_is_taken_by_one_node_with_the_link_derived_again() {
+    let cmd = command().await;
+    let alice = new_id();
+    let tenant = create_tenant(&cmd, "Acme", &alice).await;
+    let sent = cmd
+        .invite_member(
+            &tokens(),
+            &alice,
+            invite(&tenant.id, "Bob@Example.com", ROLE_OWNER),
+            NOW,
+        )
+        .await
+        .unwrap();
+    let id = sent.invitation.id.clone();
+    assert_eq!(sent.invitation.mail, timada_core::Sending::Pending);
+    assert_eq!(id, invitation_id(&sent.token));
+    // The stream keeps the nonce, never the token.
+    let nonce = sent.invitation.nonce.clone();
+    assert_eq!(nonce.len(), timada_core::codes::NONCE_LEN);
+    assert!(
+        !sent
+            .token
+            .as_bytes()
+            .windows(8)
+            .any(|window| nonce.windows(8).any(|n| n == window))
+    );
+
+    let mail = cmd
+        .claim_invitation_mail(
+            &tokens(),
+            &id,
+            Claimant {
+                node: "node-a",
+                now: NOW,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+    assert_eq!(mail.token, sent.token, "the same link, derived again");
+    assert_eq!(mail.invitation.email, "bob@example.com");
+    assert!(
+        cmd.claim_invitation_mail(
+            &tokens(),
+            &id,
+            Claimant {
+                node: "node-b",
+                now: NOW + 1
+            }
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "node-b leaves it"
+    );
+    assert!(
+        cmd.claim_invitation_mail(
+            &tokens(),
+            &id,
+            Claimant {
+                node: "node-a",
+                now: NOW + 2
+            }
+        )
+        .await
+        .unwrap()
+        .is_some(),
+        "the holder retries"
+    );
+    // Another key derives another token: without the host's key the stream
+    // gives no link away.
+    let other = timada_tenancy::HmacCodeVerifier::new([9; 32]);
+    let forged = cmd
+        .claim_invitation_mail(
+            &other,
+            &id,
+            Claimant {
+                node: "node-a",
+                now: NOW + 3,
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(forged.token, sent.token);
+    assert!(matches!(
+        cmd.accept_invitation(accept(&forged.token, &new_id()), NOW + 3)
+            .await,
+        Err(TenancyError::InvitationInvalid)
+    ));
+
+    cmd.record_invitation_mail_sent(&id).await.unwrap();
+    let state = cmd.load_invitation(&id).await.unwrap().unwrap();
+    assert_eq!(state.mail, timada_core::Sending::Sent);
+    // Replayed: nothing more.
+    assert!(
+        cmd.claim_invitation_mail(
+            &tokens(),
+            &id,
+            Claimant {
+                node: "node-b",
+                now: NOW + 4
+            }
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+    cmd.record_invitation_mail_sent(&id).await.unwrap();
+    assert_eq!(
+        cmd.load_invitation(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .aggregate_version()
+            .unwrap(),
+        3,
+        "sent, claimed, mailed: nothing more"
+    );
+    // The link is accepted once, as before.
+    let bob = new_id();
+    cmd.accept_invitation(accept(&sent.token, &bob), NOW + 5)
+        .await
+        .unwrap();
+    assert!(matches!(
+        cmd.accept_invitation(accept(&sent.token, &new_id()), NOW + 6)
+            .await,
+        Err(TenancyError::InvitationInvalid)
+    ));
+    // Accepted: no mail to send any more, whatever a late node thinks.
+    assert!(
+        cmd.claim_invitation_mail(
+            &tokens(),
+            &id,
+            Claimant {
+                node: "node-c",
+                now: NOW + timada_core::LEASE_SECS * 2
+            }
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[tokio::test]
+async fn an_undeliverable_invitation_says_so_and_a_withdrawn_one_is_not_mailed() {
+    let cmd = command().await;
+    let alice = new_id();
+    let tenant = create_tenant(&cmd, "Acme", &alice).await;
+    let sent = cmd
+        .invite_member(
+            &tokens(),
+            &alice,
+            invite(&tenant.id, "bob@example.com", ROLE_OWNER),
+            NOW,
+        )
+        .await
+        .unwrap();
+    let id = sent.invitation.id.clone();
+    cmd.claim_invitation_mail(
+        &tokens(),
+        &id,
+        Claimant {
+            node: "node-a",
+            now: NOW,
+        },
+    )
+    .await
+    .unwrap()
+    .expect("taken");
+    cmd.record_invitation_mail_undeliverable(&id, "550 no such user")
+        .await
+        .unwrap();
+    let state = cmd.load_invitation(&id).await.unwrap().unwrap();
+    assert_eq!(
+        state.mail,
+        timada_core::Sending::Undeliverable {
+            reason: "550 no such user".to_owned()
+        }
+    );
+    assert!(
+        state.is_open_at(NOW + 1),
+        "the inviter withdraws it, or not"
+    );
+    cmd.record_invitation_mail_sent(&id).await.unwrap();
+    assert!(
+        cmd.load_invitation(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .mail
+            .is_undeliverable(),
+        "the first outcome stands"
+    );
+
+    let withdrawn = cmd
+        .invite_member(
+            &tokens(),
+            &alice,
+            invite(&tenant.id, "carol@example.com", ROLE_OWNER),
+            NOW,
+        )
+        .await
+        .unwrap();
+    cmd.revoke_invitation(&alice, &withdrawn.invitation.id, NOW + 1)
+        .await
+        .unwrap();
+    assert!(
+        cmd.claim_invitation_mail(
+            &tokens(),
+            &withdrawn.invitation.id,
+            Claimant {
+                node: "node-a",
+                now: NOW + 2
+            }
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "withdrawn before any node sent it: nothing goes out"
+    );
 }

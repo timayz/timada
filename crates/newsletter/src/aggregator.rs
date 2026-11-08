@@ -5,7 +5,8 @@
 //!
 //! The address is personal data, and events cannot be erased: it is recorded
 //! sealed under a key of the subscriber's own ([`timada_core::Key`]), which
-//! [`Subscriber::Forgotten`] destroys.
+//! [`Subscriber::Forgotten`] destroys. The link that confirms a request is
+//! mailed by a subscription, which records how it went on the stream.
 
 /// One address on a shop's list. Its id is
 /// [`subscriber_id`](crate::subscriber_id) of the address, so the stream is
@@ -43,6 +44,15 @@ pub enum Subscriber {
     /// an IANA name (`Europe/Paris`), for a campaign to reach them at the
     /// hour it names in their own day. Coarse, so kept in clear.
     TimeZoneSet { time_zone: String, set_by: String },
+    /// Node `by` took the sending of the latest request's confirmation
+    /// link, until `until` should it never say how it went (see
+    /// [`timada_core::Sending`]).
+    MailClaimed { by: String, until: u64 },
+    /// The latest request's link was handed to the mail server.
+    MailSent,
+    /// The mail server refused the address for good; `reason` is what it
+    /// said.
+    MailUndeliverable { reason: String },
 }
 
 /// One mail of news the merchant writes, then sends to the confirmed

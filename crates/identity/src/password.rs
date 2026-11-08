@@ -1,11 +1,11 @@
-//! Password hashing (argon2id, stored as PHC strings) and the one-time codes
-//! mailed to prove an address. Hashing is CPU-bound by design, so it runs on
-//! the blocking pool and never stalls the executor's threads.
+//! Password hashing (argon2id, stored as PHC strings). Hashing is CPU-bound
+//! by design, so it runs on the blocking pool and never stalls the executor's
+//! threads.
 
 use std::sync::LazyLock;
 
 use argon2::Argon2;
-use argon2::password_hash::rand_core::{OsRng, RngCore};
+use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 
 use crate::error::IdentityError;
@@ -59,18 +59,6 @@ fn verify_blocking(hash: &str, password: &str) -> Result<bool, IdentityError> {
         .is_ok())
 }
 
-/// A uniformly random six-digit code, zero-padded.
-pub(crate) fn generate_code() -> String {
-    // Rejection sampling: the largest multiple of 10^6 below 2^32.
-    const LIMIT: u32 = 4_294_000_000;
-    loop {
-        let n = OsRng.next_u32();
-        if n < LIMIT {
-            return format!("{:06}", n % 1_000_000);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,14 +87,5 @@ mod tests {
             .await
             .unwrap_err();
         assert!(!err.is_user_facing());
-    }
-
-    #[test]
-    fn codes_are_six_digits() {
-        for _ in 0..100 {
-            let code = generate_code();
-            assert_eq!(code.len(), 6);
-            assert!(code.bytes().all(|b| b.is_ascii_digit()), "{code}");
-        }
     }
 }

@@ -19,9 +19,13 @@ pub use edition::*;
 pub use subscriber::*;
 
 use evento::{Executor, Projection, metadata::Event};
+use timada_core::Sending;
 use timada_core::keys::{self, Key, Keys};
 
-use crate::aggregator::{Confirmed, Forgotten, Requested, TimeZoneSet, Unsubscribed};
+use crate::aggregator::{
+    Confirmed, Forgotten, MailClaimed, MailSent, MailUndeliverable, Requested, TimeZoneSet,
+    Unsubscribed,
+};
 use crate::value_object::{SubscriberStatus, subscriber_id, unsubscribe_token};
 
 /// The command gateway. Cheap to clone when `E` is.
@@ -95,6 +99,12 @@ pub struct SubscriberState {
     pub updated_at: u64,
     /// Erased: the key is destroyed and the address cleared.
     pub forgotten: bool,
+    /// The stream version of the last `Requested`: what the mail
+    /// subscription compares its event with, so an older request's event,
+    /// replayed, mails nothing.
+    pub requested_version: u16,
+    /// Where the last request's confirmation mail stands.
+    pub mail: Sending,
 }
 
 /// A subscriber, their address opened with their key.
@@ -181,6 +191,9 @@ pub fn subscriber_projection<E: Executor>() -> Projection<E, SubscriberState> {
         .handler(on_unsubscribed())
         .handler(on_forgotten())
         .handler(on_time_zone_set())
+        .handler(on_mail_claimed())
+        .handler(on_mail_sent())
+        .handler(on_mail_undeliverable())
         .strict()
 }
 
@@ -198,6 +211,8 @@ async fn on_requested(event: Event<Requested>, state: &mut SubscriberState) -> a
     state.unsubscribed_at = None;
     state.updated_at = event.timestamp;
     state.forgotten = false;
+    state.requested_version = event.version;
+    state.mail = Sending::Pending;
     Ok(())
 }
 
@@ -228,6 +243,35 @@ async fn on_forgotten(event: Event<Forgotten>, state: &mut SubscriberState) -> a
     state.time_zone = None;
     state.forgotten = true;
     state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_claimed(
+    event: Event<MailClaimed>,
+    state: &mut SubscriberState,
+) -> anyhow::Result<()> {
+    state.mail = Sending::Claimed {
+        by: event.data.by.to_owned(),
+        until: event.data.until,
+    };
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_sent(_event: Event<MailSent>, state: &mut SubscriberState) -> anyhow::Result<()> {
+    state.mail = Sending::Sent;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_undeliverable(
+    event: Event<MailUndeliverable>,
+    state: &mut SubscriberState,
+) -> anyhow::Result<()> {
+    state.mail = Sending::Undeliverable {
+        reason: event.data.reason.to_owned(),
+    };
     Ok(())
 }
 
