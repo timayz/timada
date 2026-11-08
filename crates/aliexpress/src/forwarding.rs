@@ -4,6 +4,7 @@
 
 use timada_orders::{OrderLine, ShippingAddress};
 
+use crate::aggregator::SkuLink;
 use crate::client::LogisticsAddress;
 use crate::command::LinkState;
 use crate::model::FreightOption;
@@ -25,20 +26,53 @@ pub struct ForwardPlan {
     pub complete: bool,
 }
 
+/// What a plan needs of a linked item: the catalog product it filled and
+/// which combination each variant of it was imported from. Borrowed from a
+/// [`LinkState`] by [`forward_items`], or from a row of the read model
+/// ([`LinkedProduct`](crate::LinkedProduct)) by a page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkedSkus<'a> {
+    pub ae_product_id: &'a str,
+    pub product_id: &'a str,
+    pub skus: &'a [SkuLink],
+}
+
+impl LinkedSkus<'_> {
+    /// The linked items among `links`, the others left out.
+    pub fn of_links(links: &[LinkState]) -> Vec<LinkedSkus<'_>> {
+        links
+            .iter()
+            .filter(|link| link.is_linked())
+            .filter_map(|link| {
+                link.product_id.as_deref().map(|product_id| LinkedSkus {
+                    ae_product_id: &link.ae_product_id,
+                    product_id,
+                    skus: &link.skus,
+                })
+            })
+            .collect()
+    }
+}
+
 /// The combinations an order's lines buy, given the shop's linked items
 /// (`links`; unlinked ones are left out). A line of a product imported from
 /// AliExpress is the combination its variant (or the product, when it does
 /// not vary) was linked to; a variant the merchant added by hand is not one.
 pub fn forward_items(lines: &[OrderLine], links: &[LinkState]) -> ForwardPlan {
+    plan_items(lines, &LinkedSkus::of_links(links))
+}
+
+/// [`forward_items`] over what a plan needs of the links, wherever it was
+/// read from.
+pub fn plan_items(lines: &[OrderLine], linked: &[LinkedSkus<'_>]) -> ForwardPlan {
     let mut plan = ForwardPlan {
         items: Vec::new(),
         complete: true,
     };
     for line in lines {
-        let found = links
+        let found = linked
             .iter()
-            .filter(|link| link.is_linked())
-            .filter(|link| link.product_id.as_deref() == Some(line.product_id.as_str()))
+            .filter(|link| link.product_id == line.product_id)
             .find_map(|link| {
                 link.skus
                     .iter()
@@ -56,7 +90,7 @@ pub fn forward_items(lines: &[OrderLine], links: &[LinkState]) -> ForwardPlan {
         {
             Some(item) => item.quantity = item.quantity.saturating_add(line.quantity),
             None => plan.items.push(PlannedItem {
-                ae_product_id: link.ae_product_id.clone(),
+                ae_product_id: link.ae_product_id.to_owned(),
                 sku_id: sku.sku_id.clone(),
                 quantity: line.quantity,
             }),

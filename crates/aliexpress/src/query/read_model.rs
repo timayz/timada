@@ -13,12 +13,16 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use timada_catalog::aggregator::{Published, Unpublished};
-use timada_core::db::{Db, FromRow};
+use timada_core::db::{Db, FromRow, Value, params_from_iter};
+use timada_orders::OrderLine;
 use timada_orders::aggregator::{ItemAdded, Placed};
 
-use crate::aggregator::AliexpressProduct;
 use crate::aggregator::forward::Forward;
-use crate::command::{ForwardState, LinkState, forward_projection, link_projection};
+use crate::aggregator::{AliexpressProduct, SkuLink};
+use crate::command::{
+    ForwardState, ForwardStatus, LinkState, LinkStatus, forward_projection, link_projection,
+};
+use crate::forwarding::{ForwardPlan, LinkedSkus, plan_items};
 use crate::value_object::{Share, shard_of};
 
 /// The cursor identity of the read-model subscription, in the store.
@@ -149,9 +153,10 @@ pub async fn note_published(
 
 /// Writes the row of a forward as the write model sees it. When this node
 /// last read it is not in the row: a read that changed nothing records no
-/// event, so the node keeps that for itself ([`super::read_times::note_forward_read`]). The
-/// integration tests seed rows through this; nothing else outside the
-/// subscription writes one.
+/// event, so the node keeps that for itself ([`super::read_times::note_forward_read`])
+/// and drops it once the order is no longer read again (done, or nothing
+/// placed). The integration tests seed rows through this; nothing else
+/// outside the subscription writes one.
 pub async fn upsert_forward(
     db: &Db,
     tenant_id: &str,
@@ -189,12 +194,16 @@ pub async fn upsert_forward(
         ),
     )
     .await?;
+    if matches!(forward.status, ForwardStatus::Done | ForwardStatus::Failed) {
+        super::read_times::forget(db, tenant_id, &forward.id).await?;
+    }
     Ok(())
 }
 
 /// The forward of a shop's order as the read model has it, whole, or `None`
-/// while none was asked for. A moment behind its stream, for the order's
-/// page; what acts on a forward loads its stream.
+/// while none was asked for. An order has one forward at most (its id is
+/// made of the order's, [`forward_id`](crate::forward_id)). A moment behind
+/// its stream, for the order's page; what acts on a forward loads its stream.
 pub async fn forward_of_order(
     db: &Db,
     tenant_id: &str,
@@ -202,8 +211,7 @@ pub async fn forward_of_order(
 ) -> anyhow::Result<Option<ForwardState>> {
     let row: Option<(String,)> = db
         .fetch_optional(
-            "SELECT state FROM aliexpress_forwards WHERE tenant_id = ?1 AND order_id = ?2
-             ORDER BY updated_at DESC LIMIT 1",
+            "SELECT state FROM aliexpress_forwards WHERE tenant_id = ?1 AND order_id = ?2",
             (tenant_id, order_id),
         )
         .await?;
@@ -294,17 +302,19 @@ pub async fn forwards_stalled(
 /// Writes the row of a link as the write model sees it: the reads it holds
 /// are the ones recorded; a read that changed nothing records no event, so
 /// this node keeps when it last read the item for itself ([`super::read_times::note_read`]),
-/// and the queries below take the later of the two. What makes the product
-/// matter stays with the product: an item imported anew starts over. The
-/// integration tests seed rows through this; nothing else outside the
-/// subscription writes one.
+/// and the queries below take the later of the two; once the item is no
+/// longer read again (unlinked, or never imported) that record goes. What
+/// makes the product matter stays with the product: an item imported anew
+/// starts over. The integration tests seed rows through this; nothing else
+/// outside the subscription writes one.
 pub async fn upsert_link(db: &Db, tenant_id: &str, link: &LinkState) -> anyhow::Result<()> {
     let tried = link.last_requested_at.max(link.last_synced_at);
+    let skus = serde_json::to_string(&link.skus)?;
     db.execute(
         "INSERT INTO aliexpress_products (tenant_id, id, ae_product_id, product_id, status,
             offline, own_pricing, last_synced_at, last_error, requested_at, updated_at,
-            new_combinations, last_tried_at, shard)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            new_combinations, last_tried_at, shard, skus)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             product_id = excluded.product_id, status = excluded.status,
             offline = excluded.offline, own_pricing = excluded.own_pricing,
@@ -312,7 +322,7 @@ pub async fn upsert_link(db: &Db, tenant_id: &str, link: &LinkState) -> anyhow::
             last_error = excluded.last_error,
             requested_at = excluded.requested_at, updated_at = excluded.updated_at,
             new_combinations = excluded.new_combinations,
-            last_tried_at = excluded.last_tried_at,
+            last_tried_at = excluded.last_tried_at, skus = excluded.skus,
             wanted_at = CASE WHEN product_id IS excluded.product_id THEN wanted_at END,
             published = CASE WHEN product_id IS excluded.product_id THEN published ELSE 0 END",
         (
@@ -330,10 +340,91 @@ pub async fn upsert_link(db: &Db, tenant_id: &str, link: &LinkState) -> anyhow::
             link.offered().count() as i64,
             tried.map(|at| at as i64),
             i64::from(shard_of(&link.id)),
+            skus.as_str(),
         ),
     )
     .await?;
+    if matches!(link.status, LinkStatus::Unlinked | LinkStatus::Failed) {
+        super::read_times::forget(db, tenant_id, &link.id).await?;
+    }
     Ok(())
+}
+
+/// A linked item as the read model has it, with what a plan needs of it:
+/// the catalog product it filled and the combinations its variants are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedProduct {
+    pub ae_product_id: String,
+    pub product_id: String,
+    pub skus: Vec<SkuLink>,
+}
+
+impl LinkedProduct {
+    pub fn as_linked(&self) -> LinkedSkus<'_> {
+        LinkedSkus {
+            ae_product_id: &self.ae_product_id,
+            product_id: &self.product_id,
+            skus: &self.skus,
+        }
+    }
+}
+
+/// The imports that filled the catalog products `product_ids`, one per
+/// product (its latest, as [`link_of_product`] picks it), the products no
+/// import filled left out.
+pub async fn linked_products(
+    db: &Db,
+    tenant_id: &str,
+    product_ids: &[&str],
+) -> anyhow::Result<Vec<LinkedProduct>> {
+    let mut ids: Vec<&str> = product_ids.to_vec();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = format!(
+        "SELECT ae_product_id, product_id, skus FROM (
+            SELECT ae_product_id, product_id, skus, ROW_NUMBER() OVER (
+                PARTITION BY product_id ORDER BY updated_at DESC, id DESC
+            ) AS latest
+            FROM aliexpress_products
+            WHERE tenant_id = ?1 AND status = 'linked' AND product_id IN ({})
+         ) WHERE latest = 1 ORDER BY product_id",
+        // `?2` on: the tenant is `?1`.
+        (2..=ids.len() + 1)
+            .map(|n| format!("?{n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let mut params = vec![Value::from(tenant_id)];
+    params.extend(ids.iter().map(|id| Value::from(*id)));
+    let rows: Vec<(String, String, String)> = db.fetch_all(&sql, params_from_iter(params)).await?;
+    rows.into_iter()
+        .map(|(ae_product_id, product_id, skus)| {
+            Ok(LinkedProduct {
+                ae_product_id,
+                product_id,
+                skus: serde_json::from_str(&skus)?,
+            })
+        })
+        .collect()
+}
+
+/// What of an order's lines AliExpress sells, as the read model has the
+/// shop's imports: what a page says of the order. The forward itself plans
+/// from the store ([`forward_items`](crate::forward_items) over the links'
+/// own streams), as every command does; this is the same plan a moment
+/// behind, at no cost to the store.
+pub async fn forward_plan_shown(
+    db: &Db,
+    tenant_id: &str,
+    lines: &[OrderLine],
+) -> anyhow::Result<ForwardPlan> {
+    let product_ids: Vec<&str> = lines.iter().map(|line| line.product_id.as_str()).collect();
+    let linked = linked_products(db, tenant_id, &product_ids).await?;
+    let linked: Vec<LinkedSkus<'_>> = linked.iter().map(LinkedProduct::as_linked).collect();
+    Ok(plan_items(lines, &linked))
 }
 
 /// One row of `aliexpress_products`.

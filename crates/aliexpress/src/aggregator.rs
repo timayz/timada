@@ -3,8 +3,19 @@
 /// One AliExpress combination a catalog product (or one of its variants)
 /// sells, and what it cost when last read. What AliExpress has of it is the
 /// variant's stock in the catalog, whose streams are made for a count that
-/// moves with every sale.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+/// moves with every sale. Serialized too, as the `skus` column of the
+/// `aliexpress_products` read model holds the list.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct SkuLink {
     pub sku_id: String,
     /// `None` for a product that does not vary.

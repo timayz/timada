@@ -17,7 +17,9 @@
 //! read models (it is left out of [`TABLES`](super::TABLES)): a node copying
 //! its store from a peer keeps knowing what it read, and no peer could tell
 //! it. A node that lost it reads each of its items once more, a period
-//! early, which is all the harm a lost row does.
+//! early, which is all the harm a lost row does. A row outlives its use
+//! otherwise: the read-model subscription drops it ([`forget`]) once the
+//! item is unlinked or the order is no longer read again.
 
 use timada_core::db::Db;
 
@@ -60,4 +62,16 @@ pub async fn note_forward_read(
     at: u64,
 ) -> anyhow::Result<()> {
     note_tried(db, tenant_id, forward_id, at).await
+}
+
+/// The node no longer needs to know when it last read `id` (an item that
+/// is unlinked, an order no longer read again): its row goes. Nothing to
+/// drop is fine, and a read noted later makes a row again.
+pub async fn forget(db: &Db, tenant_id: &str, id: &str) -> anyhow::Result<()> {
+    db.execute(
+        "DELETE FROM aliexpress_read_times WHERE tenant_id = ?1 AND id = ?2",
+        (tenant_id, id),
+    )
+    .await?;
+    Ok(())
 }

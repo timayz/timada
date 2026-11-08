@@ -11,7 +11,8 @@
 //! counts has changed, the counts of the tenant's categories are worked out
 //! again in the same transaction, so a page reads them instead of computing
 //! them. A deleted product loses its rows. The combinations of a product
-//! (`catalog_variants`) and the shop's delivery time
+//! (`catalog_variants`, written again only when one of them moved) and the
+//! shop's delivery time
 //! (`catalog_delivery_default`) are kept too: what a cart shown to a shopper
 //! is priced with ([`sellable`](super::sellable)). One subscription follows
 //! every tenant's streams: each row carries the tenant of the event that
@@ -23,7 +24,8 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use timada_core::db::{
-    Connection, Db, Value, execute, fetch_all, fetch_optional, params_from_iter, search_key,
+    Connection, Db, FromRow, Value, execute, fetch_all, fetch_optional, params_from_iter,
+    search_key,
 };
 
 use crate::aggregator::category::Category;
@@ -265,11 +267,14 @@ async fn on_category_event<E: Executor>(
 /// Writes the row of a product, its combinations and its category
 /// memberships as the write model sees them, in one transaction: the row,
 /// its memberships and the category counts they change are never
-/// half-written. The full-text
-/// columns (`slug_search`, `name_search`) are left out of the write when
-/// their values are already in the row: a write that names them makes the
-/// index behind them build and commit a segment, whatever the values, and
-/// most events of a product (a picture, a variant, a price) change neither.
+/// half-written. The full-text columns (`slug_search`, `name_search`) are
+/// left out of the write when their values are already in the row: a write
+/// that names them makes the index behind them build and commit a segment,
+/// whatever the values, and most events of a product (a picture, a variant,
+/// a price) change neither. The combinations (`catalog_variants`) and the
+/// memberships are written again only when they differ from the rows, for
+/// the same reason: an imported product has dozens of combinations, and a
+/// picture or a description edit moves none of them.
 /// Public for the integration tests and the catch-up probe, which seed rows;
 /// only the subscription writes one otherwise.
 pub async fn upsert_product(
@@ -384,40 +389,83 @@ pub async fn upsert_product(
             if was_counted.unwrap_or(false) != is_counted || (is_counted && !categories_as_before) {
                 refresh_category_counts(tx, tenant_id).await?;
             }
-            // The combinations, written whole: few per product, and the
-            // price, the sale or the label of any may have moved.
-            execute(
+            // The combinations, written whole when any of them moved (a
+            // price, a sale, a label, the order) and left alone otherwise:
+            // an imported product has dozens, and most of its events (a
+            // picture, a description) touch none of them.
+            let variants: Vec<VariantRow> = product
+                .variants
+                .iter()
+                .enumerate()
+                .map(|(position, variant)| VariantRow {
+                    id: variant.id.clone(),
+                    position: position as i64,
+                    sku: variant.sku.clone(),
+                    label: product.variant_label(variant),
+                    amount_cents: variant.price.amount_cents as i64,
+                    currency: variant.price.currency.clone(),
+                    on_sale: product.sells(variant),
+                })
+                .collect();
+            let were: Vec<VariantRow> = fetch_all(
                 tx,
-                "DELETE FROM catalog_variants WHERE tenant_id = ?1 AND product_id = ?2",
+                "SELECT id, position, sku, label, amount_cents, currency, on_sale
+                 FROM catalog_variants WHERE tenant_id = ?1 AND product_id = ?2
+                 ORDER BY position",
                 (*tenant_id, product.id.as_str()),
             )
             .await?;
-            for (position, variant) in product.variants.iter().enumerate() {
+            let variants_as_before = were == variants;
+            if !variants_as_before {
                 execute(
                     tx,
-                    "INSERT INTO catalog_variants (tenant_id, product_id, id, position, sku,
-                        label, amount_cents, currency, on_sale)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    (
-                        *tenant_id,
-                        product.id.as_str(),
-                        variant.id.as_str(),
-                        position as i64,
-                        variant.sku.as_deref(),
-                        product.variant_label(variant),
-                        variant.price.amount_cents as i64,
-                        variant.price.currency.as_str(),
-                        product.sells(variant),
-                    ),
+                    "DELETE FROM catalog_variants WHERE tenant_id = ?1 AND product_id = ?2",
+                    (*tenant_id, product.id.as_str()),
                 )
                 .await?;
+                for variant in &variants {
+                    execute(
+                        tx,
+                        "INSERT INTO catalog_variants (tenant_id, product_id, id, position, sku,
+                            label, amount_cents, currency, on_sale)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        (
+                            *tenant_id,
+                            product.id.as_str(),
+                            variant.id.as_str(),
+                            variant.position,
+                            variant.sku.as_deref(),
+                            variant.label.as_deref(),
+                            variant.amount_cents,
+                            variant.currency.as_str(),
+                            variant.on_sale,
+                        ),
+                    )
+                    .await?;
+                }
             }
-            // A variant added or removed changes what the summary counts.
-            refresh_stock_state(tx, tenant_id, product).await?;
+            // A variant added, removed or taken off sale changes what the
+            // summary counts; a new product has the column's default.
+            if was.is_none() || !variants_as_before {
+                refresh_stock_state(tx, tenant_id, product).await?;
+            }
             Ok(())
         })
     })
     .await
+}
+
+/// One row of `catalog_variants`, as written and as read back: the two are
+/// compared to leave the rows alone when none of them moved.
+#[derive(Debug, PartialEq, Eq, FromRow)]
+struct VariantRow {
+    id: String,
+    position: i64,
+    sku: Option<String>,
+    label: Option<String>,
+    amount_cents: i64,
+    currency: String,
+    on_sale: bool,
 }
 
 /// The row of a product written again, every column but the two the

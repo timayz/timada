@@ -7,6 +7,11 @@ use evento::turso::migrate::{Migration, Migrations};
 pub const MIGRATION_APP: &str = "aliexpress";
 
 /// The read models of this context, one table each (see the columns).
+/// `aliexpress_products.skus` is the item's combinations as JSON (a list of
+/// [`SkuLink`](crate::aggregator::SkuLink)): which one each variant of the
+/// catalog product was imported from, so a page tells an AliExpress line
+/// from the row. An order has one forward (its id is made of the order's),
+/// which the index on `aliexpress_forwards` holds to.
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
     &[Migration::up(
@@ -28,6 +33,7 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 shard INTEGER NOT NULL,
                 wanted_at INTEGER,
                 published INTEGER NOT NULL DEFAULT 0,
+                skus TEXT NOT NULL DEFAULT '[]',
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX aliexpress_products_product ON aliexpress_products (tenant_id, product_id);
@@ -48,7 +54,7 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX aliexpress_forwards_due ON aliexpress_forwards (status, updated_at);
-        CREATE INDEX aliexpress_forwards_order ON aliexpress_forwards (tenant_id, order_id);
+        CREATE UNIQUE INDEX aliexpress_forwards_order ON aliexpress_forwards (tenant_id, order_id);
         CREATE TABLE aliexpress_read_times (
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,
