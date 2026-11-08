@@ -17,6 +17,8 @@ async fn a_buyer_reviews_a_product_of_their_order() {
     assert_eq!(review.body, "Holds my tea all day long.");
     assert_eq!(review.author_name, "Ada L.");
     assert_eq!(review.variant_label.as_deref(), Some("Beige"));
+    assert_eq!(review.order_reference, "REF-order-1");
+    assert_eq!(review.product_name, "Mug");
     assert_eq!(review.photos.len(), 2);
 
     // The other product of the order is a review of its own.

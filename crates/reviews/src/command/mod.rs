@@ -74,7 +74,11 @@ impl<E: Executor> Deref for Command<E> {
 pub struct ReviewState {
     pub id: String,
     pub order_id: String,
+    /// The short code the shopper knows the order by.
+    pub order_reference: String,
     pub product_id: String,
+    /// The product as the order names it.
+    pub product_name: String,
     pub variant_label: Option<String>,
     pub rating: u8,
     pub title: Option<String>,
@@ -124,7 +128,9 @@ async fn on_submitted(event: Event<Submitted>, review: &mut ReviewState) -> anyh
     let data = &event.data;
     review.id = event.aggregate_id.to_owned();
     review.order_id = data.order_id.to_owned();
+    review.order_reference = data.order_reference.to_owned();
     review.product_id = data.product_id.to_owned();
+    review.product_name = data.product_name.to_owned();
     review.variant_label = data.variant_label.to_owned();
     review.rating = data.rating;
     review.title = data.title.to_owned();

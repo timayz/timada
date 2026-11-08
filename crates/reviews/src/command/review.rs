@@ -149,7 +149,9 @@ impl<E: Executor> super::Command<E> {
             .routing_key_opt(routing_key)
             .event(&Submitted {
                 order_id: order.id.clone(),
+                order_reference: order.reference.clone(),
                 product_id: line.product_id.clone(),
+                product_name: line.name.clone(),
                 variant_label: line.variant_label.clone(),
                 rating: cmd.rating,
                 title: non_blank(cmd.title),

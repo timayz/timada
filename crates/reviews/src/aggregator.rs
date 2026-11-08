@@ -9,11 +9,17 @@ use crate::value_object::ReviewPhoto;
 /// [`review_id`](crate::review_id) of the two.
 #[evento::aggregate(name = "timada-reviews/Review")]
 pub enum Review {
-    /// Waits for the merchant. `variant_label` and `author_name` come from
-    /// the order, never from the shopper.
+    /// Waits for the merchant. `order_reference`, `product_name`,
+    /// `variant_label` and `author_name` come from the order, never from the
+    /// shopper, and are copied here so that whoever lists reviews needs no
+    /// order.
     Submitted {
         order_id: String,
+        /// The short code the shopper knows the order by.
+        order_reference: String,
         product_id: String,
+        /// The product as the order names it.
+        product_name: String,
         /// The variant bought (`Beige / Large`), if the product has variants.
         variant_label: Option<String>,
         /// 1 to 5 stars.

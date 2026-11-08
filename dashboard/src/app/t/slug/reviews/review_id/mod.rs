@@ -129,21 +129,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<ReviewQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let review = require_review(cx, &access).await?;
-    let order = timada_orders::Command::new(access.executor()?.clone(), access.tenant_id())
-        .load_order(&review.order_id)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?;
-    let (reference, product_name) = order
-        .map(|order| {
-            let name = order
-                .lines
-                .iter()
-                .find(|line| line.product_id == review.product_id)
-                .map(|line| line.name.clone())
-                .unwrap_or_default();
-            (order.reference, name)
-        })
-        .unwrap_or_default();
+    // What the review says of its order: copied when it was submitted.
+    let reference = review.order_reference.clone();
+    let product_name = review.product_name.clone();
     let media = app_context::<Arc<Media>>(cx);
     let photos: Vec<(String, String)> = review
         .photos
