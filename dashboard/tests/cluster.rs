@@ -33,7 +33,7 @@ use timada_tenancy::{
     read_model_subscription,
 };
 
-use cluster::{Cluster, Executor, Files};
+use cluster::{Cluster, Executor};
 use config::{ClusterConfig, StoreApiConfig};
 use store_api::StoreConnections;
 
@@ -42,7 +42,6 @@ struct Node {
     store: Executor,
     /// The read models in the store's database.
     db: db::Db,
-    files: Files,
     dir: PathBuf,
     /// The tenant catalog's worker; dropping the handle would stop it.
     catalog: evento::subscription::Subscription,
@@ -76,10 +75,9 @@ impl Node {
         let dir = root.join(format!("node{id}"));
         std::fs::create_dir_all(&dir).unwrap();
         let path = Self::store_path(root, id);
-        let files = Files { path: path.clone() };
         let store = db::open_store(&path).await.unwrap();
         let store_db = db::Db::from(store.clone());
-        let (cluster, store) = Cluster::open(
+        let (cluster, store) = cluster::open(
             Some(&ClusterConfig {
                 node_id: id,
                 peers: peers.to_vec(),
@@ -90,7 +88,7 @@ impl Node {
                 write_backlog: tuning.write_backlog,
             }),
             None,
-            &files,
+            &path,
             store,
         )
         .await
@@ -104,7 +102,6 @@ impl Node {
             cluster,
             store,
             db: store_db,
-            files,
             dir,
             catalog,
         }
@@ -162,7 +159,7 @@ async fn events_in(path: &Path, tenant: Option<&str>) -> i64 {
 
 /// Consensus commands the journal still holds (not compacted).
 async fn commands_in(path: &Path) -> i64 {
-    count_in(path, "SELECT COUNT(*) FROM accord_commands", ()).await
+    count_in(path, "SELECT COUNT(*) FROM cluster_commands", ()).await
 }
 
 async fn await_events(path: &Path, tenant: Option<&str>, expected: i64, what: &str) {
@@ -354,7 +351,7 @@ async fn a_node_away_too_long_copies_the_store_back_at_its_next_start() {
 
     // Back with its old file: told to rejoin, it marks the store for a copy.
     let n2 = Node::start(&root, 2, &addrs, tuning).await;
-    let marker = n2.files.marker().unwrap();
+    let marker = cluster::rejoin_mark(&Node::store_path(&root, 2));
     tokio::time::timeout(Duration::from_secs(30), async {
         while !marker.exists() {
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -663,11 +660,9 @@ async fn concurrent_writers_never_see_stale_versions() {
         .with_test_writer()
         .try_init();
     let root = temp_root("stress");
-    let files = Files {
-        path: root.join("timada.db"),
-    };
-    let store = db::open_store(&files.path).await.unwrap();
-    let (cluster, store) = Cluster::open(None, None, &files, store).await.unwrap();
+    let path = root.join("timada.db");
+    let store = db::open_store(&path).await.unwrap();
+    let (cluster, store) = cluster::open(None, None, &path, store).await.unwrap();
     let mut tasks = tokio::task::JoinSet::new();
     for t in 0..64 {
         let store = store.clone();

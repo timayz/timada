@@ -95,7 +95,7 @@ The worker loop wakes on whichever comes first:
 
 Each processing pass then drains all available events back-to-back: read `chunk_size` events forward from the cursor, run the handler for each, and `executor.acknowledge(key, event.cursor, lag)` after every event (`lag` = latest matching event timestamp minus this event's timestamp, saturating at 0). A full chunk triggers an immediate next read; a partial chunk means it's caught up.
 
-**Replicated backends:** `Executor::stable_timestamp()` (the Accord backend) returns a stability watermark; the subscription holds back events at or above it so a late lower-cursor event can't be skipped. Single-store backends return `None` (no gating).
+**Replicated backends:** `Executor::stable_timestamp()` (the cluster backend) returns a stability watermark; the subscription holds back events at or above it so a late lower-cursor event can't be skipped. Single-store backends return `None` (no gating).
 
 ## Context API
 

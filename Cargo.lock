@@ -2139,9 +2139,9 @@ dependencies = [
 [[package]]
 name = "evento"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#2bff5cb029aabe56f09b4878a405a6bc366bfc22"
+source = "git+https://github.com/timayz/evento?branch=bank-example-host#90e8e2335e86a49ec125a957be5db5a14958b102"
 dependencies = [
- "evento-accord",
+ "evento-cluster",
  "evento-core",
  "evento-fjall",
  "evento-lock",
@@ -2152,9 +2152,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "evento-accord"
+name = "evento-cluster"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#2bff5cb029aabe56f09b4878a405a6bc366bfc22"
+source = "git+https://github.com/timayz/evento?branch=bank-example-host#90e8e2335e86a49ec125a957be5db5a14958b102"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2173,7 +2173,7 @@ dependencies = [
 [[package]]
 name = "evento-core"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#2bff5cb029aabe56f09b4878a405a6bc366bfc22"
+source = "git+https://github.com/timayz/evento?branch=bank-example-host#90e8e2335e86a49ec125a957be5db5a14958b102"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2193,12 +2193,12 @@ dependencies = [
 [[package]]
 name = "evento-fjall"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#2bff5cb029aabe56f09b4878a405a6bc366bfc22"
+source = "git+https://github.com/timayz/evento?branch=bank-example-host#90e8e2335e86a49ec125a957be5db5a14958b102"
 dependencies = [
  "anyhow",
  "async-trait",
  "bitcode",
- "evento-accord",
+ "evento-cluster",
  "evento-core",
  "fjall",
  "tempfile",
@@ -2210,7 +2210,7 @@ dependencies = [
 [[package]]
 name = "evento-lock"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#2bff5cb029aabe56f09b4878a405a6bc366bfc22"
+source = "git+https://github.com/timayz/evento?branch=bank-example-host#90e8e2335e86a49ec125a957be5db5a14958b102"
 dependencies = [
  "anyhow",
  "quote",
@@ -2221,7 +2221,7 @@ dependencies = [
 [[package]]
 name = "evento-macro"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#2bff5cb029aabe56f09b4878a405a6bc366bfc22"
+source = "git+https://github.com/timayz/evento?branch=bank-example-host#90e8e2335e86a49ec125a957be5db5a14958b102"
 dependencies = [
  "convert_case 0.12.0",
  "quote",
@@ -2231,7 +2231,7 @@ dependencies = [
 [[package]]
 name = "evento-remote"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#2bff5cb029aabe56f09b4878a405a6bc366bfc22"
+source = "git+https://github.com/timayz/evento?branch=bank-example-host#90e8e2335e86a49ec125a957be5db5a14958b102"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2250,12 +2250,12 @@ dependencies = [
 [[package]]
 name = "evento-sql"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#2bff5cb029aabe56f09b4878a405a6bc366bfc22"
+source = "git+https://github.com/timayz/evento?branch=bank-example-host#90e8e2335e86a49ec125a957be5db5a14958b102"
 dependencies = [
  "anyhow",
  "async-trait",
  "bitcode",
- "evento-accord",
+ "evento-cluster",
  "evento-core",
  "sea-query",
  "sea-query-sqlx",
@@ -2267,7 +2267,7 @@ dependencies = [
 [[package]]
 name = "evento-sql-migrator"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#2bff5cb029aabe56f09b4878a405a6bc366bfc22"
+source = "git+https://github.com/timayz/evento?branch=bank-example-host#90e8e2335e86a49ec125a957be5db5a14958b102"
 dependencies = [
  "async-trait",
  "evento-sql",
@@ -2279,12 +2279,12 @@ dependencies = [
 [[package]]
 name = "evento-turso"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#2bff5cb029aabe56f09b4878a405a6bc366bfc22"
+source = "git+https://github.com/timayz/evento?branch=bank-example-host#90e8e2335e86a49ec125a957be5db5a14958b102"
 dependencies = [
  "anyhow",
  "async-trait",
  "bitcode",
- "evento-accord",
+ "evento-cluster",
  "evento-core",
  "evento-macro",
  "sea-query",
@@ -4388,7 +4388,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.21.7",
  "chrono",
  "getrandom 0.2.17",
  "http",

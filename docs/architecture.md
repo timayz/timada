@@ -146,10 +146,11 @@ by construction.
 
 `dashboard/src/cli/serve.rs` wires everything, in this order.
 
-1. **Cluster** (`cluster.rs`). One Accord node per process over the store, wired
-   like evento's `bank-axum-accord` example: the node, its inbox loop and its
-   recovery sweep, over `TcpTransport` with the `[cluster]` peers (a majority must
-   agree on every write) or an in-memory transport alone. Reads, snapshots and
+1. **Cluster** (`cluster.rs`). One Accord node per process over the store, opened
+   from the `[cluster]` section by evento's host (`evento::cluster::Cluster::builder`,
+   with `ClusterConfig::settings()` as its `Settings`): the node, its inbox loop and
+   its recovery sweep, over TCP with the `[cluster]` peers (a majority must agree on
+   every write) or an in-memory transport alone. Reads, snapshots and
    subscriptions are served from this node's own file. With several nodes a
    single-aggregate read waits for the writes a quorum already committed
    (`linearizable_reads`), so a page that reads what it just wrote sees it whichever
@@ -163,17 +164,19 @@ by construction.
    carries it as a refusal a storefront shows the same way. A node not heard from for
    `cluster.absent_after_secs` (an hour by default) is therefore given up: the others
    tidy up without it, and when it returns they tell it it fell behind. It then
-   refuses writes, logs the procedure and marks the store for a copy
-   (`<store file>.joining`); the next `serve` empties the store (events, snapshots,
-   cursors and the read-model tables; the journal stays) and opens the node by
+   refuses writes, logs the procedure and marks the store for a copy (the `rejoin`
+   file next to the store, written by evento's host); the next `serve` empties the
+   store (events, snapshots, cursors; the journal stays), empties the read-model
+   tables (the host's `before_copy` hook) and opens the node by
    joining, which installs a peer's store page by page (4 MiB at a time) before
    anything is served, then the subscriptions rebuild the read models from it. The
    `rejoin` command sets the same mark by hand, for a lost store file (delete the
    file first: an empty journal comes back under the node's own id through evento's
    amnesia fence). A node back before anything was tidied up past it is simply waited
-   for again. `/admin/cluster` shows this node: the writes it keeps, how each other
-   node stands, whether a copy is needed; `Cluster::watch` warns in the log at four
-   fifths of the backlog and whenever a node is given up.
+   for again. A journal found to be an older copy of itself is marked the same way,
+   journal included. `/admin/cluster` shows this node (`Cluster::health`): the writes
+   it keeps, how each other node stands, whether a copy is needed; `Cluster::watch`
+   warns in the log at four fifths of the backlog and whenever a node is given up.
 2. **Subscriptions** (`serve.rs`, `subscriptions()`). Every subscription the node runs
    is started once on the store and follows every tenant's streams: the platform's
    read models (users, the tenant catalog, the members' history), the tenants' read

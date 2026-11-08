@@ -15,7 +15,7 @@ use clap::Args;
 use timada_catalog_import::{Images, ImportOptions, NoImages, Snapshot};
 use timada_tenancy::{CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ};
 
-use crate::cluster::{Cluster, Executor, Files};
+use crate::cluster::{self, Executor};
 use crate::config::Config;
 use crate::db;
 use crate::media::Media;
@@ -134,14 +134,11 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     );
     super::migrate(config.clone()).await?;
 
-    let files = Files {
-        path: config.database.path.clone(),
-    };
     let store = db::open_store(&config.database.path).await?;
-    let (cluster, platform) = Cluster::open(
+    let (cluster, platform) = cluster::open(
         config.cluster.as_ref(),
         config.server.region.as_deref(),
-        &files,
+        &config.database.path,
         store.clone(),
     )
     .await?;

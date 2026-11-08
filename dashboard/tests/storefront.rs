@@ -99,13 +99,10 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
     std::fs::create_dir_all(&dir).unwrap();
     // The store in memory (a file would fsync every commit of the thirty-odd
     // tests running at once), the read models in it.
-    let files = cluster::Files {
-        path: PathBuf::from(":memory:"),
-    };
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
     db::migrate_store_read_models(&store).await.unwrap();
     let store_db = db::Db::from(store.clone());
-    let (cluster, platform) = Cluster::open(None, None, &files, store.clone())
+    let (cluster, platform) = cluster::open(None, None, &dir.join("timada.db"), store.clone())
         .await
         .unwrap();
     let connections = StoreConnections::new();
