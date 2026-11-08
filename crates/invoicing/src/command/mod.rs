@@ -12,7 +12,9 @@
 //!    Before taking a number, the open book and the one before are searched
 //!    for the document, so a retry after a crash between steps 2 and 3
 //!    never takes a second one.
-//! 3. *Record*: the index points at the book.
+//! 3. *Record*: the index points at the book and carries a copy of the
+//!    document, so a page reads the document from its own small stream and
+//!    never replays a book.
 
 mod ledger;
 
@@ -33,9 +35,10 @@ use crate::tax::{
     Destination, DistanceSales, Regime, TaxProfile, decide, is_distance_sale, needs_euro_rate,
 };
 use crate::value_object::{
-    Address, BOOK_CHUNK, CREDIT_NOTE_PREFIX, INVOICE_PREFIX, InvoiceLine, Seller, TEMPLATE_VERSION,
-    VatSubtotal, book_id, credit_note_id, document_label, invoice_id, prorate, series_code,
-    series_of, spread, vat_breakdown, year_of,
+    Address, BOOK_CHUNK, CREDIT_NOTE_PREFIX, DocumentKind, INVOICE_PREFIX, InvoiceDiscount,
+    InvoiceLine, InvoiceShipping, IssuedDocument, Seller, TEMPLATE_VERSION, book_id,
+    credit_note_id, document_label, invoice_id, prorate, series_code, series_of, spread,
+    vat_breakdown, year_of,
 };
 
 /// How often a write lost to another writer is tried again.
@@ -97,98 +100,6 @@ impl<E: Executor> Deref for Command<E> {
 // Documents
 // =============================================================================
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum DocumentKind {
-    #[default]
-    Invoice,
-    CreditNote,
-}
-
-impl DocumentKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Invoice => "invoice",
-            Self::CreditNote => "credit_note",
-        }
-    }
-}
-
-/// A discount code taken off an invoice's lines.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct InvoiceDiscount {
-    pub code: String,
-    /// VAT included, in minor units.
-    pub amount_cents: u64,
-}
-
-/// What shipping an invoice's order was charged.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct InvoiceShipping {
-    /// The shipping method, as the shop names it.
-    pub name: String,
-    /// VAT included, in minor units.
-    pub amount_cents: u64,
-}
-
-/// An issued document as it reads: an invoice or a credit note (the fields
-/// of the other kind are empty).
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct IssuedDocument {
-    pub document_id: String,
-    /// The company that issued it.
-    pub company_id: String,
-    pub kind: DocumentKind,
-    pub series: String,
-    pub number: u64,
-    /// `F2026-000042`.
-    pub label: String,
-    pub issued_at: u64,
-    pub order_id: String,
-    pub order_reference: String,
-    /// Invoice: when and how it was paid.
-    pub paid_at: Option<u64>,
-    pub payment_method: Option<String>,
-    /// Credit note: the invoice it corrects and the refund it records.
-    pub invoice_document_id: Option<String>,
-    pub invoice_label: Option<String>,
-    pub refund_id: Option<String>,
-    pub seller: Seller,
-    pub buyer: Address,
-    pub buyer_email: String,
-    /// Invoice: where the goods go.
-    pub delivery: Option<Address>,
-    pub currency: String,
-    /// Invoice: what was sold, at full price.
-    pub lines: Vec<InvoiceLine>,
-    /// Invoice: the discount code taken off the lines, if any; `vat` and
-    /// the totals are of what was paid.
-    pub discount: Option<InvoiceDiscount>,
-    /// Invoice: the shipping charged on top of the goods, if any; taxed at
-    /// the rates of the goods it carries, in proportion.
-    pub shipping: Option<InvoiceShipping>,
-    pub vat: Vec<VatSubtotal>,
-    pub total_excl_vat_cents: u64,
-    pub total_vat_cents: u64,
-    pub total_cents: u64,
-    pub template: u16,
-    /// How it is taxed.
-    pub regime: Regime,
-    /// The country whose VAT applies, or where the goods went.
-    pub tax_country: String,
-    /// The buyer's EU VAT number, when it bought as a business.
-    pub buyer_vat_number: Option<String>,
-    /// Invoice: VIES's reference for the check of that number.
-    pub vies_reference: Option<String>,
-    /// Invoice: the year's EU distance sales, this one included.
-    pub eu_distance_sales_cents: u64,
-    pub eu_threshold_passed: bool,
-    /// For a document in another currency than the euro: the euro rate of
-    /// the day it was issued (a credit note's is its invoice's), and its VAT
-    /// at that rate, in euro cents.
-    pub euro_rate: Option<ExchangeRate>,
-    pub total_vat_eur_cents: Option<u64>,
-}
-
 // =============================================================================
 // Book
 // =============================================================================
@@ -214,17 +125,11 @@ pub fn book_projection<E: Executor>() -> Projection<E, BookState> {
         .strict()
 }
 
-#[evento::handler]
-async fn on_invoice_issued(
-    event: Event<InvoiceIssued>,
-    book: &mut BookState,
-) -> anyhow::Result<()> {
-    let data = &event.data;
-    book.id = event.aggregate_id.to_owned();
-    book.last_number = data.number;
-    book.documents.insert(
-        data.document_id.to_owned(),
-        IssuedDocument {
+impl IssuedDocument {
+    /// The invoice as its `InvoiceIssued` says it, before the events written
+    /// beside it (discount, shipping, euro rate) are applied.
+    fn of_invoice(data: &InvoiceIssued) -> Self {
+        Self {
             document_id: data.document_id.to_owned(),
             company_id: data.company_id.to_owned(),
             kind: DocumentKind::Invoice,
@@ -253,67 +158,14 @@ async fn on_invoice_issued(
             vies_reference: data.vies_reference.to_owned(),
             eu_distance_sales_cents: data.eu_distance_sales_cents,
             eu_threshold_passed: data.eu_threshold_passed,
-            ..IssuedDocument::default()
-        },
-    );
-    Ok(())
-}
-
-#[evento::handler]
-async fn on_invoice_discounted(
-    event: Event<InvoiceDiscounted>,
-    book: &mut BookState,
-) -> anyhow::Result<()> {
-    // Written right after the `InvoiceIssued` it belongs to.
-    if let Some(document) = book.documents.get_mut(&event.data.document_id) {
-        document.discount = Some(InvoiceDiscount {
-            code: event.data.code.to_owned(),
-            amount_cents: event.data.amount_cents,
-        });
+            ..Self::default()
+        }
     }
-    Ok(())
-}
 
-#[evento::handler]
-async fn on_invoice_shipping_charged(
-    event: Event<InvoiceShippingCharged>,
-    book: &mut BookState,
-) -> anyhow::Result<()> {
-    // Written right after the `InvoiceIssued` it belongs to.
-    if let Some(document) = book.documents.get_mut(&event.data.document_id) {
-        document.shipping = Some(InvoiceShipping {
-            name: event.data.name.to_owned(),
-            amount_cents: event.data.amount_cents,
-        });
-    }
-    Ok(())
-}
-
-#[evento::handler]
-async fn on_euro_rate_recorded(
-    event: Event<EuroRateRecorded>,
-    book: &mut BookState,
-) -> anyhow::Result<()> {
-    // Written right after the `InvoiceIssued` or `CreditNoteIssued` it
-    // belongs to.
-    if let Some(document) = book.documents.get_mut(&event.data.document_id) {
-        document.euro_rate = Some(event.data.rate.to_owned());
-        document.total_vat_eur_cents = Some(event.data.total_vat_eur_cents);
-    }
-    Ok(())
-}
-
-#[evento::handler]
-async fn on_credit_note_issued(
-    event: Event<CreditNoteIssued>,
-    book: &mut BookState,
-) -> anyhow::Result<()> {
-    let data = &event.data;
-    book.id = event.aggregate_id.to_owned();
-    book.last_number = data.number;
-    book.documents.insert(
-        data.document_id.to_owned(),
-        IssuedDocument {
+    /// The credit note as its `CreditNoteIssued` says it, before the euro
+    /// rate written beside it is applied.
+    fn of_credit_note(data: &CreditNoteIssued) -> Self {
+        Self {
             document_id: data.document_id.to_owned(),
             company_id: data.company_id.to_owned(),
             kind: DocumentKind::CreditNote,
@@ -338,8 +190,93 @@ async fn on_credit_note_issued(
             regime: Regime::parse(&data.regime).unwrap_or_default(),
             tax_country: data.tax_country.to_owned(),
             buyer_vat_number: data.buyer_vat_number.to_owned(),
-            ..IssuedDocument::default()
-        },
+            ..Self::default()
+        }
+    }
+
+    fn apply_discount(&mut self, data: &InvoiceDiscounted) {
+        self.discount = Some(InvoiceDiscount {
+            code: data.code.to_owned(),
+            amount_cents: data.amount_cents,
+        });
+    }
+
+    fn apply_shipping(&mut self, data: &InvoiceShippingCharged) {
+        self.shipping = Some(InvoiceShipping {
+            name: data.name.to_owned(),
+            amount_cents: data.amount_cents,
+        });
+    }
+
+    fn apply_euro_rate(&mut self, data: &EuroRateRecorded) {
+        self.euro_rate = Some(data.rate.to_owned());
+        self.total_vat_eur_cents = Some(data.total_vat_eur_cents);
+    }
+}
+
+#[evento::handler]
+async fn on_invoice_issued(
+    event: Event<InvoiceIssued>,
+    book: &mut BookState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    book.id = event.aggregate_id.to_owned();
+    book.last_number = data.number;
+    book.documents.insert(
+        data.document_id.to_owned(),
+        IssuedDocument::of_invoice(data),
+    );
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invoice_discounted(
+    event: Event<InvoiceDiscounted>,
+    book: &mut BookState,
+) -> anyhow::Result<()> {
+    // Written right after the `InvoiceIssued` it belongs to.
+    if let Some(document) = book.documents.get_mut(&event.data.document_id) {
+        document.apply_discount(&event.data);
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invoice_shipping_charged(
+    event: Event<InvoiceShippingCharged>,
+    book: &mut BookState,
+) -> anyhow::Result<()> {
+    // Written right after the `InvoiceIssued` it belongs to.
+    if let Some(document) = book.documents.get_mut(&event.data.document_id) {
+        document.apply_shipping(&event.data);
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_euro_rate_recorded(
+    event: Event<EuroRateRecorded>,
+    book: &mut BookState,
+) -> anyhow::Result<()> {
+    // Written right after the `InvoiceIssued` or `CreditNoteIssued` it
+    // belongs to.
+    if let Some(document) = book.documents.get_mut(&event.data.document_id) {
+        document.apply_euro_rate(&event.data);
+    }
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_credit_note_issued(
+    event: Event<CreditNoteIssued>,
+    book: &mut BookState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    book.id = event.aggregate_id.to_owned();
+    book.last_number = data.number;
+    book.documents.insert(
+        data.document_id.to_owned(),
+        IssuedDocument::of_credit_note(data),
     );
     Ok(())
 }
@@ -359,7 +296,8 @@ pub struct DocumentState {
     pub year: u16,
     /// The book holding it, once recorded.
     pub book_id: Option<String>,
-    pub label: Option<String>,
+    /// The document itself, once recorded: what a page reads.
+    pub document: Option<IssuedDocument>,
 }
 
 pub fn document_projection<E: Executor>() -> Projection<E, DocumentState> {
@@ -380,7 +318,7 @@ async fn on_reserved(event: Event<Reserved>, document: &mut DocumentState) -> an
 #[evento::handler]
 async fn on_recorded(event: Event<Recorded>, document: &mut DocumentState) -> anyhow::Result<()> {
     document.book_id = Some(event.data.book_id.to_owned());
-    document.label = Some(event.data.label.to_owned());
+    document.document = Some(event.data.document.to_owned());
     Ok(())
 }
 
@@ -543,8 +481,8 @@ impl<E: Executor> Command<E> {
                 year_of(now),
             )
             .await?;
-        if let Some(book) = &index.book_id {
-            return self.document_in(book, &document_id).await;
+        if let Some(document) = index.document {
+            return Ok(document);
         }
 
         // The VAT, fixed before the number: for a distance sale, counted
@@ -608,7 +546,7 @@ impl<E: Executor> Command<E> {
             .and_then(|rate| Some((rate.clone(), rate.to_euro_cents(total_vat_cents)?)));
         self.issue_reserved(&document_id, |book, series, number| {
             let mut write = evento::append(book);
-            write.event(&InvoiceIssued {
+            let issued = InvoiceIssued {
                 document_id: document_id.clone(),
                 series: series.to_owned(),
                 number,
@@ -636,29 +574,37 @@ impl<E: Executor> Command<E> {
                 vies_reference: invoice.vies_reference.clone().filter(|_| reverse_charge),
                 eu_distance_sales_cents: decision.distance.sales_cents,
                 eu_threshold_passed: decision.distance.passed,
-            });
+            };
+            let mut document = IssuedDocument::of_invoice(&issued);
+            write.event(&issued);
             if let Some(discount) = &invoice.discount {
-                write.event(&InvoiceDiscounted {
+                let discounted = InvoiceDiscounted {
                     document_id: document_id.clone(),
                     code: discount.code.clone(),
                     amount_cents: discount.amount_cents,
-                });
+                };
+                document.apply_discount(&discounted);
+                write.event(&discounted);
             }
             if let Some(shipping) = &invoice.shipping {
-                write.event(&InvoiceShippingCharged {
+                let charged = InvoiceShippingCharged {
                     document_id: document_id.clone(),
                     name: shipping.name.clone(),
                     amount_cents: shipping.amount_cents,
-                });
+                };
+                document.apply_shipping(&charged);
+                write.event(&charged);
             }
             if let Some((rate, total_vat_eur_cents)) = &in_euros {
-                write.event(&EuroRateRecorded {
+                let recorded = EuroRateRecorded {
                     document_id: document_id.clone(),
                     rate: rate.clone(),
                     total_vat_eur_cents: *total_vat_eur_cents,
-                });
+                };
+                document.apply_euro_rate(&recorded);
+                write.event(&recorded);
             }
-            write
+            (write, document)
         })
         .await
     }
@@ -694,12 +640,12 @@ impl<E: Executor> Command<E> {
                 year_of(now),
             )
             .await?;
-        if let Some(book) = &index.book_id {
-            return self.document_in(book, &document_id).await;
+        if let Some(document) = index.document {
+            return Ok(document);
         }
         self.issue_reserved(&document_id, |book, series, number| {
             let mut write = evento::append(book);
-            write.event(&CreditNoteIssued {
+            let issued = CreditNoteIssued {
                 document_id: document_id.clone(),
                 series: series.to_owned(),
                 number,
@@ -723,15 +669,19 @@ impl<E: Executor> Command<E> {
                 regime: invoice.regime.as_str().to_owned(),
                 tax_country: invoice.tax_country.clone(),
                 buyer_vat_number: invoice.buyer_vat_number.clone(),
-            });
+            };
+            let mut document = IssuedDocument::of_credit_note(&issued);
+            write.event(&issued);
             if let Some((rate, total_vat_eur_cents)) = &in_euros {
-                write.event(&EuroRateRecorded {
+                let recorded = EuroRateRecorded {
                     document_id: document_id.clone(),
                     rate: rate.clone(),
                     total_vat_eur_cents: *total_vat_eur_cents,
-                });
+                };
+                document.apply_euro_rate(&recorded);
+                write.event(&recorded);
             }
-            write
+            (write, document)
         })
         .await
     }
@@ -772,14 +722,15 @@ impl<E: Executor> Command<E> {
 
     /// Steps 2 and 3 of the module doc for a reserved document. `event`
     /// builds the write of the document numbered `number` in `series` to
-    /// the book stream it is given (the version is set here).
+    /// the book stream it is given (the version is set here), and the
+    /// document as that write says it.
     async fn issue_reserved<F>(
         &self,
         document_id: &str,
         event: F,
     ) -> Result<IssuedDocument, InvoicingError>
     where
-        F: Fn(&str, &str, u64) -> evento::WriteBuilder,
+        F: Fn(&str, &str, u64) -> (evento::WriteBuilder, IssuedDocument),
     {
         for _ in 0..ATTEMPTS {
             let Some(index) = document_projection()
@@ -790,8 +741,8 @@ impl<E: Executor> Command<E> {
             else {
                 return Err(anyhow::anyhow!("document {document_id} is not reserved").into());
             };
-            if let Some(book) = &index.book_id {
-                return self.document_in(book, document_id).await;
+            if let Some(document) = index.document {
+                return Ok(document);
             }
 
             // A retry: the document may be in the book already.
@@ -805,12 +756,13 @@ impl<E: Executor> Command<E> {
                         .map(|document| (book.id.clone(), document.clone()))
                 });
             if let Some((book, document)) = issued {
-                self.record(&index, &book, &document.label).await?;
+                self.record(&index, &book, &document).await?;
                 return Ok(document);
             }
 
             // 2. Issue.
-            let committed = event(&open.id, &index.series, open.next)
+            let (mut write, document) = event(&open.id, &index.series, open.next);
+            let committed = write
                 .original_version(
                     open.state
                         .as_ref()
@@ -826,26 +778,25 @@ impl<E: Executor> Command<E> {
             }
 
             // 3. Record.
-            let label = document_label(&index.series, open.next);
-            self.record(&index, &open.id, &label).await?;
-            return self.document_in(&open.id, document_id).await;
+            self.record(&index, &open.id, &document).await?;
+            return Ok(document);
         }
         Err(InvoicingError::Busy)
     }
 
-    /// Points the index at its book; another writer having done it already
-    /// is fine.
+    /// Points the index at its book, the document copied beside; another
+    /// writer having done it already is fine.
     async fn record(
         &self,
         index: &DocumentState,
         book_id: &str,
-        label: &str,
+        document: &IssuedDocument,
     ) -> Result<(), InvoicingError> {
         let recorded = index
             .write()?
             .event(&Recorded {
                 book_id: book_id.to_owned(),
-                label: label.to_owned(),
+                document: document.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
@@ -888,37 +839,18 @@ impl<E: Executor> Command<E> {
         }
     }
 
-    async fn document_in(
-        &self,
-        book_id: &str,
-        document_id: &str,
-    ) -> Result<IssuedDocument, InvoicingError> {
-        book_projection()
-            .load(book_id)
-            .tenant(&self.tenant)
-            .execute(&self.executor)
-            .await?
-            .and_then(|mut book| book.documents.remove(document_id))
-            .ok_or_else(|| {
-                anyhow::anyhow!("document {document_id} is not in book {book_id}").into()
-            })
-    }
-
-    /// A document by its index stream, once issued.
+    /// A document by its index stream, once issued: read from that stream
+    /// alone, never from its book.
     pub async fn load_document(
         &self,
         document_id: &str,
     ) -> Result<Option<IssuedDocument>, InvoicingError> {
-        let Some(book) = document_projection()
+        Ok(document_projection()
             .load(document_id)
             .tenant(&self.tenant)
             .execute(&self.executor)
             .await?
-            .and_then(|index| index.book_id)
-        else {
-            return Ok(None);
-        };
-        self.document_in(&book, document_id).await.map(Some)
+            .and_then(|index| index.document))
     }
 
     /// The invoice of an order, once issued.
