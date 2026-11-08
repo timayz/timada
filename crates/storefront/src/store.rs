@@ -86,7 +86,8 @@ impl Store {
             .await
             .with_context(|| format!("cannot connect to the store at {}", config.addr))?;
         // Events on the store, cursors and snapshots here. The client carries
-        // the store's routing key, which prefixes the cursor key.
+        // the store's routing key (told by the server's Hello); the wrapper
+        // keeps it, so it prefixes the cursor key and keys new aggregates.
         let executor = Evento::new(Sidecar::from((client, db.store().clone())));
 
         crate::migrate(db.db()).await?;
