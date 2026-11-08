@@ -1,5 +1,5 @@
-//! The subscription that keeps `reviews_reviews` and `reviews_product_ratings`
-//! current for every tenant.
+//! The subscription that keeps `reviews_reviews`, `reviews_product_ratings`
+//! and `reviews_requests` current for every tenant.
 //!
 //! The handler reloads the strict write model of the review and rewrites its
 //! row, then counts the product's published reviews again, in one
@@ -17,8 +17,8 @@ use evento::{
 };
 use timada_core::db::{Db, execute};
 
-use crate::aggregator::Review;
-use crate::command::{ReviewState, review_projection};
+use crate::aggregator::{Review, ReviewRequest};
+use crate::command::{ReviewState, review_projection, review_request_projection};
 
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-reviews/read-models";
@@ -29,7 +29,52 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
         .data(db)
         .handler(on_review_event())
+        .handler(on_review_request_event())
         .any_routing_key()
+}
+
+/// Keeps `reviews_requests` current: when the review request of an order
+/// was mailed, for the order's page.
+#[evento::subscription_all]
+async fn on_review_request_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<ReviewRequest>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(request) = review_request_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    db.execute(
+        "INSERT INTO reviews_requests (tenant_id, order_id, mailed_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT (tenant_id, order_id) DO UPDATE SET mailed_at = excluded.mailed_at",
+        (
+            event.tenant.as_str(),
+            request.order_id.as_str(),
+            request.mailed_at as i64,
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Unix seconds the review request of an order was mailed at, if it was.
+pub async fn review_request_mailed_at(
+    db: &Db,
+    tenant_id: &str,
+    order_id: &str,
+) -> anyhow::Result<Option<i64>> {
+    let row: Option<(i64,)> = db
+        .fetch_optional(
+            "SELECT mailed_at FROM reviews_requests WHERE tenant_id = ?1 AND order_id = ?2",
+            (tenant_id, order_id),
+        )
+        .await?;
+    Ok(row.map(|(at,)| at))
 }
 
 #[evento::subscription_all]
@@ -51,7 +96,11 @@ async fn on_review_event<E: Executor>(
 
 /// Writes the row of a review as the write model sees it, and the rating of
 /// its product, in one transaction.
-pub async fn upsert_review(db: &Db, tenant_id: &str, review: &ReviewState) -> anyhow::Result<()> {
+pub(crate) async fn upsert_review(
+    db: &Db,
+    tenant_id: &str,
+    review: &ReviewState,
+) -> anyhow::Result<()> {
     let env = (tenant_id, review);
     db.write(&env, |tx, (tenant_id, review)| {
         Box::pin(async move {

@@ -64,6 +64,10 @@ impl AliexpressGoods {
         // price finds the product read, and a product many are buying costs
         // one call per period on a node, however many pay.
         let fresh_secs = self.aliexpress.read_fresh_secs();
+        // The read model, joined with this node's own read times (the
+        // stream records no read): freshness is this node's to judge, and
+        // a product imported a moment ago was read by its import. What is
+        // decided from here (`supplier_of`) reads the store.
         let mut stale = Vec::new();
         for product_id in product_ids {
             let Some(link) = link_of_product(&self.db, tenant_id, product_id).await? else {
@@ -132,7 +136,7 @@ impl SuppliedGoods for AliexpressGoods {
         tenant_id: &str,
         lines: &[OrderLine],
     ) -> anyhow::Result<Option<String>> {
-        let links = super::forward::order_links(&self.store, &self.db, tenant_id, lines).await?;
+        let links = super::forward::order_links(&self.store, tenant_id, lines).await?;
         Ok(
             (!forward_items(lines, &links).items.is_empty())
                 .then(|| ALIEXPRESS_SUPPLIER.to_owned()),

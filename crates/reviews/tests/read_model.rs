@@ -125,6 +125,43 @@ async fn a_revised_review_is_listed_as_it_now_reads() {
     assert_eq!(row.photo_count, 1);
 }
 
+/// The order's page reads when its review request was mailed from the read
+/// model.
+#[tokio::test]
+async fn a_mailed_review_request_is_found_by_its_order() {
+    let (executor, pool) = executor_with_pool().await;
+    let reviews = timada_reviews::Command::new(executor.clone(), TENANT);
+    assert!(
+        reviews
+            .claim_review_request("order-1", "ada@example.com", SHOPPER)
+            .await
+            .unwrap()
+    );
+    for _ in 0..2 {
+        read_model_subscription::<evento::Turso>(pool.clone())
+            .run_once(&executor)
+            .await
+            .unwrap();
+    }
+
+    let mailed_at = timada_reviews::review_request_mailed_at(&pool, TENANT, "order-1")
+        .await
+        .unwrap();
+    assert!(mailed_at.is_some_and(|at| at > 0));
+    assert_eq!(
+        timada_reviews::review_request_mailed_at(&pool, TENANT, "order-2")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        timada_reviews::review_request_mailed_at(&pool, "other", "order-1")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
 #[tokio::test]
 async fn the_row_says_what_the_review_says_of_its_order_with_no_order_in_the_store() {
     let (executor, pool) = executor_with_pool().await;

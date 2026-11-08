@@ -6,7 +6,11 @@ use evento::turso::migrate::{Migration, Migrations};
 /// The app name under which these migrations are recorded.
 pub const MIGRATION_APP: &str = "orders";
 
-/// The read models of this context, one table each (see the columns).
+/// The read models of this context, one table each (see the columns). An
+/// order's row carries the whole order as its page shows it (`state`, the
+/// [`OrderRecord`](crate::OrderRecord) JSON); a cart's row, the payments of
+/// it the provider would not give back (`refused_returns`); and
+/// `orders_order_mails` which mails the shopper was sent about an order.
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
     &[Migration::up(
@@ -39,6 +43,7 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 refund_requested_at INTEGER,
                 paid_at INTEGER,
                 hold_reminder_at INTEGER,
+                state TEXT NOT NULL,
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX orders_orders_placed ON orders_orders (tenant_id, placed_at);
@@ -64,6 +69,7 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 updated_at INTEGER NOT NULL,
                 return_requested_at INTEGER,
                 unanswered_since INTEGER,
+                refused_returns TEXT NOT NULL,
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX orders_carts_open ON orders_carts (tenant_id, updated_at)
@@ -77,10 +83,22 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 product_id TEXT NOT NULL,
                 order_id TEXT NOT NULL,
                 PRIMARY KEY (tenant_id, product_id, order_id)
+            );
+        CREATE TABLE orders_order_mails (
+                tenant_id TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                mail TEXT NOT NULL,
+                mailed_at INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, order_id, mail)
             );",
     )],
 );
 
 /// The tables the migration creates: what a node empties before copying its
 /// store from a peer, so the subscriptions fill them again.
-pub const TABLES: &[&str] = &["orders_orders", "orders_carts", "orders_order_products"];
+pub const TABLES: &[&str] = &[
+    "orders_orders",
+    "orders_carts",
+    "orders_order_products",
+    "orders_order_mails",
+];

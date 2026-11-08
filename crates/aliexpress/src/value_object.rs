@@ -40,6 +40,12 @@ pub fn ae_order_index_id(ae_order_id: &str) -> String {
     evento::hash_ids(vec!["aliexpress-order", ae_order_id])
 }
 
+/// The shop's stream saying which AliExpress item filled the catalog product
+/// `product_id`.
+pub fn product_link_id(product_id: &str) -> String {
+    evento::hash_ids(vec!["aliexpress-product-link", product_id])
+}
+
 /// How long an order placed on AliExpress is read again for tracking.
 pub const FORWARD_WATCH_SECS: u64 = 60 * 24 * 60 * 60;
 

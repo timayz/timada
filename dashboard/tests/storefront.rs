@@ -1470,7 +1470,7 @@ async fn a_store_with_a_checkout_key_sells() {
         .unwrap();
     catalog.publish_product("alice", &mug.id).await.unwrap();
 
-    let api = dashboard_endpoint(h.platform.0.clone()).await;
+    let api = dashboard_endpoint(h.platform.0.clone(), h.db.clone()).await;
     let db = h.local_db("selling-shop").await;
     let store = Store::connect(h.config(&token).api_url(&api), db.clone())
         .await
@@ -1501,7 +1501,8 @@ async fn a_store_with_a_checkout_key_sells() {
         "{refused:?}"
     );
 
-    // Read back at once, priced from the store, illustrated from the copy.
+    // Read back at once, priced from the dashboard's catalog read model,
+    // illustrated from the copy.
     let cart = store.cart(&cart_id).await.unwrap().unwrap();
     assert_eq!(cart.item_count, 3);
     assert_eq!(cart.total().as_deref(), Some("37.50 €"));
@@ -1658,7 +1659,7 @@ async fn a_checkout_knows_how_to_pay_and_the_vat_in_the_total() {
     let mug = sell("Blue Mug", 1250, None).await;
     let book = sell("Cat Book", 1000, Some("books")).await;
 
-    let api = dashboard_endpoint(h.platform.0.clone()).await;
+    let api = dashboard_endpoint(h.platform.0.clone(), h.db.clone()).await;
     let db = h.local_db("vat-shop").await;
     let store = Store::connect(h.config(&token).api_url(api), db.clone())
         .await
@@ -1751,7 +1752,7 @@ async fn a_store_shows_the_checkout_offers_and_prices_one_unit() {
         .await
         .unwrap();
 
-    let api = dashboard_endpoint(h.platform.0.clone()).await;
+    let api = dashboard_endpoint(h.platform.0.clone(), h.db.clone()).await;
     let db = h.local_db("offer-shop").await;
     let store = Store::connect(h.config(&token).api_url(api), db.clone())
         .await
@@ -2134,17 +2135,29 @@ async fn code_endpoint(platform: cluster::Executor, limits: config::StoreConfig)
 /// The dashboard's `/store/carts/*` and `/store/orders/*` side, as the
 /// library sees it: the key authenticated (401 unknown, 403 without
 /// `store:checkout`) and the path handed to `store_carts` in the key's
-/// tenant, over a socket of its own.
-async fn dashboard_endpoint(platform: cluster::Executor) -> String {
+/// tenant, over a socket of its own. A cart is priced from the catalog's
+/// read model, which the dashboard's subscription keeps current; here
+/// nothing runs it, so the stand-in catches it up before each answer.
+async fn dashboard_endpoint(platform: cluster::Executor, db: Db) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
+    let catching_up = Arc::new(tokio::sync::Mutex::new(()));
     tokio::spawn(async move {
         loop {
             let Ok((mut socket, _)) = listener.accept().await else {
                 return;
             };
             let platform = platform.clone();
+            let db = db.clone();
+            let catching_up = catching_up.clone();
             tokio::spawn(async move {
+                {
+                    let _one_at_a_time = catching_up.lock().await;
+                    timada_catalog::read_model_subscription::<cluster::Executor>(db.clone())
+                        .run_once(&platform)
+                        .await
+                        .unwrap();
+                }
                 let (head, body) = read_request(&mut socket).await;
                 let mut request_line = head.lines().next().unwrap_or_default().split(' ');
                 let method = request_line.next().unwrap_or_default().to_owned();
@@ -2162,7 +2175,7 @@ async fn dashboard_endpoint(platform: cluster::Executor) -> String {
                     }
                     Ok(access) => {
                         let orders = store_carts::gateway(platform, &access.tenant.id);
-                        dispatch(&orders, &method, &path, &body).await.unwrap()
+                        dispatch(&orders, &db, &method, &path, &body).await.unwrap()
                     }
                 };
                 respond(socket, status, &answer).await;
@@ -2176,6 +2189,7 @@ async fn dashboard_endpoint(platform: cluster::Executor) -> String {
 /// `dashboard/src/app/store` lays them out.
 async fn dispatch(
     orders: &timada_orders::Command<cluster::Executor>,
+    db: &Db,
     method: &str,
     path: &str,
     body: &[u8],
@@ -2186,7 +2200,7 @@ async fn dispatch(
             Some(item) => store_carts::start(orders, item).await?,
             None => store_carts::bad_request(),
         },
-        ("GET", ["store", "carts", id]) => store_carts::cart(orders, id).await?,
+        ("GET", ["store", "carts", id]) => store_carts::cart(orders, db, id).await?,
         ("POST", ["store", "carts", id, "items"]) => match store_carts::parse(body) {
             Some(item) => store_carts::add_item(orders, id, item).await?,
             None => store_carts::bad_request(),
@@ -2254,13 +2268,22 @@ async fn the_dashboard_answers_for_one_cart_or_order_of_the_key_tenant() {
         .unwrap();
     assert_eq!(status, StatusCode::CREATED);
     let cart_id = started["id"].as_str().unwrap().to_owned();
-    let (status, answer) = store_carts::cart(&acme_orders, &cart_id).await.unwrap();
+    // The cart is priced from the catalog's read model.
+    timada_catalog::read_model_subscription::<cluster::Executor>(h.db.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    let (status, answer) = store_carts::cart(&acme_orders, &h.db, &cart_id)
+        .await
+        .unwrap();
     assert_eq!(status, StatusCode::OK);
     assert_eq!(answer["cart"]["id"], json!(cart_id));
     assert_eq!(answer["quote"]["total_cents"], json!(1250));
     for (status, answer) in [
-        store_carts::cart(&globex_orders, &cart_id).await.unwrap(),
-        store_carts::cart(&acme_orders, "01J00000000000000000000000")
+        store_carts::cart(&globex_orders, &h.db, &cart_id)
+            .await
+            .unwrap(),
+        store_carts::cart(&acme_orders, &h.db, "01J00000000000000000000000")
             .await
             .unwrap(),
         store_carts::add_item(&globex_orders, &cart_id, item.clone())

@@ -2,7 +2,12 @@
 //!
 //! Every write model folds *all* events of its aggregate (`strict()`), so the
 //! version it observes, and `write()` sends as `original_version`, never goes
-//! stale. None of them is snapshotted: a tenant stream is a handful of events.
+//! stale. The tenant's is snapshotted ([`TenantState`] encodes with `bitcode`,
+//! which evento stores on the node after a load that found new events, under
+//! the pinned `name`): every back-office page loads it for the member's
+//! permissions, and a tenant stream is no longer a handful of events once
+//! members, roles, API keys, mail servers, templates and payment settings
+//! have each left theirs. The others are not: their streams stay short.
 
 mod aliexpress;
 mod api_key;
@@ -75,8 +80,7 @@ fn event_millis(event: &evento::Event) -> u64 {
 pub const DEFAULT_TIME_ZONE: &str = "UTC";
 
 #[evento::projection(id = id, name = "timada-tenancy/TenantState")]
-#[evento::snapshot(none)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct TenantState {
     pub id: String,
     pub slug: String,
@@ -132,7 +136,7 @@ pub struct TenantState {
 
 /// What the shop buys on AliExpress, through the platform's app and the
 /// account of the company it sells as ([`CompanyState::aliexpress`]).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct AliexpressSettings {
     pub ship_to_country: String,
     pub currency: String,
@@ -164,7 +168,7 @@ pub struct AliexpressAuthorization {
 }
 
 /// The look all of a shop's mails share.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct MailBranding {
     /// A picture in the tenant's media, `<id>.<ext>`.
     pub logo_file: Option<String>,
@@ -182,7 +186,7 @@ pub struct MailBranding {
 pub const MAIL_TEMPLATE_HISTORY: usize = 20;
 
 /// The languages a shop mails in.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct MailLanguages {
     /// What a shopper gets when their language is not among `others`.
     pub default: String,
@@ -194,7 +198,7 @@ pub struct MailLanguages {
 }
 
 /// The merchant's wording of one mail.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct MailTemplate {
     pub subject: String,
     pub html: String,
@@ -207,7 +211,7 @@ pub struct MailTemplate {
 }
 
 /// One change to a mail's wording in one language.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct MailTemplateChange {
     pub mail: String,
     pub language: String,
@@ -220,7 +224,7 @@ pub struct MailTemplateChange {
 
 /// One of the mail servers the shop's mails can go out through. The
 /// password is sealed bytes only the host can open.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct MailServerSettings {
     /// A ULID.
     pub id: String,
@@ -248,7 +252,7 @@ impl MailServerSettings {
 
 /// The company a tenant sells as and the series its invoices are numbered
 /// in.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct TenantCompany {
     pub company_id: String,
     /// `""` for the plain series.
@@ -257,7 +261,7 @@ pub struct TenantCompany {
 
 /// The merchant's account with the payment provider. The secrets are sealed
 /// bytes only the host can open.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct PaymentSettings {
     pub provider: String,
     pub publishable_key: String,
@@ -280,7 +284,7 @@ impl PaymentSettings {
 }
 
 /// A custom role as the tenant defined it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct RoleDef {
     pub label: String,
     /// Entries of [`PERMISSIONS`](crate::PERMISSIONS).

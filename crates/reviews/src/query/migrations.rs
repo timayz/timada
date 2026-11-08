@@ -40,10 +40,20 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             review_count INTEGER NOT NULL,
             rating_sum INTEGER NOT NULL,
             PRIMARY KEY (tenant_id, product_id)
+        );
+        CREATE TABLE reviews_requests (
+            tenant_id TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            mailed_at INTEGER NOT NULL,
+            PRIMARY KEY (tenant_id, order_id)
         );",
     )],
 );
 
 /// The tables the migration creates: what a node empties before copying its
 /// store from a peer, so the subscription fills them again.
-pub const TABLES: &[&str] = &["reviews_reviews", "reviews_product_ratings"];
+pub const TABLES: &[&str] = &[
+    "reviews_reviews",
+    "reviews_product_ratings",
+    "reviews_requests",
+];

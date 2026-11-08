@@ -559,7 +559,14 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await expect(page.getByRole("status")).toContainText(
       "Order marked as fulfilled.",
     );
-    await expect(page.locator("[data-order-tracking]")).toHaveText("6A12345");
+    // The page reads the read model, a moment behind the action.
+    await expect(async () => {
+      await page.reload();
+      await expect(page.locator("[data-order-tracking]")).toHaveText(
+        "6A12345",
+        { timeout: 1000 },
+      );
+    }).toPass({ timeout: 15_000 });
     await expect(
       page.getByRole("button", { name: "Cancel and refund" }),
     ).toHaveCount(0);
@@ -585,7 +592,13 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await expect(page.getByRole("status")).toContainText(
       "Order cancelled and refunded.",
     );
-    await expect(page.locator("[data-order-refunded]")).toHaveText("8.00 €");
+    await expect(async () => {
+      await page.reload();
+      await expect(page.locator("[data-order-refunded]")).toHaveText(
+        "8.00 €",
+        { timeout: 1000 },
+      );
+    }).toPass({ timeout: 15_000 });
     await expect(page.locator("[data-order-cancel-reason]")).toHaveText(
       "Out of stock",
     );

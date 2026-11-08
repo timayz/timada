@@ -73,7 +73,11 @@ async fn on_shopper_event<E: Executor>(
 }
 
 /// Drops the row of a shopper who deleted their account.
-pub async fn delete_shopper(db: &Db, tenant_id: &str, shopper_id: &str) -> anyhow::Result<()> {
+pub(crate) async fn delete_shopper(
+    db: &Db,
+    tenant_id: &str,
+    shopper_id: &str,
+) -> anyhow::Result<()> {
     db.execute(
         "DELETE FROM shoppers_shoppers WHERE tenant_id = ?1 AND id = ?2",
         (tenant_id, shopper_id),
@@ -84,7 +88,7 @@ pub async fn delete_shopper(db: &Db, tenant_id: &str, shopper_id: &str) -> anyho
 
 /// Writes the row of a shopper as the write model sees it; `updated_at` is
 /// unix seconds.
-pub async fn upsert_shopper(
+pub(crate) async fn upsert_shopper(
     db: &Db,
     tenant_id: &str,
     shopper: &Shopper,

@@ -50,7 +50,7 @@ async fn on_page_event<E: Executor>(
 }
 
 /// Drops the row of a deleted page.
-pub async fn delete_page_row(db: &Db, tenant_id: &str, page_id: &str) -> anyhow::Result<()> {
+pub(crate) async fn delete_page_row(db: &Db, tenant_id: &str, page_id: &str) -> anyhow::Result<()> {
     db.execute(
         "DELETE FROM pages WHERE tenant_id = ?1 AND id = ?2",
         (tenant_id, page_id),
@@ -60,7 +60,11 @@ pub async fn delete_page_row(db: &Db, tenant_id: &str, page_id: &str) -> anyhow:
 }
 
 /// Writes the row of a page as the write model sees it.
-pub async fn upsert_page_row(db: &Db, tenant_id: &str, page: &PageState) -> anyhow::Result<()> {
+pub(crate) async fn upsert_page_row(
+    db: &Db,
+    tenant_id: &str,
+    page: &PageState,
+) -> anyhow::Result<()> {
     db.execute(
         "INSERT INTO pages (tenant_id, id, slug, title, published, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)

@@ -1,8 +1,9 @@
 use timada_aliexpress::{
     AeOrderState, ForwardRow, ForwardState, ForwardStatus, LinkRow, LinkState, LinkStatus,
-    MIGRATIONS, Placement, Share, TABLES, forget_unrecorded, forwards_due, forwards_stalled,
-    keep_unrecorded, link_of_product, links_due, note_forward_read, note_published, note_read,
-    note_tried, note_unrecorded_try, note_wanted, unrecorded, upsert_forward, upsert_link,
+    MIGRATIONS, Placement, Share, TABLES, forget_unrecorded, forward_of_order, forwards_due,
+    forwards_stalled, keep_unrecorded, link_of_product, links_due, note_forward_read,
+    note_published, note_read, note_tried, note_unrecorded_try, note_wanted, unrecorded,
+    upsert_forward, upsert_link,
 };
 use timada_core::db::{Db, Turso};
 
@@ -310,12 +311,49 @@ async fn seed_forwards(db: &Db, tenant: &str, count: usize, updated_at: u64) {
     for index in 0..count {
         let forward = ForwardState {
             id: format!("{tenant}-{index:04}"),
+            order_id: format!("order-{index:04}"),
             status: ForwardStatus::Placed,
             updated_at,
             ..Default::default()
         };
         upsert_forward(db, tenant, &forward).await.unwrap();
     }
+}
+
+/// The order's page reads its forward whole from the read model.
+#[tokio::test]
+async fn a_forward_is_read_whole_by_its_order() {
+    let db = database().await;
+    let forward = ForwardState {
+        id: "fwd".to_owned(),
+        order_id: "order-1".to_owned(),
+        status: ForwardStatus::Placed,
+        ae_orders: vec![AeOrderState {
+            id: "8001".to_owned(),
+            status: "WAIT_SELLER_SEND_GOODS".to_owned(),
+            tracking: vec!["LP1".to_owned()],
+            ..Default::default()
+        }],
+        complete: true,
+        placed_at: Some(100),
+        updated_at: 120,
+        ..Default::default()
+    };
+    upsert_forward(&db, "acme", &forward).await.unwrap();
+
+    let shown = forward_of_order(&db, "acme", "order-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(shown, forward);
+    assert_eq!(
+        forward_of_order(&db, "acme", "order-2").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        forward_of_order(&db, "zeta", "order-1").await.unwrap(),
+        None
+    );
 }
 
 fn forwards_of(due: &[ForwardRow], tenant: &str) -> usize {

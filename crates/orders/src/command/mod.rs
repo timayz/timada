@@ -1742,6 +1742,7 @@ async fn on_storefront_address_cleared(
 #[derive(Debug, PartialEq, Eq)]
 pub struct OrderMailState {
     pub id: String,
+    pub order_id: String,
     pub mail: String,
     pub email: String,
     /// Unix seconds.
@@ -1757,6 +1758,7 @@ pub fn order_mail_projection<E: Executor>() -> Projection<E, OrderMailState> {
 #[evento::handler]
 async fn on_order_mailed(event: Event<Mailed>, state: &mut OrderMailState) -> anyhow::Result<()> {
     state.id = event.aggregate_id.to_owned();
+    state.order_id = event.data.order_id.clone();
     state.mail = event.data.mail.clone();
     state.email = event.data.email.clone();
     state.mailed_at = event.timestamp;

@@ -3,9 +3,9 @@ mod common;
 use common::*;
 use timada_orders::HOLD_REMINDER_BEFORE_SECS;
 use timada_orders::{
-    Command, OrderFilter, OrderStatus, count_orders, fulfilled_between, hold_reminders_due,
-    open_carts, orders_of_email, orders_of_tenant, payments_due, product_ever_ordered,
-    read_model_subscription,
+    Command, OrderFilter, OrderStatus, cart_refused_returns, count_orders, fulfilled_between,
+    hold_reminders_due, open_carts, order_mails, order_state, orders_of_email, orders_of_tenant,
+    payments_due, product_ever_ordered, read_model_subscription,
 };
 
 #[tokio::test]
@@ -294,4 +294,90 @@ async fn orders_due_a_hold_reminder_are_listed_until_reminded() {
             .unwrap()
     );
     assert_eq!(due_at(reminder).await, Vec::<String>::new());
+}
+
+/// The order's page reads the read model: the row carries the order whole,
+/// the facts a storefront is never answered included, with the mails the
+/// shopper was sent about it and the payments of its cart the provider
+/// would not give back.
+#[tokio::test]
+async fn an_orders_row_carries_the_order_whole_with_its_mails_and_refused_returns() {
+    let (executor, pool) = executor_with_pool().await;
+    let orders = Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let cart_id = cart_with(&orders, &mug, 1).await;
+    // Two payments opened for one cart: the order takes the first, the
+    // second is asked back and the provider will not give it.
+    let (_, first) = open_payment(&orders, &cart_id, checkout()).await;
+    let (_, second) = open_payment(&orders, &cart_id, checkout()).await;
+    let placed = orders
+        .place_order(DASHBOARD, &cart_id, first)
+        .await
+        .unwrap();
+    capture(&orders, &placed.order_id).await;
+    orders
+        .request_payment_return(DASHBOARD, &cart_id, &second.payment_id, "duplicate_payment")
+        .await
+        .unwrap();
+    orders
+        .refuse_payment_return(
+            DASHBOARD,
+            &cart_id,
+            &second.payment_id,
+            "charge already captured",
+        )
+        .await
+        .unwrap();
+    orders
+        .fulfil_order(ALICE, &placed.order_id, Some("6A1".to_owned()))
+        .await
+        .unwrap();
+    assert!(
+        orders
+            .claim_order_mail(
+                &placed.order_id,
+                "order_confirmation",
+                "ada@example.org",
+                DASHBOARD
+            )
+            .await
+            .unwrap()
+    );
+
+    for _ in 0..2 {
+        read_model_subscription::<evento::Turso>(pool.clone())
+            .run_once(&executor)
+            .await
+            .unwrap();
+    }
+
+    let shown = order_state(&pool, TENANT, &placed.order_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let exact = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert_eq!(
+        shown.fulfilled_by.as_deref(),
+        Some(ALICE),
+        "a shop-only fact"
+    );
+    assert_eq!(shown.tracking.as_deref(), Some("6A1"));
+    assert_eq!(shown, exact);
+    assert_eq!(
+        order_state(&pool, "tenant-2", &placed.order_id)
+            .await
+            .unwrap(),
+        None
+    );
+
+    let mails = order_mails(&pool, TENANT, &placed.order_id).await.unwrap();
+    assert_eq!(mails.len(), 1);
+    assert_eq!(mails[0].mail, "order_confirmation");
+    assert!(mails[0].mailed_at > 0);
+
+    assert_eq!(
+        cart_refused_returns(&pool, TENANT, &cart_id).await.unwrap(),
+        vec![(second.payment_id, "charge already captured".to_owned())]
+    );
 }
