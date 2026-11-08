@@ -14,12 +14,12 @@ use topcoat::{
 
 use crate::app::account::{account_url, sign_in::sign_in_url};
 use crate::app::document;
-use crate::shopper::{forget_checkout_draft, forget_shopper, shopper_token, signed_in};
+use crate::shopper::{forget_checkout_draft, forget_shopper, session, shopper_token};
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let to_sign_in = sign_in_url(cx, Some(&href!(index).resolve(cx)), None);
-    let shopper = signed_in(cx).await.cloned().ok_or_redirect(to_sign_in)?;
+    let shopper = session(cx).await?.clone().ok_or_redirect(to_sign_in)?;
     let nav = menu(cx).await?;
     Ok(view! {
         document(

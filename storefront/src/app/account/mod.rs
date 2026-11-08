@@ -23,7 +23,7 @@ use topcoat::{
 
 use crate::app::orders::order_id::{OrderId, index as order_page};
 use crate::app::{document, say};
-use crate::shopper::{forget_shopper, shopper_token, signed_in};
+use crate::shopper::{forget_shopper, session, shopper_token};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct AccountQuery {
@@ -71,9 +71,10 @@ fn status_label(status: OrderStatus) -> &'static str {
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let to_sign_in = sign_in::sign_in_url(cx, Some(&href!(index).resolve(cx)), None);
-    let shopper = signed_in(cx)
-        .await
-        .cloned()
+    // The dashboard away is told as such, not as a sign-in to do again.
+    let shopper = session(cx)
+        .await?
+        .clone()
         .ok_or_redirect(to_sign_in.clone())?;
     let token = shopper_token(cx).ok_or_redirect(to_sign_in.clone())?;
     let orders = match shopper_orders(cx, &token).await? {

@@ -58,9 +58,11 @@ store.shutdown().await;
   same rows; nothing queues behind a lock. The copy is rebuilt from the store when
   lost. A `Turso` or a `timada_core::db::Db` converts too, for a test's in-memory
   database.
-- `Store::connect` fails at once when the store is unreachable or refuses the key. It
-  applies the library's tables to the local database (`timada_storefront::MIGRATIONS` and
-  `migrate` exist for hosts preparing it themselves), then follows the catalog.
+- `Store::connect` applies the library's tables to the local database
+  (`timada_storefront::MIGRATIONS` and `migrate` exist for hosts preparing it themselves),
+  connects and follows the catalog. A store that refuses the key fails it at once; a store
+  that cannot be reached does not: the shop opens on the copy it has and the store is
+  reached again after a growing delay (see below).
 
 ## What lives where
 
@@ -76,6 +78,37 @@ resumes from its own cursor.
 If the store is away long enough for the subscription to give up, the store's supervisor
 restarts it from the local cursor with a growing delay (1 s to 30 s). Pages keep serving
 the rows they have.
+
+## When timada is away
+
+The catalog is the shop's own copy, so a dashboard (or a store API) that is down must not
+take the shop down with it. Browsing goes on untouched. What goes through the dashboard
+cannot: the cart, the checkout, the account, a review, a message, a newsletter sign-up.
+Every library call that reaches it then fails with `StoreUnavailable` instead of the
+transport's own error, so the host tells an outage apart from a bug: `is_store_unavailable`
+on a page's `topcoat::Error`, `is_unavailable` on a `Store` method's `anyhow::Error`. The
+refusal code `STORE_UNAVAILABLE` (`store_unavailable`) names it beside the dashboard's own
+codes, for a page wording it.
+
+What counts as the dashboard being away: the HTTP connection failing, timing out or
+breaking; a proxy in front of it answering 502, 503 or 504 with a page of its own (a load
+balancer's "no available server"); the store API not connected yet, or a read on it
+failing. A 503 the dashboard itself wrote (`{"error":"writes_paused"}`) is a refusal to
+show the shopper, not this.
+
+A shop started while the store API is away opens all the same: `Store::connect` logs a
+warning, `GET {prefix}/status` answers 503 with `"connected": false` and
+`"subscription": {"state": "connecting", ...}`, and the supervisor connects after a growing
+delay (1 s to 30 s), then follows the catalog from the local cursor. A key the store
+refuses still fails `connect` at once: nothing would ever work.
+
+The example shop (`storefront/`) shows the host's side: a request layer
+(`app::indisponible::UnavailablePage`) rewrites a page that failed this way to
+`/indisponible`, a page of the shop's own saying the feature is momentarily unavailable
+(a 503, `Cache-Control: no-store`, `Retry-After`), with the catalog's menu and search
+around it; the layout shows the cart drawer with a notice instead of an empty cart and
+takes the account link as signed out; the account pages tell the shopper the dashboard is
+away rather than sending them to sign in again.
 
 ## Reading the catalog
 

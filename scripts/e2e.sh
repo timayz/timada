@@ -17,7 +17,7 @@ fi
 # server up, `serve` dies on its first bind and the proxy forwards the suite to
 # the dev server instead, which writes the test data into its database (#400).
 # Checked before the build so a wasted build is not the first sign.
-for port in 3000 3457 3458 3459 3460 4321 12112 12113; do
+for port in 3000 3457 3458 3459 3460 3461 4321 12112 12113; do
   if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
     echo "port $port is in use: stop what listens there (the dev server?) first" >&2
     exit 1
@@ -46,7 +46,9 @@ for _ in $(seq 60); do
     echo "the test server exited before it answered: see its output above" >&2
     exit 1
   fi
-  if curl -sk -o /dev/null "$base_url/auth/login"; then
+  # `-f`: the proxy answers 503 "no available server" on its own until its
+  # health check has seen the server, and that must not count as ready.
+  if curl -sfk -o /dev/null "$base_url/auth/login"; then
     ready=1
     break
   fi

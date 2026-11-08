@@ -5,9 +5,10 @@
 
 use anyhow::Context as _;
 use topcoat_core::context::Cx;
-use topcoat_core::error::{Error, Result};
+use topcoat_core::error::Result;
 
 use crate::context::store;
+use crate::error::{gateway_down, into_error, reach};
 use crate::store::Store;
 
 impl Store {
@@ -24,9 +25,15 @@ impl Store {
             .bearer_auth(&api.token)
             .form(&[("token", token)])
             .send()
-            .await
-            .context("cannot reach the dashboard")?;
-        match response.status().as_u16() {
+            .await;
+        let response = reach(response)?;
+        let status = response.status();
+        // A proxy answering for a dashboard that is not there; this call
+        // has no refusal of its own at those statuses.
+        if let Some(away) = gateway_down(status, &[]) {
+            return Err(away.into());
+        }
+        match status.as_u16() {
             204 => Ok(true),
             422 => Ok(false),
             status => anyhow::bail!("the dashboard did not answer as expected: {status}"),
@@ -39,5 +46,5 @@ pub async fn stop_automated_mails(cx: &Cx, token: &str) -> Result<bool> {
     store(cx)
         .stop_automated_mails(token)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
