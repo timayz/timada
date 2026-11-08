@@ -158,10 +158,24 @@ pub struct ServerConfig {
     pub port: u16,
     /// Region this node serves, e.g. `eu-west-1`. Used as evento's default
     /// routing key: stamped on every new aggregate written here and inherited
-    /// by this node's subscriptions (those that must see every region call
-    /// `.any_routing_key()`). Absent: no routing key.
+    /// by this node's subscriptions. The read models and the per-node effects
+    /// (this node's copies of pictures and keys, its store connections) call
+    /// `.any_routing_key()` and see every region; the sagas (payments,
+    /// forwards, invoices, mails, releases, usage) inherit the key and run on
+    /// the nodes of the region alone, so a region's work is done by its own
+    /// nodes and not N times across the cluster. Absent: no routing key, and
+    /// every node does every region's work.
     #[serde(default)]
     pub region: Option<String>,
+    /// Regions whose background work this node also takes on, e.g. while
+    /// that region's nodes are down. Each one gets a copy of every saga
+    /// subscription, filtered on that region's key (`.routing_key(r)`) with a
+    /// cursor of its own (`{r}.{key}`), started where this node left that
+    /// region last: the first time, it goes through the region's whole
+    /// history for it (the sagas skip what is settled or too old). Needs
+    /// `region`.
+    #[serde(default)]
+    pub also_serves: Vec<String>,
     /// Reverse proxies allowed to report the client's address through
     /// `X-Forwarded-For`, as IP addresses or CIDR networks. Empty: the
     /// connection's peer address is the client.
@@ -805,6 +819,28 @@ impl ServerConfig {
                 )));
             }
         }
+        if !self.also_serves.is_empty() && self.region.is_none() {
+            return Err(ConfigError::Message(
+                "server.also_serves needs server.region: a node without a region already does every region's work".into(),
+            ));
+        }
+        for (i, served) in self.also_serves.iter().enumerate() {
+            if served.trim().is_empty() || served.trim() != served {
+                return Err(ConfigError::Message(format!(
+                    "server.also_serves: '{served}' is empty or has spaces around it"
+                )));
+            }
+            if self.region.as_deref() == Some(served.as_str()) {
+                return Err(ConfigError::Message(format!(
+                    "server.also_serves: '{served}' is this node's own region"
+                )));
+            }
+            if self.also_serves[..i].contains(served) {
+                return Err(ConfigError::Message(format!(
+                    "server.also_serves: '{served}' is listed twice"
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -939,8 +975,32 @@ mod tests {
             host: "0.0.0.0".into(),
             port: 3000,
             region: None,
+            also_serves: Vec::new(),
             trusted_proxies: trusted_proxies.iter().map(|s| s.to_string()).collect(),
         }
+    }
+
+    fn regions(region: Option<&str>, also_serves: &[&str]) -> ServerConfig {
+        ServerConfig {
+            region: region.map(str::to_owned),
+            also_serves: also_serves.iter().map(|s| s.to_string()).collect(),
+            ..server(&[])
+        }
+    }
+
+    #[test]
+    fn also_served_regions_need_a_region_and_name_other_ones_once() {
+        assert!(regions(None, &[]).validate().is_ok());
+        assert!(regions(Some("eu"), &[]).validate().is_ok());
+        assert!(regions(Some("eu"), &["us", "ap"]).validate().is_ok());
+        let err = regions(None, &["us"]).validate().unwrap_err();
+        assert!(err.to_string().contains("server.region"), "{err}");
+        let err = regions(Some("eu"), &["eu"]).validate().unwrap_err();
+        assert!(err.to_string().contains("own region"), "{err}");
+        let err = regions(Some("eu"), &["us", "us"]).validate().unwrap_err();
+        assert!(err.to_string().contains("twice"), "{err}");
+        assert!(regions(Some("eu"), &[" "]).validate().is_err());
+        assert!(regions(Some("eu"), &[" us"]).validate().is_err());
     }
 
     #[test]

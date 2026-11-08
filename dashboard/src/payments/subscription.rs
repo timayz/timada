@@ -79,7 +79,9 @@ pub fn subscription<E: Executor>(checkouts: Checkouts) -> SubscriptionBuilder<E>
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(checkouts)
         .handler(on_checkout_requested())
-        .any_routing_key()
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
         .retry(5)
 }
 

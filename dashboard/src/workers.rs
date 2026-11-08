@@ -56,15 +56,15 @@ impl WorkerState {
 
 /// A supervised subscription.
 pub struct Worker {
-    name: &'static str,
+    name: String,
     state: Mutex<WorkerState>,
     stop: watch::Sender<bool>,
     supervisor: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Worker {
-    pub fn name(&self) -> &'static str {
-        self.name
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn state(&self) -> WorkerState {
@@ -94,10 +94,11 @@ impl Worker {
 /// Starts the subscription `make` builds and keeps it running under the name
 /// `name`. The first start failing is an error: the node does not serve
 /// without its workers. Later failures restart it.
-pub async fn start<F>(name: &'static str, make: F, executor: &Executor) -> Result<Arc<Worker>>
+pub async fn start<F>(name: impl Into<String>, make: F, executor: &Executor) -> Result<Arc<Worker>>
 where
     F: Fn() -> SubscriptionBuilder<Executor> + Send + Sync + 'static,
 {
+    let name = name.into();
     let handle = make()
         .start(executor)
         .await
@@ -124,7 +125,7 @@ where
 /// once, before anything is served: after the store was copied from a peer,
 /// the read models are empty until their subscriptions caught up.
 pub async fn catch_up(
-    name: &'static str,
+    name: &str,
     builder: SubscriptionBuilder<Executor>,
     executor: &Executor,
 ) -> Result<()> {
@@ -147,7 +148,7 @@ async fn supervise<F>(
 ) where
     F: Fn() -> SubscriptionBuilder<Executor>,
 {
-    let name = worker.name;
+    let name = worker.name.clone();
     let mut delay = FIRST_RESTART_DELAY;
     // The first failure of the current run of failures, and how many
     // restarts it took so far; forgotten once a restart held up.
@@ -225,10 +226,10 @@ impl Workers {
     }
 
     /// Each worker's name and how it stands, in start order.
-    pub fn states(&self) -> Vec<(&'static str, WorkerState)> {
+    pub fn states(&self) -> Vec<(String, WorkerState)> {
         self.0
             .iter()
-            .map(|worker| (worker.name(), worker.state()))
+            .map(|worker| (worker.name().to_owned(), worker.state()))
             .collect()
     }
 
