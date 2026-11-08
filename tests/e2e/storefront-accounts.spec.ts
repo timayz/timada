@@ -1202,12 +1202,16 @@ test("a buyer is mailed a link to review a fulfilled order, which opens it on an
     const orderId = new URL(orderUrl).pathname.split("/").at(-1)!;
 
     // Not asked while it is only paid; asked once it is fulfilled. The
-    // merchant's page reads the read model, a moment behind the payment.
+    // merchant's page reads the read model, a moment behind the payment and
+    // the capture that follows it (which the fulfil button waits for).
     await expect(async () => {
       await page.goto(`/t/${slug}/orders/${orderId}`);
       await expect(
         page.locator("[data-order-review-request]"),
       ).toHaveAttribute("data-order-review-request", "none", { timeout: 1000 });
+      await expect(
+        page.getByRole("button", { name: "Mark as fulfilled" }),
+      ).toBeVisible({ timeout: 1000 });
     }).toPass({ timeout: 15_000 });
     await page.getByRole("button", { name: "Mark as fulfilled" }).click();
     await expect(page.getByRole("status")).toContainText(

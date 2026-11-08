@@ -1103,8 +1103,13 @@ test("a shopper pays what AliExpress asks at the moment of paying", async ({ pag
     aliexpress.sku("12000037001").price = "6.00";
     await pay.click();
     await expect(page.getByText("Un prix a changé")).toBeVisible();
-    await expect(total).toContainText("12,00");
     expect(stripe.lastIntent()).toBeUndefined();
+    // The page is priced from the catalog's read model, a moment behind the
+    // price the refusal just recorded: load it again until it says so.
+    await expect(async () => {
+      await page.goto(`${app.url}/checkout`);
+      await expect(total).toContainText("12,00", { timeout: 1000 });
+    }).toPass({ timeout: 20_000 });
     await pay.click();
     await expect(page).toHaveURL(/\/checkout\/complete\?.*redirect_status=succeeded/, { timeout: 30_000 });
     expect(stripe.lastIntent()!.amount).toBe(1200);
