@@ -40,7 +40,10 @@ async fn catch_up(executor: &evento::Turso, pool: &Db) {
 }
 
 async fn sign_in(shoppers: &Command<evento::Turso>, email: &str, now: u64) -> String {
-    let issued = shoppers.issue_code(&codes(), email, now).await.unwrap();
+    let issued = shoppers
+        .issue_code(&**KEYS, &codes(), email, None, now)
+        .await
+        .unwrap();
     shoppers
         .sign_in(&**KEYS, &codes(), email, &issued.code, now)
         .await

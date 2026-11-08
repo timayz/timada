@@ -85,6 +85,8 @@ pub struct Services {
     /// shoppers.
     pub email_codes: crate::seal::EmailCodes,
     pub shopper_codes: crate::seal::ShopperCodes,
+    /// What derives the invitation links' tokens.
+    pub invitation_tokens: crate::seal::InvitationTokens,
     /// The tenants' Stripe accounts and the provider they are reached through.
     pub payments: Arc<crate::payments::Payments>,
     /// The shops' own mail servers.
@@ -110,6 +112,7 @@ pub fn router(services: Services) -> Router {
         limits,
         email_codes,
         shopper_codes,
+        invitation_tokens,
         payments,
         shop_mail,
         aliexpress,
@@ -163,6 +166,7 @@ pub fn router(services: Services) -> Router {
         .app_context(keys)
         .app_context(email_codes)
         .app_context(shopper_codes)
+        .app_context(invitation_tokens)
         .app_context(payments)
         .app_context(aliexpress)
         .app_context(store)

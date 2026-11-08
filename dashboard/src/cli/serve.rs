@@ -73,9 +73,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             timada_aliexpress::Share { index, of }
         }),
     )?;
-    // The order confirmations and the notices of contact messages are
-    // mailed from the subscriptions, outside any request: they get their
-    // own transport.
+    // The sign-in codes, the invitations, the newsletter confirmations, the
+    // order confirmations and the notices of contact messages are mailed
+    // from the subscriptions, outside any request: they get their own
+    // transport, and the keys the codes and links derive under.
     let background_mail = {
         let mailer = crate::mail::build(&config.mail)?;
         let mut app = topcoat::context::AppContext::new();
@@ -84,6 +85,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         app.insert(shop_mail.clone());
         // Where the shops' logos are loaded from.
         app.insert(media.clone());
+        app.insert(crate::seal::email_codes(&config));
+        app.insert(crate::seal::shopper_codes(&config));
+        app.insert(crate::seal::invitation_tokens(&config));
         Arc::new(app)
     };
     let connections = StoreConnections::new();
@@ -234,6 +238,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         limits,
         email_codes: crate::seal::email_codes(&config),
         shopper_codes: crate::seal::shopper_codes(&config),
+        invitation_tokens: crate::seal::invitation_tokens(&config),
         payments,
         shop_mail,
         aliexpress,
@@ -440,7 +445,7 @@ fn subscriptions(
                     store.clone(),
                 )),
                 store.clone(),
-                node,
+                node.clone(),
             )),
         ),
         (
@@ -469,12 +474,7 @@ fn subscriptions(
         ),
         (
             "newsletter opt-ins",
-            crate::newsletter::subscription(
-                store.clone(),
-                background_mail.clone(),
-                keys.clone(),
-                store.clone(),
-            ),
+            crate::newsletter::subscription(keys.clone(), store.clone()),
         ),
         (
             "automation triggers",
@@ -494,15 +494,55 @@ fn subscriptions(
             crate::message_notifications::subscription(
                 store.clone(),
                 db,
-                background_mail,
-                base_url,
+                background_mail.clone(),
+                base_url.clone(),
                 ring,
                 store.clone(),
             ),
         ),
         (
             "invoices",
-            crate::invoicing::subscription(store.clone(), vies, euro_rates, store),
+            crate::invoicing::subscription(store.clone(), vies, euro_rates, store.clone()),
+        ),
+        // The mails a command owes are sent from here, after the intent is
+        // recorded: the sign-in codes of the platform and of the shops, the
+        // invitations, the newsletter confirmations.
+        (
+            "platform code mails",
+            crate::code_mails::platform_subscription(
+                store.clone(),
+                background_mail.clone(),
+                node.clone(),
+            ),
+        ),
+        (
+            "shopper code mails",
+            crate::code_mails::shopper_subscription(
+                store.clone(),
+                background_mail.clone(),
+                keys.clone(),
+                store.clone(),
+                node.clone(),
+            ),
+        ),
+        (
+            "invitation mails",
+            crate::invitation_mails::subscription(
+                store.clone(),
+                background_mail.clone(),
+                base_url,
+                node.clone(),
+            ),
+        ),
+        (
+            "newsletter confirmations",
+            crate::newsletter_confirmations::subscription(
+                store.clone(),
+                background_mail,
+                keys,
+                store,
+                node,
+            ),
         ),
     ]
 }

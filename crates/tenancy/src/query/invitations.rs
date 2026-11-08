@@ -1,7 +1,45 @@
 //! Queries over `tenancy_invitations`, for the members page of a tenant.
 
 use anyhow::Result;
+use timada_core::Sending;
 use timada_core::db::{Db, FromRow};
+
+/// Where an invitation's mail stands, as the `mail` column keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvitationMailState {
+    /// Recorded, not handed to a mail server yet.
+    Sending,
+    Sent,
+    /// The mail server refused the address for good.
+    Undeliverable,
+}
+
+impl InvitationMailState {
+    pub fn of(sending: &Sending) -> Self {
+        match sending {
+            Sending::Pending | Sending::Claimed { .. } => Self::Sending,
+            Sending::Sent => Self::Sent,
+            Sending::Undeliverable { .. } => Self::Undeliverable,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sending => "sending",
+            Self::Sent => "sent",
+            Self::Undeliverable => "undeliverable",
+        }
+    }
+
+    /// `Sending` for anything the column should not hold.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "sent" => Self::Sent,
+            "undeliverable" => Self::Undeliverable,
+            _ => Self::Sending,
+        }
+    }
+}
 
 /// One row of `tenancy_invitations`.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -18,6 +56,14 @@ pub struct InvitationRow {
     pub accepted_by: Option<String>,
     pub accepted_at: Option<i64>,
     pub revoked: bool,
+    /// Where the link's mail stands ([`InvitationMailState::as_str`]).
+    pub mail: String,
+}
+
+impl InvitationRow {
+    pub fn mail(&self) -> InvitationMailState {
+        InvitationMailState::parse(&self.mail)
+    }
 }
 
 /// The invitations of a tenant still waiting at `now`: not accepted, not
@@ -29,7 +75,7 @@ pub async fn open_invitations_of_tenant(
 ) -> Result<Vec<InvitationRow>> {
     db.fetch_all(
         "SELECT id, tenant_id, email, role, invited_by, sent_at, expires_at, accepted_by,
-            accepted_at, revoked
+            accepted_at, revoked, mail
          FROM tenancy_invitations
          WHERE tenant_id = ?1 AND accepted_by IS NULL AND revoked = 0 AND expires_at > ?2
          ORDER BY sent_at DESC, id",
@@ -80,7 +126,7 @@ pub async fn invitations_sent_since(
 pub async fn invitation_by_id(db: &Db, id: &str) -> Result<Option<InvitationRow>> {
     db.fetch_optional(
         "SELECT id, tenant_id, email, role, invited_by, sent_at, expires_at, accepted_by,
-            accepted_at, revoked
+            accepted_at, revoked, mail
          FROM tenancy_invitations WHERE id = ?1",
         (id,),
     )

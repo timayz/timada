@@ -38,7 +38,8 @@ pub struct ResolvedShopper {
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Burns the code mailed to `email`, creates the shopper on a first
-    /// sign-in (with a fresh key, kept in `keys` first), and opens a session for [`SESSION_TTL_SECS`]. `now` is unix
+    /// sign-in (under the key its codes drew, or a fresh one kept in `keys`
+    /// first), and opens a session for [`SESSION_TTL_SECS`]. `now` is unix
     /// seconds.
     pub async fn sign_in(
         &self,
@@ -61,12 +62,28 @@ impl<E: Executor> super::Command<E> {
             None => Some(evento::append(&shopper_id).original_version(0).to_owned()),
         };
         if let Some(mut writer) = writer {
-            // The key is kept before the event names it, so no event ever
-            // points at a key nobody holds.
-            let key_id = new_key_id();
-            let key = ShopperKey::generate();
+            // The address's key is the one its codes drew, so one key covers
+            // what the address recorded before and after it registered. A
+            // key is kept before the event names it, so no event ever points
+            // at a key nobody holds.
+            let drawn = match self.load_challenge(&email).await? {
+                Some(challenge) if !challenge.key_id.is_empty() => keys
+                    .get(&challenge.key_id)
+                    .await?
+                    .map(|key| (challenge.key_id, key)),
+                _ => None,
+            };
+            let fresh = drawn.is_none();
+            let (key_id, key) = match drawn {
+                Some(drawn) => drawn,
+                None => {
+                    let key_id = new_key_id();
+                    let key = ShopperKey::generate();
+                    keys.put(&key_id, &key).await?;
+                    (key_id, key)
+                }
+            };
             let email = key::seal(&key, &email_aad(&shopper_id, &key_id), email.as_bytes())?;
-            keys.put(&key_id, &key).await?;
             let registered = writer
                 .routing_key_opt(routing_key.clone())
                 .event(&Registered {
@@ -76,7 +93,7 @@ impl<E: Executor> super::Command<E> {
                 .tenant(&self.tenant)
                 .commit(&self.executor)
                 .await;
-            if registered.is_err() {
+            if registered.is_err() && fresh {
                 // Nothing names the key: drop it rather than keep it unused.
                 let _ = keys.delete(&key_id).await;
             }

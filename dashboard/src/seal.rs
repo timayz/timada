@@ -11,7 +11,7 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
-use timada_core::{CodeVerifier, HmacCodeVerifier};
+use timada_core::{CodeVerifier, HmacCodeVerifier, TokenDeriver};
 
 use crate::config::Config;
 
@@ -51,6 +51,26 @@ pub fn shopper_codes(config: &Config) -> ShopperCodes {
     ShopperCodes(config.secrets.as_ref().map(|secrets| {
         Arc::new(HmacCodeVerifier::derive("shopper-code", &secrets.key)) as Arc<dyn CodeVerifier>
     }))
+}
+
+/// What derives the tokens of the invitation links from the nonces their
+/// streams keep, under a key derived from `auth.secret_key`: every node
+/// derives the same link, and the store holds nothing a link could be
+/// rebuilt from.
+#[derive(Clone)]
+pub struct InvitationTokens(pub Arc<dyn TokenDeriver>);
+
+impl std::fmt::Debug for InvitationTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InvitationTokens(..)")
+    }
+}
+
+pub fn invitation_tokens(config: &Config) -> InvitationTokens {
+    InvitationTokens(Arc::new(HmacCodeVerifier::derive(
+        "invitation",
+        &config.auth.secret_key,
+    )))
 }
 
 const NONCE_LEN: usize = 12;
