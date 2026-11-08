@@ -1,5 +1,8 @@
+use std::future::Future;
+
 use evento::{Executor, ProjectionAggregate, WriteError};
 
+use timada_catalog::{DeliveryDays, Sellable};
 use timada_discounts::{Offer, OfferItem, OffersState, offers_id, offers_projection};
 use ulid::Ulid;
 
@@ -152,6 +155,110 @@ pub struct QuotedOffer {
     pub offer_amount_cents: u64,
 }
 
+/// Where a quote reads the catalog from: a product as a cart prices it, what
+/// is on the shelf of a thing, and the shop's delivery time.
+///
+/// Two sources exist. [`StoreCatalog`] reads the products' own streams, so
+/// what it says is what a payment asked for now would charge: the payment
+/// saga prices with it. A read model that holds the same (the catalog's
+/// `catalog_products`, `catalog_variants` and `catalog_stock` tables, a
+/// moment behind the store) prices the cart a shopper is shown, at no cost
+/// to the store; a price that moved in between is caught by the payment,
+/// which refuses what the shopper did not see (`price_changed`), and stock
+/// that ran out by its exact check against the stock's stream.
+pub trait QuoteSource: Sync {
+    /// The product, or `None` for one the shop has not.
+    fn sellable(
+        &self,
+        product_id: &str,
+    ) -> impl Future<Output = anyhow::Result<Option<Sellable>>> + Send;
+
+    /// What the checkout of `cart_id` may take of a thing: `None` for one
+    /// that is not counted.
+    fn available(
+        &self,
+        cart_id: &str,
+        product_id: &str,
+        variant_id: Option<&str>,
+    ) -> impl Future<Output = anyhow::Result<Option<u32>>> + Send;
+
+    /// The shop's delivery time for a product that gives none.
+    fn default_delivery_days(
+        &self,
+    ) -> impl Future<Output = anyhow::Result<Option<DeliveryDays>>> + Send;
+}
+
+/// The catalog as the store has it now, read through the orders gateway.
+pub struct StoreCatalog<'a, E: Executor>(pub &'a super::Command<E>);
+
+impl<E: Executor> QuoteSource for StoreCatalog<'_, E> {
+    async fn sellable(&self, product_id: &str) -> anyhow::Result<Option<Sellable>> {
+        Ok(self
+            .0
+            .load_product(product_id)
+            .await?
+            .map(|product| Sellable::of(&product)))
+    }
+
+    async fn available(
+        &self,
+        cart_id: &str,
+        product_id: &str,
+        variant_id: Option<&str>,
+    ) -> anyhow::Result<Option<u32>> {
+        let Some(stock) =
+            timada_catalog::load_stock(&self.0.executor, &self.0.tenant, product_id, variant_id)
+                .await?
+        else {
+            return Ok(None);
+        };
+        Ok(stock.available_for(Some(cart_id), timada_discounts::unix_now()))
+    }
+
+    async fn default_delivery_days(&self) -> anyhow::Result<Option<DeliveryDays>> {
+        self.0.load_default_delivery_days().await
+    }
+}
+
+/// Whether a shopper can buy `item` of `product` as asked: published,
+/// priced, and a variant on sale named exactly when it sells variants. The
+/// one set of rules for a cart's writes, the quote a shopper is shown and
+/// the price a payment is asked at.
+pub fn require_sellable(product: Option<&Sellable>, item: &CartItem) -> Result<(), OrderError> {
+    let unavailable = || OrderError::Unavailable {
+        product_id: item.product_id.clone(),
+    };
+    let product = product.ok_or_else(unavailable)?;
+    if !product.published || !product.is_priced() {
+        return Err(unavailable());
+    }
+    match (&item.variant_id, product.has_variants()) {
+        (None, false) => Ok(()),
+        (None, true) => Err(OrderError::VariantRequired),
+        (Some(_), false) => Err(OrderError::VariantNotFound),
+        (Some(variant_id), true) => product
+            .variant(variant_id)
+            .map(|_| ())
+            .ok_or(OrderError::VariantNotFound),
+    }
+}
+
+/// `OutOfStock` when the cart wants more of a thing than `available` says
+/// is left of it; `None` is a thing that is not counted.
+pub fn require_in_stock(
+    product_id: &str,
+    available: Option<u32>,
+    quantity: u32,
+) -> Result<(), OrderError> {
+    match available {
+        Some(available) if available < quantity => Err(OrderError::OutOfStock {
+            product_id: product_id.to_owned(),
+            available,
+        }),
+        _ => Ok(()),
+    }
+}
+
 impl<E: Executor> super::Command<E> {
     /// Prices a cart from the catalog as it stands now, reading every product
     /// from the store (never from a replica), so what it says is what a
@@ -161,12 +268,24 @@ impl<E: Executor> super::Command<E> {
         self.quote(&cart).await
     }
 
+    /// The exact quote: the catalog as the store has it now.
+    pub(crate) async fn quote(&self, cart: &CartState) -> Result<Quote, OrderError> {
+        self.quote_from(cart, &StoreCatalog(self)).await
+    }
+
     /// Prices the cart's lines at full price, then lets each live offer
     /// price one unit of its item, when the rest of the cart meets its
     /// conditions: that unit becomes a line of its own, so the order, its
     /// invoice and its mail say what it cost. The discount code comes off
-    /// what that adds up to.
-    pub(crate) async fn quote(&self, cart: &CartState) -> Result<Quote, OrderError> {
+    /// what that adds up to. The products come from `catalog`; the offers
+    /// and the code's discount come from their own streams whatever the
+    /// source, one small aggregate per shop and per code, which the discount
+    /// read model (a listing) holds no window or cap of.
+    pub async fn quote_from(
+        &self,
+        cart: &CartState,
+        catalog: &impl QuoteSource,
+    ) -> Result<Quote, OrderError> {
         let mut quote = Quote::default();
         let mut priced: Vec<OrderLine> = Vec::new();
         // Read once, the first time a product gives no time of its own.
@@ -177,8 +296,9 @@ impl<E: Executor> super::Command<E> {
                 variant_id: line.variant_id.clone(),
                 quantity: line.quantity,
             };
-            let product = match self.require_sellable(&item).await {
-                Ok(product) => product,
+            let product = catalog.sellable(&line.product_id).await?;
+            let product = match require_sellable(product.as_ref(), &item) {
+                Ok(()) => product.expect("a sellable product is some"),
                 Err(
                     OrderError::Unavailable { .. }
                     | OrderError::VariantRequired
@@ -189,15 +309,10 @@ impl<E: Executor> super::Command<E> {
                 }
                 Err(err) => return Err(err),
             };
-            match self
-                .require_in_stock(
-                    &cart.id,
-                    &line.product_id,
-                    line.variant_id.as_deref(),
-                    line.quantity,
-                )
-                .await
-            {
+            let available = catalog
+                .available(&cart.id, &line.product_id, line.variant_id.as_deref())
+                .await?;
+            match require_in_stock(&line.product_id, available, line.quantity) {
                 Ok(()) => {}
                 Err(OrderError::OutOfStock { .. }) => {
                     quote.unavailable.push(line.clone());
@@ -229,21 +344,21 @@ impl<E: Executor> super::Command<E> {
                 product_id: product.id.clone(),
                 variant_id: line.variant_id.clone(),
                 name: product.name.clone(),
-                variant_label: variant.and_then(|variant| product.variant_label(variant)),
+                variant_label: variant.and_then(|variant| variant.label.clone()),
                 sku: variant.and_then(|variant| variant.sku.clone()),
                 unit_amount_cents: price.amount_cents,
                 quantity: line.quantity,
-                tax_category: product.tax_category().to_owned(),
+                tax_category: product.tax_category.clone(),
                 delivery_days: match product.delivery_days {
                     Some(days) => Some(days),
                     None => match default_days {
                         Some(days) => days,
-                        None => *default_days.insert(self.load_default_delivery_days().await?),
+                        None => *default_days.insert(catalog.default_delivery_days().await?),
                     },
                 },
             });
         }
-        self.price_offers(&mut quote, priced).await?;
+        self.price_offers(&mut quote, priced, catalog).await?;
         quote.total_cents = quote.subtotal_cents;
         if let (Some(code), Some(currency)) = (&cart.discount_code, &quote.currency) {
             match self
@@ -292,6 +407,7 @@ impl<E: Executor> super::Command<E> {
         &self,
         quote: &mut Quote,
         priced: Vec<OrderLine>,
+        catalog: &impl QuoteSource,
     ) -> Result<(), OrderError> {
         let offers = match &quote.currency {
             Some(_) => offers_projection()
@@ -362,8 +478,9 @@ impl<E: Executor> super::Command<E> {
                 variant_id: offer.variant_id.clone(),
                 quantity: 1,
             };
-            let product = match self.require_sellable(&item).await {
-                Ok(product) => product,
+            let product = catalog.sellable(&offer.product_id).await?;
+            let product = match require_sellable(product.as_ref(), &item) {
+                Ok(()) => product.expect("a sellable product is some"),
                 Err(
                     OrderError::Unavailable { .. }
                     | OrderError::VariantRequired
@@ -389,7 +506,7 @@ impl<E: Executor> super::Command<E> {
                 product_id: product.id.clone(),
                 variant_id: offer.variant_id,
                 name: product.name.clone(),
-                variant_label: variant.and_then(|variant| product.variant_label(variant)),
+                variant_label: variant.and_then(|variant| variant.label.clone()),
                 title: offer.title,
                 unit_amount_cents: price.amount_cents,
                 offer_amount_cents: offer.price_cents,

@@ -6,12 +6,13 @@
 //! goes to the dashboard's `/store/carts/*` and `/store/orders/*` endpoints
 //! ([`StoreConfig::api_url`](crate::StoreConfig::api_url)), which answer
 //! for the one cart or order whose id the storefront holds and write what
-//! the shopper does to it. A page still shows a change at once, and a
-//! cart's prices are worked out there from the products as they stand
-//! ([`timada_orders::Command::quote_cart`]), so the total a cart page shows
-//! is exactly what a payment asked for now charges. The local copy only
-//! adds what a page needs to link and illustrate a line (its slug and
-//! picture).
+//! the shopper does to it. A page still shows a change to the cart at once;
+//! its lines are priced there from the catalog's read model, a moment
+//! behind the store ([`timada_orders::Command::quote_from`]), and a payment
+//! is priced again from the products' own streams, so a price that moved in
+//! between is refused as `price_changed` rather than charged unseen. The
+//! local copy only adds what a page needs to link and illustrate a line (its
+//! slug and picture).
 //!
 //! Paying goes through the dashboard, which holds the merchant's payment
 //! provider account: [`start_payment`] asks to pay and waits for the

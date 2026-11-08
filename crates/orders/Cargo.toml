@@ -15,11 +15,11 @@ thiserror.workspace = true
 ulid.workspace = true
 rand.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
-serde_json.workspace = true
 async-trait.workspace = true
 
 # `#[evento::aggregate]` expands to `bitcode::` paths, so the crate must name the

@@ -6,9 +6,10 @@ use evento::turso::migrate::{Migration, Migrations};
 /// The app name under which these migrations are recorded.
 pub const MIGRATION_APP: &str = "catalog";
 
-/// The catalog read models: products with what a search finds them by, the
-/// categories with their counts, which product is in which category, and
-/// the stock of each thing sold.
+/// The catalog read models: products with what a search finds them by and
+/// what a cart is priced with (their combinations, the shop's delivery
+/// time), the categories with their counts, which product is in which
+/// category, and the stock of each thing sold.
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
     &[Migration::up(
@@ -22,6 +23,12 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         // by: the slug and the name lowercased and stripped of accents, under
         // an index cut in runs of three characters so a search matches
         // anywhere in a word; the tenant narrows it to its own products.
+        // `tax_category` and the two `delivery_*_days` (`NULL`: the shop's
+        // default) are what a cart is priced with, with `catalog_variants`:
+        // one row per combination, `on_sale` for those a shopper can buy,
+        // `label` the values as the shop shows them (`Sable / Large`).
+        // `catalog_delivery_default` is the shop's delivery time, one row per
+        // tenant that set one.
         "CREATE TABLE catalog_products (
             tenant_id TEXT NOT NULL,
             id TEXT NOT NULL,
@@ -39,10 +46,31 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             min_amount_cents INTEGER,
             max_amount_cents INTEGER,
             variant_count INTEGER NOT NULL,
+            tax_category TEXT NOT NULL,
+            delivery_min_days INTEGER,
+            delivery_max_days INTEGER,
             stock_state TEXT NOT NULL DEFAULT 'untracked',
             slug_search TEXT NOT NULL,
             name_search TEXT NOT NULL,
             PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE catalog_variants (
+            tenant_id TEXT NOT NULL,
+            product_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            sku TEXT,
+            label TEXT,
+            amount_cents INTEGER NOT NULL,
+            currency TEXT NOT NULL,
+            on_sale INTEGER NOT NULL,
+            PRIMARY KEY (tenant_id, product_id, id)
+        );
+        CREATE TABLE catalog_delivery_default (
+            tenant_id TEXT NOT NULL,
+            min_days INTEGER,
+            max_days INTEGER,
+            PRIMARY KEY (tenant_id)
         );
         CREATE UNIQUE INDEX catalog_products_slug ON catalog_products (tenant_id, slug)
             WHERE status <> 'archived';
@@ -95,6 +123,8 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
 /// store from a peer, so the subscription fills them again.
 pub const TABLES: &[&str] = &[
     "catalog_products",
+    "catalog_variants",
+    "catalog_delivery_default",
     "catalog_categories",
     "catalog_product_categories",
     "catalog_stock",

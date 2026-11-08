@@ -203,3 +203,21 @@ pub mod ae_order {
         Pushed { ae_order_id: String, status: String },
     }
 }
+
+/// Which AliExpress item filled a catalog product: one stream per product,
+/// with the deterministic id [`product_link_id`](crate::product_link_id),
+/// written as the import records its draft. What an order's lines are bought
+/// as, and whether the shopper's money waits for that purchase, is decided
+/// from these streams and the item's own: the `aliexpress_products` read
+/// model shows the same link, a moment later, for the pages alone.
+pub mod product_link {
+    #[evento::aggregate(name = "timada-aliexpress/ProductLink")]
+    pub enum ProductLink {
+        /// The item `link_id` filled the product; the latest stands.
+        Linked {
+            product_id: String,
+            link_id: String,
+            linked_by: String,
+        },
+    }
+}

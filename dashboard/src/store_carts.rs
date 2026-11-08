@@ -25,10 +25,11 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use timada_invoicing::IssuedDocument;
 use timada_orders::wire::{CartAnswer, Refusal, RequestAnswer, Started};
-use timada_orders::{CartItem, Checkout, Command, OrderError, STOREFRONT_ACTOR};
+use timada_orders::{CartItem, CatalogReadModel, Checkout, Command, OrderError, STOREFRONT_ACTOR};
 use topcoat::router::StatusCode;
 
 use crate::cluster::Executor;
+use crate::db::Db;
 
 /// How long a request to pay waits for the payments subscription's answer
 /// before the storefront is told nobody answered.
@@ -83,12 +84,17 @@ pub fn refused(err: OrderError) -> anyhow::Result<Answer> {
 }
 
 /// `GET /store/carts/{cart_id}`: the cart priced as it stands, with the
-/// shop's shipping methods ([`CartAnswer`]), or 404.
-pub async fn cart(orders: &Command<Executor>, cart_id: &str) -> anyhow::Result<Answer> {
+/// shop's shipping methods ([`CartAnswer`]), or 404. The cart is the
+/// shopper's own stream (what they just put in it shows at once); its lines
+/// are priced from the catalog's read model (`db`), a moment behind the
+/// store, which the payment's exact pricing guards: a price that moved in
+/// between is refused as `price_changed`, never charged unseen.
+pub async fn cart(orders: &Command<Executor>, db: &Db, cart_id: &str) -> anyhow::Result<Answer> {
     let Some(cart) = orders.load_cart(cart_id).await? else {
         return Ok(not_found("cart_not_found"));
     };
-    let quote = match orders.quote_cart(cart_id).await {
+    let catalog = CatalogReadModel::new(db, orders.tenant());
+    let quote = match orders.quote_from(&cart, &catalog).await {
         Ok(quote) => quote,
         Err(err) => return refused(err),
     };

@@ -10,9 +10,12 @@
 //! rebuilds a segment for every write that touches them. When what a category
 //! counts has changed, the counts of the tenant's categories are worked out
 //! again in the same transaction, so a page reads them instead of computing
-//! them. A deleted product loses its rows. One subscription follows every tenant's streams: each row carries
-//! the tenant of the event that made it, and the rows live in the store's own
-//! database ([`Db`]).
+//! them. A deleted product loses its rows. The combinations of a product
+//! (`catalog_variants`) and the shop's delivery time
+//! (`catalog_delivery_default`) are kept too: what a cart shown to a shopper
+//! is priced with ([`sellable`](super::sellable)). One subscription follows
+//! every tenant's streams: each row carries the tenant of the event that
+//! made it, and the rows live in the store's own database ([`Db`]).
 
 use evento::{
     Executor,
@@ -23,12 +26,12 @@ use timada_core::db::{
     Connection, Db, Value, execute, fetch_all, fetch_optional, params_from_iter, search_key,
 };
 
-use crate::aggregator::Product;
 use crate::aggregator::category::Category;
 use crate::aggregator::stock::StockItem;
+use crate::aggregator::{DeliveryDefault, Product};
 use crate::command::{
-    CategoryState, ProductState, StockState, StockSummary, category_projection, product_projection,
-    stock_projection,
+    CategoryState, ProductState, StockState, StockSummary, category_projection,
+    delivery_default_projection, product_projection, stock_projection,
 };
 use crate::query::refresh_category_counts;
 
@@ -43,7 +46,40 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(on_product_event())
         .handler(on_category_event())
         .handler(on_stock_event())
+        .handler(on_delivery_default_event())
         .any_routing_key()
+}
+
+#[evento::subscription_all]
+async fn on_delivery_default_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<DeliveryDefault>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(state) = delivery_default_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    if superseded(&event, state.aggregate_version) {
+        return Ok(());
+    }
+    db.execute(
+        "INSERT INTO catalog_delivery_default (tenant_id, min_days, max_days)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT (tenant_id) DO UPDATE SET
+            min_days = excluded.min_days, max_days = excluded.max_days",
+        (
+            event.tenant.as_str(),
+            state.days.map(|days| i64::from(days.min)),
+            state.days.map(|days| i64::from(days.max)),
+        ),
+    )
+    .await?;
+    Ok(())
 }
 
 /// Whether the stream the event belongs to has already moved past it: the
@@ -83,7 +119,8 @@ async fn on_stock_event<E: Executor>(
 }
 
 /// Writes the row of one thing's stock, and the summary of its product when
-/// the product is known.
+/// the product is known. Public for the integration tests, which seed rows
+/// under tenants of their own; only the subscription writes one otherwise.
 pub async fn upsert_stock(
     db: &Db,
     tenant_id: &str,
@@ -173,7 +210,11 @@ async fn on_product_event<E: Executor>(
 /// Drops the rows of a deleted product: its own, its category memberships
 /// and its stock, in one transaction, and works the category counts out
 /// again when it was counted. Nothing to drop is fine: delivery may repeat.
-pub async fn delete_product_rows(db: &Db, tenant_id: &str, product_id: &str) -> anyhow::Result<()> {
+pub(crate) async fn delete_product_rows(
+    db: &Db,
+    tenant_id: &str,
+    product_id: &str,
+) -> anyhow::Result<()> {
     let env = (tenant_id, product_id);
     db.write(&env, |tx, (tenant_id, product_id)| {
         Box::pin(async move {
@@ -187,6 +228,7 @@ pub async fn delete_product_rows(db: &Db, tenant_id: &str, product_id: &str) -> 
             for statement in [
                 "DELETE FROM catalog_product_categories WHERE tenant_id = ?1 AND product_id = ?2",
                 "DELETE FROM catalog_stock WHERE tenant_id = ?1 AND product_id = ?2",
+                "DELETE FROM catalog_variants WHERE tenant_id = ?1 AND product_id = ?2",
                 "DELETE FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
             ] {
                 execute(tx, statement, (*tenant_id, *product_id)).await?;
@@ -220,13 +262,16 @@ async fn on_category_event<E: Executor>(
     upsert_category(&db, &event.tenant, &category).await
 }
 
-/// Writes the row of a product and its category memberships as the write
-/// model sees them, in one transaction: the row, its memberships and the
-/// category counts they change are never half-written. The full-text
+/// Writes the row of a product, its combinations and its category
+/// memberships as the write model sees them, in one transaction: the row,
+/// its memberships and the category counts they change are never
+/// half-written. The full-text
 /// columns (`slug_search`, `name_search`) are left out of the write when
 /// their values are already in the row: a write that names them makes the
 /// index behind them build and commit a segment, whatever the values, and
 /// most events of a product (a picture, a variant, a price) change neither.
+/// Public for the integration tests and the catch-up probe, which seed rows;
+/// only the subscription writes one otherwise.
 pub async fn upsert_product(
     db: &Db,
     tenant_id: &str,
@@ -252,7 +297,7 @@ pub async fn upsert_product(
             .await?;
             let slug_search = search_key(&product.slug);
             let name_search = search_key(&product.name);
-            // Eighteen values: more than a tuple of parameters holds. The
+            // Twenty-one values: more than a tuple of parameters holds. The
             // same numbering serves the insert and the update, the two
             // search keys last so the update can leave them off.
             let mut values = vec![
@@ -275,6 +320,9 @@ pub async fn upsert_product(
                 Value::from(product.price_range().map(|(min, _, _)| min as i64)),
                 Value::from(product.price_range().map(|(_, max, _)| max as i64)),
                 Value::from(product.variants.len() as i64),
+                Value::from(product.tax_category()),
+                Value::from(product.delivery_days.map(|days| i64::from(days.min))),
+                Value::from(product.delivery_days.map(|days| i64::from(days.max))),
             ];
             match &was {
                 None => {
@@ -285,9 +333,10 @@ pub async fn upsert_product(
                         "INSERT INTO catalog_products (tenant_id, id, slug, name, description,
                             amount_cents, currency, status, created_by, created_at, updated_at,
                             thumbnail, image_count, min_amount_cents, max_amount_cents,
-                            variant_count, slug_search, name_search)
+                            variant_count, tax_category, delivery_min_days, delivery_max_days,
+                            slug_search, name_search)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                            ?16, ?17, ?18)",
+                            ?16, ?17, ?18, ?19, ?20, ?21)",
                         params_from_iter(values),
                     )
                     .await?;
@@ -335,6 +384,34 @@ pub async fn upsert_product(
             if was_counted.unwrap_or(false) != is_counted || (is_counted && !categories_as_before) {
                 refresh_category_counts(tx, tenant_id).await?;
             }
+            // The combinations, written whole: few per product, and the
+            // price, the sale or the label of any may have moved.
+            execute(
+                tx,
+                "DELETE FROM catalog_variants WHERE tenant_id = ?1 AND product_id = ?2",
+                (*tenant_id, product.id.as_str()),
+            )
+            .await?;
+            for (position, variant) in product.variants.iter().enumerate() {
+                execute(
+                    tx,
+                    "INSERT INTO catalog_variants (tenant_id, product_id, id, position, sku,
+                        label, amount_cents, currency, on_sale)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    (
+                        *tenant_id,
+                        product.id.as_str(),
+                        variant.id.as_str(),
+                        position as i64,
+                        variant.sku.as_deref(),
+                        product.variant_label(variant),
+                        variant.price.amount_cents as i64,
+                        variant.price.currency.as_str(),
+                        product.sells(variant),
+                    ),
+                )
+                .await?;
+            }
             // A variant added or removed changes what the summary counts.
             refresh_stock_state(tx, tenant_id, product).await?;
             Ok(())
@@ -349,7 +426,8 @@ pub async fn upsert_product(
 const PRODUCT_UPDATE: &str = "UPDATE catalog_products SET
     slug = ?3, name = ?4, description = ?5, amount_cents = ?6, currency = ?7, status = ?8,
     updated_at = ?11, thumbnail = ?12, image_count = ?13, min_amount_cents = ?14,
-    max_amount_cents = ?15, variant_count = ?16
+    max_amount_cents = ?15, variant_count = ?16, tax_category = ?17, delivery_min_days = ?18,
+    delivery_max_days = ?19
  WHERE tenant_id = ?1 AND id = ?2";
 
 /// [`PRODUCT_UPDATE`] with the two full-text columns too, for a renamed
@@ -357,12 +435,13 @@ const PRODUCT_UPDATE: &str = "UPDATE catalog_products SET
 const PRODUCT_UPDATE_SEARCHED: &str = "UPDATE catalog_products SET
     slug = ?3, name = ?4, description = ?5, amount_cents = ?6, currency = ?7, status = ?8,
     updated_at = ?11, thumbnail = ?12, image_count = ?13, min_amount_cents = ?14,
-    max_amount_cents = ?15, variant_count = ?16, slug_search = ?17, name_search = ?18
+    max_amount_cents = ?15, variant_count = ?16, tax_category = ?17, delivery_min_days = ?18,
+    delivery_max_days = ?19, slug_search = ?20, name_search = ?21
  WHERE tenant_id = ?1 AND id = ?2";
 
 /// Writes the row of a category as the write model sees it, and works the
 /// counts out again when it is new, moved or archived.
-pub async fn upsert_category(
+pub(crate) async fn upsert_category(
     db: &Db,
     tenant_id: &str,
     category: &CategoryState,

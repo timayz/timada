@@ -2,8 +2,98 @@
 
 use timada_core::db::{Db, FromRow};
 
-use crate::command::OrderStatus;
+use crate::command::{OrderState, OrderStatus, OutsideSettlement};
 use timada_catalog::format_money;
+
+/// An order as its row keeps it: the whole [`OrderState`], with the facts
+/// that are the shop's alone and left out of what the store API answers a
+/// storefront (`#[serde(skip)]` on the state) carried beside it, so the
+/// back-office page reads the order as the write model has it.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct OrderRecord {
+    #[serde(flatten)]
+    pub order: OrderState,
+    pub settled_outside: Option<OutsideSettlement>,
+    pub hold_reminded_at: Option<u64>,
+    pub supplier_uncertain: bool,
+    pub supplier_uncertain_at: Option<u64>,
+    pub supplier_attempt_open: bool,
+    pub fulfilled_by: Option<String>,
+}
+
+impl OrderRecord {
+    pub fn of(order: &OrderState) -> Self {
+        Self {
+            order: order.clone(),
+            settled_outside: order.settled_outside.clone(),
+            hold_reminded_at: order.hold_reminded_at,
+            supplier_uncertain: order.supplier_uncertain,
+            supplier_uncertain_at: order.supplier_uncertain_at,
+            supplier_attempt_open: order.supplier_attempt_open,
+            fulfilled_by: order.fulfilled_by.clone(),
+        }
+    }
+
+    pub fn to_json(&self) -> anyhow::Result<String> {
+        Ok(serde_json::to_string(self)?)
+    }
+
+    /// The order whole again.
+    pub fn into_state(self) -> OrderState {
+        OrderState {
+            settled_outside: self.settled_outside,
+            hold_reminded_at: self.hold_reminded_at,
+            supplier_uncertain: self.supplier_uncertain,
+            supplier_uncertain_at: self.supplier_uncertain_at,
+            supplier_attempt_open: self.supplier_attempt_open,
+            fulfilled_by: self.fulfilled_by,
+            ..self.order
+        }
+    }
+}
+
+/// An order as the read model has it, whole, or `None` for one the tenant
+/// has not. A moment behind its stream: a page that follows an action on
+/// the order shows the action once the row caught up.
+pub async fn order_state(db: &Db, tenant_id: &str, id: &str) -> anyhow::Result<Option<OrderState>> {
+    let state: Option<(String,)> = db
+        .fetch_optional(
+            "SELECT state FROM orders_orders WHERE tenant_id = ?1 AND id = ?2",
+            (tenant_id, id),
+        )
+        .await?;
+    state
+        .map(|(state,)| {
+            serde_json::from_str::<OrderRecord>(&state)
+                .map(OrderRecord::into_state)
+                .map_err(anyhow::Error::from)
+        })
+        .transpose()
+}
+
+/// One row of `orders_order_mails`: a mail the shopper was sent about an
+/// order.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+pub struct OrderMailRow {
+    /// The mail's kind key (`order_confirmation`).
+    pub mail: String,
+    /// Unix seconds.
+    pub mailed_at: i64,
+}
+
+/// The mails the shopper was sent about an order, by kind.
+pub async fn order_mails(
+    db: &Db,
+    tenant_id: &str,
+    order_id: &str,
+) -> anyhow::Result<Vec<OrderMailRow>> {
+    db.fetch_all(
+        "SELECT mail, mailed_at FROM orders_order_mails
+         WHERE tenant_id = ?1 AND order_id = ?2 ORDER BY mailed_at, mail",
+        (tenant_id, order_id),
+    )
+    .await
+}
 
 /// One row of `orders_orders`.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]

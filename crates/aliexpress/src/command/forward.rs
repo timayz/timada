@@ -11,7 +11,7 @@ use crate::error::AliexpressError;
 use crate::value_object::{FORWARD_STALL_SECS, forward_id};
 
 /// Where placing an order on AliExpress stands.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ForwardStatus {
     /// Asked for, not taken on yet.
     #[default]
@@ -40,7 +40,7 @@ impl ForwardStatus {
 }
 
 /// One AliExpress order of a forward, as last read.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AeOrderState {
     pub id: String,
     /// Empty until read.
@@ -51,10 +51,11 @@ pub struct AeOrderState {
     pub closed: bool,
 }
 
-/// A shop's order on AliExpress.
+/// A shop's order on AliExpress. Serialized whole into its read-model row,
+/// for the order's page.
 #[evento::projection(id = id, name = "timada-aliexpress/ForwardState")]
 #[evento::snapshot(none)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ForwardState {
     pub id: String,
     pub order_id: String,

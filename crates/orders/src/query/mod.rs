@@ -6,11 +6,13 @@
 //! the tenant id).
 
 mod carts;
+mod catalog;
 mod migrations;
 mod orders;
 mod read_model;
 
 pub use carts::*;
+pub use catalog::*;
 pub use migrations::*;
 pub use orders::*;
 pub use read_model::*;

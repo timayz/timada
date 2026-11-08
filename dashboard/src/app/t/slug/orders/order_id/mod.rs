@@ -1,8 +1,13 @@
-//! `/t/{slug}/orders/{order_id}`: one order, read from its own stream (so a
-//! change shows at once), with where its money stands and what the merchant
-//! does next: take the payment, mark it fulfilled, cancel it, or say the
-//! money came in outside timada once the hold lapsed, and how its
-//! AliExpress items were placed there.
+//! `/t/{slug}/orders/{order_id}`: one order, with where its money stands and
+//! what the merchant does next: take the payment, mark it fulfilled, cancel
+//! it, or say the money came in outside timada once the hold lapsed, and how
+//! its AliExpress items were placed there.
+//!
+//! The page reads the read models (the order whole, its cart's refused
+//! returns, its mails, its review request, its AliExpress forward), which
+//! trail an action by a moment: a browser test that acts on the order
+//! reload-polls what it asserts. The actions themselves load the order's
+//! own stream, as every command does.
 
 pub mod aliexpress;
 pub mod cancel;
@@ -13,13 +18,15 @@ pub mod settle_outside;
 
 use std::sync::Arc;
 
+use timada_aliexpress::forward_of_order;
 use timada_aliexpress::{ForwardState, ForwardStatus};
 use timada_catalog::format_money;
 use timada_invoicing::documents_of_order;
 use timada_orders::{
     MAX_NOTE_LEN, MAX_REASON_LEN, MAX_TRACKING_LEN, OrderError, OrderState, OrderStatus,
-    SupplierOrder,
+    SupplierOrder, cart_refused_returns, order_mails, order_state,
 };
+use timada_reviews::review_request_mailed_at;
 use timada_tenancy::{
     PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_ORDERS_MANAGE, PERMISSION_ORDERS_READ, ShopMailKind,
 };
@@ -71,11 +78,12 @@ pub fn order_url(
         .resolve(cx)
 }
 
-/// The order named in the URL, or 404.
-pub(crate) async fn require_order(cx: &Cx, access: &TenantAccess) -> Result<OrderState> {
+/// The order named in the URL, as the read model has it, or 404: what the
+/// page shows. What an action decides from is the order's own stream, which
+/// the command loads ([`act`]).
+async fn shown_order(cx: &Cx, access: &TenantAccess) -> Result<OrderState> {
     let id = path_param::<OrderId>(cx);
-    orders(access)?
-        .load_order(id)
+    order_state(app_context::<Db>(cx), access.tenant_id(), id)
         .await
         .map_err(topcoat::Error::from_anyhow)?
         .ok_or_else(|| not_found().into())
@@ -132,26 +140,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let can_manage = access.can(cx, PERMISSION_ORDERS_MANAGE).await?;
     let query = query_params::<OrderQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
-    let order = require_order(cx, &access).await?;
+    let db = app_context::<Db>(cx);
+    let order = shown_order(cx, &access).await?;
     // Another payment of its cart that Stripe would not give back, for
     // good: the merchant settles it in Stripe.
-    let not_given_back: Vec<(String, String)> = orders(&access)?
-        .load_cart(&order.cart_id)
+    let not_given_back = cart_refused_returns(db, access.tenant_id(), &order.cart_id)
         .await
-        .map_err(topcoat::Error::from_anyhow)?
-        .map(|cart| {
-            cart.refused_returns()
-                .into_iter()
-                .map(|(payment_id, reason)| (payment_id.to_owned(), reason.to_owned()))
-                .collect()
-        })
-        .unwrap_or_default();
+        .map_err(topcoat::Error::from_anyhow)?;
     // The invoicing read model: issued a moment after the payment (or the
     // refund), they show once the read model has them (a moment later).
-    let documents = documents_of_order(app_context::<Db>(cx), access.tenant_id(), &order.id)
+    let documents = documents_of_order(db, access.tenant_id(), &order.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     // The mails the shopper was sent about it, by kind.
+    let sent = order_mails(db, access.tenant_id(), &order.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let mut mails = Vec::new();
     for (kind, term, shown) in [
         (ShopMailKind::OrderConfirmation, "Confirmation", true),
@@ -169,20 +173,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         if !shown {
             continue;
         }
-        let mailed = orders(&access)?
-            .load_order_mail(&order.id, kind.key())
-            .await
-            .map_err(topcoat::Error::from_anyhow)?
-            .map(|mailed| mailed.mailed_at);
+        let mailed = sent
+            .iter()
+            .find(|mail| mail.mail == kind.key())
+            .map(|mail| mail.mailed_at.max(0) as u64);
         mails.push((kind.key(), term, mailed));
     }
-    let review_request = crate::app::t::slug::reviews::reviews(&access)?
-        .load_review_request(&order.id)
+    let review_request = review_request_mailed_at(db, access.tenant_id(), &order.id)
         .await
-        .map_err(topcoat::Error::from_anyhow)?;
+        .map_err(topcoat::Error::from_anyhow)?
+        .map(|at| at.max(0) as u64);
     let store = access.executor()?.clone();
-    let forward = timada_aliexpress::Command::new(store.clone(), access.tenant_id())
-        .load_forward(&order.id)
+    let forward = forward_of_order(db, access.tenant_id(), &order.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let connected = app_context::<Arc<crate::aliexpress::Aliexpress>>(cx)
@@ -190,17 +192,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     // Whether any line is an AliExpress item, for a shop connected to it.
+    // Resolved as the forwarder resolves them (the product's index stream,
+    // then the item's, two reads per distinct product): the read model has
+    // the link but not the combinations each variant was imported from, and
+    // the card offers to place only what the forwarder would buy.
     let from_aliexpress = connected
         && !timada_aliexpress::forward_items(
             &order.lines,
-            &crate::aliexpress::forward::order_links(
-                &store,
-                app_context::<Db>(cx),
-                &access.tenant.id,
-                &order.lines,
-            )
-            .await
-            .map_err(topcoat::Error::from_anyhow)?,
+            &crate::aliexpress::forward::order_links(&store, &access.tenant.id, &order.lines)
+                .await
+                .map_err(topcoat::Error::from_anyhow)?,
         )
         .items
         .is_empty();
@@ -430,8 +431,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     fact(
                         term: "Review request",
                         attrs: attributes! { data-order-review-request=(if review_request.is_some() { "mailed" } else { "none" }) },
-                        if let Some(mailed) = &review_request {
-                            "Mailed " <time datetime=(mailed.mailed_at)>(format_time(mailed.mailed_at))</time>
+                        if let Some(mailed_at) = review_request {
+                            "Mailed " <time datetime=(mailed_at)>(format_time(mailed_at))</time>
                         } else {
                             "Not mailed"
                         }

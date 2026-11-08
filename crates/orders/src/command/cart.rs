@@ -1,5 +1,5 @@
 use evento::{Executor, ProjectionAggregate};
-use timada_catalog::{ProductState, product_projection};
+use timada_catalog::{ProductState, Sellable, product_projection};
 use timada_discounts::{
     DISCOUNT_UNKNOWN, DiscountState, discount_code_id, discount_code_projection,
     discount_projection, normalize_code,
@@ -13,6 +13,7 @@ use crate::error::OrderError;
 use crate::value_object::{MAX_CART_LINES, MAX_LINE_QUANTITY};
 
 use super::CartState;
+use super::checkout::{QuoteSource, StoreCatalog, require_in_stock, require_sellable};
 
 /// A product, or one variant of it, and how many.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -284,7 +285,7 @@ impl<E: Executor> super::Command<E> {
 
     /// `OutOfStock` when the cart wants more of a thing than is left of it:
     /// what other checkouts hold counts, the cart's own hold does not. An
-    /// untracked thing has no limit.
+    /// untracked thing has no limit. Read from the stock's own stream.
     pub(crate) async fn require_in_stock(
         &self,
         cart_id: &str,
@@ -292,47 +293,20 @@ impl<E: Executor> super::Command<E> {
         variant_id: Option<&str>,
         quantity: u32,
     ) -> Result<(), OrderError> {
-        let Some(stock) =
-            timada_catalog::load_stock(&self.executor, &self.tenant, product_id, variant_id)
-                .await?
-        else {
-            return Ok(());
-        };
-        match stock.available_for(Some(cart_id), timada_discounts::unix_now()) {
-            Some(available) if available < quantity => Err(OrderError::OutOfStock {
-                product_id: product_id.to_owned(),
-                available,
-            }),
-            _ => Ok(()),
-        }
+        let available = StoreCatalog(self)
+            .available(cart_id, product_id, variant_id)
+            .await?;
+        require_in_stock(product_id, available, quantity)
     }
 
-    /// The product of an item, when a shopper can buy it as asked: published,
-    /// priced, and a variant on sale named exactly when it sells variants.
+    /// The product of an item, when a shopper can buy it as asked
+    /// ([`require_sellable`]), read from its own stream.
     pub(crate) async fn require_sellable(
         &self,
         item: &CartItem,
     ) -> Result<ProductState, OrderError> {
-        let unavailable = || OrderError::Unavailable {
-            product_id: item.product_id.clone(),
-        };
-        let product = self
-            .load_product(&item.product_id)
-            .await?
-            .ok_or_else(unavailable)?;
-        if !product.is_published() || !product.is_priced() {
-            return Err(unavailable());
-        }
-        match (&item.variant_id, product.variants.is_empty()) {
-            (None, true) => {}
-            (None, false) => return Err(OrderError::VariantRequired),
-            (Some(_), true) => return Err(OrderError::VariantNotFound),
-            (Some(variant_id), false) => {
-                product
-                    .sold_variant(variant_id)
-                    .ok_or(OrderError::VariantNotFound)?;
-            }
-        }
-        Ok(product)
+        let product = self.load_product(&item.product_id).await?;
+        require_sellable(product.as_ref().map(Sellable::of).as_ref(), item)?;
+        Ok(product.expect("a sellable product is some"))
     }
 }

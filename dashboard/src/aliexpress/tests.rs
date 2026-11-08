@@ -496,12 +496,23 @@ impl Shop {
         AliexpressGoods::new(self.aliexpress.clone(), self.db.clone(), self.store.clone())
     }
 
-    /// Sets when the item was last read, in this node's read model.
+    /// Sets when the item was last read, as this node knows it: the read
+    /// its stream recorded (the import) and the node's own record of it.
     async fn read_at(&self, at: u64) {
         self.db
             .execute(
                 "UPDATE aliexpress_products SET last_synced_at = ?1, last_tried_at = ?1",
                 (at as i64,),
+            )
+            .await
+            .unwrap();
+        self.db
+            .execute(
+                "INSERT INTO aliexpress_read_times (tenant_id, id, tried_at, synced_at)
+                 VALUES (?1, ?2, ?3, ?3)
+                 ON CONFLICT (tenant_id, id) DO UPDATE SET
+                    tried_at = excluded.tried_at, synced_at = excluded.synced_at",
+                (self.tenant.id.as_str(), self.link_id.as_str(), at as i64),
             )
             .await
             .unwrap();
@@ -561,13 +572,7 @@ fn share_without(id: &str) -> Share {
 async fn a_read_that_finds_nothing_new_writes_nothing_and_notes_when_it_was() {
     let shop = Shop::new().await;
     let version = shop.version().await;
-    shop.db
-        .execute(
-            "UPDATE aliexpress_products SET last_synced_at = 100, last_tried_at = 100",
-            (),
-        )
-        .await
-        .unwrap();
+    shop.read_at(100).await;
     let before = crate::auth::now() as i64;
 
     let result = shop.sync(SyncMode::Routine).await;

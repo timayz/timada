@@ -43,11 +43,19 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 placed_at INTEGER,
                 updated_at INTEGER NOT NULL,
                 shard INTEGER NOT NULL,
-                last_read_at INTEGER NOT NULL,
                 settling INTEGER NOT NULL,
+                state TEXT NOT NULL,
                 PRIMARY KEY (tenant_id, id)
             );
-        CREATE INDEX aliexpress_forwards_due ON aliexpress_forwards (status, last_read_at);
+        CREATE INDEX aliexpress_forwards_due ON aliexpress_forwards (status, updated_at);
+        CREATE INDEX aliexpress_forwards_order ON aliexpress_forwards (tenant_id, order_id);
+        CREATE TABLE aliexpress_read_times (
+                tenant_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                tried_at INTEGER,
+                synced_at INTEGER,
+                PRIMARY KEY (tenant_id, id)
+            );
         CREATE TABLE aliexpress_unrecorded (
                 tenant_id TEXT NOT NULL,
                 forward_id TEXT NOT NULL,
@@ -66,4 +74,6 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
 /// copying its store from a peer, so the subscriptions fill them again.
 /// `aliexpress_unrecorded` is not one: it is this node's own record of what
 /// AliExpress took and the store would not take yet, which no peer holds.
+/// Nor is `aliexpress_read_times`, this node's own record of when it last
+/// read each item and each open order on AliExpress ([`super::read_times`]).
 pub const TABLES: &[&str] = &["aliexpress_products", "aliexpress_forwards"];
