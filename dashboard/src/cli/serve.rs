@@ -144,9 +144,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     if catch_up_first {
         tracing::info!("the store was copied from a peer: the read models catch up before serving");
     }
-    for (name, make) in SUBSCRIPTIONS {
+    for (name, make) in planned(&config.server) {
         if catch_up_first {
-            workers::catch_up(name, make(&deps), &executor).await?;
+            workers::catch_up(&name, make(&deps), &executor).await?;
         }
         let deps = deps.clone();
         all_workers.push(workers::start(name, move || make(&deps), &executor).await?);
@@ -311,6 +311,51 @@ pub struct Deps {
 /// Builds one subscription from the parts.
 type Make = fn(&Deps) -> SubscriptionBuilder<Executor>;
 
+/// A worker built from a subscription: the one the table lists, or its copy
+/// for a region this node also serves, filtered on that region's key.
+type Planned = (
+    String,
+    Box<dyn Fn(&Deps) -> SubscriptionBuilder<Executor> + Send + Sync>,
+);
+
+/// What a subscription follows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kind {
+    /// Every region's events: a read model, or an effect each node has for
+    /// itself (its store connections, its copies of pictures and keys). The
+    /// builder says `.any_routing_key()`.
+    Everywhere,
+    /// The node's own region (the executor's default routing key, which the
+    /// builder leaves alone), and each region of `server.also_serves` as a
+    /// worker of its own: a saga, whose work a region's nodes do for it.
+    Sharded,
+}
+
+/// The workers to start for `server`: every subscription once, and the
+/// sharded ones again for each region this node also serves, named after it
+/// (`payments for us-east-3`). Without a region, one worker each, following
+/// the events written without a key, as before.
+fn planned(server: &crate::config::ServerConfig) -> Vec<Planned> {
+    debug_assert!(
+        server.also_serves.is_empty() || server.region.is_some(),
+        "validated by Config::load"
+    );
+    let mut planned: Vec<Planned> = Vec::new();
+    for (name, kind, make) in SUBSCRIPTIONS {
+        planned.push((name.to_string(), Box::new(make)));
+        if *kind == Kind::Sharded {
+            for region in &server.also_serves {
+                let region = region.clone();
+                planned.push((
+                    format!("{name} for {region}"),
+                    Box::new(move |deps: &Deps| make(deps).routing_key(region.clone())),
+                ));
+            }
+        }
+    }
+    planned
+}
+
 /// Every subscription this node runs on the store, each following every
 /// tenant's streams: the platform's read models (the users, the tenant
 /// catalog, the members' history), the tenants' read models fed into the
@@ -321,75 +366,76 @@ type Make = fn(&Deps) -> SubscriptionBuilder<Executor>;
 /// catalog, the discounts and the pages give back once their holder let go
 /// of them, the order confirmations it mails and the notices of contact
 /// messages it mails the members. Every bounded context registers its
-/// subscription here, under the name the cluster page shows.
-const SUBSCRIPTIONS: &[(&str, Make)] = &[
-    ("identity", |d| {
+/// subscription here, under the name the cluster page shows, saying whether
+/// it follows every region or the node's own ([`Kind`]).
+const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
+    ("identity", Kind::Everywhere, |d| {
         timada_identity::read_model_subscription(d.db.clone())
     }),
     // Not a read model, but the same lifecycle: it frees the index entries
     // of the sign-in identities a user let go of, should the command not
     // have.
-    ("identity indexes", |_| {
+    ("identity indexes", Kind::Sharded, |_| {
         timada_identity::index_release_subscription()
     }),
-    ("tenancy", |d| {
+    ("tenancy", Kind::Everywhere, |d| {
         timada_tenancy::read_model_subscription(d.db.clone())
     }),
-    ("members history", |d| {
+    ("members history", Kind::Everywhere, |d| {
         timada_tenancy::member_audit_subscription(d.db.clone())
     }),
-    ("AliExpress access", |d| {
+    ("AliExpress access", Kind::Everywhere, |d| {
         timada_tenancy::aliexpress_accounts_subscription(d.db.clone())
     }),
     // Not a read model, but the same lifecycle: it copies how each tenant's
     // shoppers pay into the tenant's streams, for the storefronts' payment
     // form.
-    ("payment setup", |d| {
+    ("payment setup", Kind::Sharded, |d| {
         crate::payments::setup_subscription(d.payments.clone(), d.store.clone())
     }),
     // Nor this: it grants the seat an accepted invitation promised, should
     // the command not have.
-    ("invitation grants", |d| {
+    ("invitation grants", Kind::Sharded, |d| {
         timada_tenancy::invitation_grants_subscription(d.store.clone())
     }),
     // Nor this: it fetches the shops' mail logos this node lacks.
-    ("mail logos", |d| {
+    ("mail logos", Kind::Everywhere, |d| {
         crate::media::logo_subscription(d.media.clone())
     }),
-    ("catalog", |d| {
+    ("catalog", Kind::Everywhere, |d| {
         timada_catalog::read_model_subscription(d.db.clone())
     }),
-    ("orders", |d| {
+    ("orders", Kind::Everywhere, |d| {
         timada_orders::read_model_subscription(d.db.clone())
     }),
-    ("shoppers", |d| {
+    ("shoppers", Kind::Everywhere, |d| {
         timada_shoppers::read_model_subscription(d.db.clone(), d.keys.ring())
     }),
-    ("discounts", |d| {
+    ("discounts", Kind::Everywhere, |d| {
         timada_discounts::read_model_subscription(d.db.clone())
     }),
-    ("reviews", |d| {
+    ("reviews", Kind::Everywhere, |d| {
         timada_reviews::read_model_subscription(d.db.clone())
     }),
-    ("support", |d| {
+    ("support", Kind::Everywhere, |d| {
         timada_support::read_model_subscription(d.db.clone(), d.keys.ring())
     }),
-    ("newsletter", |d| {
+    ("newsletter", Kind::Everywhere, |d| {
         timada_newsletter::read_model_subscription(d.db.clone(), d.keys.ring())
     }),
-    ("automations", |d| {
+    ("automations", Kind::Everywhere, |d| {
         timada_automations::read_model_subscription(d.db.clone())
     }),
-    ("pages", |d| {
+    ("pages", Kind::Everywhere, |d| {
         timada_pages::read_model_subscription(d.db.clone())
     }),
-    ("invoicing", |d| {
+    ("invoicing", Kind::Everywhere, |d| {
         timada_invoicing::read_model_subscription(d.db.clone())
     }),
-    ("AliExpress", |d| {
+    ("AliExpress", Kind::Everywhere, |d| {
         timada_aliexpress::read_model_subscription(d.db.clone())
     }),
-    ("AliExpress orders", |d| {
+    ("AliExpress orders", Kind::Sharded, |d| {
         crate::aliexpress::forward::subscription(
             d.aliexpress.clone(),
             d.db.clone(),
@@ -397,43 +443,45 @@ const SUBSCRIPTIONS: &[(&str, Make)] = &[
             d.store.clone(),
         )
     }),
-    ("AliExpress products", |d| {
+    ("AliExpress products", Kind::Sharded, |d| {
         crate::aliexpress::subscription::subscription(
             d.aliexpress.clone(),
             d.media.clone(),
             d.store.clone(),
         )
     }),
-    ("AliExpress reads", |d| {
+    ("AliExpress reads", Kind::Sharded, |d| {
         crate::aliexpress::subscription::reads_subscription(
             d.aliexpress.clone(),
             d.db.clone(),
             d.store.clone(),
         )
     }),
-    ("AliExpress pushes", |d| {
+    ("AliExpress pushes", Kind::Sharded, |d| {
         crate::aliexpress::webhook::pushes_subscription(
             d.aliexpress.clone(),
             d.db.clone(),
             d.store.clone(),
         )
     }),
-    ("pictures", |d| crate::media::subscription(d.media.clone())),
-    ("shopper keys", |d| {
+    ("pictures", Kind::Everywhere, |d| {
+        crate::media::subscription(d.media.clone())
+    }),
+    ("shopper keys", Kind::Everywhere, |d| {
         crate::shopper_keys::subscription(d.keys.clone())
     }),
     // Nor this: it erases the newsletter subscription a deleted account
     // names.
-    ("shopper erasure", |d| {
+    ("shopper erasure", Kind::Sharded, |d| {
         crate::shopper_erasure::subscription(d.store.clone(), d.keys.ring())
     }),
-    ("message keys", |d| {
+    ("message keys", Kind::Everywhere, |d| {
         crate::message_keys::subscription(d.keys.clone())
     }),
-    ("newsletter keys", |d| {
+    ("newsletter keys", Kind::Everywhere, |d| {
         crate::newsletter_keys::subscription(d.keys.clone())
     }),
-    ("payments", |d| {
+    ("payments", Kind::Sharded, |d| {
         crate::payments::subscription(crate::payments::Checkouts::new(
             d.payments.clone(),
             d.euro_rates.clone(),
@@ -446,25 +494,25 @@ const SUBSCRIPTIONS: &[(&str, Make)] = &[
             d.node.clone(),
         ))
     }),
-    ("order payments", |d| {
+    ("order payments", Kind::Sharded, |d| {
         crate::payments::order_payments_subscription(d.payments.clone(), d.store.clone())
     }),
-    ("discount usage", |d| {
+    ("discount usage", Kind::Sharded, |d| {
         timada_orders::discount_usage_subscription(d.store.clone())
     }),
-    ("stock usage", |d| {
+    ("stock usage", Kind::Sharded, |d| {
         timada_orders::stock_usage_subscription(d.store.clone())
     }),
-    ("catalog releases", |d| {
+    ("catalog releases", Kind::Sharded, |d| {
         timada_catalog::release_subscription(d.store.clone())
     }),
-    ("discount releases", |d| {
+    ("discount releases", Kind::Sharded, |d| {
         timada_discounts::release_subscription(d.store.clone())
     }),
-    ("page releases", |d| {
+    ("page releases", Kind::Sharded, |d| {
         timada_pages::release_subscription(d.store.clone())
     }),
-    ("newsletter opt-ins", |d| {
+    ("newsletter opt-ins", Kind::Sharded, |d| {
         crate::newsletter::subscription(
             d.store.clone(),
             d.background_mail.clone(),
@@ -472,10 +520,10 @@ const SUBSCRIPTIONS: &[(&str, Make)] = &[
             d.store.clone(),
         )
     }),
-    ("automation triggers", |d| {
+    ("automation triggers", Kind::Sharded, |d| {
         crate::automations::triggers::subscription(d.db.clone(), d.store.clone())
     }),
-    ("order mails", |d| {
+    ("order mails", Kind::Sharded, |d| {
         crate::order_mails::subscription(
             d.store.clone(),
             d.background_mail.clone(),
@@ -483,7 +531,7 @@ const SUBSCRIPTIONS: &[(&str, Make)] = &[
             d.store.clone(),
         )
     }),
-    ("message notices", |d| {
+    ("message notices", Kind::Sharded, |d| {
         crate::message_notifications::subscription(
             d.store.clone(),
             d.db.clone(),
@@ -493,7 +541,7 @@ const SUBSCRIPTIONS: &[(&str, Make)] = &[
             d.store.clone(),
         )
     }),
-    ("invoices", |d| {
+    ("invoices", Kind::Sharded, |d| {
         crate::invoicing::subscription(
             d.store.clone(),
             d.vies.clone(),
@@ -502,3 +550,87 @@ const SUBSCRIPTIONS: &[(&str, Make)] = &[
         )
     }),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ServerConfig;
+
+    fn server(region: Option<&str>, also_serves: &[&str]) -> ServerConfig {
+        ServerConfig {
+            url: "https://timada.localhost".into(),
+            host: "127.0.0.1".into(),
+            port: 3000,
+            region: region.map(str::to_owned),
+            also_serves: also_serves.iter().map(|s| s.to_string()).collect(),
+            trusted_proxies: Vec::new(),
+        }
+    }
+
+    fn names(server: &ServerConfig) -> Vec<String> {
+        planned(server).into_iter().map(|(name, _)| name).collect()
+    }
+
+    /// Without a region, or without other regions to serve, the table as it
+    /// is; with them, every saga again per region, no read model.
+    #[test]
+    fn a_saga_is_planned_once_per_region_served() {
+        let plain = names(&server(None, &[]));
+        assert_eq!(plain.len(), SUBSCRIPTIONS.len());
+        assert_eq!(names(&server(Some("eu-west-1"), &[])), plain);
+
+        let more = names(&server(Some("eu-west-1"), &["us-east-3", "ap-south-1"]));
+        let sagas = SUBSCRIPTIONS
+            .iter()
+            .filter(|(_, kind, _)| *kind == Kind::Sharded)
+            .count();
+        assert_eq!(more.len(), SUBSCRIPTIONS.len() + 2 * sagas);
+        assert!(more.contains(&"payments for us-east-3".to_owned()));
+        assert!(more.contains(&"stock usage for ap-south-1".to_owned()));
+        assert!(!more.iter().any(|name| name.starts_with("catalog for")));
+        assert!(!more.iter().any(|name| name.starts_with("pictures for")));
+        // The copy follows the one in the table, so the page lists them
+        // together.
+        let at = more.iter().position(|n| n == "payments").unwrap();
+        assert_eq!(more[at + 1], "payments for us-east-3");
+    }
+
+    /// Every subscription in the table is classified on purpose: the read
+    /// models and the per-node effects everywhere, the rest sharded.
+    #[test]
+    fn read_models_follow_every_region() {
+        for (name, kind, _) in SUBSCRIPTIONS {
+            let read_model = [
+                "identity",
+                "tenancy",
+                "members history",
+                "AliExpress access",
+                "catalog",
+                "orders",
+                "shoppers",
+                "discounts",
+                "reviews",
+                "support",
+                "newsletter",
+                "automations",
+                "pages",
+                "invoicing",
+                "AliExpress",
+            ]
+            .contains(name);
+            let per_node = [
+                "mail logos",
+                "pictures",
+                "shopper keys",
+                "message keys",
+                "newsletter keys",
+            ]
+            .contains(name);
+            assert_eq!(
+                *kind == Kind::Everywhere,
+                read_model || per_node,
+                "{name} is {kind:?}"
+            );
+        }
+    }
+}

@@ -63,6 +63,11 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         routing_key: Option<String>,
     ) -> Result<bool, ReviewError> {
+        // Read first: on a cluster every node of the region tries this, so
+        // the ones that lost are told by a read, not by a refused write.
+        if self.load_review_request(order_id).await?.is_some() {
+            return Ok(false);
+        }
         let claimed = evento::append(review_request_id(order_id))
             .original_version(0)
             .routing_key_opt(routing_key)
