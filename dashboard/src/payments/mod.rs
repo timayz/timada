@@ -20,6 +20,8 @@
 //! `[payments]` section no tenant takes payments.
 
 mod capture;
+#[cfg(test)]
+pub mod fake;
 mod gateway;
 mod goods;
 mod lapsed;
@@ -42,6 +44,7 @@ pub use setup::*;
 pub use subscription::*;
 pub use unanswered::*;
 
+use timada_orders::{OrderState, PROVIDER_STRIPE};
 use timada_tenancy::{CompanyState, TenantState};
 
 use crate::cluster::Executor;
@@ -49,6 +52,28 @@ use crate::seal::Sealer;
 
 /// Who the dashboard's own payment events say did them.
 pub const DASHBOARD_ACTOR: &str = "timada-dashboard";
+
+/// The metadata every payment is opened with, read back from the provider:
+/// the tenant and the cart it was opened for.
+pub const METADATA_TENANT: &str = "tenant_id";
+pub const METADATA_CART: &str = "cart_id";
+
+/// What the provider says of the payment an order says it was placed with.
+/// A `Placed` the checkout wrote names a payment the provider opened for
+/// the tenant's cart; one a `store:write` key forged in the tenant's store
+/// names none the provider knows as this cart's, so this tells the orders
+/// the checkout placed from the rest (timada #431).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderPayment {
+    /// The provider holds the money, or took it.
+    Held,
+    /// The provider opened it for this cart but holds nothing any more: the
+    /// hold went back, or lapsed.
+    Gone,
+    /// The provider knows no such payment of the tenant's account, or opened
+    /// it for another cart or tenant; or the tenant has no account to ask.
+    Unknown,
+}
 
 /// A tenant's Stripe account, opened.
 #[derive(Clone)]
@@ -129,6 +154,46 @@ impl Payments {
         }
     }
 
+    /// What the provider says of the payment `order` says it was placed
+    /// with, under `tenant`'s account (see [`OrderPayment`]). An error is a
+    /// provider that could not be reached: asked again later, it answers.
+    pub async fn order_payment(
+        &self,
+        tenant: &TenantState,
+        order: &OrderState,
+    ) -> anyhow::Result<OrderPayment> {
+        let payment = &order.payment;
+        if payment.provider != PROVIDER_STRIPE || payment.payment_id.is_empty() {
+            return Ok(OrderPayment::Unknown);
+        }
+        let Some(account) = self.account_of(tenant)? else {
+            return Ok(OrderPayment::Unknown);
+        };
+        let status = match self
+            .gateway
+            .payment_status(&account.secret_key, &payment.payment_id)
+            .await
+        {
+            Ok(status) => status,
+            Err(err) if err.downcast_ref::<Refused>().is_some() => {
+                return Ok(OrderPayment::Unknown);
+            }
+            Err(err) => return Err(err),
+        };
+        let opened_for = |key: &str| status.metadata.get(key).map(String::as_str);
+        if opened_for(METADATA_TENANT) != Some(tenant.id.as_str())
+            || opened_for(METADATA_CART) != Some(order.cart_id.as_str())
+        {
+            return Ok(OrderPayment::Unknown);
+        }
+        Ok(match status.state {
+            PaymentState::Authorized | PaymentState::Captured => OrderPayment::Held,
+            PaymentState::Open | PaymentState::Processing | PaymentState::Cancelled => {
+                OrderPayment::Gone
+            }
+        })
+    }
+
     /// The tenant's Stripe account, opened; `None` when it set up none or
     /// payments are off here. A tenant that stopped taking payments keeps
     /// it until the merchant forgets it, to settle what is held or owed.
@@ -156,5 +221,187 @@ impl Payments {
             .load_tenant(tenant_id)
             .await?;
         Ok(tenant.filter(|tenant| !tenant.is_suspended()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use evento::Evento;
+    use timada_orders::{OrderState, PROVIDER_STRIPE, Payment};
+    use timada_tenancy::{ConfigurePayments, CreateTenant};
+
+    use super::fake::FakeGateway;
+    use super::*;
+
+    /// A tenant with its account, an order placed for `payment`; what the
+    /// provider is asked about it.
+    struct Checked {
+        provider: Arc<FakeGateway>,
+        payments: Payments,
+        tenant: TenantState,
+        store: Evento,
+    }
+
+    impl Checked {
+        async fn new() -> Self {
+            let store = Evento::new(evento::Turso::in_memory_concurrent().await.unwrap());
+            let provider = FakeGateway::new();
+            let payments = Payments::new(
+                Some(Sealer::new("payments", "secret")),
+                provider.clone(),
+                store.clone(),
+            );
+            let tenancy = timada_tenancy::Command(store.clone());
+            let tenant = tenancy
+                .create_tenant(CreateTenant {
+                    name: "Acme".into(),
+                    owner_user_id: "alice".into(),
+                })
+                .await
+                .unwrap();
+            tenancy
+                .configure_payments(
+                    "alice",
+                    &tenant.id,
+                    ConfigurePayments {
+                        provider: PROVIDER_STRIPE.into(),
+                        publishable_key: "pk_test_123".into(),
+                        secret_key_sealed: payments.seal(&tenant.id, "sk_test_good").unwrap(),
+                        webhook_secret_sealed: payments.seal(&tenant.id, "whsec_test").unwrap(),
+                    },
+                )
+                .await
+                .unwrap();
+            let tenant = tenancy.load_tenant(&tenant.id).await.unwrap().unwrap();
+            Self {
+                provider,
+                payments,
+                tenant,
+                store,
+            }
+        }
+
+        /// An order of `cart_id`, as placed for `payment`.
+        async fn order(&self, cart_id: &str, payment: Payment) -> OrderState {
+            let order_id = format!("order-of-{cart_id}");
+            evento::append(&order_id)
+                .tenant(&self.tenant.id)
+                .original_version(0)
+                .event(&timada_orders::aggregator::Placed {
+                    reference: "K7Q4-MZP2".to_owned(),
+                    cart_id: cart_id.to_owned(),
+                    email: "ada@example.com".to_owned(),
+                    shipping: Default::default(),
+                    note: None,
+                    lines: Vec::new(),
+                    currency: "EUR".to_owned(),
+                    total_cents: 862,
+                    payment,
+                    supplier: None,
+                    placed_by: "storefront".to_owned(),
+                })
+                .commit(&self.store)
+                .await
+                .unwrap();
+            timada_orders::Command::new(self.store.clone(), &self.tenant.id)
+                .load_order(&order_id)
+                .await
+                .unwrap()
+                .unwrap()
+        }
+
+        async fn of(&self, order: &OrderState) -> OrderPayment {
+            self.payments
+                .order_payment(&self.tenant, order)
+                .await
+                .unwrap()
+        }
+    }
+
+    fn payment(payment_id: &str) -> Payment {
+        Payment {
+            provider: PROVIDER_STRIPE.to_owned(),
+            payment_id: payment_id.to_owned(),
+            amount_cents: 862,
+            currency: "EUR".to_owned(),
+            capture_before: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_provider_tells_the_orders_the_checkout_placed() {
+        let checked = Checked::new().await;
+        let tenant_id = checked.tenant.id.clone();
+
+        // The checkout's order: the provider opened its payment for its cart.
+        checked.provider.hold("pi_real", &tenant_id, "cart-1", 862);
+        let real = checked.order("cart-1", payment("pi_real")).await;
+        assert_eq!(checked.of(&real).await, OrderPayment::Held);
+        checked
+            .provider
+            .set_state("pi_real", PaymentState::Captured);
+        assert_eq!(checked.of(&real).await, OrderPayment::Held);
+        checked
+            .provider
+            .set_state("pi_real", PaymentState::Cancelled);
+        assert_eq!(checked.of(&real).await, OrderPayment::Gone);
+
+        // A forged one: a payment the provider never opened, or none.
+        let forged = checked.order("cart-2", payment("pi_forged")).await;
+        assert_eq!(checked.of(&forged).await, OrderPayment::Unknown);
+        let blank = checked.order("cart-3", Payment::default()).await;
+        assert_eq!(checked.of(&blank).await, OrderPayment::Unknown);
+
+        // One borrowing another cart's payment, or another tenant's.
+        checked
+            .provider
+            .hold("pi_other_cart", &tenant_id, "cart-9", 862);
+        let borrowed = checked.order("cart-4", payment("pi_other_cart")).await;
+        assert_eq!(checked.of(&borrowed).await, OrderPayment::Unknown);
+        checked
+            .provider
+            .hold("pi_other_shop", "zeta", "cart-5", 862);
+        let borrowed = checked.order("cart-5", payment("pi_other_shop")).await;
+        assert_eq!(checked.of(&borrowed).await, OrderPayment::Unknown);
+    }
+
+    #[tokio::test]
+    async fn a_provider_that_does_not_answer_is_an_error_to_ask_again() {
+        let checked = Checked::new().await;
+        checked
+            .provider
+            .hold("pi_real", &checked.tenant.id, "cart-1", 862);
+        let real = checked.order("cart-1", payment("pi_real")).await;
+        checked.provider.set_down(Some("connection reset"));
+        let err = checked
+            .payments
+            .order_payment(&checked.tenant, &real)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("connection reset"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn without_an_account_no_order_is_known() {
+        let checked = Checked::new().await;
+        checked
+            .provider
+            .hold("pi_real", &checked.tenant.id, "cart-1", 862);
+        let real = checked.order("cart-1", payment("pi_real")).await;
+        let mut no_account = checked.tenant.clone();
+        no_account.payments = None;
+        assert_eq!(
+            checked
+                .payments
+                .order_payment(&no_account, &real)
+                .await
+                .unwrap(),
+            OrderPayment::Unknown
+        );
+        let off = Payments::new(None, checked.provider.clone(), checked.store.clone());
+        assert_eq!(
+            off.order_payment(&checked.tenant, &real).await.unwrap(),
+            OrderPayment::Unknown
+        );
     }
 }
