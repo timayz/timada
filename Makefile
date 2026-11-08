@@ -1,4 +1,4 @@
-.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate stripe.listen e2e loadtest lint fmt-check fmt test machete check
+.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate stripe.listen aliexpress.tunnel e2e loadtest lint fmt-check fmt test machete check
 
 # What `make seed` writes and `make storefront` reads: the key and the addresses
 # of the seeded shop. Git ignores it.
@@ -101,6 +101,15 @@ stripe.listen:
 	stripe listen \
 		--events payment_intent.amount_capturable_updated,payment_intent.succeeded,payment_intent.canceled,charge.refunded \
 		--forward-to http://localhost:3000/stripe/webhooks/$${STORE_TENANT_ID:?run make seed first, or set it}
+
+# A public HTTPS address for AliExpress's pushes (its message push callback) to
+# reach the dev server, until stopped; `ngrok config add-authtoken` first, once
+# (docs/aliexpress.md, *Trying the pushes from a development machine*). Set
+# NGROK_URL to the account's free static domain and the address survives a
+# restart, so the App Console is told it once:
+#   NGROK_URL=https://quiet-fox.ngrok-free.app make aliexpress.tunnel
+aliexpress.tunnel:
+	ngrok http $${NGROK_URL:+--url=$$NGROK_URL} http://localhost:3000
 
 # Browser tests on a fresh database behind the compose Traefik, with the compose
 # dex container as the OIDC provider (`make up` first).

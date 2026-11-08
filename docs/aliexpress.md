@@ -350,6 +350,41 @@ reads run beside the subscription, a few at a time, so a burst of pushes while
 AliExpress is slow holds none of them up. A number already recorded for another
 forward is refused and logged as an error.
 
+### Trying the pushes from a development machine
+
+AliExpress cannot reach a laptop, so `make aliexpress.tunnel` opens an ngrok tunnel
+to the dev server (`make dev`, port 3000), as `make stripe.listen` does for Stripe.
+The dev shell has ngrok; `ngrok config add-authtoken <token>` once, with the token of
+a free ngrok account. Claim the account's free static domain in ngrok's dashboard and
+run the tunnel with `NGROK_URL=https://<that domain>`, so the address outlives a
+restart; then register `https://<that domain>/aliexpress/webhook` as the app's
+message push callback in the App Console, with `DROPSHIPPER_ORDER_STATUS_UPDATE`
+ticked. ngrok's inspector at http://127.0.0.1:4040 shows every push with its answer
+and replays one. A push answered 401 was signed with another key or secret than
+`[aliexpress]` in `config/dev.local.toml` holds: the pushes come from the app whose
+callback it is. AliExpress documents an OV or EV certificate for the callback, and
+ngrok's domains carry a DV one; whether AliExpress holds to that is to be seen.
+
+To connect a buyer account through the same tunnel (AliExpress sends the owner back
+to `server.url`), start the dev server with `TIMADA__SERVER__URL=https://<that domain>`
+and register `/aliexpress/callback` under it as the app's callback.
+
+To check the route with no AliExpress at all, sign a push by hand with the app's key
+and secret (HMAC-SHA256 over the key followed by the body, keyed by the secret) and
+post it:
+
+```sh
+BODY='{"data":{"orderId":1105933950463697,"orderStatus":"OrderShipped"},"message_type":53}'
+SIGNATURE=$(printf '%s%s' "$APP_KEY" "$BODY" \
+  | openssl dgst -sha256 -mac HMAC -macopt key:"$APP_SECRET" | sed 's/^.* //')
+curl -i -X POST https://<that domain>/aliexpress/webhook \
+  -H "content-type: application/json" -H "authorization: $SIGNATURE" -d "$BODY"
+```
+
+It answers 200 and the push waits in the order's stream (`timada-aliexpress/AeOrder`)
+until a forward records that order; the dashboard logs it as *the status of an order
+no forward recorded yet*.
+
 A push can still be lost, past its twelve retries half an hour apart, and a node
 catching up leaves the reads of pushes older than ten minutes. So the node an order
 belongs to also reads it once it has gone unread for
