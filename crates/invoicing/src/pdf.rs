@@ -9,12 +9,12 @@ use typst::foundations::{Array, Dict, IntoValue, Value};
 use typst_as_lib::{TypstEngine, TypstTemplateMainFile};
 use typst_pdf::{PdfOptions, PdfStandard, PdfStandards};
 
-use crate::command::{DocumentKind, IssuedDocument};
 use crate::rates::{ECB_SOURCE, EURO};
 use crate::tax::Regime;
 use crate::value_object::{
-    Address, InvoiceLine, PAYMENT_METHOD_CARD, PAYMENT_METHOD_OUTSIDE, civil_date, excl_vat,
-    format_amount_fr, format_date_fr, format_rate_fr, lines_breakdown, spread,
+    Address, DocumentKind, InvoiceLine, IssuedDocument, PAYMENT_METHOD_CARD,
+    PAYMENT_METHOD_OUTSIDE, civil_date, excl_vat, format_amount_fr, format_date_fr, format_rate_fr,
+    lines_breakdown, spread,
 };
 
 /// Layout version 1 (see [`TEMPLATE_VERSION`](crate::TEMPLATE_VERSION)).
@@ -645,11 +645,11 @@ mod tests {
         let full = invoice(Some("FR85120027016"));
         // 10 % off and 6.90 shipping: 2250 + 383 at 20 %, 1799 + 307 at 5.5 %.
         let document = IssuedDocument {
-            discount: Some(crate::command::InvoiceDiscount {
+            discount: Some(crate::value_object::InvoiceDiscount {
                 code: "TEN".into(),
                 amount_cents: 450,
             }),
-            shipping: Some(crate::command::InvoiceShipping {
+            shipping: Some(crate::value_object::InvoiceShipping {
                 name: "VIP".into(),
                 amount_cents: 690,
             }),
@@ -693,7 +693,7 @@ mod tests {
     fn a_discount_reads_as_a_negative_row_under_the_lines() {
         let full = invoice(Some("FR85120027016"));
         let document = IssuedDocument {
-            discount: Some(crate::command::InvoiceDiscount {
+            discount: Some(crate::value_object::InvoiceDiscount {
                 code: "TEN".into(),
                 amount_cents: 450,
             }),

@@ -42,8 +42,20 @@ struct RateOverride {
     rate_bps: u32,
 }
 
-/// How a sale is taxed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// How a sale is taxed. Frozen in `events.lock` (a document carries it):
+/// the variants never change.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub enum Regime {
     /// Sold in France, French VAT.
     #[default]

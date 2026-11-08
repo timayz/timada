@@ -11,7 +11,8 @@
 //! holds at most [`BOOK_CHUNK`] documents and the series carries on in the
 //! next one (evento versions are 16 bits). A small index stream per
 //! document ([`invoice_id`], [`credit_note_id`]) points at the book that
-//! holds it, so a page finds it without a read model.
+//! holds it and carries a copy of the document, so a page reads one
+//! document from that stream alone, never replaying a book.
 //!
 //! A document copies everything it says (the seller as it was, the buyer,
 //! the lines, the VAT): it never changes once issued and renders the same

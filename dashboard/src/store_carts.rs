@@ -246,9 +246,12 @@ pub async fn order(orders: &Command<Executor>, order_id: &str) -> anyhow::Result
 /// `GET /store/orders/{order_id}/documents`: the invoice of the order, then
 /// the credit notes of its refunds, as far as the dashboard has issued them
 /// (a `Vec<IssuedDocument>`, empty for an order just placed); 404 for an
-/// order the tenant has not. The invoices live in the series' `Book`
-/// streams, every buyer's name and address in them, which is why a
-/// storefront's key reads none of those and is answered one order's here.
+/// order the tenant has not. Each document is read whole from its own index
+/// stream (the storefront draws the PDF, so it needs all of it; the
+/// invoicing read model keeps a summary row only). The documents live in
+/// the invoicing streams, every buyer's name and address in them, which is
+/// why a storefront's key reads none of those and is answered one order's
+/// here.
 pub async fn documents(orders: &Command<Executor>, order_id: &str) -> anyhow::Result<Answer> {
     let Some(order) = orders.load_order(order_id).await? else {
         return Ok(not_found("order_not_found"));

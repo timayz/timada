@@ -3,6 +3,9 @@
 
 use std::collections::BTreeMap;
 
+use crate::rates::ExchangeRate;
+use crate::tax::Regime;
+
 /// How many documents one book stream holds before the series carries on in
 /// the next; far below the 65 535 events a stream can take, so loading a
 /// book stays cheap.
@@ -200,6 +203,146 @@ impl VatSubtotal {
     pub fn total_cents(&self) -> u64 {
         self.base_cents + self.vat_cents
     }
+}
+
+/// Whether a document is an invoice or a credit note. Frozen in
+/// `events.lock`: the variants never change.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub enum DocumentKind {
+    #[default]
+    Invoice,
+    CreditNote,
+}
+
+impl DocumentKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Invoice => "invoice",
+            Self::CreditNote => "credit_note",
+        }
+    }
+}
+
+/// A discount code taken off an invoice's lines. Frozen in `events.lock`:
+/// the fields never change.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub struct InvoiceDiscount {
+    pub code: String,
+    /// VAT included, in minor units.
+    pub amount_cents: u64,
+}
+
+/// What shipping an invoice's order was charged. Frozen in `events.lock`:
+/// the fields never change.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub struct InvoiceShipping {
+    /// The shipping method, as the shop names it.
+    pub name: String,
+    /// VAT included, in minor units.
+    pub amount_cents: u64,
+}
+
+/// An issued document as it reads: an invoice or a credit note (the fields
+/// of the other kind are empty). Written whole into the document's index
+/// stream once it has its number ([`Recorded`](crate::aggregator::Recorded)),
+/// so a page reads it from that one small stream. Frozen in `events.lock`:
+/// the fields never change.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub struct IssuedDocument {
+    pub document_id: String,
+    /// The company that issued it.
+    pub company_id: String,
+    pub kind: DocumentKind,
+    pub series: String,
+    pub number: u64,
+    /// `F2026-000042`.
+    pub label: String,
+    pub issued_at: u64,
+    pub order_id: String,
+    pub order_reference: String,
+    /// Invoice: when and how it was paid.
+    pub paid_at: Option<u64>,
+    pub payment_method: Option<String>,
+    /// Credit note: the invoice it corrects and the refund it records.
+    pub invoice_document_id: Option<String>,
+    pub invoice_label: Option<String>,
+    pub refund_id: Option<String>,
+    pub seller: Seller,
+    pub buyer: Address,
+    pub buyer_email: String,
+    /// Invoice: where the goods go.
+    pub delivery: Option<Address>,
+    pub currency: String,
+    /// Invoice: what was sold, at full price.
+    pub lines: Vec<InvoiceLine>,
+    /// Invoice: the discount code taken off the lines, if any; `vat` and
+    /// the totals are of what was paid.
+    pub discount: Option<InvoiceDiscount>,
+    /// Invoice: the shipping charged on top of the goods, if any; taxed at
+    /// the rates of the goods it carries, in proportion.
+    pub shipping: Option<InvoiceShipping>,
+    pub vat: Vec<VatSubtotal>,
+    pub total_excl_vat_cents: u64,
+    pub total_vat_cents: u64,
+    pub total_cents: u64,
+    pub template: u16,
+    /// How it is taxed.
+    pub regime: Regime,
+    /// The country whose VAT applies, or where the goods went.
+    pub tax_country: String,
+    /// The buyer's EU VAT number, when it bought as a business.
+    pub buyer_vat_number: Option<String>,
+    /// Invoice: VIES's reference for the check of that number.
+    pub vies_reference: Option<String>,
+    /// Invoice: the year's EU distance sales, this one included.
+    pub eu_distance_sales_cents: u64,
+    pub eu_threshold_passed: bool,
+    /// For a document in another currency than the euro: the euro rate of
+    /// the day it was issued (a credit note's is its invoice's), and its VAT
+    /// at that rate, in euro cents.
+    pub euro_rate: Option<ExchangeRate>,
+    pub total_vat_eur_cents: Option<u64>,
 }
 
 /// The price without VAT of `incl` (VAT included at `rate_bps`), rounded to
