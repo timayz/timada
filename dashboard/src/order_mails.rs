@@ -3,6 +3,13 @@
 //! lives: its confirmation once placed, the payment taken once its invoice
 //! is issued (so the page it links to shows it), and its cancellation,
 //! saying whether money goes back.
+//!
+//! A shop with no mail server of its own sends through the platform's. That
+//! server mails about the orders the checkout placed and no other: an order
+//! a `store:write` key forged in the shop's store would have the platform
+//! mail any address, so one whose payment the provider does not know as the
+//! shop's is passed over (timada #431). A shop's own server is the shop's
+//! to spend.
 
 use std::sync::Arc;
 
@@ -14,10 +21,12 @@ use evento::{
 use timada_invoicing::aggregator::InvoiceIssued;
 use timada_orders::aggregator::{Cancelled, Placed};
 use timada_tenancy::ShopMailKind;
-use topcoat::context::{AppContext, Cx};
+use topcoat::context::{AppContext, Cx, app_context};
 
 use crate::cluster::Executor as Store;
 use crate::mail::{send_order_cancelled, send_order_confirmation, send_order_paid};
+use crate::payments::{OrderPayment, Payments};
+use crate::shop_mail::ShopMail;
 
 /// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/order-mails";
@@ -42,15 +51,19 @@ struct TenantStore(Evento);
 struct Mail(Arc<AppContext>);
 
 /// Follows every tenant's orders and invoices. Every node runs it; the node
-/// that claims an order's mail first is the one that sends it.
+/// that claims an order's mail first is the one that sends it. `payments`
+/// tells the orders the checkout placed, for the mails the platform's
+/// server would send.
 pub fn subscription<E: Executor>(
     platform: Store,
     mail: Arc<AppContext>,
+    payments: Arc<Payments>,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(Platform(platform))
         .data(Mail(mail))
+        .data(payments)
         .data(TenantStore(store))
         .handler(on_placed())
         .handler(on_invoice_issued())
@@ -133,6 +146,27 @@ async fn mail_order<E: Executor>(
     else {
         return Ok(());
     };
+    let mail: Mail = context.extract();
+    let cx = Cx::new(mail.0);
+    // The platform's server speaks for the orders the checkout placed alone.
+    // A provider that does not answer is not an error to retry: a pass that
+    // fails for good stops the subscription for every shop, while a mail
+    // passed over leaves this shopper the order's page (and the other nodes
+    // their own try, none having claimed it).
+    if !app_context::<ShopMail>(&cx).has_shop_mails_server(&shop) {
+        let payments: Arc<Payments> = context.extract();
+        match payments.order_payment(&shop, &order).await {
+            Ok(OrderPayment::Held | OrderPayment::Gone) => {}
+            Ok(OrderPayment::Unknown) => {
+                tracing::warn!(tenant = %tenant_id, order = %order.id, mail = kind.key(), "order mail not sent: the provider knows no payment of this order, and the platform's server would send it");
+                return Ok(());
+            }
+            Err(err) => {
+                tracing::error!(tenant = %tenant_id, order = %order.id, mail = kind.key(), error = %err, "order mail not sent: the payment provider did not answer, and the platform's server would send it");
+                return Ok(());
+            }
+        }
+    }
     let link = orders
         .storefront_address()
         .await?
@@ -145,8 +179,6 @@ async fn mail_order<E: Executor>(
     }
     // Claimed, then sent: a failure here is not retried, since a shopper
     // mailed twice is worse off than one who reads the order's page.
-    let mail: Mail = context.extract();
-    let cx = Cx::new(mail.0);
     let link = link.as_deref();
     let sent = match kind {
         ShopMailKind::OrderPaid => send_order_paid(&cx, &shop, &order, link).await,

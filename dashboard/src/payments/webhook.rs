@@ -47,8 +47,8 @@ use timada_orders::{CartState, OrderError, PROVIDER_STRIPE, Payment, Released};
 
 use super::settle::{self, release_reason};
 use super::{
-    Account, DASHBOARD_ACTOR, PaymentState, PaymentStatus, Payments, Refused, ReleaseAnswer,
-    signature,
+    Account, DASHBOARD_ACTOR, METADATA_CART, METADATA_TENANT, PaymentState, PaymentStatus,
+    Payments, Refused, ReleaseAnswer, signature,
 };
 use crate::cluster::Executor;
 
@@ -148,8 +148,8 @@ pub async fn receive(
         .gateway
         .payment_status(&account.secret_key, &payment_id)
         .await?;
-    let ours = status.metadata.get("tenant_id").map(String::as_str) == Some(tenant_id);
-    let Some(cart_id) = status.metadata.get("cart_id").filter(|_| ours).cloned() else {
+    let ours = status.metadata.get(METADATA_TENANT).map(String::as_str) == Some(tenant_id);
+    let Some(cart_id) = status.metadata.get(METADATA_CART).filter(|_| ours).cloned() else {
         return Ok(Outcome::Ignored);
     };
     if event.type_ == "charge.refunded" {

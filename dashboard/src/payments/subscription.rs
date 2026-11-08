@@ -20,7 +20,9 @@ use timada_orders::{
 };
 
 use super::webhook::OUT_OF_STOCK;
-use super::{Busy, DASHBOARD_ACTOR, NewPayment, Payments, SuppliedGoods};
+use super::{
+    Busy, DASHBOARD_ACTOR, METADATA_CART, METADATA_TENANT, NewPayment, Payments, SuppliedGoods,
+};
 use crate::ecb::{EuroRates, RateAnswer};
 
 /// The cursor identity of the subscription, in the store.
@@ -298,8 +300,8 @@ impl Checkouts {
                     currency: pending.currency.clone(),
                     idempotency_key: format!("timada-{request_id}"),
                     metadata: HashMap::from([
-                        ("tenant_id".to_owned(), tenant_id.to_owned()),
-                        ("cart_id".to_owned(), cart_id.to_owned()),
+                        (METADATA_TENANT.to_owned(), tenant_id.to_owned()),
+                        (METADATA_CART.to_owned(), cart_id.to_owned()),
                         ("request_id".to_owned(), request_id.to_owned()),
                     ]),
                     receipt_email: Some(pending.request.email.clone()),

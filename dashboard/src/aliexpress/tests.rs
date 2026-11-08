@@ -9,9 +9,10 @@ use evento::Evento;
 use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::{AeProduct, Share, map_product, track_imported};
 use timada_catalog_import::{ImportOptions, NoImages, import_one};
+use timada_orders::{PROVIDER_STRIPE, Payment};
 use timada_tenancy::{
-    AuthorizeAliexpress, ConfigureAliexpress, CreateTenant, LegalIdentity, Pricing, PricingRule,
-    Rounding, TenantState,
+    AuthorizeAliexpress, ConfigureAliexpress, ConfigurePayments, CreateTenant, LegalIdentity,
+    Pricing, PricingRule, Rounding, TenantState,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Notify;
@@ -22,7 +23,8 @@ use super::sync::AliexpressSync;
 use super::{ALIEXPRESS_ACTOR, Aliexpress, SyncMode, SyncResult};
 use crate::config::AliexpressConfig;
 use crate::db::Db;
-use crate::payments::SuppliedGoods;
+use crate::payments::fake::FakeGateway;
+use crate::payments::{Payments, SuppliedGoods};
 use crate::seal::Sealer;
 
 const AE_PRODUCT: &str = "1005006123456789";
@@ -243,6 +245,9 @@ struct Shop {
     db: Db,
     aliexpress: Arc<Aliexpress>,
     stand_in: Arc<StandIn>,
+    /// The payment provider, holding the payments of the orders to place.
+    provider: Arc<FakeGateway>,
+    payments: Arc<Payments>,
     /// Which of the nodes up this one is.
     share: Arc<Mutex<Share>>,
     tenant: TenantState,
@@ -305,6 +310,25 @@ impl Shop {
             .unwrap();
         tenancy
             .link_tenant(ALICE, &company.id, &tenant.id, None)
+            .await
+            .unwrap();
+        let provider = FakeGateway::new();
+        let payments = Arc::new(Payments::new(
+            Some(Sealer::new("payments", "secret")),
+            provider.clone(),
+            store.clone(),
+        ));
+        tenancy
+            .configure_payments(
+                ALICE,
+                &tenant.id,
+                ConfigurePayments {
+                    provider: PROVIDER_STRIPE.into(),
+                    publishable_key: "pk_test_123".into(),
+                    secret_key_sealed: payments.seal(&tenant.id, "sk_test_good").unwrap(),
+                    webhook_secret_sealed: payments.seal(&tenant.id, "whsec_test").unwrap(),
+                },
+            )
             .await
             .unwrap();
         tenancy
@@ -380,6 +404,8 @@ impl Shop {
             db,
             aliexpress,
             stand_in,
+            provider,
+            payments,
             share,
             tenant,
             link_id,
@@ -1643,7 +1669,7 @@ impl Shop {
                 }],
                 currency: "EUR".to_owned(),
                 total_cents: 862,
-                payment: Default::default(),
+                payment: self.held_payment("a-cart", 862),
                 supplier: Some(timada_aliexpress::ALIEXPRESS_SUPPLIER.to_owned()),
                 placed_by: "storefront".to_owned(),
             },
@@ -1662,6 +1688,21 @@ impl Shop {
             .unwrap()
     }
 
+    /// A payment the checkout opened for `cart_id` and the shopper
+    /// confirmed, as the provider holds it and as the order names it.
+    fn held_payment(&self, cart_id: &str, amount_cents: u64) -> Payment {
+        let payment_id = format!("pi_{cart_id}");
+        self.provider
+            .hold(&payment_id, &self.tenant.id, cart_id, amount_cents);
+        Payment {
+            provider: PROVIDER_STRIPE.to_owned(),
+            payment_id,
+            amount_cents,
+            currency: "EUR".to_owned(),
+            capture_before: None,
+        }
+    }
+
     fn orders(&self) -> timada_orders::Command<Evento> {
         timada_orders::Command::new(self.store.clone(), &self.tenant.id)
     }
@@ -1677,7 +1718,7 @@ impl Shop {
         forward_id: &str,
     ) -> super::forward::ForwardResult {
         self.aliexpress
-            .forward_order(store, &self.db, &self.tenant.id, forward_id)
+            .forward_order(store, &self.db, &self.payments, &self.tenant.id, forward_id)
             .await
             .unwrap()
     }
@@ -2010,7 +2051,13 @@ async fn a_refusal_the_order_never_hears_of_is_left_to_the_stall_sweep() {
 
     let placed = shop
         .aliexpress
-        .forward_order(&paused, &shop.db, &shop.tenant.id, &forward_id)
+        .forward_order(
+            &paused,
+            &shop.db,
+            &shop.payments,
+            &shop.tenant.id,
+            &forward_id,
+        )
         .await;
     assert!(placed.is_err(), "{placed:?}");
     let forward = shop.forward(&forward_id).await;
@@ -2154,7 +2201,13 @@ async fn a_push_before_the_order_is_recorded_is_read_once_it_is() {
     assert_eq!(shop.stand_in.reads(), 0, "no forward to read yet");
 
     shop.aliexpress
-        .forward_order(&shop.store, &shop.db, &shop.tenant.id, &forward_id)
+        .forward_order(
+            &shop.store,
+            &shop.db,
+            &shop.payments,
+            &shop.tenant.id,
+            &forward_id,
+        )
         .await
         .unwrap();
     let reads = shop.stand_in.reads();
@@ -2215,4 +2268,116 @@ async fn a_closing_push_closes_the_order_through_the_subscription() {
         .pending_cancellation
         .expect("its cancellation is asked");
     assert_eq!(asked.reason, super::forward::CLOSED_BY_ALIEXPRESS);
+}
+
+/// An order a `store:write` key forged in the shop's store names no payment
+/// the provider knows as the shop's: nothing is bought for it on the
+/// company's account (timada #431). The provider not answering refuses the
+/// forward too, to try again.
+#[tokio::test]
+async fn an_order_the_checkout_did_not_place_is_not_placed_on_aliexpress() {
+    let shop = Shop::new().await;
+    let product = timada_catalog::Command::new(shop.store.clone(), &shop.tenant.id)
+        .load_product(&shop.product_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let forged = async |order_id: &str, payment: Payment| {
+        evento::append(order_id)
+            .tenant(&shop.tenant.id)
+            .original_version(0)
+            .event(&timada_orders::aggregator::Placed {
+                reference: "K7Q4-MZP2".to_owned(),
+                cart_id: "a-cart".to_owned(),
+                email: "anyone@example.com".to_owned(),
+                shipping: timada_orders::ShippingAddress {
+                    name: "Ada Lovelace".into(),
+                    line1: "1 rue de la Paix".into(),
+                    postal_code: "75002".into(),
+                    city: "Paris".into(),
+                    country: "FR".into(),
+                    ..Default::default()
+                },
+                note: None,
+                lines: vec![timada_orders::OrderLine {
+                    product_id: shop.product_id.clone(),
+                    variant_id: Some(product.variants[0].id.clone()),
+                    quantity: 1,
+                    ..Default::default()
+                }],
+                currency: "EUR".to_owned(),
+                total_cents: 862,
+                payment,
+                supplier: Some(timada_aliexpress::ALIEXPRESS_SUPPLIER.to_owned()),
+                placed_by: "storefront".to_owned(),
+            })
+            .commit(&shop.store)
+            .await
+            .unwrap();
+        shop.links()
+            .request_forward(ALIEXPRESS_ACTOR, order_id, false)
+            .await
+            .unwrap()
+    };
+
+    // A payment the provider never opened.
+    let forward_id = forged(
+        "forged-order",
+        Payment {
+            provider: PROVIDER_STRIPE.to_owned(),
+            payment_id: "pi_forged".to_owned(),
+            amount_cents: 862,
+            currency: "EUR".to_owned(),
+            capture_before: None,
+        },
+    )
+    .await;
+    let placed = shop.forward_on(&shop.store, &forward_id).await;
+    let super::forward::ForwardResult::Failed(reason) = placed else {
+        panic!("{placed:?}");
+    };
+    assert!(
+        reason.contains("not placed through the shop's checkout"),
+        "{reason}"
+    );
+    assert_eq!(shop.placed(), 0);
+    let forward = shop.forward(&forward_id).await;
+    assert_eq!(forward.status, timada_aliexpress::ForwardStatus::Failed);
+    assert_eq!(forward.last_error.as_deref(), Some(reason.as_str()));
+
+    // One the provider opened for another cart of the shop.
+    let other = shop.held_payment("another-cart", 862);
+    let forward_id = forged("borrowed-order", other).await;
+    let placed = shop.forward_on(&shop.store, &forward_id).await;
+    let super::forward::ForwardResult::Failed(reason) = placed else {
+        panic!("{placed:?}");
+    };
+    assert!(
+        reason.contains("not placed through the shop's checkout"),
+        "{reason}"
+    );
+    assert_eq!(shop.placed(), 0);
+
+    // The provider down: not refused for good.
+    let forward_id = shop.order_to_place().await;
+    shop.provider.set_down(Some("connection reset"));
+    let placed = shop.forward_on(&shop.store, &forward_id).await;
+    let super::forward::ForwardResult::Failed(reason) = placed else {
+        panic!("{placed:?}");
+    };
+    assert!(reason.contains("did not answer"), "{reason}");
+    assert_eq!(shop.placed(), 0);
+
+    // Up again, the merchant asks again: placed.
+    shop.provider.set_down(None);
+    let forward_id = shop
+        .links()
+        .request_forward(ALICE, "an-order", true)
+        .await
+        .unwrap();
+    assert!(matches!(
+        shop.forward_on(&shop.store, &forward_id).await,
+        super::forward::ForwardResult::Placed(_)
+    ));
+    assert_eq!(shop.placed(), 1);
 }
