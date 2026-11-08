@@ -53,12 +53,19 @@ pub async fn verify(cx: &Cx) -> Result<impl View> {
     let kind = flow.kind;
     // Where the latest code's mail stands: the subscription that sends it
     // records it on the challenge, so the page can say when the address
-    // refused it.
-    let mail = identity(cx)
-        .load_email_challenge(&flow.email)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?
-        .map(|challenge| challenge.mail);
+    // refused it. Not for a password reset: the first step said "if an
+    // account exists", and an address nobody registered has no challenge,
+    // so saying "sending" or "couldn't deliver" would tell a stranger which
+    // addresses have an account. That flow reads "sent" whatever happened.
+    let mail = if kind == EmailFlowKind::ResetPassword {
+        None
+    } else {
+        identity(cx)
+            .load_email_challenge(&flow.email)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+            .map(|challenge| challenge.mail)
+    };
     let (state, lead, tail) = match mail {
         Some(Sending::Undeliverable { .. }) => (
             "undeliverable",
