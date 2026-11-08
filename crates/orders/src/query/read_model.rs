@@ -1,6 +1,7 @@
-//! The subscription that keeps `orders_orders`, `orders_carts` and
+//! The subscription that keeps `orders_orders`, `orders_carts`,
 //! `orders_order_products` (which products each order holds, for whoever
-//! asks whether a product was ever ordered) current for every tenant.
+//! asks whether a product was ever ordered) and `orders_order_mails` (which
+//! mails the shopper was sent about an order) current for every tenant.
 //!
 //! Each handler reloads the strict write model of the stream the event
 //! belongs to and rewrites its row, so delivery may repeat (the subscription
@@ -15,8 +16,11 @@ use evento::{
 };
 use timada_core::db::{Db, Value, execute, params_from_iter};
 
-use crate::aggregator::{Cart, Order};
-use crate::command::{CartState, OrderState, cart_projection, order_projection};
+use crate::aggregator::{Cart, Order, OrderMail};
+use crate::command::{
+    CartState, OrderState, cart_projection, order_mail_projection, order_projection,
+};
+use crate::query::OrderRecord;
 
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-orders/read-models";
@@ -29,7 +33,37 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .data(db)
         .handler(on_cart_event())
         .handler(on_order_event())
+        .handler(on_order_mail_event())
         .any_routing_key()
+}
+
+#[evento::subscription_all]
+async fn on_order_mail_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<OrderMail>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(mailed) = order_mail_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    // A mail is sent once; a repeat finds its row there.
+    db.execute(
+        "INSERT OR IGNORE INTO orders_order_mails (tenant_id, order_id, mail, mailed_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        (
+            event.tenant.as_str(),
+            mailed.order_id.as_str(),
+            mailed.mail.as_str(),
+            mailed.mailed_at as i64,
+        ),
+    )
+    .await?;
+    Ok(())
 }
 
 #[evento::subscription_all]
@@ -67,17 +101,19 @@ async fn on_order_event<E: Executor>(
 }
 
 /// Writes the row of a cart as the write model sees it.
-pub async fn upsert_cart(db: &Db, tenant_id: &str, cart: &CartState) -> anyhow::Result<()> {
+pub(crate) async fn upsert_cart(db: &Db, tenant_id: &str, cart: &CartState) -> anyhow::Result<()> {
+    let refused_returns = serde_json::to_string(&cart.refused_returns())?;
     db.execute(
         "INSERT INTO orders_carts (tenant_id, id, order_id, line_count, item_count, created_at,
-            updated_at, status, return_requested_at, unanswered_since)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            updated_at, status, return_requested_at, unanswered_since, refused_returns)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             order_id = excluded.order_id, line_count = excluded.line_count,
             status = excluded.status,
             item_count = excluded.item_count, updated_at = excluded.updated_at,
             return_requested_at = excluded.return_requested_at,
-            unanswered_since = excluded.unanswered_since",
+            unanswered_since = excluded.unanswered_since,
+            refused_returns = excluded.refused_returns",
         (
             tenant_id,
             cart.id.as_str(),
@@ -89,17 +125,24 @@ pub async fn upsert_cart(db: &Db, tenant_id: &str, cart: &CartState) -> anyhow::
             cart.status(),
             cart.return_requested_at().map(|at| at as i64),
             cart.unanswered_since().map(|at| at as i64),
+            refused_returns.as_str(),
         ),
     )
     .await?;
     Ok(())
 }
 
-/// Writes the row of an order as the write model sees it, and one row per
-/// product it holds, in one transaction.
-pub async fn upsert_order(db: &Db, tenant_id: &str, order: &OrderState) -> anyhow::Result<()> {
-    let env = (tenant_id, order);
-    db.write(&env, |tx, (tenant_id, order)| {
+/// Writes the row of an order as the write model sees it (the whole order
+/// as its page shows it in `state`), and one row per product it holds, in
+/// one transaction.
+pub(crate) async fn upsert_order(
+    db: &Db,
+    tenant_id: &str,
+    order: &OrderState,
+) -> anyhow::Result<()> {
+    let state = OrderRecord::of(order).to_json()?;
+    let env = (tenant_id, order, state);
+    db.write(&env, |tx, (tenant_id, order, state)| {
         Box::pin(async move {
             execute(
                 tx,
@@ -107,9 +150,9 @@ pub async fn upsert_order(db: &Db, tenant_id: &str, order: &OrderState) -> anyho
                     country, item_count, total_cents, currency, placed_at, updated_at, payment_id,
                     refunded_cents, discount_id, discount_code, discount_cents, fulfilled_at,
                     supplier, payment_state, capture_before, capture_requested_at,
-                    cancel_requested_at, paid_at, refund_requested_at, hold_reminder_at)
+                    cancel_requested_at, paid_at, refund_requested_at, hold_reminder_at, state)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                    ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
+                    ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
                  ON CONFLICT (tenant_id, id) DO UPDATE SET
                     status = excluded.status, updated_at = excluded.updated_at,
                     refunded_cents = excluded.refunded_cents, discount_id = excluded.discount_id,
@@ -121,7 +164,7 @@ pub async fn upsert_order(db: &Db, tenant_id: &str, order: &OrderState) -> anyho
                     cancel_requested_at = excluded.cancel_requested_at,
                     paid_at = excluded.paid_at,
                     refund_requested_at = excluded.refund_requested_at,
-                    hold_reminder_at = excluded.hold_reminder_at",
+                    hold_reminder_at = excluded.hold_reminder_at, state = excluded.state",
                 params_from_iter([
                     Value::from(*tenant_id),
                     Value::from(order.id.as_str()),
@@ -165,6 +208,7 @@ pub async fn upsert_order(db: &Db, tenant_id: &str, order: &OrderState) -> anyho
                             .map(|pending| pending.requested_at as i64),
                     ),
                     Value::from(order.hold_reminder_due_at().map(|at| at as i64)),
+                    Value::from(state.as_str()),
                 ]),
             )
             .await?;

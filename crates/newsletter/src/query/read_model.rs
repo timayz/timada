@@ -150,7 +150,7 @@ async fn on_edition_event<E: Executor>(
 }
 
 /// Writes the row of an edition as the write model sees it.
-pub async fn upsert_edition(
+pub(crate) async fn upsert_edition(
     db: &Db,
     tenant_id: &str,
     edition: &EditionState,
@@ -177,7 +177,7 @@ pub async fn upsert_edition(
 }
 
 /// Writes the row of a campaign as the write model sees it.
-pub async fn upsert_campaign(
+pub(crate) async fn upsert_campaign(
     db: &Db,
     tenant_id: &str,
     campaign: &CampaignState,
@@ -212,7 +212,7 @@ pub async fn upsert_campaign(
 }
 
 /// Drops the row of an erased subscriber.
-pub async fn delete_subscriber(
+pub(crate) async fn delete_subscriber(
     db: &Db,
     tenant_id: &str,
     subscriber_id: &str,
@@ -226,7 +226,7 @@ pub async fn delete_subscriber(
 }
 
 /// Writes the row of a subscriber as the write model sees them, opened.
-pub async fn upsert_subscriber(
+pub(crate) async fn upsert_subscriber(
     db: &Db,
     tenant_id: &str,
     subscriber: &Subscriber,

@@ -70,7 +70,7 @@ async fn on_run_event<E: Executor>(
 
 /// Writes the row of a run as the write model sees it: `next_at` is when
 /// the runner looks at it again, none once it ended.
-pub async fn upsert_run(db: &Db, tenant_id: &str, run: &RunState) -> anyhow::Result<()> {
+pub(crate) async fn upsert_run(db: &Db, tenant_id: &str, run: &RunState) -> anyhow::Result<()> {
     db.execute(
         "INSERT INTO automations_runs (tenant_id, id, scenario_id, scenario_version, trigger,
             subject_id, status, step, reason, next_at, started_at, updated_at)
@@ -100,7 +100,7 @@ pub async fn upsert_run(db: &Db, tenant_id: &str, run: &RunState) -> anyhow::Res
 /// Writes the row of a scenario as the write model sees it. The trigger and
 /// the count of steps are the running version's once published, the
 /// draft's before.
-pub async fn upsert_scenario(
+pub(crate) async fn upsert_scenario(
     db: &Db,
     tenant_id: &str,
     scenario: &ScenarioState,

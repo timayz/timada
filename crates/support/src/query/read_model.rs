@@ -70,7 +70,11 @@ async fn on_message_event<E: Executor>(
 }
 
 /// Drops the row of an erased message.
-pub async fn delete_message(db: &Db, tenant_id: &str, message_id: &str) -> anyhow::Result<()> {
+pub(crate) async fn delete_message(
+    db: &Db,
+    tenant_id: &str,
+    message_id: &str,
+) -> anyhow::Result<()> {
     db.execute(
         "DELETE FROM support_messages WHERE tenant_id = ?1 AND id = ?2",
         (tenant_id, message_id),
@@ -80,7 +84,11 @@ pub async fn delete_message(db: &Db, tenant_id: &str, message_id: &str) -> anyho
 }
 
 /// Writes the row of a message as the write model sees it, opened.
-pub async fn upsert_message(db: &Db, tenant_id: &str, message: &Message) -> anyhow::Result<()> {
+pub(crate) async fn upsert_message(
+    db: &Db,
+    tenant_id: &str,
+    message: &Message,
+) -> anyhow::Result<()> {
     db.execute(
         "INSERT INTO support_messages (tenant_id, id, first_name, last_name, email, body,
             language, status, received_at, handled_at, updated_at)

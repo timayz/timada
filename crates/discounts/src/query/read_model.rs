@@ -47,7 +47,7 @@ async fn on_discount_event<E: Executor>(
 }
 
 /// Writes the row of a discount as the write model sees it.
-pub async fn upsert_discount(
+pub(crate) async fn upsert_discount(
     db: &Db,
     tenant_id: &str,
     discount: &DiscountState,

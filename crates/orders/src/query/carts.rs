@@ -38,6 +38,26 @@ pub async fn open_carts(
     .await
 }
 
+/// The payments of a cart the provider would not give back, for good:
+/// `(payment id, what the provider said)`, for the merchant to settle in the
+/// provider's own dashboard.
+pub async fn cart_refused_returns(
+    db: &Db,
+    tenant_id: &str,
+    cart_id: &str,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let row: Option<(String,)> = db
+        .fetch_optional(
+            "SELECT refused_returns FROM orders_carts WHERE tenant_id = ?1 AND id = ?2",
+            (tenant_id, cart_id),
+        )
+        .await?;
+    Ok(match row {
+        Some((refused,)) => serde_json::from_str(&refused)?,
+        None => Vec::new(),
+    })
+}
+
 /// How many carts [`open_carts`] would list.
 pub async fn count_open_carts(db: &Db, tenant_id: &str) -> anyhow::Result<i64> {
     db.fetch_scalar(
