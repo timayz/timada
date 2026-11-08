@@ -31,7 +31,9 @@ pub fn release_subscription<E: Executor>(store: Evento) -> SubscriptionBuilder<E
     SubscriptionBuilder::new(RELEASE_SUBSCRIPTION)
         .data(Store(store))
         .handler(on_archived())
-        .any_routing_key()
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
         .retry(5)
 }
 

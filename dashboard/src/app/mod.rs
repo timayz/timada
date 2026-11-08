@@ -85,6 +85,8 @@ pub struct Services {
     /// shoppers.
     pub email_codes: crate::seal::EmailCodes,
     pub shopper_codes: crate::seal::ShopperCodes,
+    /// What derives the invitation links' tokens.
+    pub invitation_tokens: crate::seal::InvitationTokens,
     /// The tenants' Stripe accounts and the provider they are reached through.
     pub payments: Arc<crate::payments::Payments>,
     /// The shops' own mail servers.
@@ -93,6 +95,8 @@ pub struct Services {
     pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
     /// The live store connections, so revoking a key ends them.
     pub store: Arc<StoreConnections>,
+    /// The subscriptions this node runs, for the cluster page.
+    pub workers: crate::workers::Workers,
     pub config: Config,
 }
 
@@ -110,10 +114,12 @@ pub fn router(services: Services) -> Router {
         limits,
         email_codes,
         shopper_codes,
+        invitation_tokens,
         payments,
         shop_mail,
         aliexpress,
         store,
+        workers,
         config,
     } = services;
     // The bundle sits next to the binary; `topcoat dev` writes it after every
@@ -163,9 +169,11 @@ pub fn router(services: Services) -> Router {
         .app_context(keys)
         .app_context(email_codes)
         .app_context(shopper_codes)
+        .app_context(invitation_tokens)
         .app_context(payments)
         .app_context(aliexpress)
         .app_context(store)
+        .app_context(workers)
         .app_context(limits)
         // The transport behind `topcoat::mail::send`, and who the codes come from.
         .mail(mailer.transport)

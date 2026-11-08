@@ -33,7 +33,9 @@ pub fn invitation_grants_subscription<E: Executor>(store: Evento) -> Subscriptio
     SubscriptionBuilder::new(INVITATION_GRANTS_SUBSCRIPTION)
         .data(Store(store))
         .handler(on_accepted())
-        .any_routing_key()
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
         .tenant("")
         .retry(5)
 }

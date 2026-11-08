@@ -79,7 +79,9 @@ pub fn subscription<E: Executor>(checkouts: Checkouts) -> SubscriptionBuilder<E>
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(checkouts)
         .handler(on_checkout_requested())
-        .any_routing_key()
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
         .retry(5)
 }
 
@@ -129,13 +131,18 @@ impl Checkouts {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
+        // A request nobody waits for any more (this node replaying its
+        // history after a long absence) is refused before anything is read
+        // for it: no supplier call, no pricing.
+        if now.saturating_sub(requested_at) > ANSWER_WINDOW_SECS {
+            refuse(PAYMENTS_UNAVAILABLE).await?;
+            return Ok(());
+        }
 
         // What the shop buys as it sells is read first, so the checks below
         // go by what the supplier asks now: a price that moved is
-        // `price_changed`, goods it ran out of are `out_of_stock`. Only for a
-        // request someone waits for.
-        if now.saturating_sub(requested_at) <= ANSWER_WINDOW_SECS
-            && let Some(cart) = orders.load_cart(cart_id).await?
+        // `price_changed`, goods it ran out of are `out_of_stock`.
+        if let Some(cart) = orders.load_cart(cart_id).await?
             && !cart.is_checked_out()
             && cart
                 .request(request_id)
@@ -160,10 +167,6 @@ impl Checkouts {
                 None => return Err(err.into()),
             },
         };
-        if now.saturating_sub(requested_at) > ANSWER_WINDOW_SECS {
-            refuse(PAYMENTS_UNAVAILABLE).await?;
-            return Ok(());
-        }
         // Goods a supplier buys once the order is placed keep the money held
         // until they are bought; otherwise it is taken as soon as the order is.
         pending.supplier = self.goods.supplier_of(tenant_id, &pending.lines).await?;

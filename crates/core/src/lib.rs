@@ -1,8 +1,9 @@
 //! What every bounded context shares: the refusal code of a write the
 //! store is not taking right now, the reading of a shopper's language and
 //! time zone, the keys personal data is sealed under ([`keys`]), what a
-//! stream keeps of a mailed code ([`codes`]), when a claim on a slug or a
-//! code may be taken over ([`claim`]), and the small rules every
+//! stream keeps of a mailed code or link ([`codes`]) and where its mail
+//! stands ([`sending`]), when a claim on a slug or a code may be taken over
+//! ([`claim`]), and the small rules every
 //! context would otherwise write for itself: the canonical form of an
 //! e-mail address ([`email`]), of a slug ([`slug`]) and of a currency
 //! ([`currency`]), the clock ([`time`]), calendar dates ([`civil`]), an
@@ -19,17 +20,19 @@ pub mod db;
 pub mod email;
 pub mod keys;
 pub mod money;
+pub mod sending;
 pub mod slug;
 pub mod sql;
 pub mod time;
 
 use evento::WriteError;
 
-pub use codes::{CodeVerifier, HmacCodeVerifier};
+pub use codes::{CodeVerifier, HmacCodeVerifier, TokenDeriver, new_nonce};
 pub use currency::{CURRENCIES, normalize_currency};
 pub use email::{MAX_EMAIL_LEN, normalize_email};
 pub use keys::{Key, Keys};
 pub use money::{currency_symbol, format_amount, format_money, format_money_range};
+pub use sending::{Claim, Claimant, LEASE_SECS, Sending};
 pub use slug::{
     MIN_SLUG_LEN, SLUG_SUFFIX_LEN, normalize_slug, slugify, suffixed_slug, truncate_slug,
 };

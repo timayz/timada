@@ -1,5 +1,6 @@
-//! `/admin/cluster`: this node, as its consensus engine sees it. Every node
-//! shows its own view; open the page on each node of a cluster.
+//! `/admin/cluster`: this node, as its consensus engine sees it, and the
+//! subscriptions it runs. Every node shows its own view; open the page on
+//! each node of a cluster.
 
 use std::sync::Arc;
 
@@ -20,6 +21,7 @@ use crate::store_api::StoreConnections;
 use crate::ui::{
     Shell, Tone, document, empty_row, fact, facts, icons, page_header, section_card, status_badge,
 };
+use crate::workers::{WorkerState, Workers};
 use topcoat::icon::icon;
 
 /// How another node stands, for the table.
@@ -49,6 +51,27 @@ fn format_silence(secs: u64) -> String {
     }
 }
 
+/// The word for a worker's state, and its colour; what else the row says.
+fn worker_label(state: &WorkerState) -> (&'static str, Tone, String) {
+    match state {
+        WorkerState::Running => ("Running", Tone::Success, String::new()),
+        WorkerState::Restarting {
+            error,
+            since,
+            attempts,
+        } => (
+            "Restarting",
+            Tone::Warning,
+            format!(
+                "failed {} ago, {attempts} restart{} tried: {error}",
+                format_silence(crate::auth::now().saturating_sub(*since)),
+                if *attempts == 1 { "" } else { "s" }
+            ),
+        ),
+        WorkerState::Stopped { reason } => ("Stopped", Tone::Warning, reason.clone()),
+    }
+}
+
 /// The word for the node's state, and its colour.
 fn state(health: &NodeHealth) -> (&'static str, Tone) {
     if health.rolled_back {
@@ -74,6 +97,25 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         "single node".to_owned()
     } else {
         format!("node {} of {}", health.id.0, health.nodes)
+    };
+    // The workers not running are the ones worth a row.
+    let workers = app_context::<Workers>(cx).states();
+    let running = workers
+        .iter()
+        .filter(|(_, state)| state.is_running())
+        .count();
+    let troubled: Vec<(String, &'static str, Tone, String)> = workers
+        .iter()
+        .filter(|(_, state)| !state.is_running())
+        .map(|(name, state)| {
+            let (label, tone, detail) = worker_label(state);
+            (name.clone(), label, tone, detail)
+        })
+        .collect();
+    let workers_label = if troubled.is_empty() {
+        format!("all {running} running")
+    } else {
+        format!("{running} of {} running", workers.len())
     };
     let storefronts_label = match storefronts {
         0 => "none".to_owned(),
@@ -124,11 +166,41 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         (kept) " of " (limit) " for nodes that are away"
                     )
                     fact(term: "Storefronts connected", attrs: attributes! { data-storefronts=(storefronts) }, (&storefronts_label))
+                    fact(
+                        term: "Background workers",
+                        attrs: attributes! { data-workers=(workers.len()) data-workers-troubled=(troubled.len()) },
+                        (&workers_label)
+                    )
                     if health.joined_at_start {
                         fact(term: "Last start", "copied the store from another node")
                     }
                 )
             )
+
+            if !troubled.is_empty() {
+                section_card(
+                    title: Some("Workers not running"),
+                    table(
+                        table_header(
+                            table_row(
+                                table_head("Worker")
+                                table_head("State")
+                                table_head("Detail")
+                            )
+                        )
+                        table_body(
+                            for (name, label, tone, detail) in &troubled {
+                                table_row(
+                                    attrs: attributes! { data-worker=(name.as_str()) },
+                                    table_cell((name))
+                                    table_cell(status_badge(tone: *tone, (*label)))
+                                    table_cell((detail))
+                                )
+                            }
+                        )
+                    )
+                )
+            }
 
             if health.nodes > 1 {
                 section_card(

@@ -52,14 +52,14 @@ pub(crate) use passkey_index::free_passkey_index;
 use evento::{
     Executor, Projection, ProjectionAggregate, WriteBuilder, WriteError, metadata::Event,
 };
-use timada_core::CodeVerifier;
+use timada_core::{CodeVerifier, Sending};
 
 use crate::aggregator::{
     AdminGranted, AdminRevoked, AttemptFailed, Claimed, CodeIssued, Consumed, Created, Deleted,
-    EmailAdded, EmailRegistered, Ended, FirstUserClaimed, Linked, OAuth2AccountLinked,
-    OAuth2AccountUnlinked, PasskeyAdded, PasskeyRemoved, PasskeyRenamed, PasswordChanged,
-    ProfileUpdated, Refreshed, Registered, Released, Removed, SessionsRevoked, SignedIn,
-    SignedInWithPassword, SignedOut, Started, Unlinked, Updated,
+    EmailAdded, EmailRegistered, Ended, FirstUserClaimed, Linked, MailClaimed, MailSent,
+    MailUndeliverable, OAuth2AccountLinked, OAuth2AccountUnlinked, PasskeyAdded, PasskeyRemoved,
+    PasskeyRenamed, PasswordChanged, ProfileUpdated, Refreshed, Registered, Released, Removed,
+    SessionsRevoked, SignedIn, SignedInWithPassword, SignedOut, Started, Unlinked, Updated,
 };
 use crate::error::IdentityError;
 use crate::value_object::{
@@ -652,8 +652,15 @@ async fn on_email_released(
 pub struct EmailChallengeState {
     pub id: String,
     pub purpose: ChallengePurpose,
-    /// The code's MAC under the host's key; see `CodeIssued`.
-    pub code_tag: Vec<u8>,
+    /// The normalized address the code goes to.
+    pub email: String,
+    /// What the current code derives from under the host's key; see
+    /// `CodeIssued`.
+    pub nonce: Vec<u8>,
+    /// The stream version of the current `CodeIssued`: what the mail
+    /// subscription compares its event with, so an older code's event,
+    /// replayed, mails nothing.
+    pub issued_version: u16,
     /// Unix seconds.
     pub issued_at: u64,
     /// Unix seconds.
@@ -662,6 +669,8 @@ pub struct EmailChallengeState {
     pub failed_attempts: u32,
     /// The current code was used.
     pub consumed: bool,
+    /// Where the current code's mail stands.
+    pub mail: Sending,
 }
 
 impl EmailChallengeState {
@@ -678,6 +687,9 @@ pub fn email_challenge_projection<E: Executor>() -> Projection<E, EmailChallenge
         .handler(on_code_issued())
         .handler(on_attempt_failed())
         .handler(on_consumed())
+        .handler(on_mail_claimed())
+        .handler(on_mail_sent())
+        .handler(on_mail_undeliverable())
         .strict()
 }
 
@@ -688,11 +700,46 @@ async fn on_code_issued(
 ) -> anyhow::Result<()> {
     state.id = event.aggregate_id.to_owned();
     state.purpose = event.data.purpose;
-    state.code_tag = event.data.code_tag.to_owned();
+    state.email = event.data.email.to_owned();
+    state.nonce = event.data.nonce.to_owned();
+    state.issued_version = event.version;
     state.issued_at = event.data.issued_at;
     state.expires_at = event.data.expires_at;
     state.failed_attempts = 0;
     state.consumed = false;
+    state.mail = Sending::Pending;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_claimed(
+    event: Event<MailClaimed>,
+    state: &mut EmailChallengeState,
+) -> anyhow::Result<()> {
+    state.mail = Sending::Claimed {
+        by: event.data.by.to_owned(),
+        until: event.data.until,
+    };
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_sent(
+    _event: Event<MailSent>,
+    state: &mut EmailChallengeState,
+) -> anyhow::Result<()> {
+    state.mail = Sending::Sent;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_undeliverable(
+    event: Event<MailUndeliverable>,
+    state: &mut EmailChallengeState,
+) -> anyhow::Result<()> {
+    state.mail = Sending::Undeliverable {
+        reason: event.data.reason.to_owned(),
+    };
     Ok(())
 }
 
@@ -1008,8 +1055,18 @@ impl<E: Executor> Command<E> {
         &self,
         email: &str,
     ) -> anyhow::Result<Option<EmailChallengeState>> {
+        self.load_email_challenge_by_id(&email_challenge_id(email))
+            .await
+    }
+
+    /// The challenge stream `id` names ([`email_challenge_id`]), as the mail
+    /// subscription reads it.
+    pub async fn load_email_challenge_by_id(
+        &self,
+        id: &str,
+    ) -> anyhow::Result<Option<EmailChallengeState>> {
         email_challenge_projection()
-            .load(email_challenge_id(email))
+            .load(id)
             .execute(&self.executor)
             .await
     }

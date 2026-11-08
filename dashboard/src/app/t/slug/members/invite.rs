@@ -6,18 +6,17 @@ use topcoat::{
     router::{
         content::Form,
         error::{SeeOther, see_other},
-        href, route,
+        route,
     },
 };
 
 use super::members_url;
-use crate::app::invitations::token::{Token, index as invitation_page};
-use crate::app::t::slug::{require_tenant, role_label};
+use crate::app::t::slug::require_tenant;
 use crate::app::tenants::{error_code, tenancy};
 use crate::auth::{now, require_user};
 use crate::config::Config;
 use crate::db::Db;
-use crate::mail::send_invitation;
+use crate::seal::InvitationTokens;
 
 #[derive(Deserialize)]
 struct InviteForm {
@@ -25,13 +24,13 @@ struct InviteForm {
     role: String,
 }
 
-/// Records an invitation and mails its link. When the mail cannot go out the
-/// invitation is withdrawn again (best effort), so a retry sends a fresh one.
-/// Refused once the tenant, or the sender, has sent its share within the
-/// configured window.
+/// Records an invitation; its link is mailed by the subscription that
+/// follows the stream ([`crate::invitation_mails`]), and the members page
+/// says how that went. Refused once the tenant, or the sender, has sent its
+/// share within the configured window.
 #[route(POST)]
 pub async fn invite(cx: &Cx, Form(form): Form<InviteForm>) -> Result<SeeOther> {
-    let user = require_user(cx).await?;
+    require_user(cx).await?;
     let access = require_tenant(cx).await?;
     let slug = access.tenant.slug.as_str();
     let limits = &app_context::<Config>(cx).invitations;
@@ -59,9 +58,9 @@ pub async fn invite(cx: &Cx, Form(form): Form<InviteForm>) -> Result<SeeOther> {
         )));
     }
 
-    let tenancy = tenancy(cx);
-    let sent = match tenancy
+    let sent = match tenancy(cx)
         .invite_member(
+            &*app_context::<InvitationTokens>(cx).0,
             &access.user_id,
             InviteMember {
                 tenant_id: access.tenant.id.clone(),
@@ -84,33 +83,13 @@ pub async fn invite(cx: &Cx, Form(form): Form<InviteForm>) -> Result<SeeOther> {
         Err(err) => return Err(err.into()),
     };
 
-    let link = href!(invitation_page, Token(sent.token.clone()))
-        .absolute()
-        .resolve(cx);
-    let role = role_label(&access.tenant, &sent.invitation.role);
-    if let Err(err) = send_invitation(
-        cx,
-        &sent.invitation.email,
-        &access.tenant.name,
-        &user.label,
-        &role,
-        &link,
-    )
-    .await
-    {
-        tracing::warn!(%err, invitation = %sent.invitation.id, "cannot mail the invitation");
-        if let Err(revoke) = tenancy
-            .revoke_invitation(&access.user_id, &sent.invitation.id, now())
-            .await
-        {
-            tracing::warn!(%revoke, invitation = %sent.invitation.id, "cannot withdraw the unsent invitation");
-        }
-        return Ok(see_other(members_url(cx, slug, Some("mail_failed"), None)));
-    }
     Ok(see_other(members_url(
         cx,
         slug,
         None,
-        Some(&format!("Invitation sent to {}.", sent.invitation.email)),
+        Some(&format!(
+            "Sending the invitation to {}…",
+            sent.invitation.email
+        )),
     )))
 }

@@ -1,9 +1,10 @@
-//! `POST /store/shoppers/code` `email=…&language=fr`: mails a sign-in code
-//! to the address, from the shop, in the shopper's language when the shop
-//! has that wording (`language` is a tag or a whole `Accept-Language`
-//! value; optional). Any address gets one: the first sign-in creates the
-//! account. 202 `{}` once mailed; 429 `{"error": "code_recently_sent"}`
-//! within a minute of the last one.
+//! `POST /store/shoppers/code` `email=…&language=fr`: issues a sign-in code
+//! for the address, which the shop mails right after
+//! ([`crate::code_mails`]), in the shopper's language when the shop has that
+//! wording (`language` is a tag or a whole `Accept-Language` value;
+//! optional). Any address gets one: the first sign-in creates the account.
+//! 202 `{}` once the code is recorded; 429 `{"error": "code_recently_sent"}`
+//! within a minute of the last one, unless that one could not be delivered.
 //!
 //! Each key, and each shopper at a shop, may have only so many codes mailed
 //! within `[store]`'s window: past it, 429 `{"error": "too_many_requests"}`
@@ -28,7 +29,6 @@ use topcoat::{
 use super::{Answer, answer_error, refused, status};
 use crate::auth::now;
 use crate::config::Config;
-use crate::mail::send_shopper_code;
 use crate::rate_limit::{RateLimiter, allow_shopper_code};
 
 /// The header a storefront reports its shopper's address in.
@@ -71,24 +71,19 @@ pub async fn code(cx: &Cx, Form(form): Form<CodeForm>) -> Result<Answer> {
         Err(answer) => return answer,
     };
     let store = super::super::store(cx, &access);
-    let issued = match timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
-        .issue_code(&*codes, &form.email, now())
+    let keys = super::keys(cx, &access.tenant.id);
+    // Recorded here, mailed by the subscription that follows the stream.
+    if let Err(err) = timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
+        .issue_code(
+            &*keys,
+            &*codes,
+            &form.email,
+            form.language.as_deref(),
+            now(),
+        )
         .await
     {
-        Ok(issued) => issued,
-        Err(err) => return answer_error(err),
-    };
-    let language = form
-        .language
-        .as_deref()
-        .and_then(timada_core::primary_language);
-    send_shopper_code(
-        cx,
-        &issued.email,
-        &access.tenant,
-        &issued.code,
-        language.as_deref(),
-    )
-    .await?;
+        return answer_error(err);
+    }
     status(StatusCode::ACCEPTED)
 }

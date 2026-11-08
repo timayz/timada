@@ -29,5 +29,6 @@ export async function invite(page: Page, email: string, role: string) {
   await page.getByLabel("E-mail address").fill(email);
   await page.getByLabel("Invite as").selectOption({ label: role });
   await page.getByRole("button", { name: "Send invitation" }).click();
-  await expect(page.getByRole("status")).toContainText(`Invitation sent to ${email.toLowerCase()}.`);
+  // The link is mailed after the request answers; `inviteLink` waits for it.
+  await expect(page.getByRole("status")).toContainText(`Sending the invitation to ${email.toLowerCase()}`);
 }
