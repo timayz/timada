@@ -1,7 +1,7 @@
 use super::*;
 use crate::rates::ExchangeRate;
 use crate::tax::{Regime, TaxProfile};
-use crate::value_object::{PAYMENT_METHOD_CARD, book_id};
+use crate::value_object::{PAYMENT_METHOD_CARD, VatSubtotal, book_id};
 
 /// The tenant the tests act in, unless they say otherwise.
 const TENANT: &str = "tenant-1";
@@ -167,6 +167,57 @@ async fn invoices_are_numbered_in_turn_and_once_per_order() {
         cmd.issue_invoice_here(wrong, NOW).await.unwrap_err(),
         InvoicingError::TotalMismatch
     ));
+}
+
+#[tokio::test]
+async fn an_issued_document_is_copied_into_its_index_stream() {
+    let cmd = command().await;
+    let first = cmd.issue_invoice_here(invoice("o1"), NOW).await.unwrap();
+    let index = document_projection()
+        .load(invoice_id("o1"))
+        .tenant(&cmd.tenant)
+        .execute(&cmd.executor)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(index.book_id.as_deref(), Some(book_id("F2026", 0).as_str()));
+    assert_eq!(index.document, Some(first));
+}
+
+#[tokio::test]
+async fn a_document_is_read_from_its_index_alone() {
+    // An index whose book is nowhere in this store: what a page reads is the
+    // index's own copy, so the book is never replayed to show one document.
+    let cmd = command().await;
+    let document_id = invoice_id("o1");
+    let document = IssuedDocument {
+        document_id: document_id.clone(),
+        kind: DocumentKind::Invoice,
+        series: "F2026".into(),
+        number: 1,
+        label: "F2026-000001".into(),
+        order_id: "o1".into(),
+        total_cents: 4499,
+        ..IssuedDocument::default()
+    };
+    evento::append(&document_id)
+        .original_version(0)
+        .event(&Reserved {
+            series: "F2026".into(),
+            year: 2026,
+        })
+        .event(&Recorded {
+            book_id: book_id("F2026", 0),
+            document: document.clone(),
+        })
+        .tenant(&cmd.tenant)
+        .commit(&cmd.executor)
+        .await
+        .unwrap();
+    assert_eq!(
+        cmd.load_invoice_of_order("o1").await.unwrap(),
+        Some(document)
+    );
 }
 
 #[tokio::test]
