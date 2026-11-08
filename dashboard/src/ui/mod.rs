@@ -312,6 +312,9 @@ pub fn describe_error(code: &str) -> &'static str {
             "The hold on the shopper's card had expired: nothing was taken. AliExpress may have the order, so it stays open: settle it with the shopper, then cancel it."
         }
         "order_fulfilled" => "This order has left already.",
+        "not_kept_open" => {
+            "Only an order whose card hold lapsed while AliExpress may have it is settled outside timada: take the payment instead."
+        }
         "hold_expiring" => {
             "The hold on the shopper's card ends too soon to buy the goods: take the payment first."
         }

@@ -78,6 +78,10 @@ pub enum OrderError {
     SupplierAsking,
     #[error("the shop is preparing this order: it can no longer be cancelled")]
     OrderInPreparation,
+    #[error(
+        "only an order whose card hold lapsed while the supplier may have it is settled outside timada"
+    )]
+    NotKeptOpen,
     #[error("the refund must be more than nothing and at most what is outstanding")]
     InvalidRefund,
     #[error("the tracking number is at most 200 characters")]
@@ -189,6 +193,7 @@ impl OrderError {
             Self::SupplierOrdered => "supplier_ordered",
             Self::SupplierAsking => "supplier_asking",
             Self::OrderInPreparation => "order_in_preparation",
+            Self::NotKeptOpen => "not_kept_open",
             Self::InvalidRefund => "invalid_refund",
             Self::InvalidTracking => "invalid_tracking",
             Self::InvalidReason => "invalid_reason",

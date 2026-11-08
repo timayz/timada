@@ -3257,6 +3257,76 @@ async fn a_dropped_hold_leaves_an_order_aliexpress_may_have_to_the_merchant() {
     h.finish().await;
 }
 
+/// The merchant collected the money of a kept-open order outside timada and
+/// says so: the order is paid, its invoice issued with the payment shown as
+/// settled outside, nothing asked of Stripe, and nothing left for the sweep.
+#[tokio::test]
+async fn an_order_kept_open_is_settled_outside_timada_and_invoiced() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let sweep = PendingPayments::new(h.db.clone(), h.store(&acme), h.payments.clone());
+    *h.goods.supplier.lock().unwrap() = Some("aliexpress".into());
+    let order_id = h.place(&acme, checkout(Some(2500))).await;
+    orders
+        .begin_supplier_order("timada-aliexpress", &order_id, "aliexpress", now() as u64)
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    h.stripe.lapse(&order.payment.payment_id);
+    let body = canceled(&order.payment.payment_id);
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::HoldDropped {
+            order_id: order_id.clone()
+        }
+    );
+    let invoicing = timada_invoicing::Command::new(h.store(&acme), &acme.id);
+    assert!(
+        invoicing
+            .load_invoice_of_order(&order_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    orders
+        .settle_outside("alice", &order_id, Some("Paid by bank transfer".into()))
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Paid);
+    assert_eq!(order.payment_state(), "settled_outside");
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
+    assert_eq!(invoice.order_id, order_id);
+    assert_eq!(
+        invoice.payment_method.as_deref(),
+        Some(timada_invoicing::PAYMENT_METHOD_OUTSIDE)
+    );
+    assert_eq!(invoice.total_cents, 2500);
+    // Nothing for Stripe: the sweep passes it over, even unreachable.
+    timada_orders::read_model_subscription::<cluster::Executor>(h.db.clone())
+        .run_once(&h.platform.0)
+        .await
+        .unwrap();
+    h.stripe
+        .unreachable
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let far = now() as u64 + 30 * 86_400;
+    assert_eq!(sweep.sweep(far).await.unwrap(), 0);
+    h.stripe
+        .unreachable
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        timada_orders::money_owed(&h.db, &acme.id).await.unwrap(),
+        0,
+        "nothing held or owed"
+    );
+    h.finish().await;
+}
+
 /// The shop took its Stripe keys away: an order kept open once its hold went
 /// back holds nothing, so its cancellation is still settled, by the sweep,
 /// without them.

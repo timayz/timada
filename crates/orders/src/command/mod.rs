@@ -33,9 +33,10 @@ use crate::aggregator::{
     NewsletterOptInSet, NewsletterOptedIn, Paid, PaymentCancelled, PaymentRefused, PaymentReleased,
     PaymentRequested, PaymentReturnRefused, PaymentReturnRequested, PaymentReturned,
     PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded,
-    Released as ReferenceReleased, ShippingCharged, ShippingGranted, ShippingMethodChosen,
-    StorefrontAddressCleared, StorefrontAddressSet, SupplierOrderRefused, SupplierOrderRuledOut,
-    SupplierOrderStarted, SupplierOrderUncertain, TimeZoneGiven, TimeZoneSet,
+    Released as ReferenceReleased, SettledOutside, ShippingCharged, ShippingGranted,
+    ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet, SupplierOrderRefused,
+    SupplierOrderRuledOut, SupplierOrderStarted, SupplierOrderUncertain, TimeZoneGiven,
+    TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -893,8 +894,13 @@ pub struct OrderState {
     /// What was taken from the shopper's card, in minor units: 0 while the
     /// payment is only held.
     pub paid_cents: u64,
-    /// Unix seconds the money was taken at.
+    /// Unix seconds the money was taken at, or settled outside timada.
     pub paid_at: Option<u64>,
+    /// The merchant collected the money outside timada, once the hold had
+    /// lapsed while the supplier may have the order: paid, nothing taken
+    /// through the provider. The shop's business, not a storefront's.
+    #[serde(skip)]
+    pub settled_outside: Option<OutsideSettlement>,
     /// The provider was asked to take the money and has not answered yet.
     pub pending_capture: Option<PendingCapture>,
     /// Why the provider would not take the money, the last time it was
@@ -959,6 +965,16 @@ pub struct OrderState {
     pub updated_at: u64,
 }
 
+/// Money the merchant collected outside timada.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OutsideSettlement {
+    /// What the merchant wrote of how, if anything.
+    pub note: Option<String>,
+    pub settled_by: String,
+    /// Unix seconds.
+    pub settled_at: u64,
+}
+
 /// A refund asked for, under the key the provider is asked with.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PendingRefund {
@@ -1016,9 +1032,16 @@ impl OrderState {
         self.paid_cents.saturating_sub(self.refunded_cents)
     }
 
-    /// Whether the money was taken.
+    /// Whether the money was taken, or settled outside timada.
     pub fn is_paid(&self) -> bool {
         self.paid_at.is_some()
+    }
+
+    /// Whether the order is kept open: its hold lapsed, nothing taken, while
+    /// the supplier may have it, so nobody cancelled it. The merchant settles
+    /// it: cancels it, or says the money came in outside timada.
+    pub fn is_kept_open(&self) -> bool {
+        self.status == OrderStatus::Authorized && self.released_at.is_some() && !self.is_paid()
     }
 
     /// Whether it went as far as it goes: fulfilled or cancelled.
@@ -1114,10 +1137,12 @@ impl OrderState {
     }
 
     /// Where the money stands, as the read model stores it: `held`,
-    /// `capturing` (asked of the provider), `capture_failed`, `paid` or
-    /// `released`.
+    /// `capturing` (asked of the provider), `capture_failed`, `paid`,
+    /// `settled_outside` (paid, nothing through the provider) or `released`.
     pub fn payment_state(&self) -> &'static str {
-        if self.is_paid() {
+        if self.settled_outside.is_some() {
+            "settled_outside"
+        } else if self.is_paid() {
             "paid"
         } else if self.released_at.is_some() {
             "released"
@@ -1169,6 +1194,7 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_newsletter_opt_in_set())
         .handler(on_time_zone_set())
         .handler(on_hold_lapse_reminded())
+        .handler(on_settled_outside())
         .strict()
 }
 
@@ -1317,6 +1343,27 @@ async fn on_hold_lapse_reminded(
     order: &mut OrderState,
 ) -> anyhow::Result<()> {
     order.hold_reminded_at = Some(event.timestamp);
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_settled_outside(
+    event: Event<SettledOutside>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    if order.status == OrderStatus::Authorized {
+        order.status = OrderStatus::Paid;
+    }
+    // Nothing went through the provider: `paid_cents` stays what it took.
+    order.paid_at = Some(event.timestamp);
+    order.pending_capture = None;
+    order.capture_failure = None;
+    order.settled_outside = Some(OutsideSettlement {
+        note: event.data.note.to_owned(),
+        settled_by: event.data.settled_by.to_owned(),
+        settled_at: event.timestamp,
+    });
     order.updated_at = event.timestamp;
     Ok(())
 }

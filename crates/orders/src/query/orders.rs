@@ -34,8 +34,8 @@ pub struct OrderRow {
     pub discount_cents: i64,
     /// Who supplies some of the goods once placed (`aliexpress`).
     pub supplier: Option<String>,
-    /// `held`, `capturing`, `capture_failed`, `paid` or `released`
-    /// ([`OrderState::payment_state`](crate::OrderState::payment_state)).
+    /// `held`, `capturing`, `capture_failed`, `paid`, `settled_outside` or
+    /// `released` ([`OrderState::payment_state`](crate::OrderState::payment_state)).
     pub payment_state: String,
     /// Unix seconds the hold on the shopper's card lapses at, when known.
     pub capture_before: Option<i64>,

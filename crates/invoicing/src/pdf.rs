@@ -13,8 +13,8 @@ use crate::command::{DocumentKind, IssuedDocument};
 use crate::rates::{ECB_SOURCE, EURO};
 use crate::tax::Regime;
 use crate::value_object::{
-    Address, InvoiceLine, PAYMENT_METHOD_CARD, civil_date, excl_vat, format_amount_fr,
-    format_date_fr, format_rate_fr, lines_breakdown, spread,
+    Address, InvoiceLine, PAYMENT_METHOD_CARD, PAYMENT_METHOD_OUTSIDE, civil_date, excl_vat,
+    format_amount_fr, format_date_fr, format_rate_fr, lines_breakdown, spread,
 };
 
 /// Layout version 1 (see [`TEMPLATE_VERSION`](crate::TEMPLATE_VERSION)).
@@ -424,6 +424,7 @@ fn inputs(document: &IssuedDocument) -> Dict {
     } else {
         let method = match document.payment_method.as_deref() {
             Some(PAYMENT_METHOD_CARD) | None => "carte bancaire",
+            Some(PAYMENT_METHOD_OUTSIDE) => "règlement direct auprès du vendeur",
             Some(other) => other,
         };
         format!(
@@ -552,6 +553,17 @@ mod tests {
                 .starts_with("Facture acquittée : payée par carte bancaire le 14/10/2026")
         );
         assert!(get(&d, "vat").contains("5,5"));
+
+        // Money the merchant collected outside the platform.
+        let outside = IssuedDocument {
+            payment_method: Some(PAYMENT_METHOD_OUTSIDE.into()),
+            ..invoice(Some("FR85120027016"))
+        };
+        let settlement = get(&inputs(&outside), "settlement");
+        assert!(
+            settlement.contains("payée par règlement direct auprès du vendeur le 14/10/2026"),
+            "{settlement}"
+        );
     }
 
     #[test]

@@ -1,13 +1,15 @@
 //! `/t/{slug}/orders/{order_id}`: one order, read from its own stream (so a
 //! change shows at once), with where its money stands and what the merchant
-//! does next: take the payment, mark it fulfilled, or cancel it, and how
-//! its AliExpress items were placed there.
+//! does next: take the payment, mark it fulfilled, cancel it, or say the
+//! money came in outside timada once the hold lapsed, and how its
+//! AliExpress items were placed there.
 
 pub mod aliexpress;
 pub mod cancel;
 pub mod capture;
 pub mod fulfil;
 pub mod not_on_aliexpress;
+pub mod settle_outside;
 
 use std::sync::Arc;
 
@@ -15,7 +17,8 @@ use timada_aliexpress::{ForwardState, ForwardStatus};
 use timada_catalog::format_money;
 use timada_invoicing::{DocumentKind, format_amount_fr};
 use timada_orders::{
-    MAX_REASON_LEN, MAX_TRACKING_LEN, OrderError, OrderState, OrderStatus, SupplierOrder,
+    MAX_NOTE_LEN, MAX_REASON_LEN, MAX_TRACKING_LEN, OrderError, OrderState, OrderStatus,
+    SupplierOrder,
 };
 use timada_tenancy::{
     PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_ORDERS_MANAGE, PERMISSION_ORDERS_READ, ShopMailKind,
@@ -163,7 +166,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let mut mails = Vec::new();
     for (kind, term, shown) in [
         (ShopMailKind::OrderConfirmation, "Confirmation", true),
-        (ShopMailKind::OrderPaid, "Payment mail", order.is_paid()),
+        (
+            ShopMailKind::OrderPaid,
+            "Payment mail",
+            order.is_paid() && order.settled_outside.is_none(),
+        ),
         (
             ShopMailKind::OrderCancelled,
             "Cancellation mail",
@@ -283,9 +290,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let cancelling = order.pending_cancellation.clone();
     let can_fulfil = can_manage && status == OrderStatus::Paid && cancelling.is_none();
     let amount = format_money(order.payment.amount_cents, &order.payment.currency);
-    // Where the money stands: held on the card, being taken, taken, or
-    // given back.
+    // Where the money stands: held on the card, being taken, taken, settled
+    // outside timada, or given back.
     let payment = match (order.paid_at, order.released_at, &order.pending_capture) {
+        (Some(at), _, _) if order.settled_outside.is_some() => format!(
+            "{} settled outside timada {}",
+            format_money(order.total_cents, &order.currency),
+            format_time(at)
+        ),
         (Some(at), _, _) => format!(
             "{} taken {}",
             format_money(order.paid_cents, &order.currency),
@@ -314,11 +326,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map(|pending| format_money(pending.amount_cents, &order.currency));
     let cancel_label = if cancelling.is_some() || pending_refund.is_some() {
         "Retry the cancellation"
+    } else if order.settled_outside.is_some() {
+        "Cancel"
     } else if order.is_paid() {
         "Cancel and refund"
     } else {
         "Cancel and release the hold"
     };
+    // Its hold lapsed while AliExpress may have it: the merchant settles it
+    // with the shopper, and says so here, or cancels it.
+    let can_settle_outside = can_manage && order.is_kept_open() && cancelling.is_none();
+    let settled_outside = order.settled_outside.clone();
     let can_cancel = can_manage
         && matches!(status, OrderStatus::Authorized | OrderStatus::Paid)
         && order.pending_capture.is_none();
@@ -377,6 +395,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     }
                     if let Some(failure) = &order.capture_failure {
                         fact(term: "Payment not taken", attrs: attributes! { data-order-capture-failure="" }, (failure))
+                    }
+                    if let Some(settled) = &settled_outside {
+                        fact(term: "Settled outside", attrs: attributes! { data-order-settled-outside="" }, "the money came in outside timada" if let Some(note) = &settled.note { ": " (note) })
                     }
                     if let Some(at) = order.hold_reminded_at {
                         fact(term: "Reminder", attrs: attributes! { data-order-hold-reminded="" }, "the members who manage orders were mailed " <time datetime=(at)>(format_time(at))</time> " that the hold lapses soon")
@@ -603,10 +624,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 )
             }
 
-            if can_capture || can_fulfil || can_cancel {
+            if can_capture || can_fulfil || can_cancel || can_settle_outside {
                 section_card(
                     title: Some("Next step"),
                     <div class="grid gap-6 md:grid-cols-2">
+                        if can_settle_outside {
+                            <form method="post" action=(href!(settle_outside::settle_outside, Slug(slug.clone()), OrderId(order_id.clone()))) class="flex flex-col gap-4" data-order-settle-outside="">
+                                <p class="text-sm text-muted-foreground">"The hold on the shopper's card lapsed while AliExpress may have this order: nothing can be taken through Stripe any more. Once the shopper paid you another way, say so here: the order counts as paid, its invoice is issued, and AliExpress's tracking fulfils it."</p>
+                                field(
+                                    field_label(attrs: attributes! { for="order-settle-note" }, "How it was paid (optional)")
+                                    input(attrs: attributes! { id="order-settle-note" name="note" type="text" maxlength=(MAX_NOTE_LEN) })
+                                )
+                                <div>
+                                    button(attrs: attributes! { type="submit" }, "Settled outside timada")
+                                </div>
+                            </form>
+                        }
                         if can_capture {
                             <form method="post" action=(href!(capture::capture, Slug(slug.clone()), OrderId(order_id.clone()))) class="flex flex-col gap-4">
                                 <p class="text-sm text-muted-foreground">(if awaits_supplier {
@@ -778,6 +811,12 @@ fn ae_status_label(status: &str) -> &str {
         "IN_CANCEL" => "being cancelled",
         other => other,
     }
+}
+
+#[derive(serde::Deserialize)]
+pub struct SettleOutsideForm {
+    #[serde(default)]
+    pub note: String,
 }
 
 #[derive(serde::Deserialize)]
