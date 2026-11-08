@@ -13,6 +13,7 @@ mod hold_reminders;
 mod invoicing;
 mod key_vault;
 mod mail;
+mod mail_fault;
 mod media;
 mod media_images;
 mod message_keys;
