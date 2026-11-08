@@ -144,6 +144,13 @@ pub const CHECKOUT_CLAIM_SECS: u64 = 15 * 60;
 /// longer ordered from a supplier: buying them and taking the money must both
 /// happen before, even with the provider slow to answer.
 pub const HOLD_MARGIN_SECS: u64 = 12 * 60 * 60;
+/// How long a hold on a card usually lasts, counted from the order: what an
+/// order is held to when the provider did not say.
+pub const HOLD_USUAL_SECS: u64 = 7 * 24 * 60 * 60;
+/// How long before the hold lapses the merchant is reminded of an order the
+/// supplier may have and whose money is still only held: time enough to
+/// look at the supplier and take the payment.
+pub const HOLD_REMINDER_BEFORE_SECS: u64 = 2 * 24 * 60 * 60;
 /// Why an order is cancelled when the hold on the shopper's card lapsed
 /// before the money was taken.
 pub const HOLD_EXPIRED_REASON: &str =

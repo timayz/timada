@@ -107,8 +107,13 @@ async fn on_received<E: Executor>(
         return Ok(());
     };
     let read_models: ReadModels = context.extract();
-    let recipients =
-        mailboxes(timada_identity::users_by_ids(&read_models.0, &recipient_ids(&shop)).await?);
+    let recipients = mailboxes(
+        timada_identity::users_by_ids(
+            &read_models.0,
+            &members_who_may(&shop, PERMISSION_SUPPORT_READ),
+        )
+        .await?,
+    );
     if recipients.is_empty() {
         tracing::debug!(tenant = %event.tenant, message = %message.id, "no member to tell of a message");
         return Ok(());
@@ -139,19 +144,19 @@ async fn on_received<E: Executor>(
     Ok(())
 }
 
-/// The members who may read the messages: the owners, and those whose role
-/// grants `support:read` (or implies it).
-fn recipient_ids(shop: &TenantState) -> Vec<String> {
+/// The members `permission` lets act: the owners, and those whose role
+/// grants it (or implies it).
+pub(crate) fn members_who_may(shop: &TenantState, permission: &str) -> Vec<String> {
     shop.members
         .keys()
-        .filter(|user_id| shop.can(user_id, PERMISSION_SUPPORT_READ))
+        .filter(|user_id| shop.can(user_id, permission))
         .cloned()
         .collect()
 }
 
 /// The addresses to mail among these users: the living ones that have one
 /// (a member who signed up with a provider or a passkey alone has none).
-fn mailboxes(users: Vec<UserRow>) -> Vec<String> {
+pub(crate) fn mailboxes(users: Vec<UserRow>) -> Vec<String> {
     users
         .into_iter()
         .filter(|user| !user.deleted)
@@ -210,7 +215,10 @@ mod tests {
         ] {
             shop.members.insert(user.into(), role.into());
         }
-        assert_eq!(recipient_ids(&shop), vec!["agent", "owner", "reader"]);
+        assert_eq!(
+            members_who_may(&shop, PERMISSION_SUPPORT_READ),
+            vec!["agent", "owner", "reader"]
+        );
     }
 
     #[test]

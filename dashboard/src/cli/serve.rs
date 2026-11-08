@@ -169,6 +169,16 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let unanswered_checkouts =
         crate::payments::UnansweredCheckouts::new(db.clone(), executor.clone())
             .start(payments_every);
+    // Two days before the hold on a shopper's card lapses on an order
+    // AliExpress may have, the members who manage orders are reminded to
+    // take the payment.
+    let hold_reminders = crate::hold_reminders::HoldReminders::new(
+        db.clone(),
+        executor.clone(),
+        crate::hold_reminders::PlatformMail(background_mail.clone()),
+        url.clone(),
+    )
+    .start(payments_every);
 
     // A campaign a merchant sent goes out a batch at a time.
     let newsletter_sends = crate::newsletter_sends::NewsletterSends::new(
@@ -249,6 +259,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     lapsed_checkouts.abort();
     pending_payments.abort();
     unanswered_checkouts.abort();
+    hold_reminders.abort();
     newsletter_sends.abort();
     automation_runs.abort();
     aliexpress_sync.abort();

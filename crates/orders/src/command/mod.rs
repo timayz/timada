@@ -28,14 +28,14 @@ use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BusinessBuyersAccepted, BusinessBuyersRefused,
     BuyerIdentified, CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, CheckedOut,
     CheckoutClaimed, CheckoutRequested, Claimed, Created, DiscountApplied, DiscountGranted,
-    DiscountRemoved, Discounted, Fulfilled, ItemAdded, ItemRemoved, LanguageGiven, LanguageSet,
-    Mailed, MethodAdded, MethodChanged, MethodRemoved, NewsletterOptInSet, NewsletterOptedIn, Paid,
-    PaymentCancelled, PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturnRefused,
-    PaymentReturnRequested, PaymentReturned, PaymentsDisabled, PaymentsEnabled, Placed,
-    QuantitySet, RefundRequested, Refunded, Released as ReferenceReleased, ShippingCharged,
-    ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet,
-    SupplierOrderRefused, SupplierOrderRuledOut, SupplierOrderStarted, SupplierOrderUncertain,
-    TimeZoneGiven, TimeZoneSet,
+    DiscountRemoved, Discounted, Fulfilled, HoldLapseReminded, ItemAdded, ItemRemoved,
+    LanguageGiven, LanguageSet, Mailed, MethodAdded, MethodChanged, MethodRemoved,
+    NewsletterOptInSet, NewsletterOptedIn, Paid, PaymentCancelled, PaymentRefused, PaymentReleased,
+    PaymentRequested, PaymentReturnRefused, PaymentReturnRequested, PaymentReturned,
+    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded,
+    Released as ReferenceReleased, ShippingCharged, ShippingGranted, ShippingMethodChosen,
+    StorefrontAddressCleared, StorefrontAddressSet, SupplierOrderRefused, SupplierOrderRuledOut,
+    SupplierOrderStarted, SupplierOrderUncertain, TimeZoneGiven, TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -905,6 +905,11 @@ pub struct OrderState {
     pub pending_cancellation: Option<PendingCancellation>,
     /// Unix seconds the hold went back to the shopper, nothing taken.
     pub released_at: Option<u64>,
+    /// Unix seconds the merchant was reminded that the hold lapses soon
+    /// while the supplier may have the order. The shop's business, not a
+    /// storefront's.
+    #[serde(skip)]
+    pub hold_reminded_at: Option<u64>,
     /// Whether the goods were ordered from the supplier.
     pub supplier_order: SupplierOrder,
     /// An order to the supplier never said how it went, and the merchant
@@ -1038,6 +1043,37 @@ impl OrderState {
             && self.released_at.is_none()
     }
 
+    /// Whether the money is still only held while the supplier may have the
+    /// order: were the hold to lapse unnoticed, the shop would have paid
+    /// the supplier and the shopper never been charged.
+    pub fn hold_at_risk(&self) -> bool {
+        self.status == OrderStatus::Authorized
+            && !self.is_paid()
+            && self.released_at.is_none()
+            && self.pending_cancellation.is_none()
+            && self.supplier_order == SupplierOrder::Started
+    }
+
+    /// Unix seconds the hold on the shopper's card lapses at: what the
+    /// provider said, or a card's usual week
+    /// ([`HOLD_USUAL_SECS`](crate::HOLD_USUAL_SECS)) after the order.
+    pub fn hold_lapses_at(&self) -> u64 {
+        self.payment
+            .capture_before
+            .unwrap_or(self.placed_at.saturating_add(crate::HOLD_USUAL_SECS))
+    }
+
+    /// Unix seconds the merchant is to be reminded at that the hold lapses
+    /// soon ([`HOLD_REMINDER_BEFORE_SECS`](crate::HOLD_REMINDER_BEFORE_SECS)
+    /// before it does), while [`hold_at_risk`](Self::hold_at_risk) and not
+    /// reminded yet; `None` otherwise.
+    pub fn hold_reminder_due_at(&self) -> Option<u64> {
+        (self.hold_at_risk() && self.hold_reminded_at.is_none()).then(|| {
+            self.hold_lapses_at()
+                .saturating_sub(crate::HOLD_REMINDER_BEFORE_SECS)
+        })
+    }
+
     /// Whether the shopper may still cancel it: its money only held, waiting
     /// for goods a supplier buys once it is placed, nothing asked of the
     /// supplier (or it surely refused), and nothing asked of the provider.
@@ -1132,6 +1168,7 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_language_set())
         .handler(on_newsletter_opt_in_set())
         .handler(on_time_zone_set())
+        .handler(on_hold_lapse_reminded())
         .strict()
 }
 
@@ -1270,6 +1307,16 @@ async fn on_payment_released(
 ) -> anyhow::Result<()> {
     order.released_at = Some(event.timestamp);
     order.pending_capture = None;
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_hold_lapse_reminded(
+    event: Event<HoldLapseReminded>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.hold_reminded_at = Some(event.timestamp);
     order.updated_at = event.timestamp;
     Ok(())
 }

@@ -220,6 +220,7 @@ event timada-orders/Order::CaptureFailed { payment_id: String, reason: String, f
 event timada-orders/Order::CaptureRequested { payment_id: String, amount_cents: u64, requested_by: String }
 event timada-orders/Order::Discounted { discount_id: String, code: String, subtotal_cents: u64, amount_cents: u64, discounted_by: String }
 event timada-orders/Order::Fulfilled { tracking: Option<String>, fulfilled_by: String }
+event timada-orders/Order::HoldLapseReminded { payment_id: String, reminded_by: String }
 event timada-orders/Order::LanguageSet { language: String, set_by: String }
 event timada-orders/Order::NewsletterOptInSet { set_by: String }
 event timada-orders/Order::Paid { payment_id: String, amount_cents: u64, paid_by: String }
