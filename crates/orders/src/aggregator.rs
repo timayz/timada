@@ -391,6 +391,15 @@ pub enum Order {
     /// The shopper's IANA time zone, written with `Placed` when their
     /// browser gave it.
     TimeZoneSet { time_zone: String, set_by: String },
+    /// The merchant was told that the hold on the shopper's card
+    /// (`payment_id`) lapses soon while the supplier may have the order.
+    /// Written by the node that mails them, before the mail goes out and
+    /// once per order, so the others following the tenant leave it be.
+    /// Written by the dashboard, never a shopper.
+    HoldLapseReminded {
+        payment_id: String,
+        reminded_by: String,
+    },
 }
 
 /// The index `reference → order`: one stream per reference, with the

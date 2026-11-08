@@ -3,8 +3,8 @@ mod common;
 use common::*;
 use evento::ProjectionAggregate;
 use timada_orders::{
-    CancelPath, CaptureClaim, HOLD_EXPIRED_REASON, HOLD_MARGIN_SECS, OrderError, OrderStatus,
-    Released, SupplierOrder,
+    CancelPath, CaptureClaim, HOLD_EXPIRED_REASON, HOLD_MARGIN_SECS, HOLD_REMINDER_BEFORE_SECS,
+    HOLD_USUAL_SECS, OrderError, OrderStatus, Released, SupplierOrder,
 };
 
 async fn held(orders: &Orders, catalog: &Catalog) -> String {
@@ -785,5 +785,116 @@ async fn the_shopper_cancels_until_the_supplier_may_have_the_order() {
     assert!(
         matches!(refused, Err(OrderError::OrderInPreparation)),
         "{refused:?}"
+    );
+}
+
+/// The merchant is reminded, once, that the hold lapses soon on an order
+/// AliExpress may have and whose money is still only held: two days before
+/// it does, as the provider said, or a week less two days after the order
+/// when it did not. Taking the money, or ruling the supplier out, ends it.
+#[tokio::test]
+async fn the_merchant_is_reminded_once_before_a_held_card_lapses() {
+    let (orders, catalog) = store().await;
+    let order_id = held(&orders, &catalog).await;
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert!(!order.hold_at_risk(), "nothing asked of the supplier");
+    assert_eq!(order.hold_reminder_due_at(), None);
+    let placed_at = order.placed_at;
+
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert!(order.hold_at_risk());
+    let due = placed_at + HOLD_USUAL_SECS - HOLD_REMINDER_BEFORE_SECS;
+    assert_eq!(order.hold_reminder_due_at(), Some(due));
+    // Not due yet: nothing is taken.
+    assert!(
+        !orders
+            .claim_hold_reminder(DASHBOARD, &order_id, due - 1)
+            .await
+            .unwrap()
+    );
+    assert!(
+        orders
+            .claim_hold_reminder(DASHBOARD, &order_id, due)
+            .await
+            .unwrap()
+    );
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert!(order.hold_reminded_at.is_some());
+    assert!(order.hold_at_risk(), "still at risk, only reminded");
+    assert_eq!(order.hold_reminder_due_at(), None, "reminded already");
+    // The store API answers with this state: the shop's reminders stay out.
+    let answered = serde_json::to_value(&order).unwrap();
+    assert!(answered.get("hold_reminded_at").is_none());
+    // Told again (another node, the next sweep): nothing more.
+    assert!(
+        !orders
+            .claim_hold_reminder(DASHBOARD, &order_id, due + 1)
+            .await
+            .unwrap()
+    );
+
+    // A payment the provider dated: counted from its own end.
+    let mug = product(&catalog, "Cup", 900, "EUR").await;
+    let cart_id = cart_with(&orders, &mug, 1).await;
+    let (_, mut payment) = open_payment(&orders, &cart_id, checkout()).await;
+    payment.capture_before = Some(1_000_000);
+    let dated = orders
+        .place_order(DASHBOARD, &cart_id, payment)
+        .await
+        .unwrap()
+        .order_id;
+    orders
+        .begin_supplier_order(DASHBOARD, &dated, "aliexpress", 0)
+        .await
+        .unwrap();
+    let order = orders.load_order(&dated).await.unwrap().unwrap();
+    assert_eq!(
+        order.hold_reminder_due_at(),
+        Some(1_000_000 - HOLD_REMINDER_BEFORE_SECS)
+    );
+    // Taken meanwhile: no reminder, whatever the time.
+    capture(&orders, &dated).await;
+    let order = orders.load_order(&dated).await.unwrap().unwrap();
+    assert!(!order.hold_at_risk());
+    assert!(
+        !orders
+            .claim_hold_reminder(DASHBOARD, &dated, 2_000_000)
+            .await
+            .unwrap()
+    );
+
+    // Ruled out on the supplier's side: no longer at risk either.
+    let ruled_out = held(&orders, &catalog).await;
+    orders
+        .begin_supplier_order(DASHBOARD, &ruled_out, "aliexpress", 0)
+        .await
+        .unwrap();
+    orders
+        .record_supplier_uncertainty(DASHBOARD, &ruled_out, "aliexpress", "no answer")
+        .await
+        .unwrap();
+    assert!(
+        orders
+            .load_order(&ruled_out)
+            .await
+            .unwrap()
+            .unwrap()
+            .hold_at_risk()
+    );
+    orders
+        .rule_out_supplier_order(ALICE, &ruled_out, "aliexpress")
+        .await
+        .unwrap();
+    let order = orders.load_order(&ruled_out).await.unwrap().unwrap();
+    assert!(!order.hold_at_risk());
+    assert!(
+        !orders
+            .claim_hold_reminder(DASHBOARD, &ruled_out, u64::MAX)
+            .await
+            .unwrap()
     );
 }

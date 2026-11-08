@@ -182,6 +182,33 @@ pub async fn payments_due(
     .await
 }
 
+/// An order whose merchant is to be reminded that its hold lapses soon.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+pub struct HoldReminderDue {
+    pub tenant_id: String,
+    pub id: String,
+}
+
+/// The orders of every tenant whose merchant is due a reminder at `now`
+/// (unix seconds): their money still only held while the supplier may have
+/// them, the reminder not sent, and its time
+/// ([`hold_reminder_due_at`](crate::OrderState::hold_reminder_due_at))
+/// come. Grouped by tenant, the soonest to lapse first; the write model
+/// decides.
+pub async fn hold_reminders_due(
+    db: &Db,
+    now: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<HoldReminderDue>> {
+    db.fetch_all(
+        "SELECT tenant_id, id FROM orders_orders
+         WHERE hold_reminder_at IS NOT NULL AND hold_reminder_at <= ?1
+         ORDER BY tenant_id, hold_reminder_at, id LIMIT ?2",
+        (now, limit),
+    )
+    .await
+}
+
 /// How many payments the tenant still holds or owes, each needing its
 /// provider account to settle:
 /// - orders whose money is held on the shopper's card (an authorized order

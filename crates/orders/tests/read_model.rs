@@ -1,9 +1,11 @@
 mod common;
 
 use common::*;
+use timada_orders::HOLD_REMINDER_BEFORE_SECS;
 use timada_orders::{
-    Command, OrderFilter, OrderStatus, count_orders, fulfilled_between, open_carts,
-    orders_of_email, orders_of_tenant, payments_due, product_ever_ordered, read_model_subscription,
+    Command, OrderFilter, OrderStatus, count_orders, fulfilled_between, hold_reminders_due,
+    open_carts, orders_of_email, orders_of_tenant, payments_due, product_ever_ordered,
+    read_model_subscription,
 };
 
 #[tokio::test]
@@ -208,4 +210,61 @@ async fn an_order_kept_open_without_its_hold_waits_for_the_merchant() {
     let mut both = vec![unread, kept];
     both.sort();
     assert_eq!(due().await, both);
+}
+
+/// The sweep that reminds merchants finds, in the read model, the orders
+/// whose money is still only held while the supplier may have them, once
+/// their time came, and no longer once reminded, or settled either way.
+#[tokio::test]
+async fn orders_due_a_hold_reminder_are_listed_until_reminded() {
+    let (executor, pool) = executor_with_pool().await;
+    let orders = Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    // Holds the provider said lapse at 1,000,000.
+    let dated = async || {
+        let cart_id = cart_with(&orders, &mug, 1).await;
+        let (_, mut payment) = open_payment(&orders, &cart_id, checkout()).await;
+        payment.capture_before = Some(1_000_000);
+        orders
+            .place_order(DASHBOARD, &cart_id, payment)
+            .await
+            .unwrap()
+            .order_id
+    };
+    let at_risk = dated().await;
+    let paid = dated().await;
+    let untouched = dated().await;
+    for id in [&at_risk, &paid] {
+        orders
+            .begin_supplier_order(DASHBOARD, id, "aliexpress", 0)
+            .await
+            .unwrap();
+    }
+    capture(&orders, &paid).await;
+    let due_at = async |now: i64| {
+        read_model_subscription::<evento::Turso>(pool.clone())
+            .run_once(&executor)
+            .await
+            .unwrap();
+        hold_reminders_due(&pool, now, 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.id)
+            .collect::<Vec<_>>()
+    };
+    let reminder = (1_000_000 - HOLD_REMINDER_BEFORE_SECS) as i64;
+
+    assert_eq!(due_at(reminder - 1).await, Vec::<String>::new());
+    assert_eq!(due_at(reminder).await, vec![at_risk.clone()]);
+    let _ = untouched;
+
+    assert!(
+        orders
+            .claim_hold_reminder(DASHBOARD, &at_risk, reminder as u64)
+            .await
+            .unwrap()
+    );
+    assert_eq!(due_at(reminder).await, Vec::<String>::new());
 }

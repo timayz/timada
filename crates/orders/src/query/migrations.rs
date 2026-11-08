@@ -38,9 +38,12 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 cancel_requested_at INTEGER,
                 refund_requested_at INTEGER,
                 paid_at INTEGER,
+                hold_reminder_at INTEGER,
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX orders_orders_placed ON orders_orders (tenant_id, placed_at);
+        CREATE INDEX orders_orders_hold_reminder ON orders_orders (hold_reminder_at)
+                WHERE hold_reminder_at IS NOT NULL;
         CREATE INDEX orders_orders_payment_due ON orders_orders (tenant_id, placed_at)
                 WHERE status = 'authorized' OR cancel_requested_at IS NOT NULL
                     OR refund_requested_at IS NOT NULL;
