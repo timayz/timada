@@ -1,11 +1,13 @@
+use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::{
     AeOrderState, ForwardRow, ForwardState, ForwardStatus, LinkRow, LinkState, LinkStatus,
-    MIGRATIONS, Placement, Share, TABLES, forget_unrecorded, forward_of_order, forwards_due,
-    forwards_stalled, keep_unrecorded, link_of_product, links_due, note_forward_read,
-    note_published, note_read, note_tried, note_unrecorded_try, note_wanted, unrecorded,
-    upsert_forward, upsert_link,
+    LinkedProduct, MIGRATIONS, Placement, PlannedItem, Share, TABLES, forget_unrecorded,
+    forward_of_order, forward_plan_shown, forwards_due, forwards_stalled, keep_unrecorded,
+    link_of_product, linked_products, links_due, note_forward_read, note_published, note_read,
+    note_tried, note_unrecorded_try, note_wanted, unrecorded, upsert_forward, upsert_link,
 };
 use timada_core::db::{Db, Turso};
+use timada_orders::OrderLine;
 
 /// What a shopper wanted before this does not count any more.
 const WANTED_SINCE: i64 = 500;
@@ -354,6 +356,194 @@ async fn a_forward_is_read_whole_by_its_order() {
         forward_of_order(&db, "zeta", "order-1").await.unwrap(),
         None
     );
+
+    // An order has one forward: a second row for it is refused.
+    let twice = ForwardState {
+        id: "fwd-2".to_owned(),
+        order_id: "order-1".to_owned(),
+        ..Default::default()
+    };
+    assert!(upsert_forward(&db, "acme", &twice).await.is_err());
+}
+
+/// The order's page tells an AliExpress line from the rows: the combinations
+/// each variant was imported from are in them, so the plan it shows is the
+/// forwarder's, without a read of the store.
+#[tokio::test]
+async fn a_page_tells_an_aliexpress_line_from_the_rows() {
+    let db = database().await;
+    let sku = |sku_id: &str, variant_id: Option<&str>| SkuLink {
+        sku_id: sku_id.to_owned(),
+        variant_id: variant_id.map(str::to_owned),
+        cost_cents: 100,
+    };
+    let linked = |id: &str, ae: &str, product_id: &str, skus: Vec<SkuLink>, at: u64| LinkState {
+        id: id.to_owned(),
+        ae_product_id: ae.to_owned(),
+        product_id: Some(product_id.to_owned()),
+        status: LinkStatus::Linked,
+        skus,
+        updated_at: at,
+        ..Default::default()
+    };
+    let red_and_blue = vec![sku("A1", Some("red")), sku("A2", Some("blue"))];
+    upsert_link(
+        &db,
+        "acme",
+        &linked("item-1", "1001", "product-1", red_and_blue.clone(), 100),
+    )
+    .await
+    .unwrap();
+    upsert_link(
+        &db,
+        "acme",
+        &linked("item-2", "1002", "product-2", vec![sku("B1", None)], 100),
+    )
+    .await
+    .unwrap();
+    // The same product imported again from another item: the latest fills it.
+    upsert_link(
+        &db,
+        "acme",
+        &linked("item-3", "1003", "product-2", vec![sku("C1", None)], 200),
+    )
+    .await
+    .unwrap();
+    // Unlinked, or another shop's: neither counts.
+    let mut unlinked = linked("item-4", "1004", "product-4", vec![sku("D1", None)], 100);
+    unlinked.status = LinkStatus::Unlinked;
+    upsert_link(&db, "acme", &unlinked).await.unwrap();
+    upsert_link(
+        &db,
+        "zeta",
+        &linked("item-5", "1005", "product-5", vec![sku("E1", None)], 100),
+    )
+    .await
+    .unwrap();
+
+    let found = linked_products(
+        &db,
+        "acme",
+        &[
+            "product-2",
+            "product-1",
+            "product-4",
+            "product-5",
+            "product-2",
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        found,
+        vec![
+            LinkedProduct {
+                ae_product_id: "1001".to_owned(),
+                product_id: "product-1".to_owned(),
+                skus: red_and_blue,
+            },
+            LinkedProduct {
+                ae_product_id: "1003".to_owned(),
+                product_id: "product-2".to_owned(),
+                skus: vec![sku("C1", None)],
+            },
+        ]
+    );
+    assert!(linked_products(&db, "acme", &[]).await.unwrap().is_empty());
+
+    let line = |product_id: &str, variant_id: Option<&str>, quantity: u32| OrderLine {
+        product_id: product_id.to_owned(),
+        variant_id: variant_id.map(str::to_owned),
+        name: product_id.to_owned(),
+        quantity,
+        unit_amount_cents: 1000,
+        ..Default::default()
+    };
+    let plan = forward_plan_shown(
+        &db,
+        "acme",
+        &[
+            line("product-1", Some("red"), 2),
+            line("product-1", Some("red"), 1),
+            line("product-1", Some("hand-made"), 1),
+            line("product-2", None, 1),
+            line("product-4", None, 1),
+        ],
+    )
+    .await
+    .unwrap();
+    assert!(!plan.complete, "a variant added by hand, an unlinked item");
+    assert_eq!(
+        plan.items,
+        vec![
+            PlannedItem {
+                ae_product_id: "1001".to_owned(),
+                sku_id: "A1".to_owned(),
+                quantity: 3,
+            },
+            PlannedItem {
+                ae_product_id: "1003".to_owned(),
+                sku_id: "C1".to_owned(),
+                quantity: 1,
+            },
+        ]
+    );
+    let none = forward_plan_shown(&db, "acme", &[line("product-own", None, 1)])
+        .await
+        .unwrap();
+    assert!(none.items.is_empty());
+}
+
+/// When this node last read a thing is kept for as long as the thing is read
+/// again: an unlinked item's row goes, and so does a settled order's.
+#[tokio::test]
+async fn when_a_node_last_read_a_thing_is_forgotten_once_it_is_no_longer_read() {
+    let db = database().await;
+    let kept = async |db: &Db| -> Vec<String> {
+        let rows: Vec<(String,)> = db
+            .fetch_all(
+                "SELECT id FROM aliexpress_read_times WHERE tenant_id = 'acme' ORDER BY id",
+                (),
+            )
+            .await
+            .unwrap();
+        rows.into_iter().map(|(id,)| id).collect()
+    };
+    seed(&db, "acme", 1, Some(100)).await;
+    note_read(&db, "acme", "acme-0000", 500).await.unwrap();
+    let placed = ForwardState {
+        id: "fwd".to_owned(),
+        order_id: "order-1".to_owned(),
+        status: ForwardStatus::Placed,
+        updated_at: 100,
+        ..Default::default()
+    };
+    upsert_forward(&db, "acme", &placed).await.unwrap();
+    note_forward_read(&db, "acme", "fwd", 500).await.unwrap();
+    assert_eq!(kept(&db).await, ["acme-0000", "fwd"]);
+
+    // Written again as they stand: kept.
+    seed(&db, "acme", 1, Some(100)).await;
+    upsert_forward(&db, "acme", &placed).await.unwrap();
+    assert_eq!(kept(&db).await, ["acme-0000", "fwd"]);
+
+    // Unlinked: the item's row goes. A read noted later makes one again.
+    let unlinked = LinkState {
+        id: "acme-0000".to_owned(),
+        product_id: Some("acme-0000".to_owned()),
+        status: LinkStatus::Unlinked,
+        ..Default::default()
+    };
+    upsert_link(&db, "acme", &unlinked).await.unwrap();
+    assert_eq!(kept(&db).await, ["fwd"]);
+
+    // Done: the order's row goes.
+    let done = ForwardState {
+        status: ForwardStatus::Done,
+        ..placed.clone()
+    };
+    upsert_forward(&db, "acme", &done).await.unwrap();
+    assert!(kept(&db).await.is_empty());
 }
 
 fn forwards_of(due: &[ForwardRow], tenant: &str) -> usize {
@@ -384,6 +574,7 @@ async fn a_shop_alone_fills_the_check_longest_unchanged_first() {
     seed_forwards(&db, "acme", 2, 500).await;
     let oldest = ForwardState {
         id: "oldest".to_owned(),
+        order_id: "order-oldest".to_owned(),
         status: ForwardStatus::Placed,
         updated_at: 100,
         ..Default::default()
@@ -403,6 +594,7 @@ async fn the_due_forwards_of_a_shop_come_together() {
     for (index, tenant) in ["a", "b", "a", "b", "a", "b"].into_iter().enumerate() {
         let forward = ForwardState {
             id: format!("{tenant}-{index}"),
+            order_id: format!("order-{tenant}-{index}"),
             status: ForwardStatus::Placed,
             updated_at: 100 + index as u64,
             ..Default::default()
@@ -472,6 +664,7 @@ async fn an_order_read_or_changed_lately_is_not_due() {
     // A later change of the row does not bring it back, nor an older read.
     let changed = ForwardState {
         id: "acme-0000".to_owned(),
+        order_id: "order-acme-0000".to_owned(),
         status: ForwardStatus::Placed,
         updated_at: 120,
         ..Default::default()
@@ -514,6 +707,7 @@ async fn an_order_with_every_parcel_known_stays_due_until_it_is_settled() {
     };
     let forward = |id: &str, complete: bool, ae_orders: Vec<AeOrderState>| ForwardState {
         id: id.to_owned(),
+        order_id: format!("order-{id}"),
         status: ForwardStatus::Placed,
         complete,
         ae_orders,
@@ -558,6 +752,7 @@ async fn orders_left_being_placed_are_found_once_silent_long_enough() {
     ] {
         let forward = ForwardState {
             id: id.to_owned(),
+            order_id: format!("order-{id}"),
             status,
             updated_at,
             ..Default::default()
@@ -677,6 +872,7 @@ async fn only_placed_orders_are_due() {
     ] {
         let forward = ForwardState {
             id: id.to_owned(),
+            order_id: format!("order-{id}"),
             status,
             ..Default::default()
         };

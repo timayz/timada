@@ -183,7 +183,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await
         .map_err(topcoat::Error::from_anyhow)?
         .map(|at| at.max(0) as u64);
-    let store = access.executor()?.clone();
     let forward = forward_of_order(db, access.tenant_id(), &order.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -191,20 +190,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .connected(&access.tenant)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    // Whether any line is an AliExpress item, for a shop connected to it.
-    // Resolved as the forwarder resolves them (the product's index stream,
-    // then the item's, two reads per distinct product): the read model has
-    // the link but not the combinations each variant was imported from, and
-    // the card offers to place only what the forwarder would buy.
+    // Whether any line is an AliExpress item, for a shop connected to it:
+    // the same plan the forwarder makes, from the read model's rows (the
+    // combinations each variant was imported from are in them). The forward
+    // itself plans from the items' own streams.
     let from_aliexpress = connected
-        && !timada_aliexpress::forward_items(
-            &order.lines,
-            &crate::aliexpress::forward::order_links(&store, &access.tenant.id, &order.lines)
-                .await
-                .map_err(topcoat::Error::from_anyhow)?,
-        )
-        .items
-        .is_empty();
+        && !timada_aliexpress::forward_plan_shown(db, access.tenant_id(), &order.lines)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+            .items
+            .is_empty();
     let manages_aliexpress = access.can(cx, PERMISSION_ALIEXPRESS_MANAGE).await?;
     let open = matches!(order.status, OrderStatus::Authorized | OrderStatus::Paid);
     let can_forward =

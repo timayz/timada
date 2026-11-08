@@ -4,9 +4,9 @@ use timada_core::db::Db;
 
 use common::*;
 use timada_catalog::{
-    Command, ProductFilter, ProductStatus, categories_of_product, categories_of_tenant,
-    category_by_id, count_products, live_child_count, product_by_id, products_of_tenant,
-    read_model_subscription, tree_of, upsert_product,
+    Command, DefineVariant, OptionSelection, ProductFilter, ProductStatus, Sellable,
+    categories_of_product, categories_of_tenant, category_by_id, count_products, live_child_count,
+    product_by_id, products_of_tenant, read_model_subscription, sellable, tree_of, upsert_product,
 };
 
 async fn catch_up(executor: &evento::Turso, pool: &Db) {
@@ -436,5 +436,96 @@ async fn a_search_reads_the_index_of_its_own_tenant() {
             .unwrap(),
         1,
         "the other tenant's product kept its name"
+    );
+}
+
+/// Most events of a product move none of its combinations: their rows are
+/// left as they are, and written again only when one of them moved. Another
+/// product's rows sit in the table too, so a rewrite shows in the row ids.
+#[tokio::test]
+async fn the_combinations_are_written_again_only_when_one_of_them_moved() {
+    let (executor, pool) = executor_with_pool().await;
+    let cmd = Command::new(executor.clone(), TENANT);
+    let sell = |option_id: &str, value: &str, sku: &str, amount_cents: u64| DefineVariant {
+        selections: vec![OptionSelection {
+            option_id: option_id.to_owned(),
+            value: value.to_owned(),
+        }],
+        sku: Some(sku.to_owned()),
+        amount_cents,
+        currency: "EUR".into(),
+        image_id: None,
+    };
+    let harness = create_product(&cmd, "Cat Harness").await;
+    let colour = cmd
+        .define_option(
+            ALICE,
+            &harness.id,
+            "Colour",
+            vec!["Beige".into(), "Blue".into()],
+        )
+        .await
+        .unwrap();
+    let beige = cmd
+        .define_variant(ALICE, &harness.id, sell(&colour, "Beige", "H-BEIGE", 2290))
+        .await
+        .unwrap();
+    cmd.define_variant(ALICE, &harness.id, sell(&colour, "Blue", "H-BLUE", 1990))
+        .await
+        .unwrap();
+    let collar = create_product(&cmd, "Collar").await;
+    let size = cmd
+        .define_option(ALICE, &collar.id, "Size", vec!["S".into()])
+        .await
+        .unwrap();
+    cmd.define_variant(ALICE, &collar.id, sell(&size, "S", "C-S", 990))
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+
+    let rows = async |pool: &Db| -> Vec<(i64, String, Option<String>, i64, bool)> {
+        pool.fetch_all(
+            "SELECT rowid, id, label, amount_cents, on_sale FROM catalog_variants
+             WHERE tenant_id = ?1 AND product_id = ?2 ORDER BY position",
+            (TENANT, harness.id.as_str()),
+        )
+        .await
+        .unwrap()
+    };
+    let before = rows(&pool).await;
+    assert_eq!(before.len(), 2);
+    assert_eq!(before[0].1, beige);
+    assert_eq!(before[0].2.as_deref(), Some("Beige"));
+
+    // A description moves no combination: the rows stay, ids and all.
+    cmd.describe_product(ALICE, &harness.id, "Soft, with a leash ring.")
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+    assert_eq!(rows(&pool).await, before);
+
+    // A price moves one: the rows are written again.
+    cmd.price_variant(ALICE, &harness.id, &beige, 2490, "EUR")
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+    let after = rows(&pool).await;
+    assert_eq!(after[0].3, 2490);
+    assert_eq!(after[1].3, 1990);
+    assert!(
+        after.iter().zip(&before).all(|(now, was)| now.0 != was.0),
+        "written again: {after:?} vs {before:?}"
+    );
+
+    // What a cart is priced with reads the same from the rows as from the
+    // product's own stream, a product sold through its combinations
+    // carrying no price of its own either way.
+    let product = cmd.load_product(&harness.id).await.unwrap().unwrap();
+    let shown = sellable(&pool, TENANT, &harness.id).await.unwrap();
+    assert_eq!(shown, Some(Sellable::of(&product)));
+    assert_eq!(shown.unwrap().price, None);
+    assert!(
+        sellable(&pool, TENANT, "nope").await.unwrap().is_none(),
+        "no row, no product"
     );
 }

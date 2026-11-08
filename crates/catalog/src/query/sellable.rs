@@ -5,7 +5,7 @@
 //! when a payment is priced for real, so one set of rules prices both.
 
 use anyhow::Result;
-use timada_core::db::{Db, FromRow};
+use timada_core::db::{Db, FromRow, fetch_all, fetch_optional};
 
 use crate::command::{Price, ProductState};
 use crate::value_object::DeliveryDays;
@@ -47,7 +47,12 @@ impl Sellable {
             id: product.id.clone(),
             name: product.name.clone(),
             published: product.is_published(),
-            price: product.price.clone(),
+            // A product sold through its combinations carries no price of
+            // its own, as the read model has it too ([`sellable`]).
+            price: product
+                .price
+                .clone()
+                .filter(|_| product.variants.is_empty()),
             tax_category: product.tax_category().to_owned(),
             delivery_days: product.delivery_days,
             variant_count: product.variants.len(),
@@ -117,27 +122,40 @@ struct VariantRow {
 }
 
 /// A product as the read model has it, or `None` for one the tenant has
-/// not (or no longer: a deleted product loses its rows).
+/// not (or no longer: a deleted product loses its rows). The row and its
+/// combinations are read in one transaction, so they are of one moment: the
+/// subscription writes both in one.
 pub async fn sellable(db: &Db, tenant_id: &str, product_id: &str) -> Result<Option<Sellable>> {
-    let Some(row) = db
-        .fetch_optional::<SellableRow>(
-            "SELECT id, name, status, amount_cents, currency, tax_category, delivery_min_days,
-                delivery_max_days, variant_count
-             FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
-            (tenant_id, product_id),
-        )
-        .await?
-    else {
+    let env = (tenant_id, product_id);
+    let rows = db
+        .read(&env, |conn, (tenant_id, product_id)| {
+            Box::pin(async move {
+                let Some(row) = fetch_optional::<SellableRow>(
+                    conn,
+                    "SELECT id, name, status, amount_cents, currency, tax_category,
+                        delivery_min_days, delivery_max_days, variant_count
+                     FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
+                    (*tenant_id, *product_id),
+                )
+                .await?
+                else {
+                    return Ok(None);
+                };
+                let variants: Vec<VariantRow> = fetch_all(
+                    conn,
+                    "SELECT id, sku, label, amount_cents, currency FROM catalog_variants
+                     WHERE tenant_id = ?1 AND product_id = ?2 AND on_sale = 1
+                     ORDER BY position",
+                    (*tenant_id, *product_id),
+                )
+                .await?;
+                Ok(Some((row, variants)))
+            })
+        })
+        .await?;
+    let Some((row, variants)) = rows else {
         return Ok(None);
     };
-    let variants: Vec<VariantRow> = db
-        .fetch_all(
-            "SELECT id, sku, label, amount_cents, currency FROM catalog_variants
-             WHERE tenant_id = ?1 AND product_id = ?2 AND on_sale = 1
-             ORDER BY position",
-            (tenant_id, product_id),
-        )
-        .await?;
     let price = match (row.amount_cents, &row.currency) {
         // A product sold through its combinations carries their currency
         // and no amount of its own.
