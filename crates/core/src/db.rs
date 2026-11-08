@@ -6,9 +6,11 @@
 //! transaction ([`Db::write`]) runs alongside the node's event writes and is
 //! run again, whole, should another writer change the same rows; a page
 //! reads on a connection of its own ([`Db::connect`], or the one-shot
-//! [`Db::fetch_all`] and friends). The SQL is written as text, with `?N`
-//! placeholders and a tuple of values, and rows are read back into a struct
-//! deriving [`FromRow`] (one field per column) or a tuple (by position).
+//! [`Db::fetch_all`] and friends), or in one read transaction when its
+//! queries have to agree with each other ([`Db::read`]). The SQL is written
+//! as text, with `?N` placeholders and a tuple of values, and rows are read
+//! back into a struct deriving [`FromRow`] (one field per column) or a tuple
+//! (by position).
 //!
 //! Full-text search is Turso's index on the table itself: a [`search_key`]
 //! column next to each searched one, lowercased and stripped of accents, and
@@ -70,6 +72,34 @@ impl Db {
         F: for<'c> FnMut(&'c Connection, &'c E) -> Body<'c, T>,
     {
         self.0.transaction(env, body).await
+    }
+
+    /// Runs `body` over `env` as one read transaction on a connection of its
+    /// own, so its queries see the tables as they stood at one moment: a
+    /// page that reads a row and then its children never pairs an old row
+    /// with new children (or the other way round) when a handler writes both
+    /// in between. Nothing in `body` writes; the transaction is closed when
+    /// it returns, whatever it returns. `env` lends the body what it needs
+    /// (the ids it queries by), as in [`Db::write`].
+    pub async fn read<T, E, F>(&self, env: &E, body: F) -> Result<T>
+    where
+        E: ?Sized + Sync,
+        F: for<'c> FnOnce(&'c Connection, &'c E) -> Body<'c, T>,
+    {
+        let conn = self.connect()?;
+        conn.execute("BEGIN", ())
+            .await
+            .context("read transaction failed to open")?;
+        let outcome = body(&conn, env).await;
+        // Closed either way: a connection left in a transaction would fail
+        // its next `BEGIN`, and a read has nothing to keep.
+        let closed = conn.execute("COMMIT", ()).await;
+        if closed.is_err() {
+            let _ = conn.execute("ROLLBACK", ()).await;
+        }
+        let value = outcome?;
+        closed.context("read transaction failed to close")?;
+        Ok(value)
     }
 
     /// Runs one statement that returns no rows in a transaction of its own;
