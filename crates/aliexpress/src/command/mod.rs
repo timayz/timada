@@ -1,14 +1,17 @@
 //! Write side: the link between an AliExpress item and the catalog product
-//! it filled, and its history of reads; (in [`forward`]) the shop's orders
+//! it filled, and its history of reads; (in [`product_link`]) which item
+//! filled a product, by the product; (in [`forward`]) the shop's orders
 //! placed on AliExpress; and (in [`ae_order`]) the platform's record of the
 //! orders AliExpress holds, which a push names.
 
 mod ae_order;
 mod forward;
+mod product_link;
 mod token_refresh;
 
 pub use ae_order::*;
 pub use forward::*;
+pub use product_link::*;
 pub use token_refresh::*;
 
 use std::ops::Deref;
@@ -448,7 +451,11 @@ impl<E: Executor> Command<E> {
         }
     }
 
-    /// Records the draft an import filled.
+    /// Records the draft an import filled, and in the product's own stream
+    /// which item filled it ([`claim_product_link`]), that first: an index
+    /// left pointing at an item whose record never landed names nothing
+    /// linked, while a record without its index would hide the item from
+    /// the orders that buy it.
     pub async fn record_import(
         &self,
         actor: &str,
@@ -458,6 +465,15 @@ impl<E: Executor> Command<E> {
         routing_key: Option<String>,
     ) -> Result<(), AliexpressError> {
         let link = self.require_link(link_id).await?;
+        claim_product_link(
+            &self.executor,
+            &self.tenant,
+            product_id,
+            link_id,
+            actor,
+            routing_key.clone(),
+        )
+        .await?;
         link.write()?
             .routing_key_opt(routing_key)
             .event(&Imported {

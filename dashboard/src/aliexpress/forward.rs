@@ -26,7 +26,7 @@ use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem, Request
 use timada_aliexpress::{
     ALIEXPRESS_SUPPLIER, AeError, AliexpressError, Client, ForwardStatus, LinkState, PlaceItem,
     PlaceOrder, PlacedRecord, Placement, choose_service, delivery_country, describe_options,
-    forward_items, link_of_product, logistics_address,
+    forward_items, logistics_address,
 };
 use timada_orders::{OrderError, OrderLine, OrderStatus};
 use timada_tenancy::{CompanyState, TenantState};
@@ -110,8 +110,9 @@ fn describe(err: &AeError) -> String {
 
 impl Aliexpress {
     /// Places the order a forward asks for, on the node that takes it on:
-    /// `store` is the store, `db` the read models, `payments` says whether
-    /// the provider holds the order's money.
+    /// `store` is the store, `db` this node's own record of what AliExpress
+    /// took and the store would not take yet, `payments` says whether the
+    /// provider holds the order's money.
     pub async fn forward_order<E: evento::Executor + Clone>(
         &self,
         store: &E,
@@ -128,7 +129,7 @@ impl Aliexpress {
             return Ok(ForwardResult::Skipped);
         };
         let placed = match self
-            .prepare(store, db, payments, tenant_id, &forward.order_id)
+            .prepare(store, payments, tenant_id, &forward.order_id)
             .await
         {
             Ok(prepared) => {
@@ -207,7 +208,6 @@ impl Aliexpress {
     async fn prepare<E: evento::Executor + Clone>(
         &self,
         store: &E,
-        db: &Db,
         payments: &Payments,
         tenant_id: &str,
         order_id: &str,
@@ -261,7 +261,7 @@ impl Aliexpress {
                 ));
             }
         }
-        let links = order_links(store, db, tenant_id, &order.lines)
+        let links = order_links(store, tenant_id, &order.lines)
             .await
             .map_err(failed)?;
         let plan = forward_items(&order.lines, &links);
@@ -845,10 +845,12 @@ fn fit_tracking(numbers: &[String]) -> String {
 }
 
 /// The linked AliExpress items the products of an order's lines were
-/// imported from.
+/// imported from, read from the store (the product's index stream, then the
+/// item's): what is bought, and whether a payment waits for the purchase,
+/// is decided here, so a read model a moment behind never buys the wrong
+/// thing or takes the money early.
 pub async fn order_links<E: evento::Executor + Clone>(
     store: &E,
-    db: &Db,
     tenant_id: &str,
     lines: &[OrderLine],
 ) -> anyhow::Result<Vec<LinkState>> {
@@ -861,12 +863,7 @@ pub async fn order_links<E: evento::Executor + Clone>(
         {
             continue;
         }
-        let Some(row) = link_of_product(db, tenant_id, &line.product_id).await? else {
-            continue;
-        };
-        if let Some(link) = links.load_link_by_id(&row.id).await?
-            && link.is_linked()
-        {
+        if let Some(link) = links.load_link_of_product(&line.product_id).await? {
             found.push(link);
         }
     }
@@ -906,7 +903,6 @@ async fn on_order_placed<E: Executor>(
         return Ok(());
     }
     let aliexpress: Arc<Aliexpress> = context.extract();
-    let db: Db = context.extract();
     let store: Store = context.extract();
     let Some(merchant) = aliexpress.active_tenant(&event.tenant).await? else {
         return Ok(());
@@ -923,7 +919,7 @@ async fn on_order_placed<E: Executor>(
     let Some(order) = orders.load_order(&event.aggregate_id).await? else {
         return Ok(());
     };
-    let links = order_links(&store.0, &db, &event.tenant, &order.lines).await?;
+    let links = order_links(&store.0, &event.tenant, &order.lines).await?;
     if forward_items(&order.lines, &links).items.is_empty() {
         return Ok(());
     }
