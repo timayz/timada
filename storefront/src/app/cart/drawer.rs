@@ -27,9 +27,15 @@ struct DrawerQuery {
 }
 
 /// The cart drawer, closed until the `#cart` fragment or the page's script
-/// opens it. `cart` is this browser's cart, if it has one.
+/// opens it. `cart` is this browser's cart, if it has one; `unavailable`
+/// says the dashboard could not be asked for it, so the drawer says so
+/// rather than showing an empty cart.
 #[topcoat::view::component]
-pub async fn cart_drawer(cx: &Cx, #[default] cart: Option<&CartView>) -> Result<impl View> {
+pub async fn cart_drawer(
+    cx: &Cx,
+    #[default] cart: Option<&CartView>,
+    #[default] unavailable: bool,
+) -> Result<impl View> {
     let query = query_params::<DrawerQuery>(cx)?;
     // Where the drawer's forms come back to: this page, as the shopper sees
     // it, without the refusal it may already show.
@@ -152,6 +158,9 @@ pub async fn cart_drawer(cx: &Cx, #[default] cart: Option<&CartView>) -> Result<
                             <a class="place" href=(href!(crate::app::checkout::index))>"Commander · " (&total)</a>
                         }
                         <a class="drawer-continue" href="#" data-drawer-close="">"Continuer mes achats"</a>
+                    } else if unavailable {
+                        <p class="drawer-empty notice" role="status" data-cart-unavailable="">"Le panier est momentanément indisponible. Réessayez dans quelques minutes."</p>
+                        <a class="drawer-continue" href=(href!(crate::app::index))>"Continuer mes achats"</a>
                     } else {
                         <p class="drawer-empty" data-cart-empty="">"Votre panier est vide."</p>
                         <a class="drawer-continue" href=(href!(crate::app::index))>"Continuer mes achats"</a>

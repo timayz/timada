@@ -19,7 +19,7 @@ use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 use timada_core::db::{Db, FromRow, Json, Row};
 use topcoat_core::context::Cx;
-use topcoat_core::error::{Error, Result};
+use topcoat_core::error::Result;
 
 pub use timada_reviews::{
     MAX_BODY_LEN, MAX_PHOTOS, MAX_RATING, MAX_TITLE_LEN, MIN_BODY_LEN, MIN_RATING, ReviewState,
@@ -28,6 +28,7 @@ pub use timada_reviews::{
 use timada_reviews::{SHOPPER_CODES, review_id};
 
 use crate::context::store;
+use crate::error::{gateway_down, into_error, reach, reach_body, store_away};
 use crate::query::Product;
 use crate::store::Store;
 
@@ -337,16 +338,19 @@ impl Store {
             .bearer_auth(&api.token)
             .multipart(form)
             .send()
-            .await
-            .context("cannot reach the dashboard")?;
+            .await;
+        let response = reach(response)?;
         let status = response.status();
+        let body = reach_body(response).await?;
+        // A proxy answering for a dashboard that is not there.
+        if let Some(away) = gateway_down(status, &body) {
+            return Err(away.into());
+        }
         // 422: the review was refused; 503: the shop is not taking writes
         // for the moment (`writes_paused`). Both carry a code to show.
         if status.is_success() || matches!(status.as_u16(), 422 | 503) {
-            let answer: Answer = response
-                .json()
-                .await
-                .context("the dashboard's answer is not one")?;
+            let answer: Answer =
+                serde_json::from_slice(&body).context("the dashboard's answer is not one")?;
             return match (answer.id, answer.error) {
                 (Some(id), _) => Ok(Ok(id)),
                 (None, Some(error)) => {
@@ -378,9 +382,10 @@ impl Store {
         order_id: &str,
         product_id: &str,
     ) -> anyhow::Result<Option<ReviewState>> {
-        timada_reviews::Command::unscoped(self.executor().clone())
+        timada_reviews::Command::unscoped(self.executor()?.clone())
             .load_review(&review_id(order_id, product_id))
             .await
+            .map_err(store_away)
     }
 
     /// The order a mailed review link opens, while the link is valid: the
@@ -390,9 +395,10 @@ impl Store {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs());
-        timada_reviews::Command::unscoped(self.executor().clone())
+        timada_reviews::Command::unscoped(self.executor()?.clone())
             .resolve_review_link(token, now)
             .await
+            .map_err(store_away)
     }
 
     /// A page of the published reviews of a product, with the photos'
@@ -427,7 +433,7 @@ pub async fn submit_review(
     store(cx)
         .submit_review(order_id, product_id, draft)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// Changes a review still waiting for the shop; see
@@ -441,7 +447,7 @@ pub async fn revise_review(
     store(cx)
         .revise_review(order_id, product_id, edit)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// Where a browser loads a stored picture from; see [`Store::picture_url`].
@@ -454,15 +460,12 @@ pub async fn review_of(cx: &Cx, order_id: &str, product_id: &str) -> Result<Opti
     store(cx)
         .review_of(order_id, product_id)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// The order a mailed review link opens; see [`Store::review_link`].
 pub async fn review_link(cx: &Cx, token: &str) -> Result<Option<String>> {
-    store(cx)
-        .review_link(token)
-        .await
-        .map_err(Error::from_anyhow)
+    store(cx).review_link(token).await.map_err(into_error)
 }
 
 /// A page of the published reviews of `product`, newest first.
@@ -470,14 +473,11 @@ pub async fn reviews_of(cx: &Cx, product: &Product, page: u32) -> Result<ReviewP
     store(cx)
         .reviews_of(&product.id, page)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// The latest published reviews of the whole shop, newest first: what a
 /// checkout shows to reassure.
 pub async fn recent_reviews(cx: &Cx, limit: u32) -> Result<Vec<Review>> {
-    store(cx)
-        .recent_reviews(limit)
-        .await
-        .map_err(Error::from_anyhow)
+    store(cx).recent_reviews(limit).await.map_err(into_error)
 }

@@ -23,6 +23,7 @@ main > .wrap { padding: 1.5rem 0 3rem; }
 .btn:hover, .btn:focus-visible { text-decoration: underline; }
 .eyebrow { display: block; font-size: .75rem; font-weight: 700; margin-bottom: .4rem; }
 p.notice { padding: .75rem 1rem; border: 1px solid; }
+.unavailable .actions { display: flex; flex-wrap: wrap; gap: 1rem; }
 p.stock { font-weight: 600; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 tr[data-sold-out] { opacity: .6; }

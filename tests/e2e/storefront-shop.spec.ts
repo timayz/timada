@@ -582,9 +582,13 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
       (await page.locator("[data-order-reference]").textContent())?.trim() ??
       "";
     const secondRow = page.locator(`[data-order="${secondReference}"]`);
+    // Paid, not merely placed: the money is taken a moment after the order
+    // exists, and the read model the list reads trails that again.
     await expect(async () => {
       await page.goto(`/t/${slug}/orders`);
-      await expect(secondRow).toHaveCount(1, { timeout: 1000 });
+      await expect(secondRow).toHaveAttribute("data-order-status", "paid", {
+        timeout: 1000,
+      });
     }).toPass({ timeout: 15_000 });
     await secondRow.getByRole("link", { name: secondReference }).click();
     await page.getByLabel("Reason for cancelling").fill("Out of stock");

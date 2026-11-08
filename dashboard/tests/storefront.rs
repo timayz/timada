@@ -41,9 +41,9 @@ use timada_catalog::{
 use timada_core::db::Db;
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
-    SubscriptionState, category_ancestors, find_category, live_announcements, menu_of,
-    published_categories, published_category_body, published_category_by_slug,
-    published_option_values, published_page, published_product_by_slug,
+    StoreUnavailable, SubscriptionState, category_ancestors, find_category, is_unavailable,
+    live_announcements, menu_of, published_categories, published_category_body,
+    published_category_by_slug, published_option_values, published_page, published_product_by_slug,
     published_product_categories, published_products, published_related_products,
     search_published_pages,
 };
@@ -51,7 +51,7 @@ use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenantState,
     read_model_subscription,
 };
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use topcoat::router::StatusCode;
@@ -508,11 +508,20 @@ async fn the_store_connects_over_tls() {
         .unwrap();
     catalog.publish_product("alice", &mug.id).await.unwrap();
 
-    let plain = Store::connect(h.config(&token), h.local_db("plain").await).await;
+    // Plain TCP against a TLS listener never gets an answer: to the shop
+    // that is a store it cannot reach, so it opens and keeps trying rather
+    // than failing (the status says what is wrong).
+    let plain = Store::connect(h.config(&token), h.local_db("plain").await)
+        .await
+        .unwrap();
+    let status = plain.status().await;
+    assert!(!status.connected);
     assert!(
-        plain.is_err(),
-        "plain TCP against a TLS listener is refused"
+        matches!(status.subscription, SubscriptionState::Connecting { .. }),
+        "{:?}",
+        status.subscription
     );
+    plain.shutdown().await;
 
     let db = h.local_db("tls").await;
     let tls = StoreTls::from_ca_pem(&cert, "localhost").unwrap();
@@ -2702,4 +2711,223 @@ async fn a_product_shows_its_own_delivery_time_else_the_shops_default() {
         shown("blue-mug").await.is_none() && shown("floor-lamp").await.is_none()
     })
     .await;
+}
+
+/// An address nothing listens on: a port bound and released at once.
+async fn free_addr() -> SocketAddr {
+    let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = probe.local_addr().unwrap();
+    drop(probe);
+    addr
+}
+
+/// A proxy answering for a dashboard that is not there: `status` with a
+/// page of its own, whatever is asked; or, with a JSON `body`, a dashboard
+/// refusing in its own words.
+async fn gateway_endpoint(status: StatusCode, body: Value) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let body = body.clone();
+            tokio::spawn(async move {
+                let _ = read_request(&mut socket).await;
+                match body {
+                    Value::String(html) => {
+                        use tokio::io::AsyncWriteExt;
+                        let answer = format!(
+                            "HTTP/1.1 {} {}\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{html}",
+                            status.as_u16(),
+                            status.canonical_reason().unwrap_or(""),
+                            html.len()
+                        );
+                        socket.write_all(answer.as_bytes()).await.unwrap();
+                        socket.shutdown().await.ok();
+                    }
+                    json => respond(socket, status, &json).await,
+                }
+            });
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn a_shop_started_while_the_store_is_away_opens_and_catches_up_later() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h
+        .key_with(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
+        .await;
+    let catalog = h.catalog(&acme);
+    let mug = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Blue Mug".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .price_product("alice", &mug.id, 1250, "EUR")
+        .await
+        .unwrap();
+    catalog.publish_product("alice", &mug.id).await.unwrap();
+
+    // Nothing answers at the store's address: the shop opens all the same,
+    // on the catalog it has (none yet), and says so.
+    let away = free_addr().await;
+    let db = h.local_db("patient").await;
+    let config = StoreConfig::new(away, &token).request_timeout(Duration::from_secs(2));
+    let store = Store::connect(config, db.clone())
+        .await
+        .expect("a store that is away is no reason not to open the shop");
+    let status = store.status().await;
+    assert!(!status.connected);
+    assert!(
+        matches!(status.subscription, SubscriptionState::Connecting { .. }),
+        "{:?}",
+        status.subscription
+    );
+    assert_eq!(status.products, 0);
+    assert!(published(&db).await.is_empty());
+
+    // What needs the store says it is away, not that the shop failed.
+    let err = store.payment_setup().await.unwrap_err();
+    assert!(is_unavailable(&err), "{err:#}");
+    assert!(err.downcast_ref::<StoreUnavailable>().is_some());
+
+    // The store comes up at that address: the shop reaches it after its
+    // delay and follows the catalog from the start.
+    let config = StoreApiConfig {
+        listen: away,
+        public_addr: None,
+        tls_cert: None,
+        tls_key: None,
+    };
+    let server = store_api::serve(Some(&config), h.platform.0.clone(), h.connections.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    eventually("the shop connects and the product arrives", async || {
+        published(&db).await == vec!["Blue Mug".to_owned()]
+    })
+    .await;
+    let status = store.status().await;
+    assert!(status.connected);
+    assert_eq!(status.subscription, SubscriptionState::Running);
+    if let Err(err) = store.payment_setup().await {
+        panic!("the store answers now: {err:#}");
+    }
+
+    store.shutdown().await;
+    server.shutdown().await;
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_dashboard_that_is_away_is_told_as_unavailable_not_as_a_failure() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h
+        .key_with(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
+        .await;
+
+    // Nothing answers at the dashboard's address.
+    let dead = format!("http://{}", free_addr().await);
+    let db = h.local_db("orphan").await;
+    let store = Store::connect(h.config(&token).api_url(&dead), db.clone())
+        .await
+        .unwrap();
+    assert!(
+        store.status().await.connected,
+        "the store API itself is fine"
+    );
+    for (what, err) in [
+        ("the cart", store.cart("c1").await.err()),
+        (
+            "adding to it",
+            store.add_to_cart(None, "p1", None, 1).await.err(),
+        ),
+        ("the shopper", store.shopper("tk").await.err()),
+        ("an order", store.order("o1").await.err()),
+    ] {
+        let err = err.unwrap_or_else(|| panic!("{what} must fail with the dashboard away"));
+        assert!(is_unavailable(&err), "{what}: {err:#}");
+    }
+
+    // A proxy answering for it with a page of its own is the same thing.
+    let proxy = gateway_endpoint(
+        StatusCode::SERVICE_UNAVAILABLE,
+        Value::String("<html>503 Service Unavailable: no available server</html>".into()),
+    )
+    .await;
+    let behind_proxy = Store::connect(
+        h.config(&token).api_url(&proxy),
+        h.local_db("proxied").await,
+    )
+    .await
+    .unwrap();
+    let err = behind_proxy.cart("c1").await.unwrap_err();
+    assert!(is_unavailable(&err), "{err:#}");
+    let err = behind_proxy.shopper("tk").await.unwrap_err();
+    assert!(is_unavailable(&err), "{err:#}");
+
+    // Whereas a 503 the dashboard wrote is a refusal, carried to the shopper.
+    let paused = gateway_endpoint(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({ "error": timada_core::WRITES_PAUSED }),
+    )
+    .await;
+    let paused_shop = Store::connect(
+        h.config(&token).api_url(&paused),
+        h.local_db("paused").await,
+    )
+    .await
+    .unwrap();
+    let refused = paused_shop
+        .add_to_cart(None, "p1", None, 1)
+        .await
+        .expect("a refusal is not a failure")
+        .unwrap_err();
+    assert_eq!(refused.code(), Some(timada_core::WRITES_PAUSED));
+
+    // The store API going away is told the same way, once the request has
+    // waited its time.
+    let away = free_addr().await;
+    let config = StoreApiConfig {
+        listen: away,
+        public_addr: None,
+        tls_cert: None,
+        tls_key: None,
+    };
+    let server = store_api::serve(Some(&config), h.platform.0.clone(), h.connections.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    let on_own_server = Store::connect(
+        StoreConfig::new(away, &token).request_timeout(Duration::from_millis(500)),
+        h.local_db("abandoned").await,
+    )
+    .await
+    .unwrap();
+    assert!(on_own_server.payment_setup().await.is_ok());
+    server.shutdown().await;
+    eventually("the store reports the lost connection", async || {
+        !on_own_server.status().await.connected
+    })
+    .await;
+    let err = on_own_server.payment_setup().await.unwrap_err();
+    assert!(is_unavailable(&err), "{err:#}");
+
+    on_own_server.shutdown().await;
+    paused_shop.shutdown().await;
+    behind_proxy.shutdown().await;
+    store.shutdown().await;
+    h.finish().await;
 }

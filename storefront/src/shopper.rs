@@ -4,7 +4,9 @@
 //! in a private (encrypted, authenticated) cookie.
 
 use serde::{Deserialize, Serialize};
-use timada_storefront::{SavedAddress, ShippingAddress, Shopper, order, shopper, store};
+use timada_storefront::{
+    SavedAddress, ShippingAddress, Shopper, is_store_unavailable, order, shopper, store,
+};
 
 use crate::app::checkout::countries;
 use topcoat::{
@@ -70,7 +72,7 @@ pub async fn holds_order(cx: &Cx, order_id: &str) -> topcoat::Result<bool> {
     if placed(cx, order_id) {
         return Ok(true);
     }
-    let Some(shopper) = signed_in(cx).await else {
+    let Some(shopper) = session(cx).await?.as_ref() else {
         return Ok(false);
     };
     let email = shopper.email.clone();
@@ -353,13 +355,28 @@ pub fn forget_shopper(cx: &Cx) {
     shopper_store(cx).remove();
 }
 
-/// The shopper signed in on this browser, read from the store once per
-/// request. A token that no longer signs anyone in reads as signed out.
+/// Who the token on this browser signs in, as the dashboard says, read once
+/// per request: `None` with no token, or one that no longer signs anyone in.
+/// The error when the dashboard cannot be asked (it is away for the
+/// moment, typically): for a page that needs the answer, which then shows
+/// the shopper that rather than a sign-in form.
 #[memoize(as_ref)]
-pub async fn signed_in(cx: &Cx) -> Option<Shopper> {
-    let token = shopper_token(cx)?;
-    match shopper(cx, &token).await {
-        Ok(shopper) => shopper,
+pub async fn session(cx: &Cx) -> topcoat::Result<Option<Shopper>> {
+    let Some(token) = shopper_token(cx) else {
+        return Ok(None);
+    };
+    shopper(cx, &token).await
+}
+
+/// The shopper signed in on this browser, for a page that only decorates
+/// itself with it (the account link): nobody when the dashboard cannot say.
+pub async fn signed_in(cx: &Cx) -> Option<&Shopper> {
+    match session(cx).await {
+        Ok(shopper) => shopper.as_ref(),
+        Err(err) if is_store_unavailable(err) => {
+            tracing::warn!(%err, "cannot read who is signed in: the dashboard is away");
+            None
+        }
         Err(err) => {
             tracing::error!(%err, "cannot read who is signed in");
             None

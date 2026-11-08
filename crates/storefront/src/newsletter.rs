@@ -15,7 +15,7 @@ use std::net::IpAddr;
 use anyhow::Context as _;
 use serde::Deserialize;
 use topcoat_core::context::Cx;
-use topcoat_core::error::{Error, Result};
+use topcoat_core::error::Result;
 use topcoat_router::request::client_ip;
 
 use timada_newsletter::SHOPPER_CODES;
@@ -25,6 +25,7 @@ pub use timada_newsletter::{
 };
 
 use crate::context::store;
+use crate::error::{gateway_down, into_error, reach, reach_body};
 use crate::shoppers::{SHOPPER_SIGNED_OUT, request_language, request_time_zone};
 use crate::store::Store;
 
@@ -221,12 +222,13 @@ async fn answer<T>(
     expected: reqwest::StatusCode,
     read: impl FnOnce(&[u8]) -> anyhow::Result<T>,
 ) -> anyhow::Result<NewsletterRefusable<T>> {
-    let response = response.context("cannot reach the dashboard")?;
+    let response = reach(response)?;
     let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .context("cannot read the dashboard's answer")?;
+    let body = reach_body(response).await?;
+    // A proxy answering for a dashboard that is not there.
+    if let Some(away) = gateway_down(status, &body) {
+        return Err(away.into());
+    }
     if status == expected {
         return read(&body).map(Ok);
     }
@@ -261,7 +263,7 @@ pub async fn subscribe(cx: &Cx, email: &str) -> Result<NewsletterRefusable<()>> 
             request_time_zone(cx).as_deref(),
         )
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// See [`Store::confirm_subscription`].
@@ -272,15 +274,12 @@ pub async fn confirm_subscription(
     store(cx)
         .confirm_subscription(token)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// See [`Store::unsubscribe`].
 pub async fn unsubscribe(cx: &Cx, token: &str) -> Result<NewsletterRefusable<()>> {
-    store(cx)
-        .unsubscribe(token)
-        .await
-        .map_err(Error::from_anyhow)
+    store(cx).unsubscribe(token).await.map_err(into_error)
 }
 
 /// See [`Store::shopper_newsletter`].
@@ -288,7 +287,7 @@ pub async fn shopper_newsletter(cx: &Cx, token: &str) -> Result<NewsletterRefusa
     store(cx)
         .shopper_newsletter(token)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// See [`Store::set_shopper_newsletter`]; the language and time zone are
@@ -306,7 +305,7 @@ pub async fn set_shopper_newsletter(
             request_time_zone(cx).as_deref(),
         )
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// Whether the newsletter has somewhere to go; see

@@ -55,7 +55,7 @@
 
 use anyhow::Context as _;
 use topcoat_core::context::Cx;
-use topcoat_core::error::{Error, Result};
+use topcoat_core::error::Result;
 
 use timada_catalog::DeliveryDays;
 use timada_invoicing::tax;
@@ -67,6 +67,7 @@ pub use timada_orders::{
 };
 
 use crate::context::store;
+use crate::error::{gateway_down, into_error, reach, reach_body, store_away};
 use crate::money::MoneyFormat;
 use crate::query::{Product, published_products_by_ids};
 use crate::store::Store;
@@ -509,8 +510,8 @@ impl Fetched {
 pub(crate) const NO_BODY: Option<&()> = None;
 
 impl Store {
-    fn orders(&self) -> Command<evento::Evento> {
-        Command::unscoped(self.executor().clone())
+    fn orders(&self) -> anyhow::Result<Command<evento::Evento>> {
+        Ok(Command::unscoped(self.executor()?.clone()))
     }
 
     /// One call about a cart or an order to the dashboard's `/store/{path}`,
@@ -533,12 +534,13 @@ impl Store {
         if let Some(body) = body {
             request = request.json(body);
         }
-        let response = request.send().await.context("cannot reach the dashboard")?;
+        let response = reach(request.send().await)?;
         let status = response.status();
-        let body = response
-            .bytes()
-            .await
-            .context("cannot read the dashboard's answer")?;
+        let body = reach_body(response).await?;
+        // A proxy answering for a dashboard that is not there.
+        if let Some(away) = gateway_down(status, &body) {
+            return Err(away.into());
+        }
         match status.as_u16() {
             200 | 201 => Ok(Fetched::Found(body)),
             404 => Ok(Fetched::NotFound),
@@ -826,12 +828,15 @@ impl Store {
 
     /// See [`payment_setup`].
     pub async fn payment_setup(&self) -> anyhow::Result<Option<PaymentSetup>> {
-        self.orders().payment_setup().await
+        self.orders()?.payment_setup().await.map_err(store_away)
     }
 
     /// See [`accepts_business_buyers`].
     pub async fn accepts_business_buyers(&self) -> anyhow::Result<bool> {
-        self.orders().accepts_business_buyers().await
+        self.orders()?
+            .accepts_business_buyers()
+            .await
+            .map_err(store_away)
     }
 
     /// See [`payment_session`].
@@ -968,7 +973,7 @@ fn picture(product: &Product, variant_id: Option<&str>) -> Option<String> {
 
 /// The cart, priced, or `None` for an id the store does not know.
 pub async fn cart(cx: &Cx, cart_id: &str) -> Result<Option<CartView>> {
-    store(cx).cart(cart_id).await.map_err(Error::from_anyhow)
+    store(cx).cart(cart_id).await.map_err(into_error)
 }
 
 /// Adds `quantity` of a product (one variant of it, when it sells variants)
@@ -984,7 +989,7 @@ pub async fn add_to_cart(
     store(cx)
         .add_to_cart(cart_id, product_id, variant_id, quantity)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// Sets how many of a line the cart holds; zero removes it.
@@ -998,7 +1003,7 @@ pub async fn set_cart_quantity(
     store(cx)
         .set_cart_quantity(cart_id, product_id, variant_id, quantity)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// Takes a line out of the cart.
@@ -1018,15 +1023,12 @@ pub async fn apply_discount(cx: &Cx, cart_id: &str, code: &str) -> Result<Refusa
     store(cx)
         .apply_discount(cart_id, code)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// Takes the discount code off the cart.
 pub async fn remove_discount(cx: &Cx, cart_id: &str) -> Result<Refusable<()>> {
-    store(cx)
-        .remove_discount(cart_id)
-        .await
-        .map_err(Error::from_anyhow)
+    store(cx).remove_discount(cart_id).await.map_err(into_error)
 }
 
 /// Asks to pay for the cart, shipping where `checkout` says, and waits (up
@@ -1046,7 +1048,7 @@ pub async fn start_payment(
     store(cx)
         .start_payment(cart_id, checkout)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// The open payment of a request [`start_payment`] made, for a page shown
@@ -1060,7 +1062,7 @@ pub async fn payment_session(
     store(cx)
         .payment_session(cart_id, request_id)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// The order the cart became, once the shopper confirmed its payment (the
@@ -1068,10 +1070,7 @@ pub async fn payment_session(
 /// shopper's browser, so a page coming back from the card form may have to
 /// wait a moment for it.
 pub async fn order_of_cart(cx: &Cx, cart_id: &str) -> Result<Option<OrderState>> {
-    store(cx)
-        .order_of_cart(cart_id)
-        .await
-        .map_err(Error::from_anyhow)
+    store(cx).order_of_cart(cart_id).await.map_err(into_error)
 }
 
 /// The payment of a request that was confirmed too late and given back:
@@ -1088,7 +1087,7 @@ pub async fn payment_returned(
     store(cx)
         .payment_returned(cart_id, request_id)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// The refusal code a page words for a payment given back: the reason the
@@ -1107,24 +1106,21 @@ pub fn returned_code(code: &str) -> String {
 /// anyone holding the id may: the host decides who (the browser that placed
 /// it, or the signed-in shopper it went to).
 pub async fn cancel_order(cx: &Cx, order_id: &str) -> Result<Refusable<OrderState>> {
-    store(cx)
-        .cancel_order(order_id)
-        .await
-        .map_err(Error::from_anyhow)
+    store(cx).cancel_order(order_id).await.map_err(into_error)
 }
 
 /// An order, as the dashboard answers for its id. Anyone holding the id can
 /// read it: the host decides who may (the browser that placed it,
 /// typically).
 pub async fn order(cx: &Cx, order_id: &str) -> Result<Option<OrderState>> {
-    store(cx).order(order_id).await.map_err(Error::from_anyhow)
+    store(cx).order(order_id).await.map_err(into_error)
 }
 
 /// How the shop's shoppers pay (the provider and the merchant's public key),
 /// so a page can show the payment form before asking to pay; `None` while
 /// the shop takes no payments.
 pub async fn payment_setup(cx: &Cx) -> Result<Option<PaymentSetup>> {
-    store(cx).payment_setup().await.map_err(Error::from_anyhow)
+    store(cx).payment_setup().await.map_err(into_error)
 }
 
 /// Whether the shop sells to businesses: a shopper may then give an EU VAT
@@ -1134,5 +1130,5 @@ pub async fn accepts_business_buyers(cx: &Cx) -> Result<bool> {
     store(cx)
         .accepts_business_buyers()
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }

@@ -12,7 +12,7 @@ use std::net::IpAddr;
 use anyhow::Context as _;
 use serde::Deserialize;
 use topcoat_core::context::Cx;
-use topcoat_core::error::{Error, Result};
+use topcoat_core::error::Result;
 use topcoat_router::request::client_ip;
 
 use timada_support::SHOPPER_CODES;
@@ -22,6 +22,7 @@ pub use timada_support::{
 };
 
 use crate::context::store;
+use crate::error::{gateway_down, into_error, reach, reach_body};
 use crate::shoppers::request_language;
 use crate::store::Store;
 
@@ -98,16 +99,19 @@ impl Store {
         if let Some(ip) = ip {
             request = request.header(SHOPPER_IP, ip.to_string());
         }
-        let response = request.send().await.context("cannot reach the dashboard")?;
+        let response = reach(request.send().await)?;
         let status = response.status();
+        let body = reach_body(response).await?;
+        // A proxy answering for a dashboard that is not there.
+        if let Some(away) = gateway_down(status, &body) {
+            return Err(away.into());
+        }
         // 422: the message was refused; 429: too many from this visitor or
         // this storefront; 503: the shop is not taking writes for the
         // moment (`writes_paused`). All carry a code to show.
         if status.is_success() || matches!(status.as_u16(), 422 | 429 | 503) {
-            let answer: Answer = response
-                .json()
-                .await
-                .context("the dashboard's answer is not one")?;
+            let answer: Answer =
+                serde_json::from_slice(&body).context("the dashboard's answer is not one")?;
             return match (answer.id, answer.error) {
                 (Some(id), _) => Ok(Ok(id)),
                 (None, Some(error)) => {
@@ -132,7 +136,7 @@ pub async fn send_message(cx: &Cx, draft: MessageDraft) -> Result<MessageRefusab
     store(cx)
         .send_message(draft, client_ip(cx), request_language(cx).as_deref())
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// Whether the contact form has somewhere to go; see

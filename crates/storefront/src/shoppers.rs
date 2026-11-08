@@ -19,7 +19,7 @@ use std::net::IpAddr;
 use anyhow::Context as _;
 use serde::Deserialize;
 use topcoat_core::context::Cx;
-use topcoat_core::error::{Error, Result};
+use topcoat_core::error::Result;
 use topcoat_router::request::{client_ip, headers};
 
 use timada_orders::OrderStatus;
@@ -28,6 +28,7 @@ use timada_shoppers::SHOPPER_CODES;
 pub use timada_shoppers::{MAX_ADDRESSES, SavedAddress, Shopper};
 
 use crate::context::store;
+use crate::error::{gateway_down, into_error, reach, reach_body};
 use crate::money::MoneyFormat;
 use crate::store::Store;
 
@@ -381,12 +382,13 @@ async fn answer<T>(
     expected: reqwest::StatusCode,
     read: impl FnOnce(&[u8]) -> anyhow::Result<T>,
 ) -> anyhow::Result<ShopperRefusable<T>> {
-    let response = response.context("cannot reach the dashboard")?;
+    let response = reach(response)?;
     let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .context("cannot read the dashboard's answer")?;
+    let body = reach_body(response).await?;
+    // A proxy answering for a dashboard that is not there.
+    if let Some(away) = gateway_down(status, &body) {
+        return Err(away.into());
+    }
     if status == expected {
         return read(&body).map(Ok);
     }
@@ -452,25 +454,22 @@ pub async fn request_sign_in_code(cx: &Cx, email: &str) -> Result<ShopperRefusab
     store(cx)
         .request_sign_in_code(email, client_ip(cx), request_language(cx).as_deref())
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// Trades a mailed code for a session token; see [`Store::sign_in`].
 pub async fn sign_in(cx: &Cx, email: &str, code: &str) -> Result<ShopperRefusable<ShopperSignIn>> {
-    store(cx)
-        .sign_in(email, code)
-        .await
-        .map_err(Error::from_anyhow)
+    store(cx).sign_in(email, code).await.map_err(into_error)
 }
 
 /// Who `token` signs in, if anyone still.
 pub async fn shopper(cx: &Cx, token: &str) -> Result<Option<Shopper>> {
-    store(cx).shopper(token).await.map_err(Error::from_anyhow)
+    store(cx).shopper(token).await.map_err(into_error)
 }
 
 /// Ends the session `token` opened.
 pub async fn sign_out(cx: &Cx, token: &str) -> Result<()> {
-    store(cx).sign_out(token).await.map_err(Error::from_anyhow)
+    store(cx).sign_out(token).await.map_err(into_error)
 }
 
 /// Ends every other session; see [`Store::sign_out_everywhere_else`].
@@ -478,15 +477,12 @@ pub async fn sign_out_everywhere_else(cx: &Cx, token: &str) -> Result<ShopperRef
     store(cx)
         .sign_out_everywhere_else(token)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// Deletes the account; see [`Store::delete_account`].
 pub async fn delete_account(cx: &Cx, token: &str) -> Result<ShopperRefusable<()>> {
-    store(cx)
-        .delete_account(token)
-        .await
-        .map_err(Error::from_anyhow)
+    store(cx).delete_account(token).await.map_err(into_error)
 }
 
 /// Keeps an address on the account; see [`Store::save_address`].
@@ -498,7 +494,7 @@ pub async fn save_address(
     store(cx)
         .save_address(token, address)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// Forgets a saved address; see [`Store::remove_address`].
@@ -510,13 +506,10 @@ pub async fn remove_address(
     store(cx)
         .remove_address(token, address_id)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }
 
 /// The orders of the account; see [`Store::shopper_orders`].
 pub async fn shopper_orders(cx: &Cx, token: &str) -> Result<ShopperRefusable<Vec<ShopperOrder>>> {
-    store(cx)
-        .shopper_orders(token)
-        .await
-        .map_err(Error::from_anyhow)
+    store(cx).shopper_orders(token).await.map_err(into_error)
 }
