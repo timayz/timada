@@ -10,10 +10,11 @@
 
 use timada_invoicing::IssuedDocument;
 use topcoat_core::context::Cx;
-use topcoat_core::error::{Error, Result};
+use topcoat_core::error::Result;
 
 use crate::cart::NO_BODY;
 use crate::context::store;
+use crate::error::into_error;
 use crate::store::Store;
 
 pub use timada_invoicing::{DocumentKind, format_amount_fr};
@@ -71,10 +72,7 @@ impl Store {
 /// issued. Like [`order`](crate::order), anyone holding the order id can
 /// read them: the host decides who may.
 pub async fn documents(cx: &Cx, order_id: &str) -> Result<Vec<IssuedDocument>> {
-    store(cx)
-        .documents(order_id)
-        .await
-        .map_err(Error::from_anyhow)
+    store(cx).documents(order_id).await.map_err(into_error)
 }
 
 /// One of an order's documents as PDF; `None` when it is not one of that
@@ -87,5 +85,5 @@ pub async fn document_pdf(
     store(cx)
         .document_pdf(order_id, document_id)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(into_error)
 }

@@ -128,12 +128,36 @@ export class StorefrontApp {
 
   /// Boots it with `token` and waits for it to have synced at
   /// least `products` products.
-  async start(request: APIRequestContext, { token, mediaUrl, apiUrl }: StoreKey, products: number): Promise<void> {
+  async start(request: APIRequestContext, key: StoreKey, products: number): Promise<void> {
+    this.launch(key, STORE_ADDR);
+    await expect(async () => {
+      const response = await request.get(`${this.url}/store/status`);
+      expect(response.ok()).toBe(true);
+      const status = (await response.json()) as { connected: boolean; products: number };
+      expect(status.connected).toBe(true);
+      expect(status.products).toBeGreaterThanOrEqual(products);
+    }).toPass({ timeout: 30_000 });
+  }
+
+  /// Boots it against a store API nothing answers at (`storeAddr`), and
+  /// waits for it to serve all the same: the status says it is not
+  /// connected, and the pages serve the (empty) local copy.
+  async startAway(request: APIRequestContext, key: StoreKey, storeAddr: string): Promise<void> {
+    this.launch(key, storeAddr);
+    await expect(async () => {
+      const response = await request.get(`${this.url}/store/status`);
+      expect(response.status()).toBe(503);
+      const status = (await response.json()) as { connected: boolean };
+      expect(status.connected).toBe(false);
+    }).toPass({ timeout: 30_000 });
+  }
+
+  private launch({ token, mediaUrl, apiUrl }: StoreKey, storeAddr: string): void {
     this.dir = fs.mkdtempSync(path.join(os.tmpdir(), "timada-storefront-"));
     this.child = spawn(path.resolve("target/debug/storefront"), [], {
       env: {
         ...process.env,
-        STORE_ADDR,
+        STORE_ADDR: storeAddr,
         STORE_TOKEN: token,
         STORE_MEDIA_URL: mediaUrl,
         ...(apiUrl ? { STORE_API_URL: apiUrl } : {}),
@@ -143,13 +167,6 @@ export class StorefrontApp {
       },
       stdio: "inherit",
     });
-    await expect(async () => {
-      const response = await request.get(`${this.url}/store/status`);
-      expect(response.ok()).toBe(true);
-      const status = (await response.json()) as { connected: boolean; products: number };
-      expect(status.connected).toBe(true);
-      expect(status.products).toBeGreaterThanOrEqual(products);
-    }).toPass({ timeout: 30_000 });
   }
 
   /// Tells the process to stop as a host does (SIGTERM) and answers with its

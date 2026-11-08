@@ -13,6 +13,7 @@ pub mod checkout;
 pub mod conditions_generales_de_vente;
 pub mod emails;
 pub mod filters;
+pub mod indisponible;
 pub mod mentions_legales;
 pub mod menu;
 pub mod newsletter;
@@ -30,11 +31,11 @@ pub mod topbar;
 
 use timada_storefront::{
     CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, Store,
-    TIME_ZONE_SCRIPT, menu, product_image, products, recent_reviews,
+    TIME_ZONE_SCRIPT, is_store_unavailable, menu, product_image, products, recent_reviews,
 };
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, try_request_context},
     cookie::{Key, RouterBuilderCookieExt},
     router::{
         BodyLimit, IpNet, Router, RouterBuilderDiscoverExt, TrustedProxies, href, module_router,
@@ -45,6 +46,7 @@ use topcoat::{
 
 use crate::shopper::accounts_enabled;
 use cart::drawer::{CART_SCRIPT, DRAWER_CSS, cart_drawer};
+use indisponible::{StoreAway, UnavailablePage};
 use menu::{MENU_CSS, MENU_SCRIPT, site_menu};
 use search::{SEARCH_CSS, SEARCH_SCRIPT};
 use topbar::announcement_bar;
@@ -68,6 +70,7 @@ const THEME_CSS: &str = include_str!("theme.css");
 pub fn router(store: Store, cookie_key: Key, trusted_proxies: Vec<IpNet>) -> Router {
     module_router!()
         .discover()
+        .layer(UnavailablePage)
         .layer(BodyLimit::max(REVIEW_LIMIT).at("/orders"))
         .trusted_proxies(TrustedProxies::new().networks(trusted_proxies))
         .cookies()
@@ -131,7 +134,22 @@ pub async fn document(
     description: Option<&str>,
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
-    let cart = cart::current_cart(cx).await?;
+    // The page answering an outage asks the dashboard nothing more; any
+    // other page shows its cart, or says the cart is away when the
+    // dashboard is, and goes on: the catalogue is the shop's own copy.
+    let away = try_request_context::<StoreAway>(cx).is_some();
+    let (cart, cart_unavailable) = if away {
+        (None, true)
+    } else {
+        match cart::current_cart(cx).await {
+            Ok(cart) => (cart, false),
+            Err(err) if is_store_unavailable(&err) => {
+                tracing::warn!(error = %err, "the cart cannot be read: the dashboard is away");
+                (None, true)
+            }
+            Err(err) => return Err(err),
+        }
+    };
     let count = cart
         .as_ref()
         .map(|cart| cart.item_count)
@@ -146,7 +164,7 @@ pub async fn document(
         })
         .unwrap_or_else(|| money(0, "EUR"));
     let accounts = accounts_enabled(cx);
-    let signed_in = accounts && crate::shopper::signed_in(cx).await.is_some();
+    let signed_in = accounts && !away && crate::shopper::signed_in(cx).await.is_some();
     let announcements = timada_storefront::announcements(cx).await?;
     let page_title = if title == SHOP_NAME {
         format!("{SHOP_NAME} : {TAGLINE}")
@@ -193,7 +211,7 @@ pub async fn document(
                             <a class="cart-link" href=(href!(cart::index)) data-cart-link="" aria-controls="cart">
                                 <span class="quick-label">"Panier"</span>
                                 <span class="count" data-cart-count="" hidden=(count == 0)>(count)</span>
-                                <span class="cart-total" data-cart-total="">(total)</span>
+                                <span class="cart-total" data-cart-total="" hidden=(cart_unavailable)>(total)</span>
                             </a>
                         </nav>
                     </div>
@@ -207,7 +225,7 @@ pub async fn document(
                 <main>(child)</main>
                 site_footer()
                 if !no_drawer {
-                    cart_drawer(cart: cart.as_ref())
+                    cart_drawer(cart: cart.as_ref(), unavailable: cart_unavailable)
                     <script>(Unescaped::new_unchecked(CART_SCRIPT))</script>
                 }
             </body>
@@ -596,6 +614,9 @@ pub fn say(code: &str) -> &'static str {
         "too_many_requests" => "Trop de codes demandés : réessayez dans quelques minutes.",
         "too_many_addresses" => "Votre compte conserve dix adresses : retirez-en une d'abord.",
         "signed_out" => "Vous avez été déconnecté. Veuillez vous reconnecter.",
+        "store_unavailable" => {
+            "Cette fonctionnalité est momentanément indisponible. Réessayez dans quelques minutes."
+        }
         "writes_paused" => {
             "Cette boutique n'accepte temporairement aucune modification. Réessayez dans quelques minutes."
         }
