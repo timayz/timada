@@ -257,29 +257,6 @@ pub async fn reset_store_read_models(store: &Store) -> Result<()> {
     Ok(())
 }
 
-/// Empties the store of its events, snapshots and subscription cursors and
-/// keeps the consensus journal (the `accord_*` tables): what a node does
-/// before copying a peer's store (see `evento-accord`'s operations guide,
-/// "Opening a node by joining").
-pub async fn empty_store(store: &Store) -> Result<()> {
-    store
-        .transaction(&(), |tx, ()| {
-            Box::pin(async move {
-                tx.execute("DELETE FROM event", ())
-                    .await
-                    .context("cannot empty the events")?;
-                tx.execute("DELETE FROM snapshot", ())
-                    .await
-                    .context("cannot empty the snapshots")?;
-                tx.execute("DELETE FROM subscriber", ())
-                    .await
-                    .context("cannot empty the subscription cursors")?;
-                Ok(())
-            })
-        })
-        .await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

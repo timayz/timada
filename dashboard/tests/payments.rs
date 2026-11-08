@@ -458,13 +458,12 @@ async fn harness_on<G: PaymentGateway + 'static>(
     std::fs::create_dir_all(&dir).unwrap();
     // The store in memory (a file would fsync every commit of the thirty-odd
     // tests running at once), the read models in it.
-    let files = cluster::Files {
-        path: PathBuf::from(":memory:"),
-    };
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
     db::migrate_store_read_models(&store).await.unwrap();
     let store_db = db::Db::from(store.clone());
-    let (cluster, platform) = Cluster::open(None, None, &files, store).await.unwrap();
+    let (cluster, platform) = cluster::open(None, None, &dir.join("timada.db"), store)
+        .await
+        .unwrap();
     let payments = Arc::new(Payments::new(
         Some(seal::Sealer::new("payments", SEAL_KEY)),
         stripe.clone(),

@@ -39,7 +39,7 @@ You almost never implement this trait yourself — use one of the built-in execu
 | `Rw<R, W>` | `rw` (implied by `fjall`) | `evento-core` |
 | `Sidecar<E, L>` | `rw` | `evento-core` |
 | `evento::RemoteClient` (`evento_remote::Client`) | `remote` | `evento-remote` |
-| `AccordExecutor` (consensus-replicated) | `accord` (since alpha.37; flips `accord` on every enabled backend) | `evento-accord` |
+| `ClusterExecutor` (consensus-replicated) | `cluster` (flips `cluster` on every enabled backend) | `evento-cluster` |
 
 ## SQL setup
 
@@ -86,7 +86,7 @@ let executor: evento::MySql   = my_pool.into();
 | `M0004` | Replaces `idx_event_type` with a composite cursor-scan index |
 | `M0005` | Leading-cursor index for no-routing-key subscription scans |
 
-(The `accord` feature on `evento-sql-migrator` appends an `AccordMigration` for the consensus-journal tables.)
+(The `cluster` feature on `evento-sql-migrator` appends an `ClusterMigration` for the consensus-journal tables.)
 
 Tables after applying all:
 
@@ -232,17 +232,17 @@ it reads come back in the default tenant: the client sees a store of its own.
 `serve` is the trivial resolver (tokens ignored). Plain TCP carries the token
 in clear text: trusted networks only.
 
-## Consensus cluster (`evento-accord`)
+## Consensus cluster (`evento-cluster`)
 
-`AccordExecutor` replicates events across `N = 2f + 1` nodes (leaderless,
+`ClusterExecutor` replicates events across `N = 2f + 1` nodes (leaderless,
 strictly serializable) over a `DataStore` + `Journal` the caller supplies
 (`evento::sql::Sql` + `evento::sql::SqlJournal` on one SQLite file; the
-facade's `accord` feature re-exports `evento::accord` / `evento::AccordExecutor`
+facade's `cluster` feature re-exports `evento::cluster` / `evento::ClusterExecutor`
 and adds the journal tables to `evento::sql_migrator`, so `evento` is the
 only dependency). One
 `Node` per process: `Node::new(id, topology, clock, sink, datastore, journal)
 .with_config(config)`, `recover_state().await?` over its journal, then
-`start(inbox)` and `start_recovery()`; `AccordExecutor::new(node, local)` is
+`start(inbox)` and `start_recovery()`; `ClusterExecutor::new(node, local)` is
 the drop-in executor. Inbound frames come from `serve(listener, inbox_tx)`
 (or `serve_tls`), outbound through `TcpTransport::new(id, peers)`; a single
 node uses `InMemoryNetwork` instead. Every tenant's streams live in that one
@@ -250,8 +250,8 @@ store (`Key::of` puts the tenant in front of the routing key, so two tenants
 never conflict). A node told to rejoin (`rejoin_signal`), or back with a lost
 store, is opened by joining over its kept journal and an empty store
 (`recover_state_for_join`, `begin_join`, `start`, `join(contact)`,
-`start_recovery`): see `evento-accord/OPERATIONS.md` §7. Reference:
-`examples/bank-axum-accord` upstream; in this workspace
+`start_recovery`): see `evento-cluster/OPERATIONS.md` §7. Reference:
+`examples/bank-axum-cluster` upstream; in this workspace
 `dashboard/src/cluster.rs`.
 
 ## Raw paginated reads with `Reader` (SQL)

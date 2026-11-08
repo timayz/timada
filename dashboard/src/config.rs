@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use config::{ConfigError, Environment, File};
 use serde::Deserialize;
@@ -878,30 +877,25 @@ impl MailConfig {
 }
 
 impl ClusterConfig {
-    /// How long a node may go unheard before the others stop waiting for
-    /// it; `None` waits forever.
-    pub fn absent_after(&self) -> Option<Duration> {
-        (self.absent_after_secs > 0).then(|| Duration::from_secs(self.absent_after_secs))
+    /// The node's settings, as evento's host takes them: everything here but
+    /// the web addresses and the secret, which are this application's own
+    /// channel between the nodes.
+    pub fn settings(&self) -> evento::cluster::Settings {
+        evento::cluster::Settings {
+            node_id: self.node_id,
+            peers: self.peers.clone(),
+            listen: self.listen,
+            absent_after_secs: self.absent_after_secs,
+            write_backlog: self.write_backlog,
+            linearizable_reads: None,
+        }
     }
 
     fn validate(&mut self) -> Result<(), ConfigError> {
-        if self.peers.is_empty() {
-            return Err(ConfigError::Message(
-                "cluster.peers must list at least one node".into(),
-            ));
-        }
-        if self.write_backlog == 0 {
-            return Err(ConfigError::Message(
-                "cluster.write_backlog must be greater than 0".into(),
-            ));
-        }
-        if self.node_id as usize >= self.peers.len() {
-            return Err(ConfigError::Message(format!(
-                "cluster.node_id {} is out of range for {} peers",
-                self.node_id,
-                self.peers.len()
-            )));
-        }
+        // The node's own checks (peers, node_id, write_backlog) are evento's.
+        self.settings()
+            .validate()
+            .map_err(|err| ConfigError::Message(err.to_string()))?;
         if self.peers.len() == 1 {
             return Ok(());
         }
@@ -931,14 +925,12 @@ impl ClusterConfig {
         }
         Ok(())
     }
-
-    pub fn listen_addr(&self) -> SocketAddr {
-        self.listen.unwrap_or(self.peers[self.node_id as usize])
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     fn server(trusted_proxies: &[&str]) -> ServerConfig {
@@ -1179,9 +1171,9 @@ mod tests {
         let mut config = cluster(1, &[], None);
         config.absent_after_secs = 0;
         assert!(config.validate().is_ok());
-        assert_eq!(config.absent_after(), None);
+        assert_eq!(config.settings().absent_after(), None);
         assert_eq!(
-            cluster(1, &[], None).absent_after(),
+            cluster(1, &[], None).settings().absent_after(),
             Some(Duration::from_secs(3600))
         );
     }

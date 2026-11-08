@@ -73,7 +73,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nodes = if health.nodes == 1 {
         "single node".to_owned()
     } else {
-        format!("node {} of {}", health.node_id, health.nodes)
+        format!("node {} of {}", health.id.0, health.nodes)
     };
     let storefronts_label = match storefronts {
         0 => "none".to_owned(),
@@ -100,7 +100,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     attrs: attributes! { role="alert" class="mb-6" },
                     icon(data: icons::WARNING)
                     alert_description(
-                        "This node's journal is an older copy of itself, so it refuses writes. Stop it, delete the store file, run `timada-dashboard rejoin` and start it again."
+                        "This node's journal is an older copy of itself, so it refuses writes until it copies the store and the journal back. Restart it: the copy happens at startup."
                     )
                 )
             } else if health.rejoin_required || health.copy_pending {
@@ -146,8 +146,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             }
                             for peer in &health.peers {
                                 table_row(
-                                    attrs: attributes! { data-node=(peer.id) data-given-up=(if peer.given_up { "true" } else { "false" }) },
-                                    table_cell("Node " (peer.id))
+                                    attrs: attributes! { data-node=(peer.id.0) data-given-up=(if peer.given_up { "true" } else { "false" }) },
+                                    table_cell("Node " (peer.id.0))
                                     table_cell((peer_label(peer)))
                                 )
                             }

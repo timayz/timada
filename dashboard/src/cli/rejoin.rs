@@ -1,6 +1,6 @@
 use anyhow::{Result, ensure};
 
-use crate::cluster::{Files, mark_for_rejoin};
+use crate::cluster::mark_for_rejoin;
 use crate::config::Config;
 
 /// Marks the store for a copy from a peer at the next `serve`: for a node the
@@ -16,10 +16,7 @@ pub async fn rejoin(config: Config) -> Result<()> {
         config.cluster.is_some(),
         "a single node has no peer to copy the store from: nothing to rejoin"
     );
-    let files = Files {
-        path: config.database.path.clone(),
-    };
-    let marker = mark_for_rejoin(&files)?;
+    let marker = mark_for_rejoin(&config.database.path)?;
     tracing::info!(marker = %marker.display(), "the next start copies the store from a peer");
     Ok(())
 }

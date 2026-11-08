@@ -24,14 +24,7 @@ pub async fn reset(config: Config) -> Result<()> {
         tracing::info!(path = %path.display(), "the store does not exist, nothing to drop");
     }
     db::remove_store(path)?;
-    let files = crate::cluster::Files {
-        path: config.database.path.clone(),
-    };
-    if let Ok(marker) = files.marker()
-        && marker.exists()
-    {
-        std::fs::remove_file(marker)?;
-    }
+    crate::cluster::clear_rejoin_mark(path)?;
     let media = &config.media.dir;
     if media.is_dir() {
         tracing::warn!(dir = %media.display(), "removing the uploaded pictures");

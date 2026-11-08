@@ -5,7 +5,7 @@ use evento::subscription::{Subscription, SubscriptionBuilder};
 
 use crate::app::{self, Services};
 use crate::auth;
-use crate::cluster::{Cluster, Executor, Files};
+use crate::cluster::{self, Executor};
 use crate::config::Config;
 use crate::db;
 use crate::store_api::{self, StoreConnections};
@@ -14,18 +14,15 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let host = host.unwrap_or_else(|| config.server.host.clone());
     let port = port.unwrap_or(config.server.port);
     let url = config.server.url.clone();
-    let files = Files {
-        path: config.database.path.clone(),
-    };
 
     // The store first: its node may have to copy it from a peer, which
     // recreates the read models, so their pools open afterwards. Write pool
     // before read pool: it creates the file a read-only connection cannot.
     let store = db::open_store(&config.database.path).await?;
-    let (cluster, executor) = Cluster::open(
+    let (cluster, executor) = cluster::open(
         config.cluster.as_ref(),
         config.server.region.as_deref(),
-        &files,
+        &config.database.path,
         store.clone(),
     )
     .await?;
@@ -134,7 +131,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         )),
         background_mail.clone(),
         url.clone(),
-        cluster.node_name(),
+        cluster::node_name(&cluster),
     ) {
         read_models.push(start_read_model(name, builder, &executor).await?);
     }
