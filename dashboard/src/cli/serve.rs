@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use evento::subscription::{Subscription, SubscriptionBuilder};
+use evento::subscription::SubscriptionBuilder;
 
 use crate::app::{self, Services};
 use crate::auth;
@@ -9,6 +9,7 @@ use crate::cluster::{self, Executor};
 use crate::config::Config;
 use crate::db;
 use crate::store_api::{self, StoreConnections};
+use crate::workers::{self, Workers};
 
 pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> Result<()> {
     let host = host.unwrap_or_else(|| config.server.host.clone());
@@ -90,10 +91,13 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // This node's store connections of a key revoked or re-scoped, or of a
     // tenant suspended, on any node, end through this subscription. It starts
     // before the store API takes a connection, so none is older than it.
-    let mut read_models = vec![
-        start_read_model(
+    let mut all_workers = vec![
+        workers::start(
             "store connections",
-            store_api::closing_subscription(connections.clone()),
+            {
+                let connections = connections.clone();
+                move || store_api::closing_subscription(connections.clone())
+            },
             &executor,
         )
         .await?,
@@ -113,28 +117,41 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let webauthn = auth::webauthn::build(&config.auth, &config.server.url)?;
     let mailer = crate::mail::build(&config.mail)?;
 
-    // Read models catch up from their saved cursor before the router takes
-    // requests, then follow the stream. A failed worker is logged and the
-    // pages fall back to stale rows; the node keeps serving.
-    for (name, builder) in subscriptions(
-        db.clone(),
-        executor.clone(),
-        media.clone(),
-        keys.clone(),
-        payments.clone(),
-        aliexpress.clone(),
-        Arc::new(crate::vies::ViesClient::new(
+    // Every subscription follows the stream from its saved cursor under a
+    // supervisor (`workers`): a worker that fails is started again from the
+    // event that failed, and the cluster page says so. After this start
+    // copied the store from a peer, the read models are empty: each
+    // subscription first catches up over the copied events, so the pages
+    // never show an empty shop, and the router takes requests afterwards.
+    let deps = Arc::new(Deps {
+        db: db.clone(),
+        store: executor.clone(),
+        media: media.clone(),
+        keys: keys.clone(),
+        payments: payments.clone(),
+        aliexpress: aliexpress.clone(),
+        vies: Arc::new(crate::vies::ViesClient::new(
             config.invoicing.vies_url.clone(),
         )),
-        Arc::new(crate::ecb::EcbClient::new(
+        euro_rates: Arc::new(crate::ecb::EcbClient::new(
             config.invoicing.euro_rates_url.clone(),
         )),
-        background_mail.clone(),
-        url.clone(),
-        cluster::node_name(&cluster),
-    ) {
-        read_models.push(start_read_model(name, builder, &executor).await?);
+        background_mail: background_mail.clone(),
+        base_url: url.clone(),
+        node: cluster::node_name(&cluster),
+    });
+    let catch_up_first = cluster.health().joined_at_start;
+    if catch_up_first {
+        tracing::info!("the store was copied from a peer: the read models catch up before serving");
     }
+    for (name, make) in SUBSCRIPTIONS {
+        if catch_up_first {
+            workers::catch_up(name, make(&deps), &executor).await?;
+        }
+        let deps = deps.clone();
+        all_workers.push(workers::start(name, move || make(&deps), &executor).await?);
+    }
+    let workers = Workers::new(all_workers);
 
     // The operator's alert for a node that stays away: this node nearing the
     // writes it may keep for it, or a node given up on.
@@ -238,6 +255,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         shop_mail,
         aliexpress,
         store: connections,
+        workers: workers.clone(),
         config,
     });
 
@@ -263,16 +281,35 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     newsletter_sends.abort();
     automation_runs.abort();
     aliexpress_sync.abort();
-    for subscription in &read_models {
-        subscription.stop();
-    }
-    for subscription in &read_models {
-        subscription.stopped().await;
-    }
+    workers.shutdown().await;
     cluster.shutdown().await;
     drop(store);
     Ok(())
 }
+
+/// What the subscriptions are built from. Cloned into each worker's
+/// factory, so a worker that failed is built again from the same parts.
+pub struct Deps {
+    /// The read models in the store's database.
+    pub db: db::Db,
+    pub store: Executor,
+    pub media: Arc<crate::media::Media>,
+    pub keys: Arc<crate::key_vault::KeyVault>,
+    pub payments: Arc<crate::payments::Payments>,
+    pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
+    pub vies: Arc<dyn crate::vies::Vies>,
+    pub euro_rates: Arc<dyn crate::ecb::EuroRates>,
+    /// The transport and sender the subscriptions mail with, outside any
+    /// request.
+    pub background_mail: Arc<topcoat::context::AppContext>,
+    /// The public address, for the links in the mails.
+    pub base_url: String,
+    /// This node, as the work it claims names it.
+    pub node: String,
+}
+
+/// Builds one subscription from the parts.
+type Make = fn(&Deps) -> SubscriptionBuilder<Executor>;
 
 /// Every subscription this node runs on the store, each following every
 /// tenant's streams: the platform's read models (the users, the tenant
@@ -284,246 +321,184 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 /// catalog, the discounts and the pages give back once their holder let go
 /// of them, the order confirmations it mails and the notices of contact
 /// messages it mails the members. Every bounded context registers its
-/// subscription here.
-#[allow(clippy::too_many_arguments)]
-fn subscriptions(
-    db: db::Db,
-    store: Executor,
-    media: Arc<crate::media::Media>,
-    keys: Arc<crate::key_vault::KeyVault>,
-    payments: Arc<crate::payments::Payments>,
-    aliexpress: Arc<crate::aliexpress::Aliexpress>,
-    vies: Arc<dyn crate::vies::Vies>,
-    euro_rates: Arc<dyn crate::ecb::EuroRates>,
-    background_mail: Arc<topcoat::context::AppContext>,
-    base_url: String,
-    node: String,
-) -> Vec<(&'static str, SubscriptionBuilder<Executor>)> {
-    let ring = keys.ring();
-    vec![
-        (
-            "identity",
-            timada_identity::read_model_subscription(db.clone()),
-        ),
-        // Not a read model, but the same lifecycle: it frees the index
-        // entries of the sign-in identities a user let go of, should the
-        // command not have.
-        (
-            "identity indexes",
-            timada_identity::index_release_subscription(),
-        ),
-        (
-            "tenancy",
-            timada_tenancy::read_model_subscription(db.clone()),
-        ),
-        (
-            "members history",
-            timada_tenancy::member_audit_subscription(db.clone()),
-        ),
-        (
-            "AliExpress access",
-            timada_tenancy::aliexpress_accounts_subscription(db.clone()),
-        ),
-        // Not a read model, but the same lifecycle: it copies how each
-        // tenant's shoppers pay into the tenant's streams, for the
-        // storefronts' payment form.
-        (
-            "payment setup",
-            crate::payments::setup_subscription(payments.clone(), store.clone()),
-        ),
-        // Nor this: it grants the seat an accepted invitation promised,
-        // should the command not have.
-        (
-            "invitation grants",
-            timada_tenancy::invitation_grants_subscription(store.clone()),
-        ),
-        // Nor this: it fetches the shops' mail logos this node lacks.
-        ("mail logos", crate::media::logo_subscription(media.clone())),
-        (
-            "catalog",
-            timada_catalog::read_model_subscription(db.clone()),
-        ),
-        ("orders", timada_orders::read_model_subscription(db.clone())),
-        (
-            "shoppers",
-            timada_shoppers::read_model_subscription(db.clone(), ring.clone()),
-        ),
-        (
-            "discounts",
-            timada_discounts::read_model_subscription(db.clone()),
-        ),
-        (
-            "reviews",
-            timada_reviews::read_model_subscription(db.clone()),
-        ),
-        (
-            "support",
-            timada_support::read_model_subscription(db.clone(), ring.clone()),
-        ),
-        (
-            "newsletter",
-            timada_newsletter::read_model_subscription(db.clone(), ring.clone()),
-        ),
-        (
-            "automations",
-            timada_automations::read_model_subscription(db.clone()),
-        ),
-        ("pages", timada_pages::read_model_subscription(db.clone())),
-        (
-            "invoicing",
-            timada_invoicing::read_model_subscription(db.clone()),
-        ),
-        (
-            "AliExpress",
-            timada_aliexpress::read_model_subscription(db.clone()),
-        ),
-        (
-            "AliExpress orders",
-            crate::aliexpress::forward::subscription(
-                aliexpress.clone(),
-                db.clone(),
-                payments.clone(),
-                store.clone(),
-            ),
-        ),
-        (
-            "AliExpress products",
-            crate::aliexpress::subscription::subscription(
-                aliexpress.clone(),
-                media.clone(),
-                store.clone(),
-            ),
-        ),
-        (
-            "AliExpress reads",
-            crate::aliexpress::subscription::reads_subscription(
-                aliexpress.clone(),
-                db.clone(),
-                store.clone(),
-            ),
-        ),
-        (
-            "AliExpress pushes",
-            crate::aliexpress::webhook::pushes_subscription(
-                aliexpress.clone(),
-                db.clone(),
-                store.clone(),
-            ),
-        ),
-        ("pictures", crate::media::subscription(media.clone())),
-        (
-            "shopper keys",
-            crate::shopper_keys::subscription(keys.clone()),
-        ),
-        // Nor this: it erases the newsletter subscription a deleted
-        // account names.
-        (
-            "shopper erasure",
-            crate::shopper_erasure::subscription(store.clone(), ring.clone()),
-        ),
-        (
-            "message keys",
-            crate::message_keys::subscription(keys.clone()),
-        ),
-        (
-            "newsletter keys",
-            crate::newsletter_keys::subscription(keys.clone()),
-        ),
-        (
-            "payments",
-            crate::payments::subscription(crate::payments::Checkouts::new(
-                payments.clone(),
-                euro_rates.clone(),
-                Arc::new(crate::aliexpress::payment_reads::AliexpressGoods::new(
-                    aliexpress.clone(),
-                    db.clone(),
-                    store.clone(),
-                )),
-                store.clone(),
-                node,
+/// subscription here, under the name the cluster page shows.
+const SUBSCRIPTIONS: &[(&str, Make)] = &[
+    ("identity", |d| {
+        timada_identity::read_model_subscription(d.db.clone())
+    }),
+    // Not a read model, but the same lifecycle: it frees the index entries
+    // of the sign-in identities a user let go of, should the command not
+    // have.
+    ("identity indexes", |_| {
+        timada_identity::index_release_subscription()
+    }),
+    ("tenancy", |d| {
+        timada_tenancy::read_model_subscription(d.db.clone())
+    }),
+    ("members history", |d| {
+        timada_tenancy::member_audit_subscription(d.db.clone())
+    }),
+    ("AliExpress access", |d| {
+        timada_tenancy::aliexpress_accounts_subscription(d.db.clone())
+    }),
+    // Not a read model, but the same lifecycle: it copies how each tenant's
+    // shoppers pay into the tenant's streams, for the storefronts' payment
+    // form.
+    ("payment setup", |d| {
+        crate::payments::setup_subscription(d.payments.clone(), d.store.clone())
+    }),
+    // Nor this: it grants the seat an accepted invitation promised, should
+    // the command not have.
+    ("invitation grants", |d| {
+        timada_tenancy::invitation_grants_subscription(d.store.clone())
+    }),
+    // Nor this: it fetches the shops' mail logos this node lacks.
+    ("mail logos", |d| {
+        crate::media::logo_subscription(d.media.clone())
+    }),
+    ("catalog", |d| {
+        timada_catalog::read_model_subscription(d.db.clone())
+    }),
+    ("orders", |d| {
+        timada_orders::read_model_subscription(d.db.clone())
+    }),
+    ("shoppers", |d| {
+        timada_shoppers::read_model_subscription(d.db.clone(), d.keys.ring())
+    }),
+    ("discounts", |d| {
+        timada_discounts::read_model_subscription(d.db.clone())
+    }),
+    ("reviews", |d| {
+        timada_reviews::read_model_subscription(d.db.clone())
+    }),
+    ("support", |d| {
+        timada_support::read_model_subscription(d.db.clone(), d.keys.ring())
+    }),
+    ("newsletter", |d| {
+        timada_newsletter::read_model_subscription(d.db.clone(), d.keys.ring())
+    }),
+    ("automations", |d| {
+        timada_automations::read_model_subscription(d.db.clone())
+    }),
+    ("pages", |d| {
+        timada_pages::read_model_subscription(d.db.clone())
+    }),
+    ("invoicing", |d| {
+        timada_invoicing::read_model_subscription(d.db.clone())
+    }),
+    ("AliExpress", |d| {
+        timada_aliexpress::read_model_subscription(d.db.clone())
+    }),
+    ("AliExpress orders", |d| {
+        crate::aliexpress::forward::subscription(
+            d.aliexpress.clone(),
+            d.db.clone(),
+            d.payments.clone(),
+            d.store.clone(),
+        )
+    }),
+    ("AliExpress products", |d| {
+        crate::aliexpress::subscription::subscription(
+            d.aliexpress.clone(),
+            d.media.clone(),
+            d.store.clone(),
+        )
+    }),
+    ("AliExpress reads", |d| {
+        crate::aliexpress::subscription::reads_subscription(
+            d.aliexpress.clone(),
+            d.db.clone(),
+            d.store.clone(),
+        )
+    }),
+    ("AliExpress pushes", |d| {
+        crate::aliexpress::webhook::pushes_subscription(
+            d.aliexpress.clone(),
+            d.db.clone(),
+            d.store.clone(),
+        )
+    }),
+    ("pictures", |d| crate::media::subscription(d.media.clone())),
+    ("shopper keys", |d| {
+        crate::shopper_keys::subscription(d.keys.clone())
+    }),
+    // Nor this: it erases the newsletter subscription a deleted account
+    // names.
+    ("shopper erasure", |d| {
+        crate::shopper_erasure::subscription(d.store.clone(), d.keys.ring())
+    }),
+    ("message keys", |d| {
+        crate::message_keys::subscription(d.keys.clone())
+    }),
+    ("newsletter keys", |d| {
+        crate::newsletter_keys::subscription(d.keys.clone())
+    }),
+    ("payments", |d| {
+        crate::payments::subscription(crate::payments::Checkouts::new(
+            d.payments.clone(),
+            d.euro_rates.clone(),
+            Arc::new(crate::aliexpress::payment_reads::AliexpressGoods::new(
+                d.aliexpress.clone(),
+                d.db.clone(),
+                d.store.clone(),
             )),
-        ),
-        (
-            "order payments",
-            crate::payments::order_payments_subscription(payments.clone(), store.clone()),
-        ),
-        (
-            "discount usage",
-            timada_orders::discount_usage_subscription(store.clone()),
-        ),
-        (
-            "stock usage",
-            timada_orders::stock_usage_subscription(store.clone()),
-        ),
-        (
-            "catalog releases",
-            timada_catalog::release_subscription(store.clone()),
-        ),
-        (
-            "discount releases",
-            timada_discounts::release_subscription(store.clone()),
-        ),
-        (
-            "page releases",
-            timada_pages::release_subscription(store.clone()),
-        ),
-        (
-            "newsletter opt-ins",
-            crate::newsletter::subscription(
-                store.clone(),
-                background_mail.clone(),
-                keys.clone(),
-                store.clone(),
-            ),
-        ),
-        (
-            "automation triggers",
-            crate::automations::triggers::subscription(db.clone(), store.clone()),
-        ),
-        (
-            "order mails",
-            crate::order_mails::subscription(
-                store.clone(),
-                background_mail.clone(),
-                payments.clone(),
-                store.clone(),
-            ),
-        ),
-        (
-            "message notices",
-            crate::message_notifications::subscription(
-                store.clone(),
-                db,
-                background_mail,
-                base_url,
-                ring,
-                store.clone(),
-            ),
-        ),
-        (
-            "invoices",
-            crate::invoicing::subscription(store.clone(), vies, euro_rates, store),
-        ),
-    ]
-}
-
-async fn start_read_model(
-    name: &'static str,
-    builder: SubscriptionBuilder<Executor>,
-    executor: &Executor,
-) -> Result<Arc<Subscription>> {
-    let subscription = Arc::new(
-        builder
-            .start(executor)
-            .await
-            .with_context(|| format!("cannot start the {name} subscription"))?,
-    );
-    let watched = subscription.clone();
-    tokio::spawn(async move {
-        let reason = watched.stopped().await;
-        if reason.is_failure() {
-            tracing::error!(%reason, "the {name} subscription stopped; what it feeds is stale");
-        }
-    });
-    Ok(subscription)
-}
+            d.store.clone(),
+            d.node.clone(),
+        ))
+    }),
+    ("order payments", |d| {
+        crate::payments::order_payments_subscription(d.payments.clone(), d.store.clone())
+    }),
+    ("discount usage", |d| {
+        timada_orders::discount_usage_subscription(d.store.clone())
+    }),
+    ("stock usage", |d| {
+        timada_orders::stock_usage_subscription(d.store.clone())
+    }),
+    ("catalog releases", |d| {
+        timada_catalog::release_subscription(d.store.clone())
+    }),
+    ("discount releases", |d| {
+        timada_discounts::release_subscription(d.store.clone())
+    }),
+    ("page releases", |d| {
+        timada_pages::release_subscription(d.store.clone())
+    }),
+    ("newsletter opt-ins", |d| {
+        crate::newsletter::subscription(
+            d.store.clone(),
+            d.background_mail.clone(),
+            d.keys.clone(),
+            d.store.clone(),
+        )
+    }),
+    ("automation triggers", |d| {
+        crate::automations::triggers::subscription(d.db.clone(), d.store.clone())
+    }),
+    ("order mails", |d| {
+        crate::order_mails::subscription(
+            d.store.clone(),
+            d.background_mail.clone(),
+            d.payments.clone(),
+            d.store.clone(),
+        )
+    }),
+    ("message notices", |d| {
+        crate::message_notifications::subscription(
+            d.store.clone(),
+            d.db.clone(),
+            d.background_mail.clone(),
+            d.base_url.clone(),
+            d.keys.ring(),
+            d.store.clone(),
+        )
+    }),
+    ("invoices", |d| {
+        crate::invoicing::subscription(
+            d.store.clone(),
+            d.vies.clone(),
+            d.euro_rates.clone(),
+            d.store.clone(),
+        )
+    }),
+];
