@@ -9,6 +9,7 @@ mod components;
 mod config;
 mod db;
 mod ecb;
+mod hold_reminders;
 mod invoicing;
 mod key_vault;
 mod mail;

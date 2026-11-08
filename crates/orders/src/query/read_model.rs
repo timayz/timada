@@ -107,9 +107,9 @@ pub async fn upsert_order(db: &Db, tenant_id: &str, order: &OrderState) -> anyho
                     country, item_count, total_cents, currency, placed_at, updated_at, payment_id,
                     refunded_cents, discount_id, discount_code, discount_cents, fulfilled_at,
                     supplier, payment_state, capture_before, capture_requested_at,
-                    cancel_requested_at, paid_at, refund_requested_at)
+                    cancel_requested_at, paid_at, refund_requested_at, hold_reminder_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                    ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
+                    ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
                  ON CONFLICT (tenant_id, id) DO UPDATE SET
                     status = excluded.status, updated_at = excluded.updated_at,
                     refunded_cents = excluded.refunded_cents, discount_id = excluded.discount_id,
@@ -120,7 +120,8 @@ pub async fn upsert_order(db: &Db, tenant_id: &str, order: &OrderState) -> anyho
                     capture_requested_at = excluded.capture_requested_at,
                     cancel_requested_at = excluded.cancel_requested_at,
                     paid_at = excluded.paid_at,
-                    refund_requested_at = excluded.refund_requested_at",
+                    refund_requested_at = excluded.refund_requested_at,
+                    hold_reminder_at = excluded.hold_reminder_at",
                 params_from_iter([
                     Value::from(*tenant_id),
                     Value::from(order.id.as_str()),
@@ -163,6 +164,7 @@ pub async fn upsert_order(db: &Db, tenant_id: &str, order: &OrderState) -> anyho
                             .as_ref()
                             .map(|pending| pending.requested_at as i64),
                     ),
+                    Value::from(order.hold_reminder_due_at().map(|at| at as i64)),
                 ]),
             )
             .await?;

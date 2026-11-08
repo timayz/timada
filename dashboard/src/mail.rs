@@ -117,6 +117,38 @@ pub async fn send_message_notification(
     Ok(())
 }
 
+/// Reminds a member of `tenant_name` that the hold on the shopper's card
+/// for order `reference`, which AliExpress may have, lapses at `lapses_at`
+/// (unix seconds): the payment is to be taken before, with a link to the
+/// order. Nothing the shopper wrote travels.
+pub async fn send_hold_lapse_reminder(
+    cx: &Cx,
+    to: &str,
+    tenant_name: &str,
+    reference: &str,
+    lapses_at: u64,
+    link: &str,
+) -> Result<()> {
+    let from = app_context::<MailSender>(cx).0.clone();
+    let until = timada_core::civil::format_time(lapses_at);
+    let subject = format!("Order {reference}: take the payment before {until}");
+    let mail = mail! {
+        from: from,
+        to: Mailbox::new(to)?,
+        subject: &subject,
+        html: {
+            cx =>
+            <p>"The shopper's card holds the money of order " <strong>(reference)</strong> " for " <strong>(tenant_name)</strong> " until " <strong>(&until)</strong> ", and AliExpress may have the order."</p>
+            <p>"Check AliExpress and take the payment before then. Once the hold lapses, the money can no longer be taken, while AliExpress ships goods the shop paid for."</p>
+            <p>"If the order is not on AliExpress, say so on the order's page: the shopper may then cancel it, and the hold lapses harmlessly."</p>
+            <p><a href=(link)>"Open the order"</a></p>
+            <p>"Or open this address: " (link)</p>
+        },
+    }?;
+    send(cx, mail).await?;
+    Ok(())
+}
+
 /// Tells a member what an automation scenario of their shop wants them to
 /// know: the merchant's subject and note, and a link to what started the
 /// run. Nothing a shopper wrote travels.

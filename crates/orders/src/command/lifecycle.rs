@@ -1,9 +1,9 @@
 use evento::{Executor, ProjectionAggregate, WriteError};
 
 use crate::aggregator::{
-    CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, Fulfilled, Paid,
-    PaymentReleased, RefundRequested, Refunded, SupplierOrderRefused, SupplierOrderRuledOut,
-    SupplierOrderStarted, SupplierOrderUncertain,
+    CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, Fulfilled,
+    HoldLapseReminded, Paid, PaymentReleased, RefundRequested, Refunded, SupplierOrderRefused,
+    SupplierOrderRuledOut, SupplierOrderStarted, SupplierOrderUncertain,
 };
 use crate::error::OrderError;
 use crate::value_object::{
@@ -489,6 +489,43 @@ impl<E: Executor> super::Command<E> {
             }
         }
         Ok(())
+    }
+
+    /// Takes the reminding of the merchant that the hold lapses soon while
+    /// the supplier may have the order, before the mail goes out: whether
+    /// this caller took it. `false` when it is not due at `now` (unix
+    /// seconds; [`hold_reminder_due_at`](OrderState::hold_reminder_due_at)),
+    /// no longer called for (the money taken, the supplier ruled out, a
+    /// cancellation asked), or taken already, by another node say.
+    pub async fn claim_hold_reminder(
+        &self,
+        actor: &str,
+        order_id: &str,
+        now: u64,
+        routing_key: Option<String>,
+    ) -> Result<bool, OrderError> {
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            if !order.hold_reminder_due_at().is_some_and(|due| due <= now) {
+                return Ok(false);
+            }
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&HoldLapseReminded {
+                    payment_id: order.payment.payment_id.clone(),
+                    reminded_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(true),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(OrderError::Write(WriteError::InvalidOriginalVersion))
     }
 
     /// Records that the hold went back to the shopper, nothing taken, and

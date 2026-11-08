@@ -23,6 +23,7 @@ use timada_tenancy::{
 use topcoat::{
     Result,
     context::{Cx, app_context},
+    icon::icon,
     router::{
         error::{SeeOther, not_found, see_other},
         href, module_param, page, path_param, query_params,
@@ -33,6 +34,7 @@ use topcoat::{
 use super::{order_tone, orders};
 use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::card::{card, card_content, card_header};
 use crate::components::field::{field, field_label};
@@ -42,7 +44,7 @@ use crate::components::table::{
 };
 use crate::db::Db;
 use crate::ui::{
-    LINK, Shell, document, fact, facts, format_time, notice, page_header, section_card,
+    LINK, Shell, document, fact, facts, format_time, icons, notice, page_header, section_card,
     status_badge,
 };
 
@@ -301,6 +303,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let payment = format!("{payment} · {}", order.payment.payment_id);
     let awaits_supplier = order.awaits_supplier() && order.pending_capture.is_none();
+    // Still only held while AliExpress may have the order: the merchant is
+    // to take it before the hold lapses, or rule AliExpress out.
+    let hold_at_risk = order.hold_at_risk().then(|| order.hold_lapses_at());
     let refunded =
         (order.refunded_cents > 0).then(|| format_money(order.refunded_cents, &order.currency));
     let pending_refund = order
@@ -345,6 +350,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(super::index, Slug(slug.clone())))>"All orders"</a>
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
+            if let Some(lapses_at) = hold_at_risk {
+                alert(
+                    variant: AlertVariant::Warning,
+                    attrs: attributes! { role="status" class="mb-4" data-order-hold-at-risk="" },
+                    icon(data: icons::WARNING)
+                    alert_description(
+                        "Check AliExpress and take the payment before "
+                        <time datetime=(lapses_at)>(format_time(lapses_at))</time>
+                        ", or the shopper's card hold lapses: the shop would then have paid AliExpress for goods the shopper was never charged for. If the order is not on AliExpress, say so below."
+                    )
+                )
+            }
 
             section_card(
                 facts(
@@ -360,6 +377,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     }
                     if let Some(failure) = &order.capture_failure {
                         fact(term: "Payment not taken", attrs: attributes! { data-order-capture-failure="" }, (failure))
+                    }
+                    if let Some(at) = order.hold_reminded_at {
+                        fact(term: "Reminder", attrs: attributes! { data-order-hold-reminded="" }, "the members who manage orders were mailed " <time datetime=(at)>(format_time(at))</time> " that the hold lapses soon")
                     }
                     if let Some(asked) = &cancelling {
                         fact(term: "Cancelling", attrs: attributes! { data-order-cancelling="" }, "asked " <time datetime=(asked.requested_at)>(format_time(asked.requested_at))</time> ", not settled with Stripe yet")

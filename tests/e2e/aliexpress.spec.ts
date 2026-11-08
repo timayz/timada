@@ -683,11 +683,19 @@ test("an order AliExpress may have stays out of the shopper's hands", async ({ p
     // have it, and the shopper can no longer cancel.
     aliexpress.placeAnswers.push("lost", "refused");
     await page.goto(merchantOrder);
+    // Nothing asked of AliExpress yet: the hold is not at risk.
+    await expect(page.locator("[data-order-hold-at-risk]")).toHaveCount(0);
     await page.getByRole("button", { name: "Place on AliExpress" }).click();
     await forwardIs(page, merchantOrder, "failed");
     await expect(page.locator("[data-order-aliexpress-error]")).toContainText(
       "look at the account's orders on AliExpress before placing this one again",
     );
+    // The money is still only held while AliExpress may have the order: the
+    // merchant is told to take it before the hold lapses.
+    await expect(page.locator("[data-order-hold-at-risk]")).toContainText(
+      "Check AliExpress and take the payment before",
+    );
+    await expect(page.locator("[data-order-hold-reminded]")).toHaveCount(0);
     // AliExpress's list may not show it yet: the merchant is asked to rule
     // it out only half an hour later.
     await expect(page.locator("[data-order-aliexpress-rule-out-soon]")).toBeVisible();
