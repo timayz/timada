@@ -12,6 +12,18 @@ if ! curl -sf -o /dev/null "$maildev/email"; then
   exit 1
 fi
 
+# The server under test binds 3000 and the store API 4321; the specs start the
+# storefronts and the fake Stripe and VIES servers on the others. With the dev
+# server up, `serve` dies on its first bind and the proxy forwards the suite to
+# the dev server instead, which writes the test data into its database (#400).
+# Checked before the build so a wasted build is not the first sign.
+for port in 3000 3457 3458 3459 3460 4321 12112 12113; do
+  if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+    echo "port $port is in use: stop what listens there (the dev server?) first" >&2
+    exit 1
+  fi
+done
+
 export TIMADA_CONFIG=config/e2e.toml
 topcoat asset bundle -p timada-dashboard
 cargo build -q -p timada-dashboard -p storefront   # the shop specs spawn it
@@ -24,8 +36,26 @@ sync
 server=$!
 trap 'kill "$server" 2>/dev/null; wait "$server" 2>/dev/null || true' EXIT
 
+# Waits for the server through the proxy, and gives up as soon as the server
+# is gone: `set -e` does not see a background process die, and whatever else
+# answers the proxy must not get the suite.
 base_url="${E2E_BASE_URL:-https://timada.localhost}"
-curl -sk --retry 30 --retry-delay 1 --retry-all-errors -o /dev/null "$base_url/auth/login"
+ready=
+for _ in $(seq 60); do
+  if ! kill -0 "$server" 2>/dev/null; then
+    echo "the test server exited before it answered: see its output above" >&2
+    exit 1
+  fi
+  if curl -sk -o /dev/null "$base_url/auth/login"; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+if [ -z "$ready" ]; then
+  echo "the test server did not answer at $base_url within a minute" >&2
+  exit 1
+fi
 
 # Without arguments the whole suite; with them only what they name (a spec path
 # or a title filter). The directory must not be passed alongside: Playwright
