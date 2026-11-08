@@ -61,7 +61,7 @@ pub struct Aliexpress {
     /// What the app may spend, and what this node spent.
     budget: CallBudget,
     /// Which of the nodes up this one is, at the moment of asking.
-    share: Arc<dyn Fn() -> Share + Send + Sync>,
+    share: ShareOf,
     /// The reads after pushes that may run at once ([`PUSH_READS`]).
     push_reads: tokio::sync::Semaphore,
     /// The reads after pushes under way or waiting their turn.
@@ -74,13 +74,18 @@ pub struct Aliexpress {
 /// waits its turn rather than all asking AliExpress together.
 const PUSH_READS: usize = 4;
 
+/// Which of the nodes up this one is, at the moment of asking: among those
+/// doing a region's work when asked for one (`Some(region)`), among them all
+/// otherwise.
+pub type ShareOf = Arc<dyn Fn(Option<&str>) -> Share + Send + Sync>;
+
 impl Aliexpress {
     pub fn new(
         sealer: Option<Sealer>,
         config: &AliexpressConfig,
         allow_private_hosts: bool,
         platform: Executor,
-        share: Arc<dyn Fn() -> Share + Send + Sync>,
+        share: ShareOf,
     ) -> anyhow::Result<Arc<Self>> {
         // reqwest's rustls needs the process-wide crypto provider named.
         let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -164,9 +169,18 @@ impl Aliexpress {
     }
 
     /// Which of the nodes up this one is: which imported items and open orders
-    /// it reads.
+    /// the sweeps over every shop's rows read here, and this node's part of
+    /// the app's calls.
     pub fn share(&self) -> Share {
-        (self.share)()
+        (self.share)(None)
+    }
+
+    /// Which of the nodes up that see `region`'s events this one is: which of
+    /// the items and orders a saga is told about it reads. The sagas follow
+    /// the node's region, so an event of `region` reaches the nodes serving
+    /// it alone, and its item must fall to one of them.
+    pub fn share_in(&self, region: Option<&str>) -> Share {
+        (self.share)(region)
     }
 
     /// Whether companies can connect here: the platform has an app and can
