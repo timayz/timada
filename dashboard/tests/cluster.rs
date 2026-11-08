@@ -26,8 +26,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use evento::metadata::Event;
 use evento::remote::{Client, ServerHandle};
+use evento::subscription::{Context, SubscriptionBuilder};
 use timada_catalog::{CreateProduct, ProductState};
+use timada_tenancy::aggregator::Created;
 use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_READ, SCOPE_STORE_WRITE,
     read_model_subscription,
@@ -72,6 +75,17 @@ impl Node {
 
     /// Opens node `id` over its own files; a fresh node migrates them first.
     async fn start(root: &Path, id: u64, peers: &[SocketAddr], tuning: Tuning) -> Self {
+        Self::start_in(root, id, peers, tuning, None).await
+    }
+
+    /// [`start`](Self::start) for a node serving `region`.
+    async fn start_in(
+        root: &Path,
+        id: u64,
+        peers: &[SocketAddr],
+        tuning: Tuning,
+        region: Option<&str>,
+    ) -> Self {
         let dir = root.join(format!("node{id}"));
         std::fs::create_dir_all(&dir).unwrap();
         let path = Self::store_path(root, id);
@@ -87,7 +101,7 @@ impl Node {
                 absent_after_secs: tuning.absent_after_secs,
                 write_backlog: tuning.write_backlog,
             }),
-            None,
+            region,
             &path,
             store,
         )
@@ -692,4 +706,95 @@ async fn concurrent_writers_never_see_stale_versions() {
         done.unwrap();
     }
     cluster.shutdown().await;
+}
+
+/// The tenants a node's saga saw, by name.
+#[derive(Clone, Default)]
+struct Seen(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl Seen {
+    fn names(&self) -> Vec<String> {
+        let mut names = self.0.lock().unwrap().clone();
+        names.sort();
+        names
+    }
+}
+
+#[evento::subscription]
+async fn on_created<E: evento::Executor>(
+    context: &Context<'_, E>,
+    event: Event<Created>,
+) -> anyhow::Result<()> {
+    let seen: Seen = context.extract();
+    seen.0.lock().unwrap().push(event.data.name.clone());
+    Ok(())
+}
+
+/// A saga as `serve` builds one: no routing key of its own, so it follows the
+/// node's region; `.routing_key(r)` for a region the node also serves.
+fn saga(seen: &Seen) -> SubscriptionBuilder<Executor> {
+    SubscriptionBuilder::new("test/created-saga")
+        .data(seen.clone())
+        .handler(on_created())
+}
+
+/// Decision 1 of the CQRS review: a saga runs on the nodes of the event's
+/// region. Node 0 serves `eu`, node 1 `us`, node 2 `eu` and also `us` (the
+/// `also_serves` copy, filtered on `us` with a cursor of its own). A tenant
+/// created through node 0 is `eu`'s, one through node 1 `us`'s: node 0's saga
+/// sees the first, node 1's the second, node 2's both, and nothing twice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_saga_runs_on_the_nodes_of_its_region_and_where_it_is_also_served() {
+    let root = temp_root("regions");
+    let addrs = free_addrs().await;
+    let tuning = Tuning::default();
+    let (n0, n1, n2) = tokio::join!(
+        Node::start_in(&root, 0, &addrs, tuning, Some("eu")),
+        Node::start_in(&root, 1, &addrs, tuning, Some("us")),
+        Node::start_in(&root, 2, &addrs, tuning, Some("eu")),
+    );
+    let nodes = [n0, n1, n2];
+    let seen: [Seen; 3] = Default::default();
+    let mut sagas = Vec::new();
+    for (node, seen) in nodes.iter().zip(&seen) {
+        sagas.push(saga(seen).start(&node.store).await.unwrap());
+    }
+    // Node 2 also serves `us`.
+    sagas.push(
+        saga(&seen[2])
+            .routing_key("us")
+            .start(&nodes[2].store)
+            .await
+            .unwrap(),
+    );
+
+    let acme = create_everywhere(&nodes, "acme").await;
+    Command(nodes[1].store.clone())
+        .create_tenant(CreateTenant {
+            name: "globex".into(),
+            owner_user_id: "bob".into(),
+        })
+        .await
+        .unwrap();
+    eventually("node 2 sees both regions' tenants", async || {
+        seen[2].names() == ["acme", "globex"]
+    })
+    .await;
+    // Enough passes for a wrongly routed event to have shown up.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(seen[0].names(), ["acme"], "node 0 serves eu alone");
+    assert_eq!(seen[1].names(), ["globex"], "node 1 serves us alone");
+    assert_eq!(
+        seen[2].names(),
+        ["acme", "globex"],
+        "node 2 serves eu and us, once each"
+    );
+    assert_eq!(acme.name, "acme");
+
+    for saga in sagas {
+        saga.shutdown().await.unwrap();
+    }
+    for node in nodes {
+        node.stop().await;
+    }
 }

@@ -44,6 +44,11 @@ pub fn new_id() -> String {
     ulid::Ulid::generate().to_string()
 }
 
+/// What the tests' invitation tokens derive from their nonces under.
+pub fn tokens() -> timada_tenancy::HmacCodeVerifier {
+    timada_tenancy::HmacCodeVerifier::new([7; 32])
+}
+
 /// The gateway and the read-model database behind it.
 pub async fn command_with_pool() -> (Command<evento::Turso>, Db) {
     let (executor, pool) = executor_with_pool().await;
@@ -240,10 +245,13 @@ pub async fn grant_owed_seats(store: &evento::Turso) {
 }
 
 /// The same, as another node getting there only now: its cursor, kept under
-/// its own default routing key, starts at the beginning.
+/// its own default routing key, starts at the beginning. The saga follows
+/// the node's own region, so this stand-in for a node of the same region
+/// reads every key: the events were written without one.
 pub async fn grant_owed_seats_on(store: &evento::Turso, node: &str) {
     let executor = evento::Evento::new(store.clone()).default_routing_key(node);
     timada_tenancy::invitation_grants_subscription::<evento::Evento>(executor.clone())
+        .any_routing_key()
         .run_once(&executor)
         .await
         .unwrap();

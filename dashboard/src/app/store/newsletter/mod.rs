@@ -1,15 +1,16 @@
 //! `POST /store/newsletter` `email=…&language=fr`: a storefront hands in an
 //! address that asks for the shop's news, from its sign-up form. The shop
 //! mails it a link to confirm (`{storefront}/newsletter/confirm/{token}`,
-//! which the storefront hands back through [`confirm`]); the address counts
-//! only once it is followed. `language` is a tag or a whole
+//! which the storefront hands back through [`confirm`]), right after the
+//! request is recorded ([`crate::newsletter_confirmations`]); the address
+//! counts only once it is followed. `language` is a tag or a whole
 //! `Accept-Language` value (optional), the language the link is mailed in;
 //! `time_zone` the IANA zone the visitor's browser gives (optional, anything
 //! else ignored), the hours a scheduled campaign keeps for them.
 //!
-//! Answers 202 `{}` whether the address was mailed, is on the list already
-//! or was mailed less than an hour ago, so the answer says nothing of who is
-//! subscribed; 422 `{"error": code}` for a refusal to show the visitor (the
+//! Answers 202 `{}` whether the address is being mailed, is on the list
+//! already or was mailed less than an hour ago, so the answer says nothing
+//! of who is subscribed; 422 `{"error": code}` for a refusal to show the visitor (the
 //! codes of `timada_newsletter::SHOPPER_CODES`); 401 for a missing, unknown
 //! or revoked key, 403 for a key that may not sell, 503 for a suspended
 //! tenant, a shop not taking writes for the moment, or one that has not said
@@ -45,7 +46,6 @@ use topcoat::{
 use super::shoppers::{Answer, refused, status};
 use crate::auth::now;
 use crate::config::Config;
-use crate::newsletter::mail_confirmation;
 use crate::rate_limit::{RateLimiter, allow_newsletter_signup};
 
 /// The header a storefront reports its visitor's address in.
@@ -97,22 +97,24 @@ pub async fn subscribe(cx: &Cx, Form(form): Form<SignupForm>) -> Result<Answer> 
         return refused(StatusCode::TOO_MANY_REQUESTS, NEWSLETTER_TOO_MANY_REQUESTS);
     }
     let store = super::store(cx, &access);
-    let Some(storefront) = timada_orders::Command::new(store.executor().clone(), store.tenant_id())
+    // No link can be mailed to a shop without a storefront: say so before
+    // anything is recorded.
+    if timada_orders::Command::new(store.executor().clone(), store.tenant_id())
         .storefront_address()
         .await
         .map_err(topcoat::Error::from_anyhow)?
-    else {
+        .is_none()
+    {
         return refused(StatusCode::SERVICE_UNAVAILABLE, NEWSLETTER_UNAVAILABLE);
-    };
+    }
     let keys = super::shoppers::keys(cx, &access.tenant.id);
-    let outcome = match timada_newsletter::Command::new(store.executor().clone(), store.tenant_id())
+    // Recorded here, mailed by the subscription that follows the stream.
+    if let Err(err) = timada_newsletter::Command::new(store.executor().clone(), store.tenant_id())
         .request_subscription(&*keys, STOREFRONT_ACTOR, draft, now())
         .await
     {
-        Ok(outcome) => outcome,
-        Err(err) => return answer_error(err),
-    };
-    mail_confirmation(cx, &access.tenant, &storefront, &outcome).await?;
+        return answer_error(err);
+    }
     status(StatusCode::ACCEPTED)
 }
 

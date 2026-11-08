@@ -1,21 +1,30 @@
 //! The one-time codes mailed to prove an address. The domain issues a code
-//! and remembers only its MAC under the host's key ([`CodeVerifier`]); the
-//! web layer mails the plaintext. Guesses are counted on the stream, so
-//! nothing a client holds can reset them, and the stream alone gives the
-//! code away to nobody.
+//! and remembers only the nonce it derives from under the host's key
+//! ([`CodeVerifier`]); a subscription on every node mails the plaintext,
+//! after taking the send on the stream so one node mails, and records how
+//! it went. Guesses are counted on the stream, so nothing a client holds
+//! can reset them, and the stream alone gives the code away to nobody.
 
 use evento::ProjectionAggregate;
 use evento::{Executor, WriteError};
+use timada_core::{Claim, Claimant, LEASE_SECS, new_nonce};
 
-use crate::aggregator::{AttemptFailed, CodeIssued, Consumed};
+use crate::aggregator::{
+    AttemptFailed, CodeIssued, Consumed, MailClaimed, MailSent, MailUndeliverable,
+};
 use crate::error::IdentityError;
-use crate::password::generate_code;
 use crate::value_object::{
     CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, ChallengePurpose, email_challenge_id,
     normalize_email,
 };
 
-/// A code to mail. The plaintext exists only in this value.
+use super::EmailChallengeState;
+
+/// Reload-and-retry budget for a write on a challenge that raced another
+/// (a guess landing while the mail is claimed, say).
+const MAIL_WRITE_ATTEMPTS: usize = 3;
+
+/// A code issued. The plaintext exists only in this value and in the mail.
 #[derive(Clone, PartialEq, Eq)]
 pub struct IssuedCode {
     /// The normalized address the code is for.
@@ -32,12 +41,32 @@ impl std::fmt::Debug for IssuedCode {
     }
 }
 
+/// What the node that took the sending of a code puts in the mail.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CodeMail {
+    /// The normalized address.
+    pub email: String,
+    pub purpose: ChallengePurpose,
+    pub code: String,
+}
+
+impl std::fmt::Debug for CodeMail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodeMail")
+            .field("email", &self.email)
+            .field("purpose", &self.purpose)
+            .field("code", &"******")
+            .finish()
+    }
+}
+
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Issues a fresh code for `email`, replacing any earlier one. A code for
     /// signing in or resetting a password needs a registered address; one for
     /// registering needs a free one. Another code within
-    /// [`CODE_RESEND_AFTER_SECS`] of a live one is refused.
+    /// [`CODE_RESEND_AFTER_SECS`] of a live one is refused, unless that one
+    /// could not be delivered: then the person may try again at once.
     pub async fn issue_email_code(
         &self,
         email: &str,
@@ -62,14 +91,17 @@ impl<E: Executor> super::Command<E> {
         if let Some(existing) = &existing
             && !existing.consumed
             && now < existing.issued_at + CODE_RESEND_AFTER_SECS
+            && !existing.mail.is_undeliverable()
         {
             return Err(IdentityError::CodeRecentlySent);
         }
 
-        let code = generate_code();
+        let nonce = new_nonce();
+        let code = self.codes.derive_code("", &challenge_id, &nonce);
         let issued = CodeIssued {
             purpose,
-            code_tag: self.codes.tag("", &challenge_id, &code),
+            email: email.clone(),
+            nonce,
             issued_at: now,
             expires_at: now + CODE_TTL_SECS,
         };
@@ -102,9 +134,127 @@ impl<E: Executor> super::Command<E> {
         }
         Ok(IssuedCode { email, code })
     }
+
+    /// Takes, for `claimant`, the sending of the code that `CodeIssued`
+    /// at `issued_version` of the challenge `challenge_id` recorded: what to
+    /// mail, or `None` when this node mails nothing (the outcome is
+    /// recorded, another node is sending, the code was replaced or expired
+    /// meanwhile). A node that holds the claim gets the mail again, to send
+    /// it again after a failure worth a retry.
+    pub async fn claim_code_mail(
+        &self,
+        challenge_id: &str,
+        issued_version: u16,
+        claimant: Claimant<'_>,
+        routing_key: Option<String>,
+    ) -> Result<Option<CodeMail>, IdentityError> {
+        let Claimant { node, now } = claimant;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let Some(challenge) = self.load_email_challenge_by_id(challenge_id).await? else {
+                return Ok(None);
+            };
+            if challenge.issued_version != issued_version
+                || challenge.consumed
+                || now >= challenge.expires_at
+            {
+                return Ok(None);
+            }
+            match challenge.mail.claim(node, now) {
+                Claim::Leave => return Ok(None),
+                Claim::Held => return Ok(Some(self.code_mail(&challenge))),
+                Claim::Take => {}
+            }
+            let claimed = challenge
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&MailClaimed {
+                    by: node.to_owned(),
+                    until: now + LEASE_SECS,
+                })
+                .commit(&self.executor)
+                .await;
+            match claimed {
+                Ok(_) => return Ok(Some(self.code_mail(&challenge))),
+                // Another node claimed it, or a guess landed: decide again
+                // on the fresh state.
+                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
+    /// Records that the code `CodeIssued` at `issued_version` recorded was
+    /// handed to the mail server. Nothing is written once the code was
+    /// replaced, or the outcome recorded already.
+    pub async fn record_code_mail_sent(
+        &self,
+        challenge_id: &str,
+        issued_version: u16,
+        routing_key: Option<String>,
+    ) -> Result<(), IdentityError> {
+        self.record_code_mail(challenge_id, issued_version, None, routing_key)
+            .await
+    }
+
+    /// Records that the mail server refused the address for good (or that it
+    /// does not parse), with what it said. The next code for the address may
+    /// then be issued at once.
+    pub async fn record_code_mail_undeliverable(
+        &self,
+        challenge_id: &str,
+        issued_version: u16,
+        reason: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), IdentityError> {
+        self.record_code_mail(challenge_id, issued_version, Some(reason), routing_key)
+            .await
+    }
 }
 
 impl<E: Executor> super::Command<E> {
+    fn code_mail(&self, challenge: &EmailChallengeState) -> CodeMail {
+        CodeMail {
+            email: challenge.email.clone(),
+            purpose: challenge.purpose,
+            code: self.codes.derive_code("", &challenge.id, &challenge.nonce),
+        }
+    }
+
+    async fn record_code_mail(
+        &self,
+        challenge_id: &str,
+        issued_version: u16,
+        undeliverable: Option<&str>,
+        routing_key: Option<String>,
+    ) -> Result<(), IdentityError> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let Some(challenge) = self.load_email_challenge_by_id(challenge_id).await? else {
+                return Ok(());
+            };
+            if challenge.issued_version != issued_version || challenge.mail.is_settled() {
+                return Ok(());
+            }
+            let mut writer = challenge.write()?;
+            writer.routing_key_opt(routing_key.clone());
+            match undeliverable {
+                Some(reason) => writer.event(&MailUndeliverable {
+                    reason: reason.to_owned(),
+                }),
+                None => writer.event(&MailSent),
+            };
+            match writer.commit(&self.executor).await {
+                Ok(_) => return Ok(()),
+                // A guess landed meanwhile: write past it.
+                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
     /// Checks `code` against the live code of a normalized address and burns
     /// it. A wrong guess is recorded; the fifth kills the code. Callers act
     /// *after* this returns, so a code is never reusable.
@@ -128,9 +278,7 @@ impl<E: Executor> super::Command<E> {
         if now >= challenge.expires_at {
             return Err(IdentityError::CodeExpired);
         }
-        let matches = self
-            .codes
-            .verify("", &challenge.id, code, &challenge.code_tag);
+        let matches = self.codes.verify("", &challenge.id, &challenge.nonce, code);
         let outcome = if matches {
             challenge
                 .write()?

@@ -18,10 +18,11 @@ use evento::{Executor, Projection, metadata::Event};
 use timada_orders::ShippingAddress;
 
 use crate::aggregator::{
-    AddressRemoved, AddressSaved, AttemptFailed, CodeConsumed, CodeIssued, Forgotten, Registered,
-    SessionEnded, SessionStarted, SessionsRevoked,
+    AddressRemoved, AddressSaved, AttemptFailed, CodeConsumed, CodeIssued, Forgotten, MailClaimed,
+    MailSent, MailUndeliverable, Registered, SessionEnded, SessionStarted, SessionsRevoked,
 };
 use crate::value_object::{challenge_id, session_id, shopper_id};
+use timada_core::Sending;
 use timada_core::keys::{self as key, Key as ShopperKey, Keys as ShopperKeys};
 
 /// The command gateway. Cheap to clone when `E` is.
@@ -288,8 +289,19 @@ async fn on_forgotten(event: Event<Forgotten>, state: &mut ShopperState) -> anyh
 #[derive(Debug, PartialEq, Eq)]
 pub struct ChallengeState {
     pub id: String,
-    /// The code's MAC under the host's key; see `CodeIssued`.
-    pub code_tag: Vec<u8>,
+    /// The key the address is sealed under: the address's own, shared with
+    /// the account it registers (see `CodeIssued`).
+    pub key_id: String,
+    /// The normalized address, sealed.
+    pub email: Vec<u8>,
+    /// What the current code derives from under the host's key.
+    pub nonce: Vec<u8>,
+    /// The primary subtag of the shopper's language, to mail them in it.
+    pub language: Option<String>,
+    /// The stream version of the current `CodeIssued`: what the mail
+    /// subscription compares its event with, so an older code's event,
+    /// replayed, mails nothing.
+    pub issued_version: u16,
     /// Unix seconds.
     pub issued_at: u64,
     /// Unix seconds.
@@ -298,6 +310,26 @@ pub struct ChallengeState {
     pub failed_attempts: u32,
     /// The current code was used.
     pub consumed: bool,
+    /// Where the current code's mail stands.
+    pub mail: Sending,
+}
+
+impl ChallengeState {
+    /// The address, opened with the key `key_id` names. Fails under any
+    /// other key.
+    pub fn open_email(&self, key: &ShopperKey) -> anyhow::Result<String> {
+        let email = key::open(
+            key,
+            &challenge_email_aad(&self.id, &self.key_id),
+            &self.email,
+        )?;
+        Ok(String::from_utf8(email)?)
+    }
+}
+
+/// What a challenge's sealed address is bound to.
+pub(crate) fn challenge_email_aad(challenge_id: &str, key_id: &str) -> Vec<u8> {
+    key::aad(challenge_id, key_id, "email")
 }
 
 pub fn challenge_projection<E: Executor>() -> Projection<E, ChallengeState> {
@@ -305,6 +337,9 @@ pub fn challenge_projection<E: Executor>() -> Projection<E, ChallengeState> {
         .handler(on_code_issued())
         .handler(on_attempt_failed())
         .handler(on_code_consumed())
+        .handler(on_mail_claimed())
+        .handler(on_mail_sent())
+        .handler(on_mail_undeliverable())
         .strict()
 }
 
@@ -314,11 +349,45 @@ async fn on_code_issued(
     state: &mut ChallengeState,
 ) -> anyhow::Result<()> {
     state.id = event.aggregate_id.to_owned();
-    state.code_tag = event.data.code_tag.to_owned();
+    state.key_id = event.data.key_id.to_owned();
+    state.email = event.data.email.to_owned();
+    state.nonce = event.data.nonce.to_owned();
+    state.language = event.data.language.to_owned();
+    state.issued_version = event.version;
     state.issued_at = event.data.issued_at;
     state.expires_at = event.data.expires_at;
     state.failed_attempts = 0;
     state.consumed = false;
+    state.mail = Sending::Pending;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_claimed(
+    event: Event<MailClaimed>,
+    state: &mut ChallengeState,
+) -> anyhow::Result<()> {
+    state.mail = Sending::Claimed {
+        by: event.data.by.to_owned(),
+        until: event.data.until,
+    };
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_sent(_event: Event<MailSent>, state: &mut ChallengeState) -> anyhow::Result<()> {
+    state.mail = Sending::Sent;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_undeliverable(
+    event: Event<MailUndeliverable>,
+    state: &mut ChallengeState,
+) -> anyhow::Result<()> {
+    state.mail = Sending::Undeliverable {
+        reason: event.data.reason.to_owned(),
+    };
     Ok(())
 }
 
@@ -416,8 +485,14 @@ impl<E: Executor> Command<E> {
     }
 
     pub async fn load_challenge(&self, email: &str) -> anyhow::Result<Option<ChallengeState>> {
+        self.load_challenge_by_id(&challenge_id(email)).await
+    }
+
+    /// The challenge stream `id` names ([`challenge_id`]), as the mail
+    /// subscription reads it.
+    pub async fn load_challenge_by_id(&self, id: &str) -> anyhow::Result<Option<ChallengeState>> {
         challenge_projection()
-            .load(challenge_id(email))
+            .load(id)
             .tenant(&self.tenant)
             .execute(&self.executor)
             .await
