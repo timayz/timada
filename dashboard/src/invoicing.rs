@@ -1,5 +1,6 @@
-//! Issues the invoice of every order once its money is taken (`Paid`), and
-//! the credit note of every refund, in the store. An order whose hold went
+//! Issues the invoice of every order once its money is taken (`Paid`), or
+//! the merchant says it came in outside timada (`SettledOutside`), and the
+//! credit note of every refund, in the store. An order whose hold went
 //! back, nothing taken, has neither. What a document says comes from places
 //! only the dashboard sees together: the order and the cart it was paid
 //! from (the tenant's store), the kind of goods of each product (the
@@ -19,9 +20,9 @@ use timada_invoicing::rates::EURO;
 use timada_invoicing::tax::TaxProfile;
 use timada_invoicing::{
     Address, InvoiceDiscount, InvoiceShipping, NewCreditNote, NewInvoice, NewInvoiceLine,
-    PAYMENT_METHOD_CARD, Seller,
+    PAYMENT_METHOD_CARD, PAYMENT_METHOD_OUTSIDE, Seller,
 };
-use timada_orders::aggregator::{Paid, Refunded};
+use timada_orders::aggregator::{Paid, Refunded, SettledOutside};
 use timada_tenancy::LegalIdentity;
 
 use crate::cluster::Executor as Store;
@@ -55,6 +56,7 @@ pub fn subscription<E: Executor>(
         .data(euro_rates)
         .data(TenantStore(store))
         .handler(on_paid())
+        .handler(on_settled_outside())
         .handler(on_refunded())
         .any_routing_key()
         .retry(5)
@@ -88,27 +90,59 @@ fn seller(legal: &LegalIdentity) -> Seller {
 
 #[evento::subscription]
 async fn on_paid<E: Executor>(context: &Context<'_, E>, event: Event<Paid>) -> anyhow::Result<()> {
+    issue_invoice(
+        context,
+        &event.tenant,
+        &event.aggregate_id,
+        event.timestamp,
+        PAYMENT_METHOD_CARD,
+    )
+    .await
+}
+
+/// The merchant collected the money outside timada: invoiced as a payment
+/// is, the invoice saying so.
+#[evento::subscription]
+async fn on_settled_outside<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<SettledOutside>,
+) -> anyhow::Result<()> {
+    issue_invoice(
+        context,
+        &event.tenant,
+        &event.aggregate_id,
+        event.timestamp,
+        PAYMENT_METHOD_OUTSIDE,
+    )
+    .await
+}
+
+/// Issues the invoice of `order_id`, paid at `paid_at` (unix seconds) by
+/// `payment_method`, unless it has one.
+async fn issue_invoice<E: Executor>(
+    context: &Context<'_, E>,
+    tenant_id: &str,
+    order_id: &str,
+    paid_at: u64,
+    payment_method: &str,
+) -> anyhow::Result<()> {
     let platform: Platform = context.extract();
     let store: TenantStore = context.extract();
-    let invoicing = timada_invoicing::Command::new(store.0.clone(), &event.tenant);
-    if invoicing
-        .load_invoice_of_order(&event.aggregate_id)
-        .await?
-        .is_some()
-    {
+    let invoicing = timada_invoicing::Command::new(store.0.clone(), tenant_id);
+    if invoicing.load_invoice_of_order(order_id).await?.is_some() {
         return Ok(());
     }
     // What was sold, as `Placed` wrote it, with the discount, the shipping
     // and the billing address written beside it.
-    let Some(order) = timada_orders::Command::new(store.0.clone(), &event.tenant)
-        .load_order(&event.aggregate_id)
+    let Some(order) = timada_orders::Command::new(store.0.clone(), tenant_id)
+        .load_order(order_id)
         .await?
     else {
         return Ok(());
     };
     let tenancy = timada_tenancy::Command(platform.0.clone());
     let link = tenancy
-        .load_tenant(&event.tenant)
+        .load_tenant(tenant_id)
         .await?
         .and_then(|state| state.company);
     let company = match &link {
@@ -119,11 +153,11 @@ async fn on_paid<E: Executor>(context: &Context<'_, E>, event: Event<Paid>) -> a
         // Only an order paid before invoicing existed, or a tenant unlinked
         // between payment and now: checkout refuses to take a payment
         // without a company.
-        tracing::warn!(tenant = %event.tenant, order = %event.aggregate_id, "no company: order not invoiced");
+        tracing::warn!(tenant = %tenant_id, order = %order_id, "no company: order not invoiced");
         return Ok(());
     };
     let Some(legal) = company.identity.clone() else {
-        tracing::warn!(tenant = %event.tenant, order = %event.aggregate_id, "the company has no identity: order not invoiced");
+        tracing::warn!(tenant = %tenant_id, order = %order_id, "the company has no identity: order not invoiced");
         return Ok(());
     };
     let vies: Arc<dyn Vies> = context.extract();
@@ -144,7 +178,7 @@ async fn on_paid<E: Executor>(context: &Context<'_, E>, event: Event<Paid>) -> a
     // A business buyer's number, from the request this payment answered,
     // counts once VIES says it is valid; otherwise the sale is to a consumer
     // (VAT charged: the safe side).
-    let vat_number = timada_orders::Command::new(store.0.clone(), &event.tenant)
+    let vat_number = timada_orders::Command::new(store.0.clone(), tenant_id)
         .load_cart(&order.cart_id)
         .await?
         .and_then(|cart| {
@@ -156,11 +190,11 @@ async fn on_paid<E: Executor>(context: &Context<'_, E>, event: Event<Paid>) -> a
             match check_patiently(vies.as_ref(), &number, legal.vat_number.as_deref()).await {
                 ViesAnswer::Valid { reference } => (Some(number), reference),
                 ViesAnswer::Invalid => {
-                    tracing::info!(tenant = %event.tenant, order = %event.aggregate_id, %number, "VIES: not a valid VAT number");
+                    tracing::info!(tenant = %tenant_id, order = %order_id, %number, "VIES: not a valid VAT number");
                     (None, None)
                 }
                 ViesAnswer::Unavailable(reason) => {
-                    tracing::warn!(tenant = %event.tenant, order = %event.aggregate_id, %number, %reason, "VIES did not answer: invoiced with VAT");
+                    tracing::warn!(tenant = %tenant_id, order = %order_id, %number, %reason, "VIES did not answer: invoiced with VAT");
                     (None, None)
                 }
             }
@@ -206,11 +240,11 @@ async fn on_paid<E: Executor>(context: &Context<'_, E>, event: Event<Paid>) -> a
         match rates.rate_on(&currency, &day).await {
             RateAnswer::Rate(rate) => Some(rate),
             RateAnswer::NoSuchCurrency => {
-                tracing::warn!(tenant = %event.tenant, order = %event.aggregate_id, %currency, "no euro reference rate for this currency: invoiced without one");
+                tracing::warn!(tenant = %tenant_id, order = %order_id, %currency, "no euro reference rate for this currency: invoiced without one");
                 None
             }
             RateAnswer::Unavailable(reason) => {
-                tracing::warn!(tenant = %event.tenant, order = %event.aggregate_id, %currency, %reason, "the euro reference rates could not be read: invoiced without one");
+                tracing::warn!(tenant = %tenant_id, order = %order_id, %currency, %reason, "the euro reference rates could not be read: invoiced without one");
                 None
             }
         }
@@ -219,12 +253,12 @@ async fn on_paid<E: Executor>(context: &Context<'_, E>, event: Event<Paid>) -> a
         .issue_invoice(
             NewInvoice {
                 company_id: company.id.clone(),
-                tenant_id: event.tenant.clone(),
+                tenant_id: tenant_id.to_owned(),
                 series_code: link.series_code.clone(),
-                order_id: event.aggregate_id.clone(),
+                order_id: order_id.to_owned(),
                 order_reference: order.reference.clone(),
-                paid_at: event.timestamp,
-                payment_method: PAYMENT_METHOD_CARD.to_owned(),
+                paid_at,
+                payment_method: payment_method.to_owned(),
                 seller: seller(&legal),
                 buyer,
                 buyer_email: order.email.clone(),
@@ -247,7 +281,7 @@ async fn on_paid<E: Executor>(context: &Context<'_, E>, event: Event<Paid>) -> a
             issued_at,
         )
         .await?;
-    tracing::info!(tenant = %event.tenant, order = %event.aggregate_id, invoice = %invoice.label, "invoice issued");
+    tracing::info!(tenant = %tenant_id, order = %order_id, invoice = %invoice.label, "invoice issued");
     Ok(())
 }
 

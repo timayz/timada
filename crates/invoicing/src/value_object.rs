@@ -14,8 +14,11 @@ pub const CREDIT_NOTE_PREFIX: &str = "A";
 /// The layout a document is drawn with. Recorded in the document: a new
 /// layout is a new version, and a document keeps the one it was issued with.
 pub const TEMPLATE_VERSION: u16 = 1;
-/// How a storefront order was paid.
+/// How a storefront order was paid: through the provider, by card.
 pub const PAYMENT_METHOD_CARD: &str = "card";
+/// How a storefront order was paid: settled between the merchant and the
+/// shopper outside the platform, once the card hold had lapsed.
+pub const PAYMENT_METHOD_OUTSIDE: &str = "outside";
 
 /// The index stream of an order's invoice.
 pub fn invoice_id(order_id: &str) -> String {

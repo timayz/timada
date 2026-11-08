@@ -400,6 +400,14 @@ pub enum Order {
         payment_id: String,
         reminded_by: String,
     },
+    /// The merchant collected the money outside timada (by bank transfer,
+    /// say) for an order kept open once its hold lapsed while the supplier
+    /// may have it: the order is paid, nothing taken through the provider,
+    /// and its invoice is issued. `note` is what the merchant wrote of how.
+    SettledOutside {
+        note: Option<String>,
+        settled_by: String,
+    },
 }
 
 /// The index `reference → order`: one stream per reference, with the

@@ -140,6 +140,12 @@ async fn mail_order<E: Executor>(
     let Some(order) = orders.load_order(order_id).await? else {
         return Ok(());
     };
+    // Money the merchant collected outside timada was never taken from the
+    // card: the two settled it between them, and the mail would say
+    // otherwise.
+    if kind == ShopMailKind::OrderPaid && order.settled_outside.is_some() {
+        return Ok(());
+    }
     let Some(shop) = timada_tenancy::Command(platform.0.clone())
         .load_tenant(tenant_id)
         .await?

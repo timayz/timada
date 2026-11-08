@@ -898,3 +898,124 @@ async fn the_merchant_is_reminded_once_before_a_held_card_lapses() {
             .unwrap()
     );
 }
+
+/// An order kept open once its hold lapsed while the supplier may have it:
+/// the merchant collected the money outside timada and says so. The order
+/// is paid, nothing through the provider, and may leave; settled twice is
+/// a no-op, and no other order is settled this way.
+#[tokio::test]
+async fn a_kept_open_order_is_settled_outside_timada() {
+    let (orders, catalog) = store().await;
+    let order_id = held(&orders, &catalog).await;
+    orders
+        .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
+        .await
+        .unwrap();
+    // Still held: the provider takes it, not the merchant's word.
+    let early = orders
+        .settle_outside(ALICE, &order_id, Some("by transfer".into()))
+        .await;
+    assert!(matches!(early, Err(OrderError::NotKeptOpen)), "{early:?}");
+
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    let payment_id = order.payment.payment_id.clone();
+    assert_eq!(
+        orders
+            .record_release(DASHBOARD, &order_id, &payment_id, HOLD_EXPIRED_REASON)
+            .await
+            .unwrap(),
+        Released::KeptOpen
+    );
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert!(order.is_kept_open());
+    assert!(!order.hold_at_risk(), "nothing held any more");
+
+    orders
+        .settle_outside(ALICE, &order_id, Some("  by bank transfer  ".into()))
+        .await
+        .unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.status, OrderStatus::Paid);
+    assert!(order.is_paid());
+    assert!(!order.is_kept_open());
+    assert_eq!(order.paid_cents, 0, "nothing through the provider");
+    assert_eq!(order.payment_state(), "settled_outside");
+    let settled = order.settled_outside.clone().unwrap();
+    assert_eq!(settled.note.as_deref(), Some("by bank transfer"));
+    assert_eq!(settled.settled_by, ALICE);
+    assert_eq!(Some(settled.settled_at), order.paid_at);
+    // The store API answers with this state: the shop's note stays out.
+    let answered = serde_json::to_value(&order).unwrap();
+    assert!(answered.get("settled_outside").is_none());
+    assert!(answered.get("paid_at").is_some());
+    let version = order.aggregate_version().unwrap();
+
+    // Twice: nothing more.
+    orders.settle_outside(ALICE, &order_id, None).await.unwrap();
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.aggregate_version().unwrap(), version);
+    // Nothing to refund through the provider.
+    let refund = orders.request_refund(ALICE, &order_id, 100).await;
+    assert!(
+        matches!(refund, Err(OrderError::InvalidRefund)),
+        "{refund:?}"
+    );
+    // Paid: it leaves as any paid order, and may no longer be settled.
+    orders
+        .fulfil_order(ALICE, &order_id, Some("LP1".into()))
+        .await
+        .unwrap();
+    let late = orders.settle_outside(ALICE, &order_id, None).await;
+    assert!(matches!(late, Ok(())), "settled already: {late:?}");
+
+    // An order paid through the provider is not settled outside it.
+    let paid_id = paid(&orders, &catalog).await;
+    let refused = orders.settle_outside(ALICE, &paid_id, None).await;
+    assert!(
+        matches!(refused, Err(OrderError::NotKeptOpen)),
+        "{refused:?}"
+    );
+    // Nor one cancelled, nor one kept open but being cancelled.
+    let cancelled = held(&orders, &catalog).await;
+    let payment_id = orders
+        .load_order(&cancelled)
+        .await
+        .unwrap()
+        .unwrap()
+        .payment
+        .payment_id;
+    orders
+        .record_release(DASHBOARD, &cancelled, &payment_id, HOLD_EXPIRED_REASON)
+        .await
+        .unwrap();
+    let refused = orders.settle_outside(ALICE, &cancelled, None).await;
+    assert!(
+        matches!(refused, Err(OrderError::OrderCancelled)),
+        "{refused:?}"
+    );
+    let cancelling = held(&orders, &catalog).await;
+    orders
+        .begin_supplier_order(DASHBOARD, &cancelling, "aliexpress", 0)
+        .await
+        .unwrap();
+    let payment_id = orders
+        .load_order(&cancelling)
+        .await
+        .unwrap()
+        .unwrap()
+        .payment
+        .payment_id;
+    orders
+        .record_release(DASHBOARD, &cancelling, &payment_id, HOLD_EXPIRED_REASON)
+        .await
+        .unwrap();
+    orders
+        .request_cancellation(ALICE, &cancelling, "Cancelled on AliExpress".into(), true)
+        .await
+        .unwrap();
+    let refused = orders.settle_outside(ALICE, &cancelling, None).await;
+    assert!(
+        matches!(refused, Err(OrderError::CancellationPending)),
+        "{refused:?}"
+    );
+}

@@ -203,6 +203,33 @@ async fn an_order_kept_open_without_its_hold_waits_for_the_merchant() {
 
     assert_eq!(due().await, std::slice::from_ref(&unread));
 
+    // Settled outside timada: paid, with nothing for the sweep either.
+    let settled = lapsed().await;
+    orders
+        .begin_supplier_order(DASHBOARD, &settled, "aliexpress", 0)
+        .await
+        .unwrap();
+    let payment_id = orders
+        .load_order(&settled)
+        .await
+        .unwrap()
+        .unwrap()
+        .payment
+        .payment_id;
+    orders
+        .record_release(DASHBOARD, &settled, &payment_id, "")
+        .await
+        .unwrap();
+    orders.settle_outside(ALICE, &settled, None).await.unwrap();
+    assert_eq!(due().await, std::slice::from_ref(&unread));
+    let rows = orders_of_tenant(&pool, TENANT, &OrderFilter::default(), 0, 10)
+        .await
+        .unwrap();
+    let row = rows.iter().find(|row| row.id == settled).unwrap();
+    assert_eq!(row.status(), OrderStatus::Paid);
+    assert_eq!(row.payment_state, "settled_outside");
+    assert!(row.paid_at.is_some());
+
     orders
         .request_cancellation(ALICE, &kept, "Cancelled on AliExpress".into(), true)
         .await

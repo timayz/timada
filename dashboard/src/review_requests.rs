@@ -132,9 +132,12 @@ pub async fn ask_buyers<E: evento::Executor + Clone>(
             continue;
         };
         let products = unreviewed(&reviews, &order).await?;
+        // Refunded in full: nothing left of the sale to ask about. Money
+        // that came in outside timada took nothing through the provider.
+        let refunded_in_full = order.settled_outside.is_none() && order.outstanding_cents() == 0;
         if order.status != OrderStatus::Fulfilled
             || !order.is_paid()
-            || order.refunded_cents >= order.paid_cents
+            || refunded_in_full
             || products.is_empty()
         {
             continue;

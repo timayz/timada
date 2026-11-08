@@ -716,6 +716,45 @@ test("an order AliExpress may have stays out of the shopper's hands", async ({ p
     await page.goto(merchantOrder);
     await expect(page.locator("[data-order-aliexpress-rule-out-soon]")).toBeVisible();
     expect(aliexpress.orders).toHaveLength(1);
+    await expect(page.locator("[data-order-settle-outside]")).toHaveCount(0);
+
+    // Nobody acted, and Stripe dropped the hold: the order is kept open,
+    // nothing taken, since AliExpress may be shipping it. The shop paid
+    // AliExpress, so the merchant collects from the shopper another way and
+    // says so: the order is paid, and invoiced as settled outside timada.
+    const intent = stripe.lastIntent()!;
+    stripe.intents.get(intent.id)!.cancelled = true;
+    const dropped = JSON.stringify({
+      id: `evt_${intent.id}_canceled`,
+      type: "payment_intent.canceled",
+      data: { object: { id: intent.id, object: "payment_intent" } },
+    });
+    const told = await request.post(webhookUrl, {
+      data: dropped,
+      headers: { "content-type": "application/json", "stripe-signature": stripeSignature(dropped, "whsec_e2e") },
+    });
+    expect(told.status()).toBe(204);
+    await page.goto(merchantOrder);
+    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "authorized");
+    await expect(page.locator("[data-order-payment]")).toHaveAttribute("data-order-payment", "released");
+    await expect(page.locator("[data-order-hold-at-risk]")).toHaveCount(0);
+    await page.getByLabel("How it was paid (optional)").fill("Bank transfer received");
+    await page.getByRole("button", { name: "Settled outside timada" }).click();
+    await expect(page.getByRole("status")).toContainText("settled outside timada");
+    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid");
+    await expect(page.locator("[data-order-payment]")).toHaveAttribute("data-order-payment", "settled_outside");
+    await expect(page.locator("[data-order-settled-outside]")).toContainText("Bank transfer received");
+    await expect(page.locator("[data-order-settle-outside]")).toHaveCount(0);
+    // The invoice follows, with the payment shown as settled outside.
+    await expect(async () => {
+      await page.goto(merchantOrder);
+      await expect(page.locator("[data-order-documents] [data-document]")).toHaveCount(1, { timeout: 1000 });
+    }).toPass({ timeout: 20_000 });
+    await expect(page.locator("[data-order-documents] [data-document]")).toContainText("invoice");
+    // No "payment taken" mail: nothing was taken from the card.
+    await expect(page.locator("[data-order-mail='order_paid']")).toHaveCount(0);
+    await page.goto(shopperOrder);
+    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid");
   } finally {
     await stripe.stop();
     await aliexpress.stop();
