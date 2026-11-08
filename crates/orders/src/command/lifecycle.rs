@@ -2,12 +2,13 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 
 use crate::aggregator::{
     CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, Fulfilled,
-    HoldLapseReminded, Paid, PaymentReleased, RefundRequested, Refunded, SupplierOrderRefused,
-    SupplierOrderRuledOut, SupplierOrderStarted, SupplierOrderUncertain,
+    HoldLapseReminded, Paid, PaymentReleased, RefundRequested, Refunded, SettledOutside,
+    SupplierOrderRefused, SupplierOrderRuledOut, SupplierOrderStarted, SupplierOrderUncertain,
 };
 use crate::error::OrderError;
 use crate::value_object::{
-    MAX_REASON_LEN, SHOPPER_CANCEL_REASON, STOREFRONT_ACTOR, normalize_reason, normalize_tracking,
+    MAX_REASON_LEN, SHOPPER_CANCEL_REASON, STOREFRONT_ACTOR, normalize_note, normalize_reason,
+    normalize_tracking,
 };
 
 use super::{OrderState, OrderStatus, PendingCapture, PendingRefund, SupplierOrder};
@@ -489,6 +490,56 @@ impl<E: Executor> super::Command<E> {
             }
         }
         Ok(())
+    }
+
+    /// Records that the merchant collected the money outside timada for an
+    /// order kept open ([`is_kept_open`](OrderState::is_kept_open)): the
+    /// order is paid, nothing through the provider, and its invoice follows.
+    /// Settled twice is a no-op. Refused for any other order
+    /// (`NotKeptOpen`): one whose money is held is taken through the
+    /// provider, one taken is paid already; a cancelled or fulfilled order,
+    /// or one being cancelled, says so.
+    pub async fn settle_outside(
+        &self,
+        actor: &str,
+        order_id: &str,
+        note: Option<String>,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        let note = normalize_note(note.as_deref())?;
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            if order.settled_outside.is_some() {
+                return Ok(());
+            }
+            match order.status {
+                OrderStatus::Cancelled => return Err(OrderError::OrderCancelled),
+                OrderStatus::Fulfilled => return Err(OrderError::OrderFulfilled),
+                OrderStatus::Authorized | OrderStatus::Paid => {}
+            }
+            if order.pending_cancellation.is_some() {
+                return Err(OrderError::CancellationPending);
+            }
+            if !order.is_kept_open() {
+                return Err(OrderError::NotKeptOpen);
+            }
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&SettledOutside {
+                    note: note.clone(),
+                    settled_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(OrderError::Write(WriteError::InvalidOriginalVersion))
     }
 
     /// Takes the reminding of the merchant that the hold lapses soon while

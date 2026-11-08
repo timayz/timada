@@ -473,6 +473,59 @@ impl Aliexpress {
         }))
     }
 
+    /// Fulfils a paid order from the parcels its forward already knows,
+    /// when every line was bought on AliExpress and every one shipped:
+    /// whether it did. For an order kept open without its hold, whose
+    /// forward may have closed with every parcel known and nothing to
+    /// fulfil, once the merchant says the money came in outside timada.
+    /// An order not paid, left, or cancelled, or a forward with parcels
+    /// still to come (the next read fulfils it), changes nothing.
+    pub async fn fulfil_settled_order<E: evento::Executor + Clone>(
+        &self,
+        store: &E,
+        tenant_id: &str,
+        order_id: &str,
+    ) -> anyhow::Result<bool> {
+        let orders = timada_orders::Command::new(store.clone(), tenant_id);
+        // Paid and not left: anything else has nothing to fulfil here.
+        if !orders
+            .load_order(order_id)
+            .await?
+            .is_some_and(|order| order.status == OrderStatus::Paid)
+        {
+            return Ok(false);
+        }
+        let Some(forward) = timada_aliexpress::Command::new(store.clone(), tenant_id)
+            .load_forward(order_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+        if !matches!(forward.status, ForwardStatus::Placed | ForwardStatus::Done)
+            || !forward.complete
+            || !forward.all_shipped()
+        {
+            return Ok(false);
+        }
+        let tracking = fit_tracking(&forward.tracking());
+        match orders
+            .fulfil_order(ALIEXPRESS_ACTOR, order_id, Some(tracking))
+            .await
+        {
+            Ok(()) => {
+                tracing::info!(tenant = %tenant_id, order = %order_id, "order settled outside timada fulfilled from AliExpress");
+                Ok(true)
+            }
+            Err(
+                OrderError::OrderCancelled
+                | OrderError::OrderNotFound
+                | OrderError::PaymentNotCaptured
+                | OrderError::CancellationPending,
+            ) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     /// Reads a placed order's AliExpress orders again; once each has a
     /// parcel number and every line of the shop's order was bought there,
     /// fulfils the shop's order with them. Once AliExpress closed every one
@@ -480,7 +533,9 @@ impl Aliexpress {
     /// closed), the shop's order is to be cancelled: the payments sweep
     /// gives the hold back, or the money. An order settled otherwise
     /// (fulfilled by hand, cancelled), watched long enough, or kept open
-    /// without its hold once every parcel is known is no longer read.
+    /// without its hold once every parcel is known is no longer read; the
+    /// merchant saying the money came in outside timada fulfils that last
+    /// one from the parcels known ([`fulfil_settled_order`](Self::fulfil_settled_order)).
     ///
     /// Written in three steps, as the shop's order is another stream: what
     /// was read, the shop's order, then `Done`. A node stopping in between
@@ -835,6 +890,7 @@ pub fn subscription<E: Executor>(
         .data(Store(store))
         .handler(on_order_placed())
         .handler(on_forward_requested())
+        .handler(on_settled_outside())
         .any_routing_key()
         .retry(5)
 }
@@ -878,6 +934,22 @@ async fn on_order_placed<E: Executor>(
         Ok(_) | Err(AliexpressError::AlreadyForwarded | AliexpressError::Forwarding) => Ok(()),
         Err(err) => Err(err.into()),
     }
+}
+
+/// An order kept open whose money the merchant collected outside timada is
+/// paid: fulfilled from the parcels AliExpress already shipped, when every
+/// one is known. Otherwise the next read fulfils it, as any paid order.
+#[evento::subscription]
+async fn on_settled_outside<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<timada_orders::aggregator::SettledOutside>,
+) -> anyhow::Result<()> {
+    let aliexpress: Arc<Aliexpress> = context.extract();
+    let store: Store = context.extract();
+    aliexpress
+        .fulfil_settled_order(&store.0, &event.tenant, &event.aggregate_id)
+        .await?;
+    Ok(())
 }
 
 #[evento::subscription]
@@ -1571,6 +1643,80 @@ mod tests {
             "the merchant settles it"
         );
         assert_eq!(shop.forward(&id).await.fulfilled_tracking, None);
+    }
+
+    /// The money of an order kept open came in outside timada: paid, it is
+    /// fulfilled from AliExpress's parcels, whether they arrive after (the
+    /// next read) or arrived before and closed the forward (the saga).
+    #[tokio::test]
+    async fn an_order_settled_outside_timada_is_fulfilled_from_its_parcels() {
+        let shop = Shop::new().await;
+        let id = shop.placed_with(&["81"], false).await;
+        shop.orders()
+            .record_release("timada-dashboard", ORDER, "", "The hold lapsed.")
+            .await
+            .unwrap();
+        // Nothing shipped yet: nothing to fulfil from.
+        shop.orders()
+            .settle_outside("user-alice", ORDER, None)
+            .await
+            .unwrap();
+        assert!(
+            !shop
+                .aliexpress
+                .fulfil_settled_order(&shop.store, TENANT, ORDER)
+                .await
+                .unwrap()
+        );
+        assert_eq!(shop.order().await.status, OrderStatus::Paid);
+        // The parcel arrives: the read fulfils it, as any paid order.
+        shop.ships("81", "LP1");
+        assert_eq!(
+            shop.check(&id).await,
+            CheckResult::Checked { fulfilled: true }
+        );
+        let order = shop.order().await;
+        assert_eq!(order.status, OrderStatus::Fulfilled);
+        assert_eq!(order.tracking.as_deref(), Some("LP1"));
+        assert_eq!(shop.forward(&id).await.status, ForwardStatus::Done);
+
+        // Every parcel known before the merchant spoke: the forward closed
+        // with nothing to fulfil, so the settlement fulfils from it.
+        let shop = Shop::new().await;
+        let id = shop.placed_with(&["82"], false).await;
+        shop.orders()
+            .record_release("timada-dashboard", ORDER, "", "The hold lapsed.")
+            .await
+            .unwrap();
+        shop.ships("82", "LP2");
+        assert_eq!(
+            shop.check(&id).await,
+            CheckResult::Checked { fulfilled: false }
+        );
+        assert_eq!(shop.check(&id).await, CheckResult::Done);
+        assert_eq!(shop.order().await.status, OrderStatus::Authorized);
+        shop.orders()
+            .settle_outside("user-alice", ORDER, Some("cash".to_owned()))
+            .await
+            .unwrap();
+        assert!(
+            shop.aliexpress
+                .fulfil_settled_order(&shop.store, TENANT, ORDER)
+                .await
+                .unwrap()
+        );
+        let order = shop.order().await;
+        assert_eq!(order.status, OrderStatus::Fulfilled);
+        assert_eq!(order.tracking.as_deref(), Some("LP2"));
+        assert_eq!(order.fulfilled_by.as_deref(), Some(ALIEXPRESS_ACTOR));
+        // Told again (another node): nothing more.
+        assert!(
+            !shop
+                .aliexpress
+                .fulfil_settled_order(&shop.store, TENANT, ORDER)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
