@@ -1,7 +1,10 @@
 use evento::{Executor, ProjectionAggregate, WriteBuilder, WriteError};
 use timada_core::keys::{self, Key, Keys, new_key_id};
+use timada_core::{Claim, Claimant, LEASE_SECS};
 
-use crate::aggregator::{Confirmed, Requested, TimeZoneSet, Unsubscribed};
+use crate::aggregator::{
+    Confirmed, MailClaimed, MailSent, MailUndeliverable, Requested, TimeZoneSet, Unsubscribed,
+};
 use crate::error::NewsletterError;
 use crate::value_object::{
     CONFIRM_TTL_SECS, ConfirmLink, RESEND_AFTER_SECS, SOURCE_ACCOUNT, SubscriberStatus,
@@ -9,6 +12,10 @@ use crate::value_object::{
 };
 
 use super::{SubscriberState, email_aad};
+
+/// Reload-and-retry budget for a write on a subscriber that raced another
+/// (a time zone landing while the mail is claimed, say).
+const MAIL_WRITE_ATTEMPTS: usize = 3;
 
 /// What a shopper asks for: the shop's news at `email`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -66,6 +73,26 @@ impl std::fmt::Debug for RequestOutcome {
     }
 }
 
+/// What the node that took the sending of a confirmation puts in the mail.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ConfirmationMail {
+    /// The normalized address, opened.
+    pub email: String,
+    pub language: Option<String>,
+    /// The token of the link that confirms the request.
+    pub token: String,
+}
+
+impl std::fmt::Debug for ConfirmationMail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfirmationMail")
+            .field("email", &self.email)
+            .field("language", &self.language)
+            .field("token", &"******")
+            .finish()
+    }
+}
+
 /// What a followed confirmation link did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmOutcome {
@@ -77,10 +104,13 @@ pub enum ConfirmOutcome {
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Records that `cmd.email` asks for the shop's news, to be confirmed
-    /// through the link the caller mails. The first request draws a fresh key,
-    /// which `keys` holds before the event names it; later ones reseal the
-    /// address under the same key, so the links of earlier mails keep
-    /// working. `now` is unix seconds.
+    /// through the link the subscription that follows the stream mails
+    /// ([`Self::claim_confirmation_mail`]). The first request draws a fresh
+    /// key, which `keys` holds before the event names it; later ones reseal
+    /// the address under the same key, so the links of earlier mails keep
+    /// working. A request within [`RESEND_AFTER_SECS`] of a pending one is
+    /// not recorded, unless that one's mail could not be delivered: then the
+    /// shopper may try again at once. `now` is unix seconds.
     pub async fn request_subscription(
         &self,
         keys: &dyn Keys,
@@ -109,7 +139,8 @@ impl<E: Executor> super::Command<E> {
                     return Ok(RequestOutcome::AlreadyConfirmed);
                 }
                 SubscriberStatus::Pending
-                    if now.saturating_sub(state.requested_at) < RESEND_AFTER_SECS =>
+                    if now.saturating_sub(state.requested_at) < RESEND_AFTER_SECS
+                        && !state.mail.is_undeliverable() =>
                 {
                     return Ok(RequestOutcome::RecentlyRequested);
                 }
@@ -211,6 +242,91 @@ impl<E: Executor> super::Command<E> {
         Ok(())
     }
 
+    /// Takes, for `claimant`, the sending of the confirmation link of
+    /// the request `Requested` at `requested_version` of subscriber
+    /// `subscriber_id` recorded: what to mail, with the address opened by its
+    /// key from `keys`, or `None` when this node mails nothing (the outcome
+    /// is recorded, another node is sending, the request is no longer the
+    /// pending one, or the subscriber is erased). A node that holds the
+    /// claim gets the mail again, to send it again after a failure worth a
+    /// retry.
+    pub async fn claim_confirmation_mail(
+        &self,
+        keys: &dyn Keys,
+        subscriber_id: &str,
+        requested_version: u16,
+        claimant: Claimant<'_>,
+        routing_key: Option<String>,
+    ) -> Result<Option<ConfirmationMail>, NewsletterError> {
+        let Claimant { node, now } = claimant;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let Some(state) = self.load_subscriber(subscriber_id).await? else {
+                return Ok(None);
+            };
+            if state.requested_version != requested_version
+                || state.status != SubscriberStatus::Pending
+            {
+                return Ok(None);
+            }
+            match state.mail.claim(node, now) {
+                Claim::Leave => return Ok(None),
+                Claim::Held => return confirmation_mail(keys, &state).await,
+                Claim::Take => {}
+            }
+            // Opened before the claim: a key gone leaves nothing to claim.
+            let Some(mail) = confirmation_mail(keys, &state).await? else {
+                return Ok(None);
+            };
+            let claimed = state
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&MailClaimed {
+                    by: node.to_owned(),
+                    until: now + LEASE_SECS,
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match claimed {
+                Ok(_) => return Ok(Some(mail)),
+                // Another node claimed it, or the subscriber changed: decide
+                // again on the fresh state.
+                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
+    /// Records that the link of the request `Requested` at
+    /// `requested_version` recorded was handed to the mail server. Nothing is
+    /// written once the request was replaced, or the outcome recorded
+    /// already.
+    pub async fn record_confirmation_mail_sent(
+        &self,
+        subscriber_id: &str,
+        requested_version: u16,
+        routing_key: Option<String>,
+    ) -> Result<(), NewsletterError> {
+        self.record_confirmation_mail(subscriber_id, requested_version, None, routing_key)
+            .await
+    }
+
+    /// Records that the mail server refused the address for good (or that it
+    /// does not parse), with what it said. The address may then ask again at
+    /// once.
+    pub async fn record_confirmation_mail_undeliverable(
+        &self,
+        subscriber_id: &str,
+        requested_version: u16,
+        reason: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), NewsletterError> {
+        self.record_confirmation_mail(subscriber_id, requested_version, Some(reason), routing_key)
+            .await
+    }
+
     /// Confirms the request a mailed link names. A link that does not check
     /// out, or names a request that is no longer the pending one, is
     /// [`NewsletterError::InvalidLink`]; one older than [`CONFIRM_TTL_SECS`]
@@ -303,7 +419,57 @@ impl<E: Executor> super::Command<E> {
     }
 }
 
+/// The mail of a subscriber's pending request: `None` once their key is
+/// destroyed; an error when the key cannot be read yet.
+async fn confirmation_mail(
+    keys: &dyn Keys,
+    state: &SubscriberState,
+) -> Result<Option<ConfirmationMail>, NewsletterError> {
+    let Some(key) = keys.get(&state.key_id).await? else {
+        return Ok(None);
+    };
+    let subscriber = state.open(&key)?;
+    Ok(Some(ConfirmationMail {
+        email: subscriber.email,
+        language: subscriber.language,
+        token: confirm_token(&key, &state.id, &state.key_id, state.requested_at),
+    }))
+}
+
 impl<E: Executor> super::Command<E> {
+    async fn record_confirmation_mail(
+        &self,
+        subscriber_id: &str,
+        requested_version: u16,
+        undeliverable: Option<&str>,
+        routing_key: Option<String>,
+    ) -> Result<(), NewsletterError> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let Some(state) = self.load_subscriber(subscriber_id).await? else {
+                return Ok(());
+            };
+            if state.requested_version != requested_version || state.mail.is_settled() {
+                return Ok(());
+            }
+            let mut writer = state.write()?;
+            writer.routing_key_opt(routing_key.clone());
+            match undeliverable {
+                Some(reason) => writer.event(&MailUndeliverable {
+                    reason: reason.to_owned(),
+                }),
+                None => writer.event(&MailSent),
+            };
+            match writer.tenant(&self.tenant).commit(&self.executor).await {
+                Ok(_) => return Ok(()),
+                // The subscriber changed meanwhile: write past it.
+                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
     /// Records where a subscriber on the list lives now; the same zone, or
     /// a write that lost a race (the next request says it again), is a
     /// no-op.

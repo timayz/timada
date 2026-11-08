@@ -84,8 +84,10 @@ async fn invitations_are_listed_while_open() {
     let bob = new_id();
     let now = 1_800_000_000;
     let tenant = create_tenant(&cmd, "Acme", &alice).await;
+    let tokens = tokens();
     let invite = |email: &str, at: u64| {
         cmd.invite_member(
+            &tokens,
             &alice,
             InviteMember {
                 tenant_id: tenant.id.clone(),
@@ -186,6 +188,7 @@ async fn invitations_sent_are_counted_by_tenant_and_by_account() {
         at: u64,
     ) -> timada_tenancy::SentInvitation {
         cmd.invite_member(
+            &tokens(),
             by,
             InviteMember {
                 tenant_id: tenant_id.to_owned(),

@@ -3,8 +3,9 @@ mod common;
 use timada_core::db::Db;
 
 use common::*;
+use timada_reviews::aggregator::Submitted;
 use timada_reviews::{
-    ReviewFilter, ReviewStatus, count_reviews, product_rating, read_model_subscription,
+    ReviewFilter, ReviewStatus, count_reviews, product_rating, read_model_subscription, review_id,
     reviews_of_tenant,
 };
 
@@ -159,4 +160,38 @@ async fn a_mailed_review_request_is_found_by_its_order() {
             .unwrap(),
         None
     );
+}
+
+#[tokio::test]
+async fn the_row_says_what_the_review_says_of_its_order_with_no_order_in_the_store() {
+    let (executor, pool) = executor_with_pool().await;
+    // No order stream anywhere: the review carries its reference and name.
+    let id = review_id("order-9", MUG);
+    evento::append(&id)
+        .original_version(0)
+        .event(&Submitted {
+            order_id: "order-9".to_owned(),
+            order_reference: "REF-order-9".to_owned(),
+            product_id: MUG.to_owned(),
+            product_name: "Mug".to_owned(),
+            variant_label: Some("Beige".to_owned()),
+            rating: 4,
+            title: None,
+            body: "Holds my tea all day long.".to_owned(),
+            author_name: "Ada L.".to_owned(),
+            photos: vec![],
+            submitted_by: SHOPPER.to_owned(),
+        })
+        .tenant(TENANT)
+        .commit(&executor)
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+
+    let rows = reviews_of_tenant(&pool, TENANT, &ReviewFilter::default(), 10, 0)
+        .await
+        .unwrap();
+    let row = rows.iter().find(|row| row.id == id).unwrap();
+    assert_eq!(row.order_reference, "REF-order-9");
+    assert_eq!(row.product_name, "Mug");
 }

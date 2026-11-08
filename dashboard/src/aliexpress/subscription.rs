@@ -57,7 +57,9 @@ pub fn subscription<E: Executor>(
         .data(media)
         .data(Store(store))
         .handler(on_import_requested())
-        .any_routing_key()
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
         .retry(5)
 }
 
@@ -124,7 +126,9 @@ pub fn reads_subscription<E: Executor>(
         .data(Store(store))
         .handler(on_sync_requested())
         .handler(on_item_added())
-        .any_routing_key()
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
         .retry(5)
 }
 

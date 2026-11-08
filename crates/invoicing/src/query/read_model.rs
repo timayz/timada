@@ -12,8 +12,7 @@ use evento::{
 use timada_core::db::{Db, Value, execute, params_from_iter};
 
 use crate::aggregator::{CreditNoteIssued, InvoiceIssued};
-use crate::command::DocumentKind;
-use crate::value_object::{VatSubtotal, document_label};
+use crate::value_object::{DocumentKind, VatSubtotal, document_label};
 
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-invoicing/read-models";

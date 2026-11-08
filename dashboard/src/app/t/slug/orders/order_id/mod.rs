@@ -21,7 +21,7 @@ use std::sync::Arc;
 use timada_aliexpress::forward_of_order;
 use timada_aliexpress::{ForwardState, ForwardStatus};
 use timada_catalog::format_money;
-use timada_invoicing::{DocumentKind, format_amount_fr};
+use timada_invoicing::documents_of_order;
 use timada_orders::{
     MAX_NOTE_LEN, MAX_REASON_LEN, MAX_TRACKING_LEN, OrderError, OrderState, OrderStatus,
     SupplierOrder, cart_refused_returns, order_mails, order_state,
@@ -147,22 +147,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let not_given_back = cart_refused_returns(db, access.tenant_id(), &order.cart_id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    // Still read from their own streams: issued a moment after the payment
-    // (or the refund), they show as soon as they exist.
-    let invoicing = crate::app::t::slug::invoices::invoicing(&access)?;
-    let mut documents = Vec::new();
-    let invoice = invoicing
-        .load_invoice_of_order(&order.id)
+    // The invoicing read model: issued a moment after the payment (or the
+    // refund), they show once the read model has them (a moment later).
+    let documents = documents_of_order(db, access.tenant_id(), &order.id)
         .await
-        .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
-    documents.extend(invoice);
-    for refund_id in &order.refund_ids {
-        let note = invoicing
-            .load_credit_note_of_refund(refund_id)
-            .await
-            .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
-        documents.extend(note);
-    }
+        .map_err(topcoat::Error::from_anyhow)?;
     // The mails the shopper was sent about it, by kind.
     let sent = order_mails(db, access.tenant_id(), &order.id)
         .await
@@ -466,11 +455,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <ul class="space-y-1 text-sm">
                     for doc in &documents {
                         <li data-document=(&doc.label)>
-                            <a class=(class!(LINK, "font-mono")) href=(crate::app::t::slug::invoices::pdf_href(cx, &slug, &doc.document_id))>(&doc.label)</a>
+                            <a class=(class!(LINK, "font-mono")) href=(crate::app::t::slug::invoices::pdf_href(cx, &slug, &doc.id))>(&doc.label)</a>
                             " · "
-                            (if doc.kind == DocumentKind::CreditNote { "credit note" } else { "invoice" })
+                            (if doc.is_credit_note() { "credit note" } else { "invoice" })
                             " · "
-                            (format_amount_fr(doc.total_cents, &doc.currency))
+                            (doc.total_label())
                         </li>
                     }
                 </ul>

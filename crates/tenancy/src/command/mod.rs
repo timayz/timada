@@ -37,17 +37,18 @@ pub use payments::*;
 pub use role::*;
 
 use evento::{Executor, Projection, metadata::Event};
+use timada_core::Sending;
 
 use crate::aggregator::api_key::{
     Created as ApiKeyCreated, Revoked as ApiKeyRevoked, Scoped as ApiKeyScoped,
 };
 use crate::aggregator::{
     Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MailBrandingCleared,
-    MailBrandingSet, MailLanguagesSet, MailServerAdded, MailServerChanged, MailServerDeleted,
-    MailServersPicked, MailTemplateReset, MailTemplateSaved, MailTemplateTextSaved, MemberGranted,
-    MemberRevoked, MemberRoleChanged, PaymentsConfigured, PaymentsForgotten, PaymentsStopped,
-    Released, Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, SeatGranted,
-    SeatRefused, Sent, Suspended,
+    MailBrandingSet, MailClaimed, MailLanguagesSet, MailSent, MailServerAdded, MailServerChanged,
+    MailServerDeleted, MailServersPicked, MailTemplateReset, MailTemplateSaved,
+    MailTemplateTextSaved, MailUndeliverable, MemberGranted, MemberRevoked, MemberRoleChanged,
+    PaymentsConfigured, PaymentsForgotten, PaymentsStopped, Released, Renamed, Resumed, Revoked,
+    RoleDefined, RoleRemoved, RoleUpdated, SeatGranted, SeatRefused, Sent, Suspended,
 };
 use crate::value_object::{
     ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id, tenant_slug_id,
@@ -993,6 +994,10 @@ pub struct InvitationState {
     /// What the acceptance came to, once settled ([`Command::settle_seat`]):
     /// every node follows this answer.
     pub seat: Option<Seat>,
+    /// What the link's token derives from under the host's key.
+    pub nonce: Vec<u8>,
+    /// Where the link's mail stands.
+    pub mail: Sending,
 }
 
 /// What an accepted invitation came to, recorded on it once.
@@ -1020,6 +1025,9 @@ pub fn invitation_projection<E: Executor>() -> Projection<E, InvitationState> {
         .handler(on_invitation_revoked())
         .handler(on_seat_granted())
         .handler(on_seat_refused())
+        .handler(on_invitation_mail_claimed())
+        .handler(on_invitation_mail_sent())
+        .handler(on_invitation_mail_undeliverable())
         .strict()
 }
 
@@ -1035,6 +1043,7 @@ async fn on_invitation_sent(
     invitation.invited_by = event.data.invited_by.to_owned();
     invitation.sent_at = event.data.sent_at;
     invitation.expires_at = event.data.expires_at;
+    invitation.nonce = event.data.nonce.to_owned();
     Ok(())
 }
 
@@ -1073,6 +1082,38 @@ async fn on_seat_refused(
     invitation: &mut InvitationState,
 ) -> anyhow::Result<()> {
     invitation.seat = Some(Seat::Refused(event.data.reason.to_owned()));
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invitation_mail_claimed(
+    event: Event<MailClaimed>,
+    invitation: &mut InvitationState,
+) -> anyhow::Result<()> {
+    invitation.mail = Sending::Claimed {
+        by: event.data.by.to_owned(),
+        until: event.data.until,
+    };
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invitation_mail_sent(
+    _event: Event<MailSent>,
+    invitation: &mut InvitationState,
+) -> anyhow::Result<()> {
+    invitation.mail = Sending::Sent;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invitation_mail_undeliverable(
+    event: Event<MailUndeliverable>,
+    invitation: &mut InvitationState,
+) -> anyhow::Result<()> {
+    invitation.mail = Sending::Undeliverable {
+        reason: event.data.reason.to_owned(),
+    };
     Ok(())
 }
 

@@ -2,7 +2,7 @@
 //! a change of shape is a new variant, never a changed field.
 
 use crate::rates::ExchangeRate;
-use crate::value_object::{Address, InvoiceLine, Seller, VatSubtotal};
+use crate::value_object::{Address, InvoiceLine, IssuedDocument, Seller, VatSubtotal};
 
 /// One chunk of a numbering series (`F2026`, `A2026`): its stream holds the
 /// documents themselves, each numbered one more than the one before. The
@@ -116,8 +116,8 @@ pub enum Book {
     },
 }
 
-/// The index `document → book`: one stream per document, with the
-/// deterministic id [`invoice_id`](crate::invoice_id) or
+/// The index `document → book`, and the document itself once issued: one
+/// stream per document, with the deterministic id [`invoice_id`](crate::invoice_id) or
 /// [`credit_note_id`](crate::credit_note_id).
 #[evento::aggregate(name = "timada-invoicing/Document")]
 pub enum Document {
@@ -128,10 +128,12 @@ pub enum Document {
         /// The calendar year of the series.
         year: u16,
     },
+    /// The document has its number: the book that holds it, and the
+    /// document itself as the book says it, copied so that a page reads it
+    /// from this one small stream. The book stays the numbering authority.
     Recorded {
         book_id: String,
-        /// `F2026-000042`.
-        label: String,
+        document: IssuedDocument,
     },
 }
 

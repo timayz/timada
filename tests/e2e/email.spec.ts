@@ -37,7 +37,9 @@ test("register, sign in with a mailed code, then reset the password", async ({ b
   await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await page.getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).toHaveURL(/\/auth\/email\/verify$/);
-  await expect(page.getByText("We sent a 6-digit code to")).toContainText(email);
+  // The code is mailed after the request answers: the page says it is on
+  // its way, or sent, depending on which came first.
+  await expect(page.getByText(/We (are sending|sent) a 6-digit code to/)).toContainText(email);
   const code = await latestCode(page.request, email, before);
 
   // A wrong code keeps the page, and another code cannot be rushed.

@@ -2,6 +2,9 @@ mod common;
 
 use std::ops::Deref;
 
+use evento::ProjectionAggregate;
+use timada_core::Claimant;
+
 use common::{MemoryKeys, TENANT, codes};
 use timada_orders::ShippingAddress;
 use timada_shoppers::CodeVerifier;
@@ -59,7 +62,10 @@ async fn shoppers_with(keys: MemoryKeys) -> Shoppers {
 }
 
 async fn signed_in(shoppers: &Shoppers, email: &str, now: u64) -> timada_shoppers::SignedIn {
-    let issued = shoppers.issue_code(&codes(), email, now).await.unwrap();
+    let issued = shoppers
+        .issue_code(&shoppers.keys, &codes(), email, None, now)
+        .await
+        .unwrap();
     shoppers
         .sign_in(&shoppers.keys, &codes(), email, &issued.code, now)
         .await
@@ -101,10 +107,15 @@ async fn the_first_sign_in_creates_the_shopper_and_the_next_reuses_it() {
 #[tokio::test]
 async fn a_code_is_not_resent_too_soon_and_works_once() {
     let shoppers = shoppers().await;
-    let issued = shoppers.issue_code(&codes(), EMAIL, NOW).await.unwrap();
+    let issued = shoppers
+        .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW)
+        .await
+        .unwrap();
     assert_eq!(issued.email, "ada@example.com");
     assert!(matches!(
-        shoppers.issue_code(&codes(), EMAIL, NOW + 10).await,
+        shoppers
+            .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW + 10)
+            .await,
         Err(ShopperError::CodeRecentlySent)
     ));
     shoppers
@@ -119,7 +130,7 @@ async fn a_code_is_not_resent_too_soon_and_works_once() {
     ));
     // A used code does not hold back the next one.
     shoppers
-        .issue_code(&codes(), EMAIL, NOW + 12)
+        .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW + 12)
         .await
         .unwrap();
 }
@@ -127,7 +138,10 @@ async fn a_code_is_not_resent_too_soon_and_works_once() {
 #[tokio::test]
 async fn wrong_guesses_kill_the_code() {
     let shoppers = shoppers().await;
-    let issued = shoppers.issue_code(&codes(), EMAIL, NOW).await.unwrap();
+    let issued = shoppers
+        .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW)
+        .await
+        .unwrap();
     let wrong = if issued.code == "000000" {
         "000001"
     } else {
@@ -155,7 +169,10 @@ async fn wrong_guesses_kill_the_code() {
 #[tokio::test]
 async fn codes_and_sessions_expire() {
     let shoppers = shoppers().await;
-    let issued = shoppers.issue_code(&codes(), EMAIL, NOW).await.unwrap();
+    let issued = shoppers
+        .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW)
+        .await
+        .unwrap();
     assert!(matches!(
         shoppers
             .sign_in(
@@ -169,7 +186,9 @@ async fn codes_and_sessions_expire() {
         Err(ShopperError::CodeExpired)
     ));
     assert!(matches!(
-        shoppers.issue_code(&codes(), "not an address", NOW).await,
+        shoppers
+            .issue_code(&shoppers.keys, &codes(), "not an address", None, NOW)
+            .await,
         Err(ShopperError::InvalidEmail)
     ));
 
@@ -433,10 +452,29 @@ async fn address_ids_are_keyed_by_the_registration() {
 
 #[tokio::test]
 async fn a_key_that_cannot_be_kept_registers_nothing() {
-    let shoppers = shoppers_with(MemoryKeys::refusing()).await;
-    let issued = shoppers.issue_code(&codes(), EMAIL, NOW).await.unwrap();
+    let shoppers = shoppers().await;
+    let refusing = MemoryKeys::refusing();
+    // The first code of an address draws its key: none kept, no code.
     let err = shoppers
-        .sign_in(&shoppers.keys, &codes(), EMAIL, &issued.code, NOW)
+        .issue_code(&refusing, &codes(), EMAIL, None, NOW)
+        .await
+        .unwrap_err();
+    assert!(!err.is_user_facing(), "{err:?}");
+    assert!(
+        shoppers
+            .load_challenge("ada@example.com")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let issued = shoppers
+        .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW)
+        .await
+        .unwrap();
+    // The key the code drew cannot be read here, and a fresh one cannot be
+    // kept: nothing is registered.
+    let err = shoppers
+        .sign_in(&refusing, &codes(), EMAIL, &issued.code, NOW)
         .await
         .unwrap_err();
     assert!(!err.is_user_facing(), "{err:?}");
@@ -452,24 +490,40 @@ async fn a_key_that_cannot_be_kept_registers_nothing() {
 #[tokio::test]
 async fn the_store_keeps_nothing_that_gives_the_code_back() {
     let shoppers = shoppers().await;
-    let issued = shoppers.issue_code(&codes(), EMAIL, NOW).await.unwrap();
+    let issued = shoppers
+        .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW)
+        .await
+        .unwrap();
     let challenge = shoppers
         .load_challenge(&issued.email)
         .await
         .unwrap()
         .unwrap();
-    // Neither the code nor a plain hash of it is in the stream.
+    // Neither the code nor a plain hash of it is in the stream: a nonce the
+    // code derives from under the key, and the address sealed.
     assert!(
         !challenge
-            .code_tag
+            .nonce
             .windows(issued.code.len())
             .any(|window| window == issued.code.as_bytes())
     );
     assert_ne!(
-        challenge.code_tag,
+        challenge.nonce,
         evento::hash_ids(vec!["shopper-code", &challenge.id, &issued.code]).into_bytes()
     );
-    // Without the key the tag says nothing: the right code is a wrong guess.
+    assert!(
+        !challenge
+            .email
+            .windows(issued.email.len())
+            .any(|window| window == issued.email.as_bytes())
+    );
+    assert_eq!(
+        codes().derive_code(TENANT, &challenge.id, &challenge.nonce),
+        issued.code,
+        "the node that mails derives the same code"
+    );
+    // Without the key the nonce says nothing: the right code is a wrong
+    // guess.
     let other = timada_shoppers::HmacCodeVerifier::new([8; 32]);
     assert!(matches!(
         shoppers
@@ -483,16 +537,267 @@ async fn the_store_keeps_nothing_that_gives_the_code_back() {
         .unwrap()
         .unwrap();
     assert_eq!(challenge.failed_attempts, 1);
-    // A tag made for another shop or another challenge does not fit either.
-    assert!(!codes().verify(
-        "other-shop",
-        &challenge.id,
-        &issued.code,
-        &challenge.code_tag
-    ));
-    assert!(!codes().verify(TENANT, "another", &issued.code, &challenge.code_tag));
+    // The nonce derives another code for another shop or another challenge.
+    assert!(!codes().verify("other-shop", &challenge.id, &challenge.nonce, &issued.code));
+    assert!(!codes().verify(TENANT, "another", &challenge.nonce, &issued.code));
     shoppers
         .sign_in(&shoppers.keys, &codes(), EMAIL, &issued.code, NOW)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn a_codes_mail_is_taken_by_one_node_with_the_address_opened() {
+    let shoppers = shoppers().await;
+    let issued = shoppers
+        .issue_code(
+            &shoppers.keys,
+            &codes(),
+            " Ada@Example.com ",
+            Some("fr-FR,fr;q=0.9"),
+            NOW,
+        )
+        .await
+        .unwrap();
+    let challenge = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(challenge.mail, timada_core::Sending::Pending);
+    assert_eq!(challenge.language.as_deref(), Some("fr"));
+    assert!(
+        shoppers.keys.has(&challenge.key_id),
+        "the address's key is kept"
+    );
+    let version = challenge.issued_version;
+
+    let mail = shoppers
+        .claim_code_mail(
+            &shoppers.keys,
+            &codes(),
+            &challenge.id,
+            version,
+            Claimant {
+                node: "node-a",
+                now: NOW,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+    assert_eq!(mail.email, "ada@example.com");
+    assert_eq!(mail.language.as_deref(), Some("fr"));
+    assert_eq!(mail.code, issued.code);
+    assert!(
+        shoppers
+            .claim_code_mail(
+                &shoppers.keys,
+                &codes(),
+                &challenge.id,
+                version,
+                Claimant {
+                    node: "node-b",
+                    now: NOW + 1,
+                },
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "node-b leaves it"
+    );
+    assert!(
+        shoppers
+            .claim_code_mail(
+                &shoppers.keys,
+                &codes(),
+                &challenge.id,
+                version,
+                Claimant {
+                    node: "node-a",
+                    now: NOW + 2,
+                },
+            )
+            .await
+            .unwrap()
+            .is_some(),
+        "the holder retries"
+    );
+    shoppers
+        .record_code_mail_sent(&challenge.id, version)
+        .await
+        .unwrap();
+    assert_eq!(
+        shoppers
+            .load_challenge("ada@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .mail,
+        timada_core::Sending::Sent
+    );
+    // Replayed: nothing more.
+    assert!(
+        shoppers
+            .claim_code_mail(
+                &shoppers.keys,
+                &codes(),
+                &challenge.id,
+                version,
+                Claimant {
+                    node: "node-a",
+                    now: NOW + 3,
+                },
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    shoppers
+        .record_code_mail_sent(&challenge.id, version)
+        .await
+        .unwrap();
+    assert_eq!(
+        shoppers
+            .load_challenge("ada@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .aggregate_version()
+            .unwrap(),
+        3,
+        "issued, claimed, sent: nothing more"
+    );
+    // The account registers under the key the code drew.
+    let signed_in = shoppers
+        .sign_in(&shoppers.keys, &codes(), EMAIL, &issued.code, NOW + 4)
+        .await
+        .unwrap();
+    let shopper = shoppers
+        .load_shopper(&signed_in.shopper_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(shopper.key_id, challenge.key_id, "one key per address");
+    assert_eq!(shoppers.keys.len(), 1);
+}
+
+#[tokio::test]
+async fn an_undeliverable_code_frees_the_resend_window_and_a_deleted_key_mails_nothing() {
+    let shoppers = shoppers().await;
+    shoppers
+        .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW)
+        .await
+        .unwrap();
+    let first = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    shoppers
+        .claim_code_mail(
+            &shoppers.keys,
+            &codes(),
+            &first.id,
+            first.issued_version,
+            Claimant {
+                node: "node-a",
+                now: NOW,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("taken");
+    assert!(matches!(
+        shoppers
+            .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW + 10)
+            .await,
+        Err(ShopperError::CodeRecentlySent)
+    ));
+    shoppers
+        .record_code_mail_undeliverable(&first.id, first.issued_version, "550 no such user")
+        .await
+        .unwrap();
+    // Refused for good: the shopper may try again at once, under the same
+    // key.
+    let second = shoppers
+        .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW + 10)
+        .await
+        .unwrap();
+    let state = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.mail, timada_core::Sending::Pending);
+    assert_eq!(state.key_id, first.key_id);
+    assert_eq!(shoppers.keys.len(), 1);
+    // The first code's event, replayed, mails nothing.
+    assert!(
+        shoppers
+            .claim_code_mail(
+                &shoppers.keys,
+                &codes(),
+                &first.id,
+                first.issued_version,
+                Claimant {
+                    node: "node-a",
+                    now: NOW + 11,
+                },
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mail = shoppers
+        .claim_code_mail(
+            &shoppers.keys,
+            &codes(),
+            &state.id,
+            state.issued_version,
+            Claimant {
+                node: "node-a",
+                now: NOW + 11,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("the second code is mailed");
+    assert_eq!(mail.code, second.code);
+    // The account deleted, its key gone: the address is unreadable, and
+    // nothing is mailed; the next code draws a fresh key.
+    shoppers.keys.delete(&state.key_id).await.unwrap();
+    assert!(
+        shoppers
+            .claim_code_mail(
+                &shoppers.keys,
+                &codes(),
+                &state.id,
+                state.issued_version,
+                Claimant {
+                    node: "node-b",
+                    now: NOW + 12,
+                },
+            )
+            .await
+            .unwrap()
+            .is_none()
+    );
+    shoppers
+        .issue_code(
+            &shoppers.keys,
+            &codes(),
+            EMAIL,
+            None,
+            NOW + CODE_RESEND_AFTER_SECS + 20,
+        )
+        .await
+        .unwrap();
+    let afresh = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(afresh.key_id, state.key_id);
+    assert!(shoppers.keys.has(&afresh.key_id));
 }

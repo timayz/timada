@@ -47,16 +47,26 @@ pub enum Shopper {
 }
 
 /// The one-time codes mailed to one address. Its id is
-/// [`challenge_id`](crate::challenge_id) of the address. Only the hash of a
-/// code is kept; guesses are counted here so no client can reset them.
+/// [`challenge_id`](crate::challenge_id) of the address. The code never
+/// enters the store; guesses are counted here so no client can reset them.
+/// The mail is sent by a subscription, which records how it went on the
+/// stream ([`timada_core::Sending`]).
 #[evento::aggregate(name = "timada-shoppers/ShopperChallenge")]
 pub enum ShopperChallenge {
-    /// A fresh code, replacing any earlier one. `code_tag` is the code's MAC
-    /// under a key the host holds ([`timada_core::CodeVerifier`]): the code
-    /// itself never enters the store, and whoever reads the stream cannot
-    /// try the million codes against it. Times are unix seconds.
+    /// A fresh code, replacing any earlier one. The code derives from
+    /// `nonce` under a key the host holds ([`timada_core::CodeVerifier`]),
+    /// so whoever reads the stream cannot try the million codes against it.
+    /// `email` is the normalized address the code goes to, sealed under the
+    /// key `key_id` names: the address's own key, drawn by its first code
+    /// and shared with the account it registers, so deleting the account
+    /// leaves these unreadable too. `language` is the primary subtag of the
+    /// shopper's language (`fr`), to mail them in it; not personal data.
+    /// Times are unix seconds.
     CodeIssued {
-        code_tag: Vec<u8>,
+        key_id: String,
+        email: Vec<u8>,
+        nonce: Vec<u8>,
+        language: Option<String>,
         issued_at: u64,
         expires_at: u64,
     },
@@ -64,6 +74,14 @@ pub enum ShopperChallenge {
     AttemptFailed,
     /// The current code was used.
     CodeConsumed,
+    /// Node `by` took the sending of the latest code, until `until` should
+    /// it never say how it went.
+    MailClaimed { by: String, until: u64 },
+    /// The latest code was handed to the mail server.
+    MailSent,
+    /// The mail server refused the address for good; `reason` is what it
+    /// said.
+    MailUndeliverable { reason: String },
 }
 
 /// A signed-in browser. Its id is [`session_id`](crate::session_id) of the

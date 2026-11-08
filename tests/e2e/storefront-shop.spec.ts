@@ -544,9 +544,13 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     }).toPass({ timeout: 15_000 });
     await row.getByRole("link", { name: reference }).click();
     await expect(page.locator("[data-order-payment]")).toContainText(intent.id);
-    await expect(
-      page.locator(`[data-order-documents] [data-document="F${year}-000001"]`),
-    ).toBeVisible();
+    // The invoice is listed from the invoicing read model, a moment later.
+    await expect(async () => {
+      await page.reload();
+      await expect(
+        page.locator(`[data-order-documents] [data-document="F${year}-000001"]`),
+      ).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
     await expect(page.locator("[data-order-address]")).toContainText(
       "Ada Lovelace",
     );
