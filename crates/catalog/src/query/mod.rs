@@ -8,8 +8,10 @@ mod categories;
 mod migrations;
 mod products;
 mod read_model;
+mod sellable;
 
 pub use categories::*;
 pub use migrations::*;
 pub use products::*;
 pub use read_model::*;
+pub use sellable::*;
