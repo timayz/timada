@@ -140,16 +140,14 @@ pub fn pushes_subscription<E: Executor>(
         .handler(on_pushed())
         .handler(on_claimed())
         .any_routing_key()
+        // The AliExpress order index is written in the platform's own
+        // streams, the default tenant. A shop's store key can write the same
+        // event, under any `aggregate_id` and payload, only in the shop's
+        // own tenant: taken for real, a few forged `Pushed` naming a real
+        // order closed would have another shop's order cancelled and
+        // refunded. Such an event is never read.
+        .tenant("")
         .retry(5)
-}
-
-/// Whether the event lives in the platform's own streams (the default
-/// tenant), where the AliExpress order index is written. A shop's store key
-/// can write the same event, under any `aggregate_id` and payload, only in
-/// the shop's own tenant: taken for real, a few forged `Pushed` naming a
-/// real order closed would have another shop's order cancelled and refunded.
-fn is_platform(event: &evento::Event) -> bool {
-    event.tenant.is_empty()
 }
 
 /// A push of an order a forward recorded: read again. One that came first
@@ -159,9 +157,6 @@ async fn on_pushed<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Pushed>,
 ) -> anyhow::Result<()> {
-    if !is_platform(&event) {
-        return Ok(());
-    }
     let store: Store = context.extract();
     let Some(order) = load_ae_order_by_id(&store.0, &event.aggregate_id).await? else {
         return Ok(());
@@ -181,9 +176,6 @@ async fn on_claimed<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Claimed>,
 ) -> anyhow::Result<()> {
-    if !is_platform(&event) {
-        return Ok(());
-    }
     let store: Store = context.extract();
     let Some(order) = load_ae_order_by_id(&store.0, &event.aggregate_id).await? else {
         return Ok(());

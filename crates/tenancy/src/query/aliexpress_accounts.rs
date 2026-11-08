@@ -19,14 +19,16 @@ use crate::command::company_projection;
 /// The cursor identity of the AliExpress accounts subscription. One per node.
 pub const ALIEXPRESS_ACCOUNTS_SUBSCRIPTION: &str = "timada-tenancy/aliexpress-accounts";
 
-/// Builds the subscription over every routing key. Start it with
-/// `.start(&executor)` and keep the handle for shutdown.
+/// Builds the subscription over every routing key of the platform tenant,
+/// where companies live. Start it with `.start(&executor)` and keep the
+/// handle for shutdown.
 pub fn aliexpress_accounts_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(ALIEXPRESS_ACCOUNTS_SUBSCRIPTION)
         .data(db)
         .handler(on_aliexpress_authorized())
         .handler(on_aliexpress_disconnected())
         .any_routing_key()
+        .tenant("")
 }
 
 /// The companies whose access lapses at or before `before` (Unix seconds)

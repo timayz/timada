@@ -271,6 +271,11 @@ fn closing_handlers<E: evento::Executor>(
         .handler(on_key_scoped())
         .handler(on_tenant_suspended())
         .any_routing_key()
+        // Keys and tenants live in the platform's own streams, the default
+        // tenant: a shop's store key can write the same event in the shop's
+        // own tenant, under any `aggregate_id`, and must not end another
+        // shop's connections. Such an event is never read.
+        .tenant("")
 }
 
 /// What the closing handlers share: this node's connections, and the stamp
@@ -283,13 +288,9 @@ struct Closing {
 
 impl Closing {
     /// The node's connections, unless `event` was written before the
-    /// subscription started, or outside the platform's own streams (the
-    /// default tenant), where the keys and tenants live: a shop's store key
-    /// can write the same event in the shop's own tenant, under any
-    /// `aggregate_id`, and must not end another shop's connections.
+    /// subscription started.
     fn connections_for(&self, event: &evento::Event) -> Option<&StoreConnections> {
-        (event.tenant.is_empty() && event.timestamp_micros() >= self.since_micros)
-            .then_some(&*self.connections)
+        (event.timestamp_micros() >= self.since_micros).then_some(&*self.connections)
     }
 }
 

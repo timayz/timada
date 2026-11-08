@@ -32,21 +32,17 @@ pub const INDEX_RELEASE_SUBSCRIPTION: &str = "timada-identity/index-release";
 /// entry is decided again, from what the store holds then.
 const FREE_ATTEMPTS: usize = 3;
 
-/// Builds the subscription over every routing key. Start it with
-/// `.start(&executor)` and keep the handle for shutdown.
+/// Builds the subscription over every routing key of the platform tenant,
+/// where users live. Start it with `.start(&executor)` and keep the handle
+/// for shutdown.
 pub fn index_release_subscription<E: Executor>() -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(INDEX_RELEASE_SUBSCRIPTION)
         .handler(on_passkey_removed())
         .handler(on_oauth2_account_unlinked())
         .handler(on_deleted())
         .any_routing_key()
+        .tenant("")
         .retry(5)
-}
-
-/// Users live in the platform's own streams, the default tenant: the same
-/// event in a shop's streams frees nothing.
-fn is_platform(event: &evento::Event) -> bool {
-    event.tenant.is_empty()
 }
 
 /// Runs `step` again while it loses a race on the entry.
@@ -71,9 +67,6 @@ async fn on_passkey_removed<E: Executor>(
     context: &Context<'_, E>,
     event: Event<PasskeyRemoved>,
 ) -> anyhow::Result<()> {
-    if !is_platform(&event) {
-        return Ok(());
-    }
     let let_go_at = event_millis(&event);
     again_on_conflict(|| {
         free_passkey_index(
@@ -91,9 +84,6 @@ async fn on_oauth2_account_unlinked<E: Executor>(
     context: &Context<'_, E>,
     event: Event<OAuth2AccountUnlinked>,
 ) -> anyhow::Result<()> {
-    if !is_platform(&event) {
-        return Ok(());
-    }
     let let_go_at = event_millis(&event);
     again_on_conflict(|| {
         free_oauth2_index(
@@ -112,9 +102,6 @@ async fn on_deleted<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Deleted>,
 ) -> anyhow::Result<()> {
-    if !is_platform(&event) {
-        return Ok(());
-    }
     let Some(user) = user_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)

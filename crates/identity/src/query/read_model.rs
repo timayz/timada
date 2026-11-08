@@ -19,15 +19,16 @@ use crate::command::{SessionState, UserState, session_projection, user_projectio
 /// The cursor identity of the read-model subscription. One per node.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-identity/read-models";
 
-/// Builds the subscription over every routing key (administrators see every
-/// region). Start it with `.start(&executor)` and keep the handle for
-/// shutdown.
+/// Builds the subscription over every routing key of the platform tenant
+/// (administrators see every region; users live in the default tenant).
+/// Start it with `.start(&executor)` and keep the handle for shutdown.
 pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
         .data(db)
         .handler(on_user_event())
         .handler(on_session_event())
         .any_routing_key()
+        .tenant("")
 }
 
 #[evento::subscription_all]
