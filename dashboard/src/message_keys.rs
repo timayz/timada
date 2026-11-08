@@ -26,8 +26,9 @@ pub fn subscription<E: Executor>(vault: Arc<KeyVault>) -> SubscriptionBuilder<E>
         .handler(on_forgotten())
         .any_routing_key()
         // A key is on a majority of nodes before it is recorded, so a fetch
-        // only fails while most of the cluster is down.
-        .retry(u8::MAX)
+        // only fails while most of the cluster is down; then the worker ends
+        // and the node's supervisor starts it again from this event.
+        .retry(5)
 }
 
 #[evento::subscription]

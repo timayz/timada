@@ -40,7 +40,9 @@ pub fn index_release_subscription<E: Executor>() -> SubscriptionBuilder<E> {
         .handler(on_passkey_removed())
         .handler(on_oauth2_account_unlinked())
         .handler(on_deleted())
-        .any_routing_key()
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
         .tenant("")
         .retry(5)
 }

@@ -39,6 +39,7 @@ mod store_api;
 mod store_carts;
 mod ui;
 mod vies;
+mod workers;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

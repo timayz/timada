@@ -46,8 +46,10 @@ pub fn subscription<E: Executor>(db: Db, store: Evento) -> SubscriptionBuilder<E
         .handler(on_checkout_requested())
         .handler(on_cart_checked_out())
         .handler(on_checkout_abandoned())
-        .any_routing_key()
-        .retry(u8::MAX)
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
+        .retry(5)
 }
 
 /// Starts a run of every scenario of the tenant listening to `trigger`.

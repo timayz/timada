@@ -11,8 +11,11 @@
 //!
 //! A link opens a page of the shop's storefront
 //! (`{storefront}/newsletter/confirm/{token}`): a shop that has not said
-//! where its storefront lives cannot have a link mailed, and its requests
-//! wait.
+//! where its storefront lives cannot have a link mailed, so such a request
+//! is passed over (logged, left pending: the address may ask again once
+//! the resend window is over). Both ways of recording a request refuse one
+//! without a storefront address first, so this only happens to a request
+//! recorded before the address was cleared.
 
 use std::sync::Arc;
 
@@ -95,7 +98,7 @@ async fn on_requested<E: Executor>(
         tracing::warn!(
             tenant,
             subscriber,
-            "newsletter confirmation not mailed: the shop has no storefront address"
+            "newsletter confirmation not mailed: the shop has no storefront address; the request is left pending"
         );
         return Ok(());
     };
@@ -253,7 +256,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_refused_address_is_recorded_and_a_shop_without_storefront_waits() {
+    async fn a_refused_address_is_recorded_and_a_shop_without_storefront_leaves_the_request_pending()
+     {
         let store = Turso::in_memory_concurrent().await.unwrap();
         let vault = vault();
         shop(&store).await;
