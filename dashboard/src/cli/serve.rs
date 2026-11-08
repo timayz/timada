@@ -90,7 +90,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let connections = StoreConnections::new();
     // This node's store connections of a key revoked or re-scoped, or of a
     // tenant suspended, on any node, end through this subscription. It starts
-    // before the store API takes a connection, so none is older than it.
+    // before the store API takes a connection, so none is older than it. It
+    // follows from the head and keeps no cursor, so a restart after a failure
+    // misses what was revoked in between: those connections last until the
+    // key is next checked, as they did when the worker simply died.
     let mut all_workers = vec![
         workers::start(
             "store connections",
@@ -145,8 +148,11 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         tracing::info!("the store was copied from a peer: the read models catch up before serving");
     }
     for (name, make) in SUBSCRIPTIONS {
-        if catch_up_first {
-            workers::catch_up(name, make(&deps), &executor).await?;
+        // A pass that cannot get through the copied history is not the
+        // node's end: its worker starts anyway, supervised, at the cursor
+        // the pass left, and the cluster page says so.
+        if catch_up_first && let Err(err) = workers::catch_up(name, make(&deps), &executor).await {
+            tracing::error!(error = %format!("{err:#}"), "the {name} subscription did not catch up before serving");
         }
         let deps = deps.clone();
         all_workers.push(workers::start(name, move || make(&deps), &executor).await?);
