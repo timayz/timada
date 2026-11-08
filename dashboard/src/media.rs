@@ -328,10 +328,10 @@ pub fn subscription<E: Executor>(media: Arc<Media>) -> SubscriptionBuilder<E> {
         .handler(on_page_image_removed())
         .handler(on_page_deleted())
         .any_routing_key()
-        // About four hours of attempts at most a minute apart: a picture is
-        // on a majority of nodes before it is recorded, so a fetch only fails
-        // while most of the cluster is down.
-        .retry(u8::MAX)
+        // A picture is on a majority of nodes before it is recorded, so a
+        // fetch only fails while most of the cluster is down; then the worker
+        // ends and the node's supervisor starts it again from this event.
+        .retry(5)
 }
 
 /// The cursor identity of [`logo_subscription`], in the platform store.
@@ -349,7 +349,7 @@ pub fn logo_subscription<E: Executor>(media: Arc<Media>) -> SubscriptionBuilder<
         .handler(on_mail_branding_set())
         .any_routing_key()
         .tenant("")
-        .retry(u8::MAX)
+        .retry(5)
 }
 
 #[evento::subscription]
