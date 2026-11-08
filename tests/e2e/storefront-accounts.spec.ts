@@ -874,14 +874,16 @@ test("a returning shopper signs in with a mailed code and finds their orders and
       `${SHOP}/orders/${guestOrderId}`,
     );
     expect(receipt.html).toContain("We have received the payment");
-    await page.goto(`/t/${slug}/orders/${guestOrderId}`);
-    await expect(
-      page.locator('[data-order-mail="order_confirmation"]'),
-    ).toHaveAttribute("data-mailed", "mailed");
-    await expect(page.locator('[data-order-mail="order_paid"]')).toHaveAttribute(
-      "data-mailed",
-      "mailed",
-    );
+    // The merchant's page reads the read model, a moment behind the mails.
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders/${guestOrderId}`);
+      await expect(
+        page.locator('[data-order-mail="order_confirmation"]'),
+      ).toHaveAttribute("data-mailed", "mailed", { timeout: 1000 });
+      await expect(
+        page.locator('[data-order-mail="order_paid"]'),
+      ).toHaveAttribute("data-mailed", "mailed", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
 
     // Next time, the checkout offers to sign in, and comes back to it.
     await page.goto(`${SHOP}/p/red-plate`);
@@ -1199,12 +1201,14 @@ test("a buyer is mailed a link to review a fulfilled order, which opens it on an
     );
     const orderId = new URL(orderUrl).pathname.split("/").at(-1)!;
 
-    // Not asked while it is only paid; asked once it is fulfilled.
-    await page.goto(`/t/${slug}/orders/${orderId}`);
-    await expect(page.locator("[data-order-review-request]")).toHaveAttribute(
-      "data-order-review-request",
-      "none",
-    );
+    // Not asked while it is only paid; asked once it is fulfilled. The
+    // merchant's page reads the read model, a moment behind the payment.
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders/${orderId}`);
+      await expect(
+        page.locator("[data-order-review-request]"),
+      ).toHaveAttribute("data-order-review-request", "none", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
     await page.getByRole("button", { name: "Mark as fulfilled" }).click();
     await expect(page.getByRole("status")).toContainText(
       "Order marked as fulfilled.",
@@ -1229,11 +1233,14 @@ test("a buyer is mailed a link to review a fulfilled order, which opens it on an
         new RegExp(`${SHOP}/reviews/[A-Za-z0-9_-]{43}`),
       )![0];
     }).toPass({ timeout: 30_000 });
-    await page.goto(`/t/${slug}/orders/${orderId}`);
-    await expect(page.locator("[data-order-review-request]")).toHaveAttribute(
-      "data-order-review-request",
-      "mailed",
-    );
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders/${orderId}`);
+      await expect(
+        page.locator("[data-order-review-request]"),
+      ).toHaveAttribute("data-order-review-request", "mailed", {
+        timeout: 1000,
+      });
+    }).toPass({ timeout: 15_000 });
 
     // Another device, never signed in: the link opens the order's review form.
     const other = await (

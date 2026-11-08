@@ -542,7 +542,11 @@ test("a shopper picks AliExpress's province and the order goes in its words", as
       await city.selectOption("Roma");
       await town.selectOption("Albano Laziale");
     })}`;
-    await page.goto(url);
+    // The merchant's page reads the read model, a moment behind the payment.
+    await expect(async () => {
+      await page.goto(url);
+      await expect(page.getByRole("button", { name: "Place on AliExpress" })).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
     await page.getByRole("button", { name: "Place on AliExpress" }).click();
     await forwardIs(page, url, "placed");
     // In AliExpress's words, the shopper's pick, with their town kept for the
@@ -602,10 +606,19 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
     expect(cancelled.subject).toContain(firstReference);
     expect(cancelled.html).toContain("Nothing was charged");
     // The merchant sees it cancelled, its hold given back; it is not placed.
-    await page.goto(`/t/${slug}/orders/${first}`);
-    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "cancelled");
-    await expect(page.locator("[data-order-payment]")).toHaveAttribute("data-order-payment", "released");
-    await expect(page.locator('[data-order-mail="order_cancelled"]')).toHaveAttribute("data-mailed", "mailed");
+    // The page reads the read model, a moment behind the shopper's cancel.
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders/${first}`);
+      await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "cancelled", {
+        timeout: 1000,
+      });
+      await expect(page.locator("[data-order-payment]")).toHaveAttribute("data-order-payment", "released", {
+        timeout: 1000,
+      });
+      await expect(page.locator('[data-order-mail="order_cancelled"]')).toHaveAttribute("data-mailed", "mailed", {
+        timeout: 1000,
+      });
+    }).toPass({ timeout: 15_000 });
     await expect(page.getByRole("button", { name: "Place on AliExpress" })).toHaveCount(0);
     expect(aliexpress.orders).toHaveLength(0);
 
@@ -634,7 +647,11 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByRole("status")).toContainText("Stripe connected.");
     await expect(page.locator("[data-payments-stopped]")).toHaveCount(0);
-    await page.goto(`/t/${slug}/orders/${second}`);
+    // The merchant's page reads the read model, a moment behind the payment.
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders/${second}`);
+      await expect(page.getByRole("button", { name: "Place on AliExpress" })).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
     await page.getByRole("button", { name: "Place on AliExpress" }).click();
     await forwardIs(page, `/t/${slug}/orders/${second}`, "placed");
     await expect(async () => {
@@ -645,8 +662,12 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
     // The money taken, the shopper is mailed with the invoice's link.
     const receipt = await mailTo(request, "ada@example.org", "Payment received for your ", paidMails);
     expect(receipt.subject).toContain(secondReference);
-    await page.goto(`/t/${slug}/orders/${second}`);
-    await expect(page.locator('[data-order-mail="order_paid"]')).toHaveAttribute("data-mailed", "mailed");
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders/${second}`);
+      await expect(page.locator('[data-order-mail="order_paid"]')).toHaveAttribute("data-mailed", "mailed", {
+        timeout: 1000,
+      });
+    }).toPass({ timeout: 15_000 });
   } finally {
     await stripe.stop();
     await aliexpress.stop();
@@ -682,7 +703,13 @@ test("an order AliExpress may have stays out of the shopper's hands", async ({ p
     // AliExpress takes the order but its answer carries no number: it may
     // have it, and the shopper can no longer cancel.
     aliexpress.placeAnswers.push("lost", "refused");
-    await page.goto(merchantOrder);
+    // The merchant's page reads the read model, a moment behind the payment.
+    await expect(async () => {
+      await page.goto(merchantOrder);
+      await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "authorized", {
+        timeout: 1000,
+      });
+    }).toPass({ timeout: 15_000 });
     // Nothing asked of AliExpress yet: the hold is not at risk.
     await expect(page.locator("[data-order-hold-at-risk]")).toHaveCount(0);
     await page.getByRole("button", { name: "Place on AliExpress" }).click();
@@ -734,15 +761,24 @@ test("an order AliExpress may have stays out of the shopper's hands", async ({ p
       headers: { "content-type": "application/json", "stripe-signature": stripeSignature(dropped, "whsec_e2e") },
     });
     expect(told.status()).toBe(204);
-    await page.goto(merchantOrder);
+    await expect(async () => {
+      await page.goto(merchantOrder);
+      await expect(page.locator("[data-order-payment]")).toHaveAttribute("data-order-payment", "released", {
+        timeout: 1000,
+      });
+    }).toPass({ timeout: 15_000 });
     await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "authorized");
-    await expect(page.locator("[data-order-payment]")).toHaveAttribute("data-order-payment", "released");
     await expect(page.locator("[data-order-hold-at-risk]")).toHaveCount(0);
     await page.getByLabel("How it was paid (optional)").fill("Bank transfer received");
     await page.getByRole("button", { name: "Settled outside timada" }).click();
     await expect(page.getByRole("status")).toContainText("settled outside timada");
+    await expect(async () => {
+      await page.reload();
+      await expect(page.locator("[data-order-payment]")).toHaveAttribute("data-order-payment", "settled_outside", {
+        timeout: 1000,
+      });
+    }).toPass({ timeout: 15_000 });
     await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "paid");
-    await expect(page.locator("[data-order-payment]")).toHaveAttribute("data-order-payment", "settled_outside");
     await expect(page.locator("[data-order-settled-outside]")).toContainText("Bank transfer received");
     await expect(page.locator("[data-order-settle-outside]")).toHaveCount(0);
     // The invoice follows, with the payment shown as settled outside.
@@ -788,8 +824,13 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     await expect(page.locator("[data-aliexpress-forwarding]")).toHaveAttribute("data-aliexpress-forwarding", "manual");
     aliexpress.freight = [{ service_name: "YANWEN_JYT", cents: 120, tracking: false }];
     const first = `/t/${slug}/orders/${await buyRoses(page, request, stripe, webhookUrl, 1)}`;
-    await page.goto(first);
-    await expect(page.locator("[data-order-aliexpress]")).toHaveAttribute("data-order-aliexpress", "none");
+    // The merchant's page reads the read model, a moment behind the payment.
+    await expect(async () => {
+      await page.goto(first);
+      await expect(page.locator("[data-order-aliexpress]")).toHaveAttribute("data-order-aliexpress", "none", {
+        timeout: 1000,
+      });
+    }).toPass({ timeout: 15_000 });
     await page.getByRole("button", { name: "Place on AliExpress" }).click();
     await expect(page.getByRole("status")).toContainText("The order is being placed on AliExpress.");
     await forwardIs(page, first, "failed");
@@ -972,9 +1013,12 @@ test("a merchant picks the warehouse a product ships from, and shoppers never se
     // Bought and placed: the order names the rose, and AliExpress gets the
     // French one.
     const order = `/t/${slug}/orders/${await buyRoses(page, request, stripe, webhookUrl, 1)}`;
-    await page.goto(order);
     const line = page.locator('[data-order-line="Cat Tunnel Deluxe"]');
-    await expect(line).toContainText("Rose");
+    // The merchant's page reads the read model, a moment behind the payment.
+    await expect(async () => {
+      await page.goto(order);
+      await expect(line).toContainText("Rose", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
     await expect(line).not.toContainText("France");
     await page.getByRole("button", { name: "Place on AliExpress" }).click();
     await forwardIs(page, order, "placed");
