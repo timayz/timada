@@ -47,7 +47,9 @@ pub fn subscription<E: Executor>(store: Evento, keys: Arc<dyn KeyRing>) -> Subsc
         .data(TenantStore(store))
         .data(TenantKeys(keys))
         .handler(on_forgotten())
-        .any_routing_key()
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
         .retry(5)
 }
 

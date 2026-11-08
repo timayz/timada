@@ -231,6 +231,18 @@ pub struct DeliveryState {
     pub claimed_at: u64,
 }
 
+impl<E: Executor> super::Command<E> {
+    /// The mailing of a campaign or an edition to a subscriber, once a node
+    /// took it (`delivery_id`).
+    pub async fn load_delivery(&self, id: &str) -> anyhow::Result<Option<DeliveryState>> {
+        delivery_projection()
+            .load(id)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await
+    }
+}
+
 pub fn delivery_projection<E: Executor>() -> Projection<E, DeliveryState> {
     Projection::new::<crate::aggregator::Delivery>()
         .handler(on_claimed())
@@ -550,6 +562,15 @@ impl<E: Executor> super::Command<E> {
         subscriber_id: &str,
         routing_key: Option<String>,
     ) -> Result<bool, NewsletterError> {
+        // Read first: on a cluster every node of the region tries this, so
+        // the ones that lost are told by a read, not by a refused write.
+        if self
+            .load_delivery(&delivery_id(campaign_id, subscriber_id))
+            .await?
+            .is_some()
+        {
+            return Ok(false);
+        }
         let claimed = evento::append(delivery_id(campaign_id, subscriber_id))
             .original_version(0)
             .routing_key_opt(routing_key)
@@ -578,6 +599,15 @@ impl<E: Executor> super::Command<E> {
         subscriber_id: &str,
         routing_key: Option<String>,
     ) -> Result<bool, NewsletterError> {
+        // Read first: on a cluster every node of the region tries this, so
+        // the ones that lost are told by a read, not by a refused write.
+        if self
+            .load_delivery(&delivery_id(edition_id, subscriber_id))
+            .await?
+            .is_some()
+        {
+            return Ok(false);
+        }
         let claimed = evento::append(delivery_id(edition_id, subscriber_id))
             .original_version(0)
             .routing_key_opt(routing_key)

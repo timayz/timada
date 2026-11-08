@@ -139,7 +139,9 @@ pub fn pushes_subscription<E: Executor>(
         .data(Store(store))
         .handler(on_pushed())
         .handler(on_claimed())
-        .any_routing_key()
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
         // The AliExpress order index is written in the platform's own
         // streams, the default tenant. A shop's store key can write the same
         // event, under any `aggregate_id` and payload, only in the shop's

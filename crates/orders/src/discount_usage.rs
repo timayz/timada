@@ -37,7 +37,9 @@ pub fn discount_usage_subscription<E: Executor>(store: Evento) -> SubscriptionBu
         .data(Store(store))
         .handler(on_discounted())
         .handler(on_cancelled())
-        .any_routing_key()
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
         .retry(5)
 }
 

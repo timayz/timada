@@ -104,12 +104,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .iter()
         .filter(|(_, state)| state.is_running())
         .count();
-    let troubled: Vec<(&'static str, &'static str, Tone, String)> = workers
+    let troubled: Vec<(String, &'static str, Tone, String)> = workers
         .iter()
         .filter(|(_, state)| !state.is_running())
         .map(|(name, state)| {
             let (label, tone, detail) = worker_label(state);
-            (*name, label, tone, detail)
+            (name.clone(), label, tone, detail)
         })
         .collect();
     let workers_label = if troubled.is_empty() {
@@ -191,8 +191,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         table_body(
                             for (name, label, tone, detail) in &troubled {
                                 table_row(
-                                    attrs: attributes! { data-worker=(*name) },
-                                    table_cell((*name))
+                                    attrs: attributes! { data-worker=(name.as_str()) },
+                                    table_cell((name))
                                     table_cell(status_badge(tone: *tone, (*label)))
                                     table_cell((detail))
                                 )

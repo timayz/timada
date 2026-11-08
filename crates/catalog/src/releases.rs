@@ -40,7 +40,9 @@ pub fn release_subscription<E: Executor>(store: Evento) -> SubscriptionBuilder<E
         .handler(on_variant_sku_changed())
         .handler(on_variant_removed())
         .handler(on_category_archived())
-        .any_routing_key()
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
         .retry(5)
 }
 

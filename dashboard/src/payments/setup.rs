@@ -38,7 +38,9 @@ pub fn setup_subscription(
         .handler(on_payments_stopped())
         .handler(on_payments_forgotten())
         .handler(on_tenant_resumed())
-        .any_routing_key()
+        // A saga: it follows the node's own region (the executor's default
+        // routing key), so a region's nodes do its work and the other
+        // regions' nodes leave it to them.
         .tenant("")
         .retry(5)
 }
