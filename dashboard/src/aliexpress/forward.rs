@@ -6,6 +6,11 @@
 //! AliExpress ([`super::webhook`]) reads them again, the sweep ([`super::sync`])
 //! when no push came for a while, until AliExpress gives their parcel numbers,
 //! and the shop's order is fulfilled with them.
+//!
+//! An order is placed on AliExpress, on the company's account, for a
+//! payment the provider holds: one a `store:write` key forged in the shop's
+//! store names no payment the provider knows as the shop's, and is refused
+//! (timada #431).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -27,6 +32,7 @@ use timada_orders::{OrderError, OrderLine, OrderStatus};
 use timada_tenancy::{CompanyState, TenantState};
 
 use super::{ALIEXPRESS_ACTOR, Aliexpress};
+use crate::payments::{OrderPayment, Payments};
 
 /// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/aliexpress-forward";
@@ -104,11 +110,13 @@ fn describe(err: &AeError) -> String {
 
 impl Aliexpress {
     /// Places the order a forward asks for, on the node that takes it on:
-    /// `store` is the store, `db` the read models.
+    /// `store` is the store, `db` the read models, `payments` says whether
+    /// the provider holds the order's money.
     pub async fn forward_order<E: evento::Executor + Clone>(
         &self,
         store: &E,
         db: &Db,
+        payments: &Payments,
         tenant_id: &str,
         forward_id: &str,
     ) -> anyhow::Result<ForwardResult> {
@@ -119,7 +127,10 @@ impl Aliexpress {
         let Some((forward, version)) = forwards.load_forward_versioned(forward_id).await? else {
             return Ok(ForwardResult::Skipped);
         };
-        let placed = match self.prepare(store, db, tenant_id, &forward.order_id).await {
+        let placed = match self
+            .prepare(store, db, payments, tenant_id, &forward.order_id)
+            .await
+        {
             Ok(prepared) => {
                 // The forward's fence, at the version this attempt took it
                 // on at: one overtaken meanwhile (asked for again, given up
@@ -197,6 +208,7 @@ impl Aliexpress {
         &self,
         store: &E,
         db: &Db,
+        payments: &Payments,
         tenant_id: &str,
         order_id: &str,
     ) -> Result<Prepared, Refusal> {
@@ -229,6 +241,26 @@ impl Aliexpress {
         order
             .may_order_from_supplier(crate::auth::now())
             .map_err(|err| not_placeable(err).unwrap_or_else(|err| failed(err.into())))?;
+        // The provider's word, not the order's: the money is held for what
+        // the company is about to buy.
+        let held = payments.order_payment(&tenant, &order).await.map_err(|err| {
+            tracing::warn!(%tenant_id, %order_id, error = %err, "the payment provider did not answer about an order to place on AliExpress");
+            Refusal("The payment provider did not answer; try again in a moment.".to_owned())
+        })?;
+        match held {
+            OrderPayment::Held => {}
+            OrderPayment::Gone => {
+                return Err(Refusal(
+                    "The provider no longer holds the order's payment.".into(),
+                ));
+            }
+            OrderPayment::Unknown => {
+                tracing::warn!(%tenant_id, %order_id, payment = %order.payment.payment_id, "an order to place on AliExpress names a payment the provider does not know as this shop's");
+                return Err(Refusal(
+                    "The provider holds no payment for this order: it was not placed through the shop's checkout.".into(),
+                ));
+            }
+        }
         let links = order_links(store, db, tenant_id, &order.lines)
             .await
             .map_err(failed)?;
@@ -793,11 +825,13 @@ struct Store(Evento);
 pub fn subscription<E: Executor>(
     aliexpress: Arc<Aliexpress>,
     db: Db,
+    payments: Arc<Payments>,
     store: Evento,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(aliexpress)
         .data(db)
+        .data(payments)
         .data(Store(store))
         .handler(on_order_placed())
         .handler(on_forward_requested())
@@ -856,9 +890,10 @@ async fn on_forward_requested<E: Executor>(
     }
     let aliexpress: Arc<Aliexpress> = context.extract();
     let db: Db = context.extract();
+    let payments: Arc<Payments> = context.extract();
     let store: Store = context.extract();
     aliexpress
-        .forward_order(&store.0, &db, &event.tenant, &event.aggregate_id)
+        .forward_order(&store.0, &db, &payments, &event.tenant, &event.aggregate_id)
         .await?;
     Ok(())
 }

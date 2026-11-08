@@ -368,7 +368,12 @@ fn subscriptions(
         ),
         (
             "AliExpress orders",
-            crate::aliexpress::forward::subscription(aliexpress.clone(), db.clone(), store.clone()),
+            crate::aliexpress::forward::subscription(
+                aliexpress.clone(),
+                db.clone(),
+                payments.clone(),
+                store.clone(),
+            ),
         ),
         (
             "AliExpress products",
@@ -466,7 +471,12 @@ fn subscriptions(
         ),
         (
             "order mails",
-            crate::order_mails::subscription(store.clone(), background_mail.clone(), store.clone()),
+            crate::order_mails::subscription(
+                store.clone(),
+                background_mail.clone(),
+                payments.clone(),
+                store.clone(),
+            ),
         ),
         (
             "message notices",

@@ -385,6 +385,12 @@ impl ShopMail {
         self.enabled() && tenant.marketing_server().is_some()
     }
 
+    /// Whether `tenant`'s mails to its shoppers go out through a server of
+    /// its own here; otherwise through the platform's.
+    pub fn has_shop_mails_server(&self, tenant: &TenantState) -> bool {
+        self.enabled() && tenant.shop_mails_server().is_some()
+    }
+
     /// Who `tenant`'s mails to its shoppers come from and through which
     /// server: the one it picked for them, else the platform's, whose
     /// address `platform` the shop borrows under its own name.

@@ -289,6 +289,12 @@ What is bought:
   the address's second line. [aliexpress-provinces.md](aliexpress-provinces.md) has
   every country.
 
+Before anything is bought, Stripe is asked whether it holds the payment the order
+names, opened for this shop's cart: an order written into the shop's store by other
+means than the checkout (a `store:write` key's) is refused with *it was not placed
+through the shop's checkout*, a hold that went back meanwhile is refused too, and
+Stripe not answering fails the forward to try again.
+
 A failure is shown on the card with *Place again*. One node takes each order on
 (`Started`, like an import), and right before asking AliExpress writes `Asking` on the
 forward at the version it took it on at: an attempt overtaken in between (asked for
