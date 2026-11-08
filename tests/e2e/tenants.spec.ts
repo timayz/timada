@@ -121,6 +121,8 @@ test("the administrator sees a tenant active, suspends and resumes it", async ({
   await expect(admin).toHaveURL(/\/admin\/cluster$/);
   await expect(admin.locator("[data-node]")).toHaveText("single node");
   await expect(admin.locator("[data-node-state]")).toHaveText("Serving");
+  await expect(admin.locator("[data-workers]")).toHaveAttribute("data-workers-troubled", "0");
+  await expect(admin.locator("[data-workers]")).toContainText("running");
 
   await ownerContext.close();
   await adminContext.close();

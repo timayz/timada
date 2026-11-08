@@ -31,7 +31,6 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(on_scenario_event())
         .handler(on_run_event())
         .any_routing_key()
-        .retry(u8::MAX)
 }
 
 #[evento::subscription_all]

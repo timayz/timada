@@ -27,7 +27,6 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .data(db)
         .handler(on_page_event())
         .any_routing_key()
-        .retry(u8::MAX)
 }
 
 #[evento::subscription_all]

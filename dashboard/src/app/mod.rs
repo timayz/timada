@@ -93,6 +93,8 @@ pub struct Services {
     pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
     /// The live store connections, so revoking a key ends them.
     pub store: Arc<StoreConnections>,
+    /// The subscriptions this node runs, for the cluster page.
+    pub workers: crate::workers::Workers,
     pub config: Config,
 }
 
@@ -114,6 +116,7 @@ pub fn router(services: Services) -> Router {
         shop_mail,
         aliexpress,
         store,
+        workers,
         config,
     } = services;
     // The bundle sits next to the binary; `topcoat dev` writes it after every
@@ -166,6 +169,7 @@ pub fn router(services: Services) -> Router {
         .app_context(payments)
         .app_context(aliexpress)
         .app_context(store)
+        .app_context(workers)
         .app_context(limits)
         // The transport behind `topcoat::mail::send`, and who the codes come from.
         .mail(mailer.transport)

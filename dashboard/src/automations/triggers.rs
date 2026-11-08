@@ -47,7 +47,7 @@ pub fn subscription<E: Executor>(db: Db, store: Evento) -> SubscriptionBuilder<E
         .handler(on_cart_checked_out())
         .handler(on_checkout_abandoned())
         .any_routing_key()
-        .retry(u8::MAX)
+        .retry(5)
 }
 
 /// Starts a run of every scenario of the tenant listening to `trigger`.
