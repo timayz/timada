@@ -88,7 +88,7 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
     db::migrate_store_read_models(&store).await.unwrap();
     let store_db = db::Db::from(store.clone());
-    let (cluster, platform) = cluster::open(None, None, &dir.join("timada.db"), store)
+    let (cluster, platform) = cluster::open(None, None, &[], &dir.join("timada.db"), store)
         .await
         .unwrap();
     let connections = StoreConnections::new();

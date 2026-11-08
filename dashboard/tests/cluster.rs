@@ -75,16 +75,18 @@ impl Node {
 
     /// Opens node `id` over its own files; a fresh node migrates them first.
     async fn start(root: &Path, id: u64, peers: &[SocketAddr], tuning: Tuning) -> Self {
-        Self::start_in(root, id, peers, tuning, None).await
+        Self::start_in(root, id, peers, tuning, None, &[]).await
     }
 
-    /// [`start`](Self::start) for a node serving `region`.
+    /// [`start`](Self::start) for a node serving `region`, and doing the
+    /// work of the regions of `also_serves` too.
     async fn start_in(
         root: &Path,
         id: u64,
         peers: &[SocketAddr],
         tuning: Tuning,
         region: Option<&str>,
+        also_serves: &[&str],
     ) -> Self {
         let dir = root.join(format!("node{id}"));
         std::fs::create_dir_all(&dir).unwrap();
@@ -102,6 +104,10 @@ impl Node {
                 write_backlog: tuning.write_backlog,
             }),
             region,
+            &also_serves
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
             &path,
             store,
         )
@@ -628,22 +634,29 @@ async fn a_key_cut_off_through_one_node_ends_its_connections_on_another() {
 
 /// Work spread over the nodes goes by who is up: idle nodes still hear from
 /// each other, so each has its place among all three; one that stops is left
-/// out once it has been silent long enough.
+/// out once it has been silent long enough. A region's work is shared among
+/// the nodes serving it, which each node learns from the others' gossip
+/// (#442): node 0 serves `eu`, node 1 `us`, node 2 `eu` and also `us`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_nodes_up_share_out_what_they_do() {
     let root = temp_root("live");
     let addrs = free_addrs().await;
-    let [n0, n1, n2] = start_all(&root, &addrs, Tuning::default()).await;
+    let tuning = Tuning::default();
+    let (n0, n1, n2) = tokio::join!(
+        Node::start_in(&root, 0, &addrs, tuning, Some("eu"), &[]),
+        Node::start_in(&root, 1, &addrs, tuning, Some("us"), &[]),
+        Node::start_in(&root, 2, &addrs, tuning, Some("eu"), &["us"]),
+    );
     let within = Duration::from_secs(5);
     // Under load a node may stall for a moment: each comes to see this, and a
     // node never heard from since it started would not.
-    let sees = async |node: &Node, live: (u64, u64)| {
+    let sees = async |node: &Node, region: Option<&str>, live: (u64, u64)| {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-        while node.cluster.live_nodes(within) != live {
+        while cluster::live_place(&node.cluster, within, region) != live {
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "{:?}, not {live:?}",
-                node.cluster.live_nodes(within)
+                "{:?} for {region:?}, not {live:?}",
+                cluster::live_place(&node.cluster, within, region)
             );
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -651,13 +664,21 @@ async fn the_nodes_up_share_out_what_they_do() {
 
     // Nothing is written: gossip alone keeps them in sight of each other.
     tokio::time::sleep(within + Duration::from_secs(1)).await;
-    sees(&n0, (0, 3)).await;
-    sees(&n1, (1, 3)).await;
-    sees(&n2, (2, 3)).await;
+    sees(&n0, None, (0, 3)).await;
+    sees(&n1, None, (1, 3)).await;
+    sees(&n2, None, (2, 3)).await;
+    // eu's work is nodes 0 and 2's, us's nodes 1 and 2's.
+    sees(&n0, Some("eu"), (0, 2)).await;
+    sees(&n2, Some("eu"), (1, 2)).await;
+    sees(&n1, Some("us"), (0, 2)).await;
+    sees(&n2, Some("us"), (1, 2)).await;
 
     n1.stop().await;
-    sees(&n0, (0, 2)).await;
-    sees(&n2, (1, 2)).await;
+    sees(&n0, None, (0, 2)).await;
+    sees(&n2, None, (1, 2)).await;
+    // Node 2 does us's work alone now.
+    sees(&n2, Some("us"), (0, 1)).await;
+    sees(&n2, Some("eu"), (1, 2)).await;
 
     for node in [n0, n2] {
         node.stop().await;
@@ -676,7 +697,7 @@ async fn concurrent_writers_never_see_stale_versions() {
     let root = temp_root("stress");
     let path = root.join("timada.db");
     let store = db::open_store(&path).await.unwrap();
-    let (cluster, store) = cluster::open(None, None, &path, store).await.unwrap();
+    let (cluster, store) = cluster::open(None, None, &[], &path, store).await.unwrap();
     let mut tasks = tokio::task::JoinSet::new();
     for t in 0..64 {
         let store = store.clone();
@@ -749,9 +770,9 @@ async fn a_saga_runs_on_the_nodes_of_its_region_and_where_it_is_also_served() {
     let addrs = free_addrs().await;
     let tuning = Tuning::default();
     let (n0, n1, n2) = tokio::join!(
-        Node::start_in(&root, 0, &addrs, tuning, Some("eu")),
-        Node::start_in(&root, 1, &addrs, tuning, Some("us")),
-        Node::start_in(&root, 2, &addrs, tuning, Some("eu")),
+        Node::start_in(&root, 0, &addrs, tuning, Some("eu"), &[]),
+        Node::start_in(&root, 1, &addrs, tuning, Some("us"), &[]),
+        Node::start_in(&root, 2, &addrs, tuning, Some("eu"), &["us"]),
     );
     let nodes = [n0, n1, n2];
     let seen: [Seen; 3] = Default::default();

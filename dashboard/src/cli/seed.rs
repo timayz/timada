@@ -138,6 +138,7 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     let (cluster, platform) = cluster::open(
         config.cluster.as_ref(),
         config.server.region.as_deref(),
+        &config.server.also_serves,
         &config.database.path,
         store.clone(),
     )

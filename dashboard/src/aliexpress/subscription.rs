@@ -140,7 +140,9 @@ async fn on_sync_requested<E: Executor>(
     let aliexpress: Arc<Aliexpress> = context.extract();
     let now = crate::auth::now();
     if now.saturating_sub(event.timestamp) > REQUEST_WINDOW_SECS
-        || !aliexpress.share().owns(&event.aggregate_id)
+        || !aliexpress
+            .share_in(event.routing_key.as_deref())
+            .owns(&event.aggregate_id)
     {
         return Ok(());
     }
@@ -191,7 +193,11 @@ async fn on_item_added<E: Executor>(
         let tried_lately = link
             .last_tried_at
             .is_some_and(|at| now.saturating_sub(at as u64) < CART_ADD_FRESH_SECS);
-        if tried_lately || !aliexpress.share().owns(&link.id) {
+        if tried_lately
+            || !aliexpress
+                .share_in(event.routing_key.as_deref())
+                .owns(&link.id)
+        {
             return Ok(());
         }
         timada_aliexpress::Command::new(store.0.clone(), &event.tenant)

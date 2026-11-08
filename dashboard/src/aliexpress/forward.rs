@@ -1257,7 +1257,7 @@ mod tests {
                 &config,
                 false,
                 Evento::new(store.clone()),
-                Arc::new(|| timada_aliexpress::Share::ALONE),
+                Arc::new(|_| timada_aliexpress::Share::ALONE),
             )
             .unwrap();
             let company = CompanyState {

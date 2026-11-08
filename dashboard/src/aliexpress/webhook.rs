@@ -167,7 +167,7 @@ async fn on_pushed<E: Executor>(
         return Ok(());
     }
     let closed = (event.data.status == ORDER_CLOSED).then_some(order.ae_order_id.as_str());
-    read_again(context, order.forward.as_ref(), event.timestamp, closed).await;
+    read_again(context, order.forward.as_ref(), &event, closed).await;
     Ok(())
 }
 
@@ -186,13 +186,14 @@ async fn on_claimed<E: Executor>(
         return Ok(());
     }
     let closed = order.closed.then_some(order.ae_order_id.as_str());
-    read_again(context, order.forward.as_ref(), event.timestamp, closed).await;
+    read_again(context, order.forward.as_ref(), &event, closed).await;
     Ok(())
 }
 
-/// Reads `forward`'s orders again for what was recorded at `at` (unix
-/// seconds), on the node it belongs to and while that is news. The read runs
-/// beside the subscription, a few at a time ([`PUSH_READS`](super::PUSH_READS)),
+/// Reads `forward`'s orders again for what `event` recorded, on the node it
+/// belongs to among those serving the event's region, and while that is
+/// news. The read runs beside the subscription, a few at a time
+/// ([`PUSH_READS`](super::PUSH_READS)),
 /// so a burst of pushes while AliExpress is slow neither holds the next ones
 /// past their time nor asks AliExpress all at once; the push is recorded, so a
 /// read that fails, or is lost with its node, is the sweep's to make. One
@@ -200,7 +201,7 @@ async fn on_claimed<E: Executor>(
 async fn read_again<E: Executor>(
     context: &Context<'_, E>,
     forward: Option<&ForwardRef>,
-    at: u64,
+    event: &evento::Event,
     closed: Option<&str>,
 ) {
     let Some(forward) = forward.cloned() else {
@@ -208,7 +209,11 @@ async fn read_again<E: Executor>(
     };
     let aliexpress: Arc<Aliexpress> = context.extract();
     let now = crate::auth::now();
-    if now.saturating_sub(at) > PUSH_WINDOW_SECS || !aliexpress.share().owns(&forward.forward_id) {
+    if now.saturating_sub(event.timestamp) > PUSH_WINDOW_SECS
+        || !aliexpress
+            .share_in(event.routing_key.as_deref())
+            .owns(&forward.forward_id)
+    {
         return;
     }
     let db: Db = context.extract();
@@ -272,7 +277,7 @@ mod tests {
             &config,
             true,
             Evento::new(store.clone()),
-            Arc::new(|| Share::ALONE),
+            Arc::new(|_| Share::ALONE),
         )
         .unwrap();
         // The victim's forward placed the AliExpress order 8001.

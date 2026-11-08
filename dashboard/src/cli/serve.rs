@@ -23,6 +23,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let (cluster, executor) = cluster::open(
         config.cluster.as_ref(),
         config.server.region.as_deref(),
+        &config.server.also_serves,
         &config.database.path,
         store.clone(),
     )
@@ -69,8 +70,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         &config.aliexpress,
         config.mail.allow_private_hosts,
         executor.clone(),
-        Arc::new(move || {
-            let (index, of) = live.live_nodes(crate::aliexpress::LIVE_WITHIN);
+        Arc::new(move |region| {
+            let (index, of) = cluster::live_place(&live, crate::aliexpress::LIVE_WITHIN, region);
             timada_aliexpress::Share { index, of }
         }),
     )?;

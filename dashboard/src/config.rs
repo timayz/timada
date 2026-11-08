@@ -163,8 +163,10 @@ pub struct ServerConfig {
     /// `.any_routing_key()` and see every region; the sagas (payments,
     /// forwards, invoices, mails, releases, usage) inherit the key and run on
     /// the nodes of the region alone, so a region's work is done by its own
-    /// nodes and not N times across the cluster. Absent: no routing key, and
-    /// every node does every region's work.
+    /// nodes and not N times across the cluster; the AliExpress reads a
+    /// region's events ask for are shared out among those nodes, which tell
+    /// each other the regions they serve. One word. Absent: no routing key,
+    /// and every node does every region's work.
     #[serde(default)]
     pub region: Option<String>,
     /// Regions whose background work this node also takes on, e.g. while
@@ -819,15 +821,22 @@ impl ServerConfig {
                 )));
             }
         }
+        if let Some(region) = &self.region
+            && (region.is_empty() || region.contains(char::is_whitespace))
+        {
+            return Err(ConfigError::Message(format!(
+                "server.region: '{region}' is empty or has spaces in it; a region is one word"
+            )));
+        }
         if !self.also_serves.is_empty() && self.region.is_none() {
             return Err(ConfigError::Message(
                 "server.also_serves needs server.region: a node without a region already does every region's work".into(),
             ));
         }
         for (i, served) in self.also_serves.iter().enumerate() {
-            if served.trim().is_empty() || served.trim() != served {
+            if served.is_empty() || served.contains(char::is_whitespace) {
                 return Err(ConfigError::Message(format!(
-                    "server.also_serves: '{served}' is empty or has spaces around it"
+                    "server.also_serves: '{served}' is empty or has spaces in it; a region is one word"
                 )));
             }
             if self.region.as_deref() == Some(served.as_str()) {
@@ -1001,6 +1010,12 @@ mod tests {
         assert!(err.to_string().contains("twice"), "{err}");
         assert!(regions(Some("eu"), &[" "]).validate().is_err());
         assert!(regions(Some("eu"), &[" us"]).validate().is_err());
+        // A region is one word: it names a routing key and travels in the
+        // node's gossip with the others it serves.
+        let err = regions(Some("eu west"), &[]).validate().unwrap_err();
+        assert!(err.to_string().contains("one word"), "{err}");
+        assert!(regions(Some(""), &[]).validate().is_err());
+        assert!(regions(Some("eu"), &["us east"]).validate().is_err());
     }
 
     #[test]

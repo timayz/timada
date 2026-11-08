@@ -279,7 +279,7 @@ impl Shop {
             },
             false,
             store.clone(),
-            Arc::new(move || *current.lock().unwrap()),
+            Arc::new(move |_| *current.lock().unwrap()),
         )
         .unwrap();
 
