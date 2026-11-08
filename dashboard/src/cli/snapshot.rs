@@ -263,9 +263,9 @@ fn file_name(file: &Path) -> Result<&std::ffi::OsStr> {
         .with_context(|| format!("{} names no file", file.display()))
 }
 
-/// The rejoin mark next to the store (`cluster::joining_marker`).
+/// The rejoin mark next to the store (`cluster::rejoin_mark`).
 fn joining_marker(store: &Path) -> PathBuf {
-    with_suffix(store, ".joining")
+    crate::cluster::rejoin_mark(store)
 }
 
 #[cfg(test)]
