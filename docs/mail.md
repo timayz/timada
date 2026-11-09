@@ -104,8 +104,9 @@ is cancelled, by the merchant, the shopper or AliExpress, with its money settled
 `refunded` is true when the money had been taken and goes back, false when the hold on
 the card was given back. The shipping mail goes out once the order is fulfilled, by
 the merchant or from AliExpress's parcels: `tracking` is the parcel number when one
-was given, `tracking_url` the page that follows it (the carrier's when the merchant
-gave one, Cainiao's for an AliExpress parcel, 17TRACK otherwise). Each is sent once
+was given, `tracking_url` the carrier's page only when the merchant gave one at
+fulfilment (the shop links to no tracking site of its own choosing; the order's page
+the mail links to shows the parcel's steps). Each is sent once
 per order, an hour at most after what
 prompted it (a node catching up on older events mails nobody), and the order's page
 in the back office says when each went out.

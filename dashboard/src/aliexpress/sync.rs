@@ -346,7 +346,11 @@ impl AliexpressSync {
                 .check_forward(&store, &tenant, &company, &forward.id, None, now)
                 .await
             {
-                Ok(CheckResult::Checked { fulfilled: true }) => fulfilled += 1,
+                Ok(CheckResult::Checked { fulfilled: true }) => {
+                    fulfilled += 1;
+                    // Its parcels were asked about with the fulfilment.
+                    note_parcels_read(&self.db, tenant_id, &forward.id, now).await?;
+                }
                 Ok(_) => {}
                 Err(err) => {
                     tracing::warn!(tenant = %tenant_id, forward = %forward.id, error = %err, "AliExpress order not read")

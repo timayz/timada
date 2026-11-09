@@ -395,8 +395,8 @@ lower the setting.
 
 Once each order has its parcel number, every line of the shop's order was bought
 there and its money was taken, the order is fulfilled with those numbers as its
-tracking, and Cainiao's page for them (`global.cainiao.com`, which follows every
-number an AliExpress order carries) as the link the shopper opens.
+tracking. No carrier page goes with them: Cainiao's would tell the shopper where the
+goods come from.
 
 The parcels are then followed for the shopper's order page: every
 `[aliexpress] parcel_read_every_secs` (six hours), the node whose share the forward

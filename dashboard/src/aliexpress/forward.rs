@@ -25,8 +25,8 @@ use evento::{
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem, Requested};
 use timada_aliexpress::{
     ALIEXPRESS_SUPPLIER, AeError, AliexpressError, Client, ForwardStatus, LinkState, ParcelQuery,
-    PlaceItem, PlaceOrder, PlacedRecord, Placement, cainiao_tracking_url, choose_service,
-    delivery_country, describe_options, forward_items, logistics_address,
+    PlaceItem, PlaceOrder, PlacedRecord, Placement, choose_service, delivery_country,
+    describe_options, forward_items, logistics_address,
 };
 use timada_orders::{OrderError, OrderLine, OrderStatus};
 use timada_tenancy::{CompanyState, TenantState};
@@ -507,15 +507,11 @@ impl Aliexpress {
         {
             return Ok(false);
         }
-        let numbers = forward.tracking();
-        let tracking = fit_tracking(&numbers);
+        let tracking = fit_tracking(&forward.tracking());
+        // No carrier page: Cainiao's would tell the shopper where the goods
+        // come from. The order's own shipment shows the parcel's steps.
         match orders
-            .fulfil_order(
-                ALIEXPRESS_ACTOR,
-                order_id,
-                Some(tracking),
-                Some(cainiao_tracking_url(&numbers)),
-            )
+            .fulfil_order(ALIEXPRESS_ACTOR, order_id, Some(tracking), None)
             .await
         {
             Ok(()) => {
@@ -550,9 +546,11 @@ impl Aliexpress {
     /// forward only has to be closed.
     /// Asks AliExpress where each parcel of a closed forward is and records
     /// what changed on the shop's order ([`timada_orders::aggregator::Shipment`]);
-    /// how many parcels had news. Nothing for a forward not closed with
-    /// parcels, or an order not fulfilled. A parcel AliExpress will not tell
-    /// of is logged and passed over: the others are still followed.
+    /// how many parcels had news. Once as the order is fulfilled
+    /// ([`Self::check_forward`]), then from the sweep every period. Nothing
+    /// for a forward not closed with parcels, or an order not fulfilled. A
+    /// parcel AliExpress will not tell of is logged and passed over: the
+    /// others are still followed.
     pub async fn follow_parcels<E: evento::Executor + Clone>(
         &self,
         store: &E,
@@ -762,14 +760,14 @@ impl Aliexpress {
         if !after.complete || !after.all_shipped() || !paid {
             return Ok(CheckResult::Checked { fulfilled: false });
         }
-        let numbers = after.tracking();
-        let tracking = fit_tracking(&numbers);
+        let tracking = fit_tracking(&after.tracking());
+        // No carrier page, as above.
         let finished = match orders
             .fulfil_order(
                 ALIEXPRESS_ACTOR,
                 &forward.order_id,
                 Some(tracking.clone()),
-                Some(cainiao_tracking_url(&numbers)),
+                None,
             )
             .await
         {
@@ -789,6 +787,15 @@ impl Aliexpress {
             Ok(_) => {
                 if fulfilled {
                     tracing::info!(tenant = %tenant.id, order = %forward.order_id, "order fulfilled from AliExpress");
+                    // The parcels' first steps, so the order's page has them
+                    // when the shipping mail lands; the sweep follows on. Not
+                    // getting them now is no failure of the fulfilment.
+                    if let Err(err) = self
+                        .follow_parcels(store, tenant, company, forward_id)
+                        .await
+                    {
+                        tracing::warn!(tenant = %tenant.id, order = %forward.order_id, error = %err, "AliExpress parcels not followed at fulfilment");
+                    }
                 }
                 Ok(CheckResult::Checked { fulfilled })
             }
@@ -1541,7 +1548,7 @@ mod tests {
             shop.check(&id).await,
             CheckResult::Checked { fulfilled: true }
         );
-        assert_eq!(follow().await, 1);
+        // Fulfilled: the first steps were asked for at once.
         let shipment = shop.orders().load_shipment(ORDER).await.unwrap().unwrap();
         assert_eq!(shipment.parcels.len(), 1);
         assert_eq!(shipment.parcels[0].number, "LP1");
@@ -1557,7 +1564,7 @@ mod tests {
                 "Departed from origin country"
             ]
         );
-        // The same journey again records nothing.
+        // The sweep's follow finds the same journey: nothing recorded.
         assert_eq!(follow().await, 0);
         assert_eq!(
             shop.orders().load_shipment(ORDER).await.unwrap().unwrap(),
@@ -1588,10 +1595,8 @@ mod tests {
         let order = shop.order().await;
         assert_eq!(order.status, OrderStatus::Fulfilled);
         assert_eq!(order.tracking.as_deref(), Some("LP1, LP2"));
-        assert_eq!(
-            order.tracking_link().as_deref(),
-            Some("https://global.cainiao.com/newDetail.htm?mailNoList=LP1,LP2")
-        );
+        // Cainiao's page would name the supplier: none is given.
+        assert_eq!(order.tracking_url, None);
         let forward = shop.forward(&id).await;
         assert_eq!(forward.status, ForwardStatus::Done);
         assert_eq!(forward.tracking(), vec!["LP1", "LP2"]);

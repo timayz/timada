@@ -1,11 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import {
-  mailCountOf,
-  mailTo,
-  registerWithEmail,
-  unescapeSlashes,
-  uniqueEmail,
-} from "./email";
+import { mailCountOf, mailTo, registerWithEmail, uniqueEmail } from "./email";
 import { productTab } from "./forms";
 import {
   addToCart,
@@ -578,12 +572,10 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
         { timeout: 1000 },
       );
     }).toPass({ timeout: 15_000 });
-    // No carrier page given: the number is followed on a universal site.
-    await expect(page.locator("[data-order-tracking] a")).toHaveAttribute(
-      "href",
-      "https://t.17track.net/en#nums=6A12345",
-    );
-    // The shopper is mailed the shipment, with the number and that link.
+    // No carrier page given: the number stands alone, linked nowhere.
+    await expect(page.locator("[data-order-tracking] a")).toHaveCount(0);
+    // The shopper is mailed the shipment, with the number and no tracking
+    // site (this shop told no storefront address, so no order link either).
     const shipped = await mailTo(
       request,
       "ada@example.org",
@@ -591,9 +583,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
       shippedBefore,
     );
     expect(shipped.html).toContain("6A12345");
-    expect(unescapeSlashes(shipped.html)).toContain(
-      "https://t.17track.net/en#nums=6A12345",
-    );
+    expect(shipped.html).not.toContain("Follow your parcel");
     await expect(async () => {
       await page.reload();
       await expect(

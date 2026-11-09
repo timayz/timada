@@ -206,8 +206,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </form>
                     </details>
                 }
-                if let (Some(tracking), Some(link)) = (&order.tracking, order.tracking_link()) {
-                    <p>"Suivi du colis : " <a data-order-tracking="" href=(link) rel="noopener" target="_blank">(tracking)</a></p>
+                if let Some(tracking) = &order.tracking {
+                    <p>"Numéro de colis : "
+                        if let Some(link) = &order.tracking_url {
+                            <a data-order-tracking="" href=(link) rel="noopener" target="_blank">(tracking)</a>
+                        } else {
+                            <span data-order-tracking="">(tracking)</span>
+                        }
+                    </p>
                 }
                 for parcel in parcels.iter().filter(|parcel| !parcel.checkpoints.is_empty()) {
                     <section class="parcel" data-order-parcel=(&parcel.number)>

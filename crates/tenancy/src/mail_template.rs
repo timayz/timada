@@ -185,7 +185,9 @@ const TRACKING_VARIABLES: [MailVariable; 2] = [
     },
     MailVariable {
         name: "tracking_url",
-        description: "The page that follows the parcel, when there is a number:                       <a href=\"{{ tracking_url }}\">.",
+        description: "The carrier's page for the parcel, when the shop gave one at fulfilment: \
+                      <a href=\"{{ tracking_url }}\">. The order's page shows the parcel's \
+                      steps either way.",
     },
 ];
 
@@ -493,7 +495,7 @@ impl ShopMailKind {
                 link: full.then(|| "https://shop.example.com/orders/A1B2C3".to_owned()),
                 tracking: full.then(|| "LP00123456FR".to_owned()),
                 tracking_url: full.then(|| {
-                    "https://global.cainiao.com/newDetail.htm?mailNoList=LP00123456FR".to_owned()
+                    "https://www.laposte.fr/outils/suivre-vos-envois?code=LP00123456FR".to_owned()
                 }),
             })),
             Self::ReviewRequest => MailVars::ReviewRequest(ReviewRequestVars {
@@ -709,7 +711,7 @@ pub struct OrderShippedVars {
     pub link: Option<String>,
     /// The parcel number(s), when the fulfilment gave one.
     pub tracking: Option<String>,
-    /// Where the parcel is followed, when there is a number.
+    /// The carrier's page for the parcel, when the merchant gave one.
     pub tracking_url: Option<String>,
 }
 
@@ -1327,7 +1329,7 @@ mod tests {
         assert!(
             shipped
                 .html
-                .contains("href=\"https:&#x2f;&#x2f;global.cainiao.com&#x2f;newDetail.htm?mailNoList=LP00123456FR\""),
+                .contains("href=\"https:&#x2f;&#x2f;www.laposte.fr&#x2f;outils&#x2f;suivre-vos-envois?code=LP00123456FR\""),
             "{}",
             shipped.html
         );

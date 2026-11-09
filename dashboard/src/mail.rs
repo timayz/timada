@@ -455,8 +455,9 @@ pub async fn send_order_cancelled(
     send_order_mail(cx, shop, order, &vars).await
 }
 
-/// Mails the shopper that their order left, with its parcel number and
-/// where to follow it when the fulfilment gave one.
+/// Mails the shopper that their order left, with its parcel number and the
+/// carrier's page when the merchant gave one; the order's page, linked
+/// either way, is where the parcel's steps show.
 pub async fn send_order_shipped(
     cx: &Cx,
     shop: &TenantState,
@@ -468,7 +469,7 @@ pub async fn send_order_shipped(
         order: order_vars(order),
         link: link.map(str::to_owned),
         tracking: order.tracking.clone(),
-        tracking_url: order.tracking_link(),
+        tracking_url: order.tracking_url.clone(),
     }));
     send_order_mail(cx, shop, order, &vars).await
 }
@@ -842,18 +843,18 @@ mod tests {
         let sent = transport.sent();
         assert_eq!(sent.len(), 3);
         assert_eq!(sent[0].subject(), "Shipped: your Acme Tea order K7Q4-MZP2");
-        let universal = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
-        for part in [
-            "LP1, LP2",
-            "t.17track.net",
-            "nums=3DLP1,LP2",
-            "shop.example/orders/o1",
-        ] {
-            assert!(universal.contains(part), "missing {part:?} in {universal}");
+        let number_only = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        for part in ["LP1, LP2", "shop.example/orders/o1"] {
+            assert!(
+                number_only.contains(part),
+                "missing {part:?} in {number_only}"
+            );
         }
+        // No tracking site of the shop's choosing: the order's page it is.
+        assert!(!number_only.contains("Follow your parcel"), "{number_only}");
         let carrier = String::from_utf8(sent[1].clone().formatted(&cx).unwrap()).unwrap();
         assert!(carrier.contains("carrier.example/LP1"), "{carrier}");
-        assert!(!carrier.contains("17track"), "{carrier}");
+        assert!(carrier.contains("Follow your parcel"), "{carrier}");
         let no_number = String::from_utf8(sent[2].clone().formatted(&cx).unwrap()).unwrap();
         assert!(no_number.contains("is on its way"), "{no_number}");
         assert!(!no_number.contains("Parcel number"), "{no_number}");
