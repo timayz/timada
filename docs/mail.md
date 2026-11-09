@@ -91,9 +91,10 @@ Each mail has its own variables, all listed in the editor:
 | Order confirmation | `shop.*`, `order.reference`, `order.email`, `order.lines` (`name`, `variant`, `quantity`, `amount`), `order.subtotal`, `order.discount` (`code`, `amount`), `order.shipping_method` (`name`, `amount`, `free`), `order.total`, `order.delivery` (`min_days`, `max_days`), `order.shipping_address` and `order.billing_address` (`name`, `line1`, `line2`, `postal_code`, `city`, `country`), `order.note`, `link`, `payment_held` |
 | Payment taken | the order confirmation's, without `payment_held` |
 | Order cancelled | the order confirmation's, with `refunded` instead of `payment_held` |
+| Order shipped | the order confirmation's, with `tracking` and `tracking_url` instead of `payment_held` |
 | Review request | `shop.*`, `order.reference`, `products`, `link`, `valid_days` |
 
-The three order mails follow the order's money. The confirmation goes out once the
+The order mails follow the order. The confirmation goes out once the
 order is placed: its card is only held, and `payment_held` is true when the money is
 taken later, once the order is placed with its supplier (see `docs/payments.md`). The
 payment mail goes out once the money is taken, after the invoice is issued, so the
@@ -101,7 +102,12 @@ order's page it links to shows the invoice. An order from the shop's own stock i
 charged at once and gets both within seconds. The cancellation goes out once the order
 is cancelled, by the merchant, the shopper or AliExpress, with its money settled:
 `refunded` is true when the money had been taken and goes back, false when the hold on
-the card was given back. Each is sent once per order, an hour at most after what
+the card was given back. The shipping mail goes out once the order is fulfilled, by
+the merchant or from AliExpress's parcels: `tracking` is the parcel number when one
+was given, `tracking_url` the carrier's page only when the merchant gave one at
+fulfilment (the shop links to no tracking site of its own choosing; the order's page
+the mail links to shows the parcel's steps). Each is sent once
+per order, an hour at most after what
 prompted it (a node catching up on older events mails nobody), and the order's page
 in the back office says when each went out.
 
