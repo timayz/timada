@@ -118,7 +118,7 @@ async fn fulfilled_orders_are_found_by_when_they_left() {
     let paid = pay(&orders, &cart_with(&orders, &mug, 1).await, checkout()).await;
     let left = pay(&orders, &cart_with(&orders, &mug, 1).await, checkout()).await;
     orders
-        .fulfil_order(ALICE, &left.order_id, None)
+        .fulfil_order(ALICE, &left.order_id, None, None)
         .await
         .unwrap();
     read_model_subscription::<evento::Turso>(pool.clone())
@@ -330,7 +330,7 @@ async fn an_orders_row_carries_the_order_whole_with_its_mails_and_refused_return
         .await
         .unwrap();
     orders
-        .fulfil_order(ALICE, &placed.order_id, Some("6A1".to_owned()))
+        .fulfil_order(ALICE, &placed.order_id, Some("6A1".to_owned()), None)
         .await
         .unwrap();
     assert!(

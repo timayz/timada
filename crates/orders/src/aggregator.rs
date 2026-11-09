@@ -329,9 +329,12 @@ pub enum Order {
         supplier: String,
         ruled_out_by: String,
     },
-    /// The goods left; `tracking` is a parcel number or link, if any.
+    /// The goods left; `tracking` is the parcel number (several, joined
+    /// with `, `), if any, and `tracking_url` the carrier's page for it,
+    /// only when the merchant gave one: the shop links to no other site.
     Fulfilled {
         tracking: Option<String>,
+        tracking_url: Option<String>,
         fulfilled_by: String,
     },
     /// Final, once the money is settled: the hold released (written with

@@ -259,6 +259,7 @@ mod tests {
             })
             .event(&Fulfilled {
                 tracking: None,
+                tracking_url: None,
                 fulfilled_by: "user-alice".to_owned(),
             })
             .commit(store)

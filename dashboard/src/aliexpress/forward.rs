@@ -508,8 +508,10 @@ impl Aliexpress {
             return Ok(false);
         }
         let tracking = fit_tracking(&forward.tracking());
+        // No carrier page: Cainiao's would tell the shopper where the goods
+        // come from. The order's own shipment shows the parcel's steps.
         match orders
-            .fulfil_order(ALIEXPRESS_ACTOR, order_id, Some(tracking))
+            .fulfil_order(ALIEXPRESS_ACTOR, order_id, Some(tracking), None)
             .await
         {
             Ok(()) => {
@@ -692,8 +694,14 @@ impl Aliexpress {
             return Ok(CheckResult::Checked { fulfilled: false });
         }
         let tracking = fit_tracking(&after.tracking());
+        // No carrier page, as above.
         let finished = match orders
-            .fulfil_order(ALIEXPRESS_ACTOR, &forward.order_id, Some(tracking.clone()))
+            .fulfil_order(
+                ALIEXPRESS_ACTOR,
+                &forward.order_id,
+                Some(tracking.clone()),
+                None,
+            )
             .await
         {
             Ok(()) => done(true, Some(tracking)),
@@ -1431,6 +1439,8 @@ mod tests {
         let order = shop.order().await;
         assert_eq!(order.status, OrderStatus::Fulfilled);
         assert_eq!(order.tracking.as_deref(), Some("LP1, LP2"));
+        // Cainiao's page would name the supplier: none is given.
+        assert_eq!(order.tracking_url, None);
         let forward = shop.forward(&id).await;
         assert_eq!(forward.status, ForwardStatus::Done);
         assert_eq!(forward.tracking(), vec!["LP1", "LP2"]);
@@ -1511,7 +1521,7 @@ mod tests {
         let id = shop.placed(&["81"]).await;
         shop.ships("81", "LP1");
         shop.orders()
-            .fulfil_order("user-alice", ORDER, Some("HAND1".to_owned()))
+            .fulfil_order("user-alice", ORDER, Some("HAND1".to_owned()), None)
             .await
             .unwrap();
 
