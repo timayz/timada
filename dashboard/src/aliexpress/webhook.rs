@@ -34,6 +34,7 @@ use timada_aliexpress::{
 };
 
 use super::Aliexpress;
+use super::forward::CheckResult;
 use crate::db::Db;
 
 /// The cursor identity of [`pushes_subscription`], in the store.
@@ -117,6 +118,10 @@ pub(super) async fn check<E: evento::Executor + Clone>(
         .check_forward(&store, &tenant, &company, forward_id, closed, now)
         .await;
     timada_aliexpress::note_forward_read(db, tenant_id, forward_id, now).await?;
+    if let Ok(CheckResult::Checked { fulfilled: true }) = &read {
+        // Its parcels were asked about with the fulfilment.
+        timada_aliexpress::note_parcels_read(db, tenant_id, forward_id, now).await?;
+    }
     read?;
     Ok(())
 }
@@ -269,6 +274,7 @@ mod tests {
             sync_check_secs: 1,
             sync_every_secs: 1,
             order_read_every_secs: 86_400,
+            parcel_read_every_secs: 1,
             calls_per_day: 86_400,
             read_fresh_secs: 60,
         };

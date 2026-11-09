@@ -560,6 +560,10 @@ pub struct AliexpressConfig {
     /// catches a push that never came.
     #[serde(default = "default_aliexpress_order_read_every_secs")]
     pub order_read_every_secs: u64,
+    /// How long, in seconds, a parcel AliExpress shipped goes before AliExpress
+    /// is asked again where it is, for the order's page.
+    #[serde(default = "default_aliexpress_parcel_read_every_secs")]
+    pub parcel_read_every_secs: u64,
     /// How many calls a day the app may make, over every shop and node: read it
     /// on AliExpress's open platform. A sale always reads what it sells; the
     /// nodes spend what is left on the other products, the most useful first.
@@ -584,6 +588,10 @@ fn default_aliexpress_order_read_every_secs() -> u64 {
     24 * 60 * 60
 }
 
+fn default_aliexpress_parcel_read_every_secs() -> u64 {
+    6 * 60 * 60
+}
+
 fn default_aliexpress_calls_per_day() -> u64 {
     12_000
 }
@@ -602,6 +610,7 @@ impl Default for AliexpressConfig {
             sync_check_secs: default_aliexpress_check_secs(),
             sync_every_secs: default_aliexpress_every_secs(),
             order_read_every_secs: default_aliexpress_order_read_every_secs(),
+            parcel_read_every_secs: default_aliexpress_parcel_read_every_secs(),
             calls_per_day: default_aliexpress_calls_per_day(),
             read_fresh_secs: default_aliexpress_read_fresh_secs(),
         }

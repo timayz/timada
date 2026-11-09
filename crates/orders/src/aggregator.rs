@@ -4,7 +4,7 @@
 //! [`STOREFRONT_ACTOR`](crate::STOREFRONT_ACTOR), since a guest has no
 //! account to name.
 
-use crate::value_object::{OrderLine, Payment, ShippingAddress};
+use crate::value_object::{Checkpoint, OrderLine, Payment, ShippingAddress};
 
 /// What a shopper means to buy. Its id is a ULID the storefront keeps (a
 /// cookie, typically). A line is a product, or one variant of it, and a
@@ -410,6 +410,22 @@ pub enum Order {
     SettledOutside {
         note: Option<String>,
         settled_by: String,
+    },
+}
+
+/// Where an order's parcels are, as their carrier last said: one stream per
+/// order ([`shipment_id`](crate::shipment_id)), written by whoever follows the parcels (the
+/// dashboard's AliExpress sweep, for the parcels AliExpress shipped). The
+/// storefront shows it under the order. A read that finds the same steps
+/// writes nothing, so a stream grows with the parcel's journey, not with the
+/// reads.
+#[evento::aggregate(name = "timada-orders/Shipment")]
+pub enum Shipment {
+    /// The parcel `number`'s journey so far, whole, as last read.
+    ParcelTracked {
+        number: String,
+        checkpoints: Vec<Checkpoint>,
+        tracked_by: String,
     },
 }
 

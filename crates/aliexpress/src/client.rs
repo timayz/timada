@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha2::Sha256;
+use timada_orders::Checkpoint;
 
 use crate::address::AddressTree;
 use crate::forwarding::{choose_service, describe_options};
@@ -322,6 +323,57 @@ pub fn freight_from_response(body: &Value) -> Result<Vec<FreightOption>, AeError
     Ok(FreightOption::list_from_json(result))
 }
 
+/// What `aliexpress.logistics.ds.trackinginfo.query` is asked about: one
+/// parcel of one AliExpress order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParcelQuery {
+    /// The parcel number (`logistics_no`).
+    pub number: String,
+    /// The AliExpress order it belongs to (`out_ref`).
+    pub ae_order_id: String,
+    /// The delivery service the order was placed with (`service_name`,
+    /// `CAINIAO_STANDARD`).
+    pub service_name: String,
+    /// Where it goes: ISO 3166-1 alpha-2 (`to_area`).
+    pub country: String,
+}
+
+/// The steps of a parcel's journey in the answer to
+/// `aliexpress.logistics.ds.trackinginfo.query` (`details.details[]`, each
+/// an `event_date`, an `address` and an `event_desc`), oldest first as
+/// AliExpress lists them, or why there are none. The shapes follow ae_sdk,
+/// read leniently; a step with neither a date nor a description is dropped.
+pub fn parcel_events_from_response(body: &Value) -> Result<Vec<Checkpoint>, AeError> {
+    let response = body
+        .get("aliexpress_logistics_ds_trackinginfo_query_response")
+        .unwrap_or(body);
+    if response.get("result_success") == Some(&Value::Bool(false)) {
+        let code = response
+            .get("result_error")
+            .map(crate::model::text)
+            .filter(|code| !code.is_empty())
+            .unwrap_or_else(|| "tracking".to_owned());
+        let message = response
+            .get("error_desc")
+            .map(crate::model::text)
+            .unwrap_or_default();
+        return Err(AeError::new(code, message));
+    }
+    let steps = crate::model::list(response.get("details"))
+        .iter()
+        .filter_map(|step| {
+            let field = |name: &str| step.get(name).map(crate::model::text).unwrap_or_default();
+            let checkpoint = Checkpoint {
+                at: field("event_date"),
+                place: field("address"),
+                description: field("event_desc"),
+            };
+            (!checkpoint.at.is_empty() || !checkpoint.description.is_empty()).then_some(checkpoint)
+        })
+        .collect();
+    Ok(steps)
+}
+
 impl AeOrder {
     /// The order in the answer to `aliexpress.trade.ds.order.get`, or why
     /// there is none.
@@ -581,6 +633,23 @@ impl Client {
         AeOrder::from_response(&body)
     }
 
+    /// Where one parcel of an order the account placed is, step by step.
+    pub async fn parcel_events(&self, parcel: &ParcelQuery) -> Result<Vec<Checkpoint>, AeError> {
+        let body = self
+            .call(
+                "aliexpress.logistics.ds.trackinginfo.query",
+                vec![
+                    ("logistics_no", parcel.number.clone()),
+                    ("origin", "ESCROW".to_owned()),
+                    ("out_ref", parcel.ae_order_id.clone()),
+                    ("service_name", parcel.service_name.clone()),
+                    ("to_area", parcel.country.clone()),
+                ],
+            )
+            .await?;
+        parcel_events_from_response(&body)
+    }
+
     /// Signs and sends one call; the answer's body, or why there is none.
     async fn call(&self, method: &str, params: Vec<(&str, String)>) -> Result<Value, AeError> {
         self.call_within(method, params, None).await
@@ -676,5 +745,55 @@ impl Client {
             return Err(AeError::new(code, message));
         }
         Ok(body)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parcel_events_are_read_leniently_and_a_refusal_is_an_error() {
+        let body = serde_json::json!({
+            "aliexpress_logistics_ds_trackinginfo_query_response": {
+                "result_success": true,
+                "details": { "details": [
+                    { "event_desc": "Shipment accepted by carrier", "address": "Shenzhen", "event_date": "2026-11-08 10:12:00" },
+                    { "event_desc": "", "address": "", "event_date": "" },
+                    { "event_desc": "Departed from origin country", "event_date": "2026-11-09 08:00:00" },
+                ] },
+            },
+        });
+        let steps = parcel_events_from_response(&body).unwrap();
+        assert_eq!(
+            steps,
+            vec![
+                Checkpoint {
+                    at: "2026-11-08 10:12:00".into(),
+                    place: "Shenzhen".into(),
+                    description: "Shipment accepted by carrier".into(),
+                },
+                Checkpoint {
+                    at: "2026-11-09 08:00:00".into(),
+                    place: String::new(),
+                    description: "Departed from origin country".into(),
+                },
+            ]
+        );
+        // Nothing yet is no steps, not an error.
+        let empty = serde_json::json!({
+            "aliexpress_logistics_ds_trackinginfo_query_response": { "result_success": true },
+        });
+        assert_eq!(parcel_events_from_response(&empty).unwrap(), Vec::new());
+        let refused = serde_json::json!({
+            "aliexpress_logistics_ds_trackinginfo_query_response": {
+                "result_success": false,
+                "result_error": "NO_TRACKING",
+                "error_desc": "no such parcel",
+            },
+        });
+        let err = parcel_events_from_response(&refused).unwrap_err();
+        assert_eq!(err.code, "NO_TRACKING");
+        assert_eq!(err.message, "no such parcel");
     }
 }

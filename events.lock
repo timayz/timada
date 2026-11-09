@@ -247,6 +247,7 @@ event timada-orders/OrderReference::Claimed { order_id: String }
 event timada-orders/OrderReference::Released { released_by: String }
 event timada-orders/PaymentMethod::PaymentsDisabled { disabled_by: String }
 event timada-orders/PaymentMethod::PaymentsEnabled { provider: String, publishable_key: String, enabled_by: String }
+event timada-orders/Shipment::ParcelTracked { number: String, checkpoints: Vec<Checkpoint>, tracked_by: String }
 event timada-orders/ShippingMethods::MethodAdded { method_id: String, name: String, price_cents: u64, currency: String, countries: Vec<String>, free_above_cents: Option<u64>, added_by: String }
 event timada-orders/ShippingMethods::MethodChanged { method_id: String, name: String, price_cents: u64, currency: String, countries: Vec<String>, free_above_cents: Option<u64>, changed_by: String }
 event timada-orders/ShippingMethods::MethodRemoved { method_id: String, removed_by: String }
@@ -376,6 +377,7 @@ type timada_invoicing::value_object::InvoiceShipping { name: String, amount_cent
 type timada_invoicing::value_object::IssuedDocument { document_id: String, company_id: String, kind: DocumentKind, series: String, number: u64, label: String, issued_at: u64, order_id: String, order_reference: String, paid_at: Option<u64>, payment_method: Option<String>, invoice_document_id: Option<String>, invoice_label: Option<String>, refund_id: Option<String>, seller: Seller, buyer: Address, buyer_email: String, delivery: Option<Address>, currency: String, lines: Vec<InvoiceLine>, discount: Option<InvoiceDiscount>, shipping: Option<InvoiceShipping>, vat: Vec<VatSubtotal>, total_excl_vat_cents: u64, total_vat_cents: u64, total_cents: u64, template: u16, regime: Regime, tax_country: String, buyer_vat_number: Option<String>, vies_reference: Option<String>, eu_distance_sales_cents: u64, eu_threshold_passed: bool, euro_rate: Option<ExchangeRate>, total_vat_eur_cents: Option<u64> }
 type timada_invoicing::value_object::Seller { address: Address, legal_form: String, share_capital_cents: Option<u64>, siret: String, rcs_city: Option<String>, contact_email: String, vat_number: Option<String> }
 type timada_invoicing::value_object::VatSubtotal { rate_bps: u32, base_cents: u64, vat_cents: u64 }
+type timada_orders::value_object::Checkpoint { at: String, place: String, description: String }
 type timada_orders::value_object::OrderLine { product_id: String, variant_id: Option<String>, name: String, variant_label: Option<String>, sku: Option<String>, unit_amount_cents: u64, quantity: u32, tax_category: String, delivery_days: Option<timada_catalog::DeliveryDays> }
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String, capture_before: Option<u64> }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, region: Option<String>, country: String, phone: Option<String> }

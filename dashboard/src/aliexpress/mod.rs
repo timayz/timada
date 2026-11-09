@@ -58,6 +58,9 @@ pub struct Aliexpress {
     read_fresh_secs: u64,
     /// How long an open order goes unread before it is read again, in seconds.
     order_read_every_secs: u64,
+    /// How long a shipped parcel goes before AliExpress is asked again where
+    /// it is, in seconds.
+    parcel_read_every_secs: u64,
     /// What the app may spend, and what this node spent.
     budget: CallBudget,
     /// Which of the nodes up this one is, at the moment of asking.
@@ -122,6 +125,7 @@ impl Aliexpress {
             sync_every_secs: config.sync_every_secs.max(1),
             read_fresh_secs: config.read_fresh_secs,
             order_read_every_secs: config.order_read_every_secs.max(1),
+            parcel_read_every_secs: config.parcel_read_every_secs.max(1),
             budget: CallBudget::new(config.calls_per_day),
             share,
             push_reads: tokio::sync::Semaphore::new(PUSH_READS),
@@ -161,6 +165,12 @@ impl Aliexpress {
     /// How long an open order goes unread before it is read again, in seconds.
     pub fn order_read_every_secs(&self) -> u64 {
         self.order_read_every_secs
+    }
+
+    /// How long a shipped parcel goes before AliExpress is asked again where
+    /// it is, in seconds.
+    pub fn parcel_read_every_secs(&self) -> u64 {
+        self.parcel_read_every_secs
     }
 
     /// What the app may spend, and what this node spent.

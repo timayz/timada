@@ -274,6 +274,7 @@ impl Shop {
                 sync_check_secs: 3600,
                 sync_every_secs: 3600,
                 order_read_every_secs: 86_400,
+                parcel_read_every_secs: 1,
                 calls_per_day: 86_400_000,
                 read_fresh_secs: 60,
             },

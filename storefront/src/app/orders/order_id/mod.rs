@@ -10,8 +10,8 @@ pub mod revise;
 
 use timada_storefront::{
     DocumentKind, MAX_BODY_LEN, MAX_PHOTOS, MAX_TITLE_LEN, OrderStatus, ReviewState, ReviewStatus,
-    documents as order_documents, format_amount_fr, menu, order, picture_url, review_of, stars,
-    store,
+    documents as order_documents, format_amount_fr, menu, order, parcels, picture_url, review_of,
+    stars, store,
 };
 use topcoat::{
     Result,
@@ -126,6 +126,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<OrderQuery>(cx)?;
     let nav = menu(cx).await?;
     let documents = order_documents(cx, order_id).await?;
+    // Where the parcels are, once the shop's supplier has told.
+    let parcels = if order.status == OrderStatus::Fulfilled {
+        parcels(cx, order_id).await?
+    } else {
+        Vec::new()
+    };
     // One review per product of the order, whatever variants of it it holds;
     // none before it is paid, for a cancelled order or a shop that takes no
     // reviews.
@@ -208,6 +214,20 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <span data-order-tracking="">(tracking)</span>
                         }
                     </p>
+                }
+                for parcel in parcels.iter().filter(|parcel| !parcel.checkpoints.is_empty()) {
+                    <section class="parcel" data-order-parcel=(&parcel.number)>
+                        <h2>"Colis " (&parcel.number)</h2>
+                        <ol class="parcel-steps">
+                            for step in parcel.checkpoints.iter().rev() {
+                                <li>
+                                    <time>(&step.at)</time>
+                                    " · " (&step.description)
+                                    if !step.place.is_empty() { " · " (&step.place) }
+                                </li>
+                            }
+                        </ol>
+                    </section>
                 }
                 <table class="cart" data-order="">
                     <tbody>

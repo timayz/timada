@@ -64,6 +64,23 @@ pub async fn note_forward_read(
     note_tried(db, tenant_id, forward_id, at).await
 }
 
+/// The forward's parcels were asked about at `at` (unix seconds), whether or
+/// not AliExpress answered: they wait for the next period. Kept under a key
+/// of their own (`parcels:<forward id>`), beside the forward's own reads.
+pub async fn note_parcels_read(
+    db: &Db,
+    tenant_id: &str,
+    forward_id: &str,
+    at: u64,
+) -> anyhow::Result<()> {
+    note_tried(db, tenant_id, &parcels_read_id(forward_id), at).await
+}
+
+/// The key the parcels of `forward_id` are followed under.
+pub fn parcels_read_id(forward_id: &str) -> String {
+    format!("parcels:{forward_id}")
+}
+
 /// The node no longer needs to know when it last read `id` (an item that
 /// is unlinked, an order no longer read again): its row goes. Nothing to
 /// drop is fine, and a read noted later makes a row again.

@@ -62,8 +62,8 @@ use timada_invoicing::tax;
 use timada_orders::wire::{CartAnswer, DiscountCode, Refusal, RequestAnswer, Started};
 use timada_orders::{CartItem, CartLine, Command, PAYMENT_EXPIRED, PaymentAnswer};
 pub use timada_orders::{
-    Checkout, OrderDiscount, OrderError, OrderLine, OrderShipping, OrderState, OrderStatus,
-    PAYMENTS_UNAVAILABLE, PaymentSetup, ReturnedPayment, ShippingAddress,
+    Checkout, Checkpoint, OrderDiscount, OrderError, OrderLine, OrderShipping, OrderState,
+    OrderStatus, PAYMENTS_UNAVAILABLE, ParcelState, PaymentSetup, ReturnedPayment, ShippingAddress,
 };
 
 use crate::context::store;
@@ -931,6 +931,24 @@ impl Store {
         self.fetch_order(&format!("orders/{order_id}")).await
     }
 
+    /// See [`parcels`].
+    pub async fn parcels(&self, order_id: &str) -> anyhow::Result<Vec<ParcelState>> {
+        match self
+            .cart_call(
+                reqwest::Method::GET,
+                &format!("orders/{order_id}/parcels"),
+                NO_BODY,
+            )
+            .await?
+            .parsed::<Vec<ParcelState>>()?
+        {
+            Some(Ok(parcels)) => Ok(parcels),
+            Some(Err(err)) => Err(err.into()),
+            // An order the shop has not has no parcels.
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// See [`cancel_order`].
     pub async fn cancel_order(&self, order_id: &str) -> anyhow::Result<Refusable<OrderState>> {
         match self
@@ -1114,6 +1132,13 @@ pub async fn cancel_order(cx: &Cx, order_id: &str) -> Result<Refusable<OrderStat
 /// typically).
 pub async fn order(cx: &Cx, order_id: &str) -> Result<Option<OrderState>> {
     store(cx).order(order_id).await.map_err(into_error)
+}
+
+/// Where the order's parcels are, as their carrier last said: empty until
+/// the dashboard has news of one (the parcels AliExpress ships are followed
+/// a few times a day).
+pub async fn parcels(cx: &Cx, order_id: &str) -> Result<Vec<ParcelState>> {
+    store(cx).parcels(order_id).await.map_err(into_error)
 }
 
 /// How the shop's shoppers pay (the provider and the merchant's public key),

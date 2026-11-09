@@ -249,6 +249,21 @@ pub async fn order(orders: &Command<Executor>, order_id: &str) -> anyhow::Result
     }
 }
 
+/// `GET /store/orders/{order_id}/parcels`: where the order's parcels are, as
+/// their carrier last said (a `Vec<ParcelState>`, empty until the first
+/// news); 404 for an order the tenant has not.
+pub async fn parcels(orders: &Command<Executor>, order_id: &str) -> anyhow::Result<Answer> {
+    if orders.load_order(order_id).await?.is_none() {
+        return Ok(not_found("order_not_found"));
+    }
+    let parcels = orders
+        .load_shipment(order_id)
+        .await?
+        .map(|shipment| shipment.parcels)
+        .unwrap_or_default();
+    ok(&parcels)
+}
+
 /// `GET /store/orders/{order_id}/documents`: the invoice of the order, then
 /// the credit notes of its refunds, as far as the dashboard has issued them
 /// (a `Vec<IssuedDocument>`, empty for an order just placed); 404 for an
