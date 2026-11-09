@@ -165,6 +165,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             order.is_paid() && order.settled_outside.is_none(),
         ),
         (
+            ShopMailKind::OrderShipped,
+            "Shipping mail",
+            order.status == OrderStatus::Fulfilled,
+        ),
+        (
             ShopMailKind::OrderCancelled,
             "Cancellation mail",
             order.status == OrderStatus::Cancelled,

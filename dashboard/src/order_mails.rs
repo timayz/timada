@@ -1,8 +1,9 @@
 //! Mails the shopper of every order, under the shop's name, with a link to
 //! the order on the shop's storefront when the merchant said where it
 //! lives: its confirmation once placed, the payment taken once its invoice
-//! is issued (so the page it links to shows it), and its cancellation,
-//! saying whether money goes back.
+//! is issued (so the page it links to shows it), its shipment with the
+//! parcel number and where to follow it, and its cancellation, saying
+//! whether money goes back.
 //!
 //! A shop with no mail server of its own sends through the platform's. That
 //! server mails about the orders the checkout placed and no other: an order
@@ -19,12 +20,14 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use timada_invoicing::aggregator::InvoiceIssued;
-use timada_orders::aggregator::{Cancelled, Placed};
+use timada_orders::aggregator::{Cancelled, Fulfilled, Placed};
 use timada_tenancy::ShopMailKind;
 use topcoat::context::{AppContext, Cx, app_context};
 
 use crate::cluster::Executor as Store;
-use crate::mail::{send_order_cancelled, send_order_confirmation, send_order_paid};
+use crate::mail::{
+    send_order_cancelled, send_order_confirmation, send_order_paid, send_order_shipped,
+};
 use crate::payments::{OrderPayment, Payments};
 use crate::shop_mail::ShopMail;
 
@@ -67,6 +70,7 @@ pub fn subscription<E: Executor>(
         .data(TenantStore(store))
         .handler(on_placed())
         .handler(on_invoice_issued())
+        .handler(on_fulfilled())
         .handler(on_cancelled())
         // A saga: it follows the node's own region (the executor's default
         // routing key), so a region's nodes do its work and the other
@@ -99,6 +103,21 @@ async fn on_invoice_issued<E: Executor>(
         &event.tenant,
         &event.data.order_id,
         ShopMailKind::OrderPaid,
+        event.timestamp,
+    )
+    .await
+}
+
+#[evento::subscription]
+async fn on_fulfilled<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<Fulfilled>,
+) -> anyhow::Result<()> {
+    mail_order(
+        context,
+        &event.tenant,
+        &event.aggregate_id,
+        ShopMailKind::OrderShipped,
         event.timestamp,
     )
     .await
@@ -190,6 +209,7 @@ async fn mail_order<E: Executor>(
     let link = link.as_deref();
     let sent = match kind {
         ShopMailKind::OrderPaid => send_order_paid(&cx, &shop, &order, link).await,
+        ShopMailKind::OrderShipped => send_order_shipped(&cx, &shop, &order, link).await,
         ShopMailKind::OrderCancelled => send_order_cancelled(&cx, &shop, &order, link).await,
         _ => send_order_confirmation(&cx, &shop, &order, link).await,
     };
