@@ -10,9 +10,10 @@
 //! day before it lapses, whether or not its shops have anything imported,
 //! records what this node placed on AliExpress while the store refused the
 //! record, says of the orders of this node's share left being placed that
-//! AliExpress may have them, and reads the orders of this node's share placed
+//! AliExpress may have them, reads the orders of this node's share placed
 //! on AliExpress that no push came for in a while (see [`super::forward`],
-//! [`super::webhook`]).
+//! [`super::webhook`]), and asks where the parcels of the orders fulfilled
+//! from AliExpress are, for the shopper's order page.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,9 +21,9 @@ use std::time::Duration;
 
 use crate::db::Db;
 use timada_aliexpress::{
-    ALIEXPRESS_SUPPLIER, AliexpressError, FORWARD_STALL_SECS, ForwardRow, ForwardStatus,
-    forget_unrecorded, forwards_due, forwards_stalled, links_due, note_forward_read, note_tried,
-    note_unrecorded_try, unrecorded,
+    ALIEXPRESS_SUPPLIER, AliexpressError, FORWARD_STALL_SECS, FORWARD_WATCH_SECS, ForwardRow,
+    ForwardStatus, forget_unrecorded, forwards_due, forwards_stalled, links_due, note_forward_read,
+    note_parcels_read, note_tried, note_unrecorded_try, parcels_due, unrecorded,
 };
 use tokio::task::JoinHandle;
 
@@ -153,7 +154,55 @@ impl AliexpressSync {
         self.record_unrecorded().await?;
         self.settle_stalled(now).await?;
         self.check_forwards(now).await?;
+        self.follow_parcels(now).await?;
         Ok(())
+    }
+
+    /// Asks AliExpress where the parcels of this node's share of the orders
+    /// fulfilled from it are, those not asked about for
+    /// `parcel_read_every_secs`, for 60 days after the forward closed; how
+    /// many parcels had news.
+    pub async fn follow_parcels(&self, now: u64) -> anyhow::Result<usize> {
+        let before = now.saturating_sub(self.aliexpress.parcel_read_every_secs()) as i64;
+        let since = now.saturating_sub(FORWARD_WATCH_SECS) as i64;
+        let due = parcels_due(
+            &self.db,
+            before,
+            since,
+            self.aliexpress.share(),
+            SWEEP_LIMIT,
+        )
+        .await?;
+        let mut changed = 0;
+        for shop in due.chunk_by(|a, b| a.tenant_id == b.tenant_id) {
+            let tenant_id = &shop[0].tenant_id;
+            // A shop that cannot read is passed over until the next period,
+            // like one read.
+            let Some((tenant, company)) = self.aliexpress.connected_shop(tenant_id, now).await?
+            else {
+                for forward in shop {
+                    note_parcels_read(&self.db, tenant_id, &forward.id, now).await?;
+                }
+                continue;
+            };
+            for (index, forward) in shop.iter().enumerate() {
+                if index > 0 {
+                    tokio::time::sleep(PACE).await;
+                }
+                match self
+                    .aliexpress
+                    .follow_parcels(&self.store, &tenant, &company, &forward.id)
+                    .await
+                {
+                    Ok(count) => changed += count,
+                    Err(err) => {
+                        tracing::error!(tenant = %tenant_id, forward = %forward.id, error = %err, "AliExpress parcels not followed")
+                    }
+                }
+                note_parcels_read(&self.db, tenant_id, &forward.id, now).await?;
+            }
+        }
+        Ok(changed)
     }
 
     /// Records what this node placed on AliExpress while the store would not

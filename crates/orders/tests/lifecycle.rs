@@ -3,8 +3,8 @@ mod common;
 use common::*;
 use evento::ProjectionAggregate;
 use timada_orders::{
-    CancelPath, CaptureClaim, HOLD_EXPIRED_REASON, HOLD_MARGIN_SECS, HOLD_REMINDER_BEFORE_SECS,
-    HOLD_USUAL_SECS, OrderError, OrderStatus, Released, SupplierOrder,
+    CancelPath, CaptureClaim, Checkpoint, HOLD_EXPIRED_REASON, HOLD_MARGIN_SECS,
+    HOLD_REMINDER_BEFORE_SECS, HOLD_USUAL_SECS, OrderError, OrderStatus, Released, SupplierOrder,
 };
 
 async fn held(orders: &Orders, catalog: &Catalog) -> String {
@@ -1053,4 +1053,71 @@ async fn a_kept_open_order_is_settled_outside_timada() {
         matches!(refused, Err(OrderError::CancellationPending)),
         "{refused:?}"
     );
+}
+
+#[tokio::test]
+async fn a_parcel_journey_is_recorded_once_per_change() {
+    let (orders, catalog) = store().await;
+    let order_id = paid(&orders, &catalog).await;
+    let step = |at: &str, description: &str| Checkpoint {
+        at: at.to_owned(),
+        place: "Shenzhen".to_owned(),
+        description: description.to_owned(),
+    };
+
+    assert_eq!(orders.load_shipment(&order_id).await.unwrap(), None);
+    // Nothing known yet: no stream for it.
+    assert!(
+        !orders
+            .record_parcel_tracking(ALICE, &order_id, "LP1", Vec::new())
+            .await
+            .unwrap()
+    );
+    assert_eq!(orders.load_shipment(&order_id).await.unwrap(), None);
+    let blank = orders
+        .record_parcel_tracking(ALICE, &order_id, " ", Vec::new())
+        .await;
+    assert!(
+        matches!(blank, Err(OrderError::InvalidTracking)),
+        "{blank:?}"
+    );
+
+    let first = vec![step("2026-11-08 10:12:00", "Shipment accepted")];
+    assert!(
+        orders
+            .record_parcel_tracking(ALICE, &order_id, "LP1", first.clone())
+            .await
+            .unwrap()
+    );
+    // The same journey again writes nothing.
+    assert!(
+        !orders
+            .record_parcel_tracking(ALICE, &order_id, "LP1", first.clone())
+            .await
+            .unwrap()
+    );
+    let more = vec![
+        first[0].clone(),
+        step("2026-11-09 08:00:00", "Departed from origin country"),
+    ];
+    assert!(
+        orders
+            .record_parcel_tracking(ALICE, &order_id, "LP1", more.clone())
+            .await
+            .unwrap()
+    );
+    assert!(
+        orders
+            .record_parcel_tracking(ALICE, &order_id, "LP2", first.clone())
+            .await
+            .unwrap()
+    );
+
+    let shipment = orders.load_shipment(&order_id).await.unwrap().unwrap();
+    assert_eq!(shipment.parcels.len(), 2);
+    assert_eq!(shipment.parcels[0].number, "LP1");
+    assert_eq!(shipment.parcels[0].checkpoints, more);
+    assert_eq!(shipment.parcels[1].number, "LP2");
+    assert_eq!(shipment.parcels[1].checkpoints, first);
+    assert!(shipment.parcels[0].updated_at > 0);
 }

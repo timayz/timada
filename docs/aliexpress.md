@@ -398,6 +398,17 @@ there and its money was taken, the order is fulfilled with those numbers as its
 tracking, and Cainiao's page for them (`global.cainiao.com`, which follows every
 number an AliExpress order carries) as the link the shopper opens.
 
+The parcels are then followed for the shopper's order page: every
+`[aliexpress] parcel_read_every_secs` (six hours), the node whose share the forward
+is asks AliExpress where each parcel is (`aliexpress.logistics.ds.trackinginfo.query`,
+one call per parcel) and records the steps it names on the order's shipment
+(`timada-orders/Shipment`, one stream per order) when they changed; the storefront
+lists them under the order, latest first, and the dashboard answers them to it over
+`GET /store/orders/{order_id}/parcels`. A parcel is followed for 60 days after its
+forward closed, as long as an order is read: four calls a day per parcel in flight,
+out of the app's budget. A parcel AliExpress will not tell of is logged and the
+others still followed.
+
 AliExpress may close an order without shipping it: its push says `OrderClosed`, which
 stands even when the order cannot be read, and a read showing `FINISH` with no parcel
 ever known says the same (that read-side rule awaits the real-app test, #253). Once
@@ -434,6 +445,9 @@ fulfilled with, whether AliExpress answers or not.
   AliExpress: the request, the claim, what was bought and the AliExpress orders, each
   read that changed something, and the end. The `aliexpress_forwards` read model
   lists the ones the sweep still reads, and those left being placed.
+- **Tenant store (`timada-orders/Shipment`).** One stream per order fulfilled from
+  AliExpress, written by the sweep: each parcel's journey as AliExpress last told it
+  (`ParcelTracked`), for the shopper's order page.
 - **Platform store (`timada-aliexpress/AeOrder`).** One stream per order AliExpress
   holds for a company's account, by its AliExpress number: the forward that placed it
   (`Claimed`, with its tenant) and every push for it (`Pushed`). A push names nothing

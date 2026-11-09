@@ -933,6 +933,18 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
         timeout: 1000,
       });
     }).toPass({ timeout: 15_000 });
+    // The sweep asks AliExpress where the parcel is, and the shopper's order
+    // page lists its steps, latest first.
+    const secondId = second.split("/").at(-1)!;
+    await expect(async () => {
+      await page.goto(`${app.url}/orders/${secondId}`);
+      await expect(page.locator('[data-order-parcel="LP00123456FR"]')).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    const steps = page.locator('[data-order-parcel="LP00123456FR"] li');
+    await expect(steps).toHaveCount(2);
+    await expect(steps.first()).toContainText("Departed from origin country");
+    await expect(steps.first()).toContainText("Shenzhen");
+    expect(aliexpress.parcelReads()).toBeGreaterThan(0);
 
     // AliExpress closes a third order without shipping it, and pushes so:
     // nothing will come, so the shop's order is cancelled and the money it

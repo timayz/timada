@@ -269,6 +269,7 @@ mod tests {
             sync_check_secs: 1,
             sync_every_secs: 1,
             order_read_every_secs: 86_400,
+            parcel_read_every_secs: 1,
             calls_per_day: 86_400,
             read_fresh_secs: 60,
         };

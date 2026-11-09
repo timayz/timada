@@ -132,6 +132,11 @@ export class FakeAliexpress {
     return this.calls.filter((call) => call === "aliexpress.trade.ds.order.get").length;
   }
 
+  /// How many times a parcel was asked about (`aliexpress.logistics.ds.trackinginfo.query`).
+  parcelReads(): number {
+    return this.calls.filter((call) => call === "aliexpress.logistics.ds.trackinginfo.query").length;
+  }
+
   private handle(req: http.IncomingMessage, res: http.ServerResponse) {
     const url = new URL(req.url ?? "/", ALIEXPRESS_URL);
     const json = (body: unknown) => {
@@ -267,6 +272,25 @@ export class FakeAliexpress {
               : {},
           },
         },
+      });
+      return;
+    }
+    if (method === "aliexpress.logistics.ds.trackinginfo.query") {
+      // Every parcel shipped has left China; the steps are the same for all.
+      const number = url.searchParams.get("logistics_no") ?? "";
+      const shipped = this.orders.some((placed) => placed.tracking === number);
+      json({
+        aliexpress_logistics_ds_trackinginfo_query_response: shipped
+          ? {
+              result_success: true,
+              details: {
+                details: [
+                  { event_desc: "Shipment accepted by carrier", address: "Shenzhen", event_date: "2026-11-08 10:12:00" },
+                  { event_desc: "Departed from origin country", address: "Shenzhen", event_date: "2026-11-09 08:00:00" },
+                ],
+              },
+            }
+          : { result_success: false, result_error: "NO_TRACKING", error_desc: "no such parcel" },
       });
       return;
     }
