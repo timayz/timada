@@ -920,11 +920,8 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     expect(malformed.status()).toBe(400);
     await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "fulfilled");
     await expect(page.locator("[data-order-tracking]")).toHaveText("LP00123456FR");
-    // The number opens Cainiao's page, which follows every AliExpress parcel.
-    await expect(page.locator("[data-order-tracking] a")).toHaveAttribute(
-      "href",
-      "https://global.cainiao.com/newDetail.htm?mailNoList=LP00123456FR",
-    );
+    // No carrier page: Cainiao's would name the supplier.
+    await expect(page.locator("[data-order-tracking] a")).toHaveCount(0);
     await expect(page.locator("[data-order-aliexpress-tracking]")).toHaveText("LP00123456FR");
 
     // AliExpress closes a third order without shipping it, and pushes so:

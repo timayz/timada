@@ -402,8 +402,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     if let Some(at) = order.fulfilled_at {
                         fact(term: "Fulfilled", <time datetime=(at)>(format_time(at))</time>)
                     }
-                    if let (Some(tracking), Some(link)) = (&order.tracking, order.tracking_link()) {
-                        fact(term: "Tracking", attrs: attributes! { data-order-tracking="" }, <a class=(LINK) href=(link) rel="noopener" target="_blank">(tracking)</a>)
+                    if let Some(tracking) = &order.tracking {
+                        fact(term: "Tracking", attrs: attributes! { data-order-tracking="" },
+                            if let Some(link) = &order.tracking_url {
+                                <a class=(LINK) href=(link) rel="noopener" target="_blank">(tracking)</a>
+                            } else {
+                                (tracking)
+                            }
+                        )
                     }
                     if let Some(at) = order.cancelled_at {
                         fact(term: "Cancelled", <time datetime=(at)>(format_time(at))</time>)
@@ -646,7 +652,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 field(
                                     field_label(attrs: attributes! { for="order-tracking-url" }, "Tracking link (optional)")
                                     input(attrs: attributes! { id="order-tracking-url" name="tracking_url" type="url" placeholder="https://" maxlength=(MAX_TRACKING_URL_LEN) })
-                                    <p class="text-sm text-muted-foreground">"The carrier's page for the parcel. Without one, the shopper follows the number on 17TRACK."</p>
+                                    <p class="text-sm text-muted-foreground">"The carrier's page for this parcel, if you want the shopper to open it. The order page shows the number either way."</p>
                                 )
                                 <div>
                                     button(attrs: attributes! { type="submit" }, "Mark as fulfilled")

@@ -186,8 +186,9 @@ CLI and an internet connection.
 6. **Check the merchant's side.**
    - `/t/<slug>/orders` lists the order as Paid (Authorized for goods a supplier buys:
      *Take the payment* takes it).
-   - *Mark as fulfilled* takes an optional tracking number and the carrier's page for
-     it; without the page, the number links to 17TRACK on the order's pages.
+   - *Mark as fulfilled* takes an optional tracking number and, if the merchant wants the
+     shopper to open it, the carrier's page for it; the order's pages show the number
+     either way and link nowhere else.
    - *Cancel and refund* refunds a paid order; the refund shows in Stripe's test
      dashboard under Payments. *Cancel and release the hold* cancels an order whose
      money is only held: Stripe shows the payment cancelled, nothing taken.

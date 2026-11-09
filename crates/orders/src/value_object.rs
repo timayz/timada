@@ -425,39 +425,6 @@ pub fn normalize_tracking_url(url: Option<&str>) -> Result<Option<String>, Order
     }
 }
 
-/// Where a parcel is followed: `tracking_url` when the carrier's page is
-/// known, else 17TRACK, which takes any carrier's number, with every number
-/// of `tracking` (joined with `, `, as the order holds them).
-pub fn tracking_link(tracking: &str, tracking_url: Option<&str>) -> String {
-    if let Some(url) = tracking_url {
-        return url.to_owned();
-    }
-    let numbers: Vec<String> = tracking
-        .split(',')
-        .map(str::trim)
-        .filter(|number| !number.is_empty())
-        .map(url_encode)
-        .collect();
-    format!("{UNIVERSAL_TRACKING_URL}{}", numbers.join(","))
-}
-
-/// The site any parcel number is followed on, before its numbers.
-pub const UNIVERSAL_TRACKING_URL: &str = "https://t.17track.net/en#nums=";
-
-/// `text` as a query value: letters, digits and `-_.~` as they are, the rest
-/// percent-encoded.
-fn url_encode(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
-
 /// A cancellation needs a reason.
 pub fn normalize_reason(reason: &str) -> Result<String, OrderError> {
     optional_text(Some(reason), MAX_REASON_LEN, OrderError::InvalidReason)?
@@ -558,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tracking_link_is_the_carrier_page_or_a_universal_one() {
+    fn a_tracking_link_is_an_http_address() {
         assert_eq!(
             normalize_tracking_url(Some(
                 " https://global.cainiao.com/newDetail.htm?mailNoList=LP1 "
@@ -570,18 +537,5 @@ mod tests {
         assert_eq!(normalize_tracking_url(Some("")).unwrap(), None);
         assert!(normalize_tracking_url(Some("global.cainiao.com")).is_err());
         assert!(normalize_tracking_url(Some(&format!("https://{}", "a".repeat(500)))).is_err());
-
-        assert_eq!(
-            tracking_link("LP1, LP2", None),
-            "https://t.17track.net/en#nums=LP1,LP2"
-        );
-        assert_eq!(
-            tracking_link("6A 123/4", None),
-            "https://t.17track.net/en#nums=6A%20123%2F4"
-        );
-        assert_eq!(
-            tracking_link("LP1", Some("https://carrier.example/LP1")),
-            "https://carrier.example/LP1"
-        );
     }
 }

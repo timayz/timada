@@ -24,8 +24,6 @@ async fn a_paid_order_is_fulfilled() {
     let (orders, catalog) = store().await;
     let order_id = paid(&orders, &catalog).await;
 
-    let early_link = orders.load_order(&order_id).await.unwrap().unwrap();
-    assert_eq!(early_link.tracking_link(), None);
     let bad_link = orders
         .fulfil_order(
             ALICE,
@@ -57,10 +55,6 @@ async fn a_paid_order_is_fulfilled() {
     assert_eq!(order.tracking.as_deref(), Some("6A123"));
     assert_eq!(
         order.tracking_url.as_deref(),
-        Some("https://carrier.example/6A123")
-    );
-    assert_eq!(
-        order.tracking_link().as_deref(),
         Some("https://carrier.example/6A123")
     );
     assert!(order.fulfilled_at.is_some());

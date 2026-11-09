@@ -38,7 +38,7 @@ use crate::aggregator::{
     SupplierOrderRuledOut, SupplierOrderStarted, SupplierOrderUncertain, TimeZoneGiven,
     TimeZoneSet,
 };
-use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id, tracking_link};
+use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor> {
@@ -953,7 +953,10 @@ pub struct OrderState {
     pub status: OrderStatus,
     /// The parcel number(s), as `Fulfilled` gave them.
     pub tracking: Option<String>,
-    /// The carrier's page for the parcel, when whoever fulfilled knew it.
+    /// The carrier's page for the parcel, when the merchant gave one. The
+    /// shop shows no other: a parcel's own steps are the order's
+    /// (`Shipment`), and a carrier's page would tell where the goods come
+    /// from.
     pub tracking_url: Option<String>,
     pub cancel_reason: Option<String>,
     /// Unix seconds of `Placed`.
@@ -1045,14 +1048,6 @@ impl OrderState {
     /// it: cancels it, or says the money came in outside timada.
     pub fn is_kept_open(&self) -> bool {
         self.status == OrderStatus::Authorized && self.released_at.is_some() && !self.is_paid()
-    }
-
-    /// Where the shopper follows the parcel: the carrier's page when it was
-    /// given, else a universal tracking site with the number. `None` until
-    /// the order left, or when it left with no number.
-    pub fn tracking_link(&self) -> Option<String> {
-        let tracking = self.tracking.as_deref()?;
-        Some(tracking_link(tracking, self.tracking_url.as_deref()))
     }
 
     /// Whether it went as far as it goes: fulfilled or cancelled.
