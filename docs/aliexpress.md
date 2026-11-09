@@ -356,7 +356,8 @@ AliExpress cannot reach a laptop, so `make aliexpress.tunnel` opens an ngrok tun
 to the dev server (`make dev`, port 3000), as `make stripe.listen` does for Stripe.
 The dev shell has ngrok; `ngrok config add-authtoken <token>` once, with the token of
 a free ngrok account. Claim the account's free static domain in ngrok's dashboard and
-run the tunnel with `NGROK_URL=https://<that domain>`, so the address outlives a
+put it in `config/ngrok.local.env` as `NGROK_URL=https://<that domain>` (git ignores
+the file; `NGROK_URL` in the environment wins over it), so the address outlives a
 restart; then register `https://<that domain>/aliexpress/webhook` as the app's
 message push callback in the App Console, with `DROPSHIPPER_ORDER_STATUS_UPDATE`
 ticked. ngrok's inspector at http://127.0.0.1:4040 shows every push with its answer
