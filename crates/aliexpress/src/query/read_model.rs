@@ -196,6 +196,12 @@ pub async fn upsert_forward(
     .await?;
     if matches!(forward.status, ForwardStatus::Done | ForwardStatus::Failed) {
         super::read_times::forget(db, tenant_id, &forward.id).await?;
+        super::read_times::forget(
+            db,
+            tenant_id,
+            &super::read_times::parcels_read_id(&forward.id),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -274,6 +280,34 @@ pub async fn forwards_due(
          JOIN due ON due.tenant_id = f.tenant_id AND due.id = f.id
          ORDER BY f.tenant_id, due.last_read_at, f.id",
         (before, limit, share.of as i64, share.index as i64),
+    )
+    .await
+}
+
+/// The forwards of every shop that `share` holds whose order was fulfilled
+/// with AliExpress's parcels and closed since `since` (unix seconds), whose
+/// parcels this node last followed before `before`: what the sweep asks
+/// AliExpress where the parcels are. Followed from when the forward closed
+/// (its last change), for as long as an order is read, so a parcel that
+/// takes its time is followed to the door and one AliExpress stopped
+/// telling of is let go. Grouped by tenant, the longest unfollowed first.
+pub async fn parcels_due(
+    db: &Db,
+    before: i64,
+    since: i64,
+    share: Share,
+    limit: i64,
+) -> anyhow::Result<Vec<ForwardRow>> {
+    db.fetch_all(
+        "SELECT f.tenant_id, f.id, f.order_id, f.status, f.ae_order_ids, f.tracking,
+            f.last_error, f.placed_at, f.updated_at
+         FROM aliexpress_forwards f
+         LEFT JOIN aliexpress_read_times r
+            ON r.tenant_id = f.tenant_id AND r.id = 'parcels:' || f.id
+         WHERE f.status = 'done' AND f.tracking != '' AND f.updated_at >= ?2
+            AND COALESCE(r.tried_at, 0) < ?1 AND f.shard % ?4 = ?5
+         ORDER BY f.tenant_id, COALESCE(r.tried_at, 0), f.id LIMIT ?3",
+        (before, since, limit, share.of as i64, share.index as i64),
     )
     .await
 }

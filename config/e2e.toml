@@ -71,6 +71,7 @@ api_url = "http://127.0.0.1:12114"
 authorize_url = "http://127.0.0.1:12114/oauth/authorize"
 sync_check_secs = 2
 sync_every_secs = 3
+parcel_read_every_secs = 1
 calls_per_day = 8640000
 read_fresh_secs = 0
 

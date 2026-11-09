@@ -62,6 +62,29 @@ pub struct ShippingAddress {
     pub phone: Option<String>,
 }
 
+/// One step of a parcel's journey, as the carrier words it. Frozen in
+/// `events.lock`: the fields never change.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub struct Checkpoint {
+    /// When, as the carrier gives it (`2026-11-09 08:00:00`): its clock and
+    /// its wording, kept as they came.
+    pub at: String,
+    /// Where, when the carrier says (`Shenzhen`).
+    pub place: String,
+    /// What happened (`Departed from origin country`).
+    pub description: String,
+}
+
 /// One line of an order, as it was sold. Frozen in `events.lock`: the fields
 /// never change.
 #[derive(
@@ -199,6 +222,11 @@ pub fn payment_method_id() -> String {
 /// The stream of whether the tenant sells to businesses: one per tenant store.
 pub fn business_buyers_id() -> String {
     evento::hash_ids(vec!["business-buyers"])
+}
+
+/// The stream of where an order's parcels are: one per order, from its id.
+pub fn shipment_id(order_id: &str) -> String {
+    evento::hash_ids(vec!["shipment", order_id])
 }
 
 /// The stream of how the tenant ships: one per tenant store.

@@ -1,10 +1,12 @@
 //! `GET /store/orders/{order_id}`: the order (an `OrderState`), or 404
 //! `{"error": "order_not_found"}` for an id the tenant has no order under,
 //! another tenant's included. `documents` answers its invoice and credit
-//! notes; `cancel` is the shopper cancelling it.
+//! notes, `parcels` where its parcels are; `cancel` is the shopper
+//! cancelling it.
 
 pub mod cancel;
 pub mod documents;
+pub mod parcels;
 
 use topcoat::{
     Result,

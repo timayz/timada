@@ -11,6 +11,7 @@ mod checkout;
 mod confirmation;
 mod lifecycle;
 mod payment_method;
+mod shipment;
 mod shipping;
 mod storefront;
 
@@ -21,6 +22,7 @@ pub use cart::*;
 pub use checkout::*;
 pub use lifecycle::*;
 pub use payment_method::*;
+pub use shipment::*;
 
 use evento::{Executor, Projection, metadata::Event};
 
