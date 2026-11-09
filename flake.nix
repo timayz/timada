@@ -1,5 +1,5 @@
 {
-  description = "Timada's development shell: the Rust toolchain, Playwright, the Stripe CLI, Tailwind and mkcert";
+  description = "Timada's development shell: the Rust toolchain, Playwright, the Stripe CLI, ngrok, Tailwind and mkcert";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -14,6 +14,9 @@
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
           inherit system overlays;
+          # ngrok (`make aliexpress.tunnel`) ships under its own licence; nothing
+          # else unfree gets in.
+          config.allowUnfreePredicate = pkg: builtins.elem (nixpkgs.lib.getName pkg) [ "ngrok" ];
         };
         pkgs-unstable = import nixpkgs-unstable {
           inherit system;
@@ -45,6 +48,7 @@
             cargo-watch
             cargo-machete
             stripe-cli
+            ngrok
             tailwindcss_4
             nodejs_24 # `npx prettier` on the Playwright specs
             pkgs-unstable.playwright-test
