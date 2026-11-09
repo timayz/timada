@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<body>
+{% if shop.logo_url %}
+<p><img src="{{ shop.logo_url }}" alt="{{ shop.name }}" style="max-height: 64px; max-width: 240px;"></p>
+{% endif %}
+<p>Your order <strong>{{ order.reference }}</strong> at <strong>{{ shop.name }}</strong> is on its way.</p>
+{% if tracking %}
+<p>Parcel number: <strong>{{ tracking }}</strong></p>
+{% if tracking_url %}
+<p><a href="{{ tracking_url }}"{% if shop.accent %} style="color: {{ shop.accent }};"{% endif %}>Follow your parcel</a></p>
+{% endif %}
+{% endif %}
+<table cellpadding="4" style="border-collapse: collapse;">
+{% for line in order.lines %}
+  <tr>
+    <td>{{ line.name }}{% if line.variant %} · {{ line.variant }}{% endif %}</td>
+    <td>× {{ line.quantity }}</td>
+  </tr>
+{% endfor %}
+</table>
+<p>Delivered to<br>
+{{ order.shipping_address.name }}<br>
+{{ order.shipping_address.line1 }}<br>
+{% if order.shipping_address.line2 %}{{ order.shipping_address.line2 }}<br>{% endif %}
+{{ order.shipping_address.postal_code }} {{ order.shipping_address.city }}<br>
+{{ order.shipping_address.country }}</p>
+{% if link %}
+<p><a href="{{ link }}"{% if shop.accent %} style="color: {{ shop.accent }};"{% endif %}>View your order</a></p>
+{% endif %}
+{% if shop.footer %}
+<hr style="border: none; border-top: 1px solid #e5e7eb;">
+<p style="color: #6b7280; font-size: 12px; white-space: pre-line;">{{ shop.footer }}</p>
+{% endif %}
+</body>
+</html>

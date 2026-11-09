@@ -1,5 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
-import { registerWithEmail, uniqueEmail } from "./email";
+import {
+  mailCountOf,
+  mailTo,
+  registerWithEmail,
+  unescapeSlashes,
+  uniqueEmail,
+} from "./email";
 import { productTab } from "./forms";
 import {
   addToCart,
@@ -554,6 +560,11 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     await expect(page.locator("[data-order-address]")).toContainText(
       "Ada Lovelace",
     );
+    const shippedBefore = await mailCountOf(
+      request,
+      "ada@example.org",
+      "Shipped: your",
+    );
     await page.getByLabel("Tracking number (optional)").fill("6A12345");
     await page.getByRole("button", { name: "Mark as fulfilled" }).click();
     await expect(page.getByRole("status")).toContainText(
@@ -572,6 +583,23 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
       "href",
       "https://t.17track.net/en#nums=6A12345",
     );
+    // The shopper is mailed the shipment, with the number and that link.
+    const shipped = await mailTo(
+      request,
+      "ada@example.org",
+      "Shipped: your",
+      shippedBefore,
+    );
+    expect(shipped.html).toContain("6A12345");
+    expect(unescapeSlashes(shipped.html)).toContain(
+      "https://t.17track.net/en#nums=6A12345",
+    );
+    await expect(async () => {
+      await page.reload();
+      await expect(
+        page.locator('[data-order-mail="order_shipped"]'),
+      ).toHaveAttribute("data-mailed", "mailed", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
     await expect(
       page.getByRole("button", { name: "Cancel and refund" }),
     ).toHaveCount(0);

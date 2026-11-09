@@ -22,8 +22,8 @@ use timada_shoppers::CODE_TTL_SECS;
 use timada_tenancy::{
     AddressVars, AutomationCustomerVars, AutomationDiscountVars, AutomationOrderVars, DeliveryVars,
     DiscountVars, LineVars, MailVars, NewProductVars, NewsletterConfirmationVars, NewsletterVars,
-    OrderCancelledVars, OrderConfirmationVars, OrderPaidVars, OrderVars, RenderedMail,
-    ReviewOrderVars, ReviewRequestVars, ShippingMethodVars, ShopMailKind, ShopVars,
+    OrderCancelledVars, OrderConfirmationVars, OrderPaidVars, OrderShippedVars, OrderVars,
+    RenderedMail, ReviewOrderVars, ReviewRequestVars, ShippingMethodVars, ShopMailKind, ShopVars,
     ShopperCodeVars, TenantState, render, render_text,
 };
 
@@ -455,6 +455,24 @@ pub async fn send_order_cancelled(
     send_order_mail(cx, shop, order, &vars).await
 }
 
+/// Mails the shopper that their order left, with its parcel number and
+/// where to follow it when the fulfilment gave one.
+pub async fn send_order_shipped(
+    cx: &Cx,
+    shop: &TenantState,
+    order: &OrderState,
+    link: Option<&str>,
+) -> Result<()> {
+    let vars = MailVars::OrderShipped(Box::new(OrderShippedVars {
+        shop: shop_vars(cx, shop),
+        order: order_vars(order),
+        link: link.map(str::to_owned),
+        tracking: order.tracking.clone(),
+        tracking_url: order.tracking_link(),
+    }));
+    send_order_mail(cx, shop, order, &vars).await
+}
+
 /// Sends one of the order's mails to its shopper, in their language.
 async fn send_order_mail(
     cx: &Cx,
@@ -796,6 +814,49 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn the_shipping_mail_carries_the_number_and_where_to_follow_it() {
+        let transport = MemoryTransport::new();
+        let cx = CxTestBuilder::new()
+            .app_context(MailConfig::builder().transport(transport.clone()).build())
+            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .app_context(ShopMail::new(None, false))
+            .build();
+
+        let mut order = paid_order();
+        order.tracking = Some("LP1, LP2".to_owned());
+        send_order_shipped(&cx, &acme(), &order, Some("https://shop.example/orders/o1"))
+            .await
+            .unwrap();
+        order.tracking_url = Some("https://carrier.example/LP1".to_owned());
+        send_order_shipped(&cx, &acme(), &order, None)
+            .await
+            .unwrap();
+        order.tracking = None;
+        send_order_shipped(&cx, &acme(), &order, None)
+            .await
+            .unwrap();
+
+        let sent = transport.sent();
+        assert_eq!(sent.len(), 3);
+        assert_eq!(sent[0].subject(), "Shipped: your Acme Tea order K7Q4-MZP2");
+        let universal = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        for part in [
+            "LP1, LP2",
+            "t.17track.net",
+            "nums=3DLP1,LP2",
+            "shop.example/orders/o1",
+        ] {
+            assert!(universal.contains(part), "missing {part:?} in {universal}");
+        }
+        let carrier = String::from_utf8(sent[1].clone().formatted(&cx).unwrap()).unwrap();
+        assert!(carrier.contains("carrier.example/LP1"), "{carrier}");
+        assert!(!carrier.contains("17track"), "{carrier}");
+        let no_number = String::from_utf8(sent[2].clone().formatted(&cx).unwrap()).unwrap();
+        assert!(no_number.contains("is on its way"), "{no_number}");
+        assert!(!no_number.contains("Parcel number"), "{no_number}");
     }
 
     #[tokio::test]

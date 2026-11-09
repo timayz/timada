@@ -926,6 +926,13 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
       "https://global.cainiao.com/newDetail.htm?mailNoList=LP00123456FR",
     );
     await expect(page.locator("[data-order-aliexpress-tracking]")).toHaveText("LP00123456FR");
+    // The shopper is mailed the shipment (the page reads the read model, a moment behind).
+    await expect(async () => {
+      await page.reload();
+      await expect(page.locator('[data-order-mail="order_shipped"]')).toHaveAttribute("data-mailed", "mailed", {
+        timeout: 1000,
+      });
+    }).toPass({ timeout: 15_000 });
 
     // AliExpress closes a third order without shipping it, and pushes so:
     // nothing will come, so the shop's order is cancelled and the money it

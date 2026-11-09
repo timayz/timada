@@ -49,6 +49,8 @@ pub enum ShopMailKind {
     /// An order was cancelled, by anyone: the shopper is told whether
     /// money goes back or nothing was charged.
     OrderCancelled,
+    /// An order left: its parcel number and where to follow it.
+    OrderShipped,
     ReviewRequest,
     NewsletterConfirmation,
     /// A campaign of the shop's newsletter. Not one of [`ALL`](Self::ALL):
@@ -176,6 +178,17 @@ const REFUNDED: MailVariable = MailVariable {
                   charged. Check it with {% if refunded %}.",
 };
 
+const TRACKING_VARIABLES: [MailVariable; 2] = [
+    MailVariable {
+        name: "tracking",
+        description: "The parcel number, when the shop gave one. Check it with {% if tracking %}.",
+    },
+    MailVariable {
+        name: "tracking_url",
+        description: "The page that follows the parcel, when there is a number:                       <a href=\"{{ tracking_url }}\">.",
+    },
+];
+
 const REVIEW_REQUEST_VARIABLES: [MailVariable; 4] = [
     MailVariable {
         name: "order.reference",
@@ -239,11 +252,12 @@ const AUTOMATION_CUSTOMER_VARIABLES: [MailVariable; 2] =
     [AUTOMATION_UNSUBSCRIBE, AUTOMATION_DISCOUNT];
 
 impl ShopMailKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ShopperCode,
         Self::OrderConfirmation,
         Self::OrderPaid,
         Self::OrderCancelled,
+        Self::OrderShipped,
         Self::ReviewRequest,
         Self::NewsletterConfirmation,
     ];
@@ -255,6 +269,7 @@ impl ShopMailKind {
             Self::OrderConfirmation => "order_confirmation",
             Self::OrderPaid => "order_paid",
             Self::OrderCancelled => "order_cancelled",
+            Self::OrderShipped => "order_shipped",
             Self::ReviewRequest => "review_request",
             Self::NewsletterConfirmation => "newsletter_confirmation",
             Self::Newsletter => "newsletter",
@@ -273,6 +288,7 @@ impl ShopMailKind {
             Self::OrderConfirmation => "Order confirmation",
             Self::OrderPaid => "Payment taken",
             Self::OrderCancelled => "Order cancelled",
+            Self::OrderShipped => "Order shipped",
             Self::ReviewRequest => "Review request",
             Self::NewsletterConfirmation => "Newsletter confirmation",
             Self::Newsletter => "Newsletter",
@@ -289,6 +305,9 @@ impl ShopMailKind {
             Self::OrderCancelled => {
                 "Sent when an order is cancelled, saying whether money goes back."
             }
+            Self::OrderShipped => {
+                "Sent once an order leaves, with its parcel number and where to follow it."
+            }
             Self::ReviewRequest => "Sent after an order is fulfilled, asking for a review.",
             Self::NewsletterConfirmation => {
                 "Sent when a shopper asks for the shop's news, to confirm their address."
@@ -301,7 +320,7 @@ impl ShopMailKind {
 
     /// What the template may use: the shop's variables, then the mail's own.
     pub fn variables(self) -> Vec<MailVariable> {
-        let order_and = |extra: Option<&'static MailVariable>| -> Vec<MailVariable> {
+        let order_and = |extra: &[MailVariable]| -> Vec<MailVariable> {
             SHOP_VARIABLES
                 .iter()
                 .chain(&ORDER_VARIABLES)
@@ -311,9 +330,10 @@ impl ShopMailKind {
         };
         let own: &[MailVariable] = match self {
             Self::ShopperCode => &SHOPPER_CODE_VARIABLES,
-            Self::OrderConfirmation => return order_and(Some(&PAYMENT_HELD)),
-            Self::OrderPaid => return order_and(None),
-            Self::OrderCancelled => return order_and(Some(&REFUNDED)),
+            Self::OrderConfirmation => return order_and(&[PAYMENT_HELD]),
+            Self::OrderPaid => return order_and(&[]),
+            Self::OrderCancelled => return order_and(&[REFUNDED]),
+            Self::OrderShipped => return order_and(&TRACKING_VARIABLES),
             Self::ReviewRequest => &REVIEW_REQUEST_VARIABLES,
             Self::NewsletterConfirmation => &NEWSLETTER_CONFIRMATION_VARIABLES,
             Self::Newsletter => &NEWSLETTER_VARIABLES,
@@ -339,6 +359,7 @@ impl ShopMailKind {
             | Self::OrderCancelled
             | Self::ReviewRequest
             | Self::NewsletterConfirmation => &["link", "shop.logo_url"],
+            Self::OrderShipped => &["link", "tracking_url", "shop.logo_url"],
             Self::Newsletter => &[
                 "unsubscribe_url",
                 "shop.logo_url",
@@ -367,6 +388,7 @@ impl ShopMailKind {
             Self::OrderConfirmation
                 | Self::OrderPaid
                 | Self::OrderCancelled
+                | Self::OrderShipped
                 | Self::AutomationOrder
         ) {
             for field in ["code", "amount"] {
@@ -395,6 +417,7 @@ impl ShopMailKind {
                 "Payment received for your {{ shop.name }} order {{ order.reference }}"
             }
             Self::OrderCancelled => "Cancelled: your {{ shop.name }} order {{ order.reference }}",
+            Self::OrderShipped => "Shipped: your {{ shop.name }} order {{ order.reference }}",
             Self::ReviewRequest => "How was your {{ shop.name }} order {{ order.reference }}?",
             Self::NewsletterConfirmation => "Confirm your subscription to {{ shop.name }}'s news",
             Self::Newsletter => "News from {{ shop.name }}",
@@ -409,6 +432,7 @@ impl ShopMailKind {
             Self::OrderConfirmation => include_str!("mail_templates/order_confirmation.html"),
             Self::OrderPaid => include_str!("mail_templates/order_paid.html"),
             Self::OrderCancelled => include_str!("mail_templates/order_cancelled.html"),
+            Self::OrderShipped => include_str!("mail_templates/order_shipped.html"),
             Self::ReviewRequest => include_str!("mail_templates/review_request.html"),
             Self::NewsletterConfirmation => {
                 include_str!("mail_templates/newsletter_confirmation.html")
@@ -462,6 +486,15 @@ impl ShopMailKind {
                 order: sample_order(full),
                 link: full.then(|| "https://shop.example.com/orders/A1B2C3".to_owned()),
                 refunded: full,
+            })),
+            Self::OrderShipped => MailVars::OrderShipped(Box::new(OrderShippedVars {
+                shop,
+                order: sample_order(full),
+                link: full.then(|| "https://shop.example.com/orders/A1B2C3".to_owned()),
+                tracking: full.then(|| "LP00123456FR".to_owned()),
+                tracking_url: full.then(|| {
+                    "https://global.cainiao.com/newDetail.htm?mailNoList=LP00123456FR".to_owned()
+                }),
             })),
             Self::ReviewRequest => MailVars::ReviewRequest(ReviewRequestVars {
                 shop,
@@ -590,6 +623,7 @@ pub enum MailVars {
     OrderConfirmation(Box<OrderConfirmationVars>),
     OrderPaid(Box<OrderPaidVars>),
     OrderCancelled(Box<OrderCancelledVars>),
+    OrderShipped(Box<OrderShippedVars>),
     ReviewRequest(ReviewRequestVars),
     NewsletterConfirmation(NewsletterConfirmationVars),
     Newsletter(NewsletterVars),
@@ -605,6 +639,7 @@ impl MailVars {
             Self::OrderConfirmation(_) => ShopMailKind::OrderConfirmation,
             Self::OrderPaid(_) => ShopMailKind::OrderPaid,
             Self::OrderCancelled(_) => ShopMailKind::OrderCancelled,
+            Self::OrderShipped(_) => ShopMailKind::OrderShipped,
             Self::ReviewRequest(_) => ShopMailKind::ReviewRequest,
             Self::NewsletterConfirmation(_) => ShopMailKind::NewsletterConfirmation,
             Self::Newsletter(_) => ShopMailKind::Newsletter,
@@ -665,6 +700,17 @@ pub struct OrderCancelledVars {
     pub link: Option<String>,
     /// Money goes back to the shopper; otherwise nothing was charged.
     pub refunded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OrderShippedVars {
+    pub shop: ShopVars,
+    pub order: OrderVars,
+    pub link: Option<String>,
+    /// The parcel number(s), when the fulfilment gave one.
+    pub tracking: Option<String>,
+    /// Where the parcel is followed, when there is a number.
+    pub tracking_url: Option<String>,
 }
 
 /// An order, its amounts already worded with their currency.
@@ -1274,6 +1320,22 @@ mod tests {
         let released = render_sample(ShopMailKind::OrderCancelled, false);
         assert!(released.html.contains("Nothing was charged"));
         assert!(!released.html.contains("on its way back"));
+
+        let shipped = render_sample(ShopMailKind::OrderShipped, true);
+        assert_eq!(shipped.subject, "Shipped: your Chez Léa order A1B2C3");
+        assert!(shipped.html.contains("LP00123456FR"), "{}", shipped.html);
+        assert!(
+            shipped
+                .html
+                .contains("href=\"https:&#x2f;&#x2f;global.cainiao.com&#x2f;newDetail.htm?mailNoList=LP00123456FR\""),
+            "{}",
+            shipped.html
+        );
+        assert!(shipped.html.contains("Follow your parcel"));
+        let no_number = render_sample(ShopMailKind::OrderShipped, false);
+        assert!(no_number.html.contains("is on its way"));
+        assert!(!no_number.html.contains("Parcel number"));
+        assert!(!no_number.html.contains("Follow your parcel"));
     }
 
     #[test]
