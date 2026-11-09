@@ -24,15 +24,45 @@ async fn a_paid_order_is_fulfilled() {
     let (orders, catalog) = store().await;
     let order_id = paid(&orders, &catalog).await;
 
+    let early_link = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(early_link.tracking_link(), None);
+    let bad_link = orders
+        .fulfil_order(
+            ALICE,
+            &order_id,
+            Some("6A123".into()),
+            Some("not a link".into()),
+        )
+        .await;
+    assert!(
+        matches!(bad_link, Err(OrderError::InvalidTrackingUrl)),
+        "{bad_link:?}"
+    );
     orders
-        .fulfil_order(ALICE, &order_id, Some(" 6A123 ".into()))
+        .fulfil_order(
+            ALICE,
+            &order_id,
+            Some(" 6A123 ".into()),
+            Some(" https://carrier.example/6A123 ".into()),
+        )
         .await
         .unwrap();
-    orders.fulfil_order(ALICE, &order_id, None).await.unwrap();
+    orders
+        .fulfil_order(ALICE, &order_id, None, None)
+        .await
+        .unwrap();
 
     let order = orders.load_order(&order_id).await.unwrap().unwrap();
     assert_eq!(order.status, OrderStatus::Fulfilled);
     assert_eq!(order.tracking.as_deref(), Some("6A123"));
+    assert_eq!(
+        order.tracking_url.as_deref(),
+        Some("https://carrier.example/6A123")
+    );
+    assert_eq!(
+        order.tracking_link().as_deref(),
+        Some("https://carrier.example/6A123")
+    );
     assert!(order.fulfilled_at.is_some());
     assert_eq!(order.fulfilled_by.as_deref(), Some(ALICE));
     // The store API answers with this state: a member's id stays out of it.
@@ -63,7 +93,7 @@ async fn a_held_payment_is_taken_once() {
         matches!(refund, Err(OrderError::PaymentNotCaptured)),
         "{refund:?}"
     );
-    let early = orders.fulfil_order(ALICE, &order_id, None).await;
+    let early = orders.fulfil_order(ALICE, &order_id, None, None).await;
     assert!(
         matches!(early, Err(OrderError::PaymentNotCaptured)),
         "{early:?}"
@@ -172,7 +202,7 @@ async fn a_held_order_is_cancelled_by_releasing_its_hold() {
         matches!(taken, Err(OrderError::CancellationPending)),
         "{taken:?}"
     );
-    let shipped = orders.fulfil_order(ALICE, &order_id, None).await;
+    let shipped = orders.fulfil_order(ALICE, &order_id, None, None).await;
     assert!(shipped.is_err(), "{shipped:?}");
 
     orders
@@ -376,7 +406,7 @@ async fn a_paid_order_is_refunded_then_cancelled() {
         .await
         .unwrap();
     assert_eq!(path, CancelPath::Refund);
-    let shipped = orders.fulfil_order(ALICE, &order_id, None).await;
+    let shipped = orders.fulfil_order(ALICE, &order_id, None, None).await;
     assert!(
         matches!(shipped, Err(OrderError::CancellationPending)),
         "{shipped:?}"
@@ -434,12 +464,14 @@ async fn a_paid_order_is_refunded_then_cancelled() {
     // Nothing outstanding: nothing more to ask for.
     let spent = orders.request_refund(ALICE, &order_id, 1).await;
     assert!(matches!(spent, Err(OrderError::InvalidRefund)), "{spent:?}");
-    let fulfilled = orders.fulfil_order(ALICE, &order_id, None).await;
+    let fulfilled = orders.fulfil_order(ALICE, &order_id, None, None).await;
     assert!(
         matches!(fulfilled, Err(OrderError::OrderCancelled)),
         "{fulfilled:?}"
     );
-    let missing = orders.fulfil_order(ALICE, "no-such-order", None).await;
+    let missing = orders
+        .fulfil_order(ALICE, "no-such-order", None, None)
+        .await;
     assert!(
         matches!(missing, Err(OrderError::OrderNotFound)),
         "{missing:?}"
@@ -447,7 +479,7 @@ async fn a_paid_order_is_refunded_then_cancelled() {
 
     // An order that left is not refunded this way.
     let left = paid(&orders, &catalog).await;
-    orders.fulfil_order(ALICE, &left, None).await.unwrap();
+    orders.fulfil_order(ALICE, &left, None, None).await.unwrap();
     let late = orders.request_refund(ALICE, &left, 100).await;
     assert!(matches!(late, Err(OrderError::NotCancellable)), "{late:?}");
 }
@@ -687,7 +719,10 @@ async fn a_hold_about_to_lapse_is_not_ordered_from_the_supplier() {
         .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", lapses_at * 2)
         .await
         .unwrap();
-    orders.fulfil_order(ALICE, &order_id, None).await.unwrap();
+    orders
+        .fulfil_order(ALICE, &order_id, None, None)
+        .await
+        .unwrap();
     let left = orders
         .begin_supplier_order(DASHBOARD, &order_id, "aliexpress", 0)
         .await;
@@ -962,7 +997,7 @@ async fn a_kept_open_order_is_settled_outside_timada() {
     );
     // Paid: it leaves as any paid order, and may no longer be settled.
     orders
-        .fulfil_order(ALICE, &order_id, Some("LP1".into()))
+        .fulfil_order(ALICE, &order_id, Some("LP1".into()), None)
         .await
         .unwrap();
     let late = orders.settle_outside(ALICE, &order_id, None).await;

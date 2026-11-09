@@ -395,7 +395,8 @@ lower the setting.
 
 Once each order has its parcel number, every line of the shop's order was bought
 there and its money was taken, the order is fulfilled with those numbers as its
-tracking.
+tracking, and Cainiao's page for them (`global.cainiao.com`, which follows every
+number an AliExpress order carries) as the link the shopper opens.
 
 AliExpress may close an order without shipping it: its push says `OrderClosed`, which
 stands even when the order cannot be read, and a read showing `FINISH` with no parcel

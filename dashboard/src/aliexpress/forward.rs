@@ -25,8 +25,8 @@ use evento::{
 use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem, Requested};
 use timada_aliexpress::{
     ALIEXPRESS_SUPPLIER, AeError, AliexpressError, Client, ForwardStatus, LinkState, PlaceItem,
-    PlaceOrder, PlacedRecord, Placement, choose_service, delivery_country, describe_options,
-    forward_items, logistics_address,
+    PlaceOrder, PlacedRecord, Placement, cainiao_tracking_url, choose_service, delivery_country,
+    describe_options, forward_items, logistics_address,
 };
 use timada_orders::{OrderError, OrderLine, OrderStatus};
 use timada_tenancy::{CompanyState, TenantState};
@@ -507,9 +507,15 @@ impl Aliexpress {
         {
             return Ok(false);
         }
-        let tracking = fit_tracking(&forward.tracking());
+        let numbers = forward.tracking();
+        let tracking = fit_tracking(&numbers);
         match orders
-            .fulfil_order(ALIEXPRESS_ACTOR, order_id, Some(tracking))
+            .fulfil_order(
+                ALIEXPRESS_ACTOR,
+                order_id,
+                Some(tracking),
+                Some(cainiao_tracking_url(&numbers)),
+            )
             .await
         {
             Ok(()) => {
@@ -691,9 +697,15 @@ impl Aliexpress {
         if !after.complete || !after.all_shipped() || !paid {
             return Ok(CheckResult::Checked { fulfilled: false });
         }
-        let tracking = fit_tracking(&after.tracking());
+        let numbers = after.tracking();
+        let tracking = fit_tracking(&numbers);
         let finished = match orders
-            .fulfil_order(ALIEXPRESS_ACTOR, &forward.order_id, Some(tracking.clone()))
+            .fulfil_order(
+                ALIEXPRESS_ACTOR,
+                &forward.order_id,
+                Some(tracking.clone()),
+                Some(cainiao_tracking_url(&numbers)),
+            )
             .await
         {
             Ok(()) => done(true, Some(tracking)),
@@ -1431,6 +1443,10 @@ mod tests {
         let order = shop.order().await;
         assert_eq!(order.status, OrderStatus::Fulfilled);
         assert_eq!(order.tracking.as_deref(), Some("LP1, LP2"));
+        assert_eq!(
+            order.tracking_link().as_deref(),
+            Some("https://global.cainiao.com/newDetail.htm?mailNoList=LP1,LP2")
+        );
         let forward = shop.forward(&id).await;
         assert_eq!(forward.status, ForwardStatus::Done);
         assert_eq!(forward.tracking(), vec!["LP1", "LP2"]);
@@ -1511,7 +1527,7 @@ mod tests {
         let id = shop.placed(&["81"]).await;
         shop.ships("81", "LP1");
         shop.orders()
-            .fulfil_order("user-alice", ORDER, Some("HAND1".to_owned()))
+            .fulfil_order("user-alice", ORDER, Some("HAND1".to_owned()), None)
             .await
             .unwrap();
 

@@ -200,8 +200,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </form>
                     </details>
                 }
-                if let Some(tracking) = &order.tracking {
-                    <p>"Suivi : " (tracking)</p>
+                if let (Some(tracking), Some(link)) = (&order.tracking, order.tracking_link()) {
+                    <p>"Suivi du colis : " <a data-order-tracking="" href=(link) rel="noopener" target="_blank">(tracking)</a></p>
                 }
                 <table class="cart" data-order="">
                     <tbody>

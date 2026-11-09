@@ -38,7 +38,7 @@ use crate::aggregator::{
     SupplierOrderRuledOut, SupplierOrderStarted, SupplierOrderUncertain, TimeZoneGiven,
     TimeZoneSet,
 };
-use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
+use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id, tracking_link};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor> {
@@ -951,7 +951,10 @@ pub struct OrderState {
     /// already. Nothing else happens to the order until it is settled.
     pub pending_refund: Option<PendingRefund>,
     pub status: OrderStatus,
+    /// The parcel number(s), as `Fulfilled` gave them.
     pub tracking: Option<String>,
+    /// The carrier's page for the parcel, when whoever fulfilled knew it.
+    pub tracking_url: Option<String>,
     pub cancel_reason: Option<String>,
     /// Unix seconds of `Placed`.
     pub placed_at: u64,
@@ -1042,6 +1045,14 @@ impl OrderState {
     /// it: cancels it, or says the money came in outside timada.
     pub fn is_kept_open(&self) -> bool {
         self.status == OrderStatus::Authorized && self.released_at.is_some() && !self.is_paid()
+    }
+
+    /// Where the shopper follows the parcel: the carrier's page when it was
+    /// given, else a universal tracking site with the number. `None` until
+    /// the order left, or when it left with no number.
+    pub fn tracking_link(&self) -> Option<String> {
+        let tracking = self.tracking.as_deref()?;
+        Some(tracking_link(tracking, self.tracking_url.as_deref()))
     }
 
     /// Whether it went as far as it goes: fulfilled or cancelled.
@@ -1451,6 +1462,7 @@ async fn on_refund_requested(
 async fn on_fulfilled(event: Event<Fulfilled>, order: &mut OrderState) -> anyhow::Result<()> {
     order.status = OrderStatus::Fulfilled;
     order.tracking = event.data.tracking.to_owned();
+    order.tracking_url = event.data.tracking_url.to_owned();
     order.fulfilled_at = Some(event.timestamp);
     order.fulfilled_by = Some(event.data.fulfilled_by.to_owned());
     order.updated_at = event.timestamp;

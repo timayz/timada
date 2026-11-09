@@ -567,6 +567,11 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
         { timeout: 1000 },
       );
     }).toPass({ timeout: 15_000 });
+    // No carrier page given: the number is followed on a universal site.
+    await expect(page.locator("[data-order-tracking] a")).toHaveAttribute(
+      "href",
+      "https://t.17track.net/en#nums=6A12345",
+    );
     await expect(
       page.getByRole("button", { name: "Cancel and refund" }),
     ).toHaveCount(0);

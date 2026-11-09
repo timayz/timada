@@ -19,6 +19,8 @@ pub const MAX_CITY_LEN: usize = 100;
 pub const MAX_PHONE_LEN: usize = 30;
 pub const MAX_NOTE_LEN: usize = 1000;
 pub const MAX_TRACKING_LEN: usize = 200;
+/// The longest tracking link a fulfilment may give.
+pub const MAX_TRACKING_URL_LEN: usize = 500;
 pub const MAX_REASON_LEN: usize = 500;
 pub const MAX_SHIPPING_NAME_LEN: usize = 80;
 /// The most countries one shipping method lists.
@@ -413,6 +415,49 @@ pub fn normalize_tracking(tracking: Option<&str>) -> Result<Option<String>, Orde
     optional_text(tracking, MAX_TRACKING_LEN, OrderError::InvalidTracking)
 }
 
+/// The carrier's page for a parcel: an `http(s)` address, or nothing.
+pub fn normalize_tracking_url(url: Option<&str>) -> Result<Option<String>, OrderError> {
+    let url = optional_text(url, MAX_TRACKING_URL_LEN, OrderError::InvalidTrackingUrl)?;
+    match url {
+        Some(url) if url.starts_with("https://") || url.starts_with("http://") => Ok(Some(url)),
+        Some(_) => Err(OrderError::InvalidTrackingUrl),
+        None => Ok(None),
+    }
+}
+
+/// Where a parcel is followed: `tracking_url` when the carrier's page is
+/// known, else 17TRACK, which takes any carrier's number, with every number
+/// of `tracking` (joined with `, `, as the order holds them).
+pub fn tracking_link(tracking: &str, tracking_url: Option<&str>) -> String {
+    if let Some(url) = tracking_url {
+        return url.to_owned();
+    }
+    let numbers: Vec<String> = tracking
+        .split(',')
+        .map(str::trim)
+        .filter(|number| !number.is_empty())
+        .map(url_encode)
+        .collect();
+    format!("{UNIVERSAL_TRACKING_URL}{}", numbers.join(","))
+}
+
+/// The site any parcel number is followed on, before its numbers.
+pub const UNIVERSAL_TRACKING_URL: &str = "https://t.17track.net/en#nums=";
+
+/// `text` as a query value: letters, digits and `-_.~` as they are, the rest
+/// percent-encoded.
+fn url_encode(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-_.~".contains(&byte) {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
 /// A cancellation needs a reason.
 pub fn normalize_reason(reason: &str) -> Result<String, OrderError> {
     optional_text(Some(reason), MAX_REASON_LEN, OrderError::InvalidReason)?
@@ -510,5 +555,33 @@ mod tests {
         assert!(normalize_email("ada").is_err());
         assert!(normalize_reason("  ").is_err());
         assert_eq!(normalize_tracking(Some(" ")).unwrap(), None);
+    }
+
+    #[test]
+    fn a_tracking_link_is_the_carrier_page_or_a_universal_one() {
+        assert_eq!(
+            normalize_tracking_url(Some(
+                " https://global.cainiao.com/newDetail.htm?mailNoList=LP1 "
+            ))
+            .unwrap()
+            .as_deref(),
+            Some("https://global.cainiao.com/newDetail.htm?mailNoList=LP1")
+        );
+        assert_eq!(normalize_tracking_url(Some("")).unwrap(), None);
+        assert!(normalize_tracking_url(Some("global.cainiao.com")).is_err());
+        assert!(normalize_tracking_url(Some(&format!("https://{}", "a".repeat(500)))).is_err());
+
+        assert_eq!(
+            tracking_link("LP1, LP2", None),
+            "https://t.17track.net/en#nums=LP1,LP2"
+        );
+        assert_eq!(
+            tracking_link("6A 123/4", None),
+            "https://t.17track.net/en#nums=6A%20123%2F4"
+        );
+        assert_eq!(
+            tracking_link("LP1", Some("https://carrier.example/LP1")),
+            "https://carrier.example/LP1"
+        );
     }
 }

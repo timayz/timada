@@ -329,9 +329,14 @@ pub enum Order {
         supplier: String,
         ruled_out_by: String,
     },
-    /// The goods left; `tracking` is a parcel number or link, if any.
+    /// The goods left; `tracking` is the parcel number (several, joined
+    /// with `, `), if any, and `tracking_url` the page that follows the
+    /// parcel, when whoever fulfilled knew it (the carrier's). Without one,
+    /// the number is followed on a universal tracking site
+    /// ([`OrderState::tracking_link`](crate::OrderState::tracking_link)).
     Fulfilled {
         tracking: Option<String>,
+        tracking_url: Option<String>,
         fulfilled_by: String,
     },
     /// Final, once the money is settled: the hold released (written with

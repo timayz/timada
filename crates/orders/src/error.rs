@@ -86,6 +86,8 @@ pub enum OrderError {
     InvalidRefund,
     #[error("the tracking number is at most 200 characters")]
     InvalidTracking,
+    #[error("the tracking link is an http(s) address of at most 500 characters")]
+    InvalidTrackingUrl,
     #[error("say why the order is cancelled (at most 500 characters)")]
     InvalidReason,
     #[error("the storefront address starts with https:// (at most 200 characters)")]
@@ -196,6 +198,7 @@ impl OrderError {
             Self::NotKeptOpen => "not_kept_open",
             Self::InvalidRefund => "invalid_refund",
             Self::InvalidTracking => "invalid_tracking",
+            Self::InvalidTrackingUrl => "invalid_tracking_url",
             Self::InvalidReason => "invalid_reason",
             Self::InvalidStorefrontUrl => "invalid_storefront_url",
             Self::DiscountRefused { code } => code,

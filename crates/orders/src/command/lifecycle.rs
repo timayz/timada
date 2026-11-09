@@ -8,7 +8,7 @@ use crate::aggregator::{
 use crate::error::OrderError;
 use crate::value_object::{
     MAX_REASON_LEN, SHOPPER_CANCEL_REASON, STOREFRONT_ACTOR, normalize_note, normalize_reason,
-    normalize_tracking,
+    normalize_tracking, normalize_tracking_url,
 };
 
 use super::{OrderState, OrderStatus, PendingCapture, PendingRefund, SupplierOrder};
@@ -72,16 +72,19 @@ impl OrderState {
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Records that an order left, with its tracking number if any; already
-    /// fulfilled is a no-op. The money must have been taken first.
+    /// Records that an order left, with its tracking number if any and the
+    /// carrier's page for it when known; already fulfilled is a no-op. The
+    /// money must have been taken first.
     pub async fn fulfil_order(
         &self,
         actor: &str,
         order_id: &str,
         tracking: Option<String>,
+        tracking_url: Option<String>,
         routing_key: Option<String>,
     ) -> Result<(), OrderError> {
         let tracking = normalize_tracking(tracking.as_deref())?;
+        let tracking_url = normalize_tracking_url(tracking_url.as_deref())?;
         let order = self.require_order(order_id).await?;
         match order.status {
             OrderStatus::Paid => {}
@@ -97,6 +100,7 @@ impl<E: Executor> super::Command<E> {
             .routing_key_opt(routing_key)
             .event(&Fulfilled {
                 tracking,
+                tracking_url,
                 fulfilled_by: actor.to_owned(),
             })
             .tenant(&self.tenant)

@@ -267,6 +267,21 @@ impl AeSku {
     }
 }
 
+/// Where a parcel AliExpress shipped is followed: Cainiao's page, which
+/// knows every number an AliExpress order carries (its own services' and
+/// the sellers' carriers'), with all of `numbers` at once.
+pub fn cainiao_tracking_url(numbers: &[String]) -> String {
+    let numbers: Vec<&str> = numbers
+        .iter()
+        .map(|number| number.trim())
+        .filter(|number| !number.is_empty())
+        .collect();
+    format!("{CAINIAO_TRACKING_URL}{}", numbers.join(","))
+}
+
+/// Cainiao's tracking page, before the parcel numbers.
+pub const CAINIAO_TRACKING_URL: &str = "https://global.cainiao.com/newDetail.htm?mailNoList=";
+
 /// One way AliExpress delivers an item to a country.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FreightOption {
@@ -461,6 +476,14 @@ pub(crate) fn list(value: Option<&Value>) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cainiao_follows_every_parcel_at_once() {
+        assert_eq!(
+            cainiao_tracking_url(&["LP1".into(), " LP2 ".into(), String::new()]),
+            "https://global.cainiao.com/newDetail.htm?mailNoList=LP1,LP2"
+        );
+    }
 
     #[test]
     fn amounts_read_as_minor_units() {
