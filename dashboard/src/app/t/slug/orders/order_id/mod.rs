@@ -23,8 +23,8 @@ use timada_aliexpress::{ForwardState, ForwardStatus};
 use timada_catalog::format_money;
 use timada_invoicing::documents_of_order;
 use timada_orders::{
-    MAX_NOTE_LEN, MAX_REASON_LEN, MAX_TRACKING_LEN, OrderError, OrderState, OrderStatus,
-    SupplierOrder, cart_refused_returns, order_mails, order_state,
+    MAX_NOTE_LEN, MAX_REASON_LEN, MAX_TRACKING_LEN, MAX_TRACKING_URL_LEN, OrderError, OrderState,
+    OrderStatus, SupplierOrder, cart_refused_returns, order_mails, order_state,
 };
 use timada_reviews::review_request_mailed_at;
 use timada_tenancy::{
@@ -403,7 +403,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         fact(term: "Fulfilled", <time datetime=(at)>(format_time(at))</time>)
                     }
                     if let Some(tracking) = &order.tracking {
-                        fact(term: "Tracking", attrs: attributes! { data-order-tracking="" }, (tracking))
+                        fact(term: "Tracking", attrs: attributes! { data-order-tracking="" },
+                            if let Some(link) = &order.tracking_url {
+                                <a class=(LINK) href=(link) rel="noopener" target="_blank">(tracking)</a>
+                            } else {
+                                (tracking)
+                            }
+                        )
                     }
                     if let Some(at) = order.cancelled_at {
                         fact(term: "Cancelled", <time datetime=(at)>(format_time(at))</time>)
@@ -643,6 +649,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     field_label(attrs: attributes! { for="order-tracking" }, "Tracking number (optional)")
                                     input(attrs: attributes! { id="order-tracking" name="tracking" type="text" maxlength=(MAX_TRACKING_LEN) })
                                 )
+                                field(
+                                    field_label(attrs: attributes! { for="order-tracking-url" }, "Tracking link (optional)")
+                                    input(attrs: attributes! { id="order-tracking-url" name="tracking_url" type="url" placeholder="https://" maxlength=(MAX_TRACKING_URL_LEN) })
+                                    <p class="text-sm text-muted-foreground">"The carrier's page for this parcel, if you want the shopper to open it. The order page shows the number either way."</p>
+                                )
                                 <div>
                                     button(attrs: attributes! { type="submit" }, "Mark as fulfilled")
                                 </div>
@@ -808,6 +819,8 @@ pub struct SettleOutsideForm {
 pub struct FulfilForm {
     #[serde(default)]
     pub tracking: String,
+    #[serde(default)]
+    pub tracking_url: String,
 }
 
 #[derive(serde::Deserialize)]

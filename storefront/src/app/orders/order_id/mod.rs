@@ -201,7 +201,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </details>
                 }
                 if let Some(tracking) = &order.tracking {
-                    <p>"Suivi : " (tracking)</p>
+                    <p>"Numéro de colis : "
+                        if let Some(link) = &order.tracking_url {
+                            <a data-order-tracking="" href=(link) rel="noopener" target="_blank">(tracking)</a>
+                        } else {
+                            <span data-order-tracking="">(tracking)</span>
+                        }
+                    </p>
                 }
                 <table class="cart" data-order="">
                     <tbody>

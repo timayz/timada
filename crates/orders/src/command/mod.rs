@@ -951,7 +951,13 @@ pub struct OrderState {
     /// already. Nothing else happens to the order until it is settled.
     pub pending_refund: Option<PendingRefund>,
     pub status: OrderStatus,
+    /// The parcel number(s), as `Fulfilled` gave them.
     pub tracking: Option<String>,
+    /// The carrier's page for the parcel, when the merchant gave one. The
+    /// shop shows no other: a parcel's own steps are the order's
+    /// (`Shipment`), and a carrier's page would tell where the goods come
+    /// from.
+    pub tracking_url: Option<String>,
     pub cancel_reason: Option<String>,
     /// Unix seconds of `Placed`.
     pub placed_at: u64,
@@ -1451,6 +1457,7 @@ async fn on_refund_requested(
 async fn on_fulfilled(event: Event<Fulfilled>, order: &mut OrderState) -> anyhow::Result<()> {
     order.status = OrderStatus::Fulfilled;
     order.tracking = event.data.tracking.to_owned();
+    order.tracking_url = event.data.tracking_url.to_owned();
     order.fulfilled_at = Some(event.timestamp);
     order.fulfilled_by = Some(event.data.fulfilled_by.to_owned());
     order.updated_at = event.timestamp;
