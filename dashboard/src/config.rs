@@ -761,6 +761,31 @@ pub struct MonitoringConfig {
     pub log_json: bool,
     pub log_target: bool,
     pub log_line_number: bool,
+    /// The most a read model may trail the store, in seconds, for `/ready`
+    /// to answer 200: a node back from a night away, or one that just
+    /// copied the store, answers 503 until its read models caught up, and a
+    /// balancer polling `/ready` keeps traffic off it meanwhile. 0 reports
+    /// the lag and never judges it.
+    #[serde(default = "default_ready_lag_secs")]
+    pub ready_lag_secs: u64,
+    /// Where to serve `/metrics` (Prometheus text) and `/ready`, e.g.
+    /// `127.0.0.1:9100`: an internal address, as the figures name tenants.
+    /// Absent: no metrics served; `/ready` is on the node's own port either
+    /// way.
+    #[serde(default)]
+    pub metrics_listen: Option<SocketAddr>,
+}
+
+fn default_ready_lag_secs() -> u64 {
+    300
+}
+
+impl MonitoringConfig {
+    /// The most a read model may trail the store for the node to be ready;
+    /// `None` never judges it.
+    pub fn ready_lag(&self) -> Option<std::time::Duration> {
+        (self.ready_lag_secs > 0).then(|| std::time::Duration::from_secs(self.ready_lag_secs))
+    }
 }
 
 impl Config {

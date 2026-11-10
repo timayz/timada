@@ -310,3 +310,17 @@ log_level = "info,tantivy=warn,turso_core::mvcc=warn"
 log_json = false
 log_target = true
 log_line_number = true
+# `GET /ready` on the node's own port answers 200 while the node takes writes
+# and no read model trails the store by more than this many seconds, 503
+# otherwise, with how far each read model trails in the body: a balancer
+# polling it keeps traffic off a node catching up after a night away, a copy
+# of the store or a `rebuild`. A read model whose worker is stuck reads as
+# far behind as the store moved on since. Mind that every node runs the same
+# read models: a fault that stops one everywhere takes every node out at
+# once. 0 reports the lag and never judges it.
+# ready_lag_secs = 300
+# Where to serve `/metrics` (Prometheus text: readiness, each read model's
+# lag, workers by state, the writes kept for absent nodes, store connections
+# by tenant, the consensus engine's counters) and `/ready`. An internal
+# address: the figures name tenants. Absent: no metrics.
+# metrics_listen = "127.0.0.1:9100"

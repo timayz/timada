@@ -206,6 +206,19 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     }
     let workers = Workers::new(all_workers);
     let mailroom_sends = mailroom.start();
+    // What the balancer asks before sending traffic here, and what an
+    // operator scrapes.
+    let readiness = Arc::new(crate::readiness::Readiness::new(
+        db.clone(),
+        cluster.clone(),
+        workers.clone(),
+        connections.clone(),
+        config.monitoring.ready_lag(),
+    ));
+    let metrics = match config.monitoring.metrics_listen {
+        Some(listen) => Some(crate::metrics::serve(listen, readiness.clone()).await?),
+        None => None,
+    };
 
     // The operator's alert for a node that stays away: this node nearing the
     // writes it may keep for it, or a node given up on.
@@ -311,6 +324,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         aliexpress,
         store: connections,
         workers: workers.clone(),
+        readiness,
         config,
     });
 
@@ -326,6 +340,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 
     if let Some(store_api) = store_api {
         store_api.shutdown().await;
+    }
+    if let Some(metrics) = metrics {
+        metrics.shutdown().await;
     }
     cluster_watch.abort();
     mailroom_sends.abort();
