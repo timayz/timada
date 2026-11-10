@@ -386,6 +386,10 @@ async fn a_store_follows_its_tenant_catalog_locally() {
     assert_eq!(status.subscription, SubscriptionState::Running);
     assert_eq!(status.products, 1);
     assert!(status.last_event_at.is_some());
+    assert!(
+        status.lag_seconds.is_some_and(|lag| lag <= 5),
+        "a copy that has caught up says so: {status:?}"
+    );
     assert_eq!(h.connected(&acme), 1, "the connection is registered");
 
     store.shutdown().await;
@@ -1400,7 +1404,7 @@ async fn the_back_office_and_the_shop_count_a_category_the_same_way() {
         .await
         .unwrap();
     // One filed only under the sub-category, one under both.
-    stock(&catalog, "Cooling Mat", 2990, &[&mats.id]).await;
+    let cooling = stock(&catalog, "Cooling Mat", 2990, &[&mats.id]).await;
     stock(&catalog, "Wool Mat", 1990, &[&bedding.id, &mats.id]).await;
 
     let db = h.local_db("acme-shop").await;
@@ -1449,6 +1453,33 @@ async fn the_back_office_and_the_shop_count_a_category_the_same_way() {
     assert_eq!(
         dashboard_counts(&h, &acme).await,
         vec![("bedding".to_owned(), 1), ("mats".to_owned(), 1)]
+    );
+
+    // Unpublished, the other mat leaves the pages (the back office still
+    // counts it: it is not archived); published again, it is back.
+    catalog.unpublish_product("alice", &cooling).await.unwrap();
+    eventually("the unpublished mat leaves the pages", async || {
+        storefront_counts(&db).await == vec![("bedding".to_owned(), 0), ("mats".to_owned(), 0)]
+    })
+    .await;
+    catalog.publish_product("alice", &cooling).await.unwrap();
+    eventually("and is back once published", async || {
+        storefront_counts(&db).await == vec![("bedding".to_owned(), 1), ("mats".to_owned(), 1)]
+    })
+    .await;
+
+    // Mats moved to the top: the bedding page no longer covers it.
+    catalog
+        .move_category("alice", &mats.id, None)
+        .await
+        .unwrap();
+    eventually("the move reaches the shop", async || {
+        storefront_counts(&db).await == vec![("bedding".to_owned(), 0), ("mats".to_owned(), 1)]
+    })
+    .await;
+    assert_eq!(
+        dashboard_counts(&h, &acme).await,
+        vec![("bedding".to_owned(), 0), ("mats".to_owned(), 1)]
     );
 
     store.shutdown().await;
