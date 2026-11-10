@@ -2,9 +2,10 @@
 //! gave, as opposed to the server, the credentials or the network.
 //!
 //! A saga that sends mail records the first kind (`Undeliverable`) and moves
-//! on; it returns the second kind, so the saga retries under its supervisor
-//! (#427, stage 3 of the CQRS plan). [`SendFailure::of`] tells the two
-//! apart for the sagas.
+//! on; the second kind it records as deferred, for a later try by the
+//! mailroom (#427, stage 3 of the CQRS plan; #464). [`SendFailure::of`]
+//! tells the two apart, and [`attempt`] runs a send under the mailroom's
+//! deadline and says which it was.
 
 use std::error::Error as _;
 
@@ -43,8 +44,36 @@ pub enum SendFailure {
     /// The recipient's address is at fault: record it, with what the
     /// server said, and move on.
     Undeliverable(String),
-    /// Anything else: return it, so the saga retries.
+    /// Anything else: record it as not sent, for a later try.
     Retry(topcoat::Error),
+}
+
+/// How a send went, for the stream.
+#[derive(Debug)]
+pub enum Attempt {
+    Sent,
+    /// The recipient's address is at fault; what the server said.
+    Undeliverable(String),
+    /// The server, the credentials or the network are: what went wrong, in
+    /// one line, for the stream and the cluster page.
+    NotSent(String),
+}
+
+/// Runs `send` under the mailroom's deadline
+/// ([`SEND_DEADLINE`](crate::mailroom::SEND_DEADLINE)) and says how it
+/// went: a send still going at the deadline counts as not sent.
+pub async fn attempt(send: impl Future<Output = topcoat::Result<()>>) -> Attempt {
+    match tokio::time::timeout(crate::mailroom::SEND_DEADLINE, send).await {
+        Ok(Ok(())) => Attempt::Sent,
+        Ok(Err(err)) => match SendFailure::of(err) {
+            SendFailure::Undeliverable(reason) => Attempt::Undeliverable(reason),
+            SendFailure::Retry(err) => Attempt::NotSent(reason(&err)),
+        },
+        Err(_) => Attempt::NotSent(format!(
+            "no answer within {} s",
+            crate::mailroom::SEND_DEADLINE.as_secs()
+        )),
+    }
 }
 
 impl SendFailure {

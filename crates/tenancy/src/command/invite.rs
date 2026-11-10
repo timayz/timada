@@ -10,7 +10,8 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 use timada_core::{Claim, Claimant, LEASE_SECS, TokenDeriver, new_nonce};
 
 use crate::aggregator::{
-    Accepted, MailClaimed, MailSent, MailUndeliverable, Revoked, SeatGranted, SeatRefused, Sent,
+    Accepted, MailClaimed, MailDeferred, MailFailed, MailSent, MailUndeliverable, Revoked,
+    SeatGranted, SeatRefused, Sent,
 };
 use crate::error::TenancyError;
 use crate::value_object::{
@@ -204,8 +205,29 @@ impl<E: Executor> super::Command<E> {
         invitation_id: &str,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
-        self.record_invitation_mail(invitation_id, None, routing_key)
+        self.record_invitation_mail(invitation_id, MailOutcome::Sent, routing_key)
             .await
+    }
+
+    /// Records that the send failed at `now` (unix seconds) for `reason`, a
+    /// reason worth a retry (the server did not answer, a transient
+    /// refusal): deferred to the next try of the schedule
+    /// ([`timada_core::RETRY_DELAYS_SECS`]), or given up on once none is
+    /// left, which the members page shows. Any node may take the next try
+    /// once it is due.
+    pub async fn record_invitation_mail_not_sent(
+        &self,
+        invitation_id: &str,
+        reason: &str,
+        now: u64,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        self.record_invitation_mail(
+            invitation_id,
+            MailOutcome::NotSent { reason, now },
+            routing_key,
+        )
+        .await
     }
 
     /// Records that the mail server refused the address for good (or that it
@@ -217,8 +239,12 @@ impl<E: Executor> super::Command<E> {
         reason: &str,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
-        self.record_invitation_mail(invitation_id, Some(reason), routing_key)
-            .await
+        self.record_invitation_mail(
+            invitation_id,
+            MailOutcome::Undeliverable(reason),
+            routing_key,
+        )
+        .await
     }
 
     /// Joins the tenant the link belongs to. Marking the invitation accepted,
@@ -317,6 +343,14 @@ impl<E: Executor> super::Command<E> {
     }
 }
 
+/// How a send went, for the stream.
+#[derive(Clone, Copy)]
+enum MailOutcome<'a> {
+    Sent,
+    Undeliverable(&'a str),
+    NotSent { reason: &'a str, now: u64 },
+}
+
 /// The mail of an invitation, its token derived again from the nonce.
 fn invitation_mail(tokens: &dyn TokenDeriver, invitation: InvitationState) -> InvitationMail {
     let token = tokens.derive_token("", &invitation.nonce);
@@ -327,7 +361,7 @@ impl<E: Executor> super::Command<E> {
     async fn record_invitation_mail(
         &self,
         invitation_id: &str,
-        undeliverable: Option<&str>,
+        outcome: MailOutcome<'_>,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
         let mut attempt = 0;
@@ -341,11 +375,20 @@ impl<E: Executor> super::Command<E> {
             }
             let mut writer = invitation.write()?;
             writer.routing_key_opt(routing_key.clone());
-            match undeliverable {
-                Some(reason) => writer.event(&MailUndeliverable {
+            match outcome {
+                MailOutcome::Sent => writer.event(&MailSent),
+                MailOutcome::Undeliverable(reason) => writer.event(&MailUndeliverable {
                     reason: reason.to_owned(),
                 }),
-                None => writer.event(&MailSent),
+                MailOutcome::NotSent { reason, now } => match invitation.mail.retry_at(now) {
+                    Some(retry_at) => writer.event(&MailDeferred {
+                        retry_at,
+                        reason: reason.to_owned(),
+                    }),
+                    None => writer.event(&MailFailed {
+                        reason: reason.to_owned(),
+                    }),
+                },
             };
             match writer.commit(&self.0).await {
                 Ok(_) => return Ok(()),

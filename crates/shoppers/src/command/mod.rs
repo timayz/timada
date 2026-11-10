@@ -19,7 +19,8 @@ use timada_orders::ShippingAddress;
 
 use crate::aggregator::{
     AddressRemoved, AddressSaved, AttemptFailed, CodeConsumed, CodeIssued, Forgotten, MailClaimed,
-    MailSent, MailUndeliverable, Registered, SessionEnded, SessionStarted, SessionsRevoked,
+    MailDeferred, MailFailed, MailSent, MailUndeliverable, Registered, SessionEnded,
+    SessionStarted, SessionsRevoked,
 };
 use crate::value_object::{challenge_id, session_id, shopper_id};
 use timada_core::Sending;
@@ -340,6 +341,8 @@ pub fn challenge_projection<E: Executor>() -> Projection<E, ChallengeState> {
         .handler(on_mail_claimed())
         .handler(on_mail_sent())
         .handler(on_mail_undeliverable())
+        .handler(on_mail_deferred())
+        .handler(on_mail_failed())
         .strict()
 }
 
@@ -367,10 +370,7 @@ async fn on_mail_claimed(
     event: Event<MailClaimed>,
     state: &mut ChallengeState,
 ) -> anyhow::Result<()> {
-    state.mail = Sending::Claimed {
-        by: event.data.by.to_owned(),
-        until: event.data.until,
-    };
+    state.mail = state.mail.claimed(&event.data.by, event.data.until);
     Ok(())
 }
 
@@ -388,6 +388,24 @@ async fn on_mail_undeliverable(
     state.mail = Sending::Undeliverable {
         reason: event.data.reason.to_owned(),
     };
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_deferred(
+    event: Event<MailDeferred>,
+    state: &mut ChallengeState,
+) -> anyhow::Result<()> {
+    state.mail = state.mail.deferred(event.data.retry_at, &event.data.reason);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_failed(
+    event: Event<MailFailed>,
+    state: &mut ChallengeState,
+) -> anyhow::Result<()> {
+    state.mail = state.mail.failed(&event.data.reason);
     Ok(())
 }
 

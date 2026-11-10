@@ -10,7 +10,8 @@ use evento::{Executor, WriteError};
 use timada_core::{Claim, Claimant, LEASE_SECS, new_nonce};
 
 use crate::aggregator::{
-    AttemptFailed, CodeIssued, Consumed, MailClaimed, MailSent, MailUndeliverable,
+    AttemptFailed, CodeIssued, Consumed, MailClaimed, MailDeferred, MailFailed, MailSent,
+    MailUndeliverable,
 };
 use crate::error::IdentityError;
 use crate::value_object::{
@@ -194,7 +195,7 @@ impl<E: Executor> super::Command<E> {
         issued_version: u16,
         routing_key: Option<String>,
     ) -> Result<(), IdentityError> {
-        self.record_code_mail(challenge_id, issued_version, None, routing_key)
+        self.record_code_mail(challenge_id, issued_version, MailOutcome::Sent, routing_key)
             .await
     }
 
@@ -208,9 +209,44 @@ impl<E: Executor> super::Command<E> {
         reason: &str,
         routing_key: Option<String>,
     ) -> Result<(), IdentityError> {
-        self.record_code_mail(challenge_id, issued_version, Some(reason), routing_key)
-            .await
+        self.record_code_mail(
+            challenge_id,
+            issued_version,
+            MailOutcome::Undeliverable(reason),
+            routing_key,
+        )
+        .await
     }
+
+    /// Records that the send failed at `now` (unix seconds) for `reason`, a
+    /// reason worth a retry (the server did not answer, a transient
+    /// refusal): deferred to the next try of the schedule
+    /// ([`timada_core::RETRY_DELAYS_SECS`]), or given up on once none is
+    /// left. Any node may take the next try once it is due.
+    pub async fn record_code_mail_not_sent(
+        &self,
+        challenge_id: &str,
+        issued_version: u16,
+        reason: &str,
+        now: u64,
+        routing_key: Option<String>,
+    ) -> Result<(), IdentityError> {
+        self.record_code_mail(
+            challenge_id,
+            issued_version,
+            MailOutcome::NotSent { reason, now },
+            routing_key,
+        )
+        .await
+    }
+}
+
+/// How a send went, for the stream.
+#[derive(Clone, Copy)]
+enum MailOutcome<'a> {
+    Sent,
+    Undeliverable(&'a str),
+    NotSent { reason: &'a str, now: u64 },
 }
 
 impl<E: Executor> super::Command<E> {
@@ -226,7 +262,7 @@ impl<E: Executor> super::Command<E> {
         &self,
         challenge_id: &str,
         issued_version: u16,
-        undeliverable: Option<&str>,
+        outcome: MailOutcome<'_>,
         routing_key: Option<String>,
     ) -> Result<(), IdentityError> {
         let mut attempt = 0;
@@ -240,11 +276,20 @@ impl<E: Executor> super::Command<E> {
             }
             let mut writer = challenge.write()?;
             writer.routing_key_opt(routing_key.clone());
-            match undeliverable {
-                Some(reason) => writer.event(&MailUndeliverable {
+            match outcome {
+                MailOutcome::Sent => writer.event(&MailSent),
+                MailOutcome::Undeliverable(reason) => writer.event(&MailUndeliverable {
                     reason: reason.to_owned(),
                 }),
-                None => writer.event(&MailSent),
+                MailOutcome::NotSent { reason, now } => match challenge.mail.retry_at(now) {
+                    Some(retry_at) => writer.event(&MailDeferred {
+                        retry_at,
+                        reason: reason.to_owned(),
+                    }),
+                    None => writer.event(&MailFailed {
+                        reason: reason.to_owned(),
+                    }),
+                },
             };
             match writer.commit(&self.executor).await {
                 Ok(_) => return Ok(()),

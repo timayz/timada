@@ -2,12 +2,15 @@
 //! whose token the stream's nonce derives under the host's key.
 //!
 //! The command that records an invitation mails nothing: this subscription
-//! sees it on every node, and the node that writes the claim on the
-//! invitation first is the one that mails ([`timada_core::Sending`]), then
-//! records how the send went. A server that refuses the address for good
-//! leaves `MailUndeliverable`, which the members page shows, so the inviter
-//! sends a corrected one; anything else fails the pass, which is retried,
-//! and the holder of the claim sends again.
+//! sees it on every node and hands it to the node's [`Mailroom`], which
+//! sends off the cursor. The node that writes the claim on the invitation
+//! first is the one that mails ([`timada_core::Sending`]), then records how
+//! the send went. A server that refuses the address for good leaves
+//! `MailUndeliverable`, which the members page shows, so the inviter sends
+//! a corrected one; a server that does not answer leaves `MailDeferred`,
+//! and whichever node looks once the retry is due sends again, until the
+//! retries run out (`MailFailed`, shown too). A pass never fails for a mail
+//! server (#464).
 
 use std::sync::Arc;
 
@@ -16,52 +19,35 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use timada_core::Claimant;
-use timada_tenancy::aggregator::Sent;
-use topcoat::context::{AppContext, Cx, app_context};
+use timada_tenancy::aggregator::{
+    Accepted, MailClaimed, MailDeferred, MailFailed, MailSent, MailUndeliverable, Revoked, Sent,
+};
+use topcoat::context::{Cx, app_context};
 
 use crate::app::t::slug::role_label;
-use crate::cluster::Executor as Store;
-use crate::code_mails::retry;
+use crate::code_mails::claimant;
 use crate::mail::send_invitation;
-use crate::mail_fault::SendFailure;
+use crate::mail_fault::{Attempt, attempt};
+use crate::mailroom::{Change, Kind, Mailroom, Outcome, OwedMail};
 use crate::seal::{EmailCodes, InvitationTokens};
 
 /// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/invitation-mails";
 
-/// The platform store, where the invitations, the tenants and the users
-/// live.
-#[derive(Clone)]
-struct Platform(Store);
-
-/// What sending needs outside a request: the platform's transport and
-/// sender, and the key the links derive under.
-#[derive(Clone)]
-struct Mail(Arc<AppContext>);
-
-/// The dashboard's public address, for the link.
-#[derive(Clone)]
-struct BaseUrl(String);
-
-/// This node, as the claims name it.
-#[derive(Clone)]
-struct Node(String);
-
-/// Follows the platform's invitations. Every node runs it; the node that
-/// claims an invitation's mail first is the one that sends it.
-pub fn subscription<E: Executor>(
-    platform: Store,
-    mail: Arc<AppContext>,
-    base_url: String,
-    node: String,
-) -> SubscriptionBuilder<E> {
+/// Follows the platform's invitations into the mailroom's table. Every node
+/// runs it; the node that claims an invitation's mail first is the one that
+/// sends it.
+pub fn subscription<E: Executor>(room: Arc<Mailroom>) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
-        .data(Platform(platform))
-        .data(Mail(mail))
-        .data(BaseUrl(base_url))
-        .data(Node(node))
+        .data(room)
         .handler(on_sent())
+        .handler(on_accepted())
+        .handler(on_revoked())
+        .handler(on_mail_claimed())
+        .handler(on_mail_sent())
+        .handler(on_mail_undeliverable())
+        .handler(on_mail_deferred())
+        .handler(on_mail_failed())
         // The routing key stays the executor's: this node mails the
         // invitations of its own region.
         .tenant("")
@@ -73,78 +59,181 @@ pub fn invitation_link(base_url: &str, token: &str) -> String {
     format!("{}/invitations/{token}", base_url.trim_end_matches('/'))
 }
 
+/// Writes what an event of an invitation says into the table.
+async fn record<E: Executor>(
+    context: &Context<'_, E>,
+    stream_id: &str,
+    change: Change,
+) -> anyhow::Result<()> {
+    let room: Arc<Mailroom> = context.extract();
+    room.record(Kind::Invitation, "", stream_id, change, crate::auth::now())
+        .await
+}
+
 #[evento::subscription]
 async fn on_sent<E: Executor>(context: &Context<'_, E>, event: Event<Sent>) -> anyhow::Result<()> {
-    let platform: Platform = context.extract();
-    let mail: Mail = context.extract();
-    let base_url: BaseUrl = context.extract();
-    let node: Node = context.extract();
-    let cx = Cx::new(mail.0);
-    let tenancy = timada_tenancy::Command(platform.0.clone());
-    // The tenant and the inviter first: gone, there is nothing to send.
-    let Some(tenant) = tenancy.load_tenant(&event.data.tenant_id).await? else {
-        return Ok(());
-    };
-    let inviter =
-        timada_identity::Command::new(platform.0, app_context::<EmailCodes>(&cx).0.clone())
-            .load_user(&event.data.invited_by)
-            .await?
-            .map_or_else(|| "A member".to_owned(), |user| user.label);
-    let invitation = event.aggregate_id.as_str();
+    record(
+        context,
+        &event.aggregate_id,
+        Change::Owed {
+            version: event.version,
+            expires_at: event.data.expires_at,
+        },
+    )
+    .await
+}
+
+#[evento::subscription]
+async fn on_accepted<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<Accepted>,
+) -> anyhow::Result<()> {
+    record(context, &event.aggregate_id, Change::Settled).await
+}
+
+#[evento::subscription]
+async fn on_revoked<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<Revoked>,
+) -> anyhow::Result<()> {
+    record(context, &event.aggregate_id, Change::Settled).await
+}
+
+#[evento::subscription]
+async fn on_mail_claimed<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<MailClaimed>,
+) -> anyhow::Result<()> {
+    record(
+        context,
+        &event.aggregate_id,
+        Change::Claimed {
+            until: event.data.until,
+        },
+    )
+    .await
+}
+
+#[evento::subscription]
+async fn on_mail_sent<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<MailSent>,
+) -> anyhow::Result<()> {
+    record(context, &event.aggregate_id, Change::Settled).await
+}
+
+#[evento::subscription]
+async fn on_mail_undeliverable<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<MailUndeliverable>,
+) -> anyhow::Result<()> {
+    record(context, &event.aggregate_id, Change::Settled).await
+}
+
+#[evento::subscription]
+async fn on_mail_deferred<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<MailDeferred>,
+) -> anyhow::Result<()> {
+    record(
+        context,
+        &event.aggregate_id,
+        Change::Deferred {
+            retry_at: event.data.retry_at,
+            reason: event.data.reason.clone(),
+        },
+    )
+    .await
+}
+
+#[evento::subscription]
+async fn on_mail_failed<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<MailFailed>,
+) -> anyhow::Result<()> {
+    record(
+        context,
+        &event.aggregate_id,
+        Change::Failed {
+            reason: event.data.reason.clone(),
+        },
+    )
+    .await
+}
+
+/// Sends the invitation `owed` names at `now` (unix seconds), from the
+/// mailroom: claims it, mails it, records how it went.
+pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::Result<Outcome> {
+    let cx = Cx::new(room.mail.clone());
+    let tenancy = timada_tenancy::Command(room.platform.clone());
+    let invitation = owed.stream_id.as_str();
     let Some(mail) = tenancy
         .claim_invitation_mail(
             &*app_context::<InvitationTokens>(&cx).0,
             invitation,
-            Claimant {
-                node: &node.0,
-                now: crate::auth::now(),
-            },
+            claimant(room, now),
         )
         .await?
     else {
-        return Ok(());
+        return Ok(Outcome::Left);
     };
-    let link = invitation_link(&base_url.0, &mail.token);
+    // The tenant and the inviter: gone, there is nothing to send, and the
+    // claim lapses.
+    let Some(tenant) = tenancy.load_tenant(&mail.invitation.tenant_id).await? else {
+        return Ok(Outcome::Left);
+    };
+    let inviter = timada_identity::Command::new(
+        room.platform.clone(),
+        app_context::<EmailCodes>(&cx).0.clone(),
+    )
+    .load_user(&mail.invitation.invited_by)
+    .await?
+    .map_or_else(|| "A member".to_owned(), |user| user.label);
+    let link = invitation_link(&room.base_url, &mail.token);
     let role = role_label(&tenant, &mail.invitation.role);
-    match send_invitation(
+    let sent = attempt(send_invitation(
         &cx,
         &mail.invitation.email,
         &tenant.name,
         &inviter,
         &role,
         &link,
-    )
-    .await
-    {
-        Ok(()) => {
+    ))
+    .await;
+    match sent {
+        Attempt::Sent => {
             tracing::info!(invitation, tenant = %tenant.id, "invitation mailed");
             tenancy.record_invitation_mail_sent(invitation).await?;
+            Ok(Outcome::Sent)
         }
-        Err(err) => match SendFailure::of(err) {
-            SendFailure::Undeliverable(reason) => {
-                tracing::warn!(invitation, tenant = %tenant.id, %reason, "invitation not deliverable");
-                tenancy
-                    .record_invitation_mail_undeliverable(invitation, &reason)
-                    .await?;
-            }
-            SendFailure::Retry(err) => return Err(retry(err)),
-        },
+        Attempt::Undeliverable(reason) => {
+            tracing::warn!(invitation, tenant = %tenant.id, %reason, "invitation not deliverable");
+            tenancy
+                .record_invitation_mail_undeliverable(invitation, &reason)
+                .await?;
+            Ok(Outcome::Recorded)
+        }
+        Attempt::NotSent(reason) => {
+            tracing::warn!(invitation, tenant = %tenant.id, %reason, "invitation not sent; deferred");
+            tenancy
+                .record_invitation_mail_not_sent(invitation, &reason, now)
+                .await?;
+            Ok(Outcome::Recorded)
+        }
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use evento::{Evento, Turso};
-    use timada_core::Sending;
+    use timada_core::{RETRY_DELAYS_SECS, Sending};
     use timada_tenancy::{InviteMember, ROLE_OWNER};
     use topcoat::mail::{Mailbox, MemoryTransport};
 
     use super::*;
     use crate::code_mails::tests::{TENANT, mail_context, shop};
     use crate::mail_fault::fake_smtp;
-
-    const BASE: &str = "https://timada.example/";
+    use crate::mailroom::tests::{BASE_URL, room, rows, store};
 
     fn tokens() -> Arc<dyn timada_core::TokenDeriver> {
         Arc::new(timada_core::HmacCodeVerifier::new([9; 32]))
@@ -190,30 +279,42 @@ mod tests {
             .unwrap()
     }
 
-    async fn pass(store: &Turso, mail: Arc<AppContext>, node: &str) -> anyhow::Result<()> {
-        subscription::<Turso>(
-            Evento::new(store.clone()),
-            mail,
-            BASE.to_owned(),
-            node.to_owned(),
-        )
-        .ephemeral()
-        .no_retry()
-        .run_once(store)
-        .await
+    async fn pass(store: &Turso, room: &Arc<Mailroom>) {
+        subscription::<Turso>(room.clone())
+            .ephemeral()
+            .no_retry()
+            .run_once(store)
+            .await
+            .expect("a pass never fails for a mail");
+    }
+
+    async fn run(store: &Turso, room: &Arc<Mailroom>, now: u64) -> usize {
+        pass(store, room).await;
+        room.sweep(now).await.unwrap()
+    }
+
+    async fn mail_of(store: &Turso, id: &str) -> Sending {
+        timada_tenancy::Command(Evento::new(store.clone()))
+            .load_invitation(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .mail
     }
 
     #[tokio::test]
     async fn an_invitation_is_mailed_once_with_the_link_the_token_opens() {
-        let store = Turso::in_memory_concurrent().await.unwrap();
+        let store = store().await;
         shop_with_owner(&store).await;
         let sent = invite(&store, "Bob@Example.com").await;
+        let now = crate::auth::now();
         let transport = MemoryTransport::new();
-        let mail = mail_context(transport.clone());
+        let node_a = room(&store, transport.clone(), "node-a");
+        let node_b = room(&store, transport.clone(), "node-b");
 
-        pass(&store, mail.clone(), "node-a").await.unwrap();
-        pass(&store, mail.clone(), "node-b").await.unwrap();
-        pass(&store, mail.clone(), "node-a").await.unwrap();
+        assert_eq!(run(&store, &node_a, now).await, 1);
+        assert_eq!(run(&store, &node_b, now).await, 0);
+        assert_eq!(run(&store, &node_a, now).await, 0);
 
         let mails = transport.sent();
         assert_eq!(mails.len(), 1);
@@ -222,27 +323,19 @@ mod tests {
             mails[0].subject(),
             "You are invited to join Acme Tea on Timada"
         );
-        let cx = Cx::new(mail);
+        let cx = Cx::new(mail_context(MemoryTransport::new()));
         // The wire folds long lines.
         let wire = String::from_utf8(mails[0].clone().formatted(&cx).unwrap())
             .unwrap()
             .replace("=\r\n", "");
         assert!(
-            wire.contains(&format!(
-                "https://timada.example/invitations/{}",
-                sent.token
-            )),
+            wire.contains(&invitation_link(BASE_URL, &sent.token)),
             "{wire}"
         );
         assert!(wire.contains("Alice"), "{wire}");
         assert!(wire.contains("owner"), "{wire}");
         let tenancy = timada_tenancy::Command(Evento::new(store.clone()));
-        let state = tenancy
-            .load_invitation(&sent.invitation.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(state.mail, Sending::Sent);
+        assert_eq!(mail_of(&store, &sent.invitation.id).await, Sending::Sent);
         // The link in the mail is the one the acceptance knows.
         assert!(
             tenancy
@@ -251,49 +344,100 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+        assert!(rows(&store).await.is_empty());
     }
 
     #[tokio::test]
-    async fn a_refused_address_is_recorded_and_a_down_server_fails_the_pass() {
-        let store = Turso::in_memory_concurrent().await.unwrap();
+    async fn a_refused_address_is_recorded_and_a_down_server_defers_the_send() {
+        let store = store().await;
         shop_with_owner(&store).await;
+        let now = crate::auth::now();
         let refused = invite(&store, "bob@example.com").await;
-        let mail = mail_context(fake_smtp::transport(fake_smtp::serve(
-            "550 5.1.1 no such user",
-        )));
-        pass(&store, mail, "node-a").await.unwrap();
-        let tenancy = timada_tenancy::Command(Evento::new(store.clone()));
-        let state = tenancy
-            .load_invitation(&refused.invitation.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(state.mail.is_undeliverable(), "{:?}", state.mail);
+        let refusing = room(
+            &store,
+            fake_smtp::transport(fake_smtp::serve("550 5.1.1 no such user")),
+            "node-a",
+        );
+        assert_eq!(run(&store, &refusing, now).await, 0);
+        let mail = mail_of(&store, &refused.invitation.id).await;
+        assert!(mail.is_undeliverable(), "{mail:?}");
 
         let pending = invite(&store, "carol@example.com").await;
-        let down = mail_context(fake_smtp::transport(fake_smtp::closed_port()));
-        pass(&store, down, "node-a")
-            .await
-            .expect_err("nobody listens: the pass fails");
-        let state = tenancy
-            .load_invitation(&pending.invitation.id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(
-            matches!(&state.mail, Sending::Claimed { by, .. } if by == "node-a"),
-            "{:?}",
-            state.mail
+        let down = room(
+            &store,
+            fake_smtp::transport(fake_smtp::closed_port()),
+            "node-a",
         );
-        // Withdrawn before the server is back: nothing goes out.
-        tenancy
-            .revoke_invitation("user-alice", &pending.invitation.id, crate::auth::now())
+        assert_eq!(run(&store, &down, now).await, 0);
+        assert!(matches!(
+            mail_of(&store, &pending.invitation.id).await,
+            Sending::Deferred { attempts: 1, .. }
+        ));
+        // Withdrawn before the retry: nothing goes out, nothing is owed.
+        timada_tenancy::Command(Evento::new(store.clone()))
+            .revoke_invitation("user-alice", &pending.invitation.id, now)
             .await
             .unwrap();
         let transport = MemoryTransport::new();
-        pass(&store, mail_context(transport.clone()), "node-a")
-            .await
-            .unwrap();
+        let back = room(&store, transport.clone(), "node-a");
+        assert_eq!(run(&store, &back, now + RETRY_DELAYS_SECS[0]).await, 0);
+        assert!(transport.sent().is_empty());
+        assert!(rows(&store).await.is_empty());
+    }
+
+    /// A server down for good: each retry of the schedule waits longer, and
+    /// after the last the invitation is given up on, which the cluster page
+    /// lists; a new invitation to the address starts afresh.
+    #[tokio::test]
+    async fn a_server_down_for_good_is_given_up_on_after_the_schedule() {
+        let store = store().await;
+        shop_with_owner(&store).await;
+        let sent = invite(&store, "dan@example.com").await;
+        let id = sent.invitation.id.as_str();
+        let mut now = crate::auth::now();
+        let down = room(
+            &store,
+            fake_smtp::transport(fake_smtp::closed_port()),
+            "node-a",
+        );
+        assert_eq!(run(&store, &down, now).await, 0);
+        for (tried, delay) in RETRY_DELAYS_SECS.iter().enumerate() {
+            let Sending::Deferred {
+                retry_at, attempts, ..
+            } = mail_of(&store, id).await
+            else {
+                panic!("try {}: {:?}", tried + 1, mail_of(&store, id).await);
+            };
+            assert_eq!((retry_at, attempts), (now + delay, tried as u32 + 1));
+            // Not before it is due.
+            assert_eq!(run(&store, &down, retry_at - 1).await, 0);
+            assert_eq!(mail_of(&store, id).await.attempts(), tried as u32 + 1);
+            now = retry_at;
+            assert_eq!(run(&store, &down, now).await, 0);
+        }
+        let mail = mail_of(&store, id).await;
+        assert!(
+            matches!(&mail, Sending::Failed { attempts, .. } if *attempts == RETRY_DELAYS_SECS.len() as u32 + 1),
+            "{mail:?}"
+        );
+        pass(&store, &down).await;
+        let owed = rows(&store).await;
+        assert_eq!(owed.len(), 1);
+        assert!(owed[0].failed);
+        assert!(owed[0].reason.contains("refused") || !owed[0].reason.is_empty());
+        let db = crate::db::Db::from(store.clone());
+        assert_eq!(
+            crate::mailroom::summary(&db).await.unwrap(),
+            crate::mailroom::Summary { owed: 0, failed: 1 }
+        );
+        assert_eq!(
+            crate::mailroom::failed_mails(&db, 10).await.unwrap()[0].stream_id,
+            id
+        );
+        // The server back changes nothing for this one: it is settled.
+        let transport = MemoryTransport::new();
+        let back = room(&store, transport.clone(), "node-b");
+        assert_eq!(run(&store, &back, now + 1).await, 0);
         assert!(transport.sent().is_empty());
     }
 }

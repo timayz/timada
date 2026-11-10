@@ -17,6 +17,8 @@ mod cluster;
 mod config;
 #[path = "../src/db.rs"]
 mod db;
+#[path = "../src/mailroom/schema.rs"]
+mod mailroom;
 #[path = "../src/peers.rs"]
 mod peers;
 #[path = "../src/rate_limit.rs"]
