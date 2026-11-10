@@ -99,7 +99,10 @@ invoice decides it when it is issued, seconds after the money is taken.
   - The sale is counted, with the decision it got, before it takes its number.
     That count is an append at the version the ledger was read at, so two tenants
     selling at once never both count against a stale total. A retry finds its
-    sale counted and gets the same decision back.
+    sale counted and gets the same decision back. The ledger is chunked like a
+    book (1,000 events a chunk, a pointer per company and year naming the open
+    one, the chunk's opening total carried forward), and the invoice's index notes
+    the chunk open when it was reserved, where a retry starts looking.
   - The count is in euros. A sale priced in another currency counts for what it
     is worth at the **European Central Bank's euro reference rate** of the day it
     is invoiced (the latest the Bank published on or before that day: before the
@@ -220,10 +223,15 @@ How it holds under retries and several nodes (details in
   (a *book*), at the version the book was read at. The number and its document are
   therefore one write: a number is never taken without its document, and two
   writers never take the same one.
-- **A book holds 1,000 documents.** After that the series carries on in the next book.
+- **A book is written in chunks of 1,000 events** (a document is one to four), each
+  a stream of its own, and a pointer stream per series names the open chunk, so
+  issuing reads the pointer and that one chunk however many documents the series
+  holds. The writer that finds the chunk full opens the next one with the last
+  number, then moves the pointer; nothing is ever appended to a full chunk.
 - **A document first reserves its series.** It does so in a small index stream of
-  its own. A retry after a crash finds the document in the book instead of taking a
-  second number, even across New Year.
+  its own, noting the chunk open at the time. A retry after a crash looks for the
+  document from that chunk to the open one and finds it instead of taking a second
+  number, even across New Year.
 
 ## Keeping them
 

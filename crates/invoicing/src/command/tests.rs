@@ -1,7 +1,7 @@
 use super::*;
 use crate::rates::ExchangeRate;
 use crate::tax::{Regime, TaxProfile};
-use crate::value_object::{PAYMENT_METHOD_CARD, VatSubtotal, book_id};
+use crate::value_object::{PAYMENT_METHOD_CARD, VatSubtotal, book_id, ledger_pointer_id};
 
 /// The tenant the tests act in, unless they say otherwise.
 const TENANT: &str = "tenant-1";
@@ -205,6 +205,8 @@ async fn a_document_is_read_from_its_index_alone() {
         .event(&Reserved {
             series: "F2026".into(),
             year: 2026,
+            chunk: 0,
+            ledger_chunk: Some(0),
         })
         .event(&Recorded {
             book_id: book_id("F2026", 0),
@@ -233,19 +235,135 @@ async fn books_fill_and_the_series_carries_on_in_the_next() {
     }
     let expected: Vec<String> = (1..=8).map(|n| format!("F2026-{n:06}")).collect();
     assert_eq!(labels, expected);
-    // Three books of three, the last with two.
-    let third = book_projection()
-        .load(book_id("F2026", 2))
+    // Chunks of three events: three documents in the first, then two after
+    // the `Opened` each later chunk starts with. The pointer names the open
+    // one, which numbers on from the one before.
+    let pointer = book_pointer_projection()
+        .load(book_pointer_id("F2026"))
         .tenant(&cmd.tenant)
         .execute(&cmd.executor)
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(pointer.chunk, 3);
+    let load = |chunk: u32| {
+        let cmd = &cmd;
+        async move {
+            book_projection()
+                .load(book_id("F2026", chunk))
+                .tenant(&cmd.tenant)
+                .execute(&cmd.executor)
+                .await
+                .unwrap()
+                .unwrap()
+        }
+    };
+    let third = load(2).await;
     assert_eq!(third.documents.len(), 2);
-    assert_eq!(third.last_number, 8);
+    assert_eq!(third.last_number, 7);
+    let fourth = load(3).await;
+    assert_eq!(fourth.documents.len(), 1);
+    assert_eq!(fourth.last_number, 8);
+    assert_eq!(fourth.aggregate_version().unwrap(), 2);
     // An old one is still found through its index.
     let first = cmd.load_invoice_of_order("o0").await.unwrap().unwrap();
     assert_eq!(first.label, "F2026-000001");
+}
+
+#[tokio::test]
+async fn a_document_written_before_a_roll_is_found_from_its_reserved_chunk() {
+    let cmd = command().await;
+    cmd.issue_invoice_here(invoice("o1"), NOW).await.unwrap();
+    cmd.issue_invoice_here(invoice("o2"), NOW).await.unwrap();
+    // A writer reserved o3 while chunk 0 was open, wrote it there (filling
+    // the chunk) and stopped before recording the index.
+    let document_id = invoice_id("o3");
+    evento::append(&document_id)
+        .original_version(0)
+        .event(&Reserved {
+            series: "F2026".into(),
+            year: 2026,
+            chunk: 0,
+            ledger_chunk: Some(0),
+        })
+        .tenant(&cmd.tenant)
+        .commit(&cmd.executor)
+        .await
+        .unwrap();
+    evento::append(book_id("F2026", 0))
+        .original_version(2)
+        .event(&issued_in_book(&document_id, "o3", 3))
+        .tenant(&cmd.tenant)
+        .commit(&cmd.executor)
+        .await
+        .unwrap();
+    // The series rolled on without it.
+    for order in ["o4", "o5", "o6"] {
+        cmd.issue_invoice_here(invoice(order), NOW).await.unwrap();
+    }
+    let sixth = cmd.load_invoice_of_order("o6").await.unwrap().unwrap();
+    assert_eq!(sixth.label, "F2026-000006");
+    assert_eq!(
+        document_projection()
+            .load(invoice_id("o6"))
+            .tenant(&cmd.tenant)
+            .execute(&cmd.executor)
+            .await
+            .unwrap()
+            .unwrap()
+            .chunk,
+        1,
+        "o6 was reserved while chunk 1 was open"
+    );
+
+    // The retry looks from chunk 0, where it reserved, and takes no number.
+    let retried = cmd.issue_invoice_here(invoice("o3"), NOW).await.unwrap();
+    assert_eq!(retried.label, "F2026-000003");
+    assert_eq!(retried.total_cents, 4499);
+    let index = document_projection()
+        .load(&document_id)
+        .tenant(&cmd.tenant)
+        .execute(&cmd.executor)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(index.book_id.as_deref(), Some(book_id("F2026", 0).as_str()));
+    let seventh = cmd.issue_invoice_here(invoice("o7"), NOW).await.unwrap();
+    assert_eq!(seventh.label, "F2026-000007");
+}
+
+/// An invoice of `order_id` as a book holds it, numbered `number`.
+fn issued_in_book(document_id: &str, order_id: &str, number: u64) -> InvoiceIssued {
+    let data = invoice(order_id);
+    InvoiceIssued {
+        document_id: document_id.to_owned(),
+        series: "F2026".into(),
+        number,
+        issued_at: NOW,
+        order_id: data.order_id,
+        order_reference: data.order_reference,
+        paid_at: data.paid_at,
+        payment_method: data.payment_method,
+        seller: data.seller,
+        buyer: data.buyer,
+        buyer_email: data.buyer_email,
+        delivery: data.delivery,
+        currency: data.currency,
+        vat: Vec::new(),
+        lines: Vec::new(),
+        total_excl_vat_cents: 0,
+        total_vat_cents: 0,
+        total_cents: 4499,
+        template: TEMPLATE_VERSION,
+        issued_by: data.issued_by,
+        company_id: data.company_id,
+        regime: "domestic".into(),
+        tax_country: "FR".into(),
+        buyer_vat_number: None,
+        vies_reference: None,
+        eu_distance_sales_cents: 0,
+        eu_threshold_passed: false,
+    }
 }
 
 #[tokio::test]
@@ -272,6 +390,8 @@ async fn a_crash_after_the_number_never_takes_a_second_one() {
         .event(&Reserved {
             series: "F2026".into(),
             year: 2026,
+            chunk: 0,
+            ledger_chunk: Some(0),
         })
         .tenant(&cmd.tenant)
         .commit(&cmd.executor)
@@ -284,38 +404,9 @@ async fn a_crash_after_the_number_never_takes_a_second_one() {
         .await
         .unwrap()
         .unwrap();
-    let data = invoice("o2");
     evento::append(book_id("F2026", 0))
         .original_version(book.aggregate_version().unwrap())
-        .event(&InvoiceIssued {
-            document_id: document_id.clone(),
-            series: "F2026".into(),
-            number: 2,
-            issued_at: NOW,
-            order_id: data.order_id,
-            order_reference: data.order_reference,
-            paid_at: data.paid_at,
-            payment_method: data.payment_method,
-            seller: data.seller,
-            buyer: data.buyer,
-            buyer_email: data.buyer_email,
-            delivery: data.delivery,
-            currency: data.currency,
-            vat: Vec::new(),
-            lines: Vec::new(),
-            total_excl_vat_cents: 0,
-            total_vat_cents: 0,
-            total_cents: 4499,
-            template: TEMPLATE_VERSION,
-            issued_by: data.issued_by,
-            company_id: data.company_id,
-            regime: "domestic".into(),
-            tax_country: "FR".into(),
-            buyer_vat_number: None,
-            vies_reference: None,
-            eu_distance_sales_cents: 0,
-            eu_threshold_passed: false,
-        })
+        .event(&issued_in_book(&document_id, "o2", 2))
         .tenant(&cmd.tenant)
         .commit(&cmd.executor)
         .await
@@ -336,11 +427,14 @@ async fn a_crash_after_the_number_never_takes_a_second_one() {
 #[tokio::test]
 async fn writers_racing_never_share_or_skip_a_number() {
     let cmd = command().await;
+    // Two issued already: the race fills chunk 0 and rolls into chunk 1.
+    cmd.issue_invoice_here(invoice("o0"), NOW).await.unwrap();
+    cmd.issue_invoice_here(invoice("o1"), NOW).await.unwrap();
     let issues = (0..6).map(|i| {
         let cmd = Command::new(cmd.executor.clone(), &cmd.tenant);
         async move {
             // Two writers per order, as when two nodes answer the same event.
-            let order = format!("o{}", i / 2);
+            let order = format!("o{}", 2 + i / 2);
             cmd.issue_invoice_here(invoice(&order), NOW).await.unwrap()
         }
     });
@@ -354,7 +448,15 @@ async fn writers_racing_never_share_or_skip_a_number() {
     }
     let mut labels: Vec<&String> = by_order.values().collect();
     labels.sort();
-    assert_eq!(labels, ["F2026-000001", "F2026-000002", "F2026-000003"]);
+    assert_eq!(labels, ["F2026-000003", "F2026-000004", "F2026-000005"]);
+    let pointer = book_pointer_projection()
+        .load(book_pointer_id("F2026"))
+        .tenant(&cmd.tenant)
+        .execute(&cmd.executor)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pointer.chunk, 1);
 }
 
 async fn futures_join<F>(futures: impl Iterator<Item = F>) -> Vec<F::Output>
@@ -762,7 +864,7 @@ async fn a_crash_after_counting_reuses_the_decision() {
     let platform = Ledger(cmd.executor.clone());
     // Counted in the ledger (with the decision of the time), then nothing.
     platform
-        .count("company-1", 2026, &invoice_id("o1"), "tenant-1", |_| {
+        .count("company-1", 2026, &invoice_id("o1"), "tenant-1", 0, |_| {
             crate::tax::Decision {
                 regime: Regime::Oss,
                 tax_country: "DE".into(),
@@ -785,6 +887,77 @@ async fn a_crash_after_counting_reuses_the_decision() {
     assert_eq!(
         platform.total("company-1", 2026).await.unwrap().sales_cents,
         1_100_000
+    );
+}
+
+#[tokio::test]
+async fn a_sale_counted_before_a_roll_is_found_from_its_reserved_chunk() {
+    let cmd = command().await;
+    let platform = Ledger(cmd.executor.clone());
+    // Two sales counted, then o3 reserved while ledger chunk 0 was open and
+    // counted there (filling the chunk), and nothing more.
+    for order in ["o1", "o2"] {
+        cmd.issue_invoice(to_germany(order, 120_000), &platform, NOW)
+            .await
+            .unwrap();
+    }
+    let document_id = invoice_id("o3");
+    evento::append(&document_id)
+        .original_version(0)
+        .event(&Reserved {
+            series: "F2026".into(),
+            year: 2026,
+            chunk: 0,
+            ledger_chunk: Some(0),
+        })
+        .tenant(&cmd.tenant)
+        .commit(&cmd.executor)
+        .await
+        .unwrap();
+    let counted = platform
+        .count("company-1", 2026, &document_id, TENANT, 0, |before| {
+            crate::tax::Decision {
+                regime: Regime::DistanceOrigin,
+                tax_country: "FR".into(),
+                rates: vec![Some(2000)],
+                distance: DistanceSales {
+                    sales_cents: before.sales_cents + 100_000,
+                    passed: false,
+                },
+                euro_rate: None,
+            }
+        })
+        .await
+        .unwrap();
+    assert_eq!(counted.distance.sales_cents, 300_000);
+    // The ledger rolled on without it.
+    for order in ["o4", "o5"] {
+        cmd.issue_invoice(to_germany(order, 120_000), &platform, NOW)
+            .await
+            .unwrap();
+    }
+    let pointer = ledger_pointer_projection()
+        .load(ledger_pointer_id("company-1", 2026))
+        .execute(&cmd.executor)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(pointer.chunk, 1);
+    assert_eq!(
+        platform.total("company-1", 2026).await.unwrap().sales_cents,
+        500_000
+    );
+
+    // The retry gets the decision it was counted with, not a second count.
+    let retried = cmd
+        .issue_invoice(to_germany("o3", 120_000), &platform, NOW)
+        .await
+        .unwrap();
+    assert_eq!(retried.eu_distance_sales_cents, 300_000);
+    assert_eq!(retried.label, "F2026-000005");
+    assert_eq!(
+        platform.total("company-1", 2026).await.unwrap().sales_cents,
+        500_000
     );
 }
 
@@ -1034,7 +1207,7 @@ async fn a_retry_records_the_rate_the_sale_was_counted_at() {
     // Counted at yesterday's rate (with the decision of the time), then
     // nothing: the node went down before the number.
     platform
-        .count("company-1", 2026, &invoice_id("o1"), "tenant-1", |_| {
+        .count("company-1", 2026, &invoice_id("o1"), "tenant-1", 0, |_| {
             crate::tax::Decision {
                 regime: Regime::DistanceOrigin,
                 tax_country: "FR".into(),

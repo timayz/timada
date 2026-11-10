@@ -4,31 +4,49 @@
 //! Issuing a document goes in three steps, each safe to repeat:
 //!
 //! 1. *Reserve*: the document's index stream records the series it goes in
-//!    (version 0, so one writer wins). A retry, even in another year, keeps
-//!    looking in that series.
-//! 2. *Issue*: the document is appended to the open book of the series with
-//!    the version the book was read at, its number one more than the last.
-//!    Two writers racing for a number: one append fails and reads again.
-//!    Before taking a number, the open book and the one before are searched
-//!    for the document, so a retry after a crash between steps 2 and 3
-//!    never takes a second one.
-//! 3. *Record*: the index points at the book and carries a copy of the
+//!    and the chunk of the series open at the time (version 0, so one
+//!    writer wins). A retry, even in another year, keeps looking in that
+//!    series, from that chunk.
+//! 2. *Issue*: the document is appended to the open chunk of the series
+//!    with the version the chunk was read at, its number one more than the
+//!    last. Two writers racing for a number: one append fails and reads
+//!    again. Before taking a number, the chunks from the reserved one to
+//!    the open one are searched for the document, so a retry after a crash
+//!    between steps 2 and 3 never takes a second one.
+//! 3. *Record*: the index points at the chunk and carries a copy of the
 //!    document, so a page reads the document from its own small stream and
 //!    never replays a book.
+//!
+//! # Chunks
+//!
+//! A series (a *book*) is written in chunks of at most [`BOOK_CHUNK`]
+//! events, each a stream of its own, and the series' pointer stream names
+//! the open one: issuing reads the pointer and that one chunk, however many
+//! documents the series holds. The writer that finds the open chunk full
+//! opens the next with `Opened`, carrying the last number, then rolls the
+//! pointer, and reads again. Nothing is ever appended to a full chunk
+//! (every writer checks the version it read against the cap before writing
+//! with it), so every writer opening the next one carries the same number,
+//! and either write losing its race is the work done. Loading a chunk
+//! reads its last number and the ids of its documents, never the documents
+//! themselves: a document is read from its chunk once, when a retry finds
+//! it there and records it. The distance ledger ([`ledger`]) is chunked the
+//! same way.
 
 mod ledger;
 
 pub use ledger::*;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
-use crate::aggregator::{
-    CreditNoteIssued, EuroRateRecorded, InvoiceDiscounted, InvoiceIssued, InvoiceShippingCharged,
-    Recorded, Reserved,
+use crate::aggregator::book::{
+    Book, BookPointer, CreditNoteIssued, EuroRateRecorded, InvoiceDiscounted, InvoiceIssued,
+    InvoiceShippingCharged, Opened, Rolled,
 };
+use crate::aggregator::document::{Document, Recorded, Reserved};
 use crate::error::InvoicingError;
 use crate::rates::{EURO, ExchangeRate};
 use crate::tax::{
@@ -37,15 +55,15 @@ use crate::tax::{
 use crate::value_object::{
     Address, BOOK_CHUNK, CREDIT_NOTE_PREFIX, DocumentKind, INVOICE_PREFIX, InvoiceDiscount,
     InvoiceLine, InvoiceShipping, IssuedDocument, Seller, TEMPLATE_VERSION, book_id,
-    credit_note_id, document_label, invoice_id, prorate, series_code, series_of, spread,
-    vat_breakdown, year_of,
+    book_pointer_id, credit_note_id, document_label, invoice_id, prorate, series_code, series_of,
+    spread, vat_breakdown, year_of,
 };
 
 /// How often a write lost to another writer is tried again.
 const ATTEMPTS: usize = 10;
 
-/// How many documents a book holds: [`BOOK_CHUNK`], or three in the unit
-/// tests so they can fill books.
+/// How many events a chunk holds: [`BOOK_CHUNK`], or three in the unit
+/// tests so they can fill chunks.
 const fn chunk_size() -> u16 {
     if cfg!(test) { 3 } else { BOOK_CHUNK }
 }
@@ -97,31 +115,83 @@ impl<E: Executor> Deref for Command<E> {
 }
 
 // =============================================================================
-// Documents
-// =============================================================================
-
-// =============================================================================
 // Book
 // =============================================================================
 
+/// A chunk of a series as issuing reads it: the last number and which
+/// documents it holds, never the documents themselves (see
+/// [`BookDocuments`]).
 #[evento::projection(id = id, name = "timada-invoicing/BookState")]
 #[evento::snapshot(none)]
 #[derive(Debug, PartialEq, Eq)]
 pub struct BookState {
     pub id: String,
-    /// The number of the last document; `0` for a book with none.
+    /// The number of the last document; the one the chunk before ended
+    /// with for a chunk with none yet, `0` in the first chunk.
     pub last_number: u64,
-    /// Its documents, by index stream.
-    pub documents: BTreeMap<String, IssuedDocument>,
+    /// The index streams of its documents.
+    pub documents: BTreeSet<String>,
 }
 
 pub fn book_projection<E: Executor>() -> Projection<E, BookState> {
-    Projection::new::<crate::aggregator::Book>()
+    Projection::new::<Book>()
+        .handler(on_opened())
         .handler(on_invoice_issued())
         .handler(on_credit_note_issued())
-        .handler(on_invoice_discounted())
-        .handler(on_invoice_shipping_charged())
-        .handler(on_euro_rate_recorded())
+        .skip::<InvoiceDiscounted>()
+        .skip::<InvoiceShippingCharged>()
+        .skip::<EuroRateRecorded>()
+        .strict()
+}
+
+#[evento::handler]
+async fn on_opened(event: Event<Opened>, book: &mut BookState) -> anyhow::Result<()> {
+    book.id = event.aggregate_id.to_owned();
+    book.last_number = event.data.last_number;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invoice_issued(
+    event: Event<InvoiceIssued>,
+    book: &mut BookState,
+) -> anyhow::Result<()> {
+    book.id = event.aggregate_id.to_owned();
+    book.last_number = event.data.number;
+    book.documents.insert(event.data.document_id.to_owned());
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_credit_note_issued(
+    event: Event<CreditNoteIssued>,
+    book: &mut BookState,
+) -> anyhow::Result<()> {
+    book.id = event.aggregate_id.to_owned();
+    book.last_number = event.data.number;
+    book.documents.insert(event.data.document_id.to_owned());
+    Ok(())
+}
+
+/// The documents of a chunk, whole: read once, when a retry finds its
+/// document in a chunk and records it.
+#[evento::projection(id = id, name = "timada-invoicing/BookDocuments")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct BookDocuments {
+    pub id: String,
+    /// By index stream.
+    pub documents: BTreeMap<String, IssuedDocument>,
+}
+
+pub fn book_documents_projection<E: Executor>() -> Projection<E, BookDocuments> {
+    Projection::new::<Book>()
+        .skip::<Opened>()
+        .handler(copy_invoice())
+        .handler(copy_credit_note())
+        .handler(copy_discount())
+        .handler(copy_shipping())
+        .handler(copy_euro_rate())
         .strict()
 }
 
@@ -215,13 +285,9 @@ impl IssuedDocument {
 }
 
 #[evento::handler]
-async fn on_invoice_issued(
-    event: Event<InvoiceIssued>,
-    book: &mut BookState,
-) -> anyhow::Result<()> {
+async fn copy_invoice(event: Event<InvoiceIssued>, book: &mut BookDocuments) -> anyhow::Result<()> {
     let data = &event.data;
     book.id = event.aggregate_id.to_owned();
-    book.last_number = data.number;
     book.documents.insert(
         data.document_id.to_owned(),
         IssuedDocument::of_invoice(data),
@@ -230,9 +296,23 @@ async fn on_invoice_issued(
 }
 
 #[evento::handler]
-async fn on_invoice_discounted(
+async fn copy_credit_note(
+    event: Event<CreditNoteIssued>,
+    book: &mut BookDocuments,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    book.id = event.aggregate_id.to_owned();
+    book.documents.insert(
+        data.document_id.to_owned(),
+        IssuedDocument::of_credit_note(data),
+    );
+    Ok(())
+}
+
+#[evento::handler]
+async fn copy_discount(
     event: Event<InvoiceDiscounted>,
-    book: &mut BookState,
+    book: &mut BookDocuments,
 ) -> anyhow::Result<()> {
     // Written right after the `InvoiceIssued` it belongs to.
     if let Some(document) = book.documents.get_mut(&event.data.document_id) {
@@ -242,9 +322,9 @@ async fn on_invoice_discounted(
 }
 
 #[evento::handler]
-async fn on_invoice_shipping_charged(
+async fn copy_shipping(
     event: Event<InvoiceShippingCharged>,
-    book: &mut BookState,
+    book: &mut BookDocuments,
 ) -> anyhow::Result<()> {
     // Written right after the `InvoiceIssued` it belongs to.
     if let Some(document) = book.documents.get_mut(&event.data.document_id) {
@@ -254,9 +334,9 @@ async fn on_invoice_shipping_charged(
 }
 
 #[evento::handler]
-async fn on_euro_rate_recorded(
+async fn copy_euro_rate(
     event: Event<EuroRateRecorded>,
-    book: &mut BookState,
+    book: &mut BookDocuments,
 ) -> anyhow::Result<()> {
     // Written right after the `InvoiceIssued` or `CreditNoteIssued` it
     // belongs to.
@@ -266,18 +346,25 @@ async fn on_euro_rate_recorded(
     Ok(())
 }
 
+/// Which chunk of a series is open.
+#[evento::projection(id = id, name = "timada-invoicing/BookPointerState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct BookPointerState {
+    pub id: String,
+    pub chunk: u32,
+}
+
+pub fn book_pointer_projection<E: Executor>() -> Projection<E, BookPointerState> {
+    Projection::new::<BookPointer>()
+        .handler(on_rolled())
+        .strict()
+}
+
 #[evento::handler]
-async fn on_credit_note_issued(
-    event: Event<CreditNoteIssued>,
-    book: &mut BookState,
-) -> anyhow::Result<()> {
-    let data = &event.data;
-    book.id = event.aggregate_id.to_owned();
-    book.last_number = data.number;
-    book.documents.insert(
-        data.document_id.to_owned(),
-        IssuedDocument::of_credit_note(data),
-    );
+async fn on_rolled(event: Event<Rolled>, pointer: &mut BookPointerState) -> anyhow::Result<()> {
+    pointer.id = event.aggregate_id.to_owned();
+    pointer.chunk = pointer.chunk.max(event.data.chunk);
     Ok(())
 }
 
@@ -294,6 +381,12 @@ pub struct DocumentState {
     pub series: String,
     /// The calendar year of that series.
     pub year: u16,
+    /// The chunk of the series open when it was reserved: it is in that
+    /// one or a later one.
+    pub chunk: u32,
+    /// For an invoice, the chunk of the company's distance ledger open when
+    /// it was reserved.
+    pub ledger_chunk: Option<u32>,
     /// The book holding it, once recorded.
     pub book_id: Option<String>,
     /// The document itself, once recorded: what a page reads.
@@ -301,7 +394,7 @@ pub struct DocumentState {
 }
 
 pub fn document_projection<E: Executor>() -> Projection<E, DocumentState> {
-    Projection::new::<crate::aggregator::Document>()
+    Projection::new::<Document>()
         .handler(on_reserved())
         .handler(on_recorded())
         .strict()
@@ -312,6 +405,8 @@ async fn on_reserved(event: Event<Reserved>, document: &mut DocumentState) -> an
     document.id = event.aggregate_id.to_owned();
     document.series = event.data.series.to_owned();
     document.year = event.data.year;
+    document.chunk = event.data.chunk;
+    document.ledger_chunk = event.data.ledger_chunk;
     Ok(())
 }
 
@@ -407,12 +502,46 @@ pub fn shipping_shares(goods: &[u64], shipping_cents: u64) -> Vec<u64> {
     }
 }
 
-/// The book a document goes in, as read for one attempt.
+/// The chunk of a series the next document goes in, as read for one
+/// attempt.
 struct OpenBook {
+    /// The pointer, `None` while chunk 0 is open.
+    pointer: Option<BookPointerState>,
+    /// The chunk the pointer names (0 without one).
+    chunk: u32,
+    /// The stream of that chunk.
     id: String,
+    /// Its state, `None` when nothing was ever written to it.
     state: Option<BookState>,
+}
+
+impl OpenBook {
+    /// Whether nothing more may be written to it: the next write opens the
+    /// chunk after it.
+    fn full(&self) -> anyhow::Result<bool> {
+        match &self.state {
+            Some(book) => Ok(book.aggregate_version()? >= chunk_size()),
+            None => Ok(false),
+        }
+    }
+
+    /// The version a write to it is made at.
+    fn version(&self) -> anyhow::Result<u16> {
+        self.state
+            .as_ref()
+            .map_or(Ok(0), |book| book.aggregate_version())
+    }
+
     /// The number the next document takes.
-    next: u64,
+    fn next(&self) -> u64 {
+        self.state.as_ref().map_or(0, |book| book.last_number) + 1
+    }
+
+    fn holds(&self, document_id: &str) -> bool {
+        self.state
+            .as_ref()
+            .is_some_and(|book| book.documents.contains(document_id))
+    }
 }
 
 impl<E: Executor> Command<E> {
@@ -474,11 +603,18 @@ impl<E: Executor> Command<E> {
             .map(|(line, shipping)| line + shipping)
             .collect();
         let document_id = invoice_id(&invoice.order_id);
+        let year = year_of(now);
+        // Where a retry starts looking for its count: the chunk of the
+        // ledger open before the reservation.
+        let ledger_chunk = ledger
+            .open_chunk_number(&invoice.company_id, i64::from(year))
+            .await?;
         let index = self
             .reserve(
                 &document_id,
                 series_of(INVOICE_PREFIX, &invoice.series_code, now),
-                year_of(now),
+                year,
+                Some(ledger_chunk),
             )
             .await?;
         if let Some(document) = index.document {
@@ -510,6 +646,7 @@ impl<E: Executor> Command<E> {
                     i64::from(index.year),
                     &document_id,
                     &invoice.tenant_id,
+                    index.ledger_chunk.unwrap_or(0),
                     decide_with,
                 )
                 .await?
@@ -638,6 +775,7 @@ impl<E: Executor> Command<E> {
                 &document_id,
                 series_of(CREDIT_NOTE_PREFIX, series_code(&invoice.series), now),
                 year_of(now),
+                None,
             )
             .await?;
         if let Some(document) = index.document {
@@ -687,12 +825,14 @@ impl<E: Executor> Command<E> {
     }
 
     /// Step 1 of the module doc: the document's index, reserved in `series`
-    /// unless it was already (then in the series it was reserved in).
+    /// unless it was already (then in the series it was reserved in), noting
+    /// the chunk of the series open now and `ledger_chunk`.
     async fn reserve(
         &self,
         document_id: &str,
         series: String,
         year: u16,
+        ledger_chunk: Option<u32>,
     ) -> Result<DocumentState, InvoicingError> {
         for _ in 0..ATTEMPTS {
             if let Some(index) = document_projection()
@@ -703,11 +843,16 @@ impl<E: Executor> Command<E> {
             {
                 return Ok(index);
             }
+            // The document goes in this chunk or a later one: the pointer
+            // only moves forward.
+            let chunk = self.open_chunk_number(&series).await?;
             let reserved = evento::append(document_id)
                 .original_version(0)
                 .event(&Reserved {
                     series: series.clone(),
                     year,
+                    chunk,
+                    ledger_chunk,
                 })
                 .tenant(&self.tenant)
                 .commit(&self.executor)
@@ -745,29 +890,17 @@ impl<E: Executor> Command<E> {
                 return Ok(document);
             }
 
-            // A retry: the document may be in the book already.
-            let (open, previous) = self.open_book(&index.series).await?;
-            let issued = [open.state.as_ref(), previous.as_ref()]
-                .into_iter()
-                .flatten()
-                .find_map(|book| {
-                    book.documents
-                        .get(document_id)
-                        .map(|document| (book.id.clone(), document.clone()))
-                });
-            if let Some((book, document)) = issued {
+            // A retry: the document may be in a chunk already.
+            let open = self.open_book(&index.series).await?;
+            if let Some((book, document)) = self.find_issued(&index, &open, document_id).await? {
                 self.record(&index, &book, &document).await?;
                 return Ok(document);
             }
 
             // 2. Issue.
-            let (mut write, document) = event(&open.id, &index.series, open.next);
+            let (mut write, document) = event(&open.id, &index.series, open.next());
             let committed = write
-                .original_version(
-                    open.state
-                        .as_ref()
-                        .map_or(Ok(0), |book| book.aggregate_version())?,
-                )
+                .original_version(open.version()?)
                 .tenant(&self.tenant)
                 .commit(&self.executor)
                 .await;
@@ -807,35 +940,139 @@ impl<E: Executor> Command<E> {
         }
     }
 
-    /// The book of `series` the next document goes in, and the full one
-    /// before it if any.
-    async fn open_book(
+    /// The document, with the chunk holding it, when a writer put it in
+    /// one: looked for from the chunk open when it was reserved to the open
+    /// one (`open`, read already), reading a chunk's documents only once
+    /// their ids say it is there.
+    async fn find_issued(
         &self,
-        series: &str,
-    ) -> Result<(OpenBook, Option<BookState>), InvoicingError> {
-        let mut previous: Option<BookState> = None;
-        let mut chunk = 0;
-        loop {
-            let id = book_id(series, chunk);
-            let state = book_projection()
+        index: &DocumentState,
+        open: &OpenBook,
+        document_id: &str,
+    ) -> Result<Option<(String, IssuedDocument)>, InvoicingError> {
+        for chunk in index.chunk..=open.chunk {
+            let id = book_id(&index.series, chunk);
+            let holds = if chunk == open.chunk {
+                open.holds(document_id)
+            } else {
+                book_projection()
+                    .load(&id)
+                    .tenant(&self.tenant)
+                    .execute(&self.executor)
+                    .await?
+                    .is_some_and(|book| book.documents.contains(document_id))
+            };
+            if !holds {
+                continue;
+            }
+            let document = book_documents_projection()
                 .load(&id)
                 .tenant(&self.tenant)
                 .execute(&self.executor)
-                .await?;
-            let full = match &state {
-                Some(book) => book.aggregate_version()? >= chunk_size(),
-                None => false,
-            };
-            if !full {
-                let next = state
-                    .as_ref()
-                    .or(previous.as_ref())
-                    .map_or(0, |book| book.last_number)
-                    + 1;
-                return Ok((OpenBook { id, state, next }, previous));
+                .await?
+                .and_then(|book| book.documents.get(document_id).cloned())
+                .ok_or_else(|| anyhow::anyhow!("document {document_id} is not in book {id}"))?;
+            return Ok(Some((id, document)));
+        }
+        Ok(None)
+    }
+
+    /// The chunk of `series` the pointer names now: where a document
+    /// reserved now is written, or a later one.
+    async fn open_chunk_number(&self, series: &str) -> Result<u32, InvoicingError> {
+        Ok(book_pointer_projection()
+            .load(book_pointer_id(series))
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await?
+            .map_or(0, |pointer| pointer.chunk))
+    }
+
+    /// The chunk of `series` the next document goes in: the one the pointer
+    /// names, rolled past while full.
+    async fn open_book(&self, series: &str) -> Result<OpenBook, InvoicingError> {
+        loop {
+            let open = self.read_open_book(series).await?;
+            if !open.full()? {
+                return Ok(open);
             }
-            previous = state;
-            chunk += 1;
+            self.roll(series, open).await?;
+        }
+    }
+
+    /// The chunk the pointer names, as it is now.
+    async fn read_open_book(&self, series: &str) -> Result<OpenBook, InvoicingError> {
+        let pointer = book_pointer_projection()
+            .load(book_pointer_id(series))
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await?;
+        let chunk = pointer.as_ref().map_or(0, |pointer| pointer.chunk);
+        let id = book_id(series, chunk);
+        let state = book_projection()
+            .load(&id)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await?;
+        if chunk > 0 && state.is_none() {
+            // Its `Opened` is committed before the pointer names it: a read
+            // that sees the one without the other is behind, and numbering
+            // from nothing would start the chunk at 1.
+            return Err(
+                anyhow::anyhow!("chunk {chunk} of {series} is named but not opened").into(),
+            );
+        }
+        Ok(OpenBook {
+            pointer,
+            chunk,
+            id,
+            state,
+        })
+    }
+
+    /// Opens the chunk after the full one `open`, from the number it ended
+    /// with, then points at it. Another writer doing the same at the same
+    /// moment carries the same number, so either write losing its race is
+    /// the work done.
+    async fn roll(&self, series: &str, open: OpenBook) -> Result<(), InvoicingError> {
+        let Some(full) = open.state else {
+            return Ok(());
+        };
+        let next = open.chunk + 1;
+        let opened = evento::append(book_id(series, next))
+            .original_version(0)
+            .event(&Opened {
+                last_number: full.last_number,
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await;
+        match opened {
+            Ok(_) | Err(WriteError::InvalidOriginalVersion) => {}
+            Err(err) => return Err(err.into()),
+        }
+        let rolled = Rolled { chunk: next };
+        let pointed = match open.pointer {
+            Some(pointer) => {
+                pointer
+                    .write()?
+                    .event(&rolled)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
+                    .await
+            }
+            None => {
+                evento::append(book_pointer_id(series))
+                    .original_version(0)
+                    .event(&rolled)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
+                    .await
+            }
+        };
+        match pointed {
+            Ok(_) | Err(WriteError::InvalidOriginalVersion) => Ok(()),
+            Err(err) => Err(err.into()),
         }
     }
 
