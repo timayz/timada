@@ -56,10 +56,11 @@ use timada_core::{CodeVerifier, Sending};
 
 use crate::aggregator::{
     AdminGranted, AdminRevoked, AttemptFailed, Claimed, CodeIssued, Consumed, Created, Deleted,
-    EmailAdded, EmailRegistered, Ended, FirstUserClaimed, Linked, MailClaimed, MailSent,
-    MailUndeliverable, OAuth2AccountLinked, OAuth2AccountUnlinked, PasskeyAdded, PasskeyRemoved,
-    PasskeyRenamed, PasswordChanged, ProfileUpdated, Refreshed, Registered, Released, Removed,
-    SessionsRevoked, SignedIn, SignedInWithPassword, SignedOut, Started, Unlinked, Updated,
+    EmailAdded, EmailRegistered, Ended, FirstUserClaimed, Linked, MailClaimed, MailDeferred,
+    MailFailed, MailSent, MailUndeliverable, OAuth2AccountLinked, OAuth2AccountUnlinked,
+    PasskeyAdded, PasskeyRemoved, PasskeyRenamed, PasswordChanged, ProfileUpdated, Refreshed,
+    Registered, Released, Removed, SessionsRevoked, SignedIn, SignedInWithPassword, SignedOut,
+    Started, Unlinked, Updated,
 };
 use crate::error::IdentityError;
 use crate::value_object::{
@@ -690,6 +691,8 @@ pub fn email_challenge_projection<E: Executor>() -> Projection<E, EmailChallenge
         .handler(on_mail_claimed())
         .handler(on_mail_sent())
         .handler(on_mail_undeliverable())
+        .handler(on_mail_deferred())
+        .handler(on_mail_failed())
         .strict()
 }
 
@@ -716,10 +719,7 @@ async fn on_mail_claimed(
     event: Event<MailClaimed>,
     state: &mut EmailChallengeState,
 ) -> anyhow::Result<()> {
-    state.mail = Sending::Claimed {
-        by: event.data.by.to_owned(),
-        until: event.data.until,
-    };
+    state.mail = state.mail.claimed(&event.data.by, event.data.until);
     Ok(())
 }
 
@@ -740,6 +740,24 @@ async fn on_mail_undeliverable(
     state.mail = Sending::Undeliverable {
         reason: event.data.reason.to_owned(),
     };
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_deferred(
+    event: Event<MailDeferred>,
+    state: &mut EmailChallengeState,
+) -> anyhow::Result<()> {
+    state.mail = state.mail.deferred(event.data.retry_at, &event.data.reason);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_failed(
+    event: Event<MailFailed>,
+    state: &mut EmailChallengeState,
+) -> anyhow::Result<()> {
+    state.mail = state.mail.failed(&event.data.reason);
     Ok(())
 }
 

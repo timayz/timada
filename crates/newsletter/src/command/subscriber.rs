@@ -1,9 +1,10 @@
 use evento::{Executor, ProjectionAggregate, WriteBuilder, WriteError};
 use timada_core::keys::{self, Key, Keys, new_key_id};
-use timada_core::{Claim, Claimant, LEASE_SECS};
+use timada_core::{Claim, Claimant, LEASE_SECS, MailOutcome, MailRecord};
 
 use crate::aggregator::{
-    Confirmed, MailClaimed, MailSent, MailUndeliverable, Requested, TimeZoneSet, Unsubscribed,
+    Confirmed, MailClaimed, MailDeferred, MailFailed, MailSent, MailUndeliverable, Requested,
+    TimeZoneSet, Unsubscribed,
 };
 use crate::error::NewsletterError;
 use crate::value_object::{
@@ -246,10 +247,11 @@ impl<E: Executor> super::Command<E> {
     /// the request `Requested` at `requested_version` of subscriber
     /// `subscriber_id` recorded: what to mail, with the address opened by its
     /// key from `keys`, or `None` when this node mails nothing (the outcome
-    /// is recorded, another node is sending, the request is no longer the
-    /// pending one, or the subscriber is erased). A node that holds the
-    /// claim gets the mail again, to send it again after a failure worth a
-    /// retry.
+    /// is recorded, another node is sending, the next try is not due, the
+    /// request is no longer the pending one or its link would be expired
+    /// ([`CONFIRM_TTL_SECS`]), or the subscriber is erased). A node that
+    /// holds the claim gets the mail again, to send it again after a failure
+    /// worth a retry.
     pub async fn claim_confirmation_mail(
         &self,
         keys: &dyn Keys,
@@ -267,6 +269,7 @@ impl<E: Executor> super::Command<E> {
             };
             if state.requested_version != requested_version
                 || state.status != SubscriberStatus::Pending
+                || now.saturating_sub(state.requested_at) > CONFIRM_TTL_SECS
             {
                 return Ok(None);
             }
@@ -309,8 +312,36 @@ impl<E: Executor> super::Command<E> {
         requested_version: u16,
         routing_key: Option<String>,
     ) -> Result<(), NewsletterError> {
-        self.record_confirmation_mail(subscriber_id, requested_version, None, routing_key)
-            .await
+        self.record_confirmation_mail(
+            subscriber_id,
+            requested_version,
+            MailOutcome::Sent,
+            routing_key,
+        )
+        .await
+    }
+
+    /// Records that `node`'s send failed at `now` (unix seconds) for `reason`, a
+    /// reason worth a retry (the shop's server did not answer, a transient
+    /// refusal): deferred to the next try of the schedule
+    /// ([`timada_core::RETRY_DELAYS_SECS`]), or given up on once none is
+    /// left. Any node may take the next try once it is due.
+    pub async fn record_confirmation_mail_not_sent(
+        &self,
+        subscriber_id: &str,
+        requested_version: u16,
+        node: &str,
+        reason: &str,
+        now: u64,
+        routing_key: Option<String>,
+    ) -> Result<(), NewsletterError> {
+        self.record_confirmation_mail(
+            subscriber_id,
+            requested_version,
+            MailOutcome::NotSent { node, reason, now },
+            routing_key,
+        )
+        .await
     }
 
     /// Records that the mail server refused the address for good (or that it
@@ -323,8 +354,13 @@ impl<E: Executor> super::Command<E> {
         reason: &str,
         routing_key: Option<String>,
     ) -> Result<(), NewsletterError> {
-        self.record_confirmation_mail(subscriber_id, requested_version, Some(reason), routing_key)
-            .await
+        self.record_confirmation_mail(
+            subscriber_id,
+            requested_version,
+            MailOutcome::Undeliverable(reason),
+            routing_key,
+        )
+        .await
     }
 
     /// Confirms the request a mailed link names. A link that does not check
@@ -441,7 +477,7 @@ impl<E: Executor> super::Command<E> {
         &self,
         subscriber_id: &str,
         requested_version: u16,
-        undeliverable: Option<&str>,
+        outcome: MailOutcome<'_>,
         routing_key: Option<String>,
     ) -> Result<(), NewsletterError> {
         let mut attempt = 0;
@@ -450,16 +486,25 @@ impl<E: Executor> super::Command<E> {
             let Some(state) = self.load_subscriber(subscriber_id).await? else {
                 return Ok(());
             };
-            if state.requested_version != requested_version || state.mail.is_settled() {
+            if state.requested_version != requested_version {
+                return Ok(());
+            }
+            let record = state
+                .mail
+                .record(outcome, state.requested_at + CONFIRM_TTL_SECS);
+            if record == MailRecord::Nothing {
                 return Ok(());
             }
             let mut writer = state.write()?;
             writer.routing_key_opt(routing_key.clone());
-            match undeliverable {
-                Some(reason) => writer.event(&MailUndeliverable {
-                    reason: reason.to_owned(),
-                }),
-                None => writer.event(&MailSent),
+            match record {
+                MailRecord::Sent => writer.event(&MailSent),
+                MailRecord::Undeliverable(reason) => writer.event(&MailUndeliverable { reason }),
+                MailRecord::Deferred { retry_at, reason } => {
+                    writer.event(&MailDeferred { retry_at, reason })
+                }
+                MailRecord::Failed { reason } => writer.event(&MailFailed { reason }),
+                MailRecord::Nothing => unreachable!("returned above"),
             };
             match writer.tenant(&self.tenant).commit(&self.executor).await {
                 Ok(_) => return Ok(()),

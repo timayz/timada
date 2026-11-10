@@ -15,6 +15,8 @@ mod cluster;
 mod config;
 #[path = "../src/db.rs"]
 mod db;
+#[path = "../src/mailroom/schema.rs"]
+mod mailroom;
 #[path = "../src/read_only_store.rs"]
 mod read_only_store;
 #[path = "../src/store_api.rs"]

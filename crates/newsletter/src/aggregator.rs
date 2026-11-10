@@ -53,6 +53,11 @@ pub enum Subscriber {
     /// The mail server refused the address for good; `reason` is what it
     /// said.
     MailUndeliverable { reason: String },
+    /// The send failed for a reason worth a retry (`reason` says which); the
+    /// next try may be made at `retry_at` (unix seconds).
+    MailDeferred { retry_at: u64, reason: String },
+    /// Given up on: the last send failed with `reason` and no retry is left.
+    MailFailed { reason: String },
 }
 
 /// One mail of news the merchant writes, then sends to the confirmed

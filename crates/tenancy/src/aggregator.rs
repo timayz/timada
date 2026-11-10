@@ -296,6 +296,16 @@ pub enum Invitation {
     MailUndeliverable {
         reason: String,
     },
+    /// The send failed for a reason worth a retry (`reason` says which); the
+    /// next try may be made at `retry_at` (unix seconds).
+    MailDeferred {
+        retry_at: u64,
+        reason: String,
+    },
+    /// Given up on: the last send failed with `reason` and no retry is left.
+    MailFailed {
+        reason: String,
+    },
 }
 
 /// The store API key events, in their own module: the macro names an event

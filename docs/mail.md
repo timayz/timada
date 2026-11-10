@@ -58,7 +58,43 @@ A server switched for marketing while a campaign goes out sends its next batches
 shop whose server stops accepting mail does not fall back to another one, nor to the
 platform's server. The send fails and is logged, so a broken setup shows instead of
 being hidden. The order mails and review requests are claimed before they are sent,
-so one that fails is not retried.
+so one that fails is not retried; the codes, invitations and confirmations are retried
+by the mailroom (see [Sending in the background](#sending-in-the-background)).
+
+## Sending in the background
+
+Sign-in codes (the platform's and the shops'), invitations and newsletter
+confirmations are mailed by the dashboard's sagas, not by the request that asked for
+them: the command records the intent on the stream, a subscription on every node of
+the region sees it, and the node that first writes a claim on the stream sends. The
+send itself happens off the subscription's cursor, in the node's **mailroom**
+(`dashboard/src/mailroom`): the subscription only writes what is owed into the
+node's `owed_mails` table and acknowledges the event; the mailroom works the table
+right away and every five seconds, grouping the mails by shop and sending each shop's
+one after the other, on a lane of its own, while up to sixteen shops go at once. The
+first send a shop's server fails ends that shop's lane until the retry is due, so a
+down server is probed once, not once per mail. One shop whose server takes twenty
+seconds to not answer costs the others nothing, and a pass of a subscription never
+fails for a mail server.
+
+How a send went is recorded on the stream (`timada_core::Sending`):
+
+- **sent**: handed to the server;
+- **undeliverable**: the server refused the address for good (`550`, `551`, `553`, or
+  `501` about the recipient), or it does not parse. The person corrects the address
+  and asks again at once;
+- **deferred**: anything else (no answer, a `4xx`, bad credentials). The next try may be
+  made after 30 s, then 1, 2, 5 and 15 minutes, then 1, 4 and 12 hours, by whichever
+  node looks once it is due;
+- **failed**: the try after the last wait failed too, about eighteen hours in, or the
+  next try would come after the intent itself expires (a sign-in code lives ten
+  minutes, so its fifth failure is its last): the mail is given up on. An invitation or
+  a confirmation stays open for days. A node whose lease lapsed while it was still
+  trying records no failure over the claim another node took since.
+
+`/admin/cluster` counts the mails this node still owes and lists the ones given up on
+for a week, with the last failure's reason. The members page shows an invitation that
+is being retried or was given up on, so the inviter can invite again.
 
 ## A shop's own wording
 

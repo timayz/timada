@@ -149,7 +149,8 @@ pub enum EmailAccount {
 /// ([`timada_core::CodeVerifier`]), by the node that mails it and again by
 /// the one that checks the guess. The mail is sent by a subscription, which
 /// records how it went on the stream (`MailClaimed`, `MailSent`,
-/// `MailUndeliverable`; see [`timada_core::Sending`]).
+/// `MailUndeliverable`, `MailDeferred`, `MailFailed`; see
+/// [`timada_core::Sending`]).
 #[evento::aggregate(name = "timada-identity/EmailChallenge")]
 pub enum EmailChallenge {
     /// `email` is the normalized address the code goes to.
@@ -173,6 +174,16 @@ pub enum EmailChallenge {
     /// The mail server refused the address for good; `reason` is what it
     /// said.
     MailUndeliverable {
+        reason: String,
+    },
+    /// The send failed for a reason worth a retry (`reason` says which); the
+    /// next try may be made at `retry_at` (unix seconds).
+    MailDeferred {
+        retry_at: u64,
+        reason: String,
+    },
+    /// Given up on: the last send failed with `reason` and no retry is left.
+    MailFailed {
         reason: String,
     },
 }

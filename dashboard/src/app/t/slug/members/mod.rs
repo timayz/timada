@@ -53,8 +53,14 @@ pub fn members_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&st
 fn mail_state(mail: InvitationMailState) -> &'static str {
     match mail {
         InvitationMailState::Sending => "sending…",
+        InvitationMailState::Retrying => {
+            "not sent yet: the mail server did not answer, trying again"
+        }
         InvitationMailState::Sent => "mailed",
         InvitationMailState::Undeliverable => "could not be delivered: check the address",
+        InvitationMailState::Failed => {
+            "could not be sent: the mail server did not answer; invite again"
+        }
     }
 }
 

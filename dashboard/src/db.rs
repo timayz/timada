@@ -196,6 +196,12 @@ const STORE_READ_MODELS: &[StoreReadModel] = &[
         tables: timada_orders::TABLES,
         reset_rows: "",
     },
+    // The dashboard's own: the mails its sagas owe (`mailroom/schema.rs`).
+    StoreReadModel {
+        migrations: &crate::mailroom::MIGRATIONS,
+        tables: crate::mailroom::TABLES,
+        reset_rows: "",
+    },
     StoreReadModel {
         migrations: &timada_shoppers::MIGRATIONS,
         tables: timada_shoppers::TABLES,

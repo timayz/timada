@@ -32,7 +32,10 @@ pub use currency::{CURRENCIES, normalize_currency};
 pub use email::{MAX_EMAIL_LEN, normalize_email};
 pub use keys::{Key, Keys};
 pub use money::{currency_symbol, format_amount, format_money, format_money_range};
-pub use sending::{Claim, Claimant, LEASE_SECS, Sending};
+pub use sending::{
+    Claim, Claimant, LEASE_SECS, Outcome as MailOutcome, RETRY_DELAYS_SECS, Record as MailRecord,
+    Sending,
+};
 pub use slug::{
     MIN_SLUG_LEN, SLUG_SUFFIX_LEN, normalize_slug, slugify, suffixed_slug, truncate_slug,
 };

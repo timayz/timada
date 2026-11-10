@@ -82,6 +82,11 @@ pub enum ShopperChallenge {
     /// The mail server refused the address for good; `reason` is what it
     /// said.
     MailUndeliverable { reason: String },
+    /// The send failed for a reason worth a retry (`reason` says which); the
+    /// next try may be made at `retry_at` (unix seconds).
+    MailDeferred { retry_at: u64, reason: String },
+    /// Given up on: the last send failed with `reason` and no retry is left.
+    MailFailed { reason: String },
 }
 
 /// A signed-in browser. Its id is [`session_id`](crate::session_id) of the

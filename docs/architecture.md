@@ -95,6 +95,14 @@ Recurring patterns:
 - **Read models** are SQL tables in the shared database, fed by one
   `read_model_subscription` per crate. They are eventually consistent; pages that must
   show a write immediately read the aggregate.
+- **A saga never fails its pass for a tenant's or an outside service's fault.** A
+  subscription's cursor serves every tenant: a handler that returned an error would
+  hold it for all of them until that one shop's mail server, or that service, was
+  back. A send that fails for such a reason is recorded on the stream
+  (`MailDeferred`, `MailFailed`) and the event acknowledged; the node's mailroom
+  (`dashboard/src/mailroom`) re-drives what is owed on a timer, a lane per shop, and
+  the subscription itself only writes what is owed into the mailroom's table. Only a
+  store fault fails a pass. See `docs/mail.md`, "Sending in the background".
 - **One stream per tenant for a short list.** The settings a checkout reads whole each
   time (shipping methods, checkout offers) live in one stream with a deterministic id
   (`hash_ids(["offers"])`), capped in size, and are read straight from it: no read

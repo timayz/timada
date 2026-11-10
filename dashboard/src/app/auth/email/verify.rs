@@ -72,10 +72,15 @@ pub async fn verify(cx: &Cx) -> Result<impl View> {
             "We couldn't deliver a code to ",
             ". Check the address and ask for a new code.",
         ),
-        Some(Sending::Pending | Sending::Claimed { .. }) => (
+        Some(Sending::Pending | Sending::Claimed { .. } | Sending::Deferred { .. }) => (
             "sending",
             "We are sending a 6-digit code to ",
             ". It is valid for 10 minutes.",
+        ),
+        Some(Sending::Failed { .. }) => (
+            "failed",
+            "We couldn't send a code to ",
+            ". Our mail server did not answer; ask for a new code in a moment.",
         ),
         Some(Sending::Sent) | None => (
             "sent",

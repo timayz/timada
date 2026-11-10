@@ -135,6 +135,8 @@ event timada-identity/EmailChallenge::AttemptFailed unit
 event timada-identity/EmailChallenge::CodeIssued { purpose: ChallengePurpose, email: String, nonce: Vec<u8>, issued_at: u64, expires_at: u64 }
 event timada-identity/EmailChallenge::Consumed unit
 event timada-identity/EmailChallenge::MailClaimed { by: String, until: u64 }
+event timada-identity/EmailChallenge::MailDeferred { retry_at: u64, reason: String }
+event timada-identity/EmailChallenge::MailFailed { reason: String }
 event timada-identity/EmailChallenge::MailSent unit
 event timada-identity/EmailChallenge::MailUndeliverable { reason: String }
 event timada-identity/OAuth2Account::Linked { user_id: String, provider: String, provider_user_id: String }
@@ -194,6 +196,8 @@ event timada-newsletter/Edition::EditionRolled { cycle: String, rolled_by: Strin
 event timada-newsletter/Subscriber::Confirmed { confirmed_by: String }
 event timada-newsletter/Subscriber::Forgotten { key_id: String, forgotten_by: String }
 event timada-newsletter/Subscriber::MailClaimed { by: String, until: u64 }
+event timada-newsletter/Subscriber::MailDeferred { retry_at: u64, reason: String }
+event timada-newsletter/Subscriber::MailFailed { reason: String }
 event timada-newsletter/Subscriber::MailSent unit
 event timada-newsletter/Subscriber::MailUndeliverable { reason: String }
 event timada-newsletter/Subscriber::Requested { key_id: String, email: Vec<u8>, language: Option<String>, source: String, requested_by: String }
@@ -294,6 +298,8 @@ event timada-shoppers/ShopperChallenge::AttemptFailed unit
 event timada-shoppers/ShopperChallenge::CodeConsumed unit
 event timada-shoppers/ShopperChallenge::CodeIssued { key_id: String, email: Vec<u8>, nonce: Vec<u8>, language: Option<String>, issued_at: u64, expires_at: u64 }
 event timada-shoppers/ShopperChallenge::MailClaimed { by: String, until: u64 }
+event timada-shoppers/ShopperChallenge::MailDeferred { retry_at: u64, reason: String }
+event timada-shoppers/ShopperChallenge::MailFailed { reason: String }
 event timada-shoppers/ShopperChallenge::MailSent unit
 event timada-shoppers/ShopperChallenge::MailUndeliverable { reason: String }
 event timada-shoppers/ShopperSession::SessionEnded unit
@@ -317,6 +323,8 @@ event timada-tenancy/CompanySiren::Claimed { company_id: String }
 event timada-tenancy/CompanySiren::Released { released_by: String }
 event timada-tenancy/Invitation::Accepted { user_id: String, accepted_at: u64 }
 event timada-tenancy/Invitation::MailClaimed { by: String, until: u64 }
+event timada-tenancy/Invitation::MailDeferred { retry_at: u64, reason: String }
+event timada-tenancy/Invitation::MailFailed { reason: String }
 event timada-tenancy/Invitation::MailSent unit
 event timada-tenancy/Invitation::MailUndeliverable { reason: String }
 event timada-tenancy/Invitation::Revoked { revoked_by: String }
