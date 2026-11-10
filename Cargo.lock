@@ -2139,7 +2139,7 @@ dependencies = [
 [[package]]
 name = "evento"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#65f7200960afa6aee0ea0e656f489b6cd7992b48"
+source = "git+https://github.com/timayz/evento?branch=alpha#144d71b06b05b19cc3b5995528d011adfab4ca8c"
 dependencies = [
  "evento-cluster",
  "evento-core",
@@ -2154,7 +2154,7 @@ dependencies = [
 [[package]]
 name = "evento-cluster"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#65f7200960afa6aee0ea0e656f489b6cd7992b48"
+source = "git+https://github.com/timayz/evento?branch=alpha#144d71b06b05b19cc3b5995528d011adfab4ca8c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2173,7 +2173,7 @@ dependencies = [
 [[package]]
 name = "evento-core"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#65f7200960afa6aee0ea0e656f489b6cd7992b48"
+source = "git+https://github.com/timayz/evento?branch=alpha#144d71b06b05b19cc3b5995528d011adfab4ca8c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2193,7 +2193,7 @@ dependencies = [
 [[package]]
 name = "evento-fjall"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#65f7200960afa6aee0ea0e656f489b6cd7992b48"
+source = "git+https://github.com/timayz/evento?branch=alpha#144d71b06b05b19cc3b5995528d011adfab4ca8c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2210,7 +2210,7 @@ dependencies = [
 [[package]]
 name = "evento-lock"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#65f7200960afa6aee0ea0e656f489b6cd7992b48"
+source = "git+https://github.com/timayz/evento?branch=alpha#144d71b06b05b19cc3b5995528d011adfab4ca8c"
 dependencies = [
  "anyhow",
  "quote",
@@ -2221,7 +2221,7 @@ dependencies = [
 [[package]]
 name = "evento-macro"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#65f7200960afa6aee0ea0e656f489b6cd7992b48"
+source = "git+https://github.com/timayz/evento?branch=alpha#144d71b06b05b19cc3b5995528d011adfab4ca8c"
 dependencies = [
  "convert_case 0.12.0",
  "quote",
@@ -2231,7 +2231,7 @@ dependencies = [
 [[package]]
 name = "evento-remote"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#65f7200960afa6aee0ea0e656f489b6cd7992b48"
+source = "git+https://github.com/timayz/evento?branch=alpha#144d71b06b05b19cc3b5995528d011adfab4ca8c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2250,7 +2250,7 @@ dependencies = [
 [[package]]
 name = "evento-sql"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#65f7200960afa6aee0ea0e656f489b6cd7992b48"
+source = "git+https://github.com/timayz/evento?branch=alpha#144d71b06b05b19cc3b5995528d011adfab4ca8c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2267,7 +2267,7 @@ dependencies = [
 [[package]]
 name = "evento-sql-migrator"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#65f7200960afa6aee0ea0e656f489b6cd7992b48"
+source = "git+https://github.com/timayz/evento?branch=alpha#144d71b06b05b19cc3b5995528d011adfab4ca8c"
 dependencies = [
  "async-trait",
  "evento-sql",
@@ -2279,7 +2279,7 @@ dependencies = [
 [[package]]
 name = "evento-turso"
 version = "2.0.0-alpha.38"
-source = "git+https://github.com/timayz/evento?branch=alpha#65f7200960afa6aee0ea0e656f489b6cd7992b48"
+source = "git+https://github.com/timayz/evento?branch=alpha#144d71b06b05b19cc3b5995528d011adfab4ca8c"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6632,6 +6632,7 @@ dependencies = [
  "sha2 0.10.9",
  "smallvec",
  "thiserror 2.0.21",
+ "time",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -6702,6 +6703,7 @@ dependencies = [
  "sha2 0.11.0",
  "sqlx-core",
  "thiserror 2.0.21",
+ "time",
  "tracing",
 ]
 
@@ -6736,6 +6738,7 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.21",
+ "time",
  "tracing",
  "whoami",
 ]
@@ -6760,21 +6763,22 @@ dependencies = [
  "serde",
  "sqlx-core",
  "thiserror 2.0.21",
+ "time",
  "tracing",
  "url",
 ]
 
 [[package]]
 name = "sqlx_migrator"
-version = "0.20.0"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d42443e4d0789d82a69e87e77486975f77263d78a43491e99854296e0ad7c677"
+checksum = "ce5980aa2f3686e46ece172c86dbfdd0788a6b5d31e99d11ef74c2f9069dde60"
 dependencies = [
  "async-trait",
  "clap",
- "crc32fast",
  "sqlx",
  "thiserror 2.0.21",
+ "time",
  "tracing",
 ]
 
