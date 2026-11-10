@@ -18,7 +18,12 @@ pub use message::*;
 use evento::{Executor, Projection, metadata::Event};
 use timada_core::keys::{self, Key, Keys};
 
-use crate::aggregator::{Forgotten, Handled, Notified, Received, Reopened};
+use timada_core::Sending;
+
+use crate::aggregator::{
+    Forgotten, Handled, MailClaimed, MailDeferred, MailFailed, MailSent, MailUndeliverable,
+    Owed as NoticeOwed, Received, Reopened,
+};
 use crate::value_object::{MessageStatus, message_notification_id};
 
 /// The command gateway. Cheap to clone when `E` is.
@@ -221,38 +226,104 @@ async fn on_forgotten(event: Event<Forgotten>, message: &mut MessageState) -> an
     Ok(())
 }
 
-/// Whether, and when, the merchant was told of a message.
+/// Where the notice of a message's arrival stands. No stream is no claim
+/// yet: the notice is owed by `Received`, and pending.
 #[evento::projection(id = id, name = "timada-support/MessageNotificationState")]
 #[evento::snapshot(none)]
 #[derive(Debug, PartialEq, Eq)]
 pub struct MessageNotificationState {
     pub id: String,
     pub message_id: String,
-    pub mailed_by: String,
-    /// Unix seconds.
-    pub mailed_at: u64,
+    /// Unix seconds: no retry is made past it.
+    pub expires_at: u64,
+    pub sending: Sending,
+    /// Unix seconds: when the notice was handed to the server.
+    pub sent_at: Option<u64>,
+    /// Unix seconds of the last event.
+    pub updated_at: u64,
 }
 
 pub fn message_notification_projection<E: Executor>() -> Projection<E, MessageNotificationState> {
     Projection::new::<crate::aggregator::MessageNotification>()
-        .handler(on_notified())
+        .handler(on_notice_owed())
+        .handler(on_notice_claimed())
+        .handler(on_notice_sent())
+        .handler(on_notice_undeliverable())
+        .handler(on_notice_deferred())
+        .handler(on_notice_failed())
         .strict()
 }
 
 #[evento::handler]
-async fn on_notified(
-    event: Event<Notified>,
+async fn on_notice_owed(
+    event: Event<NoticeOwed>,
     state: &mut MessageNotificationState,
 ) -> anyhow::Result<()> {
     state.id = event.aggregate_id.to_owned();
     state.message_id = event.data.message_id.clone();
-    state.mailed_by = event.data.mailed_by.clone();
-    state.mailed_at = event.timestamp;
+    state.expires_at = event.data.expires_at;
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_notice_claimed(
+    event: Event<MailClaimed>,
+    state: &mut MessageNotificationState,
+) -> anyhow::Result<()> {
+    state.sending = state.sending.claimed(&event.data.by, event.data.until);
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_notice_sent(
+    event: Event<MailSent>,
+    state: &mut MessageNotificationState,
+) -> anyhow::Result<()> {
+    state.sending = Sending::Sent;
+    state.sent_at = Some(event.timestamp);
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_notice_undeliverable(
+    event: Event<MailUndeliverable>,
+    state: &mut MessageNotificationState,
+) -> anyhow::Result<()> {
+    state.sending = Sending::Undeliverable {
+        reason: event.data.reason.clone(),
+    };
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_notice_deferred(
+    event: Event<MailDeferred>,
+    state: &mut MessageNotificationState,
+) -> anyhow::Result<()> {
+    state.sending = state
+        .sending
+        .deferred(event.data.retry_at, &event.data.reason);
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_notice_failed(
+    event: Event<MailFailed>,
+    state: &mut MessageNotificationState,
+) -> anyhow::Result<()> {
+    state.sending = state.sending.failed(&event.data.reason);
+    state.updated_at = event.timestamp;
     Ok(())
 }
 
 impl<E: Executor> Command<E> {
-    /// The notice of a message's arrival, once a node claimed it.
+    /// Where the notice of a message's arrival stands, once a node claimed
+    /// it.
     pub async fn load_message_notification(
         &self,
         message_id: &str,

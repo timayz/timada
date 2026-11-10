@@ -13,7 +13,6 @@ use evento::{
 use timada_core::db::{Db, execute, fetch_optional, search_key};
 
 use super::api_keys::join_scopes;
-use super::invitations::InvitationMailState;
 use crate::aggregator::api_key::ApiKey;
 use crate::aggregator::company::Company;
 use crate::aggregator::{Invitation, Tenant};
@@ -214,7 +213,7 @@ async fn upsert_invitation(db: &Db, invitation: &InvitationState) -> anyhow::Res
             invitation.accepted_by.as_deref(),
             invitation.accepted_at.map(|at| at as i64),
             invitation.revoked,
-            InvitationMailState::of(&invitation.mail).as_str(),
+            timada_core::MailStatus::of(&invitation.mail).as_str(),
         ),
     )
     .await?;

@@ -1,7 +1,7 @@
 //! The subscription that keeps `orders_orders`, `orders_carts`,
 //! `orders_order_products` (which products each order holds, for whoever
-//! asks whether a product was ever ordered) and `orders_order_mails` (which
-//! mails the shopper was sent about an order) current for every tenant.
+//! asks whether a product was ever ordered) and `orders_order_mails` (where
+//! each mail to the shopper about an order stands) current for every tenant.
 //!
 //! Each handler reloads the strict write model of the stream the event
 //! belongs to and rewrites its row, so delivery may repeat (the subscription
@@ -15,6 +15,7 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use timada_core::db::{Db, Value, execute, params_from_iter};
+use timada_core::{MailStatus, Sending};
 
 use crate::aggregator::{Cart, Order, OrderMail};
 use crate::command::{
@@ -51,15 +52,28 @@ async fn on_order_mail_event<E: Executor>(
     else {
         return Ok(());
     };
-    // A mail is sent once; a repeat finds its row there.
+    // The row follows the stream: a repeat writes the same values.
     db.execute(
-        "INSERT OR IGNORE INTO orders_order_mails (tenant_id, order_id, mail, mailed_at)
-         VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO orders_order_mails (tenant_id, order_id, mail, status, attempts, reason,
+            sent_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT (tenant_id, order_id, mail) DO UPDATE SET
+            status = excluded.status, attempts = excluded.attempts, reason = excluded.reason,
+            sent_at = excluded.sent_at, updated_at = excluded.updated_at",
         (
             event.tenant.as_str(),
             mailed.order_id.as_str(),
             mailed.mail.as_str(),
-            mailed.mailed_at as i64,
+            MailStatus::of(&mailed.sending).as_str(),
+            i64::from(mailed.sending.attempts()),
+            match &mailed.sending {
+                Sending::Undeliverable { reason }
+                | Sending::Deferred { reason, .. }
+                | Sending::Failed { reason, .. } => reason.as_str(),
+                Sending::Pending | Sending::Claimed { .. } | Sending::Sent => "",
+            },
+            mailed.sent_at.map(|at| at as i64),
+            mailed.updated_at as i64,
         ),
     )
     .await?;

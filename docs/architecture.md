@@ -593,11 +593,13 @@ message handled (`support:manage`); a message marked too soon is reopened.
 The members who may read the messages (the owners, and the roles granting
 `support:read`) are told of each arrival by a platform mail with the visitor's first
 name and a link to the inbox, nothing else the visitor wrote. A per-tenant
-subscription (`timada-dashboard/message-notifications`) follows `Received`, claims the
+subscription (`timada-dashboard/message-notifications`) follows `Received` into the
+node's mailroom (see `docs/mail.md`, "Sending in the background"), which claims the
 notice first (`MessageNotification`, one stream per message, as the order mails do
-with `OrderMail`, one stream per order and mail) so a cluster mails once, then mails every recipient that identity
-holds an address for (a member who signed up with a provider or a passkey alone has
-none). A message older than an hour at the time it is seen is history being replayed
+with `OrderMail`, one stream per order and mail) so a cluster mails once, then mails
+every recipient that identity holds an address for (a member who signed up with a
+provider or a passkey alone has none), and records how it went on the notice's
+stream. A message older than a day at the time it is seen is history being replayed
 and gets no notice.
 
 The name, address and text are personal data, and events cannot be erased: like a

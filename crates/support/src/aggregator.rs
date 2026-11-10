@@ -38,14 +38,30 @@ pub enum Message {
     },
 }
 
-/// The merchant's notice that one message arrived. One stream per message,
-/// with the id [`message_notification_id`](crate::message_notification_id):
-/// the node that writes it first is the one that mails, so the members get
-/// one notice however many nodes follow the tenant.
+/// The notice to the shop's members that one message arrived. One stream
+/// per message, with the id
+/// [`message_notification_id`](crate::message_notification_id): `Received`
+/// owes the notice, a subscription on every node sees it, and the node that
+/// writes the claim first is the one that mails, then records how it went
+/// ([`timada_core::Sending`]), so the members get one notice however many
+/// nodes follow the tenant.
 #[evento::aggregate(name = "timada-support/MessageNotification")]
 pub enum MessageNotification {
-    Notified {
-        message_id: String,
-        mailed_by: String,
-    },
+    /// What the stream is about, written with the first claim: the notice
+    /// of `message_id`, worth sending until `expires_at` (unix seconds),
+    /// after which no retry is made.
+    Owed { message_id: String, expires_at: u64 },
+    /// Node `by` took the sending, until `until` should it never say how it
+    /// went.
+    MailClaimed { by: String, until: u64 },
+    /// The notice was handed to the mail server, to every member it is for.
+    MailSent,
+    /// The mail server refused every member's address for good; `reason` is
+    /// what it said of the first.
+    MailUndeliverable { reason: String },
+    /// A send failed for a reason worth a retry (`reason` says which); the
+    /// next try may be made at `retry_at` (unix seconds).
+    MailDeferred { retry_at: u64, reason: String },
+    /// Given up on: the last send failed with `reason` and no retry is left.
+    MailFailed { reason: String },
 }

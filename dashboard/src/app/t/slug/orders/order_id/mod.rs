@@ -22,10 +22,11 @@ use std::sync::Arc;
 use timada_aliexpress::forward_of_order;
 use timada_aliexpress::{ForwardState, ForwardStatus};
 use timada_catalog::format_money;
+use timada_core::MailStatus;
 use timada_invoicing::documents_of_order;
 use timada_orders::{
-    MAX_NOTE_LEN, MAX_REASON_LEN, MAX_TRACKING_LEN, MAX_TRACKING_URL_LEN, OrderError, OrderState,
-    OrderStatus, SupplierOrder, cart_refused_returns, order_mails, order_state,
+    MAX_NOTE_LEN, MAX_REASON_LEN, MAX_TRACKING_LEN, MAX_TRACKING_URL_LEN, OrderError, OrderMailRow,
+    OrderState, OrderStatus, SupplierOrder, cart_refused_returns, order_mails, order_state,
 };
 use timada_reviews::review_request_mailed_at;
 use timada_tenancy::{
@@ -153,11 +154,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let documents = documents_of_order(db, access.tenant_id(), &order.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    // The mails the shopper was sent about it, by kind.
+    // Where each mail to the shopper about it stands, by kind.
     let sent = order_mails(db, access.tenant_id(), &order.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    let mut mails = Vec::new();
+    let mut mails: Vec<(&str, &str, Option<OrderMailRow>)> = Vec::new();
     for (kind, term, shown) in [
         (ShopMailKind::OrderConfirmation, "Confirmation", true),
         (
@@ -179,11 +180,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         if !shown {
             continue;
         }
-        let mailed = sent
-            .iter()
-            .find(|mail| mail.mail == kind.key())
-            .map(|mail| mail.mailed_at.max(0) as u64);
-        mails.push((kind.key(), term, mailed));
+        let mail = sent.iter().find(|mail| mail.mail == kind.key()).cloned();
+        mails.push((kind.key(), term, mail));
     }
     let review_request = review_request_mailed_at(db, access.tenant_id(), &order.id)
         .await
@@ -424,14 +422,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         fact(term: "Reason", attrs: attributes! { data-order-cancel-reason="" }, (reason))
                     }
                     fact(term: "E-mail", <a class=(LINK) href=(format!("mailto:{}", order.email))>(&order.email)</a>)
-                    for (key, term, mailed) in &mails {
+                    for (key, term, mail) in &mails {
                         fact(
                             term: term,
-                            attrs: attributes! { data-order-mail=(key) data-mailed=(if mailed.is_some() { "mailed" } else { "none" }) },
-                            if let Some(at) = mailed {
-                                "Mailed " <time datetime=(at)>(format_time(*at))</time>
+                            attrs: attributes! { data-order-mail=(key) data-mailed=(order_mail_data(mail.as_ref())) },
+                            if let Some(at) = mail.as_ref().and_then(|mail| mail.sent_at) {
+                                "Mailed " <time datetime=(at)>(format_time(at.max(0) as u64))</time>
                             } else {
-                                "Not mailed"
+                                (order_mail_words(mail.as_ref()))
                             }
                         )
                     }
@@ -813,6 +811,31 @@ impl AliexpressCard {
             }
         }
         shown
+    }
+}
+
+/// `mailed` once the mail went out, else `none`: what the specs read.
+fn order_mail_data(mail: Option<&OrderMailRow>) -> &'static str {
+    match mail.map(OrderMailRow::status) {
+        Some(MailStatus::Sent) => "mailed",
+        _ => "none",
+    }
+}
+
+/// How the page words where a mail stands while it has not gone out.
+fn order_mail_words(mail: Option<&OrderMailRow>) -> String {
+    match mail.map(|mail| (mail.status(), mail.reason.as_str())) {
+        None => "Not mailed".to_owned(),
+        Some((MailStatus::Sending | MailStatus::Sent, _)) => "Sending…".to_owned(),
+        Some((MailStatus::Retrying, reason)) => {
+            format!("Not sent yet: the mail server did not answer ({reason}), trying again")
+        }
+        Some((MailStatus::Undeliverable, reason)) => {
+            format!("Could not be delivered: the server refused the address ({reason})")
+        }
+        Some((MailStatus::Failed, reason)) => {
+            format!("Could not be sent: the mail server did not answer ({reason}); given up")
+        }
     }
 }
 

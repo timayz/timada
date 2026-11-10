@@ -252,7 +252,12 @@ event timada-orders/Order::SupplierOrderRuledOut { supplier: String, ruled_out_b
 event timada-orders/Order::SupplierOrderStarted { supplier: String, started_by: String }
 event timada-orders/Order::SupplierOrderUncertain { supplier: String, reason: String, marked_by: String }
 event timada-orders/Order::TimeZoneSet { time_zone: String, set_by: String }
-event timada-orders/OrderMail::Mailed { order_id: String, mail: String, email: String, mailed_by: String }
+event timada-orders/OrderMail::MailClaimed { by: String, until: u64 }
+event timada-orders/OrderMail::MailDeferred { retry_at: u64, reason: String }
+event timada-orders/OrderMail::MailFailed { reason: String }
+event timada-orders/OrderMail::MailSent unit
+event timada-orders/OrderMail::MailUndeliverable { reason: String }
+event timada-orders/OrderMail::Owed { order_id: String, mail: String, expires_at: u64 }
 event timada-orders/OrderReference::Claimed { order_id: String }
 event timada-orders/OrderReference::Released { released_by: String }
 event timada-orders/PaymentMethod::PaymentsDisabled { disabled_by: String }
@@ -310,7 +315,12 @@ event timada-support/Message::Forgotten { key_id: String, forgotten_by: String }
 event timada-support/Message::Handled { handled_by: String }
 event timada-support/Message::Received { key_id: String, first_name: Vec<u8>, last_name: Vec<u8>, email: Vec<u8>, body: Vec<u8>, language: Option<String>, received_by: String }
 event timada-support/Message::Reopened { reopened_by: String }
-event timada-support/MessageNotification::Notified { message_id: String, mailed_by: String }
+event timada-support/MessageNotification::MailClaimed { by: String, until: u64 }
+event timada-support/MessageNotification::MailDeferred { retry_at: u64, reason: String }
+event timada-support/MessageNotification::MailFailed { reason: String }
+event timada-support/MessageNotification::MailSent unit
+event timada-support/MessageNotification::MailUndeliverable { reason: String }
+event timada-support/MessageNotification::Owed { message_id: String, expires_at: u64 }
 event timada-tenancy/ApiKey::Created { tenant_id: String, label: String, hint: String, scopes: Vec<String>, created_by: String, created_at: u64 }
 event timada-tenancy/ApiKey::Revoked { revoked_by: String, revoked_at: u64 }
 event timada-tenancy/ApiKey::Scoped { scopes: Vec<String>, scoped_by: String, scoped_at: u64 }

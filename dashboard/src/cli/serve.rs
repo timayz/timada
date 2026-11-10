@@ -139,6 +139,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         executor.clone(),
         background_mail.clone(),
         keys.clone(),
+        payments.clone(),
         url.clone(),
         cluster::node_name(&cluster),
     );
@@ -156,8 +157,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         euro_rates: Arc::new(crate::ecb::EcbClient::new(
             config.invoicing.euro_rates_url.clone(),
         )),
-        background_mail: background_mail.clone(),
-        base_url: url.clone(),
         node: cluster::node_name(&cluster),
     });
     let catch_up_first = cluster.health().joined_at_start;
@@ -332,11 +331,6 @@ pub struct Deps {
     pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
     pub vies: Arc<dyn crate::vies::Vies>,
     pub euro_rates: Arc<dyn crate::ecb::EuroRates>,
-    /// The transport and sender the subscriptions mail with, outside any
-    /// request.
-    pub background_mail: Arc<topcoat::context::AppContext>,
-    /// The public address, for the links in the mails.
-    pub base_url: String,
     /// This node, as the work it claims names it.
     pub node: String,
 }
@@ -562,24 +556,6 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     ("automation triggers", Kind::Sharded, |d| {
         crate::automations::triggers::subscription(d.db.clone(), d.store.clone())
     }),
-    ("order mails", Kind::Sharded, |d| {
-        crate::order_mails::subscription(
-            d.store.clone(),
-            d.background_mail.clone(),
-            d.payments.clone(),
-            d.store.clone(),
-        )
-    }),
-    ("message notices", Kind::Sharded, |d| {
-        crate::message_notifications::subscription(
-            d.store.clone(),
-            d.db.clone(),
-            d.background_mail.clone(),
-            d.base_url.clone(),
-            d.keys.ring(),
-            d.store.clone(),
-        )
-    }),
     ("invoices", Kind::Sharded, |d| {
         crate::invoicing::subscription(
             d.store.clone(),
@@ -592,7 +568,8 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     // The mails a command owes are handed to the mailroom from here, after
     // the intent is recorded, and sent off the cursor: the sign-in codes of
     // the platform and of the shops, the invitations, the newsletter
-    // confirmations.
+    // confirmations, the shops' mails about their orders, the notices of a
+    // message's arrival.
     ("platform code mails", Kind::Sharded, |d| {
         crate::code_mails::platform_subscription(d.mailroom.clone())
     }),
@@ -604,6 +581,12 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     }),
     ("newsletter confirmations", Kind::Sharded, |d| {
         crate::newsletter_confirmations::subscription(d.mailroom.clone())
+    }),
+    ("order mails", Kind::Sharded, |d| {
+        crate::order_mails::subscription(d.mailroom.clone())
+    }),
+    ("message notices", Kind::Sharded, |d| {
+        crate::message_notifications::subscription(d.mailroom.clone())
     }),
 ];
 

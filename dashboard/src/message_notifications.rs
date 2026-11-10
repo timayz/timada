@@ -2,81 +2,57 @@
 //! every member whose role lets them read the messages, with a link to the
 //! inbox. The mail carries the visitor's first name and nothing else they
 //! wrote, so what the shop may later erase does not live on in mailboxes.
+//!
+//! `Received` owes the notice; this subscription sees it on every node and
+//! hands it to the node's [`Mailroom`], which sends off the cursor (#482).
+//! The node that writes the claim on the notice's stream first is the one
+//! that mails ([`timada_core::Sending`], `MessageNotification`), one mail per
+//! member, then records how it went: a server that does not answer leaves
+//! `MailDeferred`, and whichever node looks once the retry is due mails
+//! again, every member included (a member told twice is the price of the
+//! others being told at all), until the retries run out or the notice's day
+//! is over (`MailFailed`, which `/admin/cluster` shows). A pass never fails
+//! for a mail server.
 
 use std::sync::Arc;
 
-use crate::db::Db;
 use evento::{
-    Evento, Executor,
-    metadata::Event,
+    Executor,
+    metadata::{Event, RawEvent},
     subscription::{Context, SubscriptionBuilder},
 };
-use timada_core::keys::KeyRing;
 use timada_identity::UserRow;
-use timada_support::aggregator::Received;
+use timada_support::MESSAGE_NOTICE_WINDOW_SECS;
+use timada_support::aggregator::{MessageNotification, Received};
 use timada_tenancy::{PERMISSION_SUPPORT_READ, TenantState};
-use topcoat::context::{AppContext, Cx};
+use topcoat::context::Cx;
 
-use crate::cluster::Executor as Store;
+use crate::code_mails::claimant;
 use crate::mail::send_message_notification;
+use crate::mail_fault::{Attempt, attempt};
+use crate::mailroom::{Change, Kind, Mailroom, Outcome, OwedMail};
+use crate::order_mails::change_of;
 
 /// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/message-notifications";
-/// Who the notices say mailed them.
-pub const MAILER: &str = "timada-dashboard";
 
-/// A message received longer ago than this is history being replayed (a
-/// node catching up, or the first start of this subscription): the members
-/// are not told now.
-const NOTIFICATION_WINDOW_SECS: u64 = 60 * 60;
-
-/// The platform store, where the shop and its members live.
-#[derive(Clone)]
-struct Platform(Store);
-
-/// The shared read models, where the members' addresses are.
-#[derive(Clone)]
-struct ReadModels(Db);
-
-/// The store, to open the message and claim its notice.
-#[derive(Clone)]
-struct TenantStore(Evento);
-
-/// The platform's transport and sender.
-#[derive(Clone)]
-struct Mail(Arc<AppContext>);
-
-/// The dashboard's public address, for the link.
-#[derive(Clone)]
-struct BaseUrl(String);
-
-/// The tenant's keys, to read the visitor's first name.
-#[derive(Clone)]
-struct TenantKeys(Arc<dyn KeyRing>);
-
-/// Follows every tenant's messages. Every node runs it;
-/// the node that claims a message's notice first is the one that mails.
-#[allow(clippy::too_many_arguments)]
-pub fn subscription<E: Executor>(
-    platform: Store,
-    db: Db,
-    mail: Arc<AppContext>,
-    base_url: String,
-    keys: Arc<dyn KeyRing>,
-    store: Evento,
-) -> SubscriptionBuilder<E> {
+/// Follows every tenant's messages into the mailroom's table, and the
+/// notices' own streams back into it. Every node runs it; the node that
+/// claims a message's notice first is the one that mails.
+pub fn subscription<E: Executor>(room: Arc<Mailroom>) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
-        .data(Platform(platform))
-        .data(ReadModels(db))
-        .data(Mail(mail))
-        .data(BaseUrl(base_url))
-        .data(TenantKeys(keys))
-        .data(TenantStore(store))
+        .data(room)
         .handler(on_received())
+        .handler(on_notification_event())
         // A saga: it follows the node's own region (the executor's default
         // routing key), so a region's nodes do its work and the other
         // regions' nodes leave it to them.
         .retry(5)
+}
+
+/// The inbox of the shop at `slug`, on the dashboard at `base_url`.
+pub fn inbox_link(base_url: &str, slug: &str) -> String {
+    format!("{}/t/{slug}/messages", base_url.trim_end_matches('/'))
 }
 
 #[evento::subscription]
@@ -84,66 +60,133 @@ async fn on_received<E: Executor>(
     context: &Context<'_, E>,
     event: Event<Received>,
 ) -> anyhow::Result<()> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs());
-    if now.saturating_sub(event.timestamp) > NOTIFICATION_WINDOW_SECS {
-        return Ok(());
-    }
-    let store: TenantStore = context.extract();
-    let support = timada_support::Command::new(store.0.clone(), &event.tenant);
-    // Erased meanwhile: nothing to tell.
-    let Some(state) = support.load_message(&event.aggregate_id).await? else {
-        return Ok(());
-    };
-    // A key not here yet fails the handler, which is retried.
-    let keys: TenantKeys = context.extract();
-    let Some(message) = state.open_with(&*keys.0.for_tenant(&event.tenant)).await? else {
-        return Ok(());
-    };
-    let platform: Platform = context.extract();
-    let Some(shop) = timada_tenancy::Command(platform.0.clone())
-        .load_tenant(&event.tenant)
+    let room: Arc<Mailroom> = context.extract();
+    room.record(
+        Kind::MessageNotice,
+        &event.tenant,
+        &event.aggregate_id,
+        Change::Owed {
+            version: event.version,
+            expires_at: event.timestamp + MESSAGE_NOTICE_WINDOW_SECS,
+        },
+        crate::auth::now(),
+    )
+    .await
+}
+
+/// Follows a notice's own stream into the table: where its sending stands
+/// after this event is what the stream says now, which names the message
+/// the row is keyed by.
+#[evento::subscription_all]
+async fn on_notification_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<MessageNotification>,
+) -> anyhow::Result<()> {
+    let room: Arc<Mailroom> = context.extract();
+    let Some(notice) = timada_support::message_notification_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
         .await?
     else {
         return Ok(());
     };
-    let read_models: ReadModels = context.extract();
+    let Some(change) = change_of(&notice.sending) else {
+        return Ok(());
+    };
+    room.record(
+        Kind::MessageNotice,
+        &event.tenant,
+        &notice.message_id,
+        change,
+        crate::auth::now(),
+    )
+    .await
+}
+
+/// Mails the notice of the message `owed` names at `now` (unix seconds),
+/// from the mailroom: opens the message, finds the members to tell, claims
+/// the notice, mails each of them, records how it went.
+pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::Result<Outcome> {
+    let tenant_id = owed.tenant_id.as_str();
+    let message_id = owed.stream_id.as_str();
+    let support = timada_support::Command::new(room.store.clone(), tenant_id);
+    // Erased meanwhile: nothing to tell.
+    let Some(state) = support.load_message(message_id).await? else {
+        return Ok(Outcome::Dropped);
+    };
+    // A key not here yet is the store's to bring: the lane stops for now.
+    let Some(message) = state.open_with(&*room.keys.for_tenant(tenant_id)).await? else {
+        return Ok(Outcome::Dropped);
+    };
+    let Some(shop) = timada_tenancy::Command(room.store.clone())
+        .load_tenant(tenant_id)
+        .await?
+    else {
+        return Ok(Outcome::Left);
+    };
     let recipients = mailboxes(
-        timada_identity::users_by_ids(
-            &read_models.0,
-            &members_who_may(&shop, PERMISSION_SUPPORT_READ),
-        )
-        .await?,
+        timada_identity::users_by_ids(&room.db, &members_who_may(&shop, PERMISSION_SUPPORT_READ))
+            .await?,
     );
     if recipients.is_empty() {
-        tracing::debug!(tenant = %event.tenant, message = %message.id, "no member to tell of a message");
-        return Ok(());
+        tracing::debug!(tenant = %tenant_id, message = %message.id, "no member to tell of a message");
+        return Ok(Outcome::Dropped);
     }
-    if !support.claim_notification(&message.id, MAILER).await? {
-        return Ok(());
+    if !support
+        .claim_notification(
+            &message.id,
+            owed.expires_at.max(0) as u64,
+            claimant(room, now),
+        )
+        .await?
+    {
+        return Ok(Outcome::Left);
     }
-    // Claimed, then sent: a failure here is not retried, since members told
-    // twice are worse off than one left to open the inbox.
-    let mail: Mail = context.extract();
-    let base_url: BaseUrl = context.extract();
-    let cx = Cx::new(mail.0);
-    let link = format!(
-        "{}/t/{}/messages",
-        base_url.0.trim_end_matches('/'),
-        shop.slug
-    );
+    let cx = Cx::new(room.mail.clone());
+    let link = inbox_link(&room.base_url, &shop.slug);
+    // Each member in turn; the first the server fails stops the round, the
+    // retry mails everyone again. Addresses refused for good are skipped:
+    // the notice went to whoever it could, unless that was nobody.
+    let mut told = 0;
+    let mut refused = None;
     for to in &recipients {
-        match send_message_notification(&cx, to, &shop.name, &message.first_name, &link).await {
-            Ok(()) => {
-                tracing::info!(tenant = %event.tenant, message = %message.id, "message notice mailed");
+        let sent = attempt(send_message_notification(
+            &cx,
+            to,
+            &shop.name,
+            &message.first_name,
+            &link,
+        ))
+        .await;
+        match sent {
+            Attempt::Sent => told += 1,
+            Attempt::Undeliverable(reason) => {
+                tracing::warn!(tenant = %tenant_id, message = %message.id, %reason, "a member's address refused the message notice");
+                refused.get_or_insert(reason);
             }
-            Err(err) => {
-                tracing::error!(tenant = %event.tenant, message = %message.id, error = %err, "message notice not delivered");
+            Attempt::NotSent(reason) => {
+                tracing::warn!(tenant = %tenant_id, message = %message.id, %reason, "message notice not sent; deferred");
+                support
+                    .record_notification_not_sent(&message.id, &room.node, &reason, now)
+                    .await?;
+                return Ok(Outcome::Deferred);
             }
         }
     }
-    Ok(())
+    match refused {
+        Some(reason) if told == 0 => {
+            support
+                .record_notification_undeliverable(&message.id, &reason)
+                .await?;
+            Ok(Outcome::Recorded)
+        }
+        _ => {
+            tracing::info!(tenant = %tenant_id, message = %message.id, members = told, "message notice mailed");
+            support.record_notification_sent(&message.id).await?;
+            Ok(Outcome::Sent)
+        }
+    }
 }
 
 /// The members `permission` lets act: the owners, and those whose role
@@ -231,5 +274,166 @@ mod tests {
             user("gone", Some("gone@example.com"), true),
         ]);
         assert_eq!(mailed, vec!["owner@example.com"]);
+    }
+}
+
+#[cfg(test)]
+mod saga_tests {
+    use evento::{Evento, Turso};
+    use timada_core::{RETRY_DELAYS_SECS, Sending};
+    use timada_support::ReceiveMessage;
+    use timada_tenancy::CreateTenant;
+    use topcoat::mail::{Mailbox, MemoryTransport};
+
+    use super::*;
+    use crate::code_mails::tests::{mail_context, vault};
+    use crate::mail_fault::fake_smtp;
+    use crate::mailroom::tests::{BASE_URL, room, room_with, rows, store};
+
+    /// A shop whose owner has an address, in the read models the notice
+    /// reads; the shop's id.
+    async fn shop(store: &Turso) -> String {
+        let evento = Evento::new(store.clone());
+        evento::append("user-alice")
+            .original_version(0)
+            .event(&timada_identity::aggregator::EmailRegistered {
+                email: "alice@example.org".to_owned(),
+                label: "Alice".to_owned(),
+                password_hash: String::new(),
+            })
+            .commit(&evento)
+            .await
+            .unwrap();
+        let shop = timada_tenancy::Command(evento.clone())
+            .create_tenant(CreateTenant {
+                name: "Acme Tea".to_owned(),
+                owner_user_id: "user-alice".to_owned(),
+            })
+            .await
+            .unwrap();
+        timada_identity::read_model_subscription::<Turso>(crate::db::Db::from(store.clone()))
+            .ephemeral()
+            .run_once(store)
+            .await
+            .unwrap();
+        shop.id
+    }
+
+    /// A visitor's message to `shop`, sealed under the room's keys.
+    async fn message(store: &Turso, room: &Mailroom, shop: &str) -> String {
+        timada_support::Command::new(Evento::new(store.clone()), shop)
+            .receive_message(
+                &*room.keys.for_tenant(shop),
+                "storefront",
+                ReceiveMessage {
+                    first_name: "Ada".to_owned(),
+                    last_name: "Lovelace".to_owned(),
+                    email: "ada@example.com".to_owned(),
+                    body: "Where is my order? It is late.".to_owned(),
+                    language: None,
+                },
+            )
+            .await
+            .unwrap()
+            .id
+    }
+
+    async fn pass(store: &Turso, room: &Arc<Mailroom>) {
+        subscription::<Turso>(room.clone())
+            .ephemeral()
+            .no_retry()
+            .run_once(store)
+            .await
+            .expect("a pass never fails for a mail");
+    }
+
+    async fn run(store: &Turso, room: &Arc<Mailroom>, now: u64) -> usize {
+        pass(store, room).await;
+        // The pass stamped the rows with the clock, which may have ticked
+        // past the test's `now` meanwhile: sweep at whichever is later.
+        room.sweep(now.max(crate::auth::now())).await.unwrap()
+    }
+
+    async fn notice_of(store: &Turso, shop: &str, message: &str) -> Sending {
+        timada_support::Command::new(Evento::new(store.clone()), shop)
+            .load_message_notification(message)
+            .await
+            .unwrap()
+            .map(|notice| notice.sending)
+            .unwrap_or_default()
+    }
+
+    /// Two nodes see the message; one tells the owner, with the visitor's
+    /// first name and the inbox's link, and the other finds it taken.
+    #[tokio::test]
+    async fn the_members_are_told_once_however_many_nodes_see_the_message() {
+        let store = store().await;
+        let transport = MemoryTransport::new();
+        let node_a = room(&store, transport.clone(), "node-a");
+        let node_b = room(&store, transport.clone(), "node-b");
+        let shop = shop(&store).await;
+        let message = message(&store, &node_a, &shop).await;
+        let now = crate::auth::now();
+
+        assert_eq!(run(&store, &node_a, now).await, 1);
+        assert_eq!(run(&store, &node_b, now).await, 0);
+
+        let mails = transport.sent();
+        assert_eq!(mails.len(), 1);
+        assert_eq!(mails[0].to(), [Mailbox::new("alice@example.org").unwrap()]);
+        assert_eq!(mails[0].subject(), "A message is waiting for Acme Tea");
+        let cx = Cx::new(crate::code_mails::tests::mail_context(
+            MemoryTransport::new(),
+        ));
+        let wire = String::from_utf8(mails[0].clone().formatted(&cx).unwrap())
+            .unwrap()
+            .replace("=\r\n", "");
+        assert!(wire.contains("Ada"), "{wire}");
+        assert!(!wire.contains("Lovelace"), "{wire}");
+        assert!(wire.contains(&inbox_link(BASE_URL, "acme-tea")), "{wire}");
+        assert_eq!(notice_of(&store, &shop, &message).await, Sending::Sent);
+        pass(&store, &node_a).await;
+        pass(&store, &node_b).await;
+        assert!(rows(&store).await.is_empty());
+    }
+
+    /// A server that does not answer defers the notice; the retry goes out
+    /// once due. A message erased meanwhile is nothing to tell.
+    #[tokio::test]
+    async fn a_server_that_does_not_answer_defers_the_notice_until_the_retry() {
+        let store = store().await;
+        // The nodes share the message's key, as a cluster's vaults do.
+        let keys = vault();
+        let down = room_with(
+            &store,
+            mail_context(fake_smtp::transport(fake_smtp::closed_port())),
+            keys.clone(),
+            "node-a",
+        );
+        let shop = shop(&store).await;
+        let message = message(&store, &down, &shop).await;
+        let now = crate::auth::now();
+
+        assert_eq!(run(&store, &down, now).await, 0);
+        assert!(matches!(
+            notice_of(&store, &shop, &message).await,
+            Sending::Deferred { attempts: 1, .. }
+        ));
+        let transport = MemoryTransport::new();
+        let back = room_with(&store, mail_context(transport.clone()), keys, "node-b");
+        assert_eq!(run(&store, &back, now + RETRY_DELAYS_SECS[0]).await, 1);
+        assert_eq!(transport.sent().len(), 1);
+        assert_eq!(notice_of(&store, &shop, &message).await, Sending::Sent);
+
+        // Erased before anyone could tell of it: dropped.
+        let erased = self::message(&store, &back, &shop).await;
+        timada_support::Command::new(Evento::new(store.clone()), &shop)
+            .forget_message(&*back.keys.for_tenant(&shop), "user-alice", &erased)
+            .await
+            .unwrap();
+        assert_eq!(run(&store, &back, now + RETRY_DELAYS_SECS[0]).await, 0);
+        assert_eq!(transport.sent().len(), 1);
+        assert!(rows(&store).await.is_empty());
+        assert_eq!(notice_of(&store, &shop, &erased).await, Sending::Pending);
     }
 }

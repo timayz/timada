@@ -34,7 +34,7 @@ pub use keys::{Key, Keys};
 pub use money::{currency_symbol, format_amount, format_money, format_money_range};
 pub use sending::{
     Claim, Claimant, LEASE_SECS, Outcome as MailOutcome, RETRY_DELAYS_SECS, Record as MailRecord,
-    Sending,
+    Sending, Status as MailStatus,
 };
 pub use slug::{
     MIN_SLUG_LEN, SLUG_SUFFIX_LEN, normalize_slug, slugify, suffixed_slug, truncate_slug,

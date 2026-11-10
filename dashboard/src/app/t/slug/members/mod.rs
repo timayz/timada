@@ -10,9 +10,10 @@ pub mod invite;
 pub mod revoke;
 pub mod revoke_invitation;
 
+use timada_core::MailStatus;
 use timada_tenancy::{
-    InvitationMailState, MAX_EMAIL_LEN, PERMISSION_MEMBERS_MANAGE, PERMISSION_MEMBERS_READ,
-    ROLE_OWNER, open_invitations_of_tenant,
+    MAX_EMAIL_LEN, PERMISSION_MEMBERS_MANAGE, PERMISSION_MEMBERS_READ, ROLE_OWNER,
+    open_invitations_of_tenant,
 };
 use topcoat::{
     Result,
@@ -50,17 +51,13 @@ pub fn members_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&st
 }
 
 /// How the row words where the invitation's mail stands.
-fn mail_state(mail: InvitationMailState) -> &'static str {
+fn mail_state(mail: MailStatus) -> &'static str {
     match mail {
-        InvitationMailState::Sending => "sending…",
-        InvitationMailState::Retrying => {
-            "not sent yet: the mail server did not answer, trying again"
-        }
-        InvitationMailState::Sent => "mailed",
-        InvitationMailState::Undeliverable => "could not be delivered: check the address",
-        InvitationMailState::Failed => {
-            "could not be sent: the mail server did not answer; invite again"
-        }
+        MailStatus::Sending => "sending…",
+        MailStatus::Retrying => "not sent yet: the mail server did not answer, trying again",
+        MailStatus::Sent => "mailed",
+        MailStatus::Undeliverable => "could not be delivered: check the address",
+        MailStatus::Failed => "could not be sent: the mail server did not answer; invite again",
     }
 }
 

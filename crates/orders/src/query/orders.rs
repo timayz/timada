@@ -1,5 +1,6 @@
 //! Queries over `orders_orders`, for the orders pages of a tenant.
 
+use timada_core::MailStatus;
 use timada_core::db::{Db, FromRow};
 
 use crate::command::{OrderRefund, OrderState, OrderStatus, OutsideSettlement};
@@ -79,25 +80,39 @@ pub async fn order_state(db: &Db, tenant_id: &str, id: &str) -> anyhow::Result<O
         .transpose()
 }
 
-/// One row of `orders_order_mails`: a mail the shopper was sent about an
-/// order.
+/// One row of `orders_order_mails`: where a mail to the shopper about an
+/// order stands, once a node took its sending.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
 pub struct OrderMailRow {
     /// The mail's kind key (`order_confirmation`).
     pub mail: String,
+    /// Where it stands ([`MailStatus::as_str`]).
+    pub status: String,
+    /// How many sends were tried.
+    pub attempts: i64,
+    /// What the last failure said, or `""`.
+    pub reason: String,
+    /// Unix seconds: when it was handed to the mail server.
+    pub sent_at: Option<i64>,
     /// Unix seconds.
-    pub mailed_at: i64,
+    pub updated_at: i64,
 }
 
-/// The mails the shopper was sent about an order, by kind.
+impl OrderMailRow {
+    pub fn status(&self) -> MailStatus {
+        MailStatus::parse(&self.status)
+    }
+}
+
+/// The mails to the shopper about an order, by kind.
 pub async fn order_mails(
     db: &Db,
     tenant_id: &str,
     order_id: &str,
 ) -> anyhow::Result<Vec<OrderMailRow>> {
     db.fetch_all(
-        "SELECT mail, mailed_at FROM orders_order_mails
-         WHERE tenant_id = ?1 AND order_id = ?2 ORDER BY mailed_at, mail",
+        "SELECT mail, status, attempts, reason, sent_at, updated_at FROM orders_order_mails
+         WHERE tenant_id = ?1 AND order_id = ?2 ORDER BY updated_at, mail",
         (tenant_id, order_id),
     )
     .await
