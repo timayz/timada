@@ -2,7 +2,7 @@
 
 use timada_core::db::{Db, FromRow};
 
-use crate::command::{OrderState, OrderStatus, OutsideSettlement};
+use crate::command::{OrderRefund, OrderState, OrderStatus, OutsideSettlement};
 use timada_catalog::format_money;
 
 /// An order as its row keeps it: the whole [`OrderState`], with the facts
@@ -19,6 +19,10 @@ pub struct OrderRecord {
     pub supplier_uncertain_at: Option<u64>,
     pub supplier_attempt_open: bool,
     pub fulfilled_by: Option<String>,
+    #[serde(default)]
+    pub invoicing_failure: Option<String>,
+    #[serde(default)]
+    pub refunds: Vec<OrderRefund>,
 }
 
 impl OrderRecord {
@@ -31,6 +35,8 @@ impl OrderRecord {
             supplier_uncertain_at: order.supplier_uncertain_at,
             supplier_attempt_open: order.supplier_attempt_open,
             fulfilled_by: order.fulfilled_by.clone(),
+            invoicing_failure: order.invoicing_failure.clone(),
+            refunds: order.refunds.clone(),
         }
     }
 
@@ -47,6 +53,8 @@ impl OrderRecord {
             supplier_uncertain_at: self.supplier_uncertain_at,
             supplier_attempt_open: self.supplier_attempt_open,
             fulfilled_by: self.fulfilled_by,
+            invoicing_failure: self.invoicing_failure,
+            refunds: self.refunds,
             ..self.order
         }
     }

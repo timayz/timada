@@ -9,6 +9,12 @@
 //! it once), and a provider that could not be reached is asked again by the
 //! sweep ([`PendingPayments`](super::PendingPayments)). Replayed, a request
 //! finds the money settled, and does nothing.
+//!
+//! The pass serves every tenant of the region, so only the store's own
+//! faults fail it ([`Fault`]). A fault of the order's own is recorded on it
+//! (`Order::CaptureFailed`, when this node's request stands; the merchant
+//! takes the payment again from the order page) or left to the sweep (a
+//! cancellation), and the event acknowledged (#483).
 
 use std::sync::Arc;
 
@@ -23,6 +29,8 @@ use timada_orders::aggregator::{CancellationRequested, Placed};
 use timada_orders::{CaptureClaim, OrderError};
 
 use super::{DASHBOARD_ACTOR, Payments, settle};
+use crate::db::Db;
+use crate::saga_fault::{Fault, give_up, recorded};
 
 /// The cursor identity of the subscription, in the store.
 pub const ORDER_PAYMENTS_SUBSCRIPTION: &str = "timada-dashboard/order-payments";
@@ -31,13 +39,16 @@ pub const ORDER_PAYMENTS_SUBSCRIPTION: &str = "timada-dashboard/order-payments";
 #[derive(Clone)]
 struct Store(Evento);
 
+/// `db` holds the table of events given up on.
 pub fn order_payments_subscription<E: Executor>(
     payments: Arc<Payments>,
     store: Evento,
+    db: Db,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(ORDER_PAYMENTS_SUBSCRIPTION)
         .data(payments)
         .data(Store(store))
+        .data(db)
         .handler(on_placed())
         .handler(on_placed_on_aliexpress())
         .handler(on_cancellation_requested())
@@ -76,6 +87,45 @@ pub async fn take_payment(
     Ok(())
 }
 
+/// Unix seconds now.
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+}
+
+/// Settles `outcome` of a step about the order `order_id`: the store's fault
+/// fails the pass; the order's own is recorded on it, when this node's
+/// capture request stands (`CaptureFailed`: the merchant takes the payment
+/// again), and the event acknowledged either way.
+async fn settle_fault<E: Executor>(
+    context: &Context<'_, E>,
+    event: &evento::Event,
+    order_id: Option<&str>,
+    outcome: anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let err = match outcome {
+        Ok(()) => return Ok(()),
+        Err(err) => err,
+    };
+    match Fault::of(err) {
+        Fault::Store(err) => Err(err),
+        Fault::Event(reason) => {
+            let db: Db = context.extract();
+            give_up(&db, ORDER_PAYMENTS_SUBSCRIPTION, event, &reason, now()).await?;
+            let Some(order_id) = order_id else {
+                return Ok(());
+            };
+            let store: Store = context.extract();
+            let failure = timada_orders::Command::new(store.0, &event.tenant)
+                .record_capture_failure(DASHBOARD_ACTOR, order_id, &reason)
+                .await
+                .map_err(anyhow::Error::from);
+            recorded(failure, "the capture failure")
+        }
+    }
+}
+
 #[evento::subscription]
 async fn on_placed<E: Executor>(
     context: &Context<'_, E>,
@@ -86,14 +136,15 @@ async fn on_placed<E: Executor>(
     }
     let payments: Arc<Payments> = context.extract();
     let store: Store = context.extract();
-    take_payment(
+    let taken = take_payment(
         &payments,
         &store.0,
         &event.tenant,
         &event.aggregate_id,
         DASHBOARD_ACTOR,
     )
-    .await
+    .await;
+    settle_fault(context, &event, Some(&event.aggregate_id), taken).await
 }
 
 #[evento::subscription]
@@ -109,14 +160,15 @@ async fn on_placed_on_aliexpress<E: Executor>(
     else {
         return Ok(());
     };
-    take_payment(
+    let taken = take_payment(
         &payments,
         &store.0,
         &event.tenant,
         &forward.order_id,
         ALIEXPRESS_ACTOR,
     )
-    .await
+    .await;
+    settle_fault(context, &event, Some(&forward.order_id), taken).await
 }
 
 /// A cancellation AliExpress asked for (it closed the order): settled here,
@@ -132,21 +184,26 @@ async fn on_cancellation_requested<E: Executor>(
     }
     let payments: Arc<Payments> = context.extract();
     let store: Store = context.extract();
-    let Some(tenant) = payments.active_tenant(&event.tenant).await? else {
-        return Ok(());
+    let settled = async {
+        let Some(tenant) = payments.active_tenant(&event.tenant).await? else {
+            return Ok(());
+        };
+        let orders = timada_orders::Command::new(store.0.clone(), &event.tenant);
+        // Nothing held (its hold went back already): settled without the
+        // provider, the shop's keys there or not.
+        if settle::settle_released_cancellation(&orders, &event.aggregate_id)
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+        let Some(account) = payments.account_of(&tenant)? else {
+            return Ok(());
+        };
+        settle::settle_cancellation(&payments, &account, &orders, &event.aggregate_id).await?;
+        anyhow::Ok(())
     };
-    let orders = timada_orders::Command::new(store.0.clone(), &event.tenant);
-    // Nothing held (its hold went back already): settled without the
-    // provider, the shop's keys there or not.
-    if settle::settle_released_cancellation(&orders, &event.aggregate_id)
-        .await?
-        .is_some()
-    {
-        return Ok(());
-    }
-    let Some(account) = payments.account_of(&tenant)? else {
-        return Ok(());
-    };
-    settle::settle_cancellation(&payments, &account, &orders, &event.aggregate_id).await?;
-    Ok(())
+    // The cancellation stands: the sweep settles it, no capture request to
+    // record a failure on.
+    settle_fault(context, &event, None, settled.await).await
 }

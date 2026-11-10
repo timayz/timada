@@ -23,6 +23,8 @@ mod invoicing;
 mod mailroom;
 #[path = "../src/payments/mod.rs"]
 mod payments;
+#[path = "../src/saga_fault/mod.rs"]
+mod saga_fault;
 #[path = "../src/seal.rs"]
 mod seal;
 #[path = "../src/vies.rs"]
@@ -388,7 +390,8 @@ impl SuppliedGoods for FakeGoods {
     }
 }
 
-/// VIES, as far as these tests need it: numbers starting `DE1` exist.
+/// VIES, as far as these tests need it: numbers starting `DE1` exist, and
+/// the member state behind numbers starting `DE5` is down.
 struct FakeVies;
 
 #[async_trait::async_trait]
@@ -399,9 +402,60 @@ impl vies::Vies for FakeVies {
             vies::ViesAnswer::Valid {
                 reference: Some(format!("WAPI-{vat_number}")),
             }
+        } else if vat_number.starts_with("DE5") {
+            vies::ViesAnswer::Unavailable("MS_UNAVAILABLE".into())
         } else {
             vies::ViesAnswer::Invalid
         }
+    }
+}
+
+/// The Bank behind a switch: answers from its table until a test takes it
+/// away (`unavailable`), or from the n-th question on (`answers_left`).
+struct FlakyRates {
+    table: Arc<dyn ecb::EuroRates>,
+    unavailable: std::sync::atomic::AtomicBool,
+    /// How many more questions get an answer before the Bank goes away;
+    /// `usize::MAX` for as many as asked.
+    answers_left: std::sync::atomic::AtomicUsize,
+}
+
+impl FlakyRates {
+    fn new(table: Arc<dyn ecb::EuroRates>) -> Self {
+        Self {
+            table,
+            unavailable: false.into(),
+            answers_left: usize::MAX.into(),
+        }
+    }
+
+    /// The Bank answers `n` more questions, then not at all until
+    /// [`Self::back`].
+    fn away_after(&self, n: usize) {
+        self.answers_left
+            .store(n, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn back(&self) {
+        self.answers_left
+            .store(usize::MAX, std::sync::atomic::Ordering::SeqCst);
+        self.unavailable
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl ecb::EuroRates for FlakyRates {
+    async fn rate_on(&self, currency: &str, day: &str) -> ecb::RateAnswer {
+        use std::sync::atomic::Ordering::SeqCst;
+        let left = self.answers_left.load(SeqCst);
+        if self.unavailable.load(SeqCst) || left == 0 {
+            return ecb::RateAnswer::Unavailable("the Bank's site is down".into());
+        }
+        if left != usize::MAX {
+            self.answers_left.store(left - 1, SeqCst);
+        }
+        self.table.rate_on(currency, day).await
     }
 }
 
@@ -427,6 +481,8 @@ struct Harness<G = FakeStripe> {
     payments: Arc<Payments>,
     stripe: Arc<G>,
     goods: Arc<FakeGoods>,
+    /// The Bank, which a test can take away for a while.
+    rates: Arc<FlakyRates>,
     /// What [`Harness::connect_stripe`] saves as the tenant's secret key.
     secret_key: String,
     /// The read models in the store's database.
@@ -475,28 +531,35 @@ async fn harness_on<G: PaymentGateway + 'static>(
     let invoicing_platform = platform.clone();
     let goods = Arc::new(FakeGoods::default());
     *goods.store.lock().unwrap() = Some(platform.clone());
+    let rates = Arc::new(FlakyRates::new(fake_rates()));
     // The subscriptions the dashboard runs on the store, each following
     // every tenant.
     let mut subscriptions = Vec::new();
     if answers {
         let answering = payments::subscription(payments::Checkouts::new(
             subscribed.clone(),
-            fake_rates(),
+            rates.clone(),
             goods.clone(),
             platform.clone(),
+            store_db.clone(),
             "node-0",
         ));
         subscriptions.push(answering.start(&platform).await.unwrap());
     }
     for builder in [
-        payments::order_payments_subscription(subscribed.clone(), platform.clone()),
+        payments::order_payments_subscription(
+            subscribed.clone(),
+            platform.clone(),
+            store_db.clone(),
+        ),
         timada_orders::discount_usage_subscription(platform.clone()),
         timada_orders::stock_usage_subscription(platform.clone()),
         invoicing::subscription(
             invoicing_platform.clone(),
             Arc::new(FakeVies),
-            fake_rates(),
+            rates.clone(),
             platform.clone(),
+            store_db.clone(),
         ),
     ] {
         subscriptions.push(builder.start(&platform).await.unwrap());
@@ -508,6 +571,7 @@ async fn harness_on<G: PaymentGateway + 'static>(
         payments,
         stripe,
         goods,
+        rates,
         secret_key: secret_key.to_owned(),
         db: store_db,
         dir,
@@ -1109,14 +1173,22 @@ async fn nodes_answering_one_request_at_once_hold_and_open_once() {
             fake_rates(),
             h.goods.clone(),
             h.store(&acme),
+            h.db.clone(),
             name,
         )
     };
     let (one, two) = (node("node-1"), node("node-2"));
     let asked_at = now() as u64;
+    // The request, as the subscription would hand it over.
+    let requested = evento::Event {
+        tenant: acme.id.clone(),
+        aggregate_id: cart_id.clone(),
+        name: "CheckoutRequested".into(),
+        ..Default::default()
+    };
     let (first, second) = tokio::join!(
-        one.answer(&acme.id, &cart_id, &request_id, asked_at),
-        two.answer(&acme.id, &cart_id, &request_id, asked_at),
+        one.answer(&requested, &acme.id, &cart_id, &request_id, asked_at),
+        two.answer(&requested, &acme.id, &cart_id, &request_id, asked_at),
     );
     first.unwrap();
     second.unwrap();
@@ -2881,6 +2953,181 @@ async fn invoices_follow_where_the_goods_go() {
     assert_eq!(invoice.regime, timada_invoicing::tax::Regime::Export);
     assert_eq!(invoice.total_cents, 2500);
     assert_eq!(invoice.total_excl_vat_cents, 2500);
+    h.finish().await;
+}
+
+/// VIES down for the buyer's member state: asked once, the sale is taxed as
+/// to a consumer, and the invoice carries the number as given, marked not
+/// checked, so the buyer knows why VAT was charged.
+#[tokio::test]
+async fn a_vat_number_vies_cannot_check_is_invoiced_with_vat_and_said_unchecked() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let invoicing = timada_invoicing::Command::new(h.store(&acme), &acme.id);
+    timada_orders::Command::new(h.store(&acme), &acme.id)
+        .set_business_buyers("alice", true)
+        .await
+        .unwrap();
+    let order_id = h
+        .buy(
+            &acme,
+            Checkout {
+                shipping: ShippingAddress {
+                    country: "DE".into(),
+                    postal_code: "10115".into(),
+                    ..checkout(None).shipping
+                },
+                vat_number: Some("DE555555555".into()),
+                ..checkout(None)
+            },
+        )
+        .await;
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
+    assert_eq!(
+        invoice.regime,
+        timada_invoicing::tax::Regime::DistanceOrigin,
+        "taxed as a consumer"
+    );
+    assert_eq!(invoice.vat[0].rate_bps, 2000);
+    assert_eq!(invoice.buyer_vat_number, None);
+    assert_eq!(invoice.vies_reference, None);
+    assert_eq!(invoice.unchecked_vat_number.as_deref(), Some("DE555555555"));
+    let pdf = timada_invoicing::pdf::render(&invoice).unwrap();
+    assert!(pdf.starts_with(b"%PDF-"));
+    h.finish().await;
+}
+
+/// The invoicing saga gives an order up rather than hold every tenant's
+/// invoices behind it: a distance sale in dollars needs the Bank's rate and
+/// the Bank is away when the invoice is issued. The failure is recorded on
+/// the order and on the node, the next order is invoiced, and the merchant
+/// asks again once the Bank is back.
+#[tokio::test]
+async fn an_order_that_cannot_be_invoiced_is_given_up_on_and_asked_again() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let catalog = timada_catalog::Command::new(h.store(&acme), &acme.id);
+    let invoicing = timada_invoicing::Command::new(h.store(&acme), &acme.id);
+    let hat = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Hat".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .price_product("alice", &hat.id, 3000, "USD")
+        .await
+        .unwrap();
+    catalog.publish_product("alice", &hat.id).await.unwrap();
+    let cart_id = orders.create_cart(STOREFRONT_ACTOR).await.unwrap();
+    orders
+        .add_to_cart(
+            STOREFRONT_ACTOR,
+            &cart_id,
+            CartItem {
+                product_id: hat.id.clone(),
+                variant_id: None,
+                quantity: 1,
+            },
+        )
+        .await
+        .unwrap();
+    let to_germany = Checkout {
+        shipping: ShippingAddress {
+            name: "Ada".into(),
+            line1: "Unter den Linden 1".into(),
+            postal_code: "10117".into(),
+            city: "Berlin".into(),
+            region: None,
+            country: "DE".into(),
+            phone: Some("+49 30 123456".into()),
+            ..Default::default()
+        },
+        ..checkout(Some(3000))
+    };
+    // The checkout asks the Bank once (the sale needs a rate), then the
+    // Bank is away when the invoice asks.
+    h.rates.away_after(1);
+    let PaymentAnswer::Requested(payment) = h.ask_with(&acme, &cart_id, to_germany).await else {
+        panic!("a payment is opened");
+    };
+    h.stripe.authorize(&payment.payment_id);
+    let body = authorized(&payment.payment_id);
+    let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
+        panic!("the order is placed");
+    };
+    let failure = eventually(async || {
+        orders
+            .load_order(&order_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .invoicing_failure
+    })
+    .await;
+    assert!(failure.contains("no euro rate for USD"), "{failure}");
+    assert!(
+        invoicing
+            .load_invoice_of_order(&order_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "not invoiced"
+    );
+    let given_up = saga_fault::given_up(&h.db, 10).await.unwrap();
+    assert_eq!(given_up.len(), 1, "{given_up:?}");
+    assert_eq!(given_up[0].subscription, invoicing::SUBSCRIPTION);
+    assert_eq!(given_up[0].stream_id, order_id);
+    assert_eq!(given_up[0].event, "Paid");
+    assert_eq!(given_up[0].reason, failure);
+
+    // The pass went on: the next order, in euros, is invoiced.
+    let next = h.buy(&acme, checkout(None)).await;
+    eventually(async || invoicing.load_invoice_of_order(&next).await.unwrap()).await;
+    assert!(
+        invoicing
+            .load_invoice_of_order(&order_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "the one given up on stays as it is"
+    );
+
+    // The Bank is back; the merchant asks again, and the order is invoiced.
+    h.rates.back();
+    orders.request_invoicing("alice", &order_id).await.unwrap();
+    let invoice =
+        eventually(async || invoicing.load_invoice_of_order(&order_id).await.unwrap()).await;
+    assert_eq!(invoice.currency, "USD");
+    assert_eq!(invoice.total_vat_eur_cents, Some(400));
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.invoicing_failure, None, "cleared by the request");
+    // Asking again with nothing owed changes nothing.
+    orders.request_invoicing("alice", &order_id).await.unwrap();
+    let again = eventually(async || {
+        let order = orders.load_order(&order_id).await.unwrap().unwrap();
+        (order.invoicing_failure.is_none()).then_some(order)
+    })
+    .await;
+    assert_eq!(again.invoicing_failure, None);
+    assert_eq!(
+        invoicing
+            .load_invoice_of_order(&order_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .label,
+        invoice.label,
+        "the same invoice"
+    );
     h.finish().await;
 }
 

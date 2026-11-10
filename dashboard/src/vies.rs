@@ -2,6 +2,12 @@
 //! Commission's service: a sale to a business in another EU country goes
 //! without VAT (reverse charge) only on a number VIES says is valid, and the
 //! reference VIES gives for the check is kept on the invoice as proof.
+//!
+//! VIES is asked once, for at most [`VIES_TIMEOUT`]: the check runs inside
+//! the invoicing pass, which serves every tenant, and VIES is often down for
+//! one member state for a while. An invoice issued while it is cannot wait
+//! for it: the sale is taxed as to a consumer, the safe side, and the
+//! invoice says the number was given and not checked (#483).
 
 use std::time::Duration;
 
@@ -30,6 +36,9 @@ pub trait Vies: Send + Sync {
     async fn check(&self, vat_number: &str, requester: Option<&str>) -> ViesAnswer;
 }
 
+/// How long one check may take, connection and answer together.
+pub const VIES_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub struct ViesClient {
     url: String,
     client: reqwest::Client,
@@ -44,7 +53,7 @@ impl ViesClient {
                 .trim_end_matches('/')
                 .to_owned(),
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(15))
+                .timeout(VIES_TIMEOUT)
                 .build()
                 .unwrap_or_default(),
         }
@@ -115,22 +124,4 @@ impl Vies for ViesClient {
             _ => ViesAnswer::Invalid,
         }
     }
-}
-
-/// Asks VIES a few times before giving up: it is often briefly unavailable
-/// for one member state.
-pub async fn check_patiently(
-    vies: &dyn Vies,
-    vat_number: &str,
-    requester: Option<&str>,
-) -> ViesAnswer {
-    let mut answer = ViesAnswer::Unavailable("not asked".to_owned());
-    for attempt in 0..3u32 {
-        answer = vies.check(vat_number, requester).await;
-        if !matches!(answer, ViesAnswer::Unavailable(_)) {
-            break;
-        }
-        tokio::time::sleep(Duration::from_secs(u64::from(attempt + 1))).await;
-    }
-    answer
 }

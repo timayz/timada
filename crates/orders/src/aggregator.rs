@@ -411,6 +411,16 @@ pub enum Order {
         note: Option<String>,
         settled_by: String,
     },
+    /// The order's invoice, or the credit note of one of its refunds, could
+    /// not be issued for a reason of the order's own (`reason`: what went
+    /// wrong, in one line), and the dashboard gave up on it rather than hold
+    /// every tenant's invoicing behind it. The merchant asks again
+    /// (`InvoicingRequested`). Written by the dashboard, never a shopper.
+    InvoicingFailed { reason: String, failed_by: String },
+    /// The merchant asks for the order's documents to be issued again: the
+    /// invoice if it has none, the credit note of every refund that has
+    /// none. Clears `InvoicingFailed`.
+    InvoicingRequested { requested_by: String },
 }
 
 /// Where an order's parcels are, as their carrier last said: one stream per

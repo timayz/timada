@@ -123,6 +123,7 @@ test("the administrator sees a tenant active, suspends and resumes it", async ({
   await expect(admin.locator("[data-node-state]")).toHaveText("Serving");
   await expect(admin.locator("[data-workers]")).toHaveAttribute("data-workers-troubled", "0");
   await expect(admin.locator("[data-workers]")).toContainText("running");
+  await expect(admin.locator("[data-given-up]")).toHaveAttribute("data-given-up", "0");
 
   await ownerContext.close();
   await adminContext.close();

@@ -30,12 +30,12 @@ use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BusinessBuyersAccepted, BusinessBuyersRefused,
     BuyerIdentified, CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, CheckedOut,
     CheckoutClaimed, CheckoutRequested, Claimed, Created, DiscountApplied, DiscountGranted,
-    DiscountRemoved, Discounted, Fulfilled, HoldLapseReminded, ItemAdded, ItemRemoved,
-    LanguageGiven, LanguageSet, Mailed, MethodAdded, MethodChanged, MethodRemoved,
-    NewsletterOptInSet, NewsletterOptedIn, Paid, PaymentCancelled, PaymentRefused, PaymentReleased,
-    PaymentRequested, PaymentReturnRefused, PaymentReturnRequested, PaymentReturned,
-    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded,
-    Released as ReferenceReleased, SettledOutside, ShippingCharged, ShippingGranted,
+    DiscountRemoved, Discounted, Fulfilled, HoldLapseReminded, InvoicingFailed, InvoicingRequested,
+    ItemAdded, ItemRemoved, LanguageGiven, LanguageSet, Mailed, MethodAdded, MethodChanged,
+    MethodRemoved, NewsletterOptInSet, NewsletterOptedIn, Paid, PaymentCancelled, PaymentRefused,
+    PaymentReleased, PaymentRequested, PaymentReturnRefused, PaymentReturnRequested,
+    PaymentReturned, PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested,
+    Refunded, Released as ReferenceReleased, SettledOutside, ShippingCharged, ShippingGranted,
     ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet, SupplierOrderRefused,
     SupplierOrderRuledOut, SupplierOrderStarted, SupplierOrderUncertain, TimeZoneGiven,
     TimeZoneSet,
@@ -908,6 +908,12 @@ pub struct OrderState {
     /// Why the provider would not take the money, the last time it was
     /// asked; cleared by the next request.
     pub capture_failure: Option<String>,
+    /// Why the order's invoice, or a credit note of one of its refunds,
+    /// could not be issued the last time it was tried; cleared by the next
+    /// request (`InvoicingRequested`). The shop's business, not a
+    /// storefront's.
+    #[serde(skip)]
+    pub invoicing_failure: Option<String>,
     /// A cancellation asked for and not settled yet: the hold is being
     /// released, or what was taken refunded.
     pub pending_cancellation: Option<PendingCancellation>,
@@ -949,6 +955,11 @@ pub struct OrderState {
     pub refunded_cents: u64,
     /// The provider's ids of those refunds.
     pub refund_ids: Vec<String>,
+    /// Each of those refunds with its amount, in the order they were made:
+    /// what a credit note issued later says. The shop's business, not a
+    /// storefront's.
+    #[serde(skip)]
+    pub refunds: Vec<OrderRefund>,
     /// A refund asked for and not recorded yet: the provider may hold it
     /// already. Nothing else happens to the order until it is settled.
     pub pending_refund: Option<PendingRefund>,
@@ -981,6 +992,13 @@ pub struct OutsideSettlement {
     pub settled_by: String,
     /// Unix seconds.
     pub settled_at: u64,
+}
+
+/// A refund the provider made, as `Refunded` recorded it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct OrderRefund {
+    pub refund_id: String,
+    pub amount_cents: u64,
 }
 
 /// A refund asked for, under the key the provider is asked with.
@@ -1203,6 +1221,8 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_time_zone_set())
         .handler(on_hold_lapse_reminded())
         .handler(on_settled_outside())
+        .handler(on_invoicing_failed())
+        .handler(on_invoicing_requested())
         .strict()
 }
 
@@ -1377,6 +1397,26 @@ async fn on_settled_outside(
 }
 
 #[evento::handler]
+async fn on_invoicing_failed(
+    event: Event<InvoicingFailed>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.invoicing_failure = Some(event.data.reason.to_owned());
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invoicing_requested(
+    event: Event<InvoicingRequested>,
+    order: &mut OrderState,
+) -> anyhow::Result<()> {
+    order.invoicing_failure = None;
+    order.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
 async fn on_discounted(event: Event<Discounted>, order: &mut OrderState) -> anyhow::Result<()> {
     order.discount = Some(OrderDiscount {
         discount_id: event.data.discount_id.to_owned(),
@@ -1434,6 +1474,10 @@ async fn on_newsletter_opt_in_set(
 async fn on_refunded(event: Event<Refunded>, order: &mut OrderState) -> anyhow::Result<()> {
     order.refunded_cents += event.data.amount_cents;
     order.refund_ids.push(event.data.refund_id.to_owned());
+    order.refunds.push(OrderRefund {
+        refund_id: event.data.refund_id.to_owned(),
+        amount_cents: event.data.amount_cents,
+    });
     // Whatever was asked for is settled by what the provider gave back.
     order.pending_refund = None;
     order.updated_at = event.timestamp;
