@@ -52,6 +52,13 @@ pub struct StoreStatus {
     pub products: i64,
     /// Unix seconds of the last catalog change seen.
     pub last_event_at: Option<i64>,
+    /// How far the copy trails the store, in seconds: the age of the last
+    /// event worked through against the newest in the store, as of the last
+    /// time the subscription recorded its cursor. A copy catching up (a new
+    /// replica, one that was away) reads high and falls; a balancer can keep
+    /// shoppers off it until it reads low. Unknown until the subscription
+    /// first ran.
+    pub lag_seconds: Option<i64>,
 }
 
 /// Where the catalog subscription stands.
@@ -208,11 +215,23 @@ impl Store {
             .fetch_scalar("SELECT max(updated_at) FROM storefront_products", ())
             .await
             .unwrap_or(None);
+        // The subscription writes its lag next to its cursor each time it
+        // records it.
+        let lag_seconds: Option<i64> = db
+            .fetch_optional::<(i64,)>(
+                "SELECT lag FROM subscriber WHERE key = ?1",
+                (crate::read_model::CATALOG_SUBSCRIPTION,),
+            )
+            .await
+            .ok()
+            .flatten()
+            .map(|(lag,)| lag);
         StoreStatus {
             connected,
             subscription: self.inner.subscription.lock().unwrap().clone(),
             products,
             last_event_at,
+            lag_seconds,
         }
     }
 

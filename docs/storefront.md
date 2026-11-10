@@ -560,12 +560,15 @@ the page (`storefront/src/app/emails/opt_out/token`).
 ## `GET /store/status`
 
 ```json
-{ "connected": true, "subscription": { "state": "running" }, "products": 12, "last_event_at": 1760000000 }
+{ "connected": true, "subscription": { "state": "running" }, "products": 12, "last_event_at": 1760000000, "lag_seconds": 0 }
 ```
 
 `connected` is a request to the store made just now (503 when it fails); `subscription`
 is `running`, `restarting` with the last error, or `stopped` with the reason; `products`
-counts the published rows of the local copy.
+counts the published rows of the local copy; `lag_seconds` is how far the copy trails the
+store, as of the last time the subscription recorded its cursor (`null` until it first
+ran). A new replica, or one that was away, reads high and falls as it catches up: a
+balancer can keep shoppers off it until it reads low.
 
 ## Seeding a catalogue
 
