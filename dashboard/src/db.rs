@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use evento::Turso;
 use evento::turso::TursoJournal;
 use evento::turso::migrate::{MIGRATIONS_TABLE, Migrations};
-pub use timada_core::db::Db;
+pub use timada_core::db::{Connection, Db};
 
 /// The store: the one database file, as the node and the read models in it
 /// write it.
@@ -145,73 +145,126 @@ pub fn prepare_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The read models, one crate each: its migrations, and the tables they
-/// create.
-struct StoreReadModel {
+/// A read model in the store's database, one crate each: its migrations,
+/// the tables they create, and the subscriptions that fill them.
+pub struct ReadModel {
+    /// What the `rebuild` command calls it; `None` for tables that are
+    /// emptied with a copy of the store but are not rebuilt alone (the
+    /// sagas' own bookkeeping).
+    pub name: Option<&'static str>,
+    /// The cursor keys of the subscriptions that fill its tables, as the
+    /// crates name them (a node with a region prefixes them with it).
+    pub subscriptions: &'static [&'static str],
     migrations: &'static Migrations<'static>,
     tables: &'static [&'static str],
 }
 
-const STORE_READ_MODELS: &[StoreReadModel] = &[
-    StoreReadModel {
+/// The read models the `rebuild` command knows, by name.
+pub fn read_models() -> impl Iterator<Item = &'static ReadModel> {
+    STORE_READ_MODELS
+        .iter()
+        .filter(|read_model| read_model.name.is_some())
+}
+
+/// The read model called `name`, if any.
+pub fn read_model(name: &str) -> Option<&'static ReadModel> {
+    read_models().find(|read_model| read_model.name == Some(name))
+}
+
+const STORE_READ_MODELS: &[ReadModel] = &[
+    ReadModel {
+        name: Some("identity"),
+        subscriptions: &[timada_identity::READ_MODEL_SUBSCRIPTION],
         migrations: &timada_identity::MIGRATIONS,
         tables: timada_identity::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: Some("tenancy"),
+        subscriptions: &[
+            timada_tenancy::READ_MODEL_SUBSCRIPTION,
+            timada_tenancy::MEMBER_AUDIT_SUBSCRIPTION,
+            timada_tenancy::ALIEXPRESS_ACCOUNTS_SUBSCRIPTION,
+        ],
         migrations: &timada_tenancy::MIGRATIONS,
         tables: timada_tenancy::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: Some("catalog"),
+        subscriptions: &[timada_catalog::READ_MODEL_SUBSCRIPTION],
         migrations: &timada_catalog::MIGRATIONS,
         tables: timada_catalog::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: Some("pages"),
+        subscriptions: &[timada_pages::READ_MODEL_SUBSCRIPTION],
         migrations: &timada_pages::MIGRATIONS,
         tables: timada_pages::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: Some("reviews"),
+        subscriptions: &[timada_reviews::READ_MODEL_SUBSCRIPTION],
         migrations: &timada_reviews::MIGRATIONS,
         tables: timada_reviews::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: Some("discounts"),
+        subscriptions: &[timada_discounts::READ_MODEL_SUBSCRIPTION],
         migrations: &timada_discounts::MIGRATIONS,
         tables: timada_discounts::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: Some("support"),
+        subscriptions: &[timada_support::READ_MODEL_SUBSCRIPTION],
         migrations: &timada_support::MIGRATIONS,
         tables: timada_support::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: Some("orders"),
+        subscriptions: &[timada_orders::READ_MODEL_SUBSCRIPTION],
         migrations: &timada_orders::MIGRATIONS,
         tables: timada_orders::TABLES,
     },
     // The dashboard's own: the mails its sagas owe (`mailroom/schema.rs`)
     // and the events they gave up on (`saga_fault/schema.rs`).
-    StoreReadModel {
+    ReadModel {
+        name: None,
+        subscriptions: &[],
         migrations: &crate::mailroom::MIGRATIONS,
         tables: crate::mailroom::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: None,
+        subscriptions: &[],
         migrations: &crate::saga_fault::MIGRATIONS,
         tables: crate::saga_fault::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: Some("shoppers"),
+        subscriptions: &[timada_shoppers::READ_MODEL_SUBSCRIPTION],
         migrations: &timada_shoppers::MIGRATIONS,
         tables: timada_shoppers::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: Some("invoicing"),
+        subscriptions: &[timada_invoicing::READ_MODEL_SUBSCRIPTION],
         migrations: &timada_invoicing::MIGRATIONS,
         tables: timada_invoicing::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: Some("newsletter"),
+        subscriptions: &[timada_newsletter::READ_MODEL_SUBSCRIPTION],
         migrations: &timada_newsletter::MIGRATIONS,
         tables: timada_newsletter::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: Some("automations"),
+        subscriptions: &[timada_automations::READ_MODEL_SUBSCRIPTION],
         migrations: &timada_automations::MIGRATIONS,
         tables: timada_automations::TABLES,
     },
-    StoreReadModel {
+    ReadModel {
+        name: Some("aliexpress"),
+        subscriptions: &[timada_aliexpress::READ_MODEL_SUBSCRIPTION],
         migrations: &timada_aliexpress::MIGRATIONS,
         tables: timada_aliexpress::TABLES,
     },
@@ -256,25 +309,56 @@ pub async fn migrate_store_read_models(store: &Store) -> Result<()> {
 pub async fn reset_store_read_models(store: &Store) -> Result<()> {
     let mut conn = store.connect()?;
     for read_model in STORE_READ_MODELS {
-        let app = read_model.migrations.app();
-        for table in read_model.tables {
-            conn.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
-                .await
-                .with_context(|| format!("{app}: cannot drop {table}"))?;
-        }
-        conn.execute(
-            &format!("DELETE FROM {MIGRATIONS_TABLE} WHERE app = ?1"),
-            [app],
-        )
-        .await
-        .with_context(|| format!("{app}: cannot forget the applied migrations"))?;
-        read_model
-            .migrations
-            .to_latest(&mut conn)
+        reset_read_model(&mut conn, read_model).await?;
+    }
+    Ok(())
+}
+
+/// Drops `read_model`'s tables and creates them again (see
+/// [`reset_store_read_models`]).
+async fn reset_read_model(conn: &mut Connection, read_model: &ReadModel) -> Result<()> {
+    let app = read_model.migrations.app();
+    for table in read_model.tables {
+        conn.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
             .await
-            .map_err(|(applied, err)| {
-                anyhow::anyhow!("{app}: migration failed after {applied} applied: {err}")
-            })?;
+            .with_context(|| format!("{app}: cannot drop {table}"))?;
+    }
+    conn.execute(
+        &format!("DELETE FROM {MIGRATIONS_TABLE} WHERE app = ?1"),
+        [app],
+    )
+    .await
+    .with_context(|| format!("{app}: cannot forget the applied migrations"))?;
+    read_model
+        .migrations
+        .to_latest(conn)
+        .await
+        .map_err(|(applied, err)| {
+            anyhow::anyhow!("{app}: migration failed after {applied} applied: {err}")
+        })?;
+    Ok(())
+}
+
+/// Empties one read model and forgets the cursors of the subscriptions that
+/// fill it, so their next run goes through the store from the start and
+/// fills it again: what the `rebuild` command does with the server stopped,
+/// after a change to the tables or a handler. The cursors go whatever
+/// region prefixed them (`{region}.{key}`).
+pub async fn rebuild_read_model(store: &Store, read_model: &ReadModel) -> Result<()> {
+    let mut conn = store.connect()?;
+    reset_read_model(&mut conn, read_model).await?;
+    let db = Db::from(store.clone());
+    let keys: Vec<(String,)> = db.fetch_all("SELECT key FROM subscriber", ()).await?;
+    for (key,) in keys {
+        let fills = read_model
+            .subscriptions
+            .iter()
+            .any(|own| key == *own || key.ends_with(&format!(".{own}")));
+        if fills {
+            db.execute("DELETE FROM subscriber WHERE key = ?1", [key.as_str()])
+                .await
+                .with_context(|| format!("cannot forget the cursor of {key}"))?;
+        }
     }
     Ok(())
 }
@@ -363,6 +447,61 @@ mod tests {
             listed.sort();
             assert_eq!(created, listed, "{}", read_model.migrations.app());
         }
+    }
+
+    /// A rebuilt read model is empty and its subscription, cursor forgotten
+    /// (region prefix and all), fills it again from the start of the store.
+    #[tokio::test]
+    async fn a_rebuilt_read_model_is_filled_again_from_the_start() {
+        use evento::Evento;
+        use timada_tenancy::{Command, CreateTenant, active_tenant_ids};
+
+        let turso = Turso::in_memory_concurrent().await.unwrap();
+        migrate_store_read_models(&turso).await.unwrap();
+        let store = Evento::new(turso.clone()).default_routing_key("eu");
+        let db = Db::from(turso.clone());
+        let tenant = Command(store.clone())
+            .create_tenant(CreateTenant {
+                name: "acme".into(),
+                owner_user_id: "alice".into(),
+            })
+            .await
+            .unwrap();
+        let mut subscription = timada_tenancy::read_model_subscription::<Evento>(db.clone());
+        subscription.run_once(&store).await.unwrap();
+        assert!(active_tenant_ids(&db).await.unwrap().contains(&tenant.id));
+        let key = format!("eu.{}", timada_tenancy::READ_MODEL_SUBSCRIPTION);
+        let cursors = |key: String| {
+            let db = db.clone();
+            async move {
+                db.fetch_scalar::<i64>("SELECT count(*) FROM subscriber WHERE key = ?1", [key])
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(
+            cursors(key.clone()).await,
+            1,
+            "the cursor carries the region"
+        );
+
+        rebuild_read_model(&turso, read_model("tenancy").unwrap())
+            .await
+            .unwrap();
+
+        assert!(active_tenant_ids(&db).await.unwrap().is_empty(), "emptied");
+        assert_eq!(cursors(key.clone()).await, 0, "the cursor is forgotten");
+        let mut subscription = timada_tenancy::read_model_subscription::<Evento>(db.clone());
+        subscription.run_once(&store).await.unwrap();
+        assert!(
+            active_tenant_ids(&db).await.unwrap().contains(&tenant.id),
+            "filled again from the start"
+        );
+        assert_eq!(cursors(key).await, 1);
+        assert!(
+            read_model("mailroom").is_none(),
+            "the sagas' tables are not rebuilt alone"
+        );
     }
 
     /// Every table and index of the read models, by name: what is neither

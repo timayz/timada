@@ -67,6 +67,34 @@ pub fn clear_rejoin_mark(store: &Path) -> Result<()> {
     RejoinMark::clear(&state_dir(store))
 }
 
+/// The name of the mark the `rebuild` command leaves next to the store: the
+/// next `serve` catches the read models up before it listens, as it does
+/// after a copy of the store, so a rebuilt read model is never served empty.
+const CATCH_UP_MARK: &str = "catch-up";
+
+/// The catch-up mark of the store at `store`.
+pub fn catch_up_mark(store: &Path) -> PathBuf {
+    state_dir(store).join(CATCH_UP_MARK)
+}
+
+/// Asks the next `serve` over the store at `store` to catch the read models
+/// up before it listens.
+pub fn mark_for_catch_up(store: &Path) -> Result<PathBuf> {
+    let mark = catch_up_mark(store);
+    std::fs::write(&mark, "the read models catch up before the node listens\n")
+        .with_context(|| format!("cannot write {}", mark.display()))?;
+    Ok(mark)
+}
+
+/// Removes the catch-up mark of the store at `store`, if any.
+pub fn clear_catch_up_mark(store: &Path) -> Result<()> {
+    match std::fs::remove_file(catch_up_mark(store)) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).context("cannot remove the catch-up mark"),
+    }
+}
+
 /// Opens the node over the store at `store_path` and starts it. Single node
 /// when `cluster` is `None`. `region`, when set, is the default routing key
 /// stamped on every new aggregate this node writes; with `also_serves`, the
