@@ -180,14 +180,25 @@ by construction.
    page talks to recognise), the store HTTP endpoints answer 503 with that code, and
    the store API
    carries it as a refusal a storefront shows the same way. A node not heard from for
-   `cluster.absent_after_secs` (an hour by default) is therefore given up: the others
+   `cluster.absent_after_secs` (a day by default: the backlog holds days of writes,
+   and copying a large store back costs far more than catching up) is therefore
+   given up: the others
    tidy up without it, and when it returns they tell it it fell behind. It then
    refuses writes, logs the procedure and marks the store for a copy (the `rejoin`
    file next to the store, written by evento's host); the next `serve` empties the
-   store (events, snapshots, cursors; the journal stays), empties the read-model
-   tables (the host's `before_copy` hook) and opens the node by
+   store (events, snapshots, cursors; the journal stays), drops and recreates the
+   read-model tables (the host's `before_copy` hook, `db::reset_store_read_models`:
+   a drop is one schema change where deleting the rows would write every one of
+   them to the database's log once more) and opens the node by
    joining, which installs a peer's store page by page (4 MiB at a time) before
-   anything is served, then the subscriptions rebuild the read models from it. The
+   anything is served; then the read-model subscriptions catch up from it, all at
+   once (each writes tables of its own), before the node listens. The pictures and
+   keys this node keeps are not in the store: their subscriptions walk their
+   events again from the start and fetch from a peer only what the disk lacks, so
+   a node rebuilt on a new machine should get `data/media` and
+   `data/shopper-keys` copied from a peer (`rsync`) before its first `serve`; a
+   picture a node has not got yet is answered 404 with `Cache-Control: no-store`,
+   so no cache in front keeps the miss. The
    `rejoin` command sets the same mark by hand, for a lost store file (delete the
    file first: an empty journal comes back under the node's own id through evento's
    amnesia fence). A node back before anything was tidied up past it is simply waited

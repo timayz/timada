@@ -16,7 +16,7 @@
 //! without it and cannot send them any more. The host then refuses writes
 //! (`writes_paused` on the pages) and marks the store for a copy (the
 //! `rejoin` file next to the store, [`rejoin_mark`]); the next `serve`
-//! empties the store, keeps the journal, empties the read models
+//! empties the store, keeps the journal, drops and recreates the read models
 //! (`db::reset_store_read_models`, the host's `before_copy` hook) and opens
 //! the node by joining, which copies a peer's store page by page. A journal
 //! found to be an older copy of itself is marked the same way, journal
@@ -75,9 +75,9 @@ pub fn clear_rejoin_mark(store: &Path) -> Result<()> {
 ///
 /// When the store is marked for a copy (see [`mark_for_rejoin`]) and the
 /// node has peers, the store is emptied (the journal is kept), the read
-/// models are emptied, and the node opens by joining: a peer's store is
-/// installed page by page before anything is served. The mark stays when
-/// the copy fails, so the next start tries again.
+/// models are dropped and recreated, and the node opens by joining: a
+/// peer's store is installed page by page before anything is served. The
+/// mark stays when the copy fails, so the next start tries again.
 pub async fn open(
     cluster: Option<&ClusterConfig>,
     region: Option<&str>,
@@ -85,8 +85,8 @@ pub async fn open(
     store_path: &Path,
     store: Store,
 ) -> Result<(Arc<Cluster>, Executor)> {
-    // The read models are derived data in the same file: emptied with the
-    // store, filled again by the subscriptions from the copied events.
+    // The read models are derived data in the same file: dropped with the
+    // store's rows, filled again by the subscriptions from the copied events.
     let read_models = store.clone();
     let mut builder = Cluster::builder(store)
         .settings(cluster.map(ClusterConfig::settings))

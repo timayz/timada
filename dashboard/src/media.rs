@@ -55,7 +55,7 @@ use timada_tenancy::tenant_projection;
 use topcoat::context::Cx;
 use topcoat::router::{
     Body, HeaderValue, IntoPath, Layer, LayerFuture, Next, Path as RoutePath,
-    PathBuf as RoutePathBuf, header::CACHE_CONTROL, response::Response,
+    PathBuf as RoutePathBuf, StatusCode, header::CACHE_CONTROL, response::Response,
 };
 
 use crate::config::MediaConfig;
@@ -546,7 +546,21 @@ pub const MEDIA_ROUTE: &str = "/media/{*file}";
 /// never changes (a new picture is a new id), so: as long as it likes.
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
-/// Adds that header to everything under `/media`.
+/// What a cache may keep of a picture this node could not serve: nothing.
+/// The file may be on its way (a node that is catching up fetches its copies
+/// from the others), and a miss kept for a year would hide it once it lands.
+const NO_STORE: &str = "no-store";
+
+/// The `Cache-Control` of an answer under `/media`, by its status.
+fn cache_control(status: StatusCode) -> &'static str {
+    if status.is_success() {
+        IMMUTABLE
+    } else {
+        NO_STORE
+    }
+}
+
+/// Sets that header on everything under `/media`.
 pub struct MediaCache {
     path: RoutePathBuf,
 }
@@ -567,9 +581,10 @@ impl Layer for MediaCache {
     fn handle<'cx>(&'cx self, cx: &'cx Cx, body: Body, next: Next<'cx>) -> LayerFuture<'cx> {
         Box::pin(async move {
             let mut response: Response = next.run(cx, body).await?;
+            let cache = cache_control(response.status());
             response
                 .headers_mut()
-                .insert(CACHE_CONTROL, HeaderValue::from_static(IMMUTABLE));
+                .insert(CACHE_CONTROL, HeaderValue::from_static(cache));
             Ok(response)
         })
     }
@@ -652,6 +667,15 @@ mod tests {
     const GIF: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xFF\xFF\xFF";
 
     use crate::peers::test_support::{SECRET, down, peer};
+
+    /// A picture served is kept for a year; a miss is not kept at all, so a
+    /// cache in front never hides a picture this node copies later.
+    #[test]
+    fn a_miss_is_never_cached() {
+        assert_eq!(cache_control(StatusCode::OK), IMMUTABLE);
+        assert_eq!(cache_control(StatusCode::NOT_FOUND), NO_STORE);
+        assert_eq!(cache_control(StatusCode::INTERNAL_SERVER_ERROR), NO_STORE);
+    }
 
     #[test]
     fn knows_a_picture_from_anything_else() {

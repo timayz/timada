@@ -112,8 +112,8 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     )],
 );
 
-/// The tables the migration creates: what a node empties before copying its
-/// store from a peer, so the subscriptions fill them again.
+/// The tables the migrations create: what a node drops and creates again
+/// before copying its store from a peer, so the subscriptions fill them again.
 pub const TABLES: &[&str] = &[
     "tenancy_tenants",
     "tenancy_totals",
@@ -125,7 +125,3 @@ pub const TABLES: &[&str] = &[
     "tenancy_member_audit",
     "tenancy_aliexpress_accounts",
 ];
-
-/// What [`TABLES`] hold once emptied that the schema expects: the totals
-/// row. Run after emptying them.
-pub const RESET_ROWS: &str = "INSERT INTO tenancy_totals (id, tenants) VALUES (1, 0)";
