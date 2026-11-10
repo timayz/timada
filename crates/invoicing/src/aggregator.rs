@@ -55,6 +55,10 @@ pub mod book {
             buyer_vat_number: Option<String>,
             /// VIES's reference for the check of that number.
             vies_reference: Option<String>,
+            /// The EU VAT number the buyer gave when VIES could not be asked
+            /// about it: VAT was charged as to a consumer, and the invoice
+            /// says the number was not checked.
+            unchecked_vat_number: Option<String>,
             /// The year's EU distance sales excluding VAT, this one included
             /// (only the invoices of a series count, in their order).
             eu_distance_sales_cents: u64,

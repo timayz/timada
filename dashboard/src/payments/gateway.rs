@@ -8,11 +8,19 @@
 //! sent with an idempotency key: Stripe replays the first answer to a key,
 //! errors included, for a day, while a payment's own state already makes
 //! each of them happen once.
+//!
+//! Every call has a deadline ([`READ_TIMEOUT`], [`WRITE_TIMEOUT`]): the
+//! sagas that answer checkouts and take payments call Stripe inside their
+//! pass, which serves every tenant, and a call that hangs would hold their
+//! cursor for as long as it hangs. A call that ran out of time is an error
+//! like no answer at all: a checkout is refused for now, a capture is left
+//! to the sweep (`PendingPayments`), which asks again.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use stripe::{ClientBuilder, IdempotencyKey, RequestStrategy, StripeError, StripeRequest};
 use stripe_core::balance::RetrieveForMyAccountBalance;
@@ -288,9 +296,20 @@ fn refusal(err: &anyhow::Error) -> Option<&Refused> {
     err.downcast_ref::<Refused>()
 }
 
+/// How long a call that only reads (a payment's status, the refunds, the
+/// balance) may take before it counts as no answer.
+pub const READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long a call that changes something (opens, captures, cancels or
+/// refunds a payment) may take: Stripe takes longer to answer these, and an
+/// answer cut short leaves the payment to be read back.
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Stripe, through async-stripe. One client per secret key, kept.
 pub struct StripeGateway {
     api_url: Option<String>,
+    read_timeout: Duration,
+    write_timeout: Duration,
     clients: Mutex<HashMap<String, stripe::Client>>,
 }
 
@@ -303,8 +322,18 @@ impl StripeGateway {
         let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
         Self {
             api_url,
+            read_timeout: READ_TIMEOUT,
+            write_timeout: WRITE_TIMEOUT,
             clients: Mutex::default(),
         }
+    }
+
+    /// The same gateway with other deadlines (the tests' short ones).
+    #[cfg(test)]
+    fn with_timeouts(mut self, read: Duration, write: Duration) -> Self {
+        self.read_timeout = read;
+        self.write_timeout = write;
+        self
     }
 
     fn client(&self, secret_key: &str) -> anyhow::Result<stripe::Client> {
@@ -315,13 +344,26 @@ impl StripeGateway {
         if let Some(client) = clients.get(secret_key) {
             return Ok(client.clone());
         }
-        let mut builder = ClientBuilder::new(secret_key);
+        let mut builder = ClientBuilder::new(secret_key).timeout(self.write_timeout);
         if let Some(url) = &self.api_url {
             builder = builder.url(url.clone());
         }
         let client = builder.build()?;
         clients.insert(secret_key.to_owned(), client.clone());
         Ok(client)
+    }
+
+    /// Sends a request that only reads, under [`READ_TIMEOUT`].
+    fn read<'a, R>(
+        &self,
+        request: &R,
+        client: &'a stripe::Client,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<R::Output>> + Send + 'a>>
+    where
+        R: StripeRequest,
+        R::Output: miniserde::Deserialize + 'static,
+    {
+        send(request, None, Some(self.read_timeout), client)
     }
 }
 
@@ -343,9 +385,13 @@ fn idempotent(key: &str) -> anyhow::Result<RequestStrategy> {
 /// after the await, where its type no longer matters to the future. The
 /// value round-trips through text because miniserde reads a type from text
 /// alone, a few kilobytes per call.
+///
+/// `timeout` overrides the client's deadline ([`WRITE_TIMEOUT`], set on the
+/// client) for the one request.
 fn send<'a, R>(
     request: &R,
     strategy: Option<RequestStrategy>,
+    timeout: Option<Duration>,
     client: &'a stripe::Client,
 ) -> Pin<Box<dyn Future<Output = anyhow::Result<R::Output>> + Send + 'a>>
 where
@@ -355,6 +401,9 @@ where
     let mut request = request.build().customize::<miniserde::json::Value>();
     if let Some(strategy) = strategy {
         request = request.request_strategy(strategy);
+    }
+    if let Some(timeout) = timeout {
+        request = request.timeout(timeout);
     }
     Box::pin(async move {
         let value = request.send(client).await.map_err(|err| match err {
@@ -385,7 +434,8 @@ where
 impl PaymentGateway for StripeGateway {
     async fn check_key(&self, secret_key: &str) -> anyhow::Result<()> {
         let client = self.client(secret_key)?;
-        send(&RetrieveForMyAccountBalance::new(), None, &client).await?;
+        self.read(&RetrieveForMyAccountBalance::new(), &client)
+            .await?;
         Ok(())
     }
 
@@ -411,7 +461,7 @@ impl PaymentGateway for StripeGateway {
         }
         let client = self.client(secret_key)?;
         let strategy = idempotent(&payment.idempotency_key)?;
-        let intent = send(&request, Some(strategy), &client).await?;
+        let intent = send(&request, Some(strategy), None, &client).await?;
         Ok(OpenPayment {
             payment_id: intent.id.to_string(),
             client_secret: intent.client_secret.ok_or_else(|| {
@@ -429,7 +479,7 @@ impl PaymentGateway for StripeGateway {
         // The charge says until when the card holds the money.
         let request =
             RetrievePaymentIntent::new(payment_id).expand(vec!["latest_charge".to_owned()]);
-        let intent = send(&request, None, &client).await?;
+        let intent = self.read(&request, &client).await?;
         Ok(status_of(intent))
     }
 
@@ -444,7 +494,7 @@ impl PaymentGateway for StripeGateway {
         let request = CreateRefund::new()
             .payment_intent(payment_id)
             .amount(amount_cents as i64);
-        let refund = send(&request, Some(idempotent(idempotency_key)?), &client).await?;
+        let refund = send(&request, Some(idempotent(idempotency_key)?), None, &client).await?;
         Ok(refund.id.to_string())
     }
 
@@ -455,7 +505,7 @@ impl PaymentGateway for StripeGateway {
     ) -> anyhow::Result<Vec<RefundRecord>> {
         let client = self.client(secret_key)?;
         let request = ListRefund::new().payment_intent(payment_id).limit(100);
-        let refunds = send(&request, None, &client).await?;
+        let refunds = self.read(&request, &client).await?;
         Ok(refunds
             .data
             .into_iter()
@@ -476,17 +526,21 @@ impl PaymentGateway for StripeGateway {
         payment_id: &str,
     ) -> anyhow::Result<Cancellation> {
         let client = self.client(secret_key)?;
-        let intent = send(&RetrievePaymentIntent::new(payment_id), None, &client).await?;
+        let intent = self
+            .read(&RetrievePaymentIntent::new(payment_id), &client)
+            .await?;
         if let Some(settled) = settled(&intent.status) {
             return Ok(settled);
         }
         let cancel = CancelPaymentIntent::new(payment_id)
             .cancellation_reason(CancelPaymentIntentCancellationReason::Abandoned);
-        let refused = match send(&cancel, None, &client).await {
+        let refused = match send(&cancel, None, None, &client).await {
             Ok(_) => return Ok(Cancellation::Cancelled),
             Err(err) => err,
         };
-        let intent = send(&RetrievePaymentIntent::new(payment_id), None, &client).await?;
+        let intent = self
+            .read(&RetrievePaymentIntent::new(payment_id), &client)
+            .await?;
         settled(&intent.status).ok_or(refused)
     }
 
@@ -499,7 +553,8 @@ impl PaymentGateway for StripeGateway {
         payment_id: &str,
     ) -> anyhow::Result<CaptureAnswer> {
         let client = self.client(secret_key)?;
-        let refused = match send(&CapturePaymentIntent::new(payment_id), None, &client).await {
+        let refused = match send(&CapturePaymentIntent::new(payment_id), None, None, &client).await
+        {
             Ok(intent) => {
                 return Ok(CaptureAnswer::Captured {
                     amount_cents: intent.amount_received.max(0) as u64,
@@ -542,7 +597,7 @@ impl PaymentGateway for StripeGateway {
         }
         let cancel = CancelPaymentIntent::new(payment_id)
             .cancellation_reason(CancelPaymentIntentCancellationReason::RequestedByCustomer);
-        let refused = match send(&cancel, None, &client).await {
+        let refused = match send(&cancel, None, None, &client).await {
             Ok(_) => return Ok(ReleaseAnswer::Released),
             Err(err) => err,
         };
@@ -658,6 +713,50 @@ mod tests {
             .unwrap_err();
         assert!(refusal(&err).is_none(), "{err:#}");
         assert!(err.downcast_ref::<Busy>().is_none(), "{err:#}");
+    }
+
+    /// Stripe taking the connection and never answering; its address.
+    async fn silent_stand_in() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        url
+    }
+
+    /// A call that gets no answer in time is an error like no answer at all,
+    /// a read sooner than a write, so a saga's pass never waits on Stripe
+    /// for longer than that.
+    #[tokio::test]
+    async fn a_call_stripe_does_not_answer_in_time_fails() {
+        let silent = StripeGateway::new(Some(silent_stand_in().await))
+            .with_timeouts(Duration::from_millis(200), Duration::from_millis(600));
+        let started = std::time::Instant::now();
+        let err = silent
+            .payment_status("sk_test_123", "pi_1")
+            .await
+            .unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "a read's deadline"
+        );
+        assert!(err.to_string().to_lowercase().contains("time"), "{err:#}");
+        assert!(refusal(&err).is_none() && err.downcast_ref::<Busy>().is_none());
+        let started = std::time::Instant::now();
+        let err = silent
+            .open_payment("sk_test_123", payment())
+            .await
+            .unwrap_err();
+        let waited = started.elapsed();
+        assert!(
+            waited >= Duration::from_millis(500) && waited < Duration::from_millis(1500),
+            "a write's deadline: {waited:?}"
+        );
+        assert!(refusal(&err).is_none(), "{err:#}");
     }
 
     #[test]

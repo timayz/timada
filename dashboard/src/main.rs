@@ -32,6 +32,7 @@ mod peers;
 mod rate_limit;
 mod read_only_store;
 mod review_requests;
+mod saga_fault;
 mod seal;
 mod shop_mail;
 mod shopper_erasure;

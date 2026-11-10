@@ -18,6 +18,7 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::mailroom::{self, OwedMail};
+use crate::saga_fault::{self, GivenUp};
 use crate::store_api::StoreConnections;
 use crate::ui::{
     Shell, Tone, document, empty_row, fact, facts, icons, page_header, section_card, status_badge,
@@ -27,6 +28,17 @@ use topcoat::icon::icon;
 
 /// The most mails given up on the page lists.
 const FAILED_MAILS_SHOWN: i64 = 50;
+
+/// The most events given up on the page lists.
+const GIVEN_UP_SHOWN: i64 = 50;
+
+/// The subscription an event given up on belongs to, as a person reads it.
+fn subscription_label(given_up: &GivenUp) -> &str {
+    given_up
+        .subscription
+        .rsplit_once('/')
+        .map_or(given_up.subscription.as_str(), |(_, name)| name)
+}
 
 /// What a mail given up on says, for its row.
 fn failed_mail_label(mail: &OwedMail) -> (String, String) {
@@ -152,6 +164,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         (owed, 0) => format!("{owed} waiting to be sent"),
         (owed, failed) => format!("{owed} waiting to be sent, {failed} given up on"),
     };
+    // The events the sagas gave up on this week: a fault of the one order's
+    // or cart's own, recorded on it rather than holding every tenant behind
+    // it.
+    let given_up_count = saga_fault::given_up_count(db)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let given_up = if given_up_count > 0 {
+        saga_fault::given_up(db, GIVEN_UP_SHOWN)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+    } else {
+        Vec::new()
+    };
+    let given_up_label = match given_up_count {
+        0 => "none this week".to_owned(),
+        1 => "1 this week, recorded on its order or cart".to_owned(),
+        n => format!("{n} this week, each recorded on its order or cart"),
+    };
     let storefronts_label = match storefronts {
         0 => "none".to_owned(),
         n => format!(
@@ -211,6 +241,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         attrs: attributes! { data-mails-owed=(mails.owed) data-mails-failed=(mails.failed) },
                         (&mails_label)
                     )
+                    fact(
+                        term: "Events given up on",
+                        attrs: attributes! { data-given-up=(given_up_count) },
+                        (&given_up_label)
+                    )
                     if health.joined_at_start {
                         fact(term: "Last start", "copied the store from another node")
                     }
@@ -262,6 +297,33 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     table_cell((to))
                                     table_cell((mail.attempts))
                                     table_cell((&mail.reason))
+                                )
+                            }
+                        )
+                    )
+                )
+            }
+
+            if !given_up.is_empty() {
+                section_card(
+                    title: Some("Events given up on"),
+                    table(
+                        table_header(
+                            table_row(
+                                table_head("Saga")
+                                table_head("Event")
+                                table_head("Why")
+                                table_head("When")
+                            )
+                        )
+                        table_body(
+                            for row in &given_up {
+                                table_row(
+                                    attrs: attributes! { data-given-up-event=(row.stream_id.as_str()) },
+                                    table_cell((subscription_label(row)))
+                                    table_cell((&row.event) " of " (if row.tenant_id.is_empty() { "the platform's".to_owned() } else { format!("tenant {}", row.tenant_id) }) ", stream " <span class="font-mono">(&row.stream_id)</span>)
+                                    table_cell((&row.reason))
+                                    table_cell(<time datetime=(row.given_up_at)>(crate::ui::format_time(row.given_up_at.max(0) as u64))</time>)
                                 )
                             }
                         )

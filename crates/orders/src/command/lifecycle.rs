@@ -2,8 +2,9 @@ use evento::{Executor, ProjectionAggregate, WriteError};
 
 use crate::aggregator::{
     CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, Fulfilled,
-    HoldLapseReminded, Paid, PaymentReleased, RefundRequested, Refunded, SettledOutside,
-    SupplierOrderRefused, SupplierOrderRuledOut, SupplierOrderStarted, SupplierOrderUncertain,
+    HoldLapseReminded, InvoicingFailed, InvoicingRequested, Paid, PaymentReleased, RefundRequested,
+    Refunded, SettledOutside, SupplierOrderRefused, SupplierOrderRuledOut, SupplierOrderStarted,
+    SupplierOrderUncertain,
 };
 use crate::error::OrderError;
 use crate::value_object::{
@@ -243,6 +244,77 @@ impl<E: Executor> super::Command<E> {
             }
         }
         Ok(())
+    }
+
+    /// Records that the order's invoice, or a credit note of one of its
+    /// refunds, could not be issued for a reason of the order's own
+    /// (`reason`: what went wrong, in one line), so the merchant sees it and
+    /// asks again. An order that is not paid has nothing to invoice: a
+    /// no-op.
+    pub async fn record_invoicing_failure(
+        &self,
+        actor: &str,
+        order_id: &str,
+        reason: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        let reason: String = reason.trim().chars().take(MAX_REASON_LEN).collect();
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            if !order.is_paid() {
+                return Ok(());
+            }
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&InvoicingFailed {
+                    reason: reason.clone(),
+                    failed_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Asks for the order's documents to be issued again (the invoice it
+    /// has none of, the credit notes its refunds have none of), after an
+    /// `InvoicingFailed`: whoever issues them follows the request. An order
+    /// whose money was not taken has nothing to invoice yet
+    /// (`PaymentNotCaptured`).
+    pub async fn request_invoicing(
+        &self,
+        actor: &str,
+        order_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), OrderError> {
+        for attempt in 1..=ORDER_WRITE_ATTEMPTS {
+            let order = self.require_order(order_id).await?;
+            if !order.is_paid() {
+                return Err(OrderError::PaymentNotCaptured);
+            }
+            let written = order
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&InvoicingRequested {
+                    requested_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < ORDER_WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(OrderError::Write(WriteError::InvalidOriginalVersion))
     }
 
     /// Asks for an order to be cancelled, before the provider is asked to
