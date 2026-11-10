@@ -151,13 +151,84 @@ impl Sending {
 
     /// When the send under way, failing at `now` (unix seconds), may be
     /// tried again: `None` once the retries ([`RETRY_DELAYS_SECS`]) are
-    /// used up. The command recording the failure writes `MailDeferred` with
-    /// `Some`, `MailFailed` with `None`.
-    pub fn retry_at(&self, now: u64) -> Option<u64> {
+    /// used up, or the next would come after the intent itself lapses at
+    /// `expires_at`.
+    pub fn retry_at(&self, now: u64, expires_at: u64) -> Option<u64> {
         RETRY_DELAYS_SECS
             .get(self.attempts() as usize)
             .map(|delay| now + delay)
+            .filter(|retry_at| *retry_at < expires_at)
     }
+
+    /// Whether `node` holds the claim on the send under way.
+    pub fn is_held_by(&self, node: &str) -> bool {
+        matches!(self, Self::Claimed { by, .. } if by == node)
+    }
+
+    /// What a command records on the stream for `outcome`, the intent
+    /// lapsing at `expires_at` (unix seconds): the event to write, as the
+    /// state it folds to, or [`Record::Nothing`] when the mail is settled
+    /// already, or the node reporting a failure no longer holds the claim (its lease lapsed and another node took the send: its
+    /// word on the server is stale, and would count a try that node never
+    /// made). A send that did go out is recorded whoever reports it: the
+    /// mail is in the shopper's hands.
+    pub fn record(&self, outcome: Outcome<'_>, expires_at: u64) -> Record {
+        if self.is_settled() {
+            return Record::Nothing;
+        }
+        match outcome {
+            Outcome::Sent => Record::Sent,
+            Outcome::Undeliverable(reason) => Record::Undeliverable(reason.to_owned()),
+            Outcome::NotSent { node, reason, now } => {
+                if !self.is_held_by(node) {
+                    return Record::Nothing;
+                }
+                match self.retry_at(now, expires_at) {
+                    Some(retry_at) => Record::Deferred {
+                        retry_at,
+                        reason: reason.to_owned(),
+                    },
+                    None => Record::Failed {
+                        reason: reason.to_owned(),
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// How a send went, as the node that made it reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome<'a> {
+    /// Handed to the server.
+    Sent,
+    /// The server refused the address for good (or it does not parse);
+    /// what it said.
+    Undeliverable(&'a str),
+    /// Anything else, by `node` at `now` (unix seconds): `reason` says
+    /// what.
+    NotSent {
+        node: &'a str,
+        reason: &'a str,
+        now: u64,
+    },
+}
+
+/// What to write for an [`Outcome`]: each context has an event per
+/// variant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Record {
+    Sent,
+    Undeliverable(String),
+    Deferred {
+        retry_at: u64,
+        reason: String,
+    },
+    Failed {
+        reason: String,
+    },
+    /// Nothing: settled already, or a stale report.
+    Nothing,
 }
 
 #[cfg(test)]
@@ -193,7 +264,7 @@ mod tests {
         let now = 1_000;
         let mut mail = Sending::Pending.claimed("node-1", now + LEASE_SECS);
         for (tried, delay) in RETRY_DELAYS_SECS.iter().enumerate() {
-            let retry_at = mail.retry_at(now).expect("a retry is left");
+            let retry_at = mail.retry_at(now, u64::MAX).expect("a retry is left");
             assert_eq!(retry_at, now + delay, "try {}", tried + 1);
             mail = mail.deferred(retry_at, "connection refused");
             assert_eq!(mail.attempts(), tried as u32 + 1);
@@ -206,7 +277,7 @@ mod tests {
             assert_eq!(mail.attempts(), tried as u32 + 1);
             assert_eq!(mail.claim("node-2", retry_at), Claim::Held);
         }
-        assert_eq!(mail.retry_at(now), None);
+        assert_eq!(mail.retry_at(now, u64::MAX), None);
         let failed = mail.failed("connection refused");
         assert_eq!(
             failed,
@@ -218,5 +289,71 @@ mod tests {
         assert!(failed.is_settled());
         assert!(!failed.is_undeliverable());
         assert_eq!(failed.claim("node-1", now + 1_000_000), Claim::Leave);
+    }
+
+    /// A retry that would come after the intent lapsed is no retry: the
+    /// mail is given up on at once.
+    #[test]
+    fn no_retry_is_scheduled_past_the_intents_expiry() {
+        let now = 1_000;
+        let claimed = Sending::Pending.claimed("node-1", now + LEASE_SECS);
+        assert_eq!(
+            claimed.retry_at(now, now + RETRY_DELAYS_SECS[0] + 1),
+            Some(now + RETRY_DELAYS_SECS[0])
+        );
+        assert_eq!(claimed.retry_at(now, now + RETRY_DELAYS_SECS[0]), None);
+        let not_sent = |node| Outcome::NotSent {
+            node,
+            reason: "no answer",
+            now,
+        };
+        assert_eq!(
+            claimed.record(not_sent("node-1"), now + 600),
+            Record::Deferred {
+                retry_at: now + RETRY_DELAYS_SECS[0],
+                reason: "no answer".into(),
+            }
+        );
+        let late = Sending::Pending.claimed("node-1", now + LEASE_SECS);
+        let late = late
+            .deferred(now, "x")
+            .deferred(now, "x")
+            .deferred(now, "x")
+            .deferred(now, "x");
+        let late = late.claimed("node-1", now + LEASE_SECS);
+        assert_eq!(
+            late.record(not_sent("node-1"), now + 600),
+            Record::Failed {
+                reason: "no answer".into(),
+            },
+            "the fifth wait (15 min) is past a 10-minute code"
+        );
+    }
+
+    /// A node whose lease lapsed does not record a failure over another
+    /// node's claim, but a mail that went out is recorded by whoever sent
+    /// it; nothing is recorded over a settled mail.
+    #[test]
+    fn a_stale_holder_records_no_failure() {
+        let now = 1_000;
+        let theirs = Sending::Pending.claimed("node-2", now + LEASE_SECS);
+        let mine = Outcome::NotSent {
+            node: "node-1",
+            reason: "no answer",
+            now,
+        };
+        assert_eq!(theirs.record(mine, u64::MAX), Record::Nothing);
+        assert_eq!(theirs.record(Outcome::Sent, u64::MAX), Record::Sent);
+        assert_eq!(
+            theirs.record(Outcome::Undeliverable("550 no such user"), u64::MAX),
+            Record::Undeliverable("550 no such user".into())
+        );
+        assert_eq!(
+            Sending::Sent.record(Outcome::Sent, u64::MAX),
+            Record::Nothing
+        );
+        assert!(theirs.is_held_by("node-2"));
+        assert!(!theirs.is_held_by("node-1"));
+        assert!(!Sending::Pending.is_held_by("node-1"));
     }
 }

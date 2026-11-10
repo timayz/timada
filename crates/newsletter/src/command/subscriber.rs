@@ -1,6 +1,6 @@
 use evento::{Executor, ProjectionAggregate, WriteBuilder, WriteError};
 use timada_core::keys::{self, Key, Keys, new_key_id};
-use timada_core::{Claim, Claimant, LEASE_SECS};
+use timada_core::{Claim, Claimant, LEASE_SECS, MailOutcome, MailRecord};
 
 use crate::aggregator::{
     Confirmed, MailClaimed, MailDeferred, MailFailed, MailSent, MailUndeliverable, Requested,
@@ -17,14 +17,6 @@ use super::{SubscriberState, email_aad};
 /// Reload-and-retry budget for a write on a subscriber that raced another
 /// (a time zone landing while the mail is claimed, say).
 const MAIL_WRITE_ATTEMPTS: usize = 3;
-
-/// How a send went, for the stream.
-#[derive(Clone, Copy)]
-enum MailOutcome<'a> {
-    Sent,
-    Undeliverable(&'a str),
-    NotSent { reason: &'a str, now: u64 },
-}
 
 /// What a shopper asks for: the shop's news at `email`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -329,7 +321,7 @@ impl<E: Executor> super::Command<E> {
         .await
     }
 
-    /// Records that the send failed at `now` (unix seconds) for `reason`, a
+    /// Records that `node`'s send failed at `now` (unix seconds) for `reason`, a
     /// reason worth a retry (the shop's server did not answer, a transient
     /// refusal): deferred to the next try of the schedule
     /// ([`timada_core::RETRY_DELAYS_SECS`]), or given up on once none is
@@ -338,6 +330,7 @@ impl<E: Executor> super::Command<E> {
         &self,
         subscriber_id: &str,
         requested_version: u16,
+        node: &str,
         reason: &str,
         now: u64,
         routing_key: Option<String>,
@@ -345,7 +338,7 @@ impl<E: Executor> super::Command<E> {
         self.record_confirmation_mail(
             subscriber_id,
             requested_version,
-            MailOutcome::NotSent { reason, now },
+            MailOutcome::NotSent { node, reason, now },
             routing_key,
         )
         .await
@@ -493,25 +486,25 @@ impl<E: Executor> super::Command<E> {
             let Some(state) = self.load_subscriber(subscriber_id).await? else {
                 return Ok(());
             };
-            if state.requested_version != requested_version || state.mail.is_settled() {
+            if state.requested_version != requested_version {
+                return Ok(());
+            }
+            let record = state
+                .mail
+                .record(outcome, state.requested_at + CONFIRM_TTL_SECS);
+            if record == MailRecord::Nothing {
                 return Ok(());
             }
             let mut writer = state.write()?;
             writer.routing_key_opt(routing_key.clone());
-            match outcome {
-                MailOutcome::Sent => writer.event(&MailSent),
-                MailOutcome::Undeliverable(reason) => writer.event(&MailUndeliverable {
-                    reason: reason.to_owned(),
-                }),
-                MailOutcome::NotSent { reason, now } => match state.mail.retry_at(now) {
-                    Some(retry_at) => writer.event(&MailDeferred {
-                        retry_at,
-                        reason: reason.to_owned(),
-                    }),
-                    None => writer.event(&MailFailed {
-                        reason: reason.to_owned(),
-                    }),
-                },
+            match record {
+                MailRecord::Sent => writer.event(&MailSent),
+                MailRecord::Undeliverable(reason) => writer.event(&MailUndeliverable { reason }),
+                MailRecord::Deferred { retry_at, reason } => {
+                    writer.event(&MailDeferred { retry_at, reason })
+                }
+                MailRecord::Failed { reason } => writer.event(&MailFailed { reason }),
+                MailRecord::Nothing => unreachable!("returned above"),
             };
             match writer.tenant(&self.tenant).commit(&self.executor).await {
                 Ok(_) => return Ok(()),

@@ -255,11 +255,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             )
                         )
                         table_body(
-                            for mail in &failed_mails {
+                            for (mail, (kind, to)) in failed_mails.iter().map(|mail| (mail, failed_mail_label(mail))) {
                                 table_row(
                                     attrs: attributes! { data-failed-mail=(mail.stream_id.as_str()) },
-                                    table_cell((failed_mail_label(mail).0))
-                                    table_cell((failed_mail_label(mail).1))
+                                    table_cell((kind))
+                                    table_cell((to))
                                     table_cell((mail.attempts))
                                     table_cell((&mail.reason))
                                 )

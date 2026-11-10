@@ -187,10 +187,22 @@ pub(crate) mod fake_smtp {
         port
     }
 
-    /// A port nothing listens on any more.
+    /// A port nothing listens on: the lowest of the privileged ports that
+    /// refuses a connection. An ephemeral port freed for this would be
+    /// handed to the next [`serve`] of a test running alongside, and the
+    /// "closed" port would answer; nothing a test runs can bind below 1024.
     pub(crate) fn closed_port() -> u16 {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
-        listener.local_addr().expect("the port").port()
+        (1..1024u16)
+            .find(|port| {
+                matches!(
+                    std::net::TcpStream::connect_timeout(
+                        &std::net::SocketAddr::from(([127, 0, 0, 1], *port)),
+                        std::time::Duration::from_millis(200),
+                    ),
+                    Err(err) if err.kind() == std::io::ErrorKind::ConnectionRefused
+                )
+            })
+            .expect("a privileged port nothing listens on")
     }
 
     /// A topcoat transport to the server at `port`, in clear.

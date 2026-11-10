@@ -7,7 +7,7 @@
 //! node mails, and records how it went.
 
 use evento::{Executor, ProjectionAggregate, WriteError};
-use timada_core::{Claim, Claimant, LEASE_SECS, TokenDeriver, new_nonce};
+use timada_core::{Claim, Claimant, LEASE_SECS, MailOutcome, MailRecord, TokenDeriver, new_nonce};
 
 use crate::aggregator::{
     Accepted, MailClaimed, MailDeferred, MailFailed, MailSent, MailUndeliverable, Revoked,
@@ -209,7 +209,7 @@ impl<E: Executor> super::Command<E> {
             .await
     }
 
-    /// Records that the send failed at `now` (unix seconds) for `reason`, a
+    /// Records that `node`'s send failed at `now` (unix seconds) for `reason`, a
     /// reason worth a retry (the server did not answer, a transient
     /// refusal): deferred to the next try of the schedule
     /// ([`timada_core::RETRY_DELAYS_SECS`]), or given up on once none is
@@ -218,13 +218,14 @@ impl<E: Executor> super::Command<E> {
     pub async fn record_invitation_mail_not_sent(
         &self,
         invitation_id: &str,
+        node: &str,
         reason: &str,
         now: u64,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
         self.record_invitation_mail(
             invitation_id,
-            MailOutcome::NotSent { reason, now },
+            MailOutcome::NotSent { node, reason, now },
             routing_key,
         )
         .await
@@ -343,14 +344,6 @@ impl<E: Executor> super::Command<E> {
     }
 }
 
-/// How a send went, for the stream.
-#[derive(Clone, Copy)]
-enum MailOutcome<'a> {
-    Sent,
-    Undeliverable(&'a str),
-    NotSent { reason: &'a str, now: u64 },
-}
-
 /// The mail of an invitation, its token derived again from the nonce.
 fn invitation_mail(tokens: &dyn TokenDeriver, invitation: InvitationState) -> InvitationMail {
     let token = tokens.derive_token("", &invitation.nonce);
@@ -370,25 +363,20 @@ impl<E: Executor> super::Command<E> {
             let Some(invitation) = self.load_invitation(invitation_id).await? else {
                 return Ok(());
             };
-            if invitation.mail.is_settled() {
+            let record = invitation.mail.record(outcome, invitation.expires_at);
+            if record == MailRecord::Nothing {
                 return Ok(());
             }
             let mut writer = invitation.write()?;
             writer.routing_key_opt(routing_key.clone());
-            match outcome {
-                MailOutcome::Sent => writer.event(&MailSent),
-                MailOutcome::Undeliverable(reason) => writer.event(&MailUndeliverable {
-                    reason: reason.to_owned(),
-                }),
-                MailOutcome::NotSent { reason, now } => match invitation.mail.retry_at(now) {
-                    Some(retry_at) => writer.event(&MailDeferred {
-                        retry_at,
-                        reason: reason.to_owned(),
-                    }),
-                    None => writer.event(&MailFailed {
-                        reason: reason.to_owned(),
-                    }),
-                },
+            match record {
+                MailRecord::Sent => writer.event(&MailSent),
+                MailRecord::Undeliverable(reason) => writer.event(&MailUndeliverable { reason }),
+                MailRecord::Deferred { retry_at, reason } => {
+                    writer.event(&MailDeferred { retry_at, reason })
+                }
+                MailRecord::Failed { reason } => writer.event(&MailFailed { reason }),
+                MailRecord::Nothing => unreachable!("returned above"),
             };
             match writer.commit(&self.0).await {
                 Ok(_) => return Ok(()),

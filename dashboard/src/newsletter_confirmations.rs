@@ -205,7 +205,7 @@ pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::
         );
         return Ok(Outcome::Left);
     };
-    let Some(shop) = timada_tenancy::Command(room.platform.clone())
+    let Some(shop) = timada_tenancy::Command(room.store.clone())
         .load_tenant(tenant)
         .await?
     else {
@@ -250,9 +250,9 @@ pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::
         Attempt::NotSent(reason) => {
             tracing::warn!(tenant, subscriber, %reason, "newsletter confirmation not sent; deferred");
             newsletter
-                .record_confirmation_mail_not_sent(subscriber, version, &reason, now)
+                .record_confirmation_mail_not_sent(subscriber, version, &room.node, &reason, now)
                 .await?;
-            Ok(Outcome::Recorded)
+            Ok(Outcome::Deferred)
         }
     }
 }
@@ -311,7 +311,9 @@ mod tests {
 
     async fn run(store: &Turso, room: &Arc<Mailroom>, now: u64) -> usize {
         pass(store, room).await;
-        room.sweep(now).await.unwrap()
+        // The pass stamped the rows with the clock, which may have ticked
+        // past the test's `now` meanwhile: sweep at whichever is later.
+        room.sweep(now.max(crate::auth::now())).await.unwrap()
     }
 
     async fn sending(store: &Turso, email: &str) -> Sending {

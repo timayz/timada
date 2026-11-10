@@ -10,7 +10,10 @@
 //! failed the pass would hold it until that server is back. The
 //! [`Mailroom`] works the table instead: woken by the subscriptions and on a
 //! timer, it takes the mails due, groups them by shop, and sends each shop's
-//! one after the other while a bounded number of shops go at once. Each send
+//! one after the other while a bounded number of shops go at once, each
+//! shop's lane on its own, so a slow server holds its shop's lane and
+//! nothing else; the first send a shop's server fails ends its lane until
+//! the retry. Each send
 //! claims the mail on its stream first ([`timada_core::Sending`]), so a mail
 //! owed to several nodes' tables goes out once; a send that fails for a
 //! reason worth a retry is recorded as deferred, with when the next try may
@@ -25,15 +28,15 @@
 //! saw an intent (down at the time) owes nothing for it; the nodes that did
 //! carry it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::hash::{Hash as _, Hasher as _};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Result;
 use timada_core::db::FromRow;
 use tokio::sync::Notify;
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinHandle;
 use topcoat::context::AppContext;
 
 use crate::cluster::Executor as Store;
@@ -53,7 +56,10 @@ pub const CHECK_EVERY: Duration = Duration::from_secs(5);
 const MAILS_PER_SWEEP: i64 = 200;
 
 /// How many shops send at once. Within a shop, one mail after the other.
-const LANES: usize = 8;
+const LANES: usize = 16;
+
+/// The most mails one lane takes per beat: the rest wait for the next.
+const MAILS_PER_LANE: usize = 50;
 
 /// The platform's own mails (codes, invitations) are not one shop's: they
 /// go out over this many lanes, each stream always on the same one.
@@ -192,10 +198,8 @@ pub async fn failed_mails(db: &Db, limit: i64) -> Result<Vec<OwedMail>> {
 /// The sender, with what every kind of mail needs outside a request.
 pub struct Mailroom {
     db: Db,
-    /// The platform store, where the users, the tenants and the invitations
-    /// live.
-    pub(crate) platform: Store,
-    /// The store, where the shops' shoppers and subscribers live.
+    /// The store: the platform's streams (users, tenants, invitations) and
+    /// the shops' (shoppers, subscribers) live in the one store.
     pub(crate) store: Store,
     /// The platform's transport and sender, the shops' own servers, and the
     /// keys the codes and links derive under.
@@ -208,12 +212,18 @@ pub struct Mailroom {
     pub(crate) node: String,
     /// Rung by the subscriptions once they wrote a row.
     wake: Notify,
+    /// The lanes sending right now: a shop's mails are not taken again
+    /// while its lane runs, and no more than [`LANES`] run at once.
+    busy: Mutex<HashSet<Lane>>,
 }
+
+/// What a lane is keyed by: the shop (`""` for the platform) and, for the
+/// platform's mails, which of [`PLATFORM_LANES`] a stream hashes to.
+type Lane = (String, u64);
 
 impl Mailroom {
     pub fn new(
         db: Db,
-        platform: Store,
         store: Store,
         mail: Arc<AppContext>,
         keys: Arc<KeyVault>,
@@ -222,13 +232,13 @@ impl Mailroom {
     ) -> Arc<Self> {
         Arc::new(Self {
             db,
-            platform,
             store,
             mail,
             keys,
             base_url,
             node,
             wake: Notify::new(),
+            busy: Mutex::default(),
         })
     }
 
@@ -320,7 +330,8 @@ impl Mailroom {
     }
 
     /// Sends what is due every [`CHECK_EVERY`], and as soon as a
-    /// subscription wrote a row.
+    /// subscription wrote a row. The lanes run on their own: a shop whose
+    /// server is slow holds its lane, never the next look at the table.
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(CHECK_EVERY);
@@ -330,20 +341,31 @@ impl Mailroom {
                     _ = tick.tick() => {}
                     _ = self.wake.notified() => {}
                 }
-                if let Err(err) = self.sweep(crate::auth::now()).await {
+                if let Err(err) = self.dispatch(crate::auth::now()).await {
                     tracing::error!(error = %format!("{err:#}"), "owed mails not swept");
                 }
             }
         })
     }
 
-    /// Sends the mails due at `now` (unix seconds), a lane per shop,
-    /// [`LANES`] shops at once; returns how many were handed to a server.
-    /// Then forgets the intents that lapsed and the failures shown long
-    /// enough. A send that fails is recorded on its stream and is not an
-    /// error here; a store that cannot be read or written ends the shop's
-    /// lane for this sweep, logged, and the rest go on.
-    pub async fn sweep(self: &Arc<Self>, now: u64) -> Result<usize> {
+    /// Sends the mails due at `now` (unix seconds) and waits for every
+    /// lane; returns how many were handed to a server. What
+    /// [`start`](Self::start) does on each beat, for a test.
+    #[cfg(test)]
+    pub(crate) async fn sweep(self: &Arc<Self>, now: u64) -> Result<usize> {
+        let mut sent = 0;
+        for lane in self.dispatch(now).await? {
+            sent += lane.await.unwrap_or(0);
+        }
+        Ok(sent)
+    }
+
+    /// Starts a lane for each shop with mails due at `now` and no lane
+    /// running, up to [`LANES`] running at once, then forgets the intents
+    /// that lapsed and the failures shown long enough. A send that fails is
+    /// recorded on its stream and is not an error here; a store that cannot
+    /// be read ends the beat, logged by the caller.
+    async fn dispatch(self: &Arc<Self>, now: u64) -> Result<Vec<JoinHandle<usize>>> {
         let due: Vec<OwedMail> = self
             .db
             .fetch_all(
@@ -351,23 +373,25 @@ impl Mailroom {
                         reason, updated_at
                  FROM owed_mails
                  WHERE failed = 0 AND due_at <= ?1 AND expires_at > ?1
-                 ORDER BY tenant_id, due_at, stream_id LIMIT ?2",
+                 ORDER BY due_at, tenant_id, stream_id LIMIT ?2",
                 (now as i64, MAILS_PER_SWEEP),
             )
             .await?;
-        let mut sent = 0;
-        let mut lanes = JoinSet::new();
-        for (_, mails) in lanes_of(due) {
-            if lanes.len() >= LANES
-                && let Some(done) = lanes.join_next().await
+        let mut lanes = Vec::new();
+        for (lane, mut mails) in lanes_of(due) {
             {
-                sent += done.unwrap_or(0);
+                let mut busy = self.busy.lock().unwrap();
+                if busy.len() >= LANES || !busy.insert(lane.clone()) {
+                    continue;
+                }
             }
+            mails.truncate(MAILS_PER_LANE);
             let room = self.clone();
-            lanes.spawn(async move { room.lane(mails, now).await });
-        }
-        while let Some(done) = lanes.join_next().await {
-            sent += done.unwrap_or(0);
+            lanes.push(tokio::spawn(async move {
+                let sent = room.lane(&lane, mails, now).await;
+                room.busy.lock().unwrap().remove(&lane);
+                sent
+            }));
         }
         self.db
             .execute(
@@ -376,36 +400,29 @@ impl Mailroom {
                 (now as i64, now.saturating_sub(FAILED_KEPT_SECS) as i64),
             )
             .await?;
-        Ok(sent)
+        Ok(lanes)
     }
 
-    /// One shop's mails, one after the other; how many went out.
-    async fn lane(self: Arc<Self>, mails: Vec<OwedMail>, now: u64) -> usize {
+    /// One shop's mails, one after the other, from `now` on (each send is
+    /// stamped with the time it starts: a lane may run for minutes); how
+    /// many went out. The first send the server fails ends the lane: the
+    /// server is down for the shop's other mails too, so they wait for the
+    /// first retry rather than each spend a timeout proving it.
+    async fn lane(self: &Arc<Self>, lane: &Lane, mails: Vec<OwedMail>, now: u64) -> usize {
+        let started = std::time::Instant::now();
         let mut sent = 0;
-        for owed in &mails {
-            match self.send(owed, now).await {
+        let mut mails = mails.iter();
+        while let Some(owed) = mails.next() {
+            let at = now + started.elapsed().as_secs();
+            match self.send(owed, at).await {
                 Ok(Outcome::Sent) => sent += 1,
                 Ok(Outcome::Recorded) => {}
-                Ok(Outcome::Left) => {
-                    // Another node's claim holds, or the stream moved on and
-                    // this row is about to go: not before a while.
-                    if let Err(err) = self
-                        .db
-                        .execute(
-                            "UPDATE owed_mails SET due_at = ?4
-                             WHERE kind = ?1 AND tenant_id = ?2 AND stream_id = ?3
-                               AND failed = 0 AND due_at <= ?5",
-                            (
-                                owed.kind.as_str(),
-                                owed.tenant_id.as_str(),
-                                owed.stream_id.as_str(),
-                                (now + LOOK_AGAIN_SECS) as i64,
-                                now as i64,
-                            ),
-                        )
-                        .await
-                    {
-                        tracing::warn!(error = %format!("{err:#}"), "an owed mail could not be put off");
+                Ok(Outcome::Left) => self.put_off(owed, at, at + LOOK_AGAIN_SECS).await,
+                Ok(Outcome::Deferred) => {
+                    tracing::warn!(lane = %lane.0, "a shop's mail server failed a send: its other mails wait for the retry");
+                    for rest in mails.by_ref() {
+                        self.put_off(rest, at, at + timada_core::RETRY_DELAYS_SECS[0])
+                            .await;
                     }
                 }
                 Err(err) => {
@@ -421,6 +438,29 @@ impl Mailroom {
             }
         }
         sent
+    }
+
+    /// Moves `owed`'s next look to `until`, unless the table moved it past
+    /// `now` meanwhile (the subscription saw a claim or a deferral).
+    async fn put_off(&self, owed: &OwedMail, now: u64, until: u64) {
+        if let Err(err) = self
+            .db
+            .execute(
+                "UPDATE owed_mails SET due_at = ?4
+                 WHERE kind = ?1 AND tenant_id = ?2 AND stream_id = ?3
+                   AND failed = 0 AND due_at <= ?5",
+                (
+                    owed.kind.as_str(),
+                    owed.tenant_id.as_str(),
+                    owed.stream_id.as_str(),
+                    until as i64,
+                    now as i64,
+                ),
+            )
+            .await
+        {
+            tracing::warn!(error = %format!("{err:#}"), "an owed mail could not be put off");
+        }
     }
 
     /// Sends one owed mail, by its kind. An error is the store's (a load,
@@ -446,9 +486,12 @@ impl Mailroom {
 pub enum Outcome {
     /// Handed to the server, and recorded.
     Sent,
-    /// Not sent, and the stream says why (refused for good, deferred, given
-    /// up on): the subscription moves the row.
+    /// Not sent, and the stream says why (refused for good, given up on):
+    /// the subscription moves the row.
     Recorded,
+    /// Not sent: the server did not answer or refused for now, the stream
+    /// says when to try again, and the shop's other mails can wait for it.
+    Deferred,
     /// Nothing claimed: another node is sending, the next try is not due,
     /// or the stream settled or moved on already.
     Left,
@@ -509,7 +552,6 @@ pub(crate) mod tests {
     ) -> Arc<Mailroom> {
         Mailroom::new(
             Db::from(store.clone()),
-            Evento::new(store.clone()),
             Evento::new(store.clone()),
             mail,
             keys,

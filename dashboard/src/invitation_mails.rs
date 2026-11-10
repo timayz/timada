@@ -165,8 +165,21 @@ async fn on_mail_failed<E: Executor>(
 /// mailroom: claims it, mails it, records how it went.
 pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::Result<Outcome> {
     let cx = Cx::new(room.mail.clone());
-    let tenancy = timada_tenancy::Command(room.platform.clone());
+    let tenancy = timada_tenancy::Command(room.store.clone());
     let invitation = owed.stream_id.as_str();
+    // The tenant and the inviter first, before anything is claimed: gone,
+    // there is nothing to send.
+    let Some(open) = tenancy.load_invitation(invitation).await? else {
+        return Ok(Outcome::Left);
+    };
+    let Some(tenant) = tenancy.load_tenant(&open.tenant_id).await? else {
+        return Ok(Outcome::Left);
+    };
+    let inviter =
+        timada_identity::Command::new(room.store.clone(), app_context::<EmailCodes>(&cx).0.clone())
+            .load_user(&open.invited_by)
+            .await?
+            .map_or_else(|| "A member".to_owned(), |user| user.label);
     let Some(mail) = tenancy
         .claim_invitation_mail(
             &*app_context::<InvitationTokens>(&cx).0,
@@ -177,18 +190,6 @@ pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::
     else {
         return Ok(Outcome::Left);
     };
-    // The tenant and the inviter: gone, there is nothing to send, and the
-    // claim lapses.
-    let Some(tenant) = tenancy.load_tenant(&mail.invitation.tenant_id).await? else {
-        return Ok(Outcome::Left);
-    };
-    let inviter = timada_identity::Command::new(
-        room.platform.clone(),
-        app_context::<EmailCodes>(&cx).0.clone(),
-    )
-    .load_user(&mail.invitation.invited_by)
-    .await?
-    .map_or_else(|| "A member".to_owned(), |user| user.label);
     let link = invitation_link(&room.base_url, &mail.token);
     let role = role_label(&tenant, &mail.invitation.role);
     let sent = attempt(send_invitation(
@@ -216,9 +217,9 @@ pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::
         Attempt::NotSent(reason) => {
             tracing::warn!(invitation, tenant = %tenant.id, %reason, "invitation not sent; deferred");
             tenancy
-                .record_invitation_mail_not_sent(invitation, &reason, now)
+                .record_invitation_mail_not_sent(invitation, &room.node, &reason, now)
                 .await?;
-            Ok(Outcome::Recorded)
+            Ok(Outcome::Deferred)
         }
     }
 }
@@ -290,7 +291,9 @@ mod tests {
 
     async fn run(store: &Turso, room: &Arc<Mailroom>, now: u64) -> usize {
         pass(store, room).await;
-        room.sweep(now).await.unwrap()
+        // The pass stamped the rows with the clock, which may have ticked
+        // past the test's `now` meanwhile: sweep at whichever is later.
+        room.sweep(now.max(crate::auth::now())).await.unwrap()
     }
 
     async fn mail_of(store: &Turso, id: &str) -> Sending {

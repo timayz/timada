@@ -288,10 +288,8 @@ pub(crate) async fn send_platform(
     now: u64,
 ) -> anyhow::Result<Outcome> {
     let cx = Cx::new(room.mail.clone());
-    let identity = timada_identity::Command::new(
-        room.platform.clone(),
-        app_context::<EmailCodes>(&cx).0.clone(),
-    );
+    let identity =
+        timada_identity::Command::new(room.store.clone(), app_context::<EmailCodes>(&cx).0.clone());
     let challenge = owed.stream_id.as_str();
     let version = u16::try_from(owed.version).unwrap_or(u16::MAX);
     let Some(code) = identity
@@ -316,9 +314,9 @@ pub(crate) async fn send_platform(
         Attempt::NotSent(reason) => {
             tracing::warn!(challenge, %reason, "sign-in code not sent; deferred");
             identity
-                .record_code_mail_not_sent(challenge, version, &reason, now)
+                .record_code_mail_not_sent(challenge, version, &room.node, &reason, now)
                 .await?;
-            Ok(Outcome::Recorded)
+            Ok(Outcome::Deferred)
         }
     }
 }
@@ -337,7 +335,7 @@ pub(crate) async fn send_shopper(
         return Ok(Outcome::Left);
     };
     let tenant = owed.tenant_id.as_str();
-    let Some(shop) = timada_tenancy::Command(room.platform.clone())
+    let Some(shop) = timada_tenancy::Command(room.store.clone())
         .load_tenant(tenant)
         .await?
     else {
@@ -382,9 +380,9 @@ pub(crate) async fn send_shopper(
         Attempt::NotSent(reason) => {
             tracing::warn!(tenant, challenge, %reason, "shopper sign-in code not sent; deferred");
             shoppers
-                .record_code_mail_not_sent(challenge, version, &reason, now)
+                .record_code_mail_not_sent(challenge, version, &room.node, &reason, now)
                 .await?;
-            Ok(Outcome::Recorded)
+            Ok(Outcome::Deferred)
         }
     }
 }
@@ -498,12 +496,16 @@ pub(crate) mod tests {
     /// A pass and a sweep at `now`: what a node does with a new intent.
     async fn platform_run(store: &Turso, room: &Arc<Mailroom>, now: u64) -> usize {
         platform_pass(store, room).await;
-        room.sweep(now).await.unwrap()
+        // The pass stamped the rows with the clock, which may have ticked
+        // past the test's `now` meanwhile: sweep at whichever is later.
+        room.sweep(now.max(crate::auth::now())).await.unwrap()
     }
 
     async fn shopper_run(store: &Turso, room: &Arc<Mailroom>, now: u64) -> usize {
         shopper_pass(store, room).await;
-        room.sweep(now).await.unwrap()
+        // The pass stamped the rows with the clock, which may have ticked
+        // past the test's `now` meanwhile: sweep at whichever is later.
+        room.sweep(now.max(crate::auth::now())).await.unwrap()
     }
 
     #[tokio::test]
@@ -687,7 +689,7 @@ pub(crate) mod tests {
         platform_pass(&store, &node).await;
         shopper_pass(&store, &node).await;
         assert_eq!(rows(&store).await.len(), 2);
-        let sent = node.sweep(now).await.unwrap();
+        let sent = node.sweep(now.max(crate::auth::now())).await.unwrap();
         assert_eq!(sent, 2, "both lanes ran");
         assert_eq!(transport.sent().len(), 2);
     }

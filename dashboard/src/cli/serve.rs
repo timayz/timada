@@ -137,7 +137,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let mailroom = crate::mailroom::Mailroom::new(
         db.clone(),
         executor.clone(),
-        executor.clone(),
         background_mail.clone(),
         keys.clone(),
         url.clone(),
