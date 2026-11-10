@@ -168,10 +168,14 @@ event timada-invoicing/Book::EuroRateRecorded { document_id: String, rate: Excha
 event timada-invoicing/Book::InvoiceDiscounted { document_id: String, code: String, amount_cents: u64 }
 event timada-invoicing/Book::InvoiceIssued { document_id: String, series: String, number: u64, issued_at: u64, order_id: String, order_reference: String, paid_at: u64, payment_method: String, seller: Seller, buyer: Address, buyer_email: String, delivery: Address, currency: String, lines: Vec<InvoiceLine>, vat: Vec<VatSubtotal>, total_excl_vat_cents: u64, total_vat_cents: u64, total_cents: u64, template: u16, issued_by: String, company_id: String, regime: String, tax_country: String, buyer_vat_number: Option<String>, vies_reference: Option<String>, eu_distance_sales_cents: u64, eu_threshold_passed: bool }
 event timada-invoicing/Book::InvoiceShippingCharged { document_id: String, name: String, amount_cents: u64 }
+event timada-invoicing/Book::Opened { last_number: u64 }
+event timada-invoicing/BookPointer::Rolled { chunk: u32 }
 event timada-invoicing/DistanceLedger::Converted { document_id: String, tenant_id: String, rate: ExchangeRate }
 event timada-invoicing/DistanceLedger::Counted { document_id: String, tenant_id: String, regime: String, tax_country: String, rates: Vec<Option<u32>>, sales_cents: u64, passed: bool }
+event timada-invoicing/DistanceLedger::Opened { sales_cents: u64, passed: bool }
 event timada-invoicing/Document::Recorded { book_id: String, document: IssuedDocument }
-event timada-invoicing/Document::Reserved { series: String, year: u16 }
+event timada-invoicing/Document::Reserved { series: String, year: u16, chunk: u32, ledger_chunk: Option<u32> }
+event timada-invoicing/LedgerPointer::Rolled { chunk: u32 }
 event timada-newsletter/Campaign::Drafted { subject: String, html: String, text: Option<String>, language: Option<String>, drafted_by: String }
 event timada-newsletter/Campaign::Edited { subject: String, html: String, text: Option<String>, language: Option<String>, edited_by: String }
 event timada-newsletter/Campaign::Finished { finished_by: String }

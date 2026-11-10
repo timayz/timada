@@ -19,7 +19,7 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use timada_invoicing::aggregator::InvoiceIssued;
+use timada_invoicing::aggregator::book::InvoiceIssued;
 use timada_orders::aggregator::{Cancelled, Fulfilled, Placed};
 use timada_tenancy::ShopMailKind;
 use topcoat::context::{AppContext, Cx, app_context};

@@ -594,7 +594,8 @@ async fn a_checkout_key_reads_how_the_shop_sells_and_never_a_cart_or_order() {
     let cart_type = <timada_orders::aggregator::Cart as evento::Aggregate>::aggregate_type();
     let order_type = <timada_orders::aggregator::Order as evento::Aggregate>::aggregate_type();
     // Nor an invoice series: every buyer's name and address are in it.
-    let book_type = <timada_invoicing::aggregator::Book as evento::Aggregate>::aggregate_type();
+    let book_type =
+        <timada_invoicing::aggregator::book::Book as evento::Aggregate>::aggregate_type();
     let invoicing = timada_invoicing::Command::unscoped(shop.clone());
     for refused in [
         format!("{:#}", orders.load_cart(&cart_id).await.unwrap_err()),

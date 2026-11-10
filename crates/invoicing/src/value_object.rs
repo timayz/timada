@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 use crate::rates::ExchangeRate;
 use crate::tax::Regime;
 
-/// How many documents one book stream holds before the series carries on in
-/// the next; far below the 65 535 events a stream can take, so loading a
+/// How many events one book stream (or one distance-ledger stream) holds
+/// before the series carries on in the next; a document is one to four
+/// events. Far below the 65 535 events a stream can take, so loading a
 /// book stays cheap.
 pub const BOOK_CHUNK: u16 = 1000;
 /// The prefix of the invoice series (`F2026-000042`).
@@ -42,6 +43,11 @@ pub fn book_id(series: &str, chunk: u32) -> String {
     ])
 }
 
+/// The stream naming the open chunk of a series.
+pub fn book_pointer_id(series: &str) -> String {
+    evento::hash_ids(vec!["invoice-book-pointer", series])
+}
+
 /// The series of a document issued at `at` (Unix seconds) by a tenant
 /// numbering under `code` (`""` for the plain series): `F2026`, or
 /// `PRO-F2026`; the calendar year is UTC's.
@@ -72,6 +78,16 @@ pub fn ledger_id(company_id: &str, year: i64, chunk: u32) -> String {
         company_id.to_owned(),
         year.to_string(),
         chunk.to_string(),
+    ])
+}
+
+/// The stream naming the open chunk of a company's EU distance sales of a
+/// year.
+pub fn ledger_pointer_id(company_id: &str, year: i64) -> String {
+    evento::hash_ids(vec![
+        "distance-ledger-pointer".to_owned(),
+        company_id.to_owned(),
+        year.to_string(),
     ])
 }
 
@@ -275,7 +291,7 @@ pub struct InvoiceShipping {
 
 /// An issued document as it reads: an invoice or a credit note (the fields
 /// of the other kind are empty). Written whole into the document's index
-/// stream once it has its number ([`Recorded`](crate::aggregator::Recorded)),
+/// stream once it has its number ([`Recorded`](crate::aggregator::document::Recorded)),
 /// so a page reads it from that one small stream. Frozen in `events.lock`:
 /// the fields never change.
 #[derive(

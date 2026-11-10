@@ -308,8 +308,8 @@ mod tests {
         let reads = checkout_reads();
         let cart = timada_orders::aggregator::Cart::aggregate_type();
         let order = timada_orders::aggregator::Order::aggregate_type();
-        let book = timada_invoicing::aggregator::Book::aggregate_type();
-        let document = timada_invoicing::aggregator::Document::aggregate_type();
+        let book = timada_invoicing::aggregator::book::Book::aggregate_type();
+        let document = timada_invoicing::aggregator::document::Document::aggregate_type();
         assert!(!reads.contains(&cart), "{reads:?}");
         assert!(!reads.contains(&order), "{reads:?}");
         assert!(!reads.contains(&book), "{reads:?}");
