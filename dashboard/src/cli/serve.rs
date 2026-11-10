@@ -160,8 +160,16 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         node: cluster::node_name(&cluster),
     });
     let planned = planned(&config.server);
-    if cluster.health().joined_at_start {
-        tracing::info!("the store was copied from a peer: the read models catch up before serving");
+    let copied = cluster.health().joined_at_start;
+    let rebuilt = cluster::catch_up_mark(&config.database.path).exists();
+    if copied || rebuilt {
+        if copied {
+            tracing::info!(
+                "the store was copied from a peer: the read models catch up before serving"
+            );
+        } else {
+            tracing::info!("a read model was rebuilt: the read models catch up before serving");
+        }
         // The read models alone: a saga resumes from its cursor as it would
         // after any restart, and nothing it does is waited for. All of them
         // at once: each writes tables of its own, and the store's history is
@@ -188,6 +196,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             }
         }
         tracing::info!("the read models caught up");
+        if rebuilt && let Err(err) = cluster::clear_catch_up_mark(&config.database.path) {
+            tracing::warn!(%err, "cannot remove the catch-up mark; the next start catches up again");
+        }
     }
     for (name, _kind, make) in planned {
         let deps = deps.clone();

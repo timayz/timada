@@ -1,5 +1,6 @@
 mod aliexpress_places;
 mod migrate;
+mod rebuild;
 mod rejoin;
 mod seed;
 mod serve;
@@ -7,6 +8,7 @@ mod snapshot;
 
 pub use aliexpress_places::*;
 pub use migrate::*;
+pub use rebuild::*;
 pub use rejoin::*;
 pub use seed::*;
 pub use serve::*;
@@ -18,8 +20,8 @@ use crate::config::Config;
 
 /// Two processes on one node's files would each run their own consensus
 /// over the same journal, and a copy taken while the server writes would be
-/// torn: `seed` and `snapshot` run only while the server is stopped, which
-/// the server's port tells.
+/// torn: `seed`, `snapshot` and `rebuild` run only while the server is
+/// stopped, which the server's port tells.
 pub(crate) async fn refuse_if_serving(config: &Config) -> Result<()> {
     let host = config.server.host.as_str();
     let port = config.server.port;
