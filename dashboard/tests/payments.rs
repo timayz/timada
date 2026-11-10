@@ -19,6 +19,8 @@ mod db;
 mod ecb;
 #[path = "../src/invoicing.rs"]
 mod invoicing;
+#[path = "../src/mailroom/schema.rs"]
+mod mailroom;
 #[path = "../src/payments/mod.rs"]
 mod payments;
 #[path = "../src/seal.rs"]

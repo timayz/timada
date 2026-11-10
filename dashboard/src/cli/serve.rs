@@ -131,9 +131,21 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // copied the store from a peer, the read models are empty: each
     // subscription first catches up over the copied events, so the pages
     // never show an empty shop, and the router takes requests afterwards.
+    // The mails the sagas owe go out from here, off the subscriptions'
+    // cursors, a lane per shop: one shop's mail server never holds up the
+    // others' codes, invitations and confirmations.
+    let mailroom = crate::mailroom::Mailroom::new(
+        db.clone(),
+        executor.clone(),
+        background_mail.clone(),
+        keys.clone(),
+        url.clone(),
+        cluster::node_name(&cluster),
+    );
     let deps = Arc::new(Deps {
         db: db.clone(),
         store: executor.clone(),
+        mailroom: mailroom.clone(),
         media: media.clone(),
         keys: keys.clone(),
         payments: payments.clone(),
@@ -168,6 +180,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         all_workers.push(workers::start(name, move || make(&deps), &executor).await?);
     }
     let workers = Workers::new(all_workers);
+    let mailroom_sends = mailroom.start();
 
     // The operator's alert for a node that stays away: this node nearing the
     // writes it may keep for it, or a node given up on.
@@ -290,6 +303,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         store_api.shutdown().await;
     }
     cluster_watch.abort();
+    mailroom_sends.abort();
     review_requests.abort();
     lapsed_checkouts.abort();
     pending_payments.abort();
@@ -310,6 +324,8 @@ pub struct Deps {
     /// The read models in the store's database.
     pub db: db::Db,
     pub store: Executor,
+    /// Where the mails the sagas owe are handed to be sent.
+    pub mailroom: Arc<crate::mailroom::Mailroom>,
     pub media: Arc<crate::media::Media>,
     pub keys: Arc<crate::key_vault::KeyVault>,
     pub payments: Arc<crate::payments::Payments>,
@@ -567,41 +583,21 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
             d.store.clone(),
         )
     }),
-    // The mails a command owes are sent from here, after the intent is
-    // recorded: the sign-in codes of the platform and of the shops, the
-    // invitations, the newsletter confirmations.
+    // The mails a command owes are handed to the mailroom from here, after
+    // the intent is recorded, and sent off the cursor: the sign-in codes of
+    // the platform and of the shops, the invitations, the newsletter
+    // confirmations.
     ("platform code mails", Kind::Sharded, |d| {
-        crate::code_mails::platform_subscription(
-            d.store.clone(),
-            d.background_mail.clone(),
-            d.node.clone(),
-        )
+        crate::code_mails::platform_subscription(d.mailroom.clone())
     }),
     ("shopper code mails", Kind::Sharded, |d| {
-        crate::code_mails::shopper_subscription(
-            d.store.clone(),
-            d.background_mail.clone(),
-            d.keys.clone(),
-            d.store.clone(),
-            d.node.clone(),
-        )
+        crate::code_mails::shopper_subscription(d.mailroom.clone())
     }),
     ("invitation mails", Kind::Sharded, |d| {
-        crate::invitation_mails::subscription(
-            d.store.clone(),
-            d.background_mail.clone(),
-            d.base_url.clone(),
-            d.node.clone(),
-        )
+        crate::invitation_mails::subscription(d.mailroom.clone())
     }),
     ("newsletter confirmations", Kind::Sharded, |d| {
-        crate::newsletter_confirmations::subscription(
-            d.store.clone(),
-            d.background_mail.clone(),
-            d.keys.clone(),
-            d.store.clone(),
-            d.node.clone(),
-        )
+        crate::newsletter_confirmations::subscription(d.mailroom.clone())
     }),
 ];
 

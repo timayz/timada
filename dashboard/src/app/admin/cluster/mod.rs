@@ -17,12 +17,30 @@ use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
+use crate::mailroom::{self, OwedMail};
 use crate::store_api::StoreConnections;
 use crate::ui::{
     Shell, Tone, document, empty_row, fact, facts, icons, page_header, section_card, status_badge,
 };
 use crate::workers::{WorkerState, Workers};
 use topcoat::icon::icon;
+
+/// The most mails given up on the page lists.
+const FAILED_MAILS_SHOWN: i64 = 50;
+
+/// What a mail given up on says, for its row.
+fn failed_mail_label(mail: &OwedMail) -> (String, String) {
+    let kind = match mail.kind() {
+        Some(kind) => kind.label().to_owned(),
+        None => mail.kind.clone(),
+    };
+    let to = if mail.tenant_id.is_empty() {
+        format!("the platform's, stream {}", mail.stream_id)
+    } else {
+        format!("tenant {}, stream {}", mail.tenant_id, mail.stream_id)
+    };
+    (kind, to)
+}
 
 /// How another node stands, for the table.
 fn peer_label(peer: &PeerState) -> String {
@@ -117,6 +135,23 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         format!("{running} of {} running", workers.len())
     };
+    // The mails the sagas owe on this node, and the ones given up on.
+    let db = app_context::<crate::db::Db>(cx);
+    let mails = mailroom::summary(db)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let failed_mails = if mails.failed > 0 {
+        mailroom::failed_mails(db, FAILED_MAILS_SHOWN)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+    } else {
+        Vec::new()
+    };
+    let mails_label = match (mails.owed, mails.failed) {
+        (0, 0) => "none waiting".to_owned(),
+        (owed, 0) => format!("{owed} waiting to be sent"),
+        (owed, failed) => format!("{owed} waiting to be sent, {failed} given up on"),
+    };
     let storefronts_label = match storefronts {
         0 => "none".to_owned(),
         n => format!(
@@ -171,6 +206,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         attrs: attributes! { data-workers=(workers.len()) data-workers-troubled=(troubled.len()) },
                         (&workers_label)
                     )
+                    fact(
+                        term: "Mails owed",
+                        attrs: attributes! { data-mails-owed=(mails.owed) data-mails-failed=(mails.failed) },
+                        (&mails_label)
+                    )
                     if health.joined_at_start {
                         fact(term: "Last start", "copied the store from another node")
                     }
@@ -195,6 +235,33 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     table_cell((name))
                                     table_cell(status_badge(tone: *tone, (*label)))
                                     table_cell((detail))
+                                )
+                            }
+                        )
+                    )
+                )
+            }
+
+            if !failed_mails.is_empty() {
+                section_card(
+                    title: Some("Mails given up on"),
+                    table(
+                        table_header(
+                            table_row(
+                                table_head("Mail")
+                                table_head("To")
+                                table_head("Tries")
+                                table_head("Last failure")
+                            )
+                        )
+                        table_body(
+                            for (mail, (kind, to)) in failed_mails.iter().map(|mail| (mail, failed_mail_label(mail))) {
+                                table_row(
+                                    attrs: attributes! { data-failed-mail=(mail.stream_id.as_str()) },
+                                    table_cell((kind))
+                                    table_cell((to))
+                                    table_cell((mail.attempts))
+                                    table_cell((&mail.reason))
                                 )
                             }
                         )

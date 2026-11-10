@@ -7,10 +7,11 @@
 //! node mails, and records how it went.
 
 use evento::{Executor, ProjectionAggregate, WriteError};
-use timada_core::{Claim, Claimant, LEASE_SECS, TokenDeriver, new_nonce};
+use timada_core::{Claim, Claimant, LEASE_SECS, MailOutcome, MailRecord, TokenDeriver, new_nonce};
 
 use crate::aggregator::{
-    Accepted, MailClaimed, MailSent, MailUndeliverable, Revoked, SeatGranted, SeatRefused, Sent,
+    Accepted, MailClaimed, MailDeferred, MailFailed, MailSent, MailUndeliverable, Revoked,
+    SeatGranted, SeatRefused, Sent,
 };
 use crate::error::TenancyError;
 use crate::value_object::{
@@ -204,8 +205,30 @@ impl<E: Executor> super::Command<E> {
         invitation_id: &str,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
-        self.record_invitation_mail(invitation_id, None, routing_key)
+        self.record_invitation_mail(invitation_id, MailOutcome::Sent, routing_key)
             .await
+    }
+
+    /// Records that `node`'s send failed at `now` (unix seconds) for `reason`, a
+    /// reason worth a retry (the server did not answer, a transient
+    /// refusal): deferred to the next try of the schedule
+    /// ([`timada_core::RETRY_DELAYS_SECS`]), or given up on once none is
+    /// left, which the members page shows. Any node may take the next try
+    /// once it is due.
+    pub async fn record_invitation_mail_not_sent(
+        &self,
+        invitation_id: &str,
+        node: &str,
+        reason: &str,
+        now: u64,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        self.record_invitation_mail(
+            invitation_id,
+            MailOutcome::NotSent { node, reason, now },
+            routing_key,
+        )
+        .await
     }
 
     /// Records that the mail server refused the address for good (or that it
@@ -217,8 +240,12 @@ impl<E: Executor> super::Command<E> {
         reason: &str,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
-        self.record_invitation_mail(invitation_id, Some(reason), routing_key)
-            .await
+        self.record_invitation_mail(
+            invitation_id,
+            MailOutcome::Undeliverable(reason),
+            routing_key,
+        )
+        .await
     }
 
     /// Joins the tenant the link belongs to. Marking the invitation accepted,
@@ -327,7 +354,7 @@ impl<E: Executor> super::Command<E> {
     async fn record_invitation_mail(
         &self,
         invitation_id: &str,
-        undeliverable: Option<&str>,
+        outcome: MailOutcome<'_>,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
         let mut attempt = 0;
@@ -336,16 +363,20 @@ impl<E: Executor> super::Command<E> {
             let Some(invitation) = self.load_invitation(invitation_id).await? else {
                 return Ok(());
             };
-            if invitation.mail.is_settled() {
+            let record = invitation.mail.record(outcome, invitation.expires_at);
+            if record == MailRecord::Nothing {
                 return Ok(());
             }
             let mut writer = invitation.write()?;
             writer.routing_key_opt(routing_key.clone());
-            match undeliverable {
-                Some(reason) => writer.event(&MailUndeliverable {
-                    reason: reason.to_owned(),
-                }),
-                None => writer.event(&MailSent),
+            match record {
+                MailRecord::Sent => writer.event(&MailSent),
+                MailRecord::Undeliverable(reason) => writer.event(&MailUndeliverable { reason }),
+                MailRecord::Deferred { retry_at, reason } => {
+                    writer.event(&MailDeferred { retry_at, reason })
+                }
+                MailRecord::Failed { reason } => writer.event(&MailFailed { reason }),
+                MailRecord::Nothing => unreachable!("returned above"),
             };
             match writer.commit(&self.0).await {
                 Ok(_) => return Ok(()),

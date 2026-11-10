@@ -44,11 +44,12 @@ use crate::aggregator::api_key::{
 };
 use crate::aggregator::{
     Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MailBrandingCleared,
-    MailBrandingSet, MailClaimed, MailLanguagesSet, MailSent, MailServerAdded, MailServerChanged,
-    MailServerDeleted, MailServersPicked, MailTemplateReset, MailTemplateSaved,
-    MailTemplateTextSaved, MailUndeliverable, MemberGranted, MemberRevoked, MemberRoleChanged,
-    PaymentsConfigured, PaymentsForgotten, PaymentsStopped, Released, Renamed, Resumed, Revoked,
-    RoleDefined, RoleRemoved, RoleUpdated, SeatGranted, SeatRefused, Sent, Suspended,
+    MailBrandingSet, MailClaimed, MailDeferred, MailFailed, MailLanguagesSet, MailSent,
+    MailServerAdded, MailServerChanged, MailServerDeleted, MailServersPicked, MailTemplateReset,
+    MailTemplateSaved, MailTemplateTextSaved, MailUndeliverable, MemberGranted, MemberRevoked,
+    MemberRoleChanged, PaymentsConfigured, PaymentsForgotten, PaymentsStopped, Released, Renamed,
+    Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, SeatGranted, SeatRefused, Sent,
+    Suspended,
 };
 use crate::value_object::{
     ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id, tenant_slug_id,
@@ -1028,6 +1029,8 @@ pub fn invitation_projection<E: Executor>() -> Projection<E, InvitationState> {
         .handler(on_invitation_mail_claimed())
         .handler(on_invitation_mail_sent())
         .handler(on_invitation_mail_undeliverable())
+        .handler(on_invitation_mail_deferred())
+        .handler(on_invitation_mail_failed())
         .strict()
 }
 
@@ -1090,10 +1093,7 @@ async fn on_invitation_mail_claimed(
     event: Event<MailClaimed>,
     invitation: &mut InvitationState,
 ) -> anyhow::Result<()> {
-    invitation.mail = Sending::Claimed {
-        by: event.data.by.to_owned(),
-        until: event.data.until,
-    };
+    invitation.mail = invitation.mail.claimed(&event.data.by, event.data.until);
     Ok(())
 }
 
@@ -1114,6 +1114,26 @@ async fn on_invitation_mail_undeliverable(
     invitation.mail = Sending::Undeliverable {
         reason: event.data.reason.to_owned(),
     };
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invitation_mail_deferred(
+    event: Event<MailDeferred>,
+    invitation: &mut InvitationState,
+) -> anyhow::Result<()> {
+    invitation.mail = invitation
+        .mail
+        .deferred(event.data.retry_at, &event.data.reason);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_invitation_mail_failed(
+    event: Event<MailFailed>,
+    invitation: &mut InvitationState,
+) -> anyhow::Result<()> {
+    invitation.mail = invitation.mail.failed(&event.data.reason);
     Ok(())
 }
 

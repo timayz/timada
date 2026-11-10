@@ -7,10 +7,11 @@
 
 use evento::ProjectionAggregate;
 use evento::{Executor, WriteError};
-use timada_core::{Claim, Claimant, LEASE_SECS, new_nonce};
+use timada_core::{Claim, Claimant, LEASE_SECS, MailOutcome, MailRecord, new_nonce};
 
 use crate::aggregator::{
-    AttemptFailed, CodeIssued, Consumed, MailClaimed, MailSent, MailUndeliverable,
+    AttemptFailed, CodeIssued, Consumed, MailClaimed, MailDeferred, MailFailed, MailSent,
+    MailUndeliverable,
 };
 use crate::error::IdentityError;
 use crate::value_object::{
@@ -194,7 +195,7 @@ impl<E: Executor> super::Command<E> {
         issued_version: u16,
         routing_key: Option<String>,
     ) -> Result<(), IdentityError> {
-        self.record_code_mail(challenge_id, issued_version, None, routing_key)
+        self.record_code_mail(challenge_id, issued_version, MailOutcome::Sent, routing_key)
             .await
     }
 
@@ -208,8 +209,36 @@ impl<E: Executor> super::Command<E> {
         reason: &str,
         routing_key: Option<String>,
     ) -> Result<(), IdentityError> {
-        self.record_code_mail(challenge_id, issued_version, Some(reason), routing_key)
-            .await
+        self.record_code_mail(
+            challenge_id,
+            issued_version,
+            MailOutcome::Undeliverable(reason),
+            routing_key,
+        )
+        .await
+    }
+
+    /// Records that `node`'s send failed at `now` (unix seconds) for `reason`, a
+    /// reason worth a retry (the server did not answer, a transient
+    /// refusal): deferred to the next try of the schedule
+    /// ([`timada_core::RETRY_DELAYS_SECS`]), or given up on once none is
+    /// left. Any node may take the next try once it is due.
+    pub async fn record_code_mail_not_sent(
+        &self,
+        challenge_id: &str,
+        issued_version: u16,
+        node: &str,
+        reason: &str,
+        now: u64,
+        routing_key: Option<String>,
+    ) -> Result<(), IdentityError> {
+        self.record_code_mail(
+            challenge_id,
+            issued_version,
+            MailOutcome::NotSent { node, reason, now },
+            routing_key,
+        )
+        .await
     }
 }
 
@@ -226,7 +255,7 @@ impl<E: Executor> super::Command<E> {
         &self,
         challenge_id: &str,
         issued_version: u16,
-        undeliverable: Option<&str>,
+        outcome: MailOutcome<'_>,
         routing_key: Option<String>,
     ) -> Result<(), IdentityError> {
         let mut attempt = 0;
@@ -235,16 +264,23 @@ impl<E: Executor> super::Command<E> {
             let Some(challenge) = self.load_email_challenge_by_id(challenge_id).await? else {
                 return Ok(());
             };
-            if challenge.issued_version != issued_version || challenge.mail.is_settled() {
+            if challenge.issued_version != issued_version {
+                return Ok(());
+            }
+            let record = challenge.mail.record(outcome, challenge.expires_at);
+            if record == MailRecord::Nothing {
                 return Ok(());
             }
             let mut writer = challenge.write()?;
             writer.routing_key_opt(routing_key.clone());
-            match undeliverable {
-                Some(reason) => writer.event(&MailUndeliverable {
-                    reason: reason.to_owned(),
-                }),
-                None => writer.event(&MailSent),
+            match record {
+                MailRecord::Sent => writer.event(&MailSent),
+                MailRecord::Undeliverable(reason) => writer.event(&MailUndeliverable { reason }),
+                MailRecord::Deferred { retry_at, reason } => {
+                    writer.event(&MailDeferred { retry_at, reason })
+                }
+                MailRecord::Failed { reason } => writer.event(&MailFailed { reason }),
+                MailRecord::Nothing => unreachable!("returned above"),
             };
             match writer.commit(&self.executor).await {
                 Ok(_) => return Ok(()),

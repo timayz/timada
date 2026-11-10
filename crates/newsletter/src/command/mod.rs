@@ -23,8 +23,8 @@ use timada_core::Sending;
 use timada_core::keys::{self, Key, Keys};
 
 use crate::aggregator::{
-    Confirmed, Forgotten, MailClaimed, MailSent, MailUndeliverable, Requested, TimeZoneSet,
-    Unsubscribed,
+    Confirmed, Forgotten, MailClaimed, MailDeferred, MailFailed, MailSent, MailUndeliverable,
+    Requested, TimeZoneSet, Unsubscribed,
 };
 use crate::value_object::{SubscriberStatus, subscriber_id, unsubscribe_token};
 
@@ -194,6 +194,8 @@ pub fn subscriber_projection<E: Executor>() -> Projection<E, SubscriberState> {
         .handler(on_mail_claimed())
         .handler(on_mail_sent())
         .handler(on_mail_undeliverable())
+        .handler(on_mail_deferred())
+        .handler(on_mail_failed())
         .strict()
 }
 
@@ -251,10 +253,7 @@ async fn on_mail_claimed(
     event: Event<MailClaimed>,
     state: &mut SubscriberState,
 ) -> anyhow::Result<()> {
-    state.mail = Sending::Claimed {
-        by: event.data.by.to_owned(),
-        until: event.data.until,
-    };
+    state.mail = state.mail.claimed(&event.data.by, event.data.until);
     Ok(())
 }
 
@@ -272,6 +271,24 @@ async fn on_mail_undeliverable(
     state.mail = Sending::Undeliverable {
         reason: event.data.reason.to_owned(),
     };
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_deferred(
+    event: Event<MailDeferred>,
+    state: &mut SubscriberState,
+) -> anyhow::Result<()> {
+    state.mail = state.mail.deferred(event.data.retry_at, &event.data.reason);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_mail_failed(
+    event: Event<MailFailed>,
+    state: &mut SubscriberState,
+) -> anyhow::Result<()> {
+    state.mail = state.mail.failed(&event.data.reason);
     Ok(())
 }
 
