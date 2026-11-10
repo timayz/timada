@@ -199,6 +199,12 @@ by construction.
    `data/shopper-keys` copied from a peer (`rsync`) before its first `serve`; a
    picture a node has not got yet is answered 404 with `Cache-Control: no-store`,
    so no cache in front keeps the miss. The
+   `rebuild <read-model>…` command (server stopped; `rebuild --list` names them)
+   does the same for one read model after a change to its tables or handlers:
+   it drops and recreates its tables, forgets the cursors of the subscriptions
+   that fill it, and leaves a `catch-up` mark so the next `serve` catches up
+   before it listens; on a cluster, one node at a time, the others serving
+   meanwhile. The
    `rejoin` command sets the same mark by hand, for a lost store file (delete the
    file first: an empty journal comes back under the node's own id through evento's
    amnesia fence). A node back before anything was tidied up past it is simply waited

@@ -79,6 +79,9 @@ enum Commands {
     /// Mark the store for a copy from another node at the next start (server
     /// stopped): after the other nodes gave this one up, or a lost store file
     Rejoin,
+    /// Empty a read model and forget its cursor (server stopped); the next
+    /// start fills it again from the store before serving
+    Rebuild(cli::RebuildArgs),
     /// Load a catalogue snapshot into a tenant (server stopped), then print
     /// the settings of a storefront for it
     Seed(cli::SeedArgs),
@@ -106,6 +109,7 @@ async fn main() -> Result<()> {
         Commands::Serve { host, port } => cli::serve(config, host, port).await,
         Commands::Migrate => cli::migrate(config).await,
         Commands::Rejoin => cli::rejoin(config).await,
+        Commands::Rebuild(args) => cli::rebuild(config, args).await,
         Commands::Seed(args) => cli::seed(config, args).await,
         Commands::Snapshot(args) => cli::snapshot(config, args).await,
         Commands::AliexpressPlaces(args) => cli::aliexpress_places(config, args).await,
