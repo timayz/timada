@@ -14,7 +14,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use evento::Turso;
 use evento::turso::TursoJournal;
-use evento::turso::migrate::Migrations;
+use evento::turso::migrate::{MIGRATIONS_TABLE, Migrations};
 pub use timada_core::db::Db;
 
 /// The store: the one database file, as the node and the read models in it
@@ -146,108 +146,97 @@ pub fn prepare_dir(path: &Path) -> Result<()> {
 }
 
 /// The read models, one crate each: its migrations, and the tables they
-/// create with what an emptied table must hold again.
+/// create.
 struct StoreReadModel {
     migrations: &'static Migrations<'static>,
     tables: &'static [&'static str],
-    /// A statement that puts back what an emptied table must hold (a totals
-    /// row); `""` when nothing.
-    reset_rows: &'static str,
 }
 
 const STORE_READ_MODELS: &[StoreReadModel] = &[
     StoreReadModel {
         migrations: &timada_identity::MIGRATIONS,
         tables: timada_identity::TABLES,
-        reset_rows: timada_identity::RESET_ROWS,
     },
     StoreReadModel {
         migrations: &timada_tenancy::MIGRATIONS,
         tables: timada_tenancy::TABLES,
-        reset_rows: timada_tenancy::RESET_ROWS,
     },
     StoreReadModel {
         migrations: &timada_catalog::MIGRATIONS,
         tables: timada_catalog::TABLES,
-        reset_rows: "",
     },
     StoreReadModel {
         migrations: &timada_pages::MIGRATIONS,
         tables: timada_pages::TABLES,
-        reset_rows: "",
     },
     StoreReadModel {
         migrations: &timada_reviews::MIGRATIONS,
         tables: timada_reviews::TABLES,
-        reset_rows: "",
     },
     StoreReadModel {
         migrations: &timada_discounts::MIGRATIONS,
         tables: timada_discounts::TABLES,
-        reset_rows: "",
     },
     StoreReadModel {
         migrations: &timada_support::MIGRATIONS,
         tables: timada_support::TABLES,
-        reset_rows: "",
     },
     StoreReadModel {
         migrations: &timada_orders::MIGRATIONS,
         tables: timada_orders::TABLES,
-        reset_rows: "",
     },
     // The dashboard's own: the mails its sagas owe (`mailroom/schema.rs`)
     // and the events they gave up on (`saga_fault/schema.rs`).
     StoreReadModel {
         migrations: &crate::mailroom::MIGRATIONS,
         tables: crate::mailroom::TABLES,
-        reset_rows: "",
     },
     StoreReadModel {
         migrations: &crate::saga_fault::MIGRATIONS,
         tables: crate::saga_fault::TABLES,
-        reset_rows: "",
     },
     StoreReadModel {
         migrations: &timada_shoppers::MIGRATIONS,
         tables: timada_shoppers::TABLES,
-        reset_rows: "",
     },
     StoreReadModel {
         migrations: &timada_invoicing::MIGRATIONS,
         tables: timada_invoicing::TABLES,
-        reset_rows: "",
     },
     StoreReadModel {
         migrations: &timada_newsletter::MIGRATIONS,
         tables: timada_newsletter::TABLES,
-        reset_rows: "",
     },
     StoreReadModel {
         migrations: &timada_automations::MIGRATIONS,
         tables: timada_automations::TABLES,
-        reset_rows: "",
     },
     StoreReadModel {
         migrations: &timada_aliexpress::MIGRATIONS,
         tables: timada_aliexpress::TABLES,
-        reset_rows: "",
     },
 ];
 
-/// Applies the pending migrations of the read models in the store (what
-/// [`open_store`] does; for a store a test built in memory).
+/// The tables that are this node's own in the store's database, no peer's
+/// and no read model's: a copy of the store from a peer leaves them alone.
+const NODE_TABLES: &[&Migrations<'static>] = &[&timada_aliexpress::NODE_MIGRATIONS];
+
+/// Applies the pending migrations of the read models in the store, and of
+/// this node's own tables (what [`open_store`] does; for a store a test
+/// built in memory).
 pub async fn migrate_store_read_models(store: &Store) -> Result<()> {
     let mut conn = store.connect()?;
-    for read_model in STORE_READ_MODELS {
-        read_model
-            .migrations
+    let read_models = STORE_READ_MODELS
+        .iter()
+        .map(|read_model| read_model.migrations);
+    for migrations in read_models.chain(NODE_TABLES.iter().copied()) {
+        migrations
             .to_latest(&mut conn)
             .await
             .map_err(|(applied, err)| {
                 anyhow::anyhow!(
                     "{}: migration failed after {applied} applied: {err}",
-                    read_model.migrations.app()
+                    migrations.app()
                 )
             })?;
     }
@@ -256,15 +245,36 @@ pub async fn migrate_store_read_models(store: &Store) -> Result<()> {
 
 /// Empties the read models in the store: they are derived data, which the
 /// subscriptions fill again from the store once it is copied from a peer.
+///
+/// Each table is dropped and created again by its crate's migrations rather
+/// than emptied row by row: the database keeps a version of every row a
+/// transaction deletes until it checkpoints, so deleting a large read model
+/// would write it once more to the log, while a drop is one schema change.
+/// Nothing else may be using the tables: this runs before the subscriptions
+/// start. The migrations' records are forgotten with the tables, so a
+/// migration that filled a table (a totals row) fills it again.
 pub async fn reset_store_read_models(store: &Store) -> Result<()> {
-    let db = Db::from(store.clone());
+    let mut conn = store.connect()?;
     for read_model in STORE_READ_MODELS {
+        let app = read_model.migrations.app();
         for table in read_model.tables {
-            db.execute(&format!("DELETE FROM {table}"), ()).await?;
+            conn.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
+                .await
+                .with_context(|| format!("{app}: cannot drop {table}"))?;
         }
-        if !read_model.reset_rows.is_empty() {
-            db.execute(read_model.reset_rows, ()).await?;
-        }
+        conn.execute(
+            &format!("DELETE FROM {MIGRATIONS_TABLE} WHERE app = ?1"),
+            [app],
+        )
+        .await
+        .with_context(|| format!("{app}: cannot forget the applied migrations"))?;
+        read_model
+            .migrations
+            .to_latest(&mut conn)
+            .await
+            .map_err(|(applied, err)| {
+                anyhow::anyhow!("{app}: migration failed after {applied} applied: {err}")
+            })?;
     }
     Ok(())
 }
@@ -272,6 +282,107 @@ pub async fn reset_store_read_models(store: &Store) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// After a reset the read-model tables are there again, empty, with
+    /// their indexes and the rows their migrations put in (the totals), and
+    /// the migrations are recorded again, so the next `open_store` has
+    /// nothing to apply.
+    #[tokio::test]
+    async fn a_reset_recreates_the_read_models_empty() {
+        let store = Turso::in_memory_concurrent().await.unwrap();
+        migrate_store_read_models(&store).await.unwrap();
+        let db = Db::from(store.clone());
+        let schema_before = schema(&db).await;
+        let migrations_before: i64 = db
+            .fetch_scalar(&format!("SELECT count(*) FROM {MIGRATIONS_TABLE}"), ())
+            .await
+            .unwrap();
+        db.execute(
+            "INSERT INTO identity_users (id, account, label, is_admin, deleted, registered_at, \
+             sign_in_count, oauth2_count, passkey_count, has_password, account_search, label_search) \
+             VALUES ('u1', 'ada@example.com', 'Ada', 0, 0, 1, 0, 0, 0, 1, 'ada', 'ada')",
+            (),
+        )
+        .await
+        .unwrap();
+        db.execute("UPDATE identity_totals SET users = 1 WHERE id = 1", ())
+            .await
+            .unwrap();
+
+        reset_store_read_models(&store).await.unwrap();
+
+        let users: i64 = db
+            .fetch_scalar("SELECT count(*) FROM identity_users", ())
+            .await
+            .unwrap();
+        assert_eq!(users, 0, "the rows are gone");
+        let totals: i64 = db
+            .fetch_scalar("SELECT users FROM identity_totals WHERE id = 1", ())
+            .await
+            .unwrap();
+        assert_eq!(totals, 0, "the totals row is back at zero");
+        assert_eq!(
+            schema(&db).await,
+            schema_before,
+            "tables and indexes as before"
+        );
+        let migrations_after: i64 = db
+            .fetch_scalar(&format!("SELECT count(*) FROM {MIGRATIONS_TABLE}"), ())
+            .await
+            .unwrap();
+        assert_eq!(
+            migrations_after, migrations_before,
+            "every migration recorded again"
+        );
+        // Nothing left for the next open to apply.
+        migrate_store_read_models(&store).await.unwrap();
+    }
+
+    /// Each read model's list of tables is what its migrations create, no
+    /// more and no less: a table left off the list would survive a copy of
+    /// the store with stale rows, and its migration would fail to run again.
+    #[tokio::test]
+    async fn every_read_model_lists_the_tables_its_migrations_create() {
+        for read_model in STORE_READ_MODELS {
+            let store = Turso::in_memory_concurrent().await.unwrap();
+            let mut conn = store.connect().unwrap();
+            read_model
+                .migrations
+                .to_latest(&mut conn)
+                .await
+                .map_err(|(_, err)| err)
+                .unwrap();
+            let mut created: Vec<String> = schema(&Db::from(store))
+                .await
+                .into_iter()
+                .filter(|(kind, _)| kind == "table")
+                .map(|(_, name)| name)
+                .collect();
+            created.sort();
+            let mut listed: Vec<String> = read_model.tables.iter().map(|t| t.to_string()).collect();
+            listed.sort();
+            assert_eq!(created, listed, "{}", read_model.migrations.app());
+        }
+    }
+
+    /// Every table and index of the read models, by name: what is neither
+    /// the store's own nor the migrations' record.
+    async fn schema(db: &Db) -> Vec<(String, String)> {
+        let mut rows: Vec<(String, String)> = db
+            .fetch_all(
+                "SELECT type, name FROM sqlite_schema \
+                 WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%' \
+                 AND name NOT LIKE '\\_evento%' ESCAPE '\\' \
+                 AND name NOT LIKE '\\_\\_turso\\_internal%' ESCAPE '\\' \
+                 AND name NOT IN ('event', 'snapshot', 'subscriber', 'meta') \
+                 AND name NOT LIKE 'idx\\_%' ESCAPE '\\' AND name NOT LIKE 'cluster\\_%' ESCAPE '\\'",
+                (),
+            )
+            .await
+            .unwrap();
+        rows.sort();
+        rows
+    }
 
     /// A fresh directory under the test's own temporary directory, which
     /// exists; the test removes it when it needs one that is gone.

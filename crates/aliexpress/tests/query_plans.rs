@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use timada_aliexpress::{MIGRATIONS, Share, links_due};
+use timada_aliexpress::{MIGRATIONS, NODE_MIGRATIONS, Share, links_due};
 use timada_core::db::{Db, Turso};
 
 /// How many products of each shop, one huge catalogue among the small ones.
@@ -18,11 +18,13 @@ fn products_of(shop: usize) -> usize {
 async fn links_due_on_a_platform_with_more_products_than_it_can_read() {
     let store = Turso::temporary_concurrent().await.unwrap();
     let mut conn = store.connect().unwrap();
-    MIGRATIONS
-        .to_latest(&mut conn)
-        .await
-        .map_err(|(_, err)| err)
-        .unwrap();
+    for migrations in [&MIGRATIONS, &NODE_MIGRATIONS] {
+        migrations
+            .to_latest(&mut conn)
+            .await
+            .map_err(|(_, err)| err)
+            .unwrap();
+    }
     let db = Db::from(store);
 
     let started = Instant::now();

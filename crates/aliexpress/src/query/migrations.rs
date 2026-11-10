@@ -1,5 +1,5 @@
-//! Schema of the read models: one migration, applied by the composition root
-//! in the store's database next to evento's own.
+//! Schema of the read models, and of this node's own tables, applied by the
+//! composition root in the store's database next to evento's own.
 
 use evento::turso::migrate::{Migration, Migrations};
 
@@ -54,8 +54,29 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX aliexpress_forwards_due ON aliexpress_forwards (status, updated_at);
-        CREATE UNIQUE INDEX aliexpress_forwards_order ON aliexpress_forwards (tenant_id, order_id);
-        CREATE TABLE aliexpress_read_times (
+        CREATE UNIQUE INDEX aliexpress_forwards_order ON aliexpress_forwards (tenant_id, order_id);",
+    )],
+);
+
+/// The read-model tables the migrations create: what a node drops and creates
+/// again before copying its store from a peer, so the subscriptions fill them
+/// again. The node's own tables ([`NODE_MIGRATIONS`]) are not among them.
+pub const TABLES: &[&str] = &["aliexpress_products", "aliexpress_forwards"];
+
+/// The app name under which this node's own tables are recorded.
+pub const NODE_MIGRATION_APP: &str = "aliexpress_node";
+
+/// This node's own tables, which no peer holds and a copy of the store from
+/// a peer leaves alone, recorded apart from the read models for that:
+/// `aliexpress_read_times`, when this node last read each item and each
+/// open order on AliExpress ([`super::read_times`]), and
+/// `aliexpress_unrecorded`, what AliExpress took and the store would not
+/// take yet ([`super::unrecorded`]).
+pub const NODE_MIGRATIONS: Migrations<'static> = Migrations::new(
+    NODE_MIGRATION_APP,
+    &[Migration::up(
+        "0001_read_times_unrecorded",
+        "CREATE TABLE aliexpress_read_times (
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,
                 tried_at INTEGER,
@@ -75,11 +96,3 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             );",
     )],
 );
-
-/// The read-model tables the migration creates: what a node empties before
-/// copying its store from a peer, so the subscriptions fill them again.
-/// `aliexpress_unrecorded` is not one: it is this node's own record of what
-/// AliExpress took and the store would not take yet, which no peer holds.
-/// Nor is `aliexpress_read_times`, this node's own record of when it last
-/// read each item and each open order on AliExpress ([`super::read_times`]).
-pub const TABLES: &[&str] = &["aliexpress_products", "aliexpress_forwards"];
