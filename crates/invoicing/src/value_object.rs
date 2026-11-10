@@ -351,6 +351,9 @@ pub struct IssuedDocument {
     pub buyer_vat_number: Option<String>,
     /// Invoice: VIES's reference for the check of that number.
     pub vies_reference: Option<String>,
+    /// Invoice: the EU VAT number the buyer gave when VIES could not be
+    /// asked about it; VAT was charged as to a consumer.
+    pub unchecked_vat_number: Option<String>,
     /// Invoice: the year's EU distance sales, this one included.
     pub eu_distance_sales_cents: u64,
     pub eu_threshold_passed: bool,

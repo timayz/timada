@@ -23,7 +23,9 @@ use super::webhook::OUT_OF_STOCK;
 use super::{
     Busy, DASHBOARD_ACTOR, METADATA_CART, METADATA_TENANT, NewPayment, Payments, SuppliedGoods,
 };
+use crate::db::Db;
 use crate::ecb::{EuroRates, RateAnswer};
+use crate::saga_fault::{Fault, give_up, recorded};
 
 /// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/payments";
@@ -47,6 +49,8 @@ pub struct Checkouts {
     /// The store, to write the answers with (a handler only borrows the one
     /// it runs on).
     store: Evento,
+    /// The table of requests given up on, for the cluster page.
+    db: Db,
     /// This node, as its claims name it.
     node: String,
 }
@@ -59,6 +63,7 @@ impl Checkouts {
         euro_rates: Arc<dyn EuroRates>,
         goods: Arc<dyn SuppliedGoods>,
         store: Evento,
+        db: Db,
         node: impl Into<String>,
     ) -> Self {
         Self {
@@ -66,6 +71,7 @@ impl Checkouts {
             euro_rates,
             goods,
             store,
+            db,
             node: node.into(),
         }
     }
@@ -93,6 +99,7 @@ async fn on_checkout_requested<E: Executor>(
     let checkouts: Checkouts = context.extract();
     checkouts
         .answer(
+            &event,
             &event.tenant,
             &event.aggregate_id,
             &event.data.request_id,
@@ -102,17 +109,58 @@ async fn on_checkout_requested<E: Executor>(
 }
 
 impl Checkouts {
-    /// Answers the request to pay `request_id` of a cart, asked at
-    /// `requested_at` (unix seconds), with a payment to confirm or a
-    /// refusal, unless another node claimed it first. An error is worth
-    /// asking again: this node's claim holds meanwhile, and so does what it
-    /// held for the checkout.
+    /// Answers the request to pay `request_id` of a cart (`event` is the
+    /// request), asked at `requested_at` (unix seconds), with a payment to
+    /// confirm or a refusal, unless another node claimed it first. A fault
+    /// of the store's is worth asking again: this node's claim holds
+    /// meanwhile, and so does what it held for the checkout. Any other
+    /// fault (a cart that cannot be priced, a hold that cannot be taken for
+    /// a reason of its own) refuses the request for now
+    /// (`payments_unavailable`) and gives back what was held: the shopper
+    /// asks again, and the pass goes on to the other tenants (#483).
     pub async fn answer(
+        &self,
+        event: &evento::Event,
+        tenant_id: &str,
+        cart_id: &str,
+        request_id: &str,
+        requested_at: u64,
+    ) -> anyhow::Result<()> {
+        let mut holds = None;
+        let answered = self
+            .try_answer(tenant_id, cart_id, request_id, requested_at, &mut holds)
+            .await;
+        match answered {
+            Ok(()) => Ok(()),
+            Err(err) => match Fault::of(err) {
+                Fault::Store(err) => Err(err),
+                Fault::Event(reason) => {
+                    give_up(&self.db, SUBSCRIPTION, event, &reason, now()).await?;
+                    let refused = refuse_and_give_back(
+                        &self.store,
+                        tenant_id,
+                        cart_id,
+                        request_id,
+                        PAYMENTS_UNAVAILABLE,
+                        holds.as_ref(),
+                    )
+                    .await
+                    .map(|_| ());
+                    recorded(refused, "the refusal of the request to pay")
+                }
+            },
+        }
+    }
+
+    /// [`answer`](Self::answer) up to the fault; `holds` is what the
+    /// checkout holds once it holds anything, for the caller to give back.
+    async fn try_answer(
         &self,
         tenant_id: &str,
         cart_id: &str,
         request_id: &str,
         requested_at: u64,
+        holds: &mut Option<CheckoutHolds>,
     ) -> anyhow::Result<()> {
         let payments = &self.payments;
         let orders = timada_orders::Command::new(self.store.clone(), tenant_id);
@@ -128,9 +176,7 @@ impl Checkouts {
                 .refuse_payment_request(DASHBOARD_ACTOR, cart_id, request_id, code)
                 .await
         };
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs());
+        let now = now();
         // A request nobody waits for any more (this node replaying its
         // history after a long absence) is refused before anything is read
         // for it: no supplier call, no pricing.
@@ -261,8 +307,8 @@ impl Checkouts {
             }
         }
         // The goods are held the same way, so two shoppers never pay for the
-        // last one.
-        let holds = CheckoutHolds::from(&pending);
+        // last one. From here on, a fault gives back what is held.
+        let holds = holds.insert(CheckoutHolds::from(&pending));
         let catalog = timada_catalog::Command::new(self.store.clone(), tenant_id);
         match catalog
             .reserve_stock(
@@ -279,7 +325,7 @@ impl Checkouts {
             Err(CatalogError::OutOfStock { .. }) => {
                 let discount_only = CheckoutHolds {
                     stock_lines: Vec::new(),
-                    ..holds
+                    ..holds.clone()
                 };
                 refuse_and_give_back(
                     &self.store,
@@ -325,7 +371,7 @@ impl Checkouts {
                     cart_id,
                     request_id,
                     PAYMENTS_UNAVAILABLE,
-                    Some(&holds),
+                    Some(holds),
                 )
                 .await?;
                 return Ok(());
@@ -350,12 +396,19 @@ impl Checkouts {
             // and the reservation is held again for the same cart.
             Err(err @ (OrderError::Write(_) | OrderError::Other(_))) => Err(err.into()),
             Err(err) => {
-                give_back(&self.store, tenant_id, cart_id, &holds).await;
+                give_back(&self.store, tenant_id, cart_id, holds).await;
                 tracing::warn!(%cart_id, %err, "a payment opened for a cart that cannot record it");
                 Ok(())
             }
         }
     }
+}
+
+/// Unix seconds now.
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
 }
 
 /// Refuses the request to pay with `code`. What its checkout holds

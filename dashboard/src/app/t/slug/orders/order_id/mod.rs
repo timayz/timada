@@ -13,6 +13,7 @@ pub mod aliexpress;
 pub mod cancel;
 pub mod capture;
 pub mod fulfil;
+pub mod invoice;
 pub mod not_on_aliexpress;
 pub mod settle_outside;
 
@@ -449,7 +450,23 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             section_card(
                 title: Some("Invoices"),
                 attrs: attributes! { data-order-documents="" },
-                if documents.is_empty() {
+                if let Some(reason) = &order.invoicing_failure {
+                    alert(
+                        variant: AlertVariant::Destructive,
+                        attrs: attributes! { role="alert" class="mb-4" data-order-invoicing-failure="" },
+                        icon(data: icons::ERROR)
+                        alert_description(
+                            (if documents.is_empty() { "The invoice could not be issued: " } else { "A document of this order could not be issued: " })
+                            (reason)
+                            ". Fix what it names, then ask again."
+                        )
+                    )
+                    if can_manage {
+                        <form method="post" action=(href!(invoice::invoice, Slug(slug.clone()), OrderId(order_id.clone()))) class="mb-4" data-order-invoice-again="">
+                            button(size: ButtonSize::Sm, variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, "Issue the documents again")
+                        </form>
+                    }
+                } else if documents.is_empty() {
                     <p class="text-sm text-muted-foreground">(if order.is_paid() {
                         "The invoice is being issued: reload in a moment."
                     } else if order.released_at.is_some() {

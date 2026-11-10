@@ -226,6 +226,7 @@ impl IssuedDocument {
             tax_country: data.tax_country.to_owned(),
             buyer_vat_number: data.buyer_vat_number.to_owned(),
             vies_reference: data.vies_reference.to_owned(),
+            unchecked_vat_number: data.unchecked_vat_number.to_owned(),
             eu_distance_sales_cents: data.eu_distance_sales_cents,
             eu_threshold_passed: data.eu_threshold_passed,
             ..Self::default()
@@ -473,6 +474,11 @@ pub struct NewInvoice {
     /// VIES's reference for the check.
     pub buyer_vat_number: Option<String>,
     pub vies_reference: Option<String>,
+    /// The number the buyer gave when VIES could not be asked about it
+    /// (`buyer_vat_number` is then `None`): the sale is taxed as to a
+    /// consumer, the safe side, and the invoice says the number was given
+    /// and not checked, so the buyer knows why VAT was charged.
+    pub unchecked_vat_number: Option<String>,
     /// The euro rate of `currency` on the day of issue, when it is not the
     /// euro: what the sale counts for against the yearly threshold of EU
     /// distance sales, and the VAT in euros the document also states. A
@@ -709,6 +715,7 @@ impl<E: Executor> Command<E> {
                 tax_country: decision.tax_country.clone(),
                 buyer_vat_number: invoice.buyer_vat_number.clone().filter(|_| reverse_charge),
                 vies_reference: invoice.vies_reference.clone().filter(|_| reverse_charge),
+                unchecked_vat_number: invoice.unchecked_vat_number.clone(),
                 eu_distance_sales_cents: decision.distance.sales_cents,
                 eu_threshold_passed: decision.distance.passed,
             };

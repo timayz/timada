@@ -19,3 +19,20 @@ pub enum InvoicingError {
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
+
+impl InvoicingError {
+    /// Whether the failure is the store's rather than the document's: a
+    /// write it is not taking for the moment, a series two writers kept
+    /// racing on (`Busy`, or a version conflict past the retries), a read
+    /// that failed. A saga fails its pass on these, and on these only; the
+    /// rest (an empty invoice, lines that do not add up, a credit note too
+    /// large, no euro rate for a sale that needs one) is the order's own and
+    /// is recorded on it.
+    pub fn is_store_fault(&self) -> bool {
+        match self {
+            Self::Write(err) => timada_core::is_store_write_fault(err),
+            Self::Busy | Self::Other(_) => true,
+            _ => false,
+        }
+    }
+}

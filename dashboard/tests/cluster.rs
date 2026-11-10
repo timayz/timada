@@ -20,6 +20,8 @@ mod db;
 mod mailroom;
 #[path = "../src/read_only_store.rs"]
 mod read_only_store;
+#[path = "../src/saga_fault/mod.rs"]
+mod saga_fault;
 #[path = "../src/store_api.rs"]
 mod store_api;
 

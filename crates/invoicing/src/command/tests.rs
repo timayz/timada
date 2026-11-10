@@ -96,6 +96,7 @@ fn invoice(order_id: &str) -> NewInvoice {
         },
         buyer_vat_number: None,
         vies_reference: None,
+        unchecked_vat_number: None,
         euro_rate: None,
     }
 }
@@ -361,6 +362,7 @@ fn issued_in_book(document_id: &str, order_id: &str, number: u64) -> InvoiceIssu
         tax_country: "FR".into(),
         buyer_vat_number: None,
         vies_reference: None,
+        unchecked_vat_number: None,
         eu_distance_sales_cents: 0,
         eu_threshold_passed: false,
     }

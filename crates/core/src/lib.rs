@@ -58,6 +58,23 @@ pub fn write_refusal(err: &WriteError) -> Option<&'static str> {
     }
 }
 
+/// Whether a write failed because of the store rather than because of the
+/// write: the store is not taking writes for the moment
+/// ([`WriteError::Unavailable`]), or the write kept losing to another on the
+/// same stream past the command's own retries
+/// ([`WriteError::InvalidOriginalVersion`]). Both pass once the store is back
+/// or the other writer is done, so a saga fails its pass on them and tries
+/// again: nothing else would progress either. Every other write error is the
+/// write's own (nothing to commit, a version overflow, a tenant no store
+/// keeps): asked again the same way, the store answers the same, so a saga
+/// records it on the stream and moves on.
+pub fn is_store_write_fault(err: &WriteError) -> bool {
+    matches!(
+        err,
+        WriteError::Unavailable(_) | WriteError::InvalidOriginalVersion
+    )
+}
+
 /// The primary subtag of a language tag or of an `Accept-Language` value,
 /// lowercased: `"fr-FR,fr;q=0.9,en;q=0.8"` and `"EN_us"` give `"fr"` and
 /// `"en"`. Only the first entry counts, and only when it is two or three
@@ -147,6 +164,10 @@ mod tests {
     fn only_a_paused_store_is_a_refusal() {
         let paused = WriteError::Unavailable(anyhow::anyhow!("backlog at cap"));
         assert_eq!(write_refusal(&paused), Some(WRITES_PAUSED));
+        assert!(is_store_write_fault(&paused));
+        assert!(is_store_write_fault(&WriteError::InvalidOriginalVersion));
+        assert!(!is_store_write_fault(&WriteError::MissingData));
+        assert!(!is_store_write_fault(&WriteError::VersionOverflow));
         let broken = WriteError::Unknown(anyhow::anyhow!("disk gone"));
         assert_eq!(write_refusal(&broken), None);
         assert_eq!(write_refusal(&WriteError::InvalidOriginalVersion), None);

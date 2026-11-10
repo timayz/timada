@@ -530,11 +530,16 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
                 d.store.clone(),
             )),
             d.store.clone(),
+            d.db.clone(),
             d.node.clone(),
         ))
     }),
     ("order payments", Kind::Sharded, |d| {
-        crate::payments::order_payments_subscription(d.payments.clone(), d.store.clone())
+        crate::payments::order_payments_subscription(
+            d.payments.clone(),
+            d.store.clone(),
+            d.db.clone(),
+        )
     }),
     ("discount usage", Kind::Sharded, |d| {
         timada_orders::discount_usage_subscription(d.store.clone())
@@ -581,6 +586,7 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
             d.vies.clone(),
             d.euro_rates.clone(),
             d.store.clone(),
+            d.db.clone(),
         )
     }),
     // The mails a command owes are handed to the mailroom from here, after

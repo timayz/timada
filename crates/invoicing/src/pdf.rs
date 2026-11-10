@@ -416,6 +416,10 @@ fn inputs(document: &IssuedDocument) -> Dict {
         "buyer_vat",
         text(document.buyer_vat_number.clone().unwrap_or_default()),
     );
+    put(
+        "buyer_vat_unchecked",
+        text(document.unchecked_vat_number.clone().unwrap_or_default()),
+    );
     let settlement = if credit {
         format!(
             "Montant remboursé le {} sur le moyen de paiement d'origine.",
@@ -597,6 +601,19 @@ mod tests {
         let d = inputs(&business);
         assert!(get(&d, "vat_mention").starts_with("Autoliquidation"));
         assert_eq!(get(&d, "buyer_vat"), "DE123456789");
+        assert_eq!(get(&d, "buyer_vat_unchecked"), "");
+        // VIES could not be asked: taxed as to a consumer, the number given
+        // shown as not checked.
+        let unchecked = IssuedDocument {
+            regime: Regime::DistanceOrigin,
+            tax_country: "FR".into(),
+            unchecked_vat_number: Some("DE123456789".into()),
+            ..invoice(Some("FR85120027016"))
+        };
+        let d = inputs(&unchecked);
+        assert_eq!(get(&d, "buyer_vat"), "");
+        assert_eq!(get(&d, "buyer_vat_unchecked"), "DE123456789");
+        assert!(render(&unchecked).unwrap().starts_with(b"%PDF-"));
         let export = IssuedDocument {
             regime: Regime::Export,
             ..invoice(Some("FR85120027016"))

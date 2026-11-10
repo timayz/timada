@@ -101,6 +101,18 @@ pub enum CatalogError {
 }
 
 impl CatalogError {
+    /// Whether the failure is the store's rather than the request's: a write
+    /// it is not taking for the moment, a write that kept losing to another
+    /// on the same stream, a read that failed. A saga fails its pass on
+    /// these, and on these only (see `timada_core::is_store_write_fault`).
+    pub fn is_store_fault(&self) -> bool {
+        match self {
+            Self::Write(err) => timada_core::is_store_write_fault(err),
+            Self::Other(_) => true,
+            _ => false,
+        }
+    }
+
     /// Whether the message can be shown to the person who made the request
     /// (as opposed to an infrastructure failure).
     pub fn is_user_facing(&self) -> bool {
