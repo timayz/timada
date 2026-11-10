@@ -56,17 +56,21 @@ could have several is listed as their first, picked for both.
 
 A server switched for marketing while a campaign goes out sends its next batches. A
 shop whose server stops accepting mail does not fall back to another one, nor to the
-platform's server. The send fails and is logged, so a broken setup shows instead of
-being hidden. The order mails and review requests are claimed before they are sent,
-so one that fails is not retried; the codes, invitations and confirmations are retried
-by the mailroom (see [Sending in the background](#sending-in-the-background)).
+platform's server. The send fails and is recorded, so a broken setup shows instead of
+being hidden: the codes, invitations, confirmations, order mails and message notices
+are retried by the mailroom (see [Sending in the background](#sending-in-the-background)),
+which gives up after about a day; the review requests, newsletters and hold reminders
+are claimed before they are sent, so one that fails is logged and not retried.
 
 ## Sending in the background
 
-Sign-in codes (the platform's and the shops'), invitations and newsletter
-confirmations are mailed by the dashboard's sagas, not by the request that asked for
-them: the command records the intent on the stream, a subscription on every node of
-the region sees it, and the node that first writes a claim on the stream sends. The
+Sign-in codes (the platform's and the shops'), invitations, newsletter
+confirmations, the shops' mails about their orders and the notices of a message's
+arrival are mailed by the dashboard's sagas, not by the request that asked for them:
+the command records the intent on the stream, a subscription on every node of the
+region sees it, and the node that first writes a claim on the stream sends (an order
+mail or a message notice has a stream of its own for that, `OrderMail` per order and
+mail, `MessageNotification` per message, opened by the first claim). The
 send itself happens off the subscription's cursor, in the node's **mailroom**
 (`dashboard/src/mailroom`): the subscription only writes what is owed into the
 node's `owed_mails` table and acknowledges the event; the mailroom works the table
@@ -88,13 +92,21 @@ How a send went is recorded on the stream (`timada_core::Sending`):
   node looks once it is due;
 - **failed**: the try after the last wait failed too, about eighteen hours in, or the
   next try would come after the intent itself expires (a sign-in code lives ten
-  minutes, so its fifth failure is its last): the mail is given up on. An invitation or
-  a confirmation stays open for days. A node whose lease lapsed while it was still
-  trying records no failure over the claim another node took since.
+  minutes, so its fifth failure is its last; an order mail or a message notice is
+  worth sending for a day): the mail is given up on. An invitation or a confirmation
+  stays open for days. A node whose lease lapsed while it was still trying records no
+  failure over the claim another node took since.
 
 `/admin/cluster` counts the mails this node still owes and lists the ones given up on
 for a week, with the last failure's reason. The members page shows an invitation that
-is being retried or was given up on, so the inviter can invite again.
+is being retried or was given up on, so the inviter can invite again; an order's page
+shows each of its mails the same way.
+
+An order mail the platform's server would send is checked against the payment
+provider before it is claimed: an order whose payment the provider does not know as
+the shop's is passed over (a `store:write` key could forge one), and a provider that
+does not answer is asked again at the next look. A payment mail of an order settled
+outside timada is passed over too.
 
 ## A shop's own wording
 
@@ -143,9 +155,9 @@ the merchant or from AliExpress's parcels: `tracking` is the parcel number when 
 was given, `tracking_url` the carrier's page only when the merchant gave one at
 fulfilment (the shop links to no tracking site of its own choosing; the order's page
 the mail links to shows the parcel's steps). Each is sent once
-per order, an hour at most after what
-prompted it (a node catching up on older events mails nobody), and the order's page
-in the back office says when each went out.
+per order by the mailroom (see [Sending in the background](#sending-in-the-background)),
+within a day of what prompted it (a node catching up on older events mails nobody),
+and the order's page in the back office says when each went out, or why it has not.
 
 Every mail also has `shop.logo_url`, `shop.accent` and `shop.footer`. Set them under
 "Look of your mails" on the same page. Each is empty until set, so check it with

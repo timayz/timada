@@ -1,55 +1,8 @@
 //! Queries over `tenancy_invitations`, for the members page of a tenant.
 
 use anyhow::Result;
-use timada_core::Sending;
+use timada_core::MailStatus;
 use timada_core::db::{Db, FromRow};
-
-/// Where an invitation's mail stands, as the `mail` column keeps it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InvitationMailState {
-    /// Recorded, not handed to a mail server yet.
-    Sending,
-    /// A send failed for a reason worth a retry; the next try waits.
-    Retrying,
-    Sent,
-    /// The mail server refused the address for good.
-    Undeliverable,
-    /// Given up on: every try failed.
-    Failed,
-}
-
-impl InvitationMailState {
-    pub fn of(sending: &Sending) -> Self {
-        match sending {
-            Sending::Pending | Sending::Claimed { .. } => Self::Sending,
-            Sending::Deferred { .. } => Self::Retrying,
-            Sending::Sent => Self::Sent,
-            Sending::Undeliverable { .. } => Self::Undeliverable,
-            Sending::Failed { .. } => Self::Failed,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Sending => "sending",
-            Self::Retrying => "retrying",
-            Self::Sent => "sent",
-            Self::Undeliverable => "undeliverable",
-            Self::Failed => "failed",
-        }
-    }
-
-    /// `Sending` for anything the column should not hold.
-    pub fn parse(value: &str) -> Self {
-        match value {
-            "retrying" => Self::Retrying,
-            "sent" => Self::Sent,
-            "undeliverable" => Self::Undeliverable,
-            "failed" => Self::Failed,
-            _ => Self::Sending,
-        }
-    }
-}
 
 /// One row of `tenancy_invitations`.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -66,13 +19,13 @@ pub struct InvitationRow {
     pub accepted_by: Option<String>,
     pub accepted_at: Option<i64>,
     pub revoked: bool,
-    /// Where the link's mail stands ([`InvitationMailState::as_str`]).
+    /// Where the link's mail stands ([`MailStatus::as_str`]).
     pub mail: String,
 }
 
 impl InvitationRow {
-    pub fn mail(&self) -> InvitationMailState {
-        InvitationMailState::parse(&self.mail)
+    pub fn mail(&self) -> MailStatus {
+        MailStatus::parse(&self.mail)
     }
 }
 

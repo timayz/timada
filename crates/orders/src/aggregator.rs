@@ -498,19 +498,37 @@ pub enum Storefront {
     },
 }
 
-/// A mail sent to the shopper of one order (`mail` names it: its
-/// confirmation, its payment taken, its cancellation). One stream per order
-/// and mail, with the id [`order_mail_id`](crate::order_mail_id): the node
-/// that writes it first is the one that sends, so a shopper gets each mail
-/// once however many nodes follow the tenant.
+/// The mail `mail` about one order, owed to its shopper: its confirmation,
+/// its payment taken, its shipment, its cancellation. One stream per order
+/// and mail, with the id [`order_mail_id`](crate::order_mail_id). The order's
+/// own events owe the mail; a subscription on every node sees them, and the
+/// node that writes the claim first is the one that sends, then records how
+/// it went ([`timada_core::Sending`]), so a shopper gets each mail once
+/// however many nodes follow the tenant.
 #[evento::aggregate(name = "timada-orders/OrderMail")]
 pub enum OrderMail {
-    Mailed {
+    /// What the stream is about, written with the first claim: the mail
+    /// `mail` ([`ShopMailKind`](timada_tenancy::ShopMailKind) key) about
+    /// `order_id`, worth sending until `expires_at` (unix seconds), after
+    /// which no retry is made.
+    Owed {
         order_id: String,
         mail: String,
-        email: String,
-        mailed_by: String,
+        expires_at: u64,
     },
+    /// Node `by` took the sending, until `until` should it never say how it
+    /// went.
+    MailClaimed { by: String, until: u64 },
+    /// The mail was handed to the mail server.
+    MailSent,
+    /// The mail server refused the address for good; `reason` is what it
+    /// said.
+    MailUndeliverable { reason: String },
+    /// The send failed for a reason worth a retry (`reason` says which); the
+    /// next try may be made at `retry_at` (unix seconds).
+    MailDeferred { retry_at: u64, reason: String },
+    /// Given up on: the last send failed with `reason` and no retry is left.
+    MailFailed { reason: String },
 }
 
 /// How the tenant ships: the methods a shopper picks one of at checkout.

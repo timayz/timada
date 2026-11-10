@@ -35,6 +35,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use timada_core::db::FromRow;
+use timada_tenancy::ShopMailKind;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use topcoat::context::AppContext;
@@ -42,6 +43,7 @@ use topcoat::context::AppContext;
 use crate::cluster::Executor as Store;
 use crate::db::Db;
 use crate::key_vault::KeyVault;
+use crate::payments::Payments;
 
 mod schema;
 
@@ -88,16 +90,32 @@ pub enum Kind {
     Invitation,
     /// A shop's double opt-in link (`Subscriber`).
     NewsletterConfirmation,
+    /// A shop's mail to the shopper of an order (`Order`, then `OrderMail`):
+    /// which one, by its template.
+    OrderMail(ShopMailKind),
+    /// The platform's notice to a shop's members that a message arrived
+    /// (`Message`, then `MessageNotification`).
+    MessageNotice,
 }
 
 impl Kind {
-    /// The column's value.
+    /// The order mails, one per template the shop sends about an order.
+    pub const ORDER_MAILS: [ShopMailKind; 4] = [
+        ShopMailKind::OrderConfirmation,
+        ShopMailKind::OrderPaid,
+        ShopMailKind::OrderShipped,
+        ShopMailKind::OrderCancelled,
+    ];
+
+    /// The column's value: an order mail's is its template's key.
     pub fn key(self) -> &'static str {
         match self {
             Self::PlatformCode => "platform_code",
             Self::ShopperCode => "shopper_code",
             Self::Invitation => "invitation",
             Self::NewsletterConfirmation => "newsletter_confirmation",
+            Self::OrderMail(mail) => mail.key(),
+            Self::MessageNotice => "message_notice",
         }
     }
 
@@ -107,7 +125,8 @@ impl Kind {
             "shopper_code" => Self::ShopperCode,
             "invitation" => Self::Invitation,
             "newsletter_confirmation" => Self::NewsletterConfirmation,
-            _ => return None,
+            "message_notice" => Self::MessageNotice,
+            _ => Self::OrderMail(*Self::ORDER_MAILS.iter().find(|mail| mail.key() == value)?),
         })
     }
 
@@ -118,6 +137,11 @@ impl Kind {
             Self::ShopperCode => "shopper sign-in code",
             Self::Invitation => "invitation",
             Self::NewsletterConfirmation => "newsletter confirmation",
+            Self::OrderMail(ShopMailKind::OrderPaid) => "order payment mail",
+            Self::OrderMail(ShopMailKind::OrderShipped) => "order shipping mail",
+            Self::OrderMail(ShopMailKind::OrderCancelled) => "order cancellation mail",
+            Self::OrderMail(_) => "order confirmation",
+            Self::MessageNotice => "message notice",
         }
     }
 }
@@ -197,16 +221,21 @@ pub async fn failed_mails(db: &Db, limit: i64) -> Result<Vec<OwedMail>> {
 
 /// The sender, with what every kind of mail needs outside a request.
 pub struct Mailroom {
-    db: Db,
+    /// The read models: the members' addresses, and this node's table.
+    pub(crate) db: Db,
     /// The store: the platform's streams (users, tenants, invitations) and
     /// the shops' (shoppers, subscribers) live in the one store.
     pub(crate) store: Store,
     /// The platform's transport and sender, the shops' own servers, and the
     /// keys the codes and links derive under.
     pub(crate) mail: Arc<AppContext>,
-    /// The tenants' keys, to open the shoppers' addresses.
+    /// The tenants' keys, to open the shoppers' addresses and the messages.
     pub(crate) keys: Arc<KeyVault>,
-    /// The dashboard's public address, for the invitation links.
+    /// The payment provider: the platform's server mails about the orders
+    /// the checkout placed and no other (timada #431).
+    pub(crate) payments: Arc<Payments>,
+    /// The dashboard's public address, for the invitation links and the
+    /// inbox's.
     pub(crate) base_url: String,
     /// This node, as the claims name it.
     pub(crate) node: String,
@@ -227,6 +256,7 @@ impl Mailroom {
         store: Store,
         mail: Arc<AppContext>,
         keys: Arc<KeyVault>,
+        payments: Arc<Payments>,
         base_url: String,
         node: String,
     ) -> Arc<Self> {
@@ -235,6 +265,7 @@ impl Mailroom {
             store,
             mail,
             keys,
+            payments,
             base_url,
             node,
             wake: Notify::new(),
@@ -418,6 +449,7 @@ impl Mailroom {
                 Ok(Outcome::Sent) => sent += 1,
                 Ok(Outcome::Recorded) => {}
                 Ok(Outcome::Left) => self.put_off(owed, at, at + LOOK_AGAIN_SECS).await,
+                Ok(Outcome::Dropped) => self.forget(owed, at).await,
                 Ok(Outcome::Deferred) => {
                     tracing::warn!(lane = %lane.0, "a shop's mail server failed a send: its other mails wait for the retry");
                     for rest in mails.by_ref() {
@@ -463,6 +495,20 @@ impl Mailroom {
         }
     }
 
+    /// Forgets `owed`: nothing is owed after all. Every node that owes it
+    /// reaches the same conclusion from the same streams.
+    async fn forget(&self, owed: &OwedMail, now: u64) {
+        let Some(kind) = owed.kind() else {
+            return;
+        };
+        if let Err(err) = self
+            .record(kind, &owed.tenant_id, &owed.stream_id, Change::Settled, now)
+            .await
+        {
+            tracing::warn!(error = %format!("{err:#}"), "an owed mail could not be dropped");
+        }
+    }
+
     /// Sends one owed mail, by its kind. An error is the store's (a load,
     /// a claim or a record that failed), never the mail server's.
     async fn send(&self, owed: &OwedMail, now: u64) -> Result<Outcome> {
@@ -473,6 +519,8 @@ impl Mailroom {
             Some(Kind::NewsletterConfirmation) => {
                 crate::newsletter_confirmations::send(self, owed, now).await
             }
+            Some(Kind::OrderMail(mail)) => crate::order_mails::send(self, owed, mail, now).await,
+            Some(Kind::MessageNotice) => crate::message_notifications::send(self, owed, now).await,
             None => {
                 tracing::error!(kind = %owed.kind, "not a kind of owed mail; left alone");
                 Ok(Outcome::Left)
@@ -495,6 +543,9 @@ pub enum Outcome {
     /// Nothing claimed: another node is sending, the next try is not due,
     /// or the stream settled or moved on already.
     Left,
+    /// Nothing to send after all, and nothing to record on the stream (the
+    /// mail is not the shopper's to get): the row goes.
+    Dropped,
 }
 
 /// The mails due, grouped into lanes: one per shop, the platform's over
@@ -524,6 +575,8 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::code_mails::tests::{mail_context, vault};
+    use crate::payments::fake::FakeGateway;
+    use crate::seal::Sealer;
 
     pub(crate) const BASE_URL: &str = "https://timada.example/";
 
@@ -550,11 +603,29 @@ pub(crate) mod tests {
         keys: Arc<KeyVault>,
         node: &str,
     ) -> Arc<Mailroom> {
+        room_paid_through(store, mail, keys, FakeGateway::new(), node)
+    }
+
+    /// A mailroom whose payment provider is `gateway`: what the order mails
+    /// the platform's server would send are checked against.
+    pub(crate) fn room_paid_through(
+        store: &Turso,
+        mail: Arc<AppContext>,
+        keys: Arc<KeyVault>,
+        gateway: Arc<FakeGateway>,
+        node: &str,
+    ) -> Arc<Mailroom> {
+        let evento = Evento::new(store.clone());
         Mailroom::new(
             Db::from(store.clone()),
-            Evento::new(store.clone()),
+            evento.clone(),
             mail,
             keys,
+            Arc::new(Payments::new(
+                Some(Sealer::new("payments", "secret")),
+                gateway,
+                evento,
+            )),
             BASE_URL.to_owned(),
             node.to_owned(),
         )

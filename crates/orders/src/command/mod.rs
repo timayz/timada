@@ -8,8 +8,8 @@
 mod business_buyers;
 mod cart;
 mod checkout;
-mod confirmation;
 mod lifecycle;
+mod order_mail;
 mod payment_method;
 mod shipment;
 mod shipping;
@@ -25,17 +25,19 @@ pub use payment_method::*;
 pub use shipment::*;
 
 use evento::{Executor, Projection, metadata::Event};
+use timada_core::Sending;
 
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BusinessBuyersAccepted, BusinessBuyersRefused,
     BuyerIdentified, CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, CheckedOut,
     CheckoutClaimed, CheckoutRequested, Claimed, Created, DiscountApplied, DiscountGranted,
     DiscountRemoved, Discounted, Fulfilled, HoldLapseReminded, InvoicingFailed, InvoicingRequested,
-    ItemAdded, ItemRemoved, LanguageGiven, LanguageSet, Mailed, MethodAdded, MethodChanged,
-    MethodRemoved, NewsletterOptInSet, NewsletterOptedIn, Paid, PaymentCancelled, PaymentRefused,
-    PaymentReleased, PaymentRequested, PaymentReturnRefused, PaymentReturnRequested,
-    PaymentReturned, PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested,
-    Refunded, Released as ReferenceReleased, SettledOutside, ShippingCharged, ShippingGranted,
+    ItemAdded, ItemRemoved, LanguageGiven, LanguageSet, MailClaimed, MailDeferred, MailFailed,
+    MailSent, MailUndeliverable, MethodAdded, MethodChanged, MethodRemoved, NewsletterOptInSet,
+    NewsletterOptedIn, Owed as MailOwed, Paid, PaymentCancelled, PaymentRefused, PaymentReleased,
+    PaymentRequested, PaymentReturnRefused, PaymentReturnRequested, PaymentReturned,
+    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded,
+    Released as ReferenceReleased, SettledOutside, ShippingCharged, ShippingGranted,
     ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet, SupplierOrderRefused,
     SupplierOrderRuledOut, SupplierOrderStarted, SupplierOrderUncertain, TimeZoneGiven,
     TimeZoneSet,
@@ -1790,31 +1792,101 @@ async fn on_storefront_address_cleared(
 // OrderMail
 // =============================================================================
 
+/// Where the mail `mail` about an order stands. No stream is no claim yet:
+/// the mail is owed by the order's own event, and pending.
 #[evento::projection(id = id, name = "timada-orders/OrderMailState")]
 #[evento::snapshot(none)]
 #[derive(Debug, PartialEq, Eq)]
 pub struct OrderMailState {
     pub id: String,
     pub order_id: String,
+    /// The mail's kind key (`order_confirmation`).
     pub mail: String,
-    pub email: String,
-    /// Unix seconds.
-    pub mailed_at: u64,
+    /// Unix seconds: no retry is made past it.
+    pub expires_at: u64,
+    pub sending: Sending,
+    /// Unix seconds: when the mail was handed to the server.
+    pub sent_at: Option<u64>,
+    /// Unix seconds of the last event.
+    pub updated_at: u64,
 }
 
 pub fn order_mail_projection<E: Executor>() -> Projection<E, OrderMailState> {
     Projection::new::<crate::aggregator::OrderMail>()
-        .handler(on_order_mailed())
+        .handler(on_order_mail_owed())
+        .handler(on_order_mail_claimed())
+        .handler(on_order_mail_sent())
+        .handler(on_order_mail_undeliverable())
+        .handler(on_order_mail_deferred())
+        .handler(on_order_mail_failed())
         .strict()
 }
 
 #[evento::handler]
-async fn on_order_mailed(event: Event<Mailed>, state: &mut OrderMailState) -> anyhow::Result<()> {
+async fn on_order_mail_owed(
+    event: Event<MailOwed>,
+    state: &mut OrderMailState,
+) -> anyhow::Result<()> {
     state.id = event.aggregate_id.to_owned();
     state.order_id = event.data.order_id.clone();
     state.mail = event.data.mail.clone();
-    state.email = event.data.email.clone();
-    state.mailed_at = event.timestamp;
+    state.expires_at = event.data.expires_at;
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_order_mail_claimed(
+    event: Event<MailClaimed>,
+    state: &mut OrderMailState,
+) -> anyhow::Result<()> {
+    state.sending = state.sending.claimed(&event.data.by, event.data.until);
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_order_mail_sent(
+    event: Event<MailSent>,
+    state: &mut OrderMailState,
+) -> anyhow::Result<()> {
+    state.sending = Sending::Sent;
+    state.sent_at = Some(event.timestamp);
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_order_mail_undeliverable(
+    event: Event<MailUndeliverable>,
+    state: &mut OrderMailState,
+) -> anyhow::Result<()> {
+    state.sending = Sending::Undeliverable {
+        reason: event.data.reason.clone(),
+    };
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_order_mail_deferred(
+    event: Event<MailDeferred>,
+    state: &mut OrderMailState,
+) -> anyhow::Result<()> {
+    state.sending = state
+        .sending
+        .deferred(event.data.retry_at, &event.data.reason);
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_order_mail_failed(
+    event: Event<MailFailed>,
+    state: &mut OrderMailState,
+) -> anyhow::Result<()> {
+    state.sending = state.sending.failed(&event.data.reason);
+    state.updated_at = event.timestamp;
     Ok(())
 }
 
@@ -1855,7 +1927,7 @@ impl<E: Executor> Command<E> {
             .await
     }
 
-    /// The mail `mail` sent about an order, if it was.
+    /// Where the mail `mail` about an order stands, once a node claimed it.
     pub async fn load_order_mail(
         &self,
         order_id: &str,

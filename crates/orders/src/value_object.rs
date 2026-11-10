@@ -239,10 +239,18 @@ pub fn storefront_id() -> String {
     evento::hash_ids(vec!["storefront"])
 }
 
-/// The stream of one mail sent about an order.
+/// The stream of one mail about an order ([`OrderMail`](crate::aggregator::OrderMail)).
 pub fn order_mail_id(order_id: &str, mail: &str) -> String {
     evento::hash_ids(vec!["order-mail", order_id, mail])
 }
+
+/// How long after the event that owes it a mail about an order is still
+/// worth sending: a day. Longer than the retry schedule of a send
+/// ([`timada_core::RETRY_DELAYS_SECS`], about eighteen hours in all), so a
+/// shop whose server is down for a while gets every retry; past it the mail
+/// is history (a node replaying its events), and the shopper has the
+/// order's page.
+pub const ORDER_MAIL_WINDOW_SECS: u64 = 24 * 60 * 60;
 
 /// The address of a storefront as the merchant typed it, absolute and
 /// without a trailing `/`.
