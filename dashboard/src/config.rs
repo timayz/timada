@@ -732,7 +732,10 @@ pub struct ClusterConfig {
     /// A node not heard from for this long is no longer waited for: the
     /// others tidy up finished writes without it. When it returns it is told
     /// so, and comes back by copying the store from a peer (`rejoin`, then
-    /// restart). 0 never gives a node up.
+    /// restart). A day by default: the copy is the costly way back for a
+    /// large store, and `write_backlog` holds a day's writes many times
+    /// over, so a node down for a night is simply caught up. 0 never gives
+    /// a node up.
     #[serde(default = "default_absent_after_secs")]
     pub absent_after_secs: u64,
     /// Finished writes this node keeps for a node that is away. Past it the
@@ -742,7 +745,7 @@ pub struct ClusterConfig {
 }
 
 fn default_absent_after_secs() -> u64 {
-    3600
+    24 * 3600
 }
 
 fn default_write_backlog() -> usize {
@@ -1258,7 +1261,7 @@ mod tests {
         assert_eq!(config.settings().absent_after(), None);
         assert_eq!(
             cluster(1, &[], None).settings().absent_after(),
-            Some(Duration::from_secs(3600))
+            Some(Duration::from_secs(24 * 3600))
         );
     }
 

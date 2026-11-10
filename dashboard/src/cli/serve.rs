@@ -159,22 +159,37 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         )),
         node: cluster::node_name(&cluster),
     });
-    let catch_up_first = cluster.health().joined_at_start;
-    if catch_up_first {
+    let planned = planned(&config.server);
+    if cluster.health().joined_at_start {
         tracing::info!("the store was copied from a peer: the read models catch up before serving");
-    }
-    for (name, kind, make) in planned(&config.server) {
         // The read models alone: a saga resumes from its cursor as it would
-        // after any restart, and nothing it does is waited for. A pass that
-        // cannot get through the copied history is not the node's end: its
+        // after any restart, and nothing it does is waited for. All of them
+        // at once: each writes tables of its own, and the store's history is
+        // long. A pass that cannot get through it is not the node's end: its
         // worker starts anyway, supervised, at the cursor the pass left, and
         // the cluster page says so.
-        if catch_up_first
-            && kind == Kind::ReadModel
-            && let Err(err) = workers::catch_up(&name, make(&deps), &executor).await
-        {
-            tracing::error!(error = %format!("{err:#}"), "the {name} subscription did not catch up before serving");
+        let mut catching_up = tokio::task::JoinSet::new();
+        for (name, kind, make) in &planned {
+            if *kind != Kind::ReadModel {
+                continue;
+            }
+            let name = name.clone();
+            let builder = make(&deps);
+            let executor = executor.clone();
+            catching_up.spawn(async move {
+                if let Err(err) = workers::catch_up(&name, builder, &executor).await {
+                    tracing::error!(error = %format!("{err:#}"), "the {name} subscription did not catch up before serving");
+                }
+            });
         }
+        while let Some(joined) = catching_up.join_next().await {
+            if let Err(err) = joined {
+                tracing::error!(%err, "a read model's catch-up ended early");
+            }
+        }
+        tracing::info!("the read models caught up");
+    }
+    for (name, _kind, make) in planned {
         let deps = deps.clone();
         all_workers.push(workers::start(name, move || make(&deps), &executor).await?);
     }

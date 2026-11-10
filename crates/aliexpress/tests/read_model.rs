@@ -1,10 +1,11 @@
 use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::{
     AeOrderState, ForwardRow, ForwardState, ForwardStatus, LinkRow, LinkState, LinkStatus,
-    LinkedProduct, MIGRATIONS, Placement, PlannedItem, Share, TABLES, forget_unrecorded,
-    forward_of_order, forward_plan_shown, forwards_due, forwards_stalled, keep_unrecorded,
-    link_of_product, linked_products, links_due, note_forward_read, note_published, note_read,
-    note_tried, note_unrecorded_try, note_wanted, unrecorded, upsert_forward, upsert_link,
+    LinkedProduct, MIGRATIONS, NODE_MIGRATIONS, Placement, PlannedItem, Share, TABLES,
+    forget_unrecorded, forward_of_order, forward_plan_shown, forwards_due, forwards_stalled,
+    keep_unrecorded, link_of_product, linked_products, links_due, note_forward_read,
+    note_published, note_read, note_tried, note_unrecorded_try, note_wanted, unrecorded,
+    upsert_forward, upsert_link,
 };
 use timada_core::db::{Db, Turso};
 use timada_orders::OrderLine;
@@ -16,11 +17,13 @@ const WANTED_SINCE: i64 = 500;
 async fn database() -> Db {
     let store = Turso::in_memory_concurrent().await.unwrap();
     let mut conn = store.connect().unwrap();
-    MIGRATIONS
-        .to_latest(&mut conn)
-        .await
-        .map_err(|(_, err)| err)
-        .unwrap();
+    for migrations in [&MIGRATIONS, &NODE_MIGRATIONS] {
+        migrations
+            .to_latest(&mut conn)
+            .await
+            .map_err(|(_, err)| err)
+            .unwrap();
+    }
     Db::from(store)
 }
 

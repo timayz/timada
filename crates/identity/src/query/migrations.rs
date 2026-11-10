@@ -61,10 +61,6 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     )],
 );
 
-/// The tables the migration creates: what a node empties before copying its
-/// store from a peer, so the subscriptions fill them again.
+/// The tables the migrations create: what a node drops and creates again
+/// before copying its store from a peer, so the subscriptions fill them again.
 pub const TABLES: &[&str] = &["identity_users", "identity_totals", "identity_sessions"];
-
-/// What [`TABLES`] hold once emptied that the schema expects: the totals
-/// row. Run after emptying them.
-pub const RESET_ROWS: &str = "INSERT INTO identity_totals (id, users) VALUES (1, 0)";

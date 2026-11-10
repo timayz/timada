@@ -293,8 +293,10 @@ dir = "data/shopper-keys"
 # # for: the others tidy up without it, and when it returns it is told so and
 # # refuses writes until it copies the store back from a peer (restart it:
 # # the copy happens at startup; `timada-dashboard rejoin` asks for one by
-# # hand, for a lost store file). 0 never gives a node up.
-# absent_after_secs = 3600
+# # hand, for a lost store file). A day: copying a large store back takes
+# # far longer than catching up on a night's writes, and the backlog below
+# # holds days of them. 0 never gives a node up.
+# absent_after_secs = 86400
 # # Finished writes this node keeps for a node that is away. Past it the node
 # # refuses new writes until the node returns or is given up. The node's page
 # # under Platform shows what it keeps, and the log warns at four fifths.
