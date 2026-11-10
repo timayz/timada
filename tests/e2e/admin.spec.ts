@@ -93,3 +93,19 @@ test("the administrator lists, signs out, promotes and deletes users", async ({ 
   await memberContext.close();
   await adminContext.close();
 });
+
+// The balancer's question: unauthenticated, JSON, 200 while the node serves
+// and its read models keep up with the store.
+test("the node says it is ready, and how far its read models trail", async ({ request }) => {
+  const response = await request.get("/ready");
+  expect(response.status()).toBe(200);
+  expect(response.headers()["cache-control"]).toBe("no-store");
+  const body = await response.json();
+  expect(body.ready).toBe(true);
+  expect(body.serving).toBe(true);
+  expect(body.node).toBe("serving");
+  expect(typeof body.lag_seconds).toBe("number");
+  const names = body.read_models.map((lag: { name: string }) => lag.name);
+  expect(names).toContain("catalog");
+  expect(names).toContain("orders");
+});

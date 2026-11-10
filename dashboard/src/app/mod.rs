@@ -25,8 +25,8 @@ use topcoat::{
     icon::icon,
     mail::RouterBuilderMailExt,
     router::{
-        BodyLimit, Router, RouterBuilderDirectoryExt, RouterBuilderDiscoverExt, TrustedProxies,
-        href, module_router, page, query_params,
+        BodyLimit, Method, RouteFn, Router, RouterBuilderDirectoryExt, RouterBuilderDiscoverExt,
+        TrustedProxies, href, module_router, page, query_params,
     },
     runtime::RouterBuilderRuntimeExt,
     session::{RouterBuilderSessionExt, SessionConfig},
@@ -97,6 +97,8 @@ pub struct Services {
     pub store: Arc<StoreConnections>,
     /// The subscriptions this node runs, for the cluster page.
     pub workers: crate::workers::Workers,
+    /// What `/ready` answers the balancer.
+    pub readiness: Arc<crate::readiness::Readiness>,
     pub config: Config,
 }
 
@@ -120,6 +122,7 @@ pub fn router(services: Services) -> Router {
         aliexpress,
         store,
         workers,
+        readiness,
         config,
     } = services;
     // The bundle sits next to the binary; `topcoat dev` writes it after every
@@ -137,6 +140,13 @@ pub fn router(services: Services) -> Router {
 
     module_router!()
         .discover()
+        // Whether to send traffic here, for the balancer: unauthenticated,
+        // never cached (`readiness.rs`).
+        .route(RouteFn::new(
+            Method::GET,
+            "/ready",
+            crate::readiness::ready_route,
+        ))
         // Product pictures: public, unauthenticated, cached forever. An id is
         // an unguessable ULID and the file at an address never changes.
         .serve_dir(MEDIA_ROUTE, media.dir().to_path_buf())
@@ -174,6 +184,7 @@ pub fn router(services: Services) -> Router {
         .app_context(aliexpress)
         .app_context(store)
         .app_context(workers)
+        .app_context(readiness)
         .app_context(limits)
         // The transport behind `topcoat::mail::send`, and who the codes come from.
         .mail(mailer.transport)
