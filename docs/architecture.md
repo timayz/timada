@@ -205,6 +205,16 @@ by construction.
    that fill it, and leaves a `catch-up` mark so the next `serve` catches up
    before it listens; on a cluster, one node at a time, the others serving
    meanwhile. The
+   `GET /ready` (`readiness.rs`) tells the balancer whether to send traffic here:
+   200 while the node takes writes and no read model trails the store by more
+   than `monitoring.ready_lag_secs`, 503 otherwise, the body saying how far each
+   read model trails (its subscription's recorded lag, raised to the age of the
+   store's newest event when a worker stopped acknowledging). A node back from a
+   night away, or one that is catching up after a copy or a `rebuild`, is left
+   out until it reads low. `monitoring.metrics_listen` adds an internal port
+   with `/metrics` (`metrics.rs`: Prometheus text with the same figures, the
+   workers by state, the writes kept for absent nodes, the store connections by
+   tenant and evento's counters, every series labelled by node) and `/ready`. The
    `rejoin` command sets the same mark by hand, for a lost store file (delete the
    file first: an empty journal comes back under the node's own id through evento's
    amnesia fence). A node back before anything was tidied up past it is simply waited

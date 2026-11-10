@@ -36,7 +36,9 @@ http:
           - url: "http://host.docker.internal:3001"
           - url: "http://host.docker.internal:3002"
         healthCheck:
-          path: /auth/login
+          # 503 while a node's read models trail the store (one catching up
+          # after a restart, a copy or a rebuild): it is left out meanwhile.
+          path: /ready
           interval: 2s
           timeout: 1s
     # The storefront (`make storefront`).
