@@ -197,6 +197,55 @@ impl Sending {
     }
 }
 
+/// Where a mail stands, as a read model keeps it in one word and a page
+/// reads it: [`Sending`] folded down to what a person needs to know.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    /// Recorded, not handed to a mail server yet.
+    Sending,
+    /// A send failed for a reason worth a retry; the next try waits.
+    Retrying,
+    Sent,
+    /// The mail server refused the address for good.
+    Undeliverable,
+    /// Given up on: every try failed.
+    Failed,
+}
+
+impl Status {
+    pub fn of(sending: &Sending) -> Self {
+        match sending {
+            Sending::Pending | Sending::Claimed { .. } => Self::Sending,
+            Sending::Deferred { .. } => Self::Retrying,
+            Sending::Sent => Self::Sent,
+            Sending::Undeliverable { .. } => Self::Undeliverable,
+            Sending::Failed { .. } => Self::Failed,
+        }
+    }
+
+    /// The column's value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Sending => "sending",
+            Self::Retrying => "retrying",
+            Self::Sent => "sent",
+            Self::Undeliverable => "undeliverable",
+            Self::Failed => "failed",
+        }
+    }
+
+    /// `Sending` for anything the column should not hold.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "retrying" => Self::Retrying,
+            "sent" => Self::Sent,
+            "undeliverable" => Self::Undeliverable,
+            "failed" => Self::Failed,
+            _ => Self::Sending,
+        }
+    }
+}
+
 /// How a send went, as the node that made it reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome<'a> {

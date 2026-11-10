@@ -1,12 +1,13 @@
 mod common;
 
 use common::*;
-use timada_orders::HOLD_REMINDER_BEFORE_SECS;
+use timada_core::{Claimant, MailStatus};
 use timada_orders::{
     Command, OrderFilter, OrderStatus, cart_refused_returns, count_orders, fulfilled_between,
     hold_reminders_due, open_carts, order_mails, order_state, orders_of_email, orders_of_tenant,
     payments_due, product_ever_ordered, read_model_subscription,
 };
+use timada_orders::{HOLD_REMINDER_BEFORE_SECS, ORDER_MAIL_WINDOW_SECS};
 
 #[tokio::test]
 async fn orders_and_carts_are_listed() {
@@ -333,17 +334,49 @@ async fn an_orders_row_carries_the_order_whole_with_its_mails_and_refused_return
         .fulfil_order(ALICE, &placed.order_id, Some("6A1".to_owned()), None)
         .await
         .unwrap();
+    let now = 1_700_000_000;
     assert!(
         orders
             .claim_order_mail(
                 &placed.order_id,
                 "order_confirmation",
-                "ada@example.org",
-                DASHBOARD
+                now + ORDER_MAIL_WINDOW_SECS,
+                Claimant {
+                    node: DASHBOARD,
+                    now,
+                },
             )
             .await
             .unwrap()
     );
+    orders
+        .record_order_mail_sent(&placed.order_id, "order_confirmation")
+        .await
+        .unwrap();
+    assert!(
+        orders
+            .claim_order_mail(
+                &placed.order_id,
+                "order_cancelled",
+                now + ORDER_MAIL_WINDOW_SECS,
+                Claimant {
+                    node: DASHBOARD,
+                    now,
+                },
+            )
+            .await
+            .unwrap()
+    );
+    orders
+        .record_order_mail_not_sent(
+            &placed.order_id,
+            "order_cancelled",
+            DASHBOARD,
+            "connection refused",
+            now,
+        )
+        .await
+        .unwrap();
 
     for _ in 0..2 {
         read_model_subscription::<evento::Turso>(pool.clone())
@@ -372,9 +405,17 @@ async fn an_orders_row_carries_the_order_whole_with_its_mails_and_refused_return
     );
 
     let mails = order_mails(&pool, TENANT, &placed.order_id).await.unwrap();
-    assert_eq!(mails.len(), 1);
-    assert_eq!(mails[0].mail, "order_confirmation");
-    assert!(mails[0].mailed_at > 0);
+    assert_eq!(mails.len(), 2);
+    let sent = mails
+        .iter()
+        .find(|m| m.mail == "order_confirmation")
+        .unwrap();
+    assert_eq!(sent.status(), MailStatus::Sent);
+    assert!(sent.sent_at.is_some_and(|at| at > 0));
+    let retrying = mails.iter().find(|m| m.mail == "order_cancelled").unwrap();
+    assert_eq!(retrying.status(), MailStatus::Retrying);
+    assert_eq!((retrying.attempts, retrying.sent_at), (1, None));
+    assert_eq!(retrying.reason, "connection refused");
 
     assert_eq!(
         cart_refused_returns(&pool, TENANT, &cart_id).await.unwrap(),

@@ -55,6 +55,13 @@ pub fn message_notification_id(message_id: &str) -> String {
     evento::hash_ids(vec!["message-notification", message_id])
 }
 
+/// How long after a message arrives its notice is still worth sending: a
+/// day. Longer than the retry schedule of a send
+/// ([`timada_core::RETRY_DELAYS_SECS`], about eighteen hours in all), so a
+/// mail server down for a while gets every retry; past it the message is
+/// history (a node replaying its events), and the inbox shows it anyway.
+pub const MESSAGE_NOTICE_WINDOW_SECS: u64 = 24 * 60 * 60;
+
 /// The canonical form of an address: trimmed, lower-cased, one `@` with
 /// something on both sides, nothing that is not printable. (The orders,
 /// identity and tenancy contexts have the same rule; the crates do not
