@@ -19,6 +19,8 @@ mod config;
 mod db;
 #[path = "../src/mailroom/schema.rs"]
 mod mailroom;
+#[path = "../src/media/schema.rs"]
+mod media;
 #[path = "../src/peers.rs"]
 mod peers;
 #[path = "../src/rate_limit.rs"]

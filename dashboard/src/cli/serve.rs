@@ -33,6 +33,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 
     let peers = crate::peers::Peers::from_cluster(config.cluster.as_ref())?.map(Arc::new);
     let media = Arc::new(crate::media::Media::new(&config.media, peers.clone()));
+    // The pictures this node lacks are fetched off the subscriptions'
+    // cursors (#468).
+    let fetcher = crate::media::Fetcher::new(media.clone(), db.clone());
     let keys_sealer = crate::seal::keys_sealer(&config);
     if keys_sealer.is_none() {
         tracing::warn!(
@@ -166,6 +169,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         mailroom: mailroom.clone(),
         checkouts: checkouts.clone(),
         media: media.clone(),
+        fetcher: fetcher.clone(),
         keys: keys.clone(),
         payments: payments.clone(),
         aliexpress: aliexpress.clone(),
@@ -221,6 +225,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     }
     let workers = Workers::new(all_workers);
     let mailroom_sends = mailroom.start();
+    let picture_fetches = fetcher.clone().start();
     let checkout_answers = checkouts.clone().start();
     // What the balancer asks before sending traffic here, and what an
     // operator scrapes.
@@ -362,6 +367,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     }
     cluster_watch.abort();
     mailroom_sends.abort();
+    picture_fetches.abort();
     checkout_answers.abort();
     review_requests.abort();
     lapsed_checkouts.abort();
@@ -388,6 +394,8 @@ pub struct Deps {
     /// Where the requests to pay are handed to be answered.
     pub checkouts: Arc<crate::payments::Checkouts>,
     pub media: Arc<crate::media::Media>,
+    /// Where the pictures this node lacks are listed to be fetched.
+    pub fetcher: Arc<crate::media::Fetcher>,
     pub keys: Arc<crate::key_vault::KeyVault>,
     pub payments: Arc<crate::payments::Payments>,
     pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
@@ -414,8 +422,7 @@ enum Kind {
     /// peer, these catch up before the router takes requests.
     ReadModel,
     /// Every region's events, for an effect each node has for itself: its
-    /// copies of pictures, logos and keys. The builder says
-    /// `.any_routing_key()`.
+    /// copies of the keys. The builder says `.any_routing_key()`.
     PerNode,
     /// The node's own region (the executor's default routing key, which the
     /// builder leaves alone), and each region of `server.also_serves` as a
@@ -492,8 +499,8 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
         timada_tenancy::invitation_grants_subscription(d.store.clone())
     }),
     // Nor this: it fetches the shops' mail logos this node lacks.
-    ("mail logos", Kind::PerNode, |d| {
-        crate::media::logo_subscription(d.media.clone())
+    ("mail logos", Kind::ReadModel, |d| {
+        crate::media::logo_subscription(d.fetcher.clone())
     }),
     ("catalog", Kind::ReadModel, |d| {
         timada_catalog::read_model_subscription(d.db.clone())
@@ -557,8 +564,8 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
             d.store.clone(),
         )
     }),
-    ("pictures", Kind::PerNode, |d| {
-        crate::media::subscription(d.media.clone())
+    ("pictures", Kind::ReadModel, |d| {
+        crate::media::subscription(d.fetcher.clone())
     }),
     ("shopper keys", Kind::PerNode, |d| {
         crate::shopper_keys::subscription(d.keys.clone())
@@ -707,16 +714,11 @@ mod tests {
                 "pages",
                 "invoicing",
                 "AliExpress",
-            ]
-            .contains(name);
-            let per_node = [
                 "mail logos",
                 "pictures",
-                "shopper keys",
-                "message keys",
-                "newsletter keys",
             ]
             .contains(name);
+            let per_node = ["shopper keys", "message keys", "newsletter keys"].contains(name);
             assert_eq!(*kind == Kind::ReadModel, read_model, "{name} is {kind:?}");
             assert_eq!(*kind == Kind::PerNode, per_node, "{name} is {kind:?}");
         }
