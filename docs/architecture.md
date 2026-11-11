@@ -140,8 +140,9 @@ data/timada.db            the store: every tenant's events (the platform's own i
                           orders_orders, ...), each row carrying its tenant id, derived
                           from the events and rebuilt from them when emptied; `-wal`
                           and `-log` next to it belong with it
-data/media/<id>/          one per tenant: the product pictures and the review photos,
-                          named <image id>.<ext>
+data/media/<id>/          one per tenant: the product pictures, the review photos, the
+                          pages' pictures and the mail logo, each as two WebP renditions,
+                          400/<image id>.webp and 1200/<image id>.webp
 data/shopper-keys/<id>/   one per tenant: each shopper account's and each contact message's
                           key, sealed, named <key id> (<key id>.gone once destroyed)
 <merchant app>/storefront.db  the shop's replica (`STORE_DB`): subscription cursor,
@@ -488,31 +489,41 @@ another shopper's payment, and the cart then refuses it.
 
 ## Product pictures
 
-The event store records what a picture is, never its bytes: an id, the format, the
-size, what it shows. The file lands in `media.dir/<tenant>/<image id>.<ext>` and is
-served at `/media/...` by a directory route with `Cache-Control: immutable`, since a
-new picture is a new id and an address never changes what it holds. There is no
+The event store records what a picture is, never its bytes. The upload itself is not
+kept either: the node that takes it decodes it (JPEG, PNG, WebP or GIF, at most 8 MiB
+and 25 million pixels, turned the way its EXIF orientation says) and renders two WebP
+files from it, a listing rendition of at most 400 px on its longest side and a page
+rendition of at most 1200 px, never enlarging (`timada_core::Picture`,
+`dashboard/src/media.rs`). The event records the upload's dimensions and, for each
+rendition, its dimensions, its size and the SHA-256 of its bytes. So a shop's pictures
+weigh a few tens of kilobytes each whatever the merchant uploaded, a listing sends a
+browser the small one, and a product page sends the large one with a `srcset` a phone
+takes the small one from (`timada_storefront::product_image`, `large: true`). The files
+land in `media.dir/<tenant>/400/<image id>.webp` and `.../1200/<image id>.webp` and
+are served at `/media/...` by a directory route with `Cache-Control: immutable`, since
+a new picture is a new id and an address never changes what it holds. There is no
 authentication on it: an id is an unguessable ULID, and a shopper's browser has no
-session on this node.
+session on this node. A page's body names a picture by `<image id>.webp`;
+`timada_pages::render_markdown` serves the page rendition for it.
 
-`dashboard/src/media.rs` writes and deletes the files. An upload stores the file and
-then commits, deleting it again if the commit fails; a removal commits and then
-deletes. So a failure leaves a file nobody references rather than a product pointing
-at nothing. `media.public_url` is the address a shopper loads a picture from, shown on
-each tenant's API keys page for its storefront to be configured with.
+An upload renders (off the async threads, two at a time), stores the files, and then
+commits, deleting them again if the commit fails; a removal commits and then deletes.
+So a failure leaves files nobody references rather than a product pointing at nothing.
+`media.public_url` is the address a shopper loads a picture from, shown on each
+tenant's API keys page for its storefront to be configured with.
 
 With several nodes, every node keeps every picture, so a node going down takes none
 with it and `media.public_url` can point at any of them or at a balancer in front.
-The node taking an upload stores the file, copies it to the other nodes
-(`PUT /cluster/media/<tenant>/<file>` on their `cluster.web_peers` address, with
-`cluster.secret` as a bearer token) and commits only once a majority of the cluster
-holds it, the same majority the commit itself needs; short of that the upload is
-refused and the copies are left unreferenced. Copies to the slower nodes carry on
-after the commit. Each node also runs a per-tenant subscription
-(`timada-dashboard/media`) that fetches from a peer's `/media` any picture added that
-it lacks (a node that was down during the upload, or a new one replaying the stream)
-and deletes the pictures removed. It only runs while the tenant is open on that node,
-so a node that missed a picture catches up the next time the tenant opens there.
+The node taking an upload stores the renditions, copies each to the other nodes
+(`PUT /cluster/media/<tenant>/<400|1200>/<file>` on their `cluster.web_peers` address,
+with `cluster.secret` as a bearer token; a copy is taken only if it is WebP and no
+heavier than a rendition gets) and commits only once a majority of the cluster holds
+both, the same majority the commit itself needs; short of that the upload is refused
+and the copies are left unreferenced. Copies to the slower nodes carry on after the
+commit. Each node also runs a per-node subscription (`timada-dashboard/media`) that
+fetches from a peer's `/media` any picture added that it lacks (a node that was down
+during the upload, or a new one replaying the stream), keeping a copy only if its size
+and digest are the ones the event recorded, and deletes the pictures removed.
 
 ## Reviews
 

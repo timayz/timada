@@ -20,11 +20,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredImage {
     pub image_id: String,
-    /// Lowercase, no dot.
-    pub ext: String,
-    pub size: u64,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
+    pub picture: timada_core::Picture,
 }
 
 /// Where a product's pictures go: the host keeps the bytes where its
@@ -436,10 +432,7 @@ async fn fill_product<E: Executor>(
                 id,
                 AddImage {
                     image_id: stored.image_id.clone(),
-                    ext: stored.ext.clone(),
-                    size: stored.size,
-                    width: stored.width,
-                    height: stored.height,
+                    picture: stored.picture,
                     alt: seed.images[index].alt.clone(),
                 },
             )

@@ -896,10 +896,7 @@ async fn a_variant_shows_one_of_the_products_pictures() {
         &product_id,
         AddImage {
             image_id: "img-beige".into(),
-            ext: "png".into(),
-            size: 1024,
-            width: None,
-            height: None,
+            picture: test_picture(),
             alt: "The beige one".into(),
         },
     )

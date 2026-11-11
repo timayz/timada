@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use timada_tenancy::{
-    DefineRole, MAX_MAIL_SERVERS, PickMailServers, SaveMailServer, SaveMailTemplate,
+    DefineRole, MAX_MAIL_SERVERS, MailLogo, PickMailServers, SaveMailServer, SaveMailTemplate,
     SetMailBranding, SetMailLanguages, ShopMailKind, TenancyError,
 };
 
@@ -483,8 +483,7 @@ async fn an_owner_brands_the_mails_and_clears_it() {
         &alice,
         &tenant.id,
         SetMailBranding {
-            logo_file: Some("01LOGO.png".into()),
-            logo_size: 1234,
+            logo: Some(logo("01LOGO")),
             accent: Some(" #C0FFEE ".into()),
             footer: Some("Acme SARL\r\nParis ".into()),
         },
@@ -493,8 +492,7 @@ async fn an_owner_brands_the_mails_and_clears_it() {
     .unwrap();
     let state = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
     let branding = state.mail_branding.unwrap();
-    assert_eq!(branding.logo_file.as_deref(), Some("01LOGO.png"));
-    assert_eq!(branding.logo_size, 1234);
+    assert_eq!(branding.logo, Some(logo("01LOGO")));
     assert_eq!(branding.accent.as_deref(), Some("#c0ffee"));
     assert_eq!(branding.footer.as_deref(), Some("Acme SARL\nParis"));
     assert_eq!(branding.set_by, alice);
@@ -509,7 +507,14 @@ async fn an_owner_brands_the_mails_and_clears_it() {
             ..Default::default()
         },
         SetMailBranding {
-            logo_file: Some("../secret.png".into()),
+            logo: Some(logo("../secret")),
+            ..Default::default()
+        },
+        SetMailBranding {
+            logo: Some(MailLogo {
+                picture: timada_core::Picture::default(),
+                ..logo("01LOGO")
+            }),
             ..Default::default()
         },
     ] {

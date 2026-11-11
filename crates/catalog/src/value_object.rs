@@ -49,11 +49,12 @@ pub const FALLBACK_CATEGORY_SLUG: &str = "category";
 pub const MAX_CATEGORIES_PER_PRODUCT: usize = 10;
 /// How many pictures one product carries, at most.
 pub const MAX_IMAGES_PER_PRODUCT: usize = 20;
-/// The largest picture, in bytes.
+/// The largest upload, in bytes. What is kept of it is smaller: the two
+/// renditions of [`timada_core::Picture`].
 pub const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_ALT_LEN: usize = 200;
-/// The picture formats a browser shows everywhere, as `(extension, type)`.
-/// The extension is what the stored file is named with.
+/// The picture formats an upload may come in, as `(extension, type)`. What
+/// is kept is always WebP ([`timada_core::RENDITION_EXT`]).
 pub const IMAGE_FORMATS: &[(&str, &str)] = &[
     ("jpg", "image/jpeg"),
     ("png", "image/png"),
@@ -313,14 +314,6 @@ pub fn new_part_id() -> String {
 /// address, so it is a ULID: unguessable, and sortable by when it was made.
 pub fn new_image_id() -> String {
     ulid::Ulid::generate().to_string()
-}
-
-/// The media type of a known extension.
-pub fn image_mime(ext: &str) -> Option<&'static str> {
-    IMAGE_FORMATS
-        .iter()
-        .find(|(known, _)| *known == ext)
-        .map(|(_, mime)| *mime)
 }
 
 /// Trims the text describing a picture and checks it is at most 200

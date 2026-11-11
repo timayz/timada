@@ -196,7 +196,8 @@ test("a shop gives all its mails a logo, an accent colour and a footer", async (
   const branded = await mailTo(page.request, first, `Your sign-in code for ${name}`);
   expect(branded.html).toContain("color: #c0ffee;");
   expect(branded.html).toContain(`${name} SARL`);
-  expect(branded.html).toMatch(/<img src="[^"]+\.png"/);
+  // The listing rendition, in a mail whose slashes are escaped.
+  expect(branded.html).toMatch(/<img src="[^"]+(\/|&#x2f;)400(\/|&#x2f;)[0-9A-Z]{26}\.webp"/);
 
   await page.goto(`/t/${slug}/mail`);
   await page.getByRole("button", { name: "Back to the plain look" }).click();

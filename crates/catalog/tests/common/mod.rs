@@ -75,3 +75,19 @@ pub async fn create_child(
     .await
     .unwrap()
 }
+
+/// A picture as the host records one: two renditions of a 3000 × 2250 upload.
+pub fn test_picture() -> timada_core::Picture {
+    let rendition = |side: u32, size: u64| timada_core::RenditionFile {
+        width: side,
+        height: side * 3 / 4,
+        size,
+        sha256: [side as u8; 32],
+    };
+    timada_core::Picture {
+        width: 3000,
+        height: 2250,
+        listing: rendition(400, 20_480),
+        page: rendition(1200, 122_880),
+    }
+}

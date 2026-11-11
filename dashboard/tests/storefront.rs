@@ -43,6 +43,7 @@ use timada_catalog::{
     AddImage, CreateCategory, CreateProduct, DefineVariant, OptionSelection, categories_of_tenant,
 };
 use timada_core::db::Db;
+use timada_core::{Picture, Rendition, RenditionFile};
 use timada_storefront::{
     CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
     StoreUnavailable, SubscriptionState, category_ancestors, find_category, is_unavailable,
@@ -841,10 +842,7 @@ async fn a_store_carries_the_gallery_with_the_address_it_is_loaded_from() {
                 &mat,
                 AddImage {
                     image_id: id.into(),
-                    ext: "png".into(),
-                    size: 4096,
-                    width: Some(1200),
-                    height: Some(800),
+                    picture: test_picture(1200, 800),
                     alt: alt.into(),
                 },
             )
@@ -871,19 +869,29 @@ async fn a_store_carries_the_gallery_with_the_address_it_is_loaded_from() {
         .await
         .unwrap()
         .unwrap();
-    // The rows hold the file name; the address is added when a page reads it.
+    // The rows hold the picture's id; the addresses of its two renditions
+    // are added when a page reads it.
     assert_eq!(product.images[0].url, "");
     product.fill_urls(store.media_url());
-    assert_eq!(product.images[0].file, "img-front.png");
     assert_eq!(
-        product.images[0].url, "https://cdn.example/media/acme/img-front.png",
+        product.images[0].url, "https://cdn.example/media/acme/1200/img-front.webp",
         "the trailing slash of the configured address is dropped"
     );
+    assert_eq!(
+        product.images[0].thumb_url,
+        "https://cdn.example/media/acme/400/img-front.webp"
+    );
     assert_eq!(product.images[0].alt, "Seen from the front");
-    assert_eq!(product.images[0].mime, "image/png");
     assert_eq!(
         (product.images[0].width, product.images[0].height),
-        (Some(1200), Some(800))
+        (1200, 800)
+    );
+    assert_eq!(
+        (
+            product.images[0].thumb_width,
+            product.images[0].thumb_height
+        ),
+        (400, 266)
     );
     assert_eq!(
         product.image().map(|i| i.id.as_str()),
@@ -1933,11 +1941,7 @@ async fn a_store_shows_the_published_reviews_and_sorts_by_them() {
         body: format!("{rating} stars, honestly."),
         photos: vec![timada_reviews::ReviewPhoto {
             id: format!("photo-{order}-{rating}"),
-            ext: "png".into(),
-            mime: "image/png".into(),
-            size: 68,
-            width: Some(1),
-            height: Some(1),
+            picture: test_picture(1, 1),
         }],
     };
     paid_order(
@@ -2011,8 +2015,15 @@ async fn a_store_shows_the_published_reviews_and_sorts_by_them() {
     assert_eq!(
         page.items[0].photos[0].url,
         format!(
-            "https://media.example/acme/{}",
-            page.items[0].photos[0].file
+            "https://media.example/acme/1200/{}.webp",
+            page.items[0].photos[0].id
+        )
+    );
+    assert_eq!(
+        page.items[0].photos[0].thumb_url,
+        format!(
+            "https://media.example/acme/400/{}.webp",
+            page.items[0].photos[0].id
         )
     );
     assert!(store.reviews_of(&bowl, 1).await.unwrap().items.is_empty());
@@ -2501,10 +2512,7 @@ async fn a_store_shows_the_published_pages() {
             &legal,
             timada_pages::AddPageImage {
                 image_id: image.clone(),
-                ext: "png".into(),
-                size: 10,
-                width: None,
-                height: None,
+                picture: test_picture(800, 600),
             },
         )
         .await
@@ -2514,7 +2522,7 @@ async fn a_store_shows_the_published_pages() {
             "alice",
             &legal,
             "Mentions légales",
-            &format!("Édité par Acme.\n\n![Le siège]({image}.png)"),
+            &format!("Édité par Acme.\n\n![Le siège]({image}.webp)"),
         )
         .await
         .unwrap();
@@ -2563,7 +2571,7 @@ async fn a_store_shows_the_published_pages() {
         .unwrap();
     assert!(
         legal_page.html.contains(&format!(
-            r#"src="https://cdn.example/media/acme/{image}.png""#
+            r#"src="https://cdn.example/media/acme/1200/{image}.webp""#
         )),
         "{}",
         legal_page.html
@@ -2965,4 +2973,37 @@ async fn a_dashboard_that_is_away_is_told_as_unavailable_not_as_a_failure() {
     behind_proxy.shutdown().await;
     store.shutdown().await;
     h.finish().await;
+}
+
+/// A picture as the host records one: an upload of `width` × `height`,
+/// with its two renditions within their sides.
+fn test_picture(width: u32, height: u32) -> Picture {
+    let rendition = |rendition: Rendition| {
+        let side = rendition.max_side();
+        let (w, h) = if width <= side && height <= side {
+            (width, height)
+        } else if width >= height {
+            (
+                side,
+                (u64::from(side) * u64::from(height) / u64::from(width)) as u32,
+            )
+        } else {
+            (
+                (u64::from(side) * u64::from(width) / u64::from(height)) as u32,
+                side,
+            )
+        };
+        RenditionFile {
+            width: w,
+            height: h,
+            size: u64::from(w) * u64::from(h) / 8 + 1,
+            sha256: [side as u8; 32],
+        }
+    };
+    Picture {
+        width,
+        height,
+        listing: rendition(Rendition::Listing),
+        page: rendition(Rendition::Page),
+    }
 }

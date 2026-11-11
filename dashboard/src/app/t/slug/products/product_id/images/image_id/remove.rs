@@ -24,17 +24,8 @@ pub async fn remove(cx: &Cx) -> Result<SeeOther> {
         Tab::Pictures,
         "Picture removed.",
         async |catalog, actor, id| {
-            let file = catalog.load_product(id).await?.and_then(|product| {
-                product
-                    .images
-                    .iter()
-                    .find(|image| image.id == image_id)
-                    .map(|image| image.file())
-            });
             catalog.remove_image(actor, id, &image_id).await?;
-            if let Some(file) = file {
-                media.remove(&tenant_id, &file).await;
-            }
+            media.remove_image(&tenant_id, &image_id).await;
             Ok(())
         },
     )

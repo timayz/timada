@@ -5,6 +5,7 @@ use crate::aggregator::{
     MailServerDeleted, MailServersPicked, MailTemplateReset, MailTemplateSaved,
     MailTemplateTextSaved,
 };
+use crate::command::MailLogo;
 use crate::error::TenancyError;
 use crate::languages::{is_language, language_rank};
 use crate::mail_template::{ShopMailKind, validate, validate_text};
@@ -69,9 +70,8 @@ fn normalize_mail_server(cmd: SaveMailServer) -> Result<SaveMailServer, TenancyE
 /// The look all of a shop's mails share. Blank parts are unset.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SetMailBranding {
-    /// A picture already in the tenant's media, `<id>.<ext>`.
-    pub logo_file: Option<String>,
-    pub logo_size: u64,
+    /// A picture already in the tenant's media.
+    pub logo: Option<MailLogo>,
     pub accent: Option<String>,
     pub footer: Option<String>,
 }
@@ -106,15 +106,12 @@ pub fn parse_accent(accent: &str) -> Option<String> {
         .then(|| format!("#{}", hex.to_ascii_lowercase()))
 }
 
-/// `<id>.<ext>`: letters and digits on each side, so it names one file in
-/// the tenant's media and nothing above it.
-fn is_media_file(file: &str) -> bool {
-    file.split_once('.').is_some_and(|(id, ext)| {
-        (1..=64).contains(&id.len())
-            && (1..=5).contains(&ext.len())
-            && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
-            && ext.bytes().all(|byte| byte.is_ascii_alphanumeric())
-    })
+/// A logo whose id names one file in the tenant's media and nothing above
+/// it (letters and digits), and whose record describes files.
+fn is_logo(logo: &MailLogo) -> bool {
+    (1..=64).contains(&logo.id.len())
+        && logo.id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        && logo.picture.is_valid()
 }
 
 /// A language code from the list, lowercased; `InvalidMailLanguages`
@@ -454,10 +451,7 @@ impl<E: Executor> super::Command<E> {
         if footer
             .as_ref()
             .is_some_and(|footer| footer.chars().count() > MAX_MAIL_FOOTER_LEN)
-            || cmd
-                .logo_file
-                .as_deref()
-                .is_some_and(|file| !is_media_file(file))
+            || cmd.logo.as_ref().is_some_and(|logo| !is_logo(logo))
         {
             return Err(TenancyError::InvalidMailBranding);
         }
@@ -465,17 +459,11 @@ impl<E: Executor> super::Command<E> {
         if !tenant.can(actor_user_id, PERMISSION_MAIL_MANAGE) {
             return Err(TenancyError::Forbidden);
         }
-        let logo_size = if cmd.logo_file.is_some() {
-            cmd.logo_size
-        } else {
-            0
-        };
         tenant
             .write()?
             .routing_key_opt(routing_key)
             .event(&MailBrandingSet {
-                logo_file: cmd.logo_file,
-                logo_size,
+                logo: cmd.logo,
                 accent,
                 footer,
                 set_by: actor_user_id.to_owned(),

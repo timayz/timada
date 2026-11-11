@@ -10,6 +10,8 @@
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd, html};
 
+use timada_core::Rendition;
+
 use crate::value_object::is_image_file;
 
 /// The HTML of a page's body. `media_url` is where the shop's pictures are
@@ -28,10 +30,12 @@ pub fn render_markdown(source: &str, media_url: &str) -> String {
             if is_image_file(&dest_url) {
                 Some(Event::Start(Tag::Image {
                     link_type,
+                    // The body names the picture; what is served is its
+                    // page rendition.
                     dest_url: if media_url.is_empty() {
                         dest_url
                     } else {
-                        format!("{media_url}/{dest_url}").into()
+                        format!("{media_url}/{}/{dest_url}", Rendition::Page.dir()).into()
                     },
                     title,
                     id,
@@ -128,7 +132,7 @@ mod tests {
         let html = render_markdown("![The workshop](01JBX0V7Y5B6V9H8K3QWERTYAS.webp)", MEDIA);
         assert!(
             html.contains(
-                r#"<img src="https://media.example.com/acme/01JBX0V7Y5B6V9H8K3QWERTYAS.webp" alt="The workshop">"#
+                r#"<img src="https://media.example.com/acme/1200/01JBX0V7Y5B6V9H8K3QWERTYAS.webp" alt="The workshop">"#
             ),
             "{html}"
         );

@@ -18,7 +18,7 @@ use topcoat::{
     },
 };
 
-use super::{Answer, answer_error, read_upload, refused, sniff_photos, status, with_photos};
+use super::{Answer, answer_error, read_upload, refused, render_photos, status, with_photos};
 
 #[route(POST)]
 pub async fn revise(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Json<Answer>)> {
@@ -30,7 +30,7 @@ pub async fn revise(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Js
     let Some(rating) = upload.rating else {
         return Ok(refused(REVIEW_INVALID_RATING));
     };
-    let Some(photos) = sniff_photos(upload.files) else {
+    let Some(photos) = render_photos(cx, upload.files).await? else {
         return Ok(refused(REVIEW_INVALID_PHOTO));
     };
     let revision = ReviseReview {
@@ -49,7 +49,7 @@ pub async fn revise(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Js
 
     let store = crate::app::store::store(cx, &access);
     let reviews = timada_reviews::Command::new(store.executor().clone(), store.tenant_id());
-    let revised = with_photos(cx, &access, &photos, || async {
+    let revised = with_photos(cx, &access, photos, || async {
         reviews
             .revise_review(STOREFRONT_ACTOR, revision)
             .await

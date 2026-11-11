@@ -168,12 +168,18 @@ pub struct AliexpressAuthorization {
     pub authorized_at: u64,
 }
 
+/// The shop's logo, a picture in the tenant's media: its renditions are
+/// the host's, named after `id`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct MailLogo {
+    pub id: String,
+    pub picture: timada_core::Picture,
+}
+
 /// The look all of a shop's mails share.
 #[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct MailBranding {
-    /// A picture in the tenant's media, `<id>.<ext>`.
-    pub logo_file: Option<String>,
-    pub logo_size: u64,
+    pub logo: Option<MailLogo>,
     /// `#rrggbb`.
     pub accent: Option<String>,
     pub footer: Option<String>,
@@ -890,8 +896,7 @@ async fn on_mail_branding_set(
 ) -> anyhow::Result<()> {
     let data = &event.data;
     tenant.mail_branding = Some(MailBranding {
-        logo_file: data.logo_file.to_owned(),
-        logo_size: data.logo_size,
+        logo: data.logo.to_owned(),
         accent: data.accent.to_owned(),
         footer: data.footer.to_owned(),
         set_by: data.set_by.to_owned(),

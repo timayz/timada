@@ -147,6 +147,7 @@ pub fn describe_error(code: &str) -> &'static str {
         "too_many_images" => "A product carries at most twenty pictures.",
         "unsupported_image" => "Upload a JPEG, PNG, WebP or GIF picture.",
         "image_too_large" => "A picture is at most 8 MiB.",
+        "image_too_big" => "A picture is at most 25 million pixels (5000 × 5000).",
         "no_image" => "Choose a picture to upload.",
         "invalid_alt" => "The text describing a picture is at most 200 characters.",
         "image_not_found" => "This picture is no longer on the product.",

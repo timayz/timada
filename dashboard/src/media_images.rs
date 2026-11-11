@@ -1,6 +1,7 @@
 //! Pictures an import brings in (from a snapshot's files, or fetched from
-//! where the shop it came from serves them), kept where this node serves
-//! pictures from and on a majority of the cluster, like an upload.
+//! where the shop it came from serves them), rendered and kept where this
+//! node serves pictures from and on a majority of the cluster, like an
+//! upload.
 
 use std::sync::Arc;
 
@@ -38,41 +39,27 @@ impl MediaImages {
         }
     }
 
-    /// Checks the bytes are a picture the shop takes, then stores them
-    /// under a fresh id; `what` names them in the log.
+    /// Renders the bytes into what the shop keeps, then stores them under a
+    /// fresh id; `what` names them in the log. `None` when they are not a
+    /// picture the shop takes.
     async fn keep(&self, bytes: bytes::Bytes, what: &str) -> anyhow::Result<Option<StoredImage>> {
-        if bytes.is_empty() || bytes.len() as u64 > MAX_IMAGE_BYTES {
-            tracing::warn!(
-                what,
-                size = bytes.len(),
-                "picture empty or too large, left out"
-            );
+        if bytes.is_empty() {
+            tracing::warn!(what, "picture empty, left out");
             return Ok(None);
         }
-        let Some(sniffed) = Media::sniff(&bytes) else {
-            tracing::warn!(what, "not a picture the shop accepts, left out");
-            return Ok(None);
+        let rendered = match self.media.render(bytes).await? {
+            Ok(rendered) => rendered,
+            Err(refusal) => {
+                tracing::warn!(what, ?refusal, "not a picture the shop accepts, left out");
+                return Ok(None);
+            }
         };
         let image_id = new_image_id();
-        let file = format!("{image_id}.{}", sniffed.ext);
-        self.media
-            .store(&self.tenant_id, &image_id, sniffed.ext, &bytes)
-            .await?;
-        if let Err(err) = self
+        let picture = self
             .media
-            .replicate(&self.tenant_id, &file, bytes.to_vec())
-            .await
-        {
-            self.media.remove(&self.tenant_id, &file).await;
-            return Err(err);
-        }
-        Ok(Some(StoredImage {
-            image_id,
-            ext: sniffed.ext.to_owned(),
-            size: bytes.len() as u64,
-            width: sniffed.width,
-            height: sniffed.height,
-        }))
+            .keep(&self.tenant_id, &image_id, rendered)
+            .await?;
+        Ok(Some(StoredImage { image_id, picture }))
     }
 }
 
@@ -102,10 +89,7 @@ impl Images for MediaImages {
     fn discard<'a>(&'a self, image: &'a StoredImage) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             self.media
-                .remove(
-                    &self.tenant_id,
-                    &format!("{}.{}", image.image_id, image.ext),
-                )
+                .remove_image(&self.tenant_id, &image.image_id)
                 .await;
         })
     }

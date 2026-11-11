@@ -57,6 +57,7 @@ use crate::value_object::{
     DeliveryDays, MAX_CATEGORY_DEPTH, OptionSelection, category_slug_id, format_money,
     product_sku_id, product_slug_id, sku_key,
 };
+use timada_core::Picture;
 
 /// How many times a claim or a release reads its index entry again after
 /// losing a race for it.
@@ -151,26 +152,14 @@ impl fmt::Display for ProductStatus {
     }
 }
 
-/// A picture of a product. The bytes live outside the store; `file` is what
-/// the host serves them under.
+/// A picture of a product. The bytes live outside the store, in the two
+/// renditions `picture` describes, named after `id`
+/// ([`Picture::file`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductImage {
     pub id: String,
-    /// Lowercase, no dot.
-    pub ext: String,
-    pub mime: String,
-    /// In bytes.
-    pub size: u64,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
+    pub picture: Picture,
     pub alt: String,
-}
-
-impl ProductImage {
-    /// The file name the bytes are stored under: `<id>.<ext>`.
-    pub fn file(&self) -> String {
-        format!("{}.{}", self.id, self.ext)
-    }
 }
 
 /// A way a product varies, and the values it takes.
@@ -643,11 +632,7 @@ async fn on_image_added(
 ) -> anyhow::Result<()> {
     product.images.push(ProductImage {
         id: event.data.image_id.to_owned(),
-        ext: event.data.ext.to_owned(),
-        mime: event.data.mime.to_owned(),
-        size: event.data.size,
-        width: event.data.width,
-        height: event.data.height,
+        picture: event.data.picture,
         alt: event.data.alt.to_owned(),
     });
     product.updated_at = event.timestamp;

@@ -15,13 +15,6 @@ pub const MAX_SLUG_LEN: usize = 64;
 pub const FALLBACK_SLUG: &str = "page";
 /// How many pictures one page carries, at most.
 pub const MAX_IMAGES_PER_PAGE: usize = 50;
-/// The picture formats a page takes, as `(extension, type)`.
-pub const IMAGE_FORMATS: &[(&str, &str)] = &[
-    ("jpg", "image/jpeg"),
-    ("png", "image/png"),
-    ("webp", "image/webp"),
-    ("gif", "image/gif"),
-];
 
 /// A fresh id for a page: a ULID.
 pub fn new_page_id() -> String {
@@ -91,25 +84,10 @@ pub fn slugify(title: &str) -> String {
     timada_core::slugify(title, MAX_SLUG_LEN, FALLBACK_SLUG)
 }
 
-/// The type of a picture format the page takes, by extension.
-pub fn image_mime(ext: &str) -> Option<&'static str> {
-    IMAGE_FORMATS
-        .iter()
-        .find(|(known, _)| *known == ext)
-        .map(|(_, mime)| *mime)
-}
-
-/// Whether `file` is the name a page's picture is kept under:
-/// `{ULID}.{ext}` with an extension a page takes.
+/// Whether `file` is the name a page's body knows a picture by:
+/// `{ULID}.webp` ([`timada_core::is_picture_file`]).
 pub fn is_image_file(file: &str) -> bool {
-    let Some((id, ext)) = file.split_once('.') else {
-        return false;
-    };
-    id.len() == 26
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-        && image_mime(ext).is_some()
+    timada_core::is_picture_file(file)
 }
 
 /// How many messages the top bar holds, shown or hidden.

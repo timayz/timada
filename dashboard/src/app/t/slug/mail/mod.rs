@@ -11,6 +11,8 @@ pub mod templates;
 
 use std::sync::Arc;
 
+use timada_core::Rendition;
+
 use timada_identity::UserState;
 use timada_tenancy::{
     LANGUAGES, MAIL_SECURITY_STARTTLS, MAX_MAIL_FOOTER_LEN, MAX_MAIL_SERVERS, MailServerSettings,
@@ -131,9 +133,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let labels = user_labels(cx, &editors).await?;
     let branding = tenant.mail_branding.clone().unwrap_or_default();
     let logo_url = branding
-        .logo_file
-        .as_deref()
-        .map(|file| app_context::<Arc<Media>>(cx).url(&tenant.id, file));
+        .logo
+        .as_ref()
+        .map(|logo| app_context::<Arc<Media>>(cx).url(&tenant.id, &logo.id, Rendition::Listing));
     let max_footer = MAX_MAIL_FOOTER_LEN.to_string();
     // Each mail, and for each language the shop mails in, who worded it.
     type Wording = (String, &'static str, Option<(String, u64)>);

@@ -27,6 +27,7 @@ use timada_core::db::{
     Connection, Db, FromRow, Value, execute, fetch_all, fetch_optional, params_from_iter,
     search_key,
 };
+use timada_core::{Picture, Rendition};
 
 use crate::aggregator::category::Category;
 use crate::aggregator::stock::StockItem;
@@ -320,7 +321,12 @@ pub async fn upsert_product(
                 Value::from(product.created_by.as_str()),
                 Value::from(product.created_at as i64),
                 Value::from(product.updated_at as i64),
-                Value::from(product.images.first().map(|image| image.file())),
+                Value::from(
+                    product
+                        .images
+                        .first()
+                        .map(|image| Picture::file(&image.id, Rendition::Listing)),
+                ),
                 Value::from(product.images.len() as i64),
                 Value::from(product.price_range().map(|(min, _, _)| min as i64)),
                 Value::from(product.price_range().map(|(_, max, _)| max as i64)),

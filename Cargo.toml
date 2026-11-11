@@ -35,8 +35,14 @@ rand = "0.9"
 casbin = "2.20"
 async-trait = "0.1"
 tokio-rustls = "0.26"
-# Reads a picture's kind and size from its header bytes alone.
+# Reads a picture's kind and size from its header bytes alone, before the
+# whole of it is decoded.
 imagesize = "0.14"
+# Decodes an upload and resizes it into the renditions the shop keeps; the
+# formats a merchant uploads, nothing more.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "rayon"] }
+# Encodes the renditions: lossy WebP, which `image` does not write.
+webp = "0.3"
 # A picture's bytes, shared by the copies sent to the other nodes.
 bytes = "1"
 rcgen = "0.14"

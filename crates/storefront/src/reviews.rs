@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
+use timada_core::Rendition;
 use timada_core::db::{Db, FromRow, Json, Row};
 use topcoat_core::context::Cx;
 use topcoat_core::error::Result;
@@ -29,7 +30,7 @@ use timada_reviews::{SHOPPER_CODES, review_id};
 
 use crate::context::store;
 use crate::error::{gateway_down, into_error, reach, reach_body, store_away};
-use crate::query::Product;
+use crate::query::{Product, rendition_url};
 use crate::store::Store;
 
 /// A published review, as a product page shows it.
@@ -82,25 +83,28 @@ impl Review {
     /// served from, as [`Product::fill_urls`] does.
     pub fn fill_urls(&mut self, base: Option<&str>) {
         for photo in &mut self.photos {
-            photo.url = match base {
-                Some(base) => format!("{base}/{}", photo.file),
-                None => photo.file.clone(),
-            };
+            photo.url = rendition_url(base, &photo.id, Rendition::Page);
+            photo.thumb_url = rendition_url(base, &photo.id, Rendition::Listing);
         }
     }
 }
 
-/// A photo of a review.
+/// A photo of a review, in the two sizes the store keeps it, as a product's
+/// [`Image`](crate::Image).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ReviewPhoto {
     pub id: String,
-    /// `<id>.<ext>`, under the store's picture address.
-    pub file: String,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
+    /// Of the page rendition, in pixels.
+    pub width: u32,
+    pub height: u32,
+    /// Of the listing rendition, in pixels.
+    pub thumb_width: u32,
+    pub thumb_height: u32,
     /// Where a browser loads it from; filled in when a page reads it.
     #[serde(skip)]
     pub url: String,
+    #[serde(skip)]
+    pub thumb_url: String,
 }
 
 /// How many reviews a page shows unless asked otherwise.
@@ -367,12 +371,10 @@ impl Store {
     }
 
     /// Where a browser loads a stored picture from, `file` being
-    /// `<id>.<ext>`: what a page shows a waiting review's photos with.
-    pub fn picture_url(&self, file: &str) -> String {
-        match self.media_url() {
-            Some(base) => format!("{base}/{file}"),
-            None => file.to_owned(),
-        }
+    /// The address of one rendition of a picture of the shop: what a page
+    /// shows a waiting review's photos with.
+    pub fn picture_url(&self, image_id: &str, rendition: Rendition) -> String {
+        rendition_url(self.media_url(), image_id, rendition)
     }
 
     /// The review of `product_id` from `order_id`, if one was handed in,
@@ -451,8 +453,8 @@ pub async fn revise_review(
 }
 
 /// Where a browser loads a stored picture from; see [`Store::picture_url`].
-pub fn picture_url(cx: &Cx, file: &str) -> String {
-    store(cx).picture_url(file)
+pub fn picture_url(cx: &Cx, image_id: &str, rendition: Rendition) -> String {
+    store(cx).picture_url(image_id, rendition)
 }
 
 /// Where the review of `product_id` from `order_id` stands, if there is one.

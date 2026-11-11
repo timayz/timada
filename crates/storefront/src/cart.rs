@@ -986,7 +986,7 @@ fn picture(product: &Product, variant_id: Option<&str>) -> Option<String> {
         .and_then(|id| product.images.iter().find(|image| image.id == id));
     variant_image
         .or_else(|| product.image())
-        .map(|image| image.url.clone())
+        .map(|image| image.thumb_url.clone())
 }
 
 /// The cart, priced, or `None` for an id the store does not know.

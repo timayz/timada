@@ -1,17 +1,31 @@
 mod common;
 
 use common::*;
-use timada_catalog::{
-    AddImage, CatalogError, MAX_ALT_LEN, MAX_IMAGE_BYTES, MAX_IMAGES_PER_PRODUCT,
-};
+use timada_catalog::{AddImage, CatalogError, MAX_ALT_LEN, MAX_IMAGES_PER_PRODUCT};
+use timada_core::{Picture, Rendition, RenditionFile};
+
+fn rendition(side: u32, size: u64) -> RenditionFile {
+    RenditionFile {
+        width: side,
+        height: side * 3 / 4,
+        size,
+        sha256: [side as u8; 32],
+    }
+}
+
+fn picture() -> Picture {
+    Picture {
+        width: 3000,
+        height: 2250,
+        listing: rendition(400, 20_480),
+        page: rendition(1200, 122_880),
+    }
+}
 
 fn image(id: &str) -> AddImage {
     AddImage {
         image_id: id.to_owned(),
-        ext: "PNG".into(),
-        size: 2048,
-        width: Some(800),
-        height: Some(600),
+        picture: picture(),
         alt: "  A blue mug  ".into(),
     }
 }
@@ -27,12 +41,15 @@ async fn a_picture_joins_the_gallery_with_what_is_known_about_it() {
     assert_eq!(with_image.images.len(), 1);
     let first = &with_image.images[0];
     assert_eq!(first.id, "img-1");
-    assert_eq!(first.ext, "png", "the extension is lowercased");
-    assert_eq!(first.mime, "image/png", "and names the type");
-    assert_eq!(first.size, 2048);
-    assert_eq!(first.width, Some(800));
+    assert_eq!(first.picture, picture());
+    assert_eq!((first.picture.width, first.picture.height), (3000, 2250));
+    assert_eq!(first.picture.listing.width, 400);
+    assert_eq!(first.picture.page.size, 122_880);
     assert_eq!(first.alt, "A blue mug");
-    assert_eq!(first.file(), "img-1.png");
+    assert_eq!(
+        Picture::file(&first.id, Rendition::Listing),
+        "400/img-1.webp"
+    );
 
     cmd.change_image_alt(ALICE, &product.id, "img-1", "A mug, in blue")
         .await
@@ -59,38 +76,64 @@ async fn only_a_picture_of_a_known_kind_and_size_is_taken() {
     let cmd = command().await;
     let product = create_product(&cmd, "Blue Mug").await;
 
-    for bad_ext in ["svg", "", "exe"] {
+    // A record that describes no file: a zero-byte or zero-pixel rendition,
+    // or no upload size.
+    let empty = RenditionFile::default();
+    for (what, bad) in [
+        (
+            "no upload size",
+            Picture {
+                width: 0,
+                ..picture()
+            },
+        ),
+        (
+            "an empty listing",
+            Picture {
+                listing: empty,
+                ..picture()
+            },
+        ),
+        (
+            "an empty page",
+            Picture {
+                page: RenditionFile {
+                    size: 0,
+                    ..rendition(1200, 1)
+                },
+                ..picture()
+            },
+        ),
+    ] {
         let err = cmd
             .add_image(
                 ALICE,
                 &product.id,
                 AddImage {
-                    ext: bad_ext.into(),
+                    picture: bad,
                     ..image("img-bad")
                 },
             )
             .await;
         assert!(
             matches!(err, Err(CatalogError::InvalidImage)),
-            "{bad_ext:?}: {err:?}"
+            "{what}: {err:?}"
         );
     }
-    for bad_size in [0, MAX_IMAGE_BYTES + 1] {
-        let err = cmd
-            .add_image(
-                ALICE,
-                &product.id,
-                AddImage {
-                    size: bad_size,
-                    ..image("img-bad")
-                },
-            )
-            .await;
-        assert!(
-            matches!(err, Err(CatalogError::InvalidImage)),
-            "{bad_size}: {err:?}"
-        );
-    }
+    let no_id = cmd
+        .add_image(
+            ALICE,
+            &product.id,
+            AddImage {
+                image_id: "  ".into(),
+                ..image("img-bad")
+            },
+        )
+        .await;
+    assert!(
+        matches!(no_id, Err(CatalogError::InvalidImage)),
+        "{no_id:?}"
+    );
     let long_alt = cmd
         .add_image(
             ALICE,

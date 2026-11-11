@@ -68,21 +68,19 @@ impl<E: Executor> Deref for Command<E> {
     }
 }
 
-/// One picture of a page.
+/// One picture of a page: its renditions are the host's, under its id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PageImage {
     pub id: String,
-    pub ext: String,
-    pub mime: String,
-    pub size: u64,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
+    pub picture: timada_core::Picture,
 }
 
 impl PageImage {
-    /// The name it is kept and written into the body under.
+    /// The name the body writes it under: `{id}.webp`, which
+    /// [`render_markdown`](crate::render_markdown) turns into the page
+    /// rendition's address.
     pub fn file(&self) -> String {
-        format!("{}.{}", self.id, self.ext)
+        format!("{}.{}", self.id, timada_core::RENDITION_EXT)
     }
 }
 
@@ -191,11 +189,7 @@ async fn on_image_added(event: Event<ImageAdded>, page: &mut PageState) -> anyho
     let data = &event.data;
     page.images.push(PageImage {
         id: data.image_id.to_owned(),
-        ext: data.ext.to_owned(),
-        mime: data.mime.to_owned(),
-        size: data.size,
-        width: data.width,
-        height: data.height,
+        picture: data.picture,
     });
     page.updated_at = event.timestamp;
     Ok(())

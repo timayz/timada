@@ -5,7 +5,7 @@ use crate::aggregator::{
 };
 use crate::error::PageError;
 use crate::value_object::{
-    MAX_IMAGES_PER_PAGE, image_mime, new_page_id, normalize_body, normalize_seo, normalize_slug,
+    MAX_IMAGES_PER_PAGE, new_page_id, normalize_body, normalize_seo, normalize_slug,
     normalize_title, slugify,
 };
 
@@ -21,14 +21,12 @@ pub struct CreatePage {
     pub body: String,
 }
 
-/// A picture already stored as `{image_id}.{ext}`, to add to a page.
+/// A picture the host already keeps, in the renditions `picture`
+/// describes, to add to a page.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AddPageImage {
     pub image_id: String,
-    pub ext: String,
-    pub size: u64,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
+    pub picture: timada_core::Picture,
 }
 
 #[evento::command]
@@ -216,16 +214,14 @@ impl<E: Executor> super::Command<E> {
         if page.images.len() >= MAX_IMAGES_PER_PAGE {
             return Err(PageError::TooManyImages);
         }
-        let mime = image_mime(&cmd.ext).ok_or(PageError::UnsupportedImage)?;
+        if !cmd.picture.is_valid() {
+            return Err(PageError::UnsupportedImage);
+        }
         self.write_page(
             &page,
             &ImageAdded {
                 image_id: cmd.image_id,
-                ext: cmd.ext,
-                mime: mime.to_owned(),
-                size: cmd.size,
-                width: cmd.width,
-                height: cmd.height,
+                picture: cmd.picture,
                 added_by: actor.to_owned(),
             },
             routing_key,

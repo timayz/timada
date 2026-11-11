@@ -35,7 +35,8 @@ impl SubmitReview {
             self.title.as_deref(),
             &self.body,
             self.photos.len(),
-        )
+        )?;
+        check_photos(&self.photos)
     }
 }
 
@@ -65,12 +66,13 @@ impl ReviseReview {
             self.title.as_deref(),
             &self.body,
             self.keep.len() + self.photos.len(),
-        )
+        )?;
+        check_photos(&self.photos)
     }
 }
 
 /// The rules on what a shopper writes; `photo_count` is how many photos come
-/// with it.
+/// with it. The photos themselves are checked by [`check_photos`].
 pub fn check_draft(
     rating: u8,
     title: Option<&str>,
@@ -89,6 +91,18 @@ pub fn check_draft(
     }
     if photo_count > MAX_PHOTOS {
         return Err(ReviewError::TooManyPhotos);
+    }
+    Ok(())
+}
+
+/// Every photo's record describes a file; a key with `store:write` could
+/// otherwise record what it likes.
+fn check_photos(photos: &[ReviewPhoto]) -> Result<(), ReviewError> {
+    if photos
+        .iter()
+        .any(|photo| photo.id.trim().is_empty() || !photo.picture.is_valid())
+    {
+        return Err(ReviewError::InvalidPhoto);
     }
     Ok(())
 }

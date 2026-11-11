@@ -246,24 +246,32 @@ dearest, so a sorted list reads the way a shopper expects.
 ## Pictures
 
 A product carries `images`, in the order the merchant put them; `product.image()` is
-the first, which is what a listing shows. Each one knows its `alt`, `mime`, `width`
-and `height`, and its `url`.
+the first, which is what a listing shows. The store keeps each picture in two WebP
+sizes, and an `Image` knows both: the page rendition (`url`, `width`, `height`; at most
+1200 px on its longest side) and the listing one (`thumb_url`, `thumb_width`,
+`thumb_height`; at most 400 px), with its `alt`. A review's photos (`ReviewPhoto`) come
+the same way.
 
-That address is only absolute once the host passes
+Those addresses are only absolute once the host passes
 `StoreConfig::media_url("<picture address>")`, taking the value from the tenant's API
-keys page. Without it a picture keeps its bare `file` name, which suits a host serving
-the files itself. The context helpers fill the addresses in; a host reading rows
-directly with `published_products` calls `Product::fill_urls(media_url(cx))` itself.
+keys page. Without it a picture keeps the bare paths below that address
+(`400/<id>.webp`, `1200/<id>.webp`), which suits a host serving the files itself. The
+context helpers fill the addresses in; a host reading rows directly with
+`published_products` calls `Product::fill_urls(media_url(cx))` itself.
 
 ## The two components
 
 ```rust
 price(product: &product, attrs: attributes! { class="price" })
-product_image(image: &photo, attrs: attributes! { class="photo" })
+product_image(image: &photo, attrs: attributes! { class="thumb" })
+product_image(image: &photo, large: true, attrs: attributes! { class="photo" })
 ```
 
 They render `<span data-price class="price">12.50 €</span>` and an `<img data-image
-src alt width height loading="lazy" decoding="async">`. The library ships no other
+src alt width height loading="lazy" decoding="async">`: the listing rendition by
+default, which is what a card, a menu or a cart line shows; with `large: true` the
+page rendition, with a `srcset` naming both so a phone takes the small one (`sizes`
+may be passed in `attrs`; it defaults to the viewport up to 1200 px). The library ships no other
 markup and no CSS classes (a host's Tailwind build does not scan a dependency anyway):
 everything a page shows is the merchant's own `view!` around `Product` values.
 

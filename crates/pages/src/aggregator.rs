@@ -38,16 +38,12 @@ pub enum Page {
     Unpublished {
         unpublished_by: String,
     },
-    /// A picture uploaded for the body, kept as `{image_id}.{ext}`.
+    /// A picture uploaded for the body, kept in the two renditions
+    /// `picture` describes ([`timada_core::Picture`]) and named in the
+    /// body as `{image_id}.webp`.
     ImageAdded {
         image_id: String,
-        /// Lowercase, no dot: `jpg`, `png`, `webp`, `gif`.
-        ext: String,
-        mime: String,
-        /// In bytes.
-        size: u64,
-        width: Option<u32>,
-        height: Option<u32>,
+        picture: timada_core::Picture,
         added_by: String,
     },
     ImageRemoved {

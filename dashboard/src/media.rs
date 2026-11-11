@@ -1,21 +1,31 @@
 //! The pictures merchants upload for their products.
 //!
-//! The event store records what a picture is (`timada_catalog::ProductImage`);
-//! the bytes live on disk under `media.dir`, one directory per tenant, named
-//! after the picture's id. They are served from `/media/<tenant>/<id>.<ext>`
+//! The event store records what a picture is (`timada_core::Picture`: its
+//! upload's dimensions and its two renditions, each with its size and the
+//! digest of its bytes); the bytes live on disk under `media.dir`, one
+//! directory per tenant and one per rendition below it, named after the
+//! picture's id: `<tenant>/400/<id>.webp` for listings and
+//! `<tenant>/1200/<id>.webp` for the page. They are served from `/media/...`
 //! by topcoat's directory route, with no authentication: an id is an
 //! unguessable ULID, and a shopper's browser has no session on this node.
+//!
+//! The upload itself is not kept. Whoever takes one decodes it, bounds it to
+//! each rendition's size and encodes it as WebP ([`Media::render`]), so what
+//! every node stores is a few tens of kilobytes per picture whatever the
+//! merchant uploaded, and what a listing sends a browser is the small one.
 //!
 //! Storing before committing and deleting after means a failure leaves an
 //! unreferenced file rather than a product pointing at nothing.
 //!
 //! With several nodes every node keeps every picture, so one that goes down
-//! takes none with it. An upload copies the file to the other nodes and is
-//! only recorded once a majority of nodes hold it, the same majority a
-//! commit needs: a picture the catalog knows survives whatever the events
-//! survive. Each node also follows the catalog's stream ([`subscription`])
-//! and fetches from a peer any picture it lacks (a node that was down during
-//! an upload, or a new one), and deletes the ones taken off a product.
+//! takes none with it. An upload copies the renditions to the other nodes
+//! and is only recorded once a majority of nodes hold them, the same
+//! majority a commit needs: a picture the catalog knows survives whatever
+//! the events survive. Each node also follows the catalog's stream
+//! ([`subscription`]) and fetches from a peer any picture it lacks (a node
+//! that was down during an upload, or a new one), checking each copy against
+//! the size and digest the event recorded, and deletes the ones taken off a
+//! product.
 //!
 //! A shop's mail logo is kept the same way too. Its uploads are recorded in the
 //! platform's stream rather than a tenant's, so [`logo_subscription`] follows
@@ -29,17 +39,22 @@
 //! off a page, or a page deleted, takes its files with it.
 //!
 //! Every file name is checked before it touches the disk ([`Media::path_of`]):
-//! the ids and extensions come from events, and a key with `store:write` can
-//! put anything in a tenant's stream, so a name is never trusted to stay
-//! inside the tenant's directory.
+//! the ids come from events, and a key with `store:write` can put anything in
+//! a tenant's stream, so a name is never trusted to stay inside the tenant's
+//! directory.
 
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use bytes::Bytes;
 use evento::subscription::{Context, SubscriptionBuilder};
 use evento::{Executor, metadata::Event};
+use image::{DynamicImage, GenericImageView, ImageDecoder, ImageReader, imageops::FilterType};
+use sha2::{Digest, Sha256};
 use timada_catalog::aggregator::{Deleted as ProductDeleted, ImageAdded, ImageRemoved};
 use timada_catalog::{MAX_IMAGE_BYTES, product_projection};
+use timada_core::{MAX_PICTURE_PIXELS, Picture, RENDITION_EXT, Rendition, RenditionFile};
 use timada_pages::aggregator::{
     Deleted as PageDeleted, ImageAdded as PageImageAdded, ImageRemoved as PageImageRemoved,
 };
@@ -51,6 +66,7 @@ use timada_reviews::aggregator::{
 use timada_reviews::review_projection;
 use timada_tenancy::aggregator::MailBrandingSet;
 use timada_tenancy::tenant_projection;
+use tokio::sync::Semaphore;
 
 use topcoat::context::Cx;
 use topcoat::router::{
@@ -61,11 +77,22 @@ use topcoat::router::{
 use crate::config::MediaConfig;
 use crate::peers::{self, Peers, is_id};
 
-/// The kinds of picture the shop takes, by extension.
-const EXTENSIONS: [&str; 4] = ["jpg", "png", "webp", "gif"];
-
 /// The route a node takes a copy of a picture on, below `/cluster/media`.
 pub const PEER_ROUTE: &str = "/cluster/media";
+
+/// The most a rendition may weigh. A 1200 px WebP of a photograph is a few
+/// hundred kilobytes at most; a copy heavier than this is not one of ours.
+pub const MAX_RENDITION_BYTES: u64 = 2 * 1024 * 1024;
+
+/// How many uploads this node renders at once. Decoding a 25-megapixel
+/// upload takes a hundred megabytes, and a merchant uploading a gallery
+/// sends its pictures together.
+const RENDERS_AT_ONCE: usize = 2;
+
+/// The WebP quality of each rendition, out of 100: the page one is looked
+/// at, the listing one is small anyway.
+const PAGE_QUALITY: f32 = 82.0;
+const LISTING_QUALITY: f32 = 80.0;
 
 /// Where the files are and the address they are served from.
 pub struct Media {
@@ -73,6 +100,7 @@ pub struct Media {
     public_url: String,
     /// The other nodes, when there are any.
     peers: Option<Arc<Peers>>,
+    renders: Semaphore,
 }
 
 /// What a picture turned out to be, once its first bytes were read.
@@ -85,12 +113,52 @@ pub struct SniffedImage {
     pub height: Option<u32>,
 }
 
+/// Why an upload is not taken: what a page tells the merchant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// Not a JPEG, PNG, WebP or GIF, or one that cannot be decoded.
+    NotAPicture,
+    /// Over [`MAX_IMAGE_BYTES`].
+    TooLarge,
+    /// Over [`MAX_PICTURE_PIXELS`].
+    TooManyPixels,
+}
+
+impl Refusal {
+    /// The error code the pages word (`crate::ui::say`).
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::NotAPicture => "unsupported_image",
+            Self::TooLarge => "image_too_large",
+            Self::TooManyPixels => "image_too_big",
+        }
+    }
+}
+
+/// An upload rendered into what the shop keeps, not yet stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rendered {
+    pub picture: Picture,
+    listing: Bytes,
+    page: Bytes,
+}
+
+impl Rendered {
+    fn bytes(&self, rendition: Rendition) -> &Bytes {
+        match rendition {
+            Rendition::Listing => &self.listing,
+            Rendition::Page => &self.page,
+        }
+    }
+}
+
 impl Media {
     pub fn new(config: &MediaConfig, peers: Option<Arc<Peers>>) -> Self {
         Self {
             dir: config.dir.clone(),
             public_url: config.public_url.clone(),
             peers,
+            renders: Semaphore::new(RENDERS_AT_ONCE),
         }
     }
 
@@ -105,32 +173,42 @@ impl Media {
         format!("{}/{tenant_id}", self.public_url)
     }
 
-    /// The address of one picture.
-    pub fn url(&self, tenant_id: &str, file: &str) -> String {
-        format!("{}/{tenant_id}/{file}", self.public_url)
+    /// The address of one rendition of a picture.
+    pub fn url(&self, tenant_id: &str, image_id: &str, rendition: Rendition) -> String {
+        Picture::url(&self.tenant_url(tenant_id), image_id, rendition)
     }
 
-    /// Where a picture's file is, once its names are checked: the tenant and
-    /// the picture are ids ([`is_id`]: one directory entry each, nothing
-    /// above) and the extension one of the kinds the shop takes. Everything
-    /// that touches the disk goes through here, because the names come from
-    /// events and a key with `store:write` writes what it likes there.
-    pub fn path_of(&self, tenant_id: &str, image_id: &str, ext: &str) -> anyhow::Result<PathBuf> {
+    /// Where a rendition's file is, once its names are checked: the tenant
+    /// and the picture are ids ([`is_id`]: one directory entry each, nothing
+    /// above). Everything that touches the disk goes through here, because
+    /// the names come from events and a key with `store:write` writes what
+    /// it likes there.
+    pub fn path_of(
+        &self,
+        tenant_id: &str,
+        rendition: Rendition,
+        image_id: &str,
+    ) -> anyhow::Result<PathBuf> {
         anyhow::ensure!(is_id(tenant_id), "{tenant_id:?} is not a tenant id");
         anyhow::ensure!(is_id(image_id), "{image_id:?} is not a picture id");
-        anyhow::ensure!(
-            EXTENSIONS.contains(&ext),
-            "{ext:?} is not a kind of picture the shop takes"
-        );
-        Ok(self.dir.join(tenant_id).join(format!("{image_id}.{ext}")))
+        Ok(self
+            .dir
+            .join(tenant_id)
+            .join(rendition.dir())
+            .join(format!("{image_id}.{RENDITION_EXT}")))
     }
 
-    /// Where the file named `file` (`<id>.<ext>`) is, checked the same way.
-    fn path_of_file(&self, tenant_id: &str, file: &str) -> anyhow::Result<PathBuf> {
-        let Some((image_id, ext)) = file.split_once('.') else {
-            anyhow::bail!("{file:?} is not a picture file name");
+    /// The rendition and picture a copy's address names (`<dir>/<id>.webp`
+    /// below the tenant), checked the same way.
+    fn parse_file(dir: &str, file: &str) -> anyhow::Result<(Rendition, String)> {
+        let Some(rendition) = Rendition::from_dir(dir) else {
+            anyhow::bail!("{dir:?} is not a rendition");
         };
-        self.path_of(tenant_id, image_id, ext)
+        let Some(image_id) = file.strip_suffix(&format!(".{RENDITION_EXT}")) else {
+            anyhow::bail!("{file:?} is not a rendition's file name");
+        };
+        anyhow::ensure!(is_id(image_id), "{image_id:?} is not a picture id");
+        Ok((rendition, image_id.to_owned()))
     }
 
     /// What the bytes are, or `None` when they are not a picture of a kind
@@ -153,62 +231,115 @@ impl Media {
         })
     }
 
-    /// Writes a picture. The bytes land in a temporary file first, so a
+    /// Renders an upload into the two renditions the shop keeps, off the
+    /// async threads and a couple at a time. `Err` is a refusal to tell the
+    /// merchant; the outer error is this node's.
+    pub async fn render(&self, bytes: Bytes) -> anyhow::Result<Result<Rendered, Refusal>> {
+        if bytes.len() as u64 > MAX_IMAGE_BYTES {
+            return Ok(Err(Refusal::TooLarge));
+        }
+        let _slot = self.renders.acquire().await?;
+        Ok(tokio::task::spawn_blocking(move || render(&bytes)).await?)
+    }
+
+    /// Writes a rendered upload to this node's disk and copies it to a
+    /// majority of the cluster, like the event that will record it: a node
+    /// going down takes no picture with it. Fails, with the files deleted
+    /// again, when this node cannot write or too few nodes took the copies;
+    /// the picture must then not be recorded. What it returns is what the
+    /// event records.
+    pub async fn keep(
+        &self,
+        tenant_id: &str,
+        image_id: &str,
+        rendered: Rendered,
+    ) -> anyhow::Result<Picture> {
+        let kept = async {
+            for rendition in Rendition::ALL {
+                self.store(tenant_id, rendition, image_id, rendered.bytes(rendition))
+                    .await?;
+            }
+            self.replicate(tenant_id, image_id, &rendered).await
+        }
+        .await;
+        if let Err(err) = kept {
+            self.remove_image(tenant_id, image_id).await;
+            return Err(err);
+        }
+        Ok(rendered.picture)
+    }
+
+    /// Writes one rendition. The bytes land in a temporary file first, so a
     /// reader never sees a half-written one.
     pub async fn store(
         &self,
         tenant_id: &str,
+        rendition: Rendition,
         image_id: &str,
-        ext: &str,
         bytes: &[u8],
     ) -> anyhow::Result<()> {
-        let path = self.path_of(tenant_id, image_id, ext)?;
-        let dir = path.parent().expect("a tenant directory");
+        let path = self.path_of(tenant_id, rendition, image_id)?;
+        let dir = path.parent().expect("a rendition directory");
         tokio::fs::create_dir_all(dir).await?;
-        let partial = path.with_extension(format!("{ext}.part"));
+        let partial = path.with_extension(format!("{RENDITION_EXT}.part"));
         tokio::fs::write(&partial, bytes).await?;
         tokio::fs::rename(&partial, &path).await?;
         Ok(())
     }
 
-    /// Copies a picture this node just stored to the other nodes, returning
-    /// once a majority of the cluster (this node included) holds it. The
-    /// copies to the remaining nodes carry on in the background. Fails when
-    /// too many nodes refused or could not be reached for a majority; the
-    /// picture must then not be recorded.
-    pub async fn replicate(
+    /// Copies a picture's renditions to the other nodes, returning once a
+    /// majority of the cluster (this node included) holds both. The copies
+    /// to the remaining nodes carry on in the background.
+    async fn replicate(
         &self,
         tenant_id: &str,
-        file: &str,
-        bytes: Vec<u8>,
+        image_id: &str,
+        rendered: &Rendered,
     ) -> anyhow::Result<()> {
         let Some(peers) = &self.peers else {
             return Ok(());
         };
-        peers
-            .put_to_quorum(
-                &format!("{PEER_ROUTE}/{tenant_id}/{file}"),
-                bytes.into(),
-                "picture",
-            )
-            .await
+        let copies = Rendition::ALL.map(|rendition| {
+            let path = format!(
+                "{PEER_ROUTE}/{tenant_id}/{}",
+                Picture::file(image_id, rendition)
+            );
+            let bytes = rendered.bytes(rendition).clone();
+            async move { peers.put_to_quorum(&path, bytes, "picture").await }
+        });
+        let [listing, page] = copies;
+        let (listing, page) = tokio::join!(listing, page);
+        listing.and(page)
     }
 
-    /// Makes sure this node holds a picture the catalog references, fetching
-    /// it from a peer that does when it is missing. The copy fetched must be
-    /// the size the catalog recorded and a picture.
+    /// Makes sure this node holds every rendition of a picture the catalog
+    /// references, fetching from a peer that does what it lacks. A copy
+    /// fetched must be the size and have the digest the catalog recorded.
     pub async fn fetch(
         &self,
         tenant_id: &str,
         image_id: &str,
-        ext: &str,
-        size: u64,
+        picture: &Picture,
     ) -> anyhow::Result<()> {
-        let path = self.path_of(tenant_id, image_id, ext)?;
-        let file = format!("{image_id}.{ext}");
+        for (rendition, recorded) in picture.files() {
+            self.fetch_rendition(tenant_id, image_id, rendition, recorded)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn fetch_rendition(
+        &self,
+        tenant_id: &str,
+        image_id: &str,
+        rendition: Rendition,
+        recorded: &RenditionFile,
+    ) -> anyhow::Result<()> {
+        let path = self.path_of(tenant_id, rendition, image_id)?;
+        let file = Picture::file(image_id, rendition);
         if tokio::fs::metadata(&path)
             .await
-            .is_ok_and(|meta| meta.len() == size)
+            .is_ok_and(|meta| meta.len() == recorded.size)
         {
             return Ok(());
         }
@@ -226,16 +357,8 @@ impl Media {
                     .await?
                     .error_for_status()?;
                 let bytes = response.bytes().await?;
-                anyhow::ensure!(
-                    bytes.len() as u64 == size,
-                    "got {} bytes, expected {size}",
-                    bytes.len()
-                );
-                anyhow::ensure!(
-                    Self::sniff(&bytes).is_some_and(|sniffed| sniffed.ext == ext),
-                    "not a {ext} picture"
-                );
-                self.store(tenant_id, image_id, ext, &bytes).await
+                check_copy(&bytes, recorded)?;
+                self.store(tenant_id, rendition, image_id, &bytes).await
             }
             .await;
             match fetched {
@@ -257,53 +380,161 @@ impl Media {
         peers::authorizes(self.peers.as_deref(), header)
     }
 
-    /// Takes a copy a peer sends: checks the names cannot leave the media
-    /// directory ([`Self::path_of`]) and that the bytes are the picture the
-    /// name says, then stores it. `false` when it is refused.
-    pub async fn accept(&self, tenant_id: &str, file: &str, bytes: &[u8]) -> anyhow::Result<bool> {
-        let Some((image_id, ext)) = file.split_once('.') else {
+    /// Takes a copy a peer sends, at `<dir>/<file>` below the tenant: checks
+    /// the names cannot leave the media directory ([`Self::path_of`]) and
+    /// that the bytes are a rendition (WebP, no heavier than one gets), then
+    /// stores it. `false` when it is refused.
+    pub async fn accept(
+        &self,
+        tenant_id: &str,
+        dir: &str,
+        file: &str,
+        bytes: &[u8],
+    ) -> anyhow::Result<bool> {
+        let Ok((rendition, image_id)) = Self::parse_file(dir, file) else {
             return Ok(false);
         };
-        let valid = self.path_of(tenant_id, image_id, ext).is_ok()
-            && bytes.len() as u64 <= MAX_IMAGE_BYTES
-            && Self::sniff(bytes).is_some_and(|sniffed| sniffed.ext == ext);
+        let valid = self.path_of(tenant_id, rendition, &image_id).is_ok()
+            && bytes.len() as u64 <= MAX_RENDITION_BYTES
+            && is_rendition(bytes);
         if !valid {
             return Ok(false);
         }
-        self.store(tenant_id, image_id, ext, bytes).await?;
+        self.store(tenant_id, rendition, &image_id, bytes).await?;
         Ok(true)
     }
 
-    /// Deletes a picture known only by its id, whatever its kind. A name
-    /// that is not an id names nothing of ours: logged, nothing touched.
-    pub async fn remove_image(&self, tenant_id: &str, image_id: &str) {
-        if !is_id(tenant_id) || !is_id(image_id) {
-            tracing::warn!(tenant = %tenant_id, image = %image_id, "not a picture of ours: not deleted");
-            return;
-        }
-        for ext in EXTENSIONS {
-            self.remove(tenant_id, &format!("{image_id}.{ext}")).await;
-        }
-    }
-
-    /// Deletes a picture (`file` is `<id>.<ext>`). A failure is logged and
+    /// Deletes every rendition of a picture. A failure is logged and
     /// otherwise ignored: the product has already stopped pointing at it,
     /// and a file nobody references is a waste of disk, not a fault. A name
     /// that is not a picture of ours is logged and touches nothing.
-    pub async fn remove(&self, tenant_id: &str, file: &str) {
-        let path = match self.path_of_file(tenant_id, file) {
-            Ok(path) => path,
-            Err(err) => {
-                tracing::warn!(tenant = %tenant_id, %file, %err, "not a picture of ours: not deleted");
-                return;
+    pub async fn remove_image(&self, tenant_id: &str, image_id: &str) {
+        for rendition in Rendition::ALL {
+            let path = match self.path_of(tenant_id, rendition, image_id) {
+                Ok(path) => path,
+                Err(err) => {
+                    tracing::warn!(tenant = %tenant_id, image = %image_id, %err, "not a picture of ours: not deleted");
+                    return;
+                }
+            };
+            if let Err(err) = tokio::fs::remove_file(&path).await
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(path = %path.display(), %err, "cannot delete a picture");
             }
-        };
-        if let Err(err) = tokio::fs::remove_file(&path).await
-            && err.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(path = %path.display(), %err, "cannot delete a picture");
         }
     }
+}
+
+/// Whether a copy is the file the catalog recorded: its size and digest.
+fn check_copy(bytes: &[u8], recorded: &RenditionFile) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        bytes.len() as u64 == recorded.size,
+        "got {} bytes, expected {}",
+        bytes.len(),
+        recorded.size
+    );
+    anyhow::ensure!(
+        sha256(bytes) == recorded.sha256,
+        "the bytes are not the ones recorded"
+    );
+    Ok(())
+}
+
+/// Whether the bytes are a WebP picture, as every rendition is.
+fn is_rendition(bytes: &[u8]) -> bool {
+    Media::sniff(bytes).is_some_and(|sniffed| sniffed.ext == RENDITION_EXT)
+}
+
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+/// Renders an upload: decodes it (JPEG, PNG, WebP or GIF, the first frame
+/// of an animation, turned the way its EXIF orientation says), bounds it
+/// to the page rendition's side and then to the listing's, never enlarging,
+/// and encodes each as WebP. Blocking: a second or so for a 25-megapixel
+/// photograph.
+fn render(bytes: &[u8]) -> Result<Rendered, Refusal> {
+    // The header first: an upload with too many pixels is refused before a
+    // byte of it is decoded.
+    let sniffed = Media::sniff(bytes).ok_or(Refusal::NotAPicture)?;
+    let (Some(width), Some(height)) = (sniffed.width, sniffed.height) else {
+        return Err(Refusal::NotAPicture);
+    };
+    if u64::from(width) * u64::from(height) > MAX_PICTURE_PIXELS || width == 0 || height == 0 {
+        return Err(Refusal::TooManyPixels);
+    }
+    let mut decoder = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| Refusal::NotAPicture)?
+        .into_decoder()
+        .map_err(|_| Refusal::NotAPicture)?;
+    // What the header said is what gets decoded, and no more.
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(width);
+    limits.max_image_height = Some(height);
+    limits.max_alloc = Some(MAX_PICTURE_PIXELS * 8);
+    decoder
+        .set_limits(limits)
+        .map_err(|_| Refusal::TooManyPixels)?;
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut upload = DynamicImage::from_decoder(decoder).map_err(|_| Refusal::NotAPicture)?;
+    upload.apply_orientation(orientation);
+    let (width, height) = upload.dimensions();
+    if width == 0 || height == 0 {
+        return Err(Refusal::NotAPicture);
+    }
+
+    let page_image = fit(&upload, Rendition::Page);
+    let listing_image = fit(&page_image, Rendition::Listing);
+    let (page, page_file) = encode(&page_image, PAGE_QUALITY)?;
+    let (listing, listing_file) = encode(&listing_image, LISTING_QUALITY)?;
+    Ok(Rendered {
+        picture: Picture {
+            width,
+            height,
+            listing: listing_file,
+            page: page_file,
+        },
+        listing,
+        page,
+    })
+}
+
+/// The picture within the rendition's side, shrunk if it is larger and
+/// left alone otherwise.
+fn fit(image: &DynamicImage, rendition: Rendition) -> DynamicImage {
+    let side = rendition.max_side();
+    if image.width() <= side && image.height() <= side {
+        return image.clone();
+    }
+    image.resize(side, side, FilterType::Lanczos3)
+}
+
+/// The picture as WebP, with what the store records of the file.
+fn encode(image: &DynamicImage, quality: f32) -> Result<(Bytes, RenditionFile), Refusal> {
+    let (width, height) = image.dimensions();
+    let encoded = if image.color().has_alpha() {
+        let rgba = image.to_rgba8();
+        webp::Encoder::from_rgba(rgba.as_raw(), width, height).encode(quality)
+    } else {
+        let rgb = image.to_rgb8();
+        webp::Encoder::from_rgb(rgb.as_raw(), width, height).encode(quality)
+    };
+    let bytes = Bytes::copy_from_slice(&encoded);
+    if bytes.is_empty() || bytes.len() as u64 > MAX_RENDITION_BYTES {
+        return Err(Refusal::NotAPicture);
+    }
+    let file = RenditionFile {
+        width,
+        height,
+        size: bytes.len() as u64,
+        sha256: sha256(&bytes),
+    };
+    Ok((bytes, file))
 }
 
 /// The cursor identity of the subscription that keeps this node's copies in
@@ -359,28 +590,22 @@ async fn on_mail_branding_set<E: Executor>(
 ) -> anyhow::Result<()> {
     // Nothing is taken from the event but the stream it names: the branding
     // fetched is the one the tenant holds now.
-    if event.data.logo_file.is_none() {
+    let Some(set) = &event.data.logo else {
         return Ok(());
-    }
+    };
     let media: Arc<Media> = context.extract();
-    let Some(branding) = tenant_projection()
+    let Some(logo) = tenant_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
         .await?
         .and_then(|tenant| tenant.mail_branding)
-    else {
-        return Ok(());
-    };
-    let Some((id, ext)) = branding
-        .logo_file
-        .as_deref()
-        .filter(|file| Some(*file) == event.data.logo_file.as_deref())
-        .and_then(|file| file.split_once('.'))
+        .and_then(|branding| branding.logo)
+        .filter(|logo| logo.id == set.id)
     else {
         return Ok(());
     };
     media
-        .fetch(&event.aggregate_id, id, ext, branding.logo_size)
+        .fetch(&event.aggregate_id, &logo.id, &logo.picture)
         .await
 }
 
@@ -408,12 +633,7 @@ async fn on_image_added<E: Executor>(
         return Ok(());
     }
     media
-        .fetch(
-            &event.tenant,
-            &event.data.image_id,
-            &event.data.ext,
-            event.data.size,
-        )
+        .fetch(&event.tenant, &event.data.image_id, &event.data.picture)
         .await
 }
 
@@ -469,7 +689,7 @@ async fn on_review_submitted<E: Executor>(
     };
     for photo in &review.photos {
         media
-            .fetch(&event.tenant, &photo.id, &photo.ext, photo.size)
+            .fetch(&event.tenant, &photo.id, &photo.picture)
             .await?;
     }
     Ok(())
@@ -530,7 +750,7 @@ async fn on_review_revised<E: Executor>(
     for photo in &review.photos {
         if event.data.added.iter().any(|added| added.id == photo.id) {
             media
-                .fetch(&event.tenant, &photo.id, &photo.ext, photo.size)
+                .fetch(&event.tenant, &photo.id, &photo.picture)
                 .await?;
         }
     }
@@ -612,12 +832,7 @@ async fn on_page_image_added<E: Executor>(
         return Ok(());
     }
     media
-        .fetch(
-            &event.tenant,
-            &event.data.image_id,
-            &event.data.ext,
-            event.data.size,
-        )
+        .fetch(&event.tenant, &event.data.image_id, &event.data.picture)
         .await
 }
 
@@ -655,18 +870,33 @@ async fn on_page_deleted<E: Executor>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
 
-    /// A 1×1 pixel of each kind, as the bytes a browser would post.
-    const PNG: &[u8] = &[
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
-        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
-        0x15, 0xC4, 0x89,
-    ];
+    /// A PNG of `width` × `height` in one colour, as a browser would post it.
+    pub fn png(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
+        let image = image::RgbaImage::from_pixel(width, height, image::Rgba(rgba));
+        let mut out = Cursor::new(Vec::new());
+        image
+            .write_to(&mut out, image::ImageFormat::Png)
+            .expect("a PNG");
+        out.into_inner()
+    }
+
+    /// A rendered upload: what [`Media::render`] makes of `png`.
+    pub fn rendered(bytes: &[u8]) -> Rendered {
+        render(bytes).expect("a picture")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{png, rendered};
+    use super::*;
+
     const GIF: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xFF\xFF\xFF";
 
-    use crate::peers::test_support::{SECRET, down, peer};
+    use crate::peers::test_support::{SECRET, answering, down, peer};
 
     /// A picture served is kept for a year; a miss is not kept at all, so a
     /// cache in front never hides a picture this node copies later.
@@ -679,10 +909,10 @@ mod tests {
 
     #[test]
     fn knows_a_picture_from_anything_else() {
-        let png = Media::sniff(PNG).expect("a PNG");
+        let png = Media::sniff(&png(3, 2, [0, 0, 255, 255])).expect("a PNG");
         assert_eq!(png.ext, "png");
         assert_eq!(png.mime, "image/png");
-        assert_eq!((png.width, png.height), (Some(1), Some(1)));
+        assert_eq!((png.width, png.height), (Some(3), Some(2)));
         let gif = Media::sniff(GIF).expect("a GIF");
         assert_eq!(gif.ext, "gif");
         assert_eq!(gif.mime, "image/gif");
@@ -690,6 +920,64 @@ mod tests {
         assert!(Media::sniff(b"not a picture at all").is_none());
         assert!(Media::sniff(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>").is_none());
         assert!(Media::sniff(&[]).is_none());
+    }
+
+    /// An upload becomes two WebP files, each within its side and never
+    /// enlarged, and the record says what the upload and the files were.
+    #[test]
+    fn an_upload_is_rendered_in_two_sizes() {
+        let wide = rendered(&png(3000, 1000, [200, 30, 30, 255]));
+        assert_eq!((wide.picture.width, wide.picture.height), (3000, 1000));
+        assert_eq!(
+            (wide.picture.page.width, wide.picture.page.height),
+            (1200, 400)
+        );
+        assert_eq!(
+            (wide.picture.listing.width, wide.picture.listing.height),
+            (400, 133)
+        );
+        for (rendition, file) in wide.picture.files() {
+            let bytes = wide.bytes(rendition);
+            assert_eq!(bytes.len() as u64, file.size);
+            assert_eq!(sha256(bytes), file.sha256);
+            assert!(is_rendition(bytes), "{rendition:?} is WebP");
+            let decoded = image::load_from_memory(bytes).expect("decodes");
+            assert_eq!(decoded.dimensions(), (file.width, file.height));
+        }
+        assert!(wide.picture.is_valid());
+
+        let small = rendered(&png(50, 80, [0, 0, 0, 128]));
+        assert_eq!(
+            (small.picture.page.width, small.picture.page.height),
+            (50, 80)
+        );
+        assert_eq!(
+            (small.picture.listing.width, small.picture.listing.height),
+            (50, 80),
+            "never enlarged"
+        );
+        // Its transparency survives.
+        let decoded = image::load_from_memory(&small.page).unwrap();
+        assert!(decoded.color().has_alpha());
+    }
+
+    /// What is not a picture, or more picture than the shop takes, is
+    /// refused with the word for it, before it is decoded.
+    #[test]
+    fn an_upload_that_is_not_a_picture_is_refused() {
+        assert_eq!(render(b"not a picture"), Err(Refusal::NotAPicture));
+        assert_eq!(render(&[]), Err(Refusal::NotAPicture));
+        // A PNG header claiming 6000 × 6000 pixels, and nothing behind it.
+        let mut huge = png(1, 1, [0; 4]);
+        huge[16..20].copy_from_slice(&6000u32.to_be_bytes());
+        huge[20..24].copy_from_slice(&6000u32.to_be_bytes());
+        assert_eq!(render(&huge), Err(Refusal::TooManyPixels));
+        // A header that lies about a size within the cap is found out.
+        let mut lying = png(1, 1, [0; 4]);
+        lying[16..20].copy_from_slice(&600u32.to_be_bytes());
+        assert!(render(&lying).is_err());
+        assert_eq!(Refusal::TooLarge.code(), "image_too_large");
+        assert_eq!(Refusal::TooManyPixels.code(), "image_too_big");
     }
 
     #[test]
@@ -703,8 +991,12 @@ mod tests {
         );
         assert_eq!(media.tenant_url("t-1"), "https://shop.example/media/t-1");
         assert_eq!(
-            media.url("t-1", "img-1.png"),
-            "https://shop.example/media/t-1/img-1.png"
+            media.url("t-1", "img-1", Rendition::Listing),
+            "https://shop.example/media/t-1/400/img-1.webp"
+        );
+        assert_eq!(
+            media.url("t-1", "img-1", Rendition::Page),
+            "https://shop.example/media/t-1/1200/img-1.webp"
         );
     }
 
@@ -715,45 +1007,88 @@ mod tests {
             dir,
             public_url: "https://shop.example/media".into(),
             peers: Some(Arc::new(Peers::for_test(peers, nodes))),
+            renders: Semaphore::new(RENDERS_AT_ONCE),
+        }
+    }
+
+    fn alone(media: Media) -> Media {
+        Media {
+            peers: None,
+            ..media
         }
     }
 
     #[tokio::test]
-    async fn an_upload_is_copied_to_a_majority_of_the_cluster() {
+    async fn an_upload_is_kept_once_a_majority_of_the_cluster_has_it() {
+        let upload = rendered(&png(900, 600, [10, 200, 10, 255]));
         let three = media(vec![peer(204, b"").await, down().await], 3);
-        assert!(three.replicate("t1", "i1.png", PNG.to_vec()).await.is_ok());
-        let alone = media(vec![peer(401, b"").await, down().await], 3);
-        assert!(alone.replicate("t1", "i1.png", PNG.to_vec()).await.is_err());
-        let single = Media {
-            peers: None,
-            ..alone
-        };
-        assert!(single.replicate("t1", "i1.png", PNG.to_vec()).await.is_ok());
+        let picture = three.keep("t1", "i1", upload.clone()).await.expect("kept");
+        assert_eq!(picture, upload.picture);
+        for rendition in Rendition::ALL {
+            let path = three.path_of("t1", rendition, "i1").unwrap();
+            assert_eq!(
+                tokio::fs::read(&path).await.unwrap().len() as u64,
+                picture.rendition(rendition).size
+            );
+        }
+
+        // Short of a majority, nothing is kept here either.
+        let short = media(vec![peer(401, b"").await, down().await], 3);
+        assert!(short.keep("t1", "i1", upload.clone()).await.is_err());
+        assert!(
+            !short.dir.join("t1").exists()
+                || !short.path_of("t1", Rendition::Page, "i1").unwrap().exists()
+        );
+
+        let single = alone(media(vec![], 1));
+        assert!(single.keep("t1", "i1", upload).await.is_ok());
     }
 
+    /// A node lacking a picture takes it from the first peer whose copy is
+    /// the one recorded, rendition by rendition.
     #[tokio::test]
     async fn a_missing_picture_is_fetched_from_a_peer_that_has_it() {
-        let size = PNG.len() as u64;
-        let media = media(
-            vec![down().await, peer(404, b"").await, peer(200, PNG).await],
-            4,
-        );
-        media.fetch("t1", "i1", "png", size).await.expect("fetched");
-        let stored = tokio::fs::read(media.dir.join("t1/i1.png")).await.unwrap();
-        assert_eq!(stored, PNG);
+        let upload = rendered(&png(900, 600, [10, 10, 200, 255]));
+        let (listing, page) = (upload.listing.clone(), upload.page.clone());
+        let has_it = answering(move |head, _| {
+            let body = if head.contains("/400/") {
+                listing.to_vec()
+            } else {
+                page.to_vec()
+            };
+            (200, body)
+        })
+        .await;
+        let media = media(vec![down().await, peer(404, b"").await, has_it], 4);
+        media
+            .fetch("t1", "i1", &upload.picture)
+            .await
+            .expect("fetched");
+        for (rendition, file) in upload.picture.files() {
+            let stored = tokio::fs::read(media.path_of("t1", rendition, "i1").unwrap())
+                .await
+                .unwrap();
+            assert_eq!(stored, upload.bytes(rendition).to_vec());
+            assert_eq!(stored.len() as u64, file.size);
+        }
         // Held now: nothing is asked of the peers.
-        let held = Media {
-            peers: None,
-            ..media
-        };
-        held.fetch("t1", "i1", "png", size)
+        alone(media)
+            .fetch("t1", "i1", &upload.picture)
             .await
             .expect("already here");
 
-        // A copy that is not what the catalog recorded is not kept.
-        let wrong = super::tests::media(vec![peer(200, GIF).await], 3);
-        assert!(wrong.fetch("t1", "i2", "png", size).await.is_err());
-        assert!(!wrong.dir.join("t1/i2.png").exists());
+        // A copy that is not what the catalog recorded is not kept: the
+        // right size with other bytes, or another picture altogether.
+        let other = rendered(&png(900, 600, [200, 10, 10, 255]));
+        let wrong = super::tests::media(vec![peer(200, b"").await], 3);
+        assert!(wrong.fetch("t1", "i2", &upload.picture).await.is_err());
+        let swapped = {
+            let page = other.page.clone();
+            answering(move |_, _| (200, page.to_vec())).await
+        };
+        let swapped = super::tests::media(vec![swapped], 3);
+        assert!(swapped.fetch("t1", "i2", &upload.picture).await.is_err());
+        assert!(!swapped.dir.join("t1").exists());
     }
 
     #[tokio::test]
@@ -761,30 +1096,48 @@ mod tests {
         let media = media(vec![], 1);
         assert!(media.authorizes(Some(SECRET.as_bytes())));
         assert!(!media.authorizes(None));
-        let single = Media {
-            peers: None,
-            ..media
-        };
+        let single = alone(media);
         assert!(!single.authorizes(Some(SECRET.as_bytes())));
 
+        let upload = rendered(&png(20, 20, [1, 2, 3, 255]));
+        let webp = upload.listing.to_vec();
         let media = super::tests::media(vec![], 3);
-        for (tenant, file) in [
-            ("..", "i1.png"),
-            ("t1", "../i1.png"),
-            ("t1", "i1.exe"),
-            ("t/1", "i1.png"),
+        for (tenant, dir, file) in [
+            ("..", "400", "i1.webp"),
+            ("t1", "..", "i1.webp"),
+            ("t1", "400", "../i1.webp"),
+            ("t1", "400", "i1.exe"),
+            ("t1", "400", "i1.png"),
+            ("t1", "800", "i1.webp"),
+            ("t/1", "400", "i1.webp"),
         ] {
             assert!(
-                !media.accept(tenant, file, PNG).await.unwrap(),
-                "{tenant}/{file}"
+                !media.accept(tenant, dir, file, &webp).await.unwrap(),
+                "{tenant}/{dir}/{file}"
             );
         }
-        // The bytes must be what the name says.
-        assert!(!media.accept("t1", "i1.gif", PNG).await.unwrap());
-        assert!(media.accept("t1", "i1.png", PNG).await.unwrap());
-        assert!(media.dir.join("t1/i1.png").is_file());
+        // The bytes must be a rendition: WebP, and no heavier than one gets.
+        assert!(
+            !media
+                .accept("t1", "400", "i1.webp", &png(2, 2, [0; 4]))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !media
+                .accept(
+                    "t1",
+                    "400",
+                    "i1.webp",
+                    &vec![0; MAX_RENDITION_BYTES as usize + 1]
+                )
+                .await
+                .unwrap()
+        );
+        assert!(media.accept("t1", "400", "i1.webp", &webp).await.unwrap());
+        assert!(media.dir.join("t1/400/i1.webp").is_file());
         media.remove_image("t1", "i1").await;
-        assert!(!media.dir.join("t1/i1.png").exists());
+        assert!(!media.dir.join("t1/400/i1.webp").exists());
     }
 
     /// The names come from events, which a key with `store:write` fills as
@@ -792,55 +1145,57 @@ mod tests {
     /// the tenant's directory.
     #[tokio::test]
     async fn a_name_from_the_store_cannot_leave_the_tenant_directory() {
-        let media = media(vec![peer(200, PNG).await], 3);
+        let upload = rendered(&png(20, 20, [1, 2, 3, 255]));
+        let media = media(vec![peer(200, b"").await], 3);
         let bad_names = [
-            ("..", "i1", "png"),
-            ("t1", "../../etc/passwd", "png"),
-            ("t1", "i1", "png/../../x"),
-            ("t1", "i1", "exe"),
-            ("t/1", "i1", "png"),
-            ("", "i1", "png"),
-            ("t1", "", "png"),
-            ("t1", "i1", ""),
+            ("..", "i1"),
+            ("t1", "../../etc/passwd"),
+            ("t1", "i1/../../x"),
+            ("t/1", "i1"),
+            ("", "i1"),
+            ("t1", ""),
+            ("t1", "i1.webp"),
         ];
-        for (tenant, image, ext) in bad_names {
+        for (tenant, image) in bad_names {
             assert!(
-                media.path_of(tenant, image, ext).is_err(),
-                "{tenant}/{image}.{ext}"
-            );
-            assert!(
-                media.store(tenant, image, ext, PNG).await.is_err(),
-                "stored {tenant}/{image}.{ext}"
+                media.path_of(tenant, Rendition::Page, image).is_err(),
+                "{tenant}/{image}"
             );
             assert!(
                 media
-                    .fetch(tenant, image, ext, PNG.len() as u64)
+                    .store(tenant, Rendition::Page, image, &upload.page)
                     .await
                     .is_err(),
-                "fetched {tenant}/{image}.{ext}"
+                "stored {tenant}/{image}"
+            );
+            assert!(
+                media.fetch(tenant, image, &upload.picture).await.is_err(),
+                "fetched {tenant}/{image}"
             );
         }
         assert_eq!(
-            media.path_of("t1", "i1", "png").unwrap(),
-            media.dir.join("t1/i1.png")
+            media.path_of("t1", Rendition::Listing, "i1").unwrap(),
+            media.dir.join("t1/400/i1.webp")
         );
 
         // A file above the tenant's directory survives every way of asking
         // for its deletion.
-        tokio::fs::create_dir_all(media.dir.join("t1"))
+        tokio::fs::create_dir_all(media.dir.join("t1/400"))
             .await
             .unwrap();
-        let above = media.dir.join("i1.png");
-        tokio::fs::write(&above, PNG).await.unwrap();
-        media.remove("t1", "../i1.png").await;
-        media.remove("..", "i1.png").await;
+        let above = media.dir.join("i1.webp");
+        tokio::fs::write(&above, &upload.listing).await.unwrap();
         media.remove_image("t1", "..").await;
         media.remove_image("t1", "../i1").await;
+        media.remove_image("..", "i1").await;
         assert!(above.is_file());
         // While a picture of ours goes.
-        media.store("t1", "i1", "png", PNG).await.unwrap();
-        media.remove("t1", "i1.png").await;
-        assert!(!media.dir.join("t1/i1.png").exists());
+        media
+            .store("t1", Rendition::Listing, "i1", &upload.listing)
+            .await
+            .unwrap();
+        media.remove_image("t1", "i1").await;
+        assert!(!media.dir.join("t1/400/i1.webp").exists());
     }
 
     /// Tenants live in the platform's streams. A shop's store key can write a
@@ -848,12 +1203,15 @@ mod tests {
     /// nothing is fetched into that tenant's media for it.
     #[tokio::test]
     async fn a_branding_in_a_shops_tenant_fetches_nothing() {
+        let upload = rendered(&png(20, 20, [1, 2, 3, 255]));
         let store = evento::Turso::in_memory_concurrent().await.unwrap();
         evento::append("victim")
             .original_version(0)
             .event(&MailBrandingSet {
-                logo_file: Some("i1.png".to_owned()),
-                logo_size: PNG.len() as u64,
+                logo: Some(timada_tenancy::MailLogo {
+                    id: "i1".to_owned(),
+                    picture: upload.picture,
+                }),
                 accent: None,
                 footer: None,
                 set_by: "mallory".to_owned(),
@@ -862,7 +1220,8 @@ mod tests {
             .commit(&store)
             .await
             .unwrap();
-        let has_it = peer(200, PNG).await;
+        let listing = upload.listing.clone();
+        let has_it = answering(move |_, _| (200, listing.to_vec())).await;
         let media = Arc::new(media(vec![has_it], 1));
 
         logo_subscription::<evento::Turso>(media.clone())
@@ -871,7 +1230,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            tokio::fs::metadata(media.path_of("victim", "i1", "png").unwrap())
+            tokio::fs::metadata(media.path_of("victim", Rendition::Listing, "i1").unwrap())
                 .await
                 .is_err()
         );

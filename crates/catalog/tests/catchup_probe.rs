@@ -64,10 +64,7 @@ async fn seed(cmd: &Command<evento::Turso>, products: usize) -> Vec<String> {
                 &product.id,
                 AddImage {
                     image_id: format!("img-{n}-{i}"),
-                    ext: "jpg".into(),
-                    size: 20_000,
-                    width: Some(800),
-                    height: Some(600),
+                    picture: test_picture(),
                     alt: format!("Picture {i}"),
                 },
             )

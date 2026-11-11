@@ -21,8 +21,9 @@
 
 use std::sync::Arc;
 
+use bytes::Bytes;
 use serde::Serialize;
-use timada_catalog::{MAX_IMAGE_BYTES, new_image_id};
+use timada_catalog::new_image_id;
 use timada_orders::STOREFRONT_ACTOR;
 use timada_reviews::{
     REVIEW_INVALID_PHOTO, REVIEW_INVALID_RATING, ReviewError, ReviewPhoto, SubmitReview,
@@ -38,7 +39,7 @@ use topcoat::{
     },
 };
 
-use crate::media::{Media, SniffedImage};
+use crate::media::{Media, Rendered};
 
 pub mod revise;
 
@@ -86,7 +87,7 @@ struct Upload {
     body: String,
     /// The `keep_photo` ids of a revision.
     keep: Vec<String>,
-    files: Vec<Vec<u8>>,
+    files: Vec<Bytes>,
 }
 
 async fn read_upload(multipart: &mut Multipart) -> Result<Upload> {
@@ -103,7 +104,7 @@ async fn read_upload(multipart: &mut Multipart) -> Result<Upload> {
                 let bytes = field.bytes().await?;
                 // A file input left empty still sends a part.
                 if !bytes.is_empty() {
-                    upload.files.push(bytes.to_vec());
+                    upload.files.push(bytes);
                 }
             }
             _ => {}
@@ -112,24 +113,27 @@ async fn read_upload(multipart: &mut Multipart) -> Result<Upload> {
     Ok(upload)
 }
 
-/// The photos the bytes are, not what the files were called; `None` when
-/// one is not a picture taken, or too large.
-fn sniff_photos(files: Vec<Vec<u8>>) -> Option<Vec<(ReviewPhoto, Vec<u8>)>> {
+/// The photos the bytes are, not what the files were called, rendered into
+/// what the shop keeps under fresh ids; `None` when one is not a picture
+/// taken, or too large.
+async fn render_photos(cx: &Cx, files: Vec<Bytes>) -> Result<Option<Vec<(ReviewPhoto, Rendered)>>> {
+    let media = app_context::<Arc<Media>>(cx);
     let mut photos = Vec::with_capacity(files.len());
     for bytes in files {
-        let sniffed: Option<SniffedImage> = Media::sniff(&bytes);
-        let sniffed = sniffed.filter(|_| bytes.len() as u64 <= MAX_IMAGE_BYTES)?;
+        let Ok(rendered) = media
+            .render(bytes)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+        else {
+            return Ok(None);
+        };
         let photo = ReviewPhoto {
             id: new_image_id(),
-            ext: sniffed.ext.to_owned(),
-            mime: sniffed.mime.to_owned(),
-            size: bytes.len() as u64,
-            width: sniffed.width,
-            height: sniffed.height,
+            picture: rendered.picture,
         };
-        photos.push((photo, bytes));
+        photos.push((photo, rendered));
     }
-    Some(photos)
+    Ok(Some(photos))
 }
 
 /// Stores the photos and copies them to a majority of nodes, then runs
@@ -137,7 +141,7 @@ fn sniff_photos(files: Vec<Vec<u8>>) -> Option<Vec<(ReviewPhoto, Vec<u8>)>> {
 async fn with_photos<F, Fut>(
     cx: &Cx,
     access: &ApiKeyAccess,
-    photos: &[(ReviewPhoto, Vec<u8>)],
+    photos: Vec<(ReviewPhoto, Rendered)>,
     record: F,
 ) -> std::result::Result<String, ReviewError>
 where
@@ -148,27 +152,22 @@ where
     let media = app_context::<Arc<Media>>(cx).clone();
     let mut stored: Vec<String> = Vec::new();
     let mut kept = Ok(());
-    for (photo, bytes) in photos {
-        let file = photo.file();
-        if let Err(err) = media.store(tenant_id, &photo.id, &photo.ext, bytes).await {
-            kept = Err(err);
-            break;
-        }
-        stored.push(file.clone());
+    for (photo, rendered) in photos {
         // On a majority of nodes before it is recorded, like the event that
         // records it.
-        if let Err(err) = media.replicate(tenant_id, &file, bytes.clone()).await {
+        if let Err(err) = media.keep(tenant_id, &photo.id, rendered).await {
             kept = Err(err);
             break;
         }
+        stored.push(photo.id);
     }
     let recorded = match kept {
         Ok(()) => record().await,
         Err(err) => Err(ReviewError::Other(err)),
     };
     if recorded.is_err() {
-        for file in &stored {
-            media.remove(tenant_id, file).await;
+        for id in &stored {
+            media.remove_image(tenant_id, id).await;
         }
     }
     recorded
@@ -184,7 +183,7 @@ pub async fn submit(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Js
     let Some(rating) = upload.rating else {
         return Ok(refused(REVIEW_INVALID_RATING));
     };
-    let Some(photos) = sniff_photos(upload.files) else {
+    let Some(photos) = render_photos(cx, upload.files).await? else {
         return Ok(refused(REVIEW_INVALID_PHOTO));
     };
     let draft = SubmitReview {
@@ -210,7 +209,7 @@ pub async fn submit(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Js
         return answer_error(err);
     }
 
-    let submitted = with_photos(cx, &access, &photos, || async {
+    let submitted = with_photos(cx, &access, photos, || async {
         reviews
             .submit_review(STOREFRONT_ACTOR, draft)
             .await

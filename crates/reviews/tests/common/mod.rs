@@ -96,13 +96,20 @@ pub async fn cancel(executor: &evento::Turso, order_id: &str) {
 }
 
 pub fn photo(id: &str) -> ReviewPhoto {
+    let rendition = timada_core::RenditionFile {
+        width: 1,
+        height: 1,
+        size: 68,
+        sha256: [1; 32],
+    };
     ReviewPhoto {
         id: id.to_owned(),
-        ext: "png".to_owned(),
-        mime: "image/png".to_owned(),
-        size: 68,
-        width: Some(1),
-        height: Some(1),
+        picture: timada_core::Picture {
+            width: 1,
+            height: 1,
+            listing: rendition,
+            page: rendition,
+        },
     }
 }
 
