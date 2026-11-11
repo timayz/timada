@@ -272,6 +272,7 @@ impl Shop {
         let stand_in = StandIn::new();
         let share = Arc::new(Mutex::new(Share::ALONE));
         let current = share.clone();
+        let quota = Arc::new(crate::media::Quota::new(db.clone(), None));
         let aliexpress = Aliexpress::new(
             Some(Sealer::new("aliexpress-test", "secret")),
             &AliexpressConfig {
@@ -288,6 +289,7 @@ impl Shop {
             },
             false,
             store.clone(),
+            quota,
             Arc::new(move |_| *current.lock().unwrap()),
         )
         .unwrap();

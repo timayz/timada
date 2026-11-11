@@ -257,7 +257,7 @@ async fn import<E: Executor>(
         merchant.aliexpress_pricing.as_ref(),
     )
     .map_err(|err| err.to_string())?;
-    let images = Arc::new(aliexpress.images(media, tenant_id));
+    let images = Arc::new(aliexpress.images(media, &merchant));
     let imported = import_one(
         catalog,
         actor,

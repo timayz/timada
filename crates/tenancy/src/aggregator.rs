@@ -22,6 +22,11 @@ pub enum Tenant {
         reason: String,
     },
     Resumed,
+    /// How much disk the tenant's pictures may take, in bytes, set by the
+    /// platform; `None` puts it back on the platform's default.
+    MediaQuotaSet {
+        bytes: Option<u64>,
+    },
     MemberGranted {
         user_id: String,
         role: String,

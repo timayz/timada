@@ -46,10 +46,10 @@ use crate::aggregator::{
     Accepted, Claimed, CompanyLinked, CompanyUnlinked, Created, MailBrandingCleared,
     MailBrandingSet, MailClaimed, MailDeferred, MailFailed, MailLanguagesSet, MailSent,
     MailServerAdded, MailServerChanged, MailServerDeleted, MailServersPicked, MailTemplateReset,
-    MailTemplateSaved, MailTemplateTextSaved, MailUndeliverable, MemberGranted, MemberRevoked,
-    MemberRoleChanged, PaymentsConfigured, PaymentsForgotten, PaymentsStopped, Released, Renamed,
-    Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, SeatGranted, SeatRefused, Sent,
-    Suspended,
+    MailTemplateSaved, MailTemplateTextSaved, MailUndeliverable, MediaQuotaSet, MemberGranted,
+    MemberRevoked, MemberRoleChanged, PaymentsConfigured, PaymentsForgotten, PaymentsStopped,
+    Released, Renamed, Resumed, Revoked, RoleDefined, RoleRemoved, RoleUpdated, SeatGranted,
+    SeatRefused, Sent, Suspended,
 };
 use crate::value_object::{
     ROLE_OWNER, api_key_id, api_key_scope_implies, implies, invitation_id, tenant_slug_id,
@@ -122,6 +122,9 @@ pub struct TenantState {
     pub mail_template_history: Vec<MailTemplateChange>,
     /// The look all the shop's mails share, once set.
     pub mail_branding: Option<MailBranding>,
+    /// How much disk the tenant's pictures may take, in bytes, when the
+    /// platform set it apart from its default.
+    pub media_quota_bytes: Option<u64>,
     /// What the shop buys on AliExpress, once set up.
     pub aliexpress: Option<AliexpressSettings>,
     /// How the shop prices what it imports, by cost band, from its creation
@@ -366,6 +369,7 @@ pub fn tenant_projection<E: Executor>() -> Projection<E, TenantState> {
         .handler(on_time_zone_set())
         .handler(on_suspended())
         .handler(on_resumed())
+        .handler(on_media_quota_set())
         .handler(on_member_granted())
         .handler(on_member_role_changed())
         .handler(on_member_revoked())
@@ -430,6 +434,15 @@ async fn on_suspended(event: Event<Suspended>, tenant: &mut TenantState) -> anyh
 #[evento::handler]
 async fn on_resumed(_event: Event<Resumed>, tenant: &mut TenantState) -> anyhow::Result<()> {
     tenant.suspended = None;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_media_quota_set(
+    event: Event<MediaQuotaSet>,
+    tenant: &mut TenantState,
+) -> anyhow::Result<()> {
+    tenant.media_quota_bytes = event.data.bytes;
     Ok(())
 }
 

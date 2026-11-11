@@ -587,6 +587,9 @@ pub fn say(code: &str) -> &'static str {
         "review_invalid_body" => "Dites-nous en un peu plus : de 10 à 2000 caractères.",
         "review_too_many_photos" => "Joignez au plus trois photos.",
         "review_invalid_photo" => "Joignez des photos JPEG, PNG, WebP ou GIF de 8 Mio au plus.",
+        "review_storage_full" => {
+            "La boutique ne peut plus recevoir de photos pour le moment : envoyez votre avis sans photo."
+        }
         "review_order_not_found" => "Cette commande ne peut pas être évaluée.",
         "review_not_purchased" => "Ce produit ne fait pas partie de cette commande.",
         "review_order_cancelled" => "Une commande annulée ne peut pas être évaluée.",

@@ -109,6 +109,16 @@ test("the administrator sees a tenant active, suspends and resumes it", async ({
   await expect(owner.getByRole("alert").filter({ hasText: "suspended by the platform" })).toContainText("unpaid invoices");
   await expect(owner.locator("[data-tenant-status]")).toHaveAttribute("data-tenant-status", "suspended");
 
+  // The platform sets how much disk the tenant's pictures may take.
+  await expect(admin.locator("[data-tenant-pictures]")).toContainText("the platform's default");
+  await admin.getByLabel("Quota, in MiB").fill("2048");
+  await admin.getByRole("button", { name: "Set the quota" }).click();
+  await expect(admin.getByRole("status")).toContainText("Picture quota set.");
+  await expect(admin.locator("[data-tenant-pictures]")).toHaveText("0 B of 2.1 GB");
+  await admin.getByLabel("Quota, in MiB").fill("");
+  await admin.getByRole("button", { name: "Set the quota" }).click();
+  await expect(admin.getByRole("status")).toContainText("back on the platform's default");
+
   // Resume: back online on the next visit.
   await admin.getByRole("button", { name: "Resume tenant" }).click();
   await expect(admin.getByRole("status")).toContainText("Tenant resumed.");

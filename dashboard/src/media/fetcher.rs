@@ -159,6 +159,38 @@ impl Fetcher {
         self.wake.notify_one();
     }
 
+    /// Puts files the store knows on the wanted list, afresh: what the
+    /// reconcile found missing or wrong on disk.
+    pub(crate) async fn want_known(
+        &self,
+        files: &[&super::read_model::Known],
+        now: u64,
+    ) -> Result<()> {
+        let rows: Vec<(String, String, Rendition, RenditionFile)> = files
+            .iter()
+            .filter_map(|known| {
+                Some((
+                    known.tenant_id.clone(),
+                    known.image_id.clone(),
+                    Rendition::from_dir(&known.rendition)?,
+                    known.recorded()?,
+                ))
+            })
+            .collect();
+        self.db
+            .write(&(rows, now as i64), |tx, (rows, now)| {
+                Box::pin(async move {
+                    for (tenant_id, image_id, rendition, file) in rows {
+                        want(tx, tenant_id, image_id, *rendition, file, *now).await?;
+                    }
+                    Ok(())
+                })
+            })
+            .await?;
+        self.wake();
+        Ok(())
+    }
+
     /// Fetches what is due every [`CHECK_EVERY`], and as soon as a
     /// subscription wrote a row.
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
