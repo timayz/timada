@@ -493,6 +493,39 @@ async fn a_revoked_key_disconnects_the_store() {
     h.finish().await;
 }
 
+/// A store that says it cannot serve the key's shop right now (here the
+/// tenant is suspended; a store that cannot check the key answers the same)
+/// does not stop the shop from starting: it opens on its copy, says what it
+/// waits for, and connects once the store takes the key again.
+#[tokio::test]
+async fn a_store_that_cannot_serve_the_shop_yet_is_waited_for() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    h.platform.suspend_tenant(&acme.id, "unpaid").await.unwrap();
+    let store = Store::connect(h.config(&token), h.local_db("suspended").await)
+        .await
+        .unwrap();
+    let status = store.status().await;
+    assert!(!status.connected);
+    match &status.subscription {
+        SubscriptionState::Connecting { error } => {
+            assert!(error.contains("suspended"), "{error}");
+        }
+        other => panic!("{other:?}"),
+    }
+
+    h.platform.resume_tenant(&acme.id).await.unwrap();
+    eventually("the shop connects once the store takes it", async || {
+        let status = store.status().await;
+        status.connected && status.subscription == SubscriptionState::Running
+    })
+    .await;
+
+    store.shutdown().await;
+    h.finish().await;
+}
+
 #[tokio::test]
 async fn the_store_connects_over_tls() {
     let dir =
