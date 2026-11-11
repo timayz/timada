@@ -92,8 +92,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <div>
                         if !product.images.is_empty() {
                             <ul class="gallery" data-gallery="">
-                                for image in &product.images {
-                                    <li>product_image(image: image, attrs: attributes! { class="photo" })</li>
+                                // The first spans the gallery: the page rendition, with
+                                // the small one for phones; the others are tiles.
+                                for (position, image) in product.images.iter().enumerate() {
+                                    <li>product_image(image: image, large: position == 0, attrs: attributes! { class="photo" })</li>
                                 }
                             </ul>
                         }
@@ -228,7 +230,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 if !review.photos.is_empty() {
                                     <p>
                                         for photo in &review.photos {
-                                            <a href=(&photo.url)><img src=(&photo.url) alt="Une photo du client" data-review-photo=(&photo.id)></a>
+                                            <a href=(&photo.url)><img src=(&photo.thumb_url) width=(photo.thumb_width) height=(photo.thumb_height) loading="lazy" alt="Une photo du client" data-review-photo=(&photo.id)></a>
                                         }
                                     </p>
                                 }

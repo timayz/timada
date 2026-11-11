@@ -19,24 +19,12 @@ pub const REVIEW_LINK_TTL_SECS: u64 = 60 * 24 * 60 * 60;
 
 /// A photo of a review, as the upload that took it found it. Frozen in
 /// `events.lock`: the fields never change. The file is
-/// `<tenant>/<id>.<ext>` wherever the shop keeps its pictures.
+/// Kept wherever the shop keeps its pictures, in the two renditions
+/// `picture` describes, named after `id`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct ReviewPhoto {
     pub id: String,
-    /// Lowercase, no dot: `jpg`, `png`, `webp`, `gif`.
-    pub ext: String,
-    pub mime: String,
-    /// In bytes.
-    pub size: u64,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-}
-
-impl ReviewPhoto {
-    /// The file name, under the tenant's picture directory.
-    pub fn file(&self) -> String {
-        format!("{}.{}", self.id, self.ext)
-    }
+    pub picture: timada_core::Picture,
 }
 
 /// Where a review stands.

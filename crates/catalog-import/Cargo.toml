@@ -7,6 +7,7 @@ description = "Loads a catalogue snapshot into a tenant's catalog, and takes one
 
 [dependencies]
 timada-catalog = { path = "../catalog" }
+timada-core = { path = "../core" }
 evento.workspace = true
 serde.workspace = true
 serde_json.workspace = true

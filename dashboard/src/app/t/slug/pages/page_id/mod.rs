@@ -17,6 +17,8 @@ pub mod upload;
 
 use std::sync::Arc;
 
+use timada_core::{Picture, Rendition};
+
 use serde::Deserialize;
 use timada_pages::{
     MAX_BODY_LEN, MAX_IMAGES_PER_PAGE, MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_SLUG_LEN,
@@ -371,7 +373,7 @@ async fn page_screen(
                 <ul class="divide-y divide-border text-sm">
                     for image in &page.images {
                         <li class="flex items-center gap-3 py-2" data-page-image=(image.file())>
-                            <img src=(format!("{media_url}/{}", image.file())) alt="" class="size-12 shrink-0 rounded border border-border object-cover">
+                            <img src=(Picture::url(media_url, &image.id, Rendition::Listing)) alt="" class="size-12 shrink-0 rounded border border-border object-cover">
                             <code class="min-w-0 flex-1 truncate text-xs" data-page-image-snippet="">"![](" (image.file()) ")"</code>
                             <form method="post" action=(href!(remove_image::remove_image, Slug(slug.to_owned()), PageId(id.to_owned())))>
                                 <input type="hidden" name="image_id" value=(&image.id)>

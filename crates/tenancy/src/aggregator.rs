@@ -170,12 +170,11 @@ pub enum Tenant {
         language: String,
         reset_by: String,
     },
-    /// The look all the shop's mails share. `logo_file` is a picture in the
-    /// tenant's media (`<id>.<ext>`, `logo_size` bytes); `accent` is a
-    /// `#rrggbb` colour; `footer` is plain text. Each is `None` when unset.
+    /// The look all the shop's mails share. `logo` is a picture in the
+    /// tenant's media; `accent` is a `#rrggbb` colour; `footer` is plain
+    /// text. Each is `None` when unset.
     MailBrandingSet {
-        logo_file: Option<String>,
-        logo_size: u64,
+        logo: Option<crate::command::MailLogo>,
         accent: Option<String>,
         footer: Option<String>,
         set_by: String,

@@ -20,6 +20,7 @@ pub mod db;
 pub mod email;
 pub mod keys;
 pub mod money;
+pub mod picture;
 pub mod sending;
 pub mod slug;
 pub mod sql;
@@ -32,6 +33,10 @@ pub use currency::{CURRENCIES, normalize_currency};
 pub use email::{MAX_EMAIL_LEN, normalize_email};
 pub use keys::{Key, Keys};
 pub use money::{currency_symbol, format_amount, format_money, format_money_range};
+pub use picture::{
+    MAX_PICTURE_PIXELS, Picture, RENDITION_EXT, RENDITION_MIME, Rendition, RenditionFile,
+    is_picture_file,
+};
 pub use sending::{
     Claim, Claimant, LEASE_SECS, Outcome as MailOutcome, RETRY_DELAYS_SECS, Record as MailRecord,
     Sending, Status as MailStatus,

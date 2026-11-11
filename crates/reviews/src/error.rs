@@ -15,6 +15,9 @@ pub enum ReviewError {
     InvalidBody,
     #[error("a review has at most {MAX_PHOTOS} photos")]
     TooManyPhotos,
+    /// A photo whose record describes no file.
+    #[error("a photo is a picture the shop keeps")]
+    InvalidPhoto,
     #[error("a reason is at most {MAX_REASON_LEN} characters")]
     InvalidReason,
     #[error("a reply says something in at most {MAX_REPLY_LEN} characters")]
@@ -70,6 +73,7 @@ impl ReviewError {
             Self::InvalidTitle => REVIEW_INVALID_TITLE,
             Self::InvalidBody => REVIEW_INVALID_BODY,
             Self::TooManyPhotos => REVIEW_TOO_MANY_PHOTOS,
+            Self::InvalidPhoto => REVIEW_INVALID_PHOTO,
             Self::InvalidReason => "invalid_review_reason",
             Self::InvalidReply => "invalid_review_reply",
             Self::OrderNotFound => REVIEW_ORDER_NOT_FOUND,

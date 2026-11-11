@@ -396,11 +396,13 @@ async fn upsert_review(db: &Db, review: &ReviewState) -> anyhow::Result<()> {
                         .iter()
                         .map(|photo| crate::ReviewPhoto {
                             id: photo.id.clone(),
-                            file: photo.file(),
-                            width: photo.width,
-                            height: photo.height,
+                            width: photo.picture.page.width,
+                            height: photo.picture.page.height,
+                            thumb_width: photo.picture.listing.width,
+                            thumb_height: photo.picture.listing.height,
                             // Filled in when a page reads the review.
                             url: String::new(),
+                            thumb_url: String::new(),
                         })
                         .collect();
                     execute(
@@ -697,14 +699,15 @@ fn images_json(product: &ProductState) -> anyhow::Result<String> {
         .iter()
         .map(|image| crate::Image {
             id: image.id.clone(),
-            file: image.file(),
-            mime: image.mime.clone(),
             alt: image.alt.clone(),
-            width: image.width,
-            height: image.height,
+            width: image.picture.page.width,
+            height: image.picture.page.height,
+            thumb_width: image.picture.listing.width,
+            thumb_height: image.picture.listing.height,
             // Filled in when a page reads the product: the address belongs
             // to the host's configuration, not to the row.
             url: String::new(),
+            thumb_url: String::new(),
         })
         .collect();
     Ok(serde_json::to_string(&images)?)

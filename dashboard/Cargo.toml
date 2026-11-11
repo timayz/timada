@@ -10,6 +10,8 @@ tokio.workspace = true
 # components draw their icons from the Lucide set `build.rs` stages.
 topcoat = { workspace = true, features = ["ui", "icon-iconify"] }
 imagesize.workspace = true
+image.workspace = true
+webp.workspace = true
 bytes.workspace = true
 evento.workspace = true
 timada-core = { path = "../crates/core" }

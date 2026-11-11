@@ -19,12 +19,14 @@ pub mod unpublish;
 pub mod variants;
 
 use std::sync::Arc;
+
 use timada_catalog::{
     CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_ATTRIBUTE_VALUE_LEN,
     MAX_DELIVERY_DAYS, MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN,
     MAX_OPTION_LABEL_LEN, MAX_OPTION_NAME_LEN, MAX_OPTIONS, MAX_SKU_LEN, MAX_VARIANTS,
     ProductOption, ProductState, ProductVariant, TAX_CATEGORIES, format_money, tax_category_label,
 };
+use timada_core::Rendition;
 use timada_tenancy::{
     PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ, PERMISSION_REVIEWS_READ,
 };
@@ -409,7 +411,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let gallery: Vec<(timada_catalog::ProductImage, String)> = product
         .images
         .iter()
-        .map(|image| (image.clone(), media.url(&access.tenant.id, &image.file())))
+        .map(|image| {
+            (
+                image.clone(),
+                media.url(&access.tenant.id, &image.id, Rendition::Listing),
+            )
+        })
         .collect();
     // The rating counts published reviews only; the link is for those who
     // may read the reviews.
@@ -531,7 +538,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .iter()
         .map(|image| {
             let label = if image.alt.is_empty() {
-                image.file()
+                image.id.clone()
             } else {
                 image.alt.clone()
             };
@@ -809,7 +816,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         for (position, (image, url)) in gallery.iter().enumerate() {
                             <li class="flex gap-3 rounded-lg border border-border p-3" data-image=(&image.id)>
                                 <img class="h-24 w-24 shrink-0 rounded-md object-cover" src=(url) alt=(&image.alt)
-                                    width=(image.width.unwrap_or(96)) height=(image.height.unwrap_or(96)) loading="lazy">
+                                    width=(image.picture.listing.width) height=(image.picture.listing.height) loading="lazy">
                                 <div class="min-w-0 flex-1 text-sm">
                                     if position == 0 {
                                         <p class="mb-1 text-xs text-muted-foreground" data-image-first="">"Shown in listings"</p>

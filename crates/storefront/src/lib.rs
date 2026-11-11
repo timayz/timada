@@ -68,3 +68,4 @@ pub use store::*;
 pub use support::*;
 /// How long delivery takes, as [`Product`] and [`CartView`] carry it.
 pub use timada_catalog::DeliveryDays;
+pub use timada_core::Rendition;

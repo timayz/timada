@@ -32,6 +32,22 @@ struct FakeImages {
     discarded: AtomicUsize,
 }
 
+/// A picture of `width` × `height`, as the host would record one.
+fn picture(width: u32, height: u32) -> timada_core::Picture {
+    let rendition = |side: u32| timada_core::RenditionFile {
+        width: side.min(width),
+        height: side.min(height),
+        size: u64::from(side) * 20,
+        sha256: [3; 32],
+    };
+    timada_core::Picture {
+        width,
+        height,
+        listing: rendition(400),
+        page: rendition(1200),
+    }
+}
+
 impl Images for FakeImages {
     fn fetch<'a>(&'a self, url: &'a str) -> BoxFuture<'a, anyhow::Result<Option<StoredImage>>> {
         Box::pin(async move {
@@ -44,10 +60,7 @@ impl Images for FakeImages {
             }
             Ok(Some(StoredImage {
                 image_id: format!("img-{}", url.rsplit('/').next().unwrap()),
-                ext: "jpg".into(),
-                size: 1234,
-                width: Some(600),
-                height: Some(400),
+                picture: picture(600, 400),
             }))
         })
     }
@@ -57,10 +70,7 @@ impl Images for FakeImages {
             self.stored.fetch_add(1, Ordering::SeqCst);
             Ok(Some(StoredImage {
                 image_id: format!("img-{}", String::from_utf8_lossy(&bytes)),
-                ext: "png".into(),
-                size: bytes.len() as u64,
-                width: Some(10),
-                height: Some(10),
+                picture: picture(10, 10),
             }))
         })
     }
@@ -311,7 +321,7 @@ async fn loads_the_tree_and_the_products_then_skips_them_next_time() {
         "in the snapshot's order, the missing ones left out"
     );
     assert_eq!(product.images[1].alt, "De côté");
-    assert_eq!(product.images[0].width, Some(600));
+    assert_eq!(product.images[0].picture.width, 600);
     let names: Vec<&str> = product.options.iter().map(|o| o.name.as_str()).collect();
     assert_eq!(names, ["Taille", "Couleur"]);
     assert_eq!(product.variants.len(), 3);
@@ -476,7 +486,8 @@ async fn pictures_in_the_snapshot_are_stored_from_their_files_not_fetched() {
     let product = catalog.load_product_by_slug("bol").await.unwrap().unwrap();
     let ids: Vec<&str> = product.images.iter().map(|i| i.id.as_str()).collect();
     assert_eq!(ids, ["img-front", "img-side.jpg", "img-back.jpg"]);
-    assert_eq!(product.images[0].ext, "png");
-    assert_eq!(product.images[0].size, 5);
+    // The snapshot's file was 10 × 10, the fetched ones 600 × 400.
+    assert_eq!(product.images[0].picture.width, 10);
+    assert_eq!(product.images[1].picture.page.width, 600);
     std::fs::remove_dir_all(dir).unwrap();
 }

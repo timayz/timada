@@ -57,18 +57,13 @@ pub enum Product {
         category_id: String,
         uncategorized_by: String,
     },
-    /// A picture of the product. The bytes live outside the store, under the
-    /// id and extension recorded here; the host decides the address they are
-    /// served from.
+    /// A picture of the product: its two renditions, as the host rendered
+    /// them from the upload ([`timada_core::Picture`]). The bytes live
+    /// outside the store, named after the id; the host decides the address
+    /// they are served from.
     ImageAdded {
         image_id: String,
-        /// Lowercase, no dot: `jpg`, `png`, `webp`, `gif`.
-        ext: String,
-        mime: String,
-        /// In bytes.
-        size: u64,
-        width: Option<u32>,
-        height: Option<u32>,
+        picture: timada_core::Picture,
         /// What the picture shows, for a reader who cannot see it.
         alt: String,
         added_by: String,

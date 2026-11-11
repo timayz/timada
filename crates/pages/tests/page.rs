@@ -112,12 +112,21 @@ async fn pictures_are_added_and_removed() {
     let pages = command().await;
     let id = pages.create_page(ALICE, draft("Atelier")).await.unwrap();
     let image_id = new_page_image_id();
+    let rendition = |side: u32| timada_core::RenditionFile {
+        width: side,
+        height: side * 3 / 4,
+        size: u64::from(side) * 100,
+        sha256: [7; 32],
+    };
+    let picture = timada_core::Picture {
+        width: 1600,
+        height: 1200,
+        listing: rendition(400),
+        page: rendition(1200),
+    };
     let image = AddPageImage {
         image_id: image_id.clone(),
-        ext: "webp".to_owned(),
-        size: 1234,
-        width: Some(800),
-        height: Some(600),
+        picture,
     };
     pages
         .add_page_image(ALICE, &id, image.clone())
@@ -127,20 +136,23 @@ async fn pictures_are_added_and_removed() {
     pages.add_page_image(ALICE, &id, image).await.unwrap();
     let page = pages.load_page(&id).await.unwrap().unwrap();
     assert_eq!(page.images.len(), 1);
-    assert_eq!(page.images[0].mime, "image/webp");
+    assert_eq!(page.images[0].picture, picture);
     assert_eq!(page.images[0].file(), format!("{image_id}.webp"));
-    let bmp = pages
+    // A record describing no file is refused.
+    let empty = pages
         .add_page_image(
             ALICE,
             &id,
             AddPageImage {
                 image_id: new_page_image_id(),
-                ext: "bmp".to_owned(),
                 ..AddPageImage::default()
             },
         )
         .await;
-    assert!(matches!(bmp, Err(PageError::UnsupportedImage)), "{bmp:?}");
+    assert!(
+        matches!(empty, Err(PageError::UnsupportedImage)),
+        "{empty:?}"
+    );
 
     pages
         .remove_page_image(ALICE, &id, &image_id)
