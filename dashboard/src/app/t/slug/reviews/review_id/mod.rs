@@ -10,6 +10,8 @@ pub mod reply;
 
 use std::sync::Arc;
 
+use timada_core::Rendition;
+
 use timada_reviews::{MAX_REPLY_LEN, ReviewError, ReviewState, ReviewStatus, stars};
 use timada_tenancy::{PERMISSION_REVIEWS_MANAGE, PERMISSION_REVIEWS_READ};
 use topcoat::{
@@ -133,13 +135,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let reference = review.order_reference.clone();
     let product_name = review.product_name.clone();
     let media = app_context::<Arc<Media>>(cx);
-    let photos: Vec<(String, String)> = review
+    // Each photo's small rendition, and the one to look at.
+    let photos: Vec<(String, String, String)> = review
         .photos
         .iter()
         .map(|photo| {
             (
                 photo.id.clone(),
-                media.url(&access.tenant.id, &photo.file()),
+                media.url(&access.tenant.id, &photo.id, Rendition::Listing),
+                media.url(&access.tenant.id, &photo.id, Rendition::Page),
             )
         })
         .collect();
@@ -205,9 +209,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <p class="whitespace-pre-line text-sm" data-review-body="">(&review.body)</p>
                 if !photos.is_empty() {
                     <ul class="mt-4 flex flex-wrap gap-4">
-                        for (photo_id, url) in &photos {
+                        for (photo_id, thumb_url, url) in &photos {
                             <li class="flex flex-col gap-2" data-review-photo=(photo_id)>
-                                <a href=(url)><img class="h-40 w-40 rounded-lg border border-border object-cover" src=(url) alt="A photo the shopper attached"></a>
+                                <a href=(url)><img class="h-40 w-40 rounded-lg border border-border object-cover" src=(thumb_url) alt="A photo the shopper attached"></a>
                                 if open {
                                     <form method="post" action=(href!(remove_photo::remove_photo, Slug(slug.clone()), ReviewId(id.clone())))>
                                         <input type="hidden" name="image_id" value=(photo_id)>

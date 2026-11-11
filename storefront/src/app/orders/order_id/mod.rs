@@ -9,9 +9,9 @@ pub mod review;
 pub mod revise;
 
 use timada_storefront::{
-    DocumentKind, MAX_BODY_LEN, MAX_PHOTOS, MAX_TITLE_LEN, OrderStatus, ReviewState, ReviewStatus,
-    documents as order_documents, format_amount_fr, menu, order, parcels, picture_url, review_of,
-    stars, store,
+    DocumentKind, MAX_BODY_LEN, MAX_PHOTOS, MAX_TITLE_LEN, OrderStatus, Rendition, ReviewState,
+    ReviewStatus, documents as order_documents, format_amount_fr, menu, order, parcels,
+    picture_url, review_of, stars, store,
 };
 use topcoat::{
     Result,
@@ -149,7 +149,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             let photos = review
                 .iter()
                 .flat_map(|review| &review.photos)
-                .map(|photo| (photo.id.clone(), picture_url(cx, &photo.file())))
+                .map(|photo| {
+                    (
+                        photo.id.clone(),
+                        picture_url(cx, &photo.id, Rendition::Listing),
+                    )
+                })
                 .collect();
             line_reviews.push(LineReview {
                 product_id: line.product_id.clone(),

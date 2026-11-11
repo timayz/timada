@@ -68,10 +68,12 @@ pub async fn new_products(
             .map(|product| NewProductVars {
                 url: format!("{}/p/{}", storefront.trim_end_matches('/'), product.slug),
                 price: product.price_label(),
+                // The row holds the listing rendition's path below the
+                // tenant's picture address.
                 image_url: product
                     .thumbnail
                     .as_deref()
-                    .map(|file| media.url(&tenant.id, file)),
+                    .map(|file| format!("{}/{file}", media.tenant_url(&tenant.id))),
                 name: product.name,
             })
             .collect(),

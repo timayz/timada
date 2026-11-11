@@ -256,3 +256,22 @@ pub async fn grant_owed_seats_on(store: &evento::Turso, node: &str) {
         .await
         .unwrap();
 }
+
+/// A logo as the host records one: two renditions of a 1600 × 400 upload.
+pub fn logo(id: &str) -> timada_tenancy::MailLogo {
+    let rendition = |side: u32| timada_core::RenditionFile {
+        width: side,
+        height: side / 4,
+        size: u64::from(side) * 50,
+        sha256: [9; 32],
+    };
+    timada_tenancy::MailLogo {
+        id: id.to_owned(),
+        picture: timada_core::Picture {
+            width: 1600,
+            height: 400,
+            listing: rendition(400),
+            page: rendition(1200),
+        },
+    }
+}

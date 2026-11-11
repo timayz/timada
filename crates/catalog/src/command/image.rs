@@ -6,19 +6,16 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered};
 use crate::error::CatalogError;
-use crate::value_object::{MAX_IMAGE_BYTES, MAX_IMAGES_PER_PRODUCT, image_mime, normalize_alt};
+use crate::value_object::{MAX_IMAGES_PER_PRODUCT, normalize_alt};
+use timada_core::Picture;
 
 /// A picture to add: what the host made of the uploaded file.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AddImage {
-    /// A fresh unguessable id; the stored file is named after it.
+    /// A fresh unguessable id; the stored files are named after it.
     pub image_id: String,
-    /// Lowercase, no dot, one of [`IMAGE_FORMATS`](crate::IMAGE_FORMATS).
-    pub ext: String,
-    /// In bytes.
-    pub size: u64,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
+    /// The renditions the host keeps, already stored.
+    pub picture: Picture,
     pub alt: String,
 }
 
@@ -32,9 +29,7 @@ impl<E: Executor> super::Command<E> {
         cmd: AddImage,
         routing_key: Option<String>,
     ) -> Result<(), CatalogError> {
-        let ext = cmd.ext.trim().to_ascii_lowercase();
-        let mime = image_mime(&ext).ok_or(CatalogError::InvalidImage)?;
-        if cmd.image_id.trim().is_empty() || cmd.size == 0 || cmd.size > MAX_IMAGE_BYTES {
+        if cmd.image_id.trim().is_empty() || !cmd.picture.is_valid() {
             return Err(CatalogError::InvalidImage);
         }
         let alt = normalize_alt(&cmd.alt)?;
@@ -50,11 +45,7 @@ impl<E: Executor> super::Command<E> {
             .routing_key_opt(routing_key)
             .event(&ImageAdded {
                 image_id: cmd.image_id,
-                ext,
-                mime: mime.to_owned(),
-                size: cmd.size,
-                width: cmd.width,
-                height: cmd.height,
+                picture: cmd.picture,
                 alt,
                 added_by: actor.to_owned(),
             })

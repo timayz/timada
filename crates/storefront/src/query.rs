@@ -3,25 +3,51 @@
 use std::collections::BTreeMap;
 use timada_catalog::{DeliveryDays, TreeNode, TreeOf, tree_of};
 use timada_core::db::{Db, FromRow, Json, Row};
+use timada_core::{Picture, Rendition};
 
 use crate::money::MoneyFormat;
 
-/// A picture of a product. `url` is where a browser loads it from: absolute
-/// once the host set [`StoreConfig::media_url`](crate::StoreConfig::media_url),
-/// and the bare file name otherwise.
+/// A picture of a product, in the two sizes the store keeps it
+/// ([`timada_core::Rendition`]): the page rendition (`url`, `width`,
+/// `height`; 1200 px on its longest side at most) and the listing one
+/// (`thumb_url`, `thumb_width`, `thumb_height`; 400 px). Both are WebP.
+/// The addresses are absolute once the host set
+/// [`StoreConfig::media_url`](crate::StoreConfig::media_url), and the bare
+/// paths below it (`400/<id>.webp`) otherwise.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
 pub struct Image {
     pub id: String,
-    /// `<id>.<ext>`.
-    pub file: String,
-    pub mime: String,
     /// What the picture shows; may be empty.
     pub alt: String,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
+    /// Of the page rendition, in pixels.
+    pub width: u32,
+    pub height: u32,
+    /// Of the listing rendition, in pixels.
+    pub thumb_width: u32,
+    pub thumb_height: u32,
     /// Filled in from the store's media address when the product is read.
     #[serde(default)]
     pub url: String,
+    #[serde(default)]
+    pub thumb_url: String,
+}
+
+impl Image {
+    /// Points the picture at `base`, the address the store's pictures are
+    /// served from; without one it keeps the bare paths.
+    pub fn fill_urls(&mut self, base: Option<&str>) {
+        self.url = rendition_url(base, &self.id, Rendition::Page);
+        self.thumb_url = rendition_url(base, &self.id, Rendition::Listing);
+    }
+}
+
+/// The address of one rendition of a picture under `base`, or its bare path
+/// without one.
+pub fn rendition_url(base: Option<&str>, image_id: &str, rendition: Rendition) -> String {
+    match base {
+        Some(base) => Picture::url(base, image_id, rendition),
+        None => Picture::file(image_id, rendition),
+    }
 }
 
 /// A way a product varies, with the values it takes.
@@ -304,10 +330,7 @@ impl Product {
     /// [`published_products`] and friends.
     pub fn fill_urls(&mut self, base: Option<&str>) {
         for image in &mut self.images {
-            image.url = match base {
-                Some(base) => format!("{base}/{}", image.file),
-                None => image.file.clone(),
-            };
+            image.fill_urls(base);
         }
     }
 }

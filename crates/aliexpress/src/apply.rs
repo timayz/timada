@@ -613,10 +613,7 @@ async fn picture<E: Executor>(
             product_id,
             AddImage {
                 image_id: stored.image_id.clone(),
-                ext: stored.ext.clone(),
-                size: stored.size,
-                width: stored.width,
-                height: stored.height,
+                picture: stored.picture,
                 alt: String::new(),
             },
         )

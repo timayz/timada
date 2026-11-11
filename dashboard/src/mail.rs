@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+use timada_core::Rendition;
+
 use anyhow::Context as _;
 use topcoat::{
     Result,
@@ -304,8 +306,8 @@ pub fn shop_vars(cx: &Cx, shop: &TenantState) -> ShopVars {
     ShopVars {
         name: shop.name.clone(),
         logo_url: branding
-            .and_then(|branding| branding.logo_file.as_deref())
-            .map(|file| app_context::<Arc<Media>>(cx).url(&shop.id, file)),
+            .and_then(|branding| branding.logo.as_ref())
+            .map(|logo| app_context::<Arc<Media>>(cx).url(&shop.id, &logo.id, Rendition::Listing)),
         accent: branding.and_then(|branding| branding.accent.clone()),
         footer: branding.and_then(|branding| branding.footer.clone()),
     }

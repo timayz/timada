@@ -173,12 +173,17 @@ test("an owner uploads, describes, reorders and removes a product's pictures", a
   const first = page.locator("[data-image]").first();
   await expect(first.locator("img")).toHaveAttribute("alt", "A blue mug, seen from the front");
   await expect(first.locator("[data-image-first]")).toBeVisible();
+  // What is served is a rendition: WebP, in the listing size.
   const src = await first.locator("img").getAttribute("src");
-  expect(src).toMatch(/\/media\/[0-9A-Z]{26}\/[0-9A-Z]{26}\.png$/);
+  expect(src).toMatch(/\/media\/[0-9A-Z]{26}\/400\/[0-9A-Z]{26}\.webp$/);
   const served = await request.get(src!);
   expect(served.status()).toBe(200);
-  expect(served.headers()["content-type"]).toContain("image/png");
+  expect(served.headers()["content-type"]).toContain("image/webp");
   expect(served.headers()["cache-control"]).toContain("immutable");
+  // And the page size next to it.
+  const large = await request.get(src!.replace("/400/", "/1200/"));
+  expect(large.status()).toBe(200);
+  expect(large.headers()["content-type"]).toContain("image/webp");
 
   // A second one goes last, and the two can swap.
   await page.getByLabel("Add a picture").setInputFiles({ name: "side.png", mimeType: "image/png", buffer: PNG });
