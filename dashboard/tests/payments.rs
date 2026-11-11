@@ -85,6 +85,11 @@ struct FakeStripe {
     open_calls: std::sync::atomic::AtomicUsize,
     /// How long opening a payment takes, in milliseconds.
     open_delay_ms: std::sync::atomic::AtomicU64,
+    /// Stripe answers no opening until this many are under way at once (0:
+    /// none held): a payment opened on its own was answered one at a time.
+    meet: std::sync::atomic::AtomicUsize,
+    arrived: std::sync::atomic::AtomicUsize,
+    met: tokio::sync::Notify,
     /// The idempotency keys of the payments being opened: a second call
     /// with one of them meanwhile is answered 409, as Stripe does.
     opening: Mutex<std::collections::HashSet<String>>,
@@ -183,6 +188,23 @@ impl PaymentGateway for FakeStripe {
         let delay = self.open_delay_ms.load(SeqCst);
         if delay > 0 {
             tokio::time::sleep(Duration::from_millis(delay)).await;
+        }
+        let meet = self.meet.load(SeqCst);
+        if meet > 0 {
+            let met = self.met.notified();
+            tokio::pin!(met);
+            met.as_mut().enable();
+            if self.arrived.fetch_add(1, SeqCst) + 1 >= meet {
+                self.met.notify_waiters();
+            } else if tokio::time::timeout(Duration::from_secs(10), met)
+                .await
+                .is_err()
+            {
+                self.opening.lock().unwrap().remove(&key);
+                anyhow::bail!(
+                    "no other payment was being opened meanwhile: answered one at a time"
+                );
+            }
         }
         let open = {
             let mut opened = self.opened.lock().unwrap();
@@ -477,6 +499,8 @@ fn fake_rates() -> Arc<dyn ecb::EuroRates> {
 struct Harness<G = FakeStripe> {
     cluster: Arc<Cluster>,
     subscriptions: Vec<evento::subscription::Subscription>,
+    /// The lanes answering the requests to pay, when this node answers.
+    checkout_answers: Option<tokio::task::JoinHandle<()>>,
     platform: Command<cluster::Executor>,
     payments: Arc<Payments>,
     stripe: Arc<G>,
@@ -535,16 +559,19 @@ async fn harness_on<G: PaymentGateway + 'static>(
     // The subscriptions the dashboard runs on the store, each following
     // every tenant.
     let mut subscriptions = Vec::new();
+    let mut checkout_answers = None;
     if answers {
-        let answering = payments::subscription(payments::Checkouts::new(
+        let checkouts = payments::Checkouts::new(
             subscribed.clone(),
             rates.clone(),
             goods.clone(),
             platform.clone(),
             store_db.clone(),
             "node-0",
-        ));
+        );
+        let answering = payments::subscription(checkouts.clone());
         subscriptions.push(answering.start(&platform).await.unwrap());
+        checkout_answers = Some(checkouts.start());
     }
     for builder in [
         payments::order_payments_subscription(
@@ -567,6 +594,7 @@ async fn harness_on<G: PaymentGateway + 'static>(
     Harness {
         cluster,
         subscriptions,
+        checkout_answers,
         platform: Command(platform),
         payments,
         stripe,
@@ -820,6 +848,9 @@ impl<G: PaymentGateway + 'static> Harness<G> {
     }
 
     async fn finish(self) {
+        if let Some(answers) = &self.checkout_answers {
+            answers.abort();
+        }
         for subscription in &self.subscriptions {
             subscription.stop();
         }
@@ -1210,6 +1241,54 @@ async fn nodes_answering_one_request_at_once_hold_and_open_once() {
     let stock = stock_of(&h, &acme, &mug).await;
     assert!(stock.holds.contains_key(&cart_id), "{stock:?}");
     assert_eq!(stock.available_at(now() as u64), Some(8));
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn the_requests_of_two_carts_are_answered_at_once() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let (first_cart, _) = h.cart(&acme).await;
+    let (second_cart, _) = h.cart(&acme).await;
+    // Stripe answers neither opening until both are asked for: answered one
+    // request at a time, the first would wait for the second for ever.
+    h.stripe.meet.store(2, std::sync::atomic::Ordering::SeqCst);
+
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let first = orders
+        .request_checkout(STOREFRONT_ACTOR, &first_cart, checkout(Some(2500)))
+        .await
+        .unwrap();
+    let second = orders
+        .request_checkout(STOREFRONT_ACTOR, &second_cart, checkout(Some(2500)))
+        .await
+        .unwrap();
+    let answers = eventually(async || {
+        let one = orders.load_cart(&first_cart).await.unwrap().unwrap();
+        let two = orders.load_cart(&second_cart).await.unwrap().unwrap();
+        Some((
+            one.request(&first).unwrap().answer.clone()?,
+            two.request(&second).unwrap().answer.clone()?,
+        ))
+    })
+    .await;
+    assert!(
+        matches!(answers.0, PaymentAnswer::Requested(_)),
+        "{:?}",
+        answers.0
+    );
+    assert!(
+        matches!(answers.1, PaymentAnswer::Requested(_)),
+        "{:?}",
+        answers.1
+    );
+    assert_eq!(
+        h.stripe
+            .open_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
     h.finish().await;
 }
 

@@ -113,6 +113,13 @@ Recurring patterns:
   VIES is asked once for five seconds (the invoice then carries the buyer's number as
   "not checked", VAT charged), Stripe answers reads in five seconds and writes in
   twenty, or the call counts as no answer.
+- **A saga whose step is slow answers off its cursor.** The payments subscription
+  queues each request to pay with the node's `Checkouts`
+  (`dashboard/src/payments/subscription.rs`) and acknowledges it; the lanes answer up
+  to 16 carts at once, a cart's requests in order, and a store fault puts a request
+  back for a growing while rather than holding the cursor (#467). A request the
+  retries cannot answer is refused by the sweep of unanswered requests at its claim's
+  end. The same shape as the mailroom: the cursor only records what is to be done.
 - **One stream per tenant for a short list.** The settings a checkout reads whole each
   time (shipping methods, checkout offers) live in one stream with a deterministic id
   (`hash_ids(["offers"])`), capped in size, and are read straight from it: no read

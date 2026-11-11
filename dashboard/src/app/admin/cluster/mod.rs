@@ -147,6 +147,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         format!("{running} of {} running", workers.len())
     };
+    // The requests to pay this node is answering or has waiting for a lane.
+    let checkouts_queued = app_context::<Arc<crate::payments::Checkouts>>(cx).queued();
     // The mails the sagas owe on this node, and the ones given up on.
     let db = app_context::<crate::db::Db>(cx);
     let mails = mailroom::summary(db)
@@ -235,6 +237,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         term: "Background workers",
                         attrs: attributes! { data-workers=(workers.len()) data-workers-troubled=(troubled.len()) },
                         (&workers_label)
+                    )
+                    fact(
+                        term: "Requests to pay",
+                        attrs: attributes! { data-checkouts-queued=(checkouts_queued) },
+                        (checkouts_queued) " being answered"
                     )
                     fact(
                         term: "Mails owed",
