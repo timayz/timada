@@ -6,7 +6,13 @@ authors.workspace = true
 
 [features]
 # Renders the documents as PDF (Typst, with its own fonts compiled in).
-pdf = ["dep:typst", "dep:typst-as-lib", "dep:typst-pdf", "dep:typst-assets"]
+pdf = [
+    "dep:typst",
+    "dep:typst-as-lib",
+    "dep:typst-pdf",
+    "dep:typst-assets",
+    "dep:tokio",
+]
 
 [dependencies]
 evento.workspace = true
@@ -22,6 +28,7 @@ typst = { workspace = true, optional = true }
 typst-as-lib = { workspace = true, optional = true }
 typst-pdf = { workspace = true, optional = true }
 typst-assets = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio.workspace = true
