@@ -133,6 +133,20 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             id INTEGER PRIMARY KEY CHECK (id = 1),
             products INTEGER NOT NULL
         );
+        -- How many of the products a page lists (a category's, or the whole
+        -- shop's under '') take each value of an option, kept as products
+        -- are listed, taken off and change their options: what a filter
+        -- shows beside each value while nothing else narrows the page.
+        -- `value` is one of the spellings folding to `value_key`; a value no
+        -- listed product takes has no row.
+        CREATE TABLE storefront_category_facets (
+            category_id TEXT NOT NULL,
+            name_key TEXT NOT NULL,
+            value_key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            products INTEGER NOT NULL,
+            PRIMARY KEY (category_id, name_key, value_key)
+        );
         -- Published reviews only: one that is rejected leaves. `reply` and
         -- `replied_at` hold the merchant's public answer, while there is one.
         CREATE TABLE storefront_reviews (
@@ -200,6 +214,7 @@ pub const TABLES: &[&str] = &[
     "storefront_product_categories",
     "storefront_category_products",
     "storefront_shop",
+    "storefront_category_facets",
     "storefront_reviews",
     "storefront_stock",
     "storefront_pages",

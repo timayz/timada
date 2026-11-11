@@ -602,10 +602,9 @@ impl ProductQuery {
             .filter(move |(name, _)| Some(name.as_str()) != aside)
     }
 
-    /// Whether anything narrows the page's rows besides the products left
-    /// out.
-    fn narrowed(&self) -> bool {
-        self.min_cents.is_some() || self.max_cents.is_some() || !self.options.is_empty()
+    /// Whether a price band narrows the page's rows.
+    fn banded(&self) -> bool {
+        self.min_cents.is_some() || self.max_cents.is_some()
     }
 }
 
@@ -736,17 +735,31 @@ fn left_out_statement(query: &ProductQuery) -> Statement {
 
 /// How many products the query lists over every page: the count kept for
 /// its page when nothing narrows the rows, less the products left out that
-/// the page lists; counted over the rows otherwise.
+/// the page lists; the count kept for one value when that value alone
+/// narrows them; counted over the rows otherwise.
 async fn listed_total(db: &Db, query: &ProductQuery) -> anyhow::Result<i64> {
-    if query.narrowed() {
+    if query.banded() {
         return count_statement(query).fetch_scalar(db).await;
     }
-    let listed = page_count(db, query.page_rows()).await?;
-    if query.exclude.is_empty() {
-        return Ok(listed);
+    match (query.options.as_slice(), query.exclude.is_empty()) {
+        ([], true) => page_count(db, query.page_rows()).await,
+        ([], false) => {
+            let listed = page_count(db, query.page_rows()).await?;
+            let left_out: Vec<(String,)> = left_out_statement(query).fetch_all(db).await?;
+            Ok(listed - left_out.len() as i64)
+        }
+        ([(name_key, value_key)], true) => {
+            let kept: Option<(i64,)> = db
+                .fetch_optional(
+                    "SELECT products FROM storefront_category_facets
+                     WHERE category_id = ?1 AND name_key = ?2 AND value_key = ?3",
+                    (query.page_rows(), name_key.as_str(), value_key.as_str()),
+                )
+                .await?;
+            Ok(kept.map_or(0, |(products,)| products))
+        }
+        _ => count_statement(query).fetch_scalar(db).await,
     }
-    let left_out: Vec<(String,)> = left_out_statement(query).fetch_all(db).await?;
-    Ok(listed - left_out.len() as i64)
 }
 
 /// How many products the page of `category_id` lists, as its rows keep it.
@@ -989,11 +1002,33 @@ pub async fn published_option_values(
         let found = found(db, query, &search, Some(name_key.as_str()), true).await?;
         return Ok(facet_of(&found, &name_key));
     }
-    let rows: Vec<(String, String, i64)> = facet_statement(query, &name_key).fetch_all(db).await?;
+    // Nothing narrows the page but the option's own values: the counts the
+    // rows keep for it.
+    let statement = if !query.banded()
+        && query.exclude.is_empty()
+        && query.options_but(Some(&name_key)).next().is_none()
+    {
+        kept_facet_statement(query.page_rows(), &name_key)
+    } else {
+        facet_statement(query, &name_key)
+    };
+    let rows: Vec<(String, String, i64)> = statement.fetch_all(db).await?;
     Ok(rows
         .into_iter()
         .map(|(key, label, count)| FacetValue { key, label, count })
         .collect())
+}
+
+/// The values option `name_key` takes among what the page of `category_id`
+/// lists, as its rows keep them.
+fn kept_facet_statement(category_id: &str, name_key: &str) -> Statement {
+    let mut statement = Statement::default();
+    let (page, name) = (statement.bind(category_id), statement.bind(name_key));
+    statement.sql = format!(
+        "SELECT value_key, value, products FROM storefront_category_facets
+         WHERE category_id = {page} AND name_key = {name} ORDER BY value_key"
+    );
+    statement
 }
 
 /// The values option `name_key` takes among the query's rows, each with how
@@ -1587,6 +1622,18 @@ mod sql {
         )
         .await
         .unwrap();
+        // What each page counts of the values its products take.
+        db.execute(
+            "INSERT INTO storefront_category_facets (category_id, name_key, value_key, value,
+                products)
+             SELECT cp.category_id, po.name_key, po.value_key, min(po.value), count(*)
+             FROM storefront_category_products cp
+             JOIN storefront_product_options po ON po.product_id = cp.product_id
+             GROUP BY cp.category_id, po.name_key, po.value_key",
+            (),
+        )
+        .await
+        .unwrap();
         db
     }
 
@@ -1838,6 +1885,45 @@ mod sql {
         assert_eq!(found("collar").await.as_deref(), Some("collar"));
         assert_eq!(found("draft").await, None);
         assert_eq!(found("missing").await, None);
+    }
+
+    #[tokio::test]
+    async fn the_kept_counts_agree_with_the_rows() {
+        let db = catalog().await;
+        for page in [None, Some("cat")] {
+            let mut query = ProductQuery::default();
+            if let Some(category) = page {
+                query = query.in_category(category);
+            }
+            let kept: Vec<(String, String, i64)> =
+                kept_facet_statement(query.page_rows(), "couleur")
+                    .fetch_all(&db)
+                    .await
+                    .unwrap();
+            let counted: Vec<(String, String, i64)> = facet_statement(&query, "couleur")
+                .fetch_all(&db)
+                .await
+                .unwrap();
+            assert_eq!(kept, counted, "{page:?}");
+            for (key, _, _) in &counted {
+                let one = query.clone().with_option("Couleur", key);
+                assert_eq!(
+                    listed_total(&db, &one).await.unwrap(),
+                    count_statement(&one)
+                        .fetch_scalar::<i64>(&db)
+                        .await
+                        .unwrap(),
+                    "{page:?} {key}"
+                );
+            }
+        }
+        // A value no listed product takes counts nothing.
+        assert_eq!(
+            ids(&db, ProductQuery::default().with_option("Couleur", "Vert"))
+                .await
+                .1,
+            0
+        );
     }
 
     /// The `detail` of each step of `statement`'s plan.
