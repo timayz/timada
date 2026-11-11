@@ -97,6 +97,8 @@ pub struct Services {
     pub store: Arc<StoreConnections>,
     /// The subscriptions this node runs, for the cluster page.
     pub workers: crate::workers::Workers,
+    /// The requests to pay this node is answering, for the cluster page.
+    pub checkouts: Arc<crate::payments::Checkouts>,
     /// What `/ready` answers the balancer.
     pub readiness: Arc<crate::readiness::Readiness>,
     pub config: Config,
@@ -122,6 +124,7 @@ pub fn router(services: Services) -> Router {
         aliexpress,
         store,
         workers,
+        checkouts,
         readiness,
         config,
     } = services;
@@ -184,6 +187,7 @@ pub fn router(services: Services) -> Router {
         .app_context(aliexpress)
         .app_context(store)
         .app_context(workers)
+        .app_context(checkouts)
         .app_context(readiness)
         .app_context(limits)
         // The transport behind `topcoat::mail::send`, and who the codes come from.

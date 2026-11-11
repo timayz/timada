@@ -14,7 +14,12 @@ the goods for goods it buys after the sale (AliExpress). How it works is in
    held only (`capture_method=manual`), and hands back what the card form needs. It
    refuses instead when the price moved since the shopper saw it, an item is off sale or
    Stripe is not set up. It also notes who supplies the goods: a line the shop buys on
-   AliExpress once the order is placed makes the order wait for it.
+   AliExpress once the order is placed makes the order wait for it. The payments
+   subscription only queues the request on the node; the node's lanes answer up to 16
+   carts at once, a cart's requests one after the other, and the first node of the
+   region to claim a request (`Cart::CheckoutClaimed`) is the one that answers it. A
+   fault of the store's puts the request back for a growing while instead of holding
+   the subscription for every shop; `/admin/cluster` shows how many are being answered.
 3. The shopper's browser confirms the payment in Stripe's Payment Element
    (`/checkout` in the storefront), which holds the money on the card.
 4. Stripe calls `POST /stripe/webhooks/{tenant_id}` (`payment_intent.amount_capturable_updated`).
