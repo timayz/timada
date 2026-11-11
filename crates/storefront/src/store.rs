@@ -17,7 +17,8 @@ use crate::money::MoneyFormat;
 use crate::read_model::catalog_subscription;
 
 /// How long the supervisor waits before connecting or restarting the
-/// subscription again, doubling up to [`MAX_RESTART_DELAY`].
+/// subscription again, doubling up to [`MAX_RESTART_DELAY`]; each wait is
+/// drawn between half and all of it ([`jittered`]).
 const FIRST_RESTART_DELAY: Duration = Duration::from_secs(1);
 const MAX_RESTART_DELAY: Duration = Duration::from_secs(30);
 
@@ -88,10 +89,13 @@ impl Store {
     /// is [`StoreDb::open`]'s, or a store a test built in memory.
     ///
     /// A store that refuses the key fails at once: nothing would ever work.
-    /// A store that cannot be reached does not: the shop opens on the
-    /// catalog it has (empty, on a first start), the store is reached again
-    /// after a growing delay (1 s to 30 s), and until then every call that
-    /// needs it fails with [`StoreUnavailable`](crate::StoreUnavailable);
+    /// A store that cannot be reached does not, nor one that says it cannot
+    /// serve the key's shop right now (a suspended shop, a store that could
+    /// not check the key: `Rejection::Unavailable`, what a degraded cluster
+    /// answers): the shop opens on the catalog it has (empty, on a first
+    /// start), the store is reached again after a growing delay (1 s to
+    /// 30 s), and until then every call that needs it fails with
+    /// [`StoreUnavailable`](crate::StoreUnavailable);
     /// [`status`](Self::status) says where it stands.
     pub async fn connect(config: StoreConfig, db: impl Into<StoreDb>) -> anyhow::Result<Store> {
         let db = db.into();
@@ -123,7 +127,7 @@ impl Store {
                 tracing::info!(addr = %inner.config.addr, "store connected");
                 Some(inner.start_subscription().await?)
             }
-            Err(err) if err.downcast_ref::<evento::remote::Rejection>().is_some() => {
+            Err(err) if refused_key(&err) => {
                 return Err(err.context(format!(
                     "cannot connect to the store at {}",
                     inner.config.addr
@@ -276,6 +280,22 @@ impl Inner {
     }
 }
 
+/// Whether the store refused the key itself (`Rejection::Unauthorized`):
+/// no other answer means the key will never do.
+fn refused_key(err: &anyhow::Error) -> bool {
+    matches!(
+        err.downcast_ref::<evento::remote::Rejection>(),
+        Some(evento::remote::Rejection::Unauthorized)
+    )
+}
+
+/// Between half and all of `delay`: the shops a store lost at once (it
+/// restarted, a balancer moved its name) come back spread over the wait
+/// rather than all at its end.
+fn jittered(delay: Duration) -> Duration {
+    delay.mul_f64(rand::random_range(0.5..=1.0))
+}
+
 /// Connects to the store API and performs its handshake; the client then
 /// reconnects on its own when the connection drops.
 async fn connect_client(config: &StoreConfig) -> anyhow::Result<RemoteClient> {
@@ -289,8 +309,8 @@ async fn connect_client(config: &StoreConfig) -> anyhow::Result<RemoteClient> {
 }
 
 /// Keeps the catalog subscription alive. A store that was away when the shop
-/// started is reached again after a growing delay, and the subscription
-/// started once it answers. A pass that kept failing (the store was away
+/// started (or said it could not serve it yet) is reached again after a
+/// growing delay, and the subscription started once it answers. A pass that kept failing (the store was away
 /// longer than the subscription's own retries) ends the worker, so it is
 /// started again from the local cursor after a growing delay. Without this
 /// the local copy would silently freeze.
@@ -314,7 +334,7 @@ async fn supervise(
                         stopped();
                         return;
                     }
-                    _ = tokio::time::sleep(delay) => {}
+                    _ = tokio::time::sleep(jittered(delay)) => {}
                 }
                 delay = (delay * 2).min(MAX_RESTART_DELAY);
                 if inner.executor.get().is_none() {
