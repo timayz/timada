@@ -410,6 +410,12 @@ async fn shop() -> Shop {
             FROM storefront_category_products cp WHERE cp.category_id = storefront_categories.id)",
         "INSERT INTO storefront_shop (id, products) SELECT 1, count(*)
          FROM storefront_category_products WHERE category_id = ''",
+        "INSERT INTO storefront_category_facets (category_id, name_key, value_key, value,
+            products)
+         SELECT cp.category_id, po.name_key, po.value_key, min(po.value), count(*)
+         FROM storefront_category_products cp
+         JOIN storefront_product_options po ON po.product_id = cp.product_id
+         GROUP BY cp.category_id, po.name_key, po.value_key",
     ] {
         execute(&conn, statement, ()).await.unwrap();
     }
