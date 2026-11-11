@@ -25,7 +25,7 @@ use evento::{
 };
 use timada_core::db::{
     Connection, Db, FromRow, Value, execute, fetch_all, fetch_optional, params_from_iter,
-    search_key,
+    search_key, tenant_search_key,
 };
 use timada_core::{Picture, Rendition};
 
@@ -301,9 +301,9 @@ pub async fn upsert_product(
                 (*tenant_id, product.id.as_str()),
             )
             .await?;
-            let slug_search = search_key(&product.slug);
+            let slug_search = tenant_search_key(tenant_id, &product.slug);
             let name_search = search_key(&product.name);
-            // Twenty-one values: more than a tuple of parameters holds. The
+            // Twenty values: more than a tuple of parameters holds. The
             // same numbering serves the insert and the update, the two
             // search keys last so the update can leave them off.
             let mut values = vec![
@@ -311,7 +311,6 @@ pub async fn upsert_product(
                 Value::from(product.id.as_str()),
                 Value::from(product.slug.as_str()),
                 Value::from(product.name.as_str()),
-                Value::from(product.description.as_str()),
                 Value::from(product.price.as_ref().map(|p| p.amount_cents as i64)),
                 // The currency everything on this product is priced in,
                 // which for one sold only through its variants is theirs
@@ -341,13 +340,13 @@ pub async fn upsert_product(
                     values.push(Value::from(name_search.as_str()));
                     execute(
                         tx,
-                        "INSERT INTO catalog_products (tenant_id, id, slug, name, description,
-                            amount_cents, currency, status, created_by, created_at, updated_at,
-                            thumbnail, image_count, min_amount_cents, max_amount_cents,
-                            variant_count, tax_category, delivery_min_days, delivery_max_days,
-                            slug_search, name_search)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                            ?16, ?17, ?18, ?19, ?20, ?21)",
+                        "INSERT INTO catalog_products (tenant_id, id, slug, name, amount_cents,
+                            currency, status, created_by, created_at, updated_at, thumbnail,
+                            image_count, min_amount_cents, max_amount_cents, variant_count,
+                            tax_category, delivery_min_days, delivery_max_days, slug_search,
+                            name_search)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                            ?15, ?16, ?17, ?18, ?19, ?20)",
                         params_from_iter(values),
                     )
                     .await?;
@@ -478,19 +477,19 @@ struct VariantRow {
 /// full-text index reads (`slug_search`, `name_search`): it stays out of the
 /// write, and so does the segment it would build.
 const PRODUCT_UPDATE: &str = "UPDATE catalog_products SET
-    slug = ?3, name = ?4, description = ?5, amount_cents = ?6, currency = ?7, status = ?8,
-    updated_at = ?11, thumbnail = ?12, image_count = ?13, min_amount_cents = ?14,
-    max_amount_cents = ?15, variant_count = ?16, tax_category = ?17, delivery_min_days = ?18,
-    delivery_max_days = ?19
+    slug = ?3, name = ?4, amount_cents = ?5, currency = ?6, status = ?7,
+    updated_at = ?10, thumbnail = ?11, image_count = ?12, min_amount_cents = ?13,
+    max_amount_cents = ?14, variant_count = ?15, tax_category = ?16, delivery_min_days = ?17,
+    delivery_max_days = ?18
  WHERE tenant_id = ?1 AND id = ?2";
 
 /// [`PRODUCT_UPDATE`] with the two full-text columns too, for a renamed
 /// product.
 const PRODUCT_UPDATE_SEARCHED: &str = "UPDATE catalog_products SET
-    slug = ?3, name = ?4, description = ?5, amount_cents = ?6, currency = ?7, status = ?8,
-    updated_at = ?11, thumbnail = ?12, image_count = ?13, min_amount_cents = ?14,
-    max_amount_cents = ?15, variant_count = ?16, tax_category = ?17, delivery_min_days = ?18,
-    delivery_max_days = ?19, slug_search = ?20, name_search = ?21
+    slug = ?3, name = ?4, amount_cents = ?5, currency = ?6, status = ?7,
+    updated_at = ?10, thumbnail = ?11, image_count = ?12, min_amount_cents = ?13,
+    max_amount_cents = ?14, variant_count = ?15, tax_category = ?16, delivery_min_days = ?17,
+    delivery_max_days = ?18, slug_search = ?19, name_search = ?20
  WHERE tenant_id = ?1 AND id = ?2";
 
 /// Writes the row of a category as the write model sees it, and works the

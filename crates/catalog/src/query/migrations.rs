@@ -22,7 +22,11 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         // `slug_search` and `name_search` are what a search finds a product
         // by: the slug and the name lowercased and stripped of accents, under
         // an index cut in runs of three characters so a search matches
-        // anywhere in a word; the tenant narrows it to its own products.
+        // anywhere in a word. `slug_search` starts with the tenant's token
+        // (`timada_core::db::tenant_search_key`), which every search must
+        // match too: the index then answers with the tenant's own products
+        // only, not with every shop's. There is no description: no page
+        // reads it from here, and a list sorting rows carried it along.
         // `tax_category` and the two `delivery_*_days` (`NULL`: the shop's
         // default) are what a cart is priced with, with `catalog_variants`:
         // one row per combination, `on_sale` for those a shopper can buy,
@@ -34,7 +38,6 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             id TEXT NOT NULL,
             slug TEXT NOT NULL,
             name TEXT NOT NULL,
-            description TEXT NOT NULL,
             amount_cents INTEGER,
             currency TEXT,
             status TEXT NOT NULL,
@@ -74,7 +77,10 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         );
         CREATE UNIQUE INDEX catalog_products_slug ON catalog_products (tenant_id, slug)
             WHERE status <> 'archived';
-        CREATE INDEX catalog_products_name ON catalog_products (tenant_id, name);
+        CREATE INDEX catalog_products_changed
+            ON catalog_products (tenant_id, updated_at, id);
+        CREATE INDEX catalog_products_status_changed
+            ON catalog_products (tenant_id, status, updated_at, id);
         CREATE INDEX catalog_products_fts ON catalog_products
             USING fts(slug_search, name_search)
             WITH (tokenizer = 'ngram', min_gram = 3, max_gram = 3);

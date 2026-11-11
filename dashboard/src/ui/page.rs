@@ -240,6 +240,35 @@ pub async fn pager(
     })
 }
 
+/// Newer / what the list holds / Older, for a list read from where the page
+/// beside it stopped: there is no page number to show. Nothing when both
+/// links are absent.
+#[component]
+pub async fn cursor_pager(
+    summary: &str,
+    #[default] newer: Option<String>,
+    #[default] older: Option<String>,
+) -> Result<impl View> {
+    Ok(view! {
+        if newer.is_some() || older.is_some() {
+            pagination(
+                attrs: attributes! { class="mt-4" },
+                pagination_content(
+                    if let Some(newer) = newer {
+                        pagination_item(pagination_previous(label: "Newer", attrs: attributes! { href=(newer) rel="prev" }))
+                    }
+                    pagination_item(
+                        <span class="px-2 text-sm text-muted-foreground">(summary)</span>
+                    )
+                    if let Some(older) = older {
+                        pagination_item(pagination_next(label: "Older", attrs: attributes! { href=(older) rel="next" }))
+                    }
+                )
+            )
+        }
+    })
+}
+
 /// A `GET` form of filters above a list.
 #[component]
 pub async fn filter_bar(
