@@ -289,6 +289,64 @@ pub fn fts_query(q: &str) -> Option<String> {
     (cleaned.chars().count() >= 3).then(|| format!("\"{cleaned}\""))
 }
 
+/// A count of a tenant's rows kept in a row of its own, for a page that
+/// shows how many there are (a home tile) without counting them each time.
+/// A write of a counted row reads [`Tally::of`] the row before it and calls
+/// [`Tally::settle`] after it, in the same transaction: the count moves by
+/// the difference, so a write a replay repeats moves nothing.
+#[derive(Debug, Clone, Copy)]
+pub struct Tally {
+    /// The table of the counts: `(tenant_id, name, n)`, keyed by the first
+    /// two.
+    pub table: &'static str,
+    /// What is counted, one row of `table` per tenant.
+    pub name: &'static str,
+    /// Whether one row counts: a `count(*)` of it, `?1` the tenant and `?2`
+    /// the row's id, 0 when it is not there.
+    pub counted: &'static str,
+}
+
+impl Tally {
+    /// Whether the row `id` counts now (1) or not (0).
+    pub async fn of(&self, tx: &Connection, tenant_id: &str, id: &str) -> Result<i64> {
+        fetch_scalar(tx, self.counted, (tenant_id, id)).await
+    }
+
+    /// Moves the count by what the write changed of the row `id`, which
+    /// counted `was` before it.
+    pub async fn settle(&self, tx: &Connection, tenant_id: &str, id: &str, was: i64) -> Result<()> {
+        let delta = self.of(tx, tenant_id, id).await? - was;
+        if delta == 0 {
+            return Ok(());
+        }
+        execute(
+            tx,
+            &format!(
+                "INSERT INTO {} (tenant_id, name, n) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (tenant_id, name) DO UPDATE SET n = n + excluded.n",
+                self.table
+            ),
+            (tenant_id, self.name, delta),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// The count of a tenant: 0 before anything counted.
+    pub async fn read(&self, db: &Db, tenant_id: &str) -> Result<i64> {
+        let row: Option<(i64,)> = db
+            .fetch_optional(
+                &format!(
+                    "SELECT n FROM {} WHERE tenant_id = ?1 AND name = ?2",
+                    self.table
+                ),
+                (tenant_id, self.name),
+            )
+            .await?;
+        Ok(row.map_or(0, |(n,)| n))
+    }
+}
+
 /// What sets a tenant's rows apart in a full-text index shared by every
 /// tenant: the last characters of its id, which are the random ones of a
 /// ULID. Other tenants may share some of its runs of three; the query still
@@ -349,6 +407,72 @@ mod tests {
         assert_eq!(fts_query("a\"b\\c"), Some("\"abc\"".into()));
         assert_eq!(fts_query("ab"), None);
         assert_eq!(fts_query("  \"  "), None);
+    }
+
+    #[tokio::test]
+    async fn a_tally_moves_with_the_rows_it_counts_and_not_with_repeats() {
+        const OPEN: Tally = Tally {
+            table: "tallies",
+            name: "open",
+            counted: "SELECT count(*) FROM thing WHERE tenant_id = ?1 AND id = ?2 AND open = 1",
+        };
+        let db = Db::from(Turso::in_memory_concurrent().await.unwrap());
+        let conn = db.connect().unwrap();
+        for statement in [
+            "CREATE TABLE thing (tenant_id TEXT NOT NULL, id TEXT NOT NULL,
+                open INTEGER NOT NULL, PRIMARY KEY (tenant_id, id))",
+            "CREATE TABLE tallies (tenant_id TEXT NOT NULL, name TEXT NOT NULL,
+                n INTEGER NOT NULL, PRIMARY KEY (tenant_id, name))",
+        ] {
+            conn.execute(statement, ()).await.unwrap();
+        }
+        // Writes a row the way a read model does: read, write, settle.
+        async fn write(db: &Db, tenant: &str, id: &str, open: Option<bool>) {
+            let env = (tenant, id, open);
+            db.write(&env, |tx, (tenant, id, open)| {
+                Box::pin(async move {
+                    let was = OPEN.of(tx, tenant, id).await?;
+                    match open {
+                        Some(open) => {
+                            execute(
+                                tx,
+                                "INSERT INTO thing (tenant_id, id, open) VALUES (?1, ?2, ?3)
+                                 ON CONFLICT (tenant_id, id) DO UPDATE SET open = excluded.open",
+                                (*tenant, *id, *open),
+                            )
+                            .await?
+                        }
+                        None => {
+                            execute(
+                                tx,
+                                "DELETE FROM thing WHERE tenant_id = ?1 AND id = ?2",
+                                (*tenant, *id),
+                            )
+                            .await?
+                        }
+                    };
+                    OPEN.settle(tx, tenant, id, was).await
+                })
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(OPEN.read(&db, "t").await.unwrap(), 0);
+        write(&db, "t", "a", Some(true)).await;
+        write(&db, "t", "a", Some(true)).await;
+        write(&db, "t", "b", Some(true)).await;
+        write(&db, "t", "c", Some(false)).await;
+        write(&db, "u", "a", Some(true)).await;
+        assert_eq!(
+            OPEN.read(&db, "t").await.unwrap(),
+            2,
+            "a repeat moves nothing"
+        );
+        write(&db, "t", "b", Some(false)).await;
+        write(&db, "t", "a", None).await;
+        write(&db, "t", "a", None).await;
+        assert_eq!(OPEN.read(&db, "t").await.unwrap(), 0);
+        assert_eq!(OPEN.read(&db, "u").await.unwrap(), 1, "each tenant its own");
     }
 
     #[tokio::test]

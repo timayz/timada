@@ -1,7 +1,7 @@
 //! Queries over `orders_carts`: the carts shoppers are filling, so the
 //! merchant sees what is left behind.
 
-use timada_core::db::{Db, FromRow};
+use timada_core::db::{Db, FromRow, Tally};
 
 /// One row of `orders_carts`.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -60,13 +60,17 @@ pub async fn cart_refused_returns(
 
 /// How many carts [`open_carts`] would list.
 pub async fn count_open_carts(db: &Db, tenant_id: &str) -> anyhow::Result<i64> {
-    db.fetch_scalar(
-        "SELECT count(*) FROM orders_carts
-         WHERE tenant_id = ?1 AND order_id IS NULL AND item_count > 0",
-        (tenant_id,),
-    )
-    .await
+    OPEN_CARTS.read(db, tenant_id).await
 }
+
+/// What [`count_open_carts`] counts, kept by the read model as it writes the
+/// rows: a cart not checked out with something in it.
+pub const OPEN_CARTS: Tally = Tally {
+    table: "orders_tallies",
+    name: "open_carts",
+    counted: "SELECT count(*) FROM orders_carts
+        WHERE tenant_id = ?1 AND id = ?2 AND order_id IS NULL AND item_count > 0",
+};
 
 /// Where a page of [`paying_carts_before`] or [`idle_carts_before`] stopped:
 /// the last row's `updated_at` and `id`. The next page starts after it.

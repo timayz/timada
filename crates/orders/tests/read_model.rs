@@ -3,9 +3,9 @@ mod common;
 use common::*;
 use timada_core::{Claimant, MailStatus};
 use timada_orders::{
-    Command, OrderFilter, OrderStatus, cart_refused_returns, count_orders, fulfilled_between,
-    hold_reminders_due, open_carts, order_mails, order_state, orders_of_email, orders_of_tenant,
-    payments_due, product_ever_ordered, read_model_subscription,
+    Command, OrderFilter, OrderStatus, cart_refused_returns, count_open_carts, count_orders,
+    fulfilled_between, hold_reminders_due, open_carts, order_count, order_mails, order_state,
+    orders_of_email, orders_of_tenant, payments_due, product_ever_ordered, read_model_subscription,
 };
 use timada_orders::{HOLD_REMINDER_BEFORE_SECS, ORDER_MAIL_WINDOW_SECS};
 
@@ -37,6 +37,11 @@ async fn orders_and_carts_are_listed() {
 
     let rows = orders_of_tenant(&pool, TENANT, &all, 0, 10).await.unwrap();
     assert_eq!(rows.len(), 3);
+    assert_eq!(
+        order_count(&pool, TENANT).await.unwrap(),
+        3,
+        "the home's count"
+    );
     let row = rows.iter().find(|row| row.id == placed.order_id).unwrap();
     assert_eq!(row.reference, placed.reference);
     assert_eq!(row.status(), OrderStatus::Paid);
@@ -91,6 +96,7 @@ async fn orders_and_carts_are_listed() {
         "an empty or ordered cart is not left behind"
     );
     assert_eq!(carts[0].id, left);
+    assert_eq!(count_open_carts(&pool, TENANT).await.unwrap(), 1);
 
     // Which products were ever ordered: a cancelled order counts, a cart
     // does not, and nothing crosses tenants.
@@ -461,10 +467,14 @@ async fn a_dropped_cart_leaves_the_carts_table_and_a_replay_leaves_it_out() {
     assert!(dropped);
     follow().await;
     assert_eq!(listed().await, vec![kept.clone()]);
+    assert_eq!(count_open_carts(&pool, TENANT).await.unwrap(), 1);
 
     // A rebuild reads every event again into an empty table: the dropped
     // cart's first events do not put its row back on the way.
     pool.execute("DELETE FROM orders_carts", ()).await.unwrap();
+    pool.execute("DELETE FROM orders_tallies", ())
+        .await
+        .unwrap();
     pool.execute("DELETE FROM subscriber", ()).await.unwrap();
     follow().await;
     assert_eq!(listed().await, vec![kept]);
@@ -473,4 +483,5 @@ async fn a_dropped_cart_leaves_the_carts_table_and_a_replay_leaves_it_out() {
         .await
         .unwrap();
     assert_eq!(rows, 1);
+    assert_eq!(count_open_carts(&pool, TENANT).await.unwrap(), 1);
 }

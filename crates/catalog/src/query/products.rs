@@ -1,7 +1,7 @@
 //! Queries over `catalog_products`, for the products pages of a tenant.
 
 use anyhow::Result;
-use timada_core::db::{Db, FromRow};
+use timada_core::db::{Db, FromRow, Tally};
 
 use crate::command::{Price, ProductStatus};
 use crate::value_object::format_money;
@@ -331,6 +331,19 @@ pub async fn count_products(db: &Db, tenant_id: &str, filter: &ProductFilter<'_>
         (tenant_id, search, filter.category, filter.status_value()),
     )
     .await
+}
+
+/// How many products a tenant has, whatever their status: what its home
+/// shows. Kept by the read model as it writes the rows.
+pub const PRODUCTS: Tally = Tally {
+    table: "catalog_tallies",
+    name: "products",
+    counted: "SELECT count(*) FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
+};
+
+/// How many products a tenant has, read from [`PRODUCTS`].
+pub async fn product_count(db: &Db, tenant_id: &str) -> Result<i64> {
+    PRODUCTS.read(db, tenant_id).await
 }
 
 /// One product of a tenant, by id.

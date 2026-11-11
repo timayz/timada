@@ -22,7 +22,7 @@ use crate::aggregator::{Cart, Order, OrderMail};
 use crate::command::{
     CartState, OrderState, cart_projection, order_mail_projection, order_projection,
 };
-use crate::query::OrderRecord;
+use crate::query::{OPEN_CARTS, ORDERS, OrderRecord};
 
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-orders/read-models";
@@ -98,12 +98,7 @@ async fn on_cart_event<E: Executor>(
     // A dropped cart leaves the table; the load reads the stream to its end,
     // so a replay never puts its row back on the way there.
     if cart.is_expired() {
-        db.execute(
-            "DELETE FROM orders_carts WHERE tenant_id = ?1 AND id = ?2",
-            (event.tenant.as_str(), cart.id.as_str()),
-        )
-        .await?;
-        return Ok(());
+        return delete_cart(&db, &event.tenant, &cart.id).await;
     }
     upsert_cart(&db, &event.tenant, &cart).await
 }
@@ -125,36 +120,64 @@ async fn on_order_event<E: Executor>(
     upsert_order(&db, &event.tenant, &order).await
 }
 
-/// Writes the row of a cart as the write model sees it.
+/// Drops the row of a cart, and its count among the open ones.
+async fn delete_cart(db: &Db, tenant_id: &str, cart_id: &str) -> anyhow::Result<()> {
+    let env = (tenant_id, cart_id);
+    db.write(&env, |tx, (tenant_id, cart_id)| {
+        Box::pin(async move {
+            let was = OPEN_CARTS.of(tx, tenant_id, cart_id).await?;
+            execute(
+                tx,
+                "DELETE FROM orders_carts WHERE tenant_id = ?1 AND id = ?2",
+                (*tenant_id, *cart_id),
+            )
+            .await?;
+            OPEN_CARTS.settle(tx, tenant_id, cart_id, was).await
+        })
+    })
+    .await
+}
+
+/// Writes the row of a cart as the write model sees it, and moves the count
+/// of open carts when it opened or closed one.
 pub(crate) async fn upsert_cart(db: &Db, tenant_id: &str, cart: &CartState) -> anyhow::Result<()> {
     let refused_returns = serde_json::to_string(&cart.refused_returns())?;
-    db.execute(
-        "INSERT INTO orders_carts (tenant_id, id, order_id, line_count, item_count, created_at,
-            updated_at, status, return_requested_at, unanswered_since, refused_returns)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-         ON CONFLICT (tenant_id, id) DO UPDATE SET
-            order_id = excluded.order_id, line_count = excluded.line_count,
-            status = excluded.status,
-            item_count = excluded.item_count, updated_at = excluded.updated_at,
-            return_requested_at = excluded.return_requested_at,
-            unanswered_since = excluded.unanswered_since,
-            refused_returns = excluded.refused_returns",
-        (
-            tenant_id,
-            cart.id.as_str(),
-            cart.order_id.as_deref(),
-            cart.lines.len() as i64,
-            i64::from(cart.item_count()),
-            cart.created_at as i64,
-            cart.updated_at as i64,
-            cart.status(),
-            cart.return_requested_at().map(|at| at as i64),
-            cart.unanswered_since().map(|at| at as i64),
-            refused_returns.as_str(),
-        ),
-    )
-    .await?;
-    Ok(())
+    let env = (tenant_id, cart, refused_returns);
+    db.write(&env, |tx, (tenant_id, cart, refused_returns)| {
+        Box::pin(async move {
+            let was = OPEN_CARTS.of(tx, tenant_id, &cart.id).await?;
+            execute(
+                tx,
+                "INSERT INTO orders_carts (tenant_id, id, order_id, line_count, item_count,
+                    created_at, updated_at, status, return_requested_at, unanswered_since,
+                    refused_returns)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 ON CONFLICT (tenant_id, id) DO UPDATE SET
+                    order_id = excluded.order_id, line_count = excluded.line_count,
+                    status = excluded.status,
+                    item_count = excluded.item_count, updated_at = excluded.updated_at,
+                    return_requested_at = excluded.return_requested_at,
+                    unanswered_since = excluded.unanswered_since,
+                    refused_returns = excluded.refused_returns",
+                (
+                    *tenant_id,
+                    cart.id.as_str(),
+                    cart.order_id.as_deref(),
+                    cart.lines.len() as i64,
+                    i64::from(cart.item_count()),
+                    cart.created_at as i64,
+                    cart.updated_at as i64,
+                    cart.status(),
+                    cart.return_requested_at().map(|at| at as i64),
+                    cart.unanswered_since().map(|at| at as i64),
+                    refused_returns.as_str(),
+                ),
+            )
+            .await?;
+            OPEN_CARTS.settle(tx, tenant_id, &cart.id, was).await
+        })
+    })
+    .await
 }
 
 /// Writes the row of an order as the write model sees it (the whole order
@@ -169,6 +192,7 @@ pub(crate) async fn upsert_order(
     let env = (tenant_id, order, state);
     db.write(&env, |tx, (tenant_id, order, state)| {
         Box::pin(async move {
+            let was = ORDERS.of(tx, tenant_id, &order.id).await?;
             execute(
                 tx,
                 "INSERT INTO orders_orders (tenant_id, id, reference, cart_id, status, email, name,
@@ -237,6 +261,7 @@ pub(crate) async fn upsert_order(
                 ]),
             )
             .await?;
+            ORDERS.settle(tx, tenant_id, &order.id, was).await?;
             // The lines of an order never change once placed; a repeat finds
             // its rows there.
             for line in &order.lines {

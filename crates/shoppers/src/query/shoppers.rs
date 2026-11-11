@@ -1,6 +1,6 @@
 //! Queries over `shoppers_shoppers`, for the customers page of a tenant.
 
-use timada_core::db::{Db, FromRow};
+use timada_core::db::{Db, FromRow, Tally};
 
 /// One shopper of a tenant, with the orders placed with their address.
 #[derive(Debug, Clone, FromRow, PartialEq, Eq)]
@@ -38,11 +38,13 @@ pub async fn shoppers_of_tenant(
 
 /// How many shoppers the tenant has.
 pub async fn count_shoppers(db: &Db, tenant_id: &str) -> anyhow::Result<u64> {
-    let (count,): (i64,) = db
-        .fetch_one(
-            "SELECT COUNT(*) FROM shoppers_shoppers WHERE tenant_id = ?1",
-            (tenant_id,),
-        )
-        .await?;
-    Ok(count as u64)
+    Ok(SHOPPERS.read(db, tenant_id).await?.max(0) as u64)
 }
+
+/// What [`count_shoppers`] counts, kept by the read model as it writes the
+/// rows.
+pub const SHOPPERS: Tally = Tally {
+    table: "shoppers_tallies",
+    name: "shoppers",
+    counted: "SELECT count(*) FROM shoppers_shoppers WHERE tenant_id = ?1 AND id = ?2",
+};

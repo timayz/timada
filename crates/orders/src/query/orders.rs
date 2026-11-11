@@ -1,7 +1,7 @@
 //! Queries over `orders_orders`, for the orders pages of a tenant.
 
 use timada_core::MailStatus;
-use timada_core::db::{Db, FromRow};
+use timada_core::db::{Db, FromRow, Tally};
 
 use crate::command::{OrderRefund, OrderState, OrderStatus, OutsideSettlement};
 use timada_catalog::format_money;
@@ -217,6 +217,19 @@ pub async fn orders_of_tenant(
         ),
     )
     .await
+}
+
+/// How many orders a tenant has, whatever their status: what its home
+/// shows. Kept by the read model as it writes the rows.
+pub const ORDERS: Tally = Tally {
+    table: "orders_tallies",
+    name: "orders",
+    counted: "SELECT count(*) FROM orders_orders WHERE tenant_id = ?1 AND id = ?2",
+};
+
+/// How many orders a tenant has, read from [`ORDERS`].
+pub async fn order_count(db: &Db, tenant_id: &str) -> anyhow::Result<i64> {
+    ORDERS.read(db, tenant_id).await
 }
 
 /// How many orders [`orders_of_tenant`] would list.

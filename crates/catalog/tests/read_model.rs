@@ -6,7 +6,8 @@ use common::*;
 use timada_catalog::{
     Command, DefineVariant, OptionSelection, ProductFilter, ProductPage, ProductStatus, Sellable,
     categories_of_product, categories_of_tenant, category_by_id, count_products, live_child_count,
-    product_by_id, products_of_tenant, read_model_subscription, sellable, tree_of, upsert_product,
+    product_by_id, product_count, products_of_tenant, read_model_subscription, sellable, tree_of,
+    upsert_product,
 };
 
 async fn catch_up(executor: &evento::Turso, pool: &Db) {
@@ -36,6 +37,11 @@ async fn products_are_listed_searched_counted_and_stay_idempotent() {
     let all = ProductFilter::default();
     assert_eq!(count_products(&pool, TENANT, &all).await.unwrap(), 2);
     assert_eq!(count_products(&pool, "other", &all).await.unwrap(), 0);
+    assert_eq!(
+        product_count(&pool, TENANT).await.unwrap(),
+        2,
+        "the home's count"
+    );
     let rows = products_of_tenant(&pool, TENANT, &all, ProductPage::First, 50)
         .await
         .unwrap()
@@ -172,6 +178,7 @@ async fn a_deleted_product_loses_its_rows_and_its_category_count() {
             .is_none(),
         "the row is gone, not archived"
     );
+    assert_eq!(product_count(&pool, TENANT).await.unwrap(), 0);
     assert!(
         categories_of_product(&pool, TENANT, &ball.id)
             .await
