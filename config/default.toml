@@ -234,14 +234,20 @@ dir = "data/shopper-keys"
 # # that callback registered, tracking arrives this late: lower it.
 # order_read_every_secs = 86400
 # # How long, in seconds, a parcel AliExpress shipped goes before AliExpress is
-# # asked again where it is, for the shopper's order page. Each parcel is
-# # followed for 60 days after it ships: one call per parcel per period.
+# # asked again where it is, for the shopper's order page, while it moves. One
+# # that stays still waits as long as it has been still, up to eight periods.
+# # A parcel is followed until it is delivered, or 60 days after it ships: one
+# # call per parcel per period at most.
 # parcel_read_every_secs = 21600
-# # How many calls a day the app may make, over every shop and node: read it on
-# # AliExpress's open platform. A sale always reads what it sells; the nodes
-# # spend what is left on the other products: first what shoppers wanted in the
-# # last 30 days, then what is on sale, then the rest. 0: nothing but what sales
-# # and members ask for.
+# # How many calls a day the app may make, over every shop and node: read the
+# # app's quota on AliExpress's open platform and set this from it, with a
+# # margin. The default is only the ceiling the dropshipping API was known for
+# # (500 an hour): a few hundred orders a day placed through the app spend most
+# # of it. A sale always reads what it sells, an order placed or pushed is
+# # always read; the nodes spend what is left in three lanes: 60 % on the other
+# # products (first what shoppers wanted in the last 30 days, then what is on
+# # sale, then the rest), 10 % on the open orders no push came for, 30 % on the
+# # parcels. 0: nothing but what sales and members ask for.
 # calls_per_day = 12000
 # # How recent, in seconds, a read of a product must be for a payment to go by
 # # it instead of reading the product again. Longer spends fewer calls on what

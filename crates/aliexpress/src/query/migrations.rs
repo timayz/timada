@@ -69,9 +69,11 @@ pub const NODE_MIGRATION_APP: &str = "aliexpress_node";
 /// This node's own tables, which no peer holds and a copy of the store from
 /// a peer leaves alone, recorded apart from the read models for that:
 /// `aliexpress_read_times`, when this node last read each item and each
-/// open order on AliExpress ([`super::read_times`]), and
-/// `aliexpress_unrecorded`, what AliExpress took and the store would not
-/// take yet ([`super::unrecorded`]).
+/// open order on AliExpress, and whether a shipped order's parcels are
+/// followed any more ([`super::read_times`]); `aliexpress_deliveries`, what
+/// delivering each item last cost, for the reads that reuse it
+/// ([`super::deliveries`]); and `aliexpress_unrecorded`, what AliExpress took
+/// and the store would not take yet ([`super::unrecorded`]).
 pub const NODE_MIGRATIONS: Migrations<'static> = Migrations::new(
     NODE_MIGRATION_APP,
     &[Migration::up(
@@ -81,6 +83,18 @@ pub const NODE_MIGRATIONS: Migrations<'static> = Migrations::new(
                 id TEXT NOT NULL,
                 tried_at INTEGER,
                 synced_at INTEGER,
+                delivered INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (tenant_id, id)
+            );
+        CREATE TABLE aliexpress_deliveries (
+                tenant_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                sku_cost_cents INTEGER NOT NULL,
+                fee_cents INTEGER NOT NULL,
+                min_days INTEGER,
+                max_days INTEGER,
+                read_at INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE TABLE aliexpress_unrecorded (

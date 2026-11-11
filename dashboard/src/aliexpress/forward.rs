@@ -26,7 +26,7 @@ use timada_aliexpress::aggregator::forward::{Checked, Done, ForwardItem, Request
 use timada_aliexpress::{
     ALIEXPRESS_SUPPLIER, AeError, AliexpressError, Client, ForwardStatus, LinkState, ParcelQuery,
     PlaceItem, PlaceOrder, PlacedRecord, Placement, choose_service, delivery_country,
-    describe_options, forward_items, logistics_address,
+    describe_options, forward_items, logistics_address, parcel_delivered,
 };
 use timada_orders::{OrderError, OrderLine, OrderStatus};
 use timada_tenancy::{CompanyState, TenantState};
@@ -84,6 +84,18 @@ pub enum CheckResult {
     Done,
     /// Another node read it in between, or it is not placed.
     Skipped,
+}
+
+/// How following a closed forward's parcels went.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Followed {
+    /// How many parcels had news.
+    pub changed: usize,
+    /// Nothing is left to follow: every parcel is at the door
+    /// ([`parcel_delivered`]), or the shop's order is not one whose parcels
+    /// are followed (fulfilled by hand, cancelled). Never for a forward
+    /// still open.
+    pub over: bool,
 }
 
 /// Why placing an order failed, for the merchant.
@@ -546,34 +558,43 @@ impl Aliexpress {
     /// forward only has to be closed.
     /// Asks AliExpress where each parcel of a closed forward is and records
     /// what changed on the shop's order ([`timada_orders::aggregator::Shipment`]);
-    /// how many parcels had news. Once as the order is fulfilled
-    /// ([`Self::check_forward`]), then from the sweep every period. Nothing
-    /// for a forward not closed with parcels, or an order not fulfilled. A
-    /// parcel AliExpress will not tell of is logged and passed over: the
-    /// others are still followed.
+    /// how many parcels had news, and whether there is anything left to
+    /// follow. Once as the order is fulfilled ([`Self::check_forward`]), then
+    /// from the sweep, less and less often while the parcels stay still,
+    /// until every one is at the door. Nothing to follow for a forward
+    /// closed without fulfilling the order, or an order no longer fulfilled.
+    /// A parcel AliExpress will not tell of is logged and passed over: the
+    /// others are still followed, and so is it next time.
     pub async fn follow_parcels<E: evento::Executor + Clone>(
         &self,
         store: &E,
         tenant: &TenantState,
         company: &CompanyState,
         forward_id: &str,
-    ) -> anyhow::Result<usize> {
+    ) -> anyhow::Result<Followed> {
+        let nothing = Followed {
+            changed: 0,
+            over: true,
+        };
         let forwards = timada_aliexpress::Command::new(store.clone(), &tenant.id);
         let Some(forward) = forwards.load_forward_by_id(forward_id).await? else {
-            return Ok(0);
+            return Ok(nothing);
         };
-        if forward.status != ForwardStatus::Done || forward.fulfilled_tracking.is_none() {
-            return Ok(0);
+        if forward.status != ForwardStatus::Done {
+            return Ok(Followed::default());
+        }
+        if forward.fulfilled_tracking.is_none() {
+            return Ok(nothing);
         }
         let Some(client) = self.client_of(company)? else {
-            return Ok(0);
+            return Ok(Followed::default());
         };
         let orders = timada_orders::Command::new(store.clone(), &tenant.id);
         let Some(order) = orders.load_order(&forward.order_id).await? else {
-            return Ok(0);
+            return Ok(nothing);
         };
         if order.status != OrderStatus::Fulfilled {
-            return Ok(0);
+            return Ok(nothing);
         }
         // The forward's items all ship by the service chosen for the order;
         // an AliExpress order is one seller's, so the first item's stands
@@ -584,7 +605,10 @@ impl Aliexpress {
             .map(|item| item.service_name.clone())
             .unwrap_or_default();
         let country = delivery_country(&order.shipping.country, &order.shipping.postal_code);
-        let mut changed = 0;
+        let mut followed = Followed {
+            changed: 0,
+            over: true,
+        };
         for ae_order in &forward.ae_orders {
             for number in &ae_order.tracking {
                 let query = ParcelQuery {
@@ -597,18 +621,20 @@ impl Aliexpress {
                     Ok(checkpoints) => checkpoints,
                     Err(err) => {
                         tracing::warn!(tenant = %tenant.id, order = %order.id, parcel = %number, error = %err, "AliExpress did not tell where the parcel is");
+                        followed.over = false;
                         continue;
                     }
                 };
+                followed.over &= parcel_delivered(&checkpoints);
                 if orders
                     .record_parcel_tracking(ALIEXPRESS_ACTOR, &order.id, number, checkpoints)
                     .await?
                 {
-                    changed += 1;
+                    followed.changed += 1;
                 }
             }
         }
-        Ok(changed)
+        Ok(followed)
     }
 
     pub async fn check_forward<E: evento::Executor + Clone>(
@@ -1236,6 +1262,8 @@ mod tests {
         shipped: Mutex<HashMap<String, String>>,
         /// The orders AliExpress closed without shipping them.
         closed: Mutex<Vec<String>>,
+        /// Every parcel shipped is at the door.
+        delivered: AtomicBool,
         /// Answers 503 to everything.
         down: AtomicBool,
         reads: AtomicUsize,
@@ -1278,12 +1306,16 @@ mod tests {
                     .values()
                     .any(|parcel| *parcel == number);
                 let response = if shipped {
+                    let mut steps = vec![
+                        serde_json::json!({ "event_desc": "Shipment accepted by carrier", "address": "Shenzhen", "event_date": "2026-11-08 10:12:00" }),
+                        serde_json::json!({ "event_desc": "Departed from origin country", "address": "Shenzhen", "event_date": "2026-11-09 08:00:00" }),
+                    ];
+                    if self.delivered.load(Ordering::SeqCst) {
+                        steps.push(serde_json::json!({ "event_desc": "Delivered", "address": "Paris", "event_date": "2026-11-14 09:30:00" }));
+                    }
                     serde_json::json!({
                         "result_success": true,
-                        "details": { "details": [
-                            { "event_desc": "Shipment accepted by carrier", "address": "Shenzhen", "event_date": "2026-11-08 10:12:00" },
-                            { "event_desc": "Departed from origin country", "address": "Shenzhen", "event_date": "2026-11-09 08:00:00" },
-                        ] },
+                        "details": { "details": steps },
                     })
                 } else {
                     serde_json::json!({ "result_success": false, "result_error": "NO_TRACKING" })
@@ -1539,8 +1571,8 @@ mod tests {
                 .await
                 .unwrap()
         };
-        // Not closed yet: nothing to follow.
-        assert_eq!(follow().await, 0);
+        // Not closed yet: nothing to follow, nor over.
+        assert_eq!(follow().await, Followed::default());
         assert_eq!(shop.orders().load_shipment(ORDER).await.unwrap(), None);
 
         shop.ships("81", "LP1");
@@ -1564,11 +1596,33 @@ mod tests {
                 "Departed from origin country"
             ]
         );
-        // The sweep's follow finds the same journey: nothing recorded.
-        assert_eq!(follow().await, 0);
+        // The sweep's follow finds the same journey: nothing recorded, and
+        // the parcel still on its way.
+        assert_eq!(
+            follow().await,
+            Followed {
+                changed: 0,
+                over: false
+            }
+        );
         assert_eq!(
             shop.orders().load_shipment(ORDER).await.unwrap().unwrap(),
             shipment
+        );
+
+        // At the door: the last step recorded, and nothing left to follow.
+        shop.stand_in.delivered.store(true, Ordering::SeqCst);
+        assert_eq!(
+            follow().await,
+            Followed {
+                changed: 1,
+                over: true
+            }
+        );
+        let shipment = shop.orders().load_shipment(ORDER).await.unwrap().unwrap();
+        assert_eq!(
+            shipment.parcels[0].checkpoints.last().unwrap().description,
+            "Delivered"
         );
     }
 

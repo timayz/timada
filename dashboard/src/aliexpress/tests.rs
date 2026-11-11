@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use evento::Evento;
 use timada_aliexpress::aggregator::SkuLink;
@@ -29,6 +30,9 @@ use crate::seal::Sealer;
 
 const AE_PRODUCT: &str = "1005006123456789";
 const ALICE: &str = "alice";
+/// How often the sweep's timer runs, and how soon an order with every parcel
+/// known is read again.
+const SWEEP_EVERY: Duration = Duration::from_secs(3600);
 
 /// AliExpress, as far as reading one product goes: two combinations, of which
 /// a test changes the first.
@@ -48,6 +52,8 @@ struct StandIn {
     /// Lets a held answer go.
     answer: Notify,
     reads: AtomicUsize,
+    /// How many times delivery was asked about (`aliexpress.ds.freight.query`).
+    freights: AtomicUsize,
     /// What delivering one costs, in cents; free by default.
     delivery_cents: AtomicU64,
     /// The orders placed, each as [`PLACED_AE_ORDER`].
@@ -83,6 +89,7 @@ impl StandIn {
             holding: Notify::new(),
             answer: Notify::new(),
             reads: AtomicUsize::new(0),
+            freights: AtomicUsize::new(0),
             delivery_cents: AtomicU64::new(0),
             placed: AtomicUsize::new(0),
             place_answers: Mutex::default(),
@@ -118,6 +125,7 @@ impl StandIn {
                         .unwrap_or_default();
                     if String::from_utf8_lossy(line).contains("method=aliexpress.ds.freight.query")
                     {
+                        stand_in.freights.fetch_add(1, Ordering::SeqCst);
                         let body = stand_in.freight().to_string();
                         let answer = format!(
                             "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -848,7 +856,12 @@ async fn who_asked_decides_what_the_read_records() {
 #[tokio::test]
 async fn the_sweep_asks_once_a_period_for_what_is_due() {
     let shop = Shop::new().await;
-    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        SWEEP_EVERY,
+    );
     let now = crate::auth::now();
 
     assert_eq!(sweep.ask_due(now).await.unwrap(), 0, "just imported");
@@ -869,7 +882,12 @@ async fn the_sweep_asks_once_a_period_for_what_is_due() {
 #[tokio::test]
 async fn a_shop_that_cannot_read_is_passed_over_without_a_request() {
     let shop = Shop::new().await;
-    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        SWEEP_EVERY,
+    );
     let tenancy = timada_tenancy::Command(shop.store.clone());
     tenancy
         .remove_aliexpress(ALICE, &shop.tenant.id)
@@ -949,7 +967,12 @@ async fn the_read_model_hears_what_makes_a_product_matter() {
 #[tokio::test]
 async fn the_sweep_spends_the_day_on_what_shoppers_want_first() {
     let shop = Shop::new().await;
-    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        SWEEP_EVERY,
+    );
     // Another shop's product on sale, tried long before this one.
     let on_sale = timada_aliexpress::LinkState {
         id: "other-item".to_owned(),
@@ -1046,7 +1069,12 @@ impl Shop {
 #[tokio::test]
 async fn an_open_order_is_read_by_the_node_it_belongs_to() {
     let shop = Shop::new().await;
-    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        SWEEP_EVERY,
+    );
     let forward_id = shop.placed_on_aliexpress().await;
     let later = shop.period_after(crate::auth::now());
 
@@ -1064,7 +1092,12 @@ async fn an_open_order_is_read_by_the_node_it_belongs_to() {
 #[tokio::test]
 async fn an_open_order_is_read_once_a_period_when_no_push_comes() {
     let shop = Shop::new().await;
-    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        SWEEP_EVERY,
+    );
     shop.placed_on_aliexpress().await;
     let now = crate::auth::now();
 
@@ -1089,7 +1122,12 @@ async fn an_open_order_is_read_once_a_period_when_no_push_comes() {
 #[tokio::test]
 async fn a_push_saves_the_sweep_its_read() {
     let shop = Shop::new().await;
-    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        SWEEP_EVERY,
+    );
     let forward_id = shop.placed_on_aliexpress().await;
     let now = crate::auth::now();
     let pushed_at = shop.period_after(now) - 10;
@@ -1100,7 +1138,7 @@ async fn a_push_saves_the_sweep_its_read() {
         shop.store.clone(),
         &shop.tenant.id,
         &forward_id,
-        None,
+        super::webhook::Said::Nothing,
         pushed_at,
     )
     .await
@@ -1122,7 +1160,12 @@ async fn a_push_saves_the_sweep_its_read() {
 #[tokio::test]
 async fn a_node_that_stopped_with_the_parcels_known_leaves_the_order_to_the_next_sweep() {
     let shop = Shop::new().await;
-    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        SWEEP_EVERY,
+    );
     let forward_id = shop.placed_on_aliexpress().await;
     let forwards = timada_aliexpress::Command::new(shop.store.clone(), &shop.tenant.id);
 
@@ -1149,10 +1192,13 @@ async fn a_node_that_stopped_with_the_parcels_known_leaves_the_order_to_the_next
         .unwrap();
     shop.follow_read_models().await;
 
-    // A minute later, not a day: the shopper is not left waiting.
-    let fulfilled = sweep.check_forwards(crate::auth::now() + 60).await.unwrap();
+    // A sweep later, not a day: the shopper is not left waiting.
+    let went_through = sweep
+        .check_forwards(crate::auth::now() + SWEEP_EVERY.as_secs() + 1)
+        .await
+        .unwrap();
 
-    assert_eq!(fulfilled, 1);
+    assert_eq!(went_through, 1);
     let forward = forwards
         .load_forward_versioned(&forward_id)
         .await
@@ -1171,7 +1217,12 @@ async fn a_node_that_stopped_with_the_parcels_known_leaves_the_order_to_the_next
 #[tokio::test]
 async fn a_shop_that_cannot_read_takes_no_turn_with_its_open_orders() {
     let shop = Shop::new().await;
-    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        SWEEP_EVERY,
+    );
     let forward_id = shop.placed_on_aliexpress().await;
     let later = shop.period_after(crate::auth::now());
     timada_tenancy::Command(shop.store.clone())
@@ -1183,13 +1234,203 @@ async fn a_shop_that_cannot_read_takes_no_turn_with_its_open_orders() {
 
     assert_eq!(shop.stand_in.reads(), 0);
     let before = later as i64 - 1;
-    let due = timada_aliexpress::forwards_due(&shop.db, before, Share::ALONE, 10)
+    let due = timada_aliexpress::forwards_due(&shop.db, before, before, Share::ALONE, 10)
         .await
         .unwrap();
     assert!(
         due.iter().all(|forward| forward.id != forward_id),
         "passed over until the next period"
     );
+}
+
+/// A forward closed with its parcels, as the read model has it: what the
+/// parcels sweep goes through.
+fn shipped_forward(id: &str, closed_at: u64) -> timada_aliexpress::ForwardState {
+    timada_aliexpress::ForwardState {
+        id: id.to_owned(),
+        order_id: format!("order-{id}"),
+        status: timada_aliexpress::ForwardStatus::Done,
+        ae_orders: vec![timada_aliexpress::AeOrderState {
+            id: format!("81{id}"),
+            tracking: vec![format!("LP{id}")],
+            ..Default::default()
+        }],
+        complete: true,
+        fulfilled_tracking: Some(format!("LP{id}")),
+        updated_at: closed_at,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn the_parcels_of_every_shop_take_turns_and_a_still_one_waits_longer() {
+    let shop = Shop::new().await;
+    let now = crate::auth::now();
+    for (tenant, id) in [
+        ("a-shop", "a1"),
+        ("a-shop", "a2"),
+        ("a-shop", "a3"),
+        ("b-shop", "b1"),
+    ] {
+        timada_aliexpress::upsert_forward(&shop.db, tenant, &shipped_forward(id, now - 10))
+            .await
+            .unwrap();
+    }
+    // Asked about every hour while they move, every eight at most.
+    let due = async |at: u64, limit: i64| -> Vec<String> {
+        timada_aliexpress::parcels_due(
+            &shop.db,
+            at as i64,
+            3_600,
+            8 * 3_600,
+            (at - timada_aliexpress::FORWARD_WATCH_SECS) as i64,
+            Share::ALONE,
+            limit,
+        )
+        .await
+        .unwrap()
+        .iter()
+        .map(|forward| forward.id.clone())
+        .collect()
+    };
+
+    // Never asked about: due, the shops taking turns.
+    assert_eq!(due(now, 2).await, ["a1", "b1"]);
+    assert_eq!(due(now, 10).await, ["a1", "a2", "a3", "b1"]);
+
+    // A parcel that moved is asked about again a period later.
+    timada_aliexpress::note_parcels_followed(&shop.db, "a-shop", "a1", now, true)
+        .await
+        .unwrap();
+    assert!(!due(now + 3_599, 10).await.contains(&"a1".to_owned()));
+    assert!(due(now + 3_600, 10).await.contains(&"a1".to_owned()));
+
+    // One that stays still waits as long as it has been still: twice as
+    // long each time.
+    timada_aliexpress::note_parcels_followed(&shop.db, "a-shop", "a1", now + 3_600, false)
+        .await
+        .unwrap();
+    assert!(!due(now + 7_199, 10).await.contains(&"a1".to_owned()));
+    assert!(due(now + 7_200, 10).await.contains(&"a1".to_owned()));
+    timada_aliexpress::note_parcels_followed(&shop.db, "a-shop", "a1", now + 7_200, false)
+        .await
+        .unwrap();
+    assert!(!due(now + 14_399, 10).await.contains(&"a1".to_owned()));
+    assert!(due(now + 14_400, 10).await.contains(&"a1".to_owned()));
+    // Up to eight periods.
+    timada_aliexpress::note_parcels_followed(&shop.db, "a-shop", "a1", now + 86_400, false)
+        .await
+        .unwrap();
+    assert!(
+        !due(now + 86_400 + 8 * 3_600 - 1, 10)
+            .await
+            .contains(&"a1".to_owned())
+    );
+    assert!(
+        due(now + 86_400 + 8 * 3_600, 10)
+            .await
+            .contains(&"a1".to_owned())
+    );
+
+    // At the door: no more.
+    timada_aliexpress::note_parcels_delivered(&shop.db, "a-shop", "a1", now + 100_000)
+        .await
+        .unwrap();
+    assert!(!due(now + 10 * 86_400, 10).await.contains(&"a1".to_owned()));
+    assert!(due(now + 10 * 86_400, 10).await.contains(&"a2".to_owned()));
+}
+
+#[tokio::test]
+async fn a_confirmed_push_ends_the_following_of_the_parcels() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        SWEEP_EVERY,
+    );
+    let forward_id = shop.placed_on_aliexpress().await;
+    let forwards = timada_aliexpress::Command::new(shop.store.clone(), &shop.tenant.id);
+    // The parcel is known, and the order fulfilled with it by the sweep.
+    let (_, version) = forwards
+        .load_forward_versioned(&forward_id)
+        .await
+        .unwrap()
+        .unwrap();
+    forwards
+        .record_checked(
+            &forward_id,
+            version,
+            vec![timada_aliexpress::aggregator::forward::Checked {
+                ae_order_id: "8100000000000001".to_owned(),
+                status: "WAIT_BUYER_ACCEPT_GOODS".to_owned(),
+                logistics_status: "SELLER_SEND_GOODS".to_owned(),
+                tracking: vec!["LP00123456FR".to_owned()],
+                closed: false,
+            }],
+            None,
+        )
+        .await
+        .unwrap();
+    shop.follow_read_models().await;
+    let fulfilled_at = crate::auth::now() + SWEEP_EVERY.as_secs() + 1;
+    assert_eq!(sweep.check_forwards(fulfilled_at).await.unwrap(), 1);
+    shop.follow_read_models().await;
+    let reads = shop.stand_in.reads();
+
+    // The sweep asks where the parcel is a period after the fulfilment did.
+    assert_eq!(sweep.follow_parcels(fulfilled_at).await.unwrap(), 0);
+    let later = fulfilled_at + shop.aliexpress.parcel_read_every_secs() + 1;
+    assert_eq!(sweep.follow_parcels(later).await.unwrap(), 1);
+    assert_eq!(shop.stand_in.reads(), reads + 1);
+
+    // AliExpress says the buyer has the goods: asked about once more, for the
+    // last steps, then no more.
+    super::webhook::check(
+        shop.aliexpress.clone(),
+        &shop.db,
+        shop.store.clone(),
+        &shop.tenant.id,
+        &forward_id,
+        super::webhook::Said::Confirmed,
+        later + 1,
+    )
+    .await
+    .unwrap();
+    assert_eq!(shop.stand_in.reads(), reads + 2);
+    assert_eq!(
+        sweep.follow_parcels(later + 10 * 86_400).await.unwrap(),
+        0,
+        "followed to the door"
+    );
+}
+
+#[tokio::test]
+async fn a_routine_read_asks_for_the_delivery_only_when_the_cost_moved() {
+    let shop = Shop::new().await;
+    let freights = || shop.stand_in.freights.load(Ordering::SeqCst);
+
+    // The import did not go through this node's reads: the first read asks.
+    shop.sync(SyncMode::Routine).await;
+    assert_eq!(freights(), 1);
+    // The same cost: what was read stands.
+    shop.sync(SyncMode::Routine).await;
+    assert_eq!(freights(), 1);
+
+    // A sale asks every time, and so does a member.
+    shop.sync(SyncMode::Sale).await;
+    shop.sync(SyncMode::Asked { by: ALICE }).await;
+    assert_eq!(freights(), 3);
+
+    // The cost moved: asked again, and the fee read goes into the price.
+    *shop.stand_in.cost.lock().unwrap() = "5.00".to_owned();
+    shop.stand_in.delivery_cents.store(100, Ordering::SeqCst);
+    shop.sync(SyncMode::Routine).await;
+    assert_eq!(freights(), 4);
+    assert_eq!(shop.rose().await.0, 1_200, "(5.00 + 1.00) × 2");
+    shop.sync(SyncMode::Routine).await;
+    assert_eq!(freights(), 4);
+    assert_eq!(shop.rose().await.0, 1_200);
 }
 
 #[tokio::test]
@@ -1819,7 +2060,12 @@ async fn an_order_aliexpress_took_is_recorded_once_the_store_takes_writes_again(
 #[tokio::test]
 async fn an_order_aliexpress_took_is_recorded_by_the_sweep_when_the_store_refused_it() {
     let shop = Shop::new().await;
-    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        SWEEP_EVERY,
+    );
     let forward_id = shop.order_to_place().await;
     let paused = RefusesWrites::placed(&shop.store, usize::MAX);
 
@@ -1921,7 +2167,12 @@ async fn a_refusal_after_an_attempt_that_may_have_placed_keeps_the_fence() {
 #[tokio::test]
 async fn a_stalled_attempt_keeps_the_fence_against_a_later_refusal() {
     let shop = Shop::new().await;
-    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        SWEEP_EVERY,
+    );
     let forward_id = shop.order_to_place_with(false).await;
     // What a node writes before asking AliExpress, then it stopped.
     let forwards = shop.links();
@@ -2041,7 +2292,12 @@ async fn an_order_placed_again_before_the_sweep_keeps_the_fence() {
 #[tokio::test]
 async fn a_refusal_the_order_never_hears_of_is_left_to_the_stall_sweep() {
     let shop = Shop::new().await;
-    let sweep = AliexpressSync::new(shop.db.clone(), shop.store.clone(), shop.aliexpress.clone());
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        SWEEP_EVERY,
+    );
     let forward_id = shop.order_to_place_with(false).await;
     shop.stand_in
         .place_answers

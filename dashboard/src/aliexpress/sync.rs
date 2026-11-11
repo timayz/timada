@@ -6,14 +6,19 @@
 //! for the read) as fast as the day's budget of calls allows ([`super::budget`]).
 //! What sales spend comes out of it, so the sweep gets what they leave.
 //!
+//! The open orders of this node's share placed on AliExpress that no push came
+//! for in a while (see [`super::forward`], [`super::webhook`]), and the parcels
+//! of the orders fulfilled from AliExpress, for the shopper's order page, are
+//! read the same way, each from a lane of the budget of its own
+//! ([`Lane`]): a season's parcels never take the products' calls, nor the
+//! products the orders'.
+//!
 //! On a timer of its own, the sweep renews every connected company's access a
 //! day before it lapses, whether or not its shops have anything imported,
 //! records what this node placed on AliExpress while the store refused the
-//! record, says of the orders of this node's share left being placed that
-//! AliExpress may have them, reads the orders of this node's share placed
-//! on AliExpress that no push came for in a while (see [`super::forward`],
-//! [`super::webhook`]), and asks where the parcels of the orders fulfilled
-//! from AliExpress are, for the shopper's order page.
+//! record, and says of the orders of this node's share left being placed that
+//! AliExpress may have them. Nothing there waits for the budget, so a lane
+//! short of calls never holds a renewal up.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,16 +28,19 @@ use crate::db::Db;
 use timada_aliexpress::{
     ALIEXPRESS_SUPPLIER, AliexpressError, FORWARD_STALL_SECS, FORWARD_WATCH_SECS, ForwardRow,
     ForwardStatus, forget_unrecorded, forwards_due, forwards_stalled, links_due, note_forward_read,
-    note_parcels_read, note_tried, note_unrecorded_try, parcels_due, unrecorded,
+    note_parcels_delivered, note_parcels_followed, note_tried, note_unrecorded_try, parcels_due,
+    unrecorded,
 };
 use tokio::task::JoinHandle;
 
+use super::budget::Lane;
 use super::forward::{CheckResult, MAY_HAVE_PLACED};
 
 use super::{ALIEXPRESS_ACTOR, Aliexpress};
 use crate::cluster::Executor;
 
-/// The most accounts or orders one sweep goes through, over every shop.
+/// The most accounts or orders one pass of the timer goes through, over
+/// every shop.
 const SWEEP_LIMIT: i64 = 500;
 
 /// A pause between two reads of one shop's orders, so a sweep never bursts
@@ -43,9 +51,14 @@ const PACE: Duration = Duration::from_millis(200);
 /// while may still be paid for, and what sold lately is likely to sell again.
 const WANTED_SECS: u64 = 30 * 24 * 60 * 60;
 
-/// The longest the drip sleeps when nothing is due: a product may become due
+/// The longest a lane sleeps when nothing is due: a product may become due
 /// at any time, and looking for that costs one query.
 const LONGEST_IDLE: Duration = Duration::from_secs(60);
+
+/// How many periods a parcel that stays still waits at most before it is
+/// asked about again: one at the door's step waits a period, one that has
+/// not moved for a week waits this many.
+pub const PARCEL_STILL_PERIODS: u64 = 8;
 
 pub struct AliexpressSync {
     /// The read models: the imports, the forwards, the companies' access.
@@ -53,27 +66,37 @@ pub struct AliexpressSync {
     /// The store, every tenant's.
     store: Executor,
     aliexpress: Arc<Aliexpress>,
+    /// How often the timer runs, and how soon an order with every parcel
+    /// known is read again.
+    every: Duration,
 }
 
 impl AliexpressSync {
-    pub fn new(db: Db, store: Executor, aliexpress: Arc<Aliexpress>) -> Arc<Self> {
+    pub fn new(db: Db, store: Executor, aliexpress: Arc<Aliexpress>, every: Duration) -> Arc<Self> {
         Arc::new(Self {
             db,
             store,
             aliexpress,
+            every,
         })
     }
 
-    /// Sweeps every `every`, the first time right away, and meanwhile asks for
-    /// the products due as the budget allows.
-    pub fn start(self: Arc<Self>, every: Duration) -> JoinHandle<()> {
+    /// Sweeps every `every`, the first time right away, and meanwhile reads
+    /// what is due in each lane as the budget allows.
+    pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         tokio::spawn(async move {
-            tokio::join!(self.sweep_every(every), self.drip(every.min(LONGEST_IDLE)));
+            let idle = self.every.min(LONGEST_IDLE);
+            tokio::join!(
+                self.sweep_every(),
+                self.drip(Lane::Products, idle),
+                self.drip(Lane::Orders, idle),
+                self.drip(Lane::Parcels, idle),
+            );
         })
     }
 
-    async fn sweep_every(&self, every: Duration) {
-        let mut tick = tokio::time::interval(every);
+    async fn sweep_every(&self) {
+        let mut tick = tokio::time::interval(self.every);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
@@ -83,16 +106,24 @@ impl AliexpressSync {
         }
     }
 
-    async fn drip(&self, idle: Duration) {
+    /// Goes through what is due in `lane`, a batch at a time, the budget
+    /// giving the pace; sleeps `idle` when nothing is.
+    async fn drip(&self, lane: Lane, idle: Duration) {
         if !self.aliexpress.enabled() || !self.aliexpress.budget().spends() {
             return;
         }
         loop {
-            match self.ask_due(crate::auth::now()).await {
+            let now = crate::auth::now();
+            let went_through = match lane {
+                Lane::Products => self.ask_due(now).await,
+                Lane::Orders => self.check_forwards(now).await,
+                Lane::Parcels => self.follow_parcels(now).await,
+            };
+            match went_through {
                 Ok(0) => tokio::time::sleep(idle).await,
                 Ok(_) => {}
                 Err(err) => {
-                    tracing::error!(error = %err, "AliExpress products not asked for");
+                    tracing::error!(?lane, error = %err, "AliExpress not read");
                     tokio::time::sleep(idle).await;
                 }
             }
@@ -111,7 +142,7 @@ impl AliexpressSync {
             now.saturating_sub(self.aliexpress.sync_every_secs()) as i64,
             now.saturating_sub(WANTED_SECS) as i64,
             share,
-            budget.batch(share),
+            budget.batch(Lane::Products, share),
         )
         .await?;
         let mut connected: HashMap<&str, bool> = HashMap::new();
@@ -130,7 +161,9 @@ impl AliexpressSync {
                 }
             };
             if can_read {
-                budget.ready(|| self.aliexpress.share()).await;
+                budget
+                    .ready(Lane::Products, || self.aliexpress.share())
+                    .await;
                 let links = timada_aliexpress::Command::new(self.store.clone(), tenant_id);
                 if let Err(err) = links.request_sync(ALIEXPRESS_ACTOR, &link.id).await {
                     tracing::warn!(tenant = %tenant_id, link = %link.id, error = %err, "AliExpress product not asked for");
@@ -143,9 +176,10 @@ impl AliexpressSync {
     }
 
     /// Renews the access that lapses within a day, records what this node
-    /// placed on AliExpress and could not record then, says of the orders of
-    /// this node's share left being placed that AliExpress may have them,
-    /// then reads the open orders of this node's share that are due.
+    /// placed on AliExpress and could not record then, and says of the
+    /// orders of this node's share left being placed that AliExpress may
+    /// have them. Nothing here asks AliExpress but the renewals, which never
+    /// wait.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
         if !self.aliexpress.enabled() {
             return Ok(());
@@ -153,27 +187,27 @@ impl AliexpressSync {
         self.renew_due(now).await?;
         self.record_unrecorded().await?;
         self.settle_stalled(now).await?;
-        self.check_forwards(now).await?;
-        self.follow_parcels(now).await?;
         Ok(())
     }
 
     /// Asks AliExpress where the parcels of this node's share of the orders
-    /// fulfilled from it are, those not asked about for
-    /// `parcel_read_every_secs`, for 60 days after the forward closed; how
-    /// many parcels had news.
+    /// fulfilled from it are, those due at `now` ([`parcels_due`]), the
+    /// budget giving the pace; how many forwards it went through. The ones
+    /// followed to the door are asked about no more.
     pub async fn follow_parcels(&self, now: u64) -> anyhow::Result<usize> {
-        let before = now.saturating_sub(self.aliexpress.parcel_read_every_secs()) as i64;
-        let since = now.saturating_sub(FORWARD_WATCH_SECS) as i64;
+        let share = self.aliexpress.share();
+        let budget = self.aliexpress.budget();
+        let every = self.aliexpress.parcel_read_every_secs();
         let due = parcels_due(
             &self.db,
-            before,
-            since,
-            self.aliexpress.share(),
-            SWEEP_LIMIT,
+            now as i64,
+            every as i64,
+            every.saturating_mul(PARCEL_STILL_PERIODS) as i64,
+            now.saturating_sub(FORWARD_WATCH_SECS) as i64,
+            share,
+            budget.batch(Lane::Parcels, share),
         )
         .await?;
-        let mut changed = 0;
         for shop in due.chunk_by(|a, b| a.tenant_id == b.tenant_id) {
             let tenant_id = &shop[0].tenant_id;
             // A shop that cannot read is passed over until the next period,
@@ -181,7 +215,7 @@ impl AliexpressSync {
             let Some((tenant, company)) = self.aliexpress.connected_shop(tenant_id, now).await?
             else {
                 for forward in shop {
-                    note_parcels_read(&self.db, tenant_id, &forward.id, now).await?;
+                    note_parcels_followed(&self.db, tenant_id, &forward.id, now, false).await?;
                 }
                 continue;
             };
@@ -189,20 +223,39 @@ impl AliexpressSync {
                 if index > 0 {
                     tokio::time::sleep(PACE).await;
                 }
+                budget
+                    .ready_for(
+                        Lane::Parcels,
+                        forward.tracking.split_whitespace().count(),
+                        || self.aliexpress.share(),
+                    )
+                    .await;
                 match self
                     .aliexpress
                     .follow_parcels(&self.store, &tenant, &company, &forward.id)
                     .await
                 {
-                    Ok(count) => changed += count,
+                    Ok(followed) => {
+                        note_parcels_followed(
+                            &self.db,
+                            tenant_id,
+                            &forward.id,
+                            now,
+                            followed.changed > 0,
+                        )
+                        .await?;
+                        if followed.over {
+                            note_parcels_delivered(&self.db, tenant_id, &forward.id, now).await?;
+                        }
+                    }
                     Err(err) => {
-                        tracing::error!(tenant = %tenant_id, forward = %forward.id, error = %err, "AliExpress parcels not followed")
+                        tracing::error!(tenant = %tenant_id, forward = %forward.id, error = %err, "AliExpress parcels not followed");
+                        note_parcels_followed(&self.db, tenant_id, &forward.id, now, false).await?;
                     }
                 }
-                note_parcels_read(&self.db, tenant_id, &forward.id, now).await?;
             }
         }
-        Ok(changed)
+        Ok(due.len())
     }
 
     /// Records what this node placed on AliExpress while the store would not
@@ -303,22 +356,28 @@ impl AliexpressSync {
         Ok(failed)
     }
 
-    /// Reads the orders of this node's share placed on AliExpress that are due,
-    /// shop by shop; returns how many shop orders were fulfilled from them.
+    /// Reads the orders of this node's share placed on AliExpress that are due
+    /// at `now` ([`forwards_due`]), shop by shop, the budget giving the pace;
+    /// how many it went through.
     pub async fn check_forwards(&self, now: u64) -> anyhow::Result<usize> {
+        let share = self.aliexpress.share();
         let before = now.saturating_sub(self.aliexpress.order_read_every_secs()) as i64;
-        let due = forwards_due(&self.db, before, self.aliexpress.share(), SWEEP_LIMIT).await?;
-        let mut fulfilled = 0;
+        let settling_before = now.saturating_sub(self.every.as_secs()) as i64;
+        let due = forwards_due(
+            &self.db,
+            before,
+            settling_before,
+            share,
+            self.aliexpress.budget().batch(Lane::Orders, share),
+        )
+        .await?;
         for shop in due.chunk_by(|a, b| a.tenant_id == b.tenant_id) {
             let tenant_id = &shop[0].tenant_id;
-            match self.check_tenant(tenant_id, shop, now).await {
-                Ok(count) => fulfilled += count,
-                Err(err) => {
-                    tracing::error!(tenant = %tenant_id, error = %err, "AliExpress orders not read")
-                }
+            if let Err(err) = self.check_tenant(tenant_id, shop, now).await {
+                tracing::error!(tenant = %tenant_id, error = %err, "AliExpress orders not read")
             }
         }
-        Ok(fulfilled)
+        Ok(due.len())
     }
 
     async fn check_tenant(
@@ -326,30 +385,36 @@ impl AliexpressSync {
         tenant_id: &str,
         forwards: &[ForwardRow],
         now: u64,
-    ) -> anyhow::Result<usize> {
+    ) -> anyhow::Result<()> {
         // A shop that cannot read is passed over until the next period, like one
         // read, or its orders would take every turn it gets.
         let Some((tenant, company)) = self.aliexpress.connected_shop(tenant_id, now).await? else {
             for forward in forwards {
                 note_forward_read(&self.db, tenant_id, &forward.id, now).await?;
             }
-            return Ok(0);
+            return Ok(());
         };
         let store = self.store.clone();
-        let mut fulfilled = 0;
+        let budget = self.aliexpress.budget();
         for (index, forward) in forwards.iter().enumerate() {
             if index > 0 {
                 tokio::time::sleep(PACE).await;
             }
+            budget
+                .ready_for(
+                    Lane::Orders,
+                    forward.ae_order_ids.split_whitespace().count(),
+                    || self.aliexpress.share(),
+                )
+                .await;
             match self
                 .aliexpress
                 .check_forward(&store, &tenant, &company, &forward.id, None, now)
                 .await
             {
                 Ok(CheckResult::Checked { fulfilled: true }) => {
-                    fulfilled += 1;
                     // Its parcels were asked about with the fulfilment.
-                    note_parcels_read(&self.db, tenant_id, &forward.id, now).await?;
+                    note_parcels_followed(&self.db, tenant_id, &forward.id, now, true).await?;
                 }
                 Ok(_) => {}
                 Err(err) => {
@@ -358,7 +423,7 @@ impl AliexpressSync {
             }
             note_forward_read(&self.db, tenant_id, &forward.id, now).await?;
         }
-        Ok(fulfilled)
+        Ok(())
     }
 
     /// Renews the access of every connected company due within the margin,

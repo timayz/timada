@@ -196,6 +196,10 @@ pub async fn upsert_forward(
     .await?;
     if matches!(forward.status, ForwardStatus::Done | ForwardStatus::Failed) {
         super::read_times::forget(db, tenant_id, &forward.id).await?;
+    }
+    // Its parcels are followed from `Done` on; the first follow may well be
+    // noted before this row hears of the closing.
+    if forward.status == ForwardStatus::Failed {
         super::read_times::forget(
             db,
             tenant_id,
@@ -245,8 +249,9 @@ pub struct ForwardRow {
 /// The orders of every shop placed on AliExpress and not settled yet that
 /// `share` holds, last read or changed before `before` (unix seconds): what a sweep
 /// reads, in case a push from AliExpress never came. One whose parcels are all
-/// known is due whenever: a read settles such an order in one go, so only a node
-/// that stopped half-way leaves it so. The shops take turns, each its longest
+/// known is due sooner, from `settling_before`: a read settles such an order in
+/// one go, so only a node that stopped half-way leaves it so, and the shopper is
+/// not left waiting a period for it. The shops take turns, each its longest
 /// unread first, so one shop's open orders never crowd another shop out. Grouped
 /// by tenant, as the sweep paces one shop's reads. When one was last read is
 /// the later of its last change and this node's own record of reading it
@@ -254,6 +259,7 @@ pub struct ForwardRow {
 pub async fn forwards_due(
     db: &Db,
     before: i64,
+    settling_before: i64,
     share: Share,
     limit: i64,
 ) -> anyhow::Result<Vec<ForwardRow>> {
@@ -271,7 +277,8 @@ pub async fn forwards_due(
                     PARTITION BY tenant_id ORDER BY last_read_at, id
                 ) AS turn
                 FROM read
-                WHERE (last_read_at < ?1 OR settling = 1) AND shard % ?3 = ?4
+                WHERE (last_read_at < ?1 OR (settling = 1 AND last_read_at < ?5))
+                    AND shard % ?3 = ?4
             ) ORDER BY turn, last_read_at, tenant_id LIMIT ?2
          )
          SELECT f.tenant_id, f.id, f.order_id, f.status, f.ae_order_ids, f.tracking,
@@ -279,35 +286,73 @@ pub async fn forwards_due(
          FROM aliexpress_forwards f
          JOIN due ON due.tenant_id = f.tenant_id AND due.id = f.id
          ORDER BY f.tenant_id, due.last_read_at, f.id",
-        (before, limit, share.of as i64, share.index as i64),
+        (
+            before,
+            limit,
+            share.of as i64,
+            share.index as i64,
+            settling_before,
+        ),
     )
     .await
 }
 
 /// The forwards of every shop that `share` holds whose order was fulfilled
 /// with AliExpress's parcels and closed since `since` (unix seconds), whose
-/// parcels this node last followed before `before`: what the sweep asks
-/// AliExpress where the parcels are. Followed from when the forward closed
-/// (its last change), for as long as an order is read, so a parcel that
-/// takes its time is followed to the door and one AliExpress stopped
-/// telling of is let go. Grouped by tenant, the longest unfollowed first.
+/// parcels are due to be asked about at `now`: what the sweep asks AliExpress
+/// where the parcels are. Followed from when the forward closed (its last
+/// change), for as long as an order is read, so a parcel that takes its time
+/// is followed to the door and one AliExpress stopped telling of is let go;
+/// no further once this node found them delivered
+/// ([`super::read_times::note_parcels_delivered`]). Asked about again
+/// `every` seconds after the last time while they move, and after as long as
+/// they have been still once they stop, up to `at_most` seconds: a parcel
+/// waiting at customs for a week costs a call every `at_most`, not every
+/// `every`. The shops take turns, each its longest unasked first, so one
+/// shop's season never crowds another shop's parcels out. Grouped by tenant,
+/// as the sweep paces one shop's reads.
 pub async fn parcels_due(
     db: &Db,
-    before: i64,
+    now: i64,
+    every: i64,
+    at_most: i64,
     since: i64,
     share: Share,
     limit: i64,
 ) -> anyhow::Result<Vec<ForwardRow>> {
     db.fetch_all(
-        "SELECT f.tenant_id, f.id, f.order_id, f.status, f.ae_order_ids, f.tracking,
+        "WITH followed AS (
+            SELECT f.tenant_id, f.id, f.shard, COALESCE(r.tried_at, 0) AS tried_at,
+                COALESCE(r.tried_at, 0) - COALESCE(r.synced_at, f.updated_at) AS still_for
+            FROM aliexpress_forwards f
+            LEFT JOIN aliexpress_read_times r
+                ON r.tenant_id = f.tenant_id AND r.id = 'parcels:' || f.id
+            WHERE f.status = 'done' AND f.tracking != '' AND f.updated_at >= ?4
+                AND COALESCE(r.delivered, 0) = 0
+         ),
+         due AS (
+            SELECT tenant_id, id, tried_at FROM (
+                SELECT tenant_id, id, tried_at, ROW_NUMBER() OVER (
+                    PARTITION BY tenant_id ORDER BY tried_at, id
+                ) AS turn
+                FROM followed
+                WHERE tried_at + MAX(?2, MIN(?3, still_for)) <= ?1 AND shard % ?6 = ?7
+            ) ORDER BY turn, tried_at, tenant_id LIMIT ?5
+         )
+         SELECT f.tenant_id, f.id, f.order_id, f.status, f.ae_order_ids, f.tracking,
             f.last_error, f.placed_at, f.updated_at
          FROM aliexpress_forwards f
-         LEFT JOIN aliexpress_read_times r
-            ON r.tenant_id = f.tenant_id AND r.id = 'parcels:' || f.id
-         WHERE f.status = 'done' AND f.tracking != '' AND f.updated_at >= ?2
-            AND COALESCE(r.tried_at, 0) < ?1 AND f.shard % ?4 = ?5
-         ORDER BY f.tenant_id, COALESCE(r.tried_at, 0), f.id LIMIT ?3",
-        (before, since, limit, share.of as i64, share.index as i64),
+         JOIN due ON due.tenant_id = f.tenant_id AND due.id = f.id
+         ORDER BY f.tenant_id, due.tried_at, f.id",
+        (
+            now,
+            every,
+            at_most,
+            since,
+            limit,
+            share.of as i64,
+            share.index as i64,
+        ),
     )
     .await
 }
@@ -380,6 +425,7 @@ pub async fn upsert_link(db: &Db, tenant_id: &str, link: &LinkState) -> anyhow::
     .await?;
     if matches!(link.status, LinkStatus::Unlinked | LinkStatus::Failed) {
         super::read_times::forget(db, tenant_id, &link.id).await?;
+        super::deliveries::forget_delivery(db, tenant_id, &link.id).await?;
     }
     Ok(())
 }

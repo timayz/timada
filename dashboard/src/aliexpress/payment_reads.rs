@@ -93,7 +93,7 @@ impl AliexpressGoods {
             let (tenant, company) = (tenant.clone(), company.clone());
             reads.spawn(async move {
                 let read = aliexpress
-                    .sync_link(&db, &store, &tenant, &company, &link_id, SyncMode::Routine)
+                    .sync_link(&db, &store, &tenant, &company, &link_id, SyncMode::Sale)
                     .await;
                 match read {
                     Ok(SyncResult::Failed(reason)) => {

@@ -561,13 +561,15 @@ pub struct AliexpressConfig {
     #[serde(default = "default_aliexpress_order_read_every_secs")]
     pub order_read_every_secs: u64,
     /// How long, in seconds, a parcel AliExpress shipped goes before AliExpress
-    /// is asked again where it is, for the order's page.
+    /// is asked again where it is, for the order's page, while it moves; one
+    /// that stays still waits up to eight periods.
     #[serde(default = "default_aliexpress_parcel_read_every_secs")]
     pub parcel_read_every_secs: u64,
-    /// How many calls a day the app may make, over every shop and node: read it
-    /// on AliExpress's open platform. A sale always reads what it sells; the
-    /// nodes spend what is left on the other products, the most useful first.
-    /// 0: nothing but what sales and members ask for.
+    /// How many calls a day the app may make, over every shop and node: read
+    /// the app's quota on AliExpress's open platform and set this from it. A
+    /// sale always reads what it sells; the nodes spend what is left on the
+    /// other products, the open orders and the parcels, each from a lane of
+    /// its own. 0: nothing but what sales and members ask for.
     #[serde(default = "default_aliexpress_calls_per_day")]
     pub calls_per_day: u64,
     /// How recent, in seconds, a read of an imported product must be for a

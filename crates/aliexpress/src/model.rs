@@ -81,6 +81,23 @@ pub struct AeProduct {
     pub delivery_days: Option<DeliveryDays>,
 }
 
+/// What delivering an item to the market's country costs and takes, as
+/// asked for one of its combinations ([`AeProduct::delivery_sku`]). What a
+/// routine read reuses while that combination's own cost stands (the sweep
+/// then spends one call on the item, not two), kept on the node that read it
+/// ([`crate::delivery_read`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Delivery {
+    /// The combination it was asked for.
+    pub sku_id: String,
+    /// What that combination cost on its own when asked, in minor units.
+    pub sku_cost_cents: u64,
+    /// What delivery costs on top, in minor units; 0 when free.
+    pub fee_cents: u64,
+    /// How long it takes, when AliExpress says.
+    pub days: Option<DeliveryDays>,
+}
+
 /// One combination AliExpress sells.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AeSku {
@@ -128,16 +145,18 @@ impl AeProduct {
             .or_else(|| priced().next())
     }
 
-    /// Adds `cents` of delivery to the cost of every combination priced in
-    /// `currency`: what the shop pays to have one delivered.
-    pub fn add_delivery(&mut self, cents: u64, currency: &str) {
+    /// Adds the delivery's fee to the cost of every combination priced in
+    /// `currency` (what the shop pays to have one delivered) and takes the
+    /// days it says.
+    pub fn add_delivery(&mut self, delivery: &Delivery, currency: &str) {
         for sku in &mut self.skus {
             if sku.quoted_in(currency)
                 && let Some(cost) = &mut sku.cost_cents
             {
-                *cost = cost.saturating_add(cents);
+                *cost = cost.saturating_add(delivery.fee_cents);
             }
         }
+        self.delivery_days = delivery.days;
     }
 
     pub(crate) fn from_json(product_id: &str, result: &Value) -> Option<Self> {
@@ -524,7 +543,15 @@ mod tests {
             sku("c", None, Some("EUR"), 3),
             sku("d", Some(100), Some("USD"), 3),
         ]);
-        product.add_delivery(2_805, "EUR");
+        product.add_delivery(
+            &Delivery {
+                sku_id: "1".into(),
+                sku_cost_cents: 0,
+                fee_cents: 2_805,
+                days: None,
+            },
+            "EUR",
+        );
         let costs: Vec<_> = product.skus.iter().map(|sku| sku.cost_cents).collect();
         assert_eq!(costs, [Some(2_819), Some(2_825), None, Some(100)]);
     }
