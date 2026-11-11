@@ -102,10 +102,16 @@ archived or gone does too), and an import asked for anyway unlinks it first.
 
 ## Keeping in step
 
-A read of AliExpress is one call per product. Dropshippers have no call that reads
-several products, and no push when one changes (checked in the open platform's API
-list), so what keeps a catalogue in step is reads, and the app's calls are limited
-while catalogues are not.
+A read of AliExpress is one call per product for its combinations
+(`aliexpress.ds.product.get`) and one for what delivering one costs and takes
+(`aliexpress.ds.freight.query`). Dropshippers have no call that reads several
+products, and no push when one changes (checked in the open platform's API list), so
+what keeps a catalogue in step is reads, and the app's calls are limited while
+catalogues are not. A routine read (the sweep's, or a cart's) spends one call on most
+products: delivery seldom moves on its own, so the node keeps what it last read of it
+(`aliexpress_deliveries`, its own table) and asks again only when the combination it
+asked about costs something else, or a week went by. A read before a payment, or for a
+member, asks both every time.
 
 Each node goes through the imported products due, its own share, and asks for each to
 be read again: a `SyncRequested` on the item's stream, which says who asked. A product
@@ -151,29 +157,59 @@ is.
 ### The day's calls
 
 `[aliexpress] calls_per_day` (12,000 by default) is what the app may spend in a day,
-over every shop and node. Each node holds its part, and spends it evenly over the day:
-at 12,000 alone, one call every 7.2 seconds, never a burst. A node that idled keeps a
-minute of calls at most.
+over every shop and node. **Read the app's quota in the open platform's console and
+set it from that**, with a margin: the default is only the ceiling the dropshipping
+API was known for (500 calls an hour), and the sweeps starve under it as soon as a
+few hundred orders a day are placed through the app. Each node holds its part (the
+day's calls over the nodes up), and spends it evenly over the day: at 12,000 alone,
+one call every 7.2 seconds, never a burst. A node that idled keeps a minute of calls
+at most.
 
-Every call this node makes counts: a read for a sale, a member or a cart, an import, an
-order placed or read again, a renewal. Those never wait, since a sale cannot. The sweep
-spends what they leave, so a busy day reads fewer of the other products, not more calls
-in all. A burst of sales costs the sweep at most a day's calls. The budget is per node,
-each counting its own calls, so it holds as long as the nodes are about as busy.
+Every call this node makes counts: a read for a sale, a member or a cart, an import,
+an order placed, a push read, a renewal. Those never wait, since a sale cannot. The
+sweeps spend what they leave, so a busy day reads fewer of the other products, not
+more calls in all. A burst of sales costs the sweeps at most a day's calls. The
+budget is per node, each counting its own calls, so it holds as long as the nodes
+are about as busy.
 
-An open order costs a call per AliExpress order for each push, and for each day it went
-without one: 500 open orders with no push at all spend about 500 calls a day.
+What the sweeps spend is split into three lanes, each a part of the day's calls, so
+that one of them wanting more than its part waits at its own floor while the others
+go on at theirs. A season's parcels never take the products' calls, nor the
+products the open orders':
 
-The sweep spends the calls by priority:
+| Lane | Part | What it reads |
+|---|---|---|
+| Products | 60 % | the imported products, for their price and stock, one call each (two when the cost moved) |
+| Orders | 10 % | the open orders on AliExpress that no push came for in `order_read_every_secs`, one call per AliExpress order |
+| Parcels | 30 % | where the parcels of the orders shipped are, one call per parcel |
+
+What sales and members spend comes out of every lane by its part. A lane goes
+through what is due a batch at a time (five minutes of its calls, 100 rows at most),
+and sleeps a minute when nothing is. The renewals of the companies' access, the
+records a node could not write and the stalled forwards run on the hourly timer
+(`sync_check_secs`) and wait for no lane.
+
+The products lane spends its calls by priority:
 
 1. What shoppers wanted in the last 30 days: put in a cart, or bought.
 2. What is on sale.
 3. The rest: drafts, and what was taken off sale.
 
 Within each of those the shops take turns, each its oldest first, so one huge catalogue
-cannot starve the others. When the budget does not cover a period, the last rank waits:
-a draft may be stale when a merchant publishes it, and the read at payment protects the
-sale. Pressing *Sync now* brings it up to date.
+cannot starve the others; the orders and parcels lanes give the shops turns the same
+way. When the budget does not cover a period, the last rank waits: a draft may be
+stale when a merchant publishes it, and the read at payment protects the sale.
+Pressing *Sync now* brings it up to date.
+
+What a quota buys, with three nodes and the shops together placing a thousand orders
+a day (the calls that never wait come to about 11,000 a day then: four per order
+placed, one per push, two per payment):
+
+| `calls_per_day` | Products read a day | Each of 100,000 products read every | Parcels followed |
+|---|---|---|---|
+| 12,000 | ~600 | ~170 days | a few hundred a day: most wait |
+| 50,000 | ~23,000 | ~4 days | ~12,000 calls a day: about what a thousand shipments a day need |
+| 250,000 | ~140,000 | daily (`sync_every_secs`) | all, as often as `parcel_read_every_secs` says |
 
 `calls_per_day = 0` leaves only what sales and members ask for.
 
@@ -398,15 +434,23 @@ there and its money was taken, the order is fulfilled with those numbers as its
 tracking. No carrier page goes with them: Cainiao's would tell the shopper where the
 goods come from.
 
-The parcels are then followed for the shopper's order page: every
-`[aliexpress] parcel_read_every_secs` (six hours), the node whose share the forward
-is asks AliExpress where each parcel is (`aliexpress.logistics.ds.trackinginfo.query`,
-one call per parcel) and records the steps it names on the order's shipment
+The parcels are then followed for the shopper's order page: the node whose share the
+forward is asks AliExpress where each parcel is
+(`aliexpress.logistics.ds.trackinginfo.query`, one call per parcel, from the parcels
+lane of the day's calls) and records the steps it names on the order's shipment
 (`timada-orders/Shipment`, one stream per order) when they changed; the storefront
 lists them under the order, latest first, and the dashboard answers them to it over
-`GET /store/orders/{order_id}/parcels`. A parcel is followed for 60 days after its
-forward closed, as long as an order is read: four calls a day per parcel in flight,
-out of the app's budget. A parcel AliExpress will not tell of is logged and the
+`GET /store/orders/{order_id}/parcels`. A parcel that moves is asked about again
+`[aliexpress] parcel_read_every_secs` (six hours) after the last time; one that stays
+still waits as long as it has been still, up to eight periods (two days): a parcel at
+customs for a week costs a call every two days, not four a day. The following ends
+when every parcel is at the door (its last step says *Delivered* or *Signed*, as
+AliExpress words them; the wording awaits the real-app test, #253), when a push says
+the buyer confirmed receiving the goods (`OrderConfirmed`: the push reads the last
+steps once more, then no more), or 60 days after the forward closed, as long as an
+order is read. The node keeps which forwards it followed to the door
+(`aliexpress_read_times.delivered`, its own table), so a node taking a forward over
+asks once and finds the same. A parcel AliExpress will not tell of is logged and the
 others still followed.
 
 AliExpress may close an order without shipping it: its push says `OrderClosed`, which
@@ -424,9 +468,9 @@ these calls too.
 The order and the forward are two streams, so this is three writes: what was read, the
 order's `Fulfilled`, then the forward's `Done`. A node that stops in between loses
 nothing. Only that leaves an order open with every parcel known, so such an order is
-due on every sweep (`sync_check_secs`) rather than once a day. The next read fulfils
-it from the reads recorded, or closes the forward with the tracking the order was
-fulfilled with, whether AliExpress answers or not.
+due again a sweep period later (`sync_check_secs`) rather than a day. The next read
+fulfils it from the reads recorded, or closes the forward with the tracking the order
+was fulfilled with, whether AliExpress answers or not.
 
 ## Where things live
 
@@ -452,6 +496,13 @@ fulfilled with, whether AliExpress answers or not.
   holds for a company's account, by its AliExpress number: the forward that placed it
   (`Claimed`, with its tenant) and every push for it (`Pushed`). A push names nothing
   else, so this is where it finds its shop.
+- **This node's own tables.** Beside the read models, what no peer holds and a copy
+  of the store leaves alone: `aliexpress_read_times` (when this node last read each
+  item and open order, when it last asked where each shipped order's parcels were,
+  and whether they are at the door), `aliexpress_deliveries` (what delivering each
+  item last cost and took, which routine reads reuse) and `aliexpress_unrecorded`
+  (what AliExpress took and the store would not record yet). A node that loses them
+  reads each once more, which is all the harm a lost row does.
 - **Calls.** These are signed like moh3a/ae_sdk: HMAC-SHA256 over the API path (for
   path calls), then every parameter sorted by name as `name` + `value`, in upper-case
   hex. Dotted methods go to `/sync` and path methods to `/rest<path>`. The response

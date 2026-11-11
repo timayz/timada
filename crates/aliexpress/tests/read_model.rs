@@ -1,12 +1,13 @@
 use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::{
-    AeOrderState, ForwardRow, ForwardState, ForwardStatus, LinkRow, LinkState, LinkStatus,
-    LinkedProduct, MIGRATIONS, NODE_MIGRATIONS, Placement, PlannedItem, Share, TABLES,
-    forget_unrecorded, forward_of_order, forward_plan_shown, forwards_due, forwards_stalled,
-    keep_unrecorded, link_of_product, linked_products, links_due, note_forward_read,
-    note_published, note_read, note_tried, note_unrecorded_try, note_wanted, unrecorded,
-    upsert_forward, upsert_link,
+    AeOrderState, Delivery, DeliveryRead, ForwardRow, ForwardState, ForwardStatus, LinkRow,
+    LinkState, LinkStatus, LinkedProduct, MIGRATIONS, NODE_MIGRATIONS, Placement, PlannedItem,
+    Share, TABLES, delivery_read, forget_unrecorded, forward_of_order, forward_plan_shown,
+    forwards_due, forwards_stalled, keep_unrecorded, link_of_product, linked_products, links_due,
+    note_delivery, note_forward_read, note_parcels_followed, note_published, note_read, note_tried,
+    note_unrecorded_try, note_wanted, unrecorded, upsert_forward, upsert_link,
 };
+use timada_catalog::DeliveryDays;
 use timada_core::db::{Db, Turso};
 use timada_orders::OrderLine;
 
@@ -540,13 +541,76 @@ async fn when_a_node_last_read_a_thing_is_forgotten_once_it_is_no_longer_read() 
     upsert_link(&db, "acme", &unlinked).await.unwrap();
     assert_eq!(kept(&db).await, ["fwd"]);
 
-    // Done: the order's row goes.
+    // Done: the order's row goes; its parcels' stays, they are followed from
+    // here on (the first follow may be noted before the row hears of it).
+    note_parcels_followed(&db, "acme", "fwd", 600, true)
+        .await
+        .unwrap();
     let done = ForwardState {
         status: ForwardStatus::Done,
         ..placed.clone()
     };
     upsert_forward(&db, "acme", &done).await.unwrap();
+    assert_eq!(kept(&db).await, ["parcels:fwd"]);
+
+    // Nothing placed: no parcels to follow.
+    let failed = ForwardState {
+        status: ForwardStatus::Failed,
+        ..placed.clone()
+    };
+    upsert_forward(&db, "acme", &failed).await.unwrap();
     assert!(kept(&db).await.is_empty());
+}
+
+/// What delivering an item last cost is kept beside its read times, and
+/// goes with them.
+#[tokio::test]
+async fn what_delivering_an_item_cost_is_kept_until_it_is_unlinked() {
+    let db = database().await;
+    seed(&db, "acme", 1, Some(100)).await;
+    let delivery = Delivery {
+        sku_id: "sku-1".to_owned(),
+        sku_cost_cents: 431,
+        fee_cents: 250,
+        days: DeliveryDays::new(7, 12).ok(),
+    };
+    note_delivery(&db, "acme", "acme-0000", &delivery, 500)
+        .await
+        .unwrap();
+    assert_eq!(
+        delivery_read(&db, "acme", "acme-0000").await.unwrap(),
+        Some(DeliveryRead {
+            delivery: delivery.clone(),
+            read_at: 500
+        })
+    );
+    assert_eq!(delivery_read(&db, "acme", "other").await.unwrap(), None);
+
+    // Read again: the later answer stands.
+    let free = Delivery {
+        fee_cents: 0,
+        days: None,
+        ..delivery
+    };
+    note_delivery(&db, "acme", "acme-0000", &free, 600)
+        .await
+        .unwrap();
+    assert_eq!(
+        delivery_read(&db, "acme", "acme-0000")
+            .await
+            .unwrap()
+            .map(|read| (read.delivery.fee_cents, read.delivery.days, read.read_at)),
+        Some((0, None, 600))
+    );
+
+    let unlinked = LinkState {
+        id: "acme-0000".to_owned(),
+        product_id: Some("acme-0000".to_owned()),
+        status: LinkStatus::Unlinked,
+        ..Default::default()
+    };
+    upsert_link(&db, "acme", &unlinked).await.unwrap();
+    assert_eq!(delivery_read(&db, "acme", "acme-0000").await.unwrap(), None);
 }
 
 fn forwards_of(due: &[ForwardRow], tenant: &str) -> usize {
@@ -563,7 +627,9 @@ async fn open_orders_leave_the_other_shops_their_turn() {
     seed_forwards(&db, "b-small", 3, 200).await;
     seed_forwards(&db, "c-small", 3, 300).await;
 
-    let due = forwards_due(&db, 1_000, Share::ALONE, 10).await.unwrap();
+    let due = forwards_due(&db, 1_000, 1_000, Share::ALONE, 10)
+        .await
+        .unwrap();
 
     assert_eq!(due.len(), 10);
     assert_eq!(forwards_of(&due, "b-small"), 3);
@@ -584,7 +650,9 @@ async fn a_shop_alone_fills_the_check_longest_unchanged_first() {
     };
     upsert_forward(&db, "acme", &oldest).await.unwrap();
 
-    let due = forwards_due(&db, 1_000, Share::ALONE, 2).await.unwrap();
+    let due = forwards_due(&db, 1_000, 1_000, Share::ALONE, 2)
+        .await
+        .unwrap();
 
     assert_eq!(due[0].id, "oldest");
     assert_eq!(due.len(), 2);
@@ -605,7 +673,9 @@ async fn the_due_forwards_of_a_shop_come_together() {
         upsert_forward(&db, tenant, &forward).await.unwrap();
     }
 
-    let due = forwards_due(&db, 1_000, Share::ALONE, 6).await.unwrap();
+    let due = forwards_due(&db, 1_000, 1_000, Share::ALONE, 6)
+        .await
+        .unwrap();
 
     // The check paces its reads within one run of a shop's forwards.
     let runs = due.chunk_by(|a, b| a.tenant_id == b.tenant_id).count();
@@ -621,7 +691,7 @@ async fn each_open_order_goes_to_one_node() {
     let mut seen = Vec::new();
     for index in 0..3 {
         let share = Share { index, of: 3 };
-        let due = forwards_due(&db, 1_000, share, 100).await.unwrap();
+        let due = forwards_due(&db, 1_000, 1_000, share, 100).await.unwrap();
         assert!(!due.is_empty(), "node {index} has its part");
         for forward in &due {
             assert!(share.owns(&forward.id));
@@ -642,14 +712,14 @@ async fn an_order_read_or_changed_lately_is_not_due() {
     seed_forwards(&db, "acme", 2, 100).await;
     seed_forwards(&db, "changed", 1, 950).await;
     assert_eq!(
-        forwards_due(&db, 1_000, Share::ALONE, 10)
+        forwards_due(&db, 1_000, 1_000, Share::ALONE, 10)
             .await
             .unwrap()
             .len(),
         3
     );
     assert_eq!(
-        forwards_due(&db, 900, Share::ALONE, 10)
+        forwards_due(&db, 900, 900, Share::ALONE, 10)
             .await
             .unwrap()
             .len(),
@@ -660,7 +730,7 @@ async fn an_order_read_or_changed_lately_is_not_due() {
     note_forward_read(&db, "acme", "acme-0000", 950)
         .await
         .unwrap();
-    let due = forwards_due(&db, 900, Share::ALONE, 10).await.unwrap();
+    let due = forwards_due(&db, 900, 900, Share::ALONE, 10).await.unwrap();
     let ids: Vec<&str> = due.iter().map(|forward| forward.id.as_str()).collect();
     assert_eq!(ids, ["acme-0001"]);
 
@@ -676,7 +746,7 @@ async fn an_order_read_or_changed_lately_is_not_due() {
     note_forward_read(&db, "acme", "acme-0000", 500)
         .await
         .unwrap();
-    let due = forwards_due(&db, 900, Share::ALONE, 10).await.unwrap();
+    let due = forwards_due(&db, 900, 900, Share::ALONE, 10).await.unwrap();
     assert_eq!(due.len(), 1);
 }
 
@@ -688,7 +758,7 @@ async fn the_longest_unread_goes_first_so_a_big_backlog_comes_round() {
     // Reading two a sweep gets through all three.
     let mut read = Vec::new();
     for at in [800, 801] {
-        for forward in forwards_due(&db, 900, Share::ALONE, 2).await.unwrap() {
+        for forward in forwards_due(&db, 900, 900, Share::ALONE, 2).await.unwrap() {
             note_forward_read(&db, "acme", &forward.id, at)
                 .await
                 .unwrap();
@@ -735,10 +805,21 @@ async fn an_order_with_every_parcel_known_stays_due_until_it_is_settled() {
         upsert_forward(&db, "acme", &row).await.unwrap();
     }
 
-    let due = forwards_due(&db, 900, Share::ALONE, 10).await.unwrap();
-
+    // Read just now: a day to go for the others, a sweep for the one every
+    // parcel of is known.
+    let due = forwards_due(&db, 900, 1_000, Share::ALONE, 10)
+        .await
+        .unwrap();
     let ids: Vec<&str> = due.iter().map(|forward| forward.id.as_str()).collect();
     assert_eq!(ids, ["stopped"]);
+
+    // Not even a sweep gone by: nothing yet.
+    assert!(
+        forwards_due(&db, 900, 900, Share::ALONE, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -882,7 +963,9 @@ async fn only_placed_orders_are_due() {
         upsert_forward(&db, "acme", &forward).await.unwrap();
     }
 
-    let due = forwards_due(&db, 1_000, Share::ALONE, 10).await.unwrap();
+    let due = forwards_due(&db, 1_000, 1_000, Share::ALONE, 10)
+        .await
+        .unwrap();
 
     assert_eq!(due.len(), 2);
 }

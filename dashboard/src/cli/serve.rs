@@ -300,10 +300,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         db.clone(),
         executor.clone(),
         aliexpress.clone(),
+        std::time::Duration::from_secs(config.aliexpress.sync_check_secs.max(1)),
     )
-    .start(std::time::Duration::from_secs(
-        config.aliexpress.sync_check_secs.max(1),
-    ));
+    .start();
 
     let router = app::router(Services {
         executor,

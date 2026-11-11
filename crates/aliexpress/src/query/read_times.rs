@@ -1,5 +1,6 @@
 //! When this node last read each AliExpress item and each open AliExpress
-//! order, kept on the node (`aliexpress_read_times`) rather than in events.
+//! order, and last asked where each shipped order's parcels were, kept on
+//! the node (`aliexpress_read_times`) rather than in events.
 //!
 //! This is the one fact about an item that the store does not hold, on
 //! purpose: a read that changes nothing records no event, and the sweep reads
@@ -65,15 +66,43 @@ pub async fn note_forward_read(
 }
 
 /// The forward's parcels were asked about at `at` (unix seconds), whether or
-/// not AliExpress answered: they wait for the next period. Kept under a key
-/// of their own (`parcels:<forward id>`), beside the forward's own reads.
-pub async fn note_parcels_read(
+/// not AliExpress answered, and `news` says whether a parcel had moved. They
+/// wait for the next period, which grows while they stay still
+/// ([`super::parcels_due`]). Kept under a key of their own
+/// (`parcels:<forward id>`), beside the forward's own reads.
+pub async fn note_parcels_followed(
+    db: &Db,
+    tenant_id: &str,
+    forward_id: &str,
+    at: u64,
+    news: bool,
+) -> anyhow::Result<()> {
+    let id = parcels_read_id(forward_id);
+    if news {
+        note_read(db, tenant_id, &id, at).await
+    } else {
+        note_tried(db, tenant_id, &id, at).await
+    }
+}
+
+/// The forward's parcels are at the door, or there is nothing left to follow
+/// of them: this node asks about them no more. A node taking the forward over
+/// asks once and finds the same.
+pub async fn note_parcels_delivered(
     db: &Db,
     tenant_id: &str,
     forward_id: &str,
     at: u64,
 ) -> anyhow::Result<()> {
-    note_tried(db, tenant_id, &parcels_read_id(forward_id), at).await
+    db.execute(
+        "INSERT INTO aliexpress_read_times (tenant_id, id, tried_at, delivered)
+         VALUES (?1, ?2, ?3, 1)
+         ON CONFLICT (tenant_id, id) DO UPDATE SET
+            tried_at = MAX(COALESCE(tried_at, 0), excluded.tried_at), delivered = 1",
+        (tenant_id, parcels_read_id(forward_id), at as i64),
+    )
+    .await?;
+    Ok(())
 }
 
 /// The key the parcels of `forward_id` are followed under.

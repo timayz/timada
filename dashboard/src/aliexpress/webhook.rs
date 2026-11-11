@@ -30,7 +30,8 @@ use evento::{
 };
 use timada_aliexpress::aggregator::ae_order::{Claimed, Pushed};
 use timada_aliexpress::{
-    ForwardRef, ORDER_CLOSED, Push, load_ae_order_by_id, parse_push, push_signed, record_push,
+    ForwardRef, ORDER_CLOSED, ORDER_CONFIRMED, Push, load_ae_order_by_id, parse_push, push_signed,
+    record_push,
 };
 
 use super::Aliexpress;
@@ -99,30 +100,73 @@ pub async fn receive<E: evento::Executor>(
     Ok(Outcome::Accepted { forward })
 }
 
+/// What a push said of an AliExpress order, beyond that it changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Said {
+    Nothing,
+    /// AliExpress closed this order without shipping it.
+    Closed(String),
+    /// The buyer has the goods: the parcels are at the door.
+    Confirmed,
+}
+
 /// Reads the forward's AliExpress orders again, as the sweep would, which then
-/// has no reason to for a while; `closed` is the order the push said
-/// AliExpress closed.
+/// has no reason to for a while. A forward closed already gets its parcels
+/// followed instead: a push after the goods shipped is news of their journey,
+/// the last of it when the push `said` the buyer has them, after which they
+/// are followed no more.
 pub(super) async fn check<E: evento::Executor + Clone>(
     aliexpress: Arc<Aliexpress>,
     db: &Db,
     store: E,
     tenant_id: &str,
     forward_id: &str,
-    closed: Option<&str>,
+    said: Said,
     now: u64,
 ) -> anyhow::Result<()> {
     let Some((tenant, company)) = aliexpress.connected_shop(tenant_id, now).await? else {
         return Ok(());
     };
+    let closed = match &said {
+        Said::Closed(ae_order_id) => Some(ae_order_id.as_str()),
+        Said::Nothing | Said::Confirmed => None,
+    };
     let read = aliexpress
         .check_forward(&store, &tenant, &company, forward_id, closed, now)
         .await;
     timada_aliexpress::note_forward_read(db, tenant_id, forward_id, now).await?;
-    if let Ok(CheckResult::Checked { fulfilled: true }) = &read {
+    match read? {
         // Its parcels were asked about with the fulfilment.
-        timada_aliexpress::note_parcels_read(db, tenant_id, forward_id, now).await?;
+        CheckResult::Checked { fulfilled: true } => {
+            timada_aliexpress::note_parcels_followed(db, tenant_id, forward_id, now, true).await?;
+        }
+        CheckResult::Skipped => {
+            let forward = timada_aliexpress::Command::new(store.clone(), tenant_id)
+                .load_forward_by_id(forward_id)
+                .await?;
+            if forward.is_some_and(|forward| {
+                forward.status == timada_aliexpress::ForwardStatus::Done
+                    && forward.fulfilled_tracking.is_some()
+            }) {
+                let followed = aliexpress
+                    .follow_parcels(&store, &tenant, &company, forward_id)
+                    .await?;
+                timada_aliexpress::note_parcels_followed(
+                    db,
+                    tenant_id,
+                    forward_id,
+                    now,
+                    followed.changed > 0,
+                )
+                .await?;
+                if followed.over || said == Said::Confirmed {
+                    timada_aliexpress::note_parcels_delivered(db, tenant_id, forward_id, now)
+                        .await?;
+                }
+            }
+        }
+        CheckResult::Checked { fulfilled: false } | CheckResult::Done => {}
     }
-    read?;
     Ok(())
 }
 
@@ -171,8 +215,12 @@ async fn on_pushed<E: Executor>(
     if order.waited(event.version) {
         return Ok(());
     }
-    let closed = (event.data.status == ORDER_CLOSED).then_some(order.ae_order_id.as_str());
-    read_again(context, order.forward.as_ref(), &event, closed).await;
+    let said = match event.data.status.as_str() {
+        ORDER_CLOSED => Said::Closed(order.ae_order_id.clone()),
+        ORDER_CONFIRMED => Said::Confirmed,
+        _ => Said::Nothing,
+    };
+    read_again(context, order.forward.as_ref(), &event, said).await;
     Ok(())
 }
 
@@ -190,8 +238,12 @@ async fn on_claimed<E: Executor>(
     if order.waiting == 0 {
         return Ok(());
     }
-    let closed = order.closed.then_some(order.ae_order_id.as_str());
-    read_again(context, order.forward.as_ref(), &event, closed).await;
+    let said = if order.closed {
+        Said::Closed(order.ae_order_id.clone())
+    } else {
+        Said::Nothing
+    };
+    read_again(context, order.forward.as_ref(), &event, said).await;
     Ok(())
 }
 
@@ -207,7 +259,7 @@ async fn read_again<E: Executor>(
     context: &Context<'_, E>,
     forward: Option<&ForwardRef>,
     event: &evento::Event,
-    closed: Option<&str>,
+    said: Said,
 ) {
     let Some(forward) = forward.cloned() else {
         return;
@@ -223,7 +275,6 @@ async fn read_again<E: Executor>(
     }
     let db: Db = context.extract();
     let store: Store = context.extract();
-    let closed = closed.map(str::to_owned);
     // Counted before it is spawned, its turn taken inside: the subscription
     // never waits for a read.
     aliexpress.push_reads_running.fetch_add(1, Ordering::SeqCst);
@@ -235,7 +286,7 @@ async fn read_again<E: Executor>(
                 store.0,
                 &forward.tenant_id,
                 &forward.forward_id,
-                closed.as_deref(),
+                said,
                 crate::auth::now(),
             )
             .await
