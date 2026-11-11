@@ -45,7 +45,8 @@ use timada_catalog::{
     category_projection, delivery_default_projection, product_projection, stock_projection,
 };
 use timada_core::db::{
-    Connection, Db, Value, execute, fetch_all, fetch_optional, params_from_iter, search_key,
+    Connection, Db, FromRow, Value, execute, fetch_all, fetch_optional, params_from_iter,
+    search_key,
 };
 use timada_reviews::aggregator::Review;
 use timada_reviews::{ReviewState, review_projection};
@@ -217,13 +218,16 @@ async fn delete_product_rows(db: &Db, product_id: &str) -> anyhow::Result<()> {
             )
             .await?;
             let was_in = memberships_of(tx, product_id).await?;
+            let had = options_of(tx, product_id).await?;
             file_product(
                 tx,
                 product_id,
-                was_counted.is_some_and(|(counted,)| counted),
-                &was_in,
-                false,
-                &BTreeSet::new(),
+                &Filing {
+                    counted: was_counted.is_some_and(|(counted,)| counted),
+                    categories: was_in.iter().map(String::as_str).collect(),
+                    options: &had,
+                },
+                &Filing::default(),
             )
             .await?;
             for statement in [
@@ -470,6 +474,17 @@ async fn upsert_review(db: &Db, review: &ReviewState) -> anyhow::Result<()> {
 /// category takes it.
 pub(crate) const WHOLE_SHOP: &str = "";
 
+/// A product's option rows, in key order.
+async fn options_of(tx: &Connection, product_id: &str) -> anyhow::Result<Vec<OptionRow>> {
+    fetch_all(
+        tx,
+        "SELECT name_key, value_key, name, value FROM storefront_product_options
+         WHERE product_id = ?1 ORDER BY name_key, value_key",
+        (product_id,),
+    )
+    .await
+}
+
 /// The categories a product's rows file it under, in id order.
 async fn memberships_of(tx: &Connection, product_id: &str) -> anyhow::Result<Vec<String>> {
     let rows: Vec<(String,)> = fetch_all(
@@ -557,18 +572,9 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
             }
             // The option rows, as the table keeps them.
             let options: Vec<crate::ProductOption> = serde_json::from_str(&options_json)?;
-            let mut wanted: Vec<(String, String, String, String)> = distinct_option_rows(&options)
-                .into_iter()
-                .map(|row| (row.name_key, row.value_key, row.name, row.value))
-                .collect();
+            let mut wanted = distinct_option_rows(&options);
             wanted.sort();
-            let were: Vec<(String, String, String, String)> = fetch_all(
-                tx,
-                "SELECT name_key, value_key, name, value FROM storefront_product_options
-                 WHERE product_id = ?1 ORDER BY name_key, value_key",
-                (product.id.as_str(),),
-            )
-            .await?;
+            let were = options_of(tx, &product.id).await?;
             if were != wanted {
                 execute(
                     tx,
@@ -576,16 +582,16 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                     (product.id.as_str(),),
                 )
                 .await?;
-                for (name_key, value_key, name, value) in &wanted {
+                for row in &wanted {
                     execute(
                         tx,
                         INSERT_OPTION,
                         (
                             product.id.as_str(),
-                            name_key.as_str(),
-                            value_key.as_str(),
-                            name.as_str(),
-                            value.as_str(),
+                            row.name_key.as_str(),
+                            row.value_key.as_str(),
+                            row.name.as_str(),
+                            row.value.as_str(),
                         ),
                     )
                     .await?;
@@ -608,14 +614,19 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                     .await?;
                 }
             }
-            let is_counted = product.status.as_str() == "published";
             file_product(
                 tx,
                 &product.id,
-                was_counted,
-                &was_in,
-                is_counted,
-                &product.categories,
+                &Filing {
+                    counted: was_counted,
+                    categories: was_in.iter().map(String::as_str).collect(),
+                    options: &were,
+                },
+                &Filing {
+                    counted: product.status.as_str() == "published",
+                    categories: product.categories.iter().map(String::as_str).collect(),
+                    options: &wanted,
+                },
             )
             .await?;
             // A variant added or removed changes what is counted.
@@ -662,7 +673,9 @@ const PRODUCT_UPDATE_SEARCHED: &str = "UPDATE storefront_products SET
  WHERE id = ?1";
 
 /// One row of `storefront_product_options`: a value an option of the product
-/// takes, with the keys a filter compares.
+/// takes, with the keys a filter compares. Ordered by its keys first, as the
+/// table is.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromRow)]
 pub(crate) struct OptionRow {
     pub name_key: String,
     pub value_key: String,
@@ -845,15 +858,19 @@ async fn upsert_category(db: &Db, category: &CategoryState) -> anyhow::Result<()
 /// before its own) is passed over here and counted when the category
 /// arrives, which counts everything again.
 ///
-/// `was_counted` and `was_in` are what the rows said before this change,
-/// `is_counted` and `now_in` what the product says now.
+/// Each page also counts how many of its products take each value of an
+/// option (`storefront_category_facets`): a page that stops listing the
+/// product loses the values it had, one that starts gains those it has, and
+/// one that goes on listing it trades the values it gave up for those it
+/// took.
+///
+/// `was` is what the rows said before this change, `now` what the product
+/// says now.
 async fn file_product(
     conn: &Connection,
     product_id: &str,
-    was_counted: bool,
-    was_in: &[String],
-    is_counted: bool,
-    now_in: &BTreeSet<String>,
+    was: &Filing<'_>,
+    now: &Filing<'_>,
 ) -> anyhow::Result<()> {
     let links: Vec<CategoryLink> = fetch_all(
         conn,
@@ -874,22 +891,44 @@ async fn file_product(
     .into_iter()
     .map(|(id,)| id)
     .collect();
-    let listed_now = if is_counted {
-        let mut pages = pages_listing(&tree, now_in.iter().map(String::as_str));
+    let listed_now = if now.counted {
+        let mut pages = pages_listing(&tree, now.categories.iter().copied());
         pages.insert(WHOLE_SHOP.to_owned());
         pages
     } else {
         BTreeSet::new()
     };
+    // What the pages count of its option values moves with them: one move
+    // per page and value, written together.
+    let mut moves: Vec<(&str, &OptionRow, i64)> = Vec::new();
     for category_id in listed_before.difference(&listed_now) {
         execute(conn, DELETE_LISTING, (category_id.as_str(), product_id)).await?;
         count_listing(conn, category_id, -1).await?;
+        moves.extend(
+            was.options
+                .iter()
+                .map(|row| (category_id.as_str(), row, -1)),
+        );
     }
     for category_id in listed_now.difference(&listed_before) {
         execute(conn, INSERT_LISTING, (category_id.as_str(), product_id)).await?;
         count_listing(conn, category_id, 1).await?;
+        moves.extend(now.options.iter().map(|row| (category_id.as_str(), row, 1)));
     }
-    if is_counted && listed_now.intersection(&listed_before).next().is_some() {
+    let gone = was
+        .options
+        .iter()
+        .filter(|row| !now.options.iter().any(|kept| kept.same_value(row)));
+    let taken = now
+        .options
+        .iter()
+        .filter(|row| !was.options.iter().any(|had| had.same_value(row)));
+    for category_id in listed_now.intersection(&listed_before) {
+        moves.extend(gone.clone().map(|row| (category_id.as_str(), row, -1)));
+        moves.extend(taken.clone().map(|row| (category_id.as_str(), row, 1)));
+    }
+    move_facets(conn, &moves).await?;
+    if now.counted && listed_now.intersection(&listed_before).next().is_some() {
         // The pages that go on listing it sort it by keys that moved with it.
         execute(
             conn,
@@ -902,24 +941,7 @@ async fn file_product(
         )
         .await?;
     }
-    let filed_before: BTreeSet<&str> = if was_counted {
-        was_in
-            .iter()
-            .map(String::as_str)
-            .filter(|id| tree.contains_key(id))
-            .collect()
-    } else {
-        BTreeSet::new()
-    };
-    let filed_now: BTreeSet<&str> = if is_counted {
-        now_in
-            .iter()
-            .map(String::as_str)
-            .filter(|id| tree.contains_key(id))
-            .collect()
-    } else {
-        BTreeSet::new()
-    };
+    let (filed_before, filed_now) = (was.counted_in(&tree), now.counted_in(&tree));
     for category_id in filed_before.difference(&filed_now) {
         execute(
             conn,
@@ -977,6 +999,99 @@ async fn count_listing(conn: &Connection, category_id: &str, delta: i64) -> anyh
     Ok(())
 }
 
+/// Where a product stands for the pages that list it: whether it counts
+/// (is published), the categories it is filed under, and its option rows.
+/// The default is a product that is not there at all.
+#[derive(Default)]
+struct Filing<'a> {
+    counted: bool,
+    categories: Vec<&'a str>,
+    options: &'a [OptionRow],
+}
+
+impl<'a> Filing<'a> {
+    /// The categories whose `product_count` it is in: those it is filed
+    /// under that the copy knows, while it counts.
+    fn counted_in(&self, tree: &HashMap<&str, &CategoryLink>) -> BTreeSet<&'a str> {
+        if !self.counted {
+            return BTreeSet::new();
+        }
+        self.categories
+            .iter()
+            .copied()
+            .filter(|id| tree.contains_key(id))
+            .collect()
+    }
+}
+
+impl OptionRow {
+    /// Whether it is the same value of the same option as `other`, however
+    /// either is spelled.
+    fn same_value(&self, other: &OptionRow) -> bool {
+        self.name_key == other.name_key && self.value_key == other.value_key
+    }
+}
+
+/// Moves how many products of a page take a value of an option, by
+/// `(page, value, delta)`, a hundred moves a statement: one statement per
+/// move made filing a product with dozens of values on four pages cost
+/// several times the rest of its filing. A value no product of a page takes
+/// any more loses its row. The spelling shown is the least one counted
+/// since the value's row was made.
+async fn move_facets(conn: &Connection, moves: &[(&str, &OptionRow, i64)]) -> anyhow::Result<()> {
+    for chunk in moves.chunks(100) {
+        let mut values = Vec::with_capacity(chunk.len() * 5);
+        let mut tuples = Vec::with_capacity(chunk.len());
+        for (category_id, row, delta) in chunk {
+            let at = values.len();
+            tuples.push(format!(
+                "(?{}, ?{}, ?{}, ?{}, ?{})",
+                at + 1,
+                at + 2,
+                at + 3,
+                at + 4,
+                at + 5
+            ));
+            values.extend([
+                Value::from(*category_id),
+                Value::from(row.name_key.as_str()),
+                Value::from(row.value_key.as_str()),
+                Value::from(row.value.as_str()),
+                Value::from(*delta),
+            ]);
+        }
+        execute(
+            conn,
+            &format!(
+                "INSERT INTO storefront_category_facets (category_id, name_key, value_key, value,
+                    products)
+                 VALUES {}
+                 ON CONFLICT (category_id, name_key, value_key) DO UPDATE SET
+                    products = products + excluded.products,
+                    value = CASE WHEN excluded.products > 0 THEN min(value, excluded.value)
+                        ELSE value END",
+                tuples.join(", ")
+            ),
+            params_from_iter(values),
+        )
+        .await?;
+    }
+    let emptied: BTreeSet<&str> = moves
+        .iter()
+        .filter(|(_, _, delta)| *delta < 0)
+        .map(|(category_id, _, _)| *category_id)
+        .collect();
+    for category_id in emptied {
+        execute(
+            conn,
+            "DELETE FROM storefront_category_facets WHERE category_id = ?1 AND products <= 0",
+            (category_id,),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// The categories whose pages list a product filed under `categories`: each
 /// of them the tree knows and, above a live one, every live ancestor up to
 /// the first archived or unknown. The same reach as
@@ -1008,8 +1123,9 @@ fn pages_listing<'a>(
 }
 
 /// Works out the counts of every category and the rows each one's page
-/// lists, the whole shop's included, from scratch, and writes what differs
-/// from the rows: what a category moved in the tree or archived calls for,
+/// lists, the whole shop's included, and what each page counts of its
+/// products' option values, from scratch, and writes what differs from the
+/// rows: what a category moved in the tree or archived calls for,
 /// since either changes what the pages below and above list, and what a
 /// category arriving after the products filed under it calls for. A
 /// product's own change goes through [`file_product`] instead. Returns how
@@ -1042,6 +1158,27 @@ async fn refresh_category_counts(conn: &Connection) -> anyhow::Result<usize> {
     .into_iter()
     .filter(|(_, product_id)| published.contains(product_id))
     .collect();
+    // Each published product's option rows, for what each page counts of
+    // them.
+    let mut options: HashMap<String, Vec<OptionRow>> = HashMap::new();
+    for (product_id, name_key, value_key, name, value) in
+        fetch_all::<(String, String, String, String, String)>(
+            conn,
+            "SELECT product_id, name_key, value_key, name, value FROM storefront_product_options",
+            (),
+        )
+        .await?
+    {
+        if published.contains(&product_id) {
+            options.entry(product_id).or_default().push(OptionRow {
+                name_key,
+                value_key,
+                name,
+                value,
+            });
+        }
+    }
+    let mut facets = Facets::default();
     // What is listed and should stay is taken out as it is met; what is
     // left over is listed by no page any more.
     let mut stale: HashSet<(String, String)> = fetch_all::<(String, String)>(
@@ -1062,6 +1199,7 @@ async fn refresh_category_counts(conn: &Connection) -> anyhow::Result<usize> {
         )
         .await? as usize;
         for product_id in &counts.subtree_products {
+            facets.count(&id, options.get(product_id));
             if stale.remove(&(id.clone(), product_id.clone())) {
                 continue;
             }
@@ -1084,6 +1222,7 @@ async fn refresh_category_counts(conn: &Connection) -> anyhow::Result<usize> {
         changed += 1;
     }
     for product_id in &published {
+        facets.count(WHOLE_SHOP, options.get(product_id));
         if stale.remove(&(WHOLE_SHOP.to_owned(), product_id.clone())) {
             continue;
         }
@@ -1099,7 +1238,85 @@ async fn refresh_category_counts(conn: &Connection) -> anyhow::Result<usize> {
         .await?;
         changed += 1;
     }
+    changed += facets.write(conn).await?;
     Ok(changed)
+}
+
+/// What each page counts of the option values of the products it lists, as
+/// a recount works it out: `(page, option key, value key)` to the least
+/// spelling and how many products take it.
+#[derive(Default)]
+struct Facets(HashMap<(String, String, String), (String, i64)>);
+
+impl Facets {
+    /// Counts the values of a product listed on the page of `category_id`.
+    fn count(&mut self, category_id: &str, options: Option<&Vec<OptionRow>>) {
+        for row in options.into_iter().flatten() {
+            let (value, products) = self
+                .0
+                .entry((
+                    category_id.to_owned(),
+                    row.name_key.clone(),
+                    row.value_key.clone(),
+                ))
+                .or_insert_with(|| (row.value.clone(), 0));
+            if row.value < *value {
+                value.clone_from(&row.value);
+            }
+            *products += 1;
+        }
+    }
+
+    /// Writes what differs from the rows; returns how many rows it changed.
+    async fn write(self, conn: &Connection) -> anyhow::Result<usize> {
+        let kept: HashMap<(String, String, String), (String, i64)> =
+            fetch_all::<(String, String, String, String, i64)>(
+                conn,
+                "SELECT category_id, name_key, value_key, value, products
+                 FROM storefront_category_facets",
+                (),
+            )
+            .await?
+            .into_iter()
+            .map(|(category_id, name_key, value_key, value, products)| {
+                ((category_id, name_key, value_key), (value, products))
+            })
+            .collect();
+        let mut changed = 0;
+        for (key, counted) in &self.0 {
+            if kept.get(key) == Some(counted) {
+                continue;
+            }
+            execute(
+                conn,
+                "INSERT INTO storefront_category_facets (category_id, name_key, value_key,
+                    value, products)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (category_id, name_key, value_key) DO UPDATE SET
+                    value = excluded.value, products = excluded.products",
+                (
+                    key.0.as_str(),
+                    key.1.as_str(),
+                    key.2.as_str(),
+                    counted.0.as_str(),
+                    counted.1,
+                ),
+            )
+            .await?;
+            changed += 1;
+        }
+        for key in kept.keys().filter(|key| !self.0.contains_key(*key)) {
+            execute(
+                conn,
+                "DELETE FROM storefront_category_facets
+                 WHERE category_id = ?1 AND name_key = ?2 AND value_key = ?3",
+                (key.0.as_str(), key.1.as_str(), key.2.as_str()),
+            )
+            .await?;
+            changed += 1;
+        }
+        Ok(changed)
+    }
 }
 
 #[cfg(test)]
@@ -1161,14 +1378,75 @@ mod tests {
     /// Files a product's change, then checks a full recount has nothing
     /// left to write.
     async fn file(db: &Db, id: &str, was: Option<(bool, &[&str])>, now: Option<(bool, &[&str])>) {
-        let env = (id, was, now);
-        db.write(&env, |tx, (id, was, now)| {
+        let (was_counted, was_in) = was.unwrap_or((false, &[]));
+        let (is_counted, now_in) = now.unwrap_or((false, &[]));
+        file_with(
+            db,
+            id,
+            (was_counted, was_in, &[]),
+            (is_counted, now_in, &[]),
+        )
+        .await;
+    }
+
+    /// Where a product stood or stands: published, its categories and the
+    /// `(option, value)` pairs it takes.
+    type Stand<'a> = (bool, &'a [&'a str], &'a [(&'a str, &'a str)]);
+
+    /// [`file`] with the product's option values, written to its rows first
+    /// as the subscription writes them.
+    async fn file_with(db: &Db, id: &str, was: Stand<'_>, now: Stand<'_>) {
+        let rows = |pairs: &[(&str, &str)]| -> Vec<OptionRow> {
+            let mut rows: Vec<OptionRow> = pairs
+                .iter()
+                .map(|(name, value)| OptionRow {
+                    name_key: crate::facet_key(name),
+                    value_key: crate::facet_key(value),
+                    name: (*name).to_owned(),
+                    value: (*value).to_owned(),
+                })
+                .collect();
+            rows.sort();
+            rows
+        };
+        let env = (id, was, now, rows(was.2), rows(now.2));
+        db.write(&env, |tx, (id, was, now, had, has)| {
             Box::pin(async move {
-                let (was_counted, was_in) = was.unwrap_or((false, &[]));
-                let (is_counted, now_in) = now.unwrap_or((false, &[]));
-                let was_in: Vec<String> = was_in.iter().map(|c| (*c).to_owned()).collect();
-                let now_in: BTreeSet<String> = now_in.iter().map(|c| (*c).to_owned()).collect();
-                file_product(tx, id, was_counted, &was_in, is_counted, &now_in).await?;
+                execute(
+                    tx,
+                    "DELETE FROM storefront_product_options WHERE product_id = ?1",
+                    (*id,),
+                )
+                .await?;
+                for row in has {
+                    execute(
+                        tx,
+                        INSERT_OPTION,
+                        (
+                            *id,
+                            row.name_key.as_str(),
+                            row.value_key.as_str(),
+                            row.name.as_str(),
+                            row.value.as_str(),
+                        ),
+                    )
+                    .await?;
+                }
+                file_product(
+                    tx,
+                    id,
+                    &Filing {
+                        counted: was.0,
+                        categories: was.1.to_vec(),
+                        options: had,
+                    },
+                    &Filing {
+                        counted: now.0,
+                        categories: now.1.to_vec(),
+                        options: has,
+                    },
+                )
+                .await?;
                 assert_eq!(
                     refresh_category_counts(tx).await?,
                     0,
@@ -1179,6 +1457,21 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    /// What the page of `category_id` counts of each option value, as
+    /// `value key: products`.
+    async fn facets(db: &Db, category_id: &str) -> Vec<String> {
+        db.fetch_all::<(String, i64)>(
+            "SELECT value_key, products FROM storefront_category_facets
+             WHERE category_id = ?1 ORDER BY name_key, value_key",
+            (category_id,),
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(value_key, products)| format!("{value_key}: {products}"))
+        .collect()
     }
 
     async fn counts(db: &Db) -> Vec<(String, i64, i64)> {
@@ -1339,6 +1632,143 @@ mod tests {
         file(&db, "p3", Some((true, &["toys"])), Some((true, &["toys"]))).await;
         assert_eq!(counts(&db).await, [row("old", 1, 1), row("toys", 3, 3)]);
         assert_eq!(shop(&db).await, 5);
+    }
+
+    #[tokio::test]
+    async fn each_page_counts_the_values_its_products_take() {
+        let db = tree().await;
+        let colours = |values: &'static [&'static str]| -> Vec<(&'static str, &'static str)> {
+            values.iter().map(|value| ("Couleur", *value)).collect()
+        };
+        let rose_blue = colours(&["Rose", "Bleu"]);
+        let rose_grey = colours(&["Rose", "Gris"]);
+        let rose = colours(&["Rose"]);
+
+        // Two levels down: counted on its page, its ancestors' and the whole
+        // shop's; a draft counts nowhere.
+        product(&db, "p1", "published", &["travel"]).await;
+        file_with(
+            &db,
+            "p1",
+            (false, &[], &[]),
+            (true, &["travel"], &rose_blue),
+        )
+        .await;
+        for page in ["travel", "mats", "bedding", WHOLE_SHOP] {
+            assert_eq!(facets(&db, page).await, ["bleu: 1", "rose: 1"], "{page}");
+        }
+        product(&db, "p3", "draft", &["toys"]).await;
+        file_with(&db, "p3", (false, &[], &[]), (false, &["toys"], &rose)).await;
+        assert!(facets(&db, "toys").await.is_empty());
+
+        // A second product with one of the values.
+        product(&db, "p2", "published", &["toys"]).await;
+        file_with(&db, "p2", (false, &[], &[]), (true, &["toys"], &rose)).await;
+        assert_eq!(facets(&db, "toys").await, ["rose: 1"]);
+        assert_eq!(facets(&db, WHOLE_SHOP).await, ["bleu: 1", "rose: 2"]);
+
+        // A value traded for another: the pages that go on listing it move.
+        file_with(
+            &db,
+            "p1",
+            (true, &["travel"], &rose_blue),
+            (true, &["travel"], &rose_grey),
+        )
+        .await;
+        assert_eq!(facets(&db, "mats").await, ["gris: 1", "rose: 1"]);
+        assert_eq!(facets(&db, WHOLE_SHOP).await, ["gris: 1", "rose: 2"]);
+
+        // Moved to another branch: its values go with it.
+        product(&db, "p2", "published", &["mats"]).await;
+        file_with(
+            &db,
+            "p2",
+            (true, &["toys"], &rose),
+            (true, &["mats"], &rose),
+        )
+        .await;
+        assert!(facets(&db, "toys").await.is_empty());
+        assert_eq!(facets(&db, "mats").await, ["gris: 1", "rose: 2"]);
+        assert_eq!(facets(&db, "travel").await, ["gris: 1", "rose: 1"]);
+
+        // Unpublished: its values leave every page.
+        product(&db, "p1", "draft", &["travel"]).await;
+        file_with(
+            &db,
+            "p1",
+            (true, &["travel"], &rose_grey),
+            (false, &["travel"], &rose_grey),
+        )
+        .await;
+        assert!(facets(&db, "travel").await.is_empty());
+        assert_eq!(facets(&db, WHOLE_SHOP).await, ["rose: 1"]);
+
+        // A category moved in the tree: the full recount moves them too.
+        db.write(&(), |tx, ()| {
+            Box::pin(async move {
+                execute(
+                    tx,
+                    "UPDATE storefront_categories SET parent_id = 'toys' WHERE id = 'mats'",
+                    (),
+                )
+                .await?;
+                assert!(refresh_category_counts(tx).await? > 0);
+                assert_eq!(refresh_category_counts(tx).await?, 0);
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        assert!(facets(&db, "bedding").await.is_empty());
+        assert_eq!(facets(&db, "toys").await, ["rose: 1"]);
+    }
+
+    /// What filing a product costs the first time it is listed, with none,
+    /// 6 or 24 option values to count on its four pages: what copying a
+    /// large shop pays per product. Run by hand:
+    /// `cargo test -p timada-storefront --lib filing_cost -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "times the filing of 2,000 products; run by hand with --ignored --nocapture"]
+    async fn filing_cost() {
+        const PRODUCTS: usize = 2_000;
+        for values in [0usize, 6, 24] {
+            let db = tree().await;
+            let options: Vec<OptionRow> = (0..values)
+                .map(|n| OptionRow {
+                    name_key: if n % 2 == 0 { "couleur" } else { "taille" }.to_owned(),
+                    value_key: format!("v{n}"),
+                    name: "Couleur".to_owned(),
+                    value: format!("V{n}"),
+                })
+                .collect();
+            for n in 0..PRODUCTS {
+                product(&db, &format!("p{n:05}"), "published", &["travel"]).await;
+            }
+            let started = std::time::Instant::now();
+            for n in 0..PRODUCTS {
+                let env = (format!("p{n:05}"), &options);
+                db.write(&env, |tx, (id, options)| {
+                    Box::pin(async move {
+                        file_product(
+                            tx,
+                            id,
+                            &Filing::default(),
+                            &Filing {
+                                counted: true,
+                                categories: vec!["travel"],
+                                options,
+                            },
+                        )
+                        .await
+                    })
+                })
+                .await
+                .unwrap();
+            }
+            let each = started.elapsed() / PRODUCTS as u32;
+            tracing::info!(target: "probe", values, ?each, "filed");
+            println!("  {values:>2} option values: {each:?} per product");
+        }
     }
 
     /// A product's rows are found through the index on the product: named,
