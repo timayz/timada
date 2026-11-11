@@ -14,8 +14,9 @@
 //!
 //! What a category counts, and the products its page lists, are kept on the
 //! rows so the menu and a collection page read them instead of computing them
-//! on each request. A product's change moves only its own rows and the
-//! counts of the categories it reaches ([`file_product`]); a category moved
+//! on each request; so are the whole shop's ([`WHOLE_SHOP`]), which lists
+//! every published product. A product's change moves only its own rows and
+//! the counts of the pages it reaches ([`file_product`]); a category moved
 //! in the tree or archived changes what every page below and above lists, so
 //! that works everything out again ([`refresh_category_counts`]) and writes
 //! what differs.
@@ -463,6 +464,12 @@ async fn upsert_review(db: &Db, review: &ReviewState) -> anyhow::Result<()> {
     .await
 }
 
+/// The category id the whole shop's page is listed under in
+/// `storefront_category_products`: every published product, whatever its
+/// categories, which `/boutique`, the home's rails and a search read. No
+/// category takes it.
+pub(crate) const WHOLE_SHOP: &str = "";
+
 /// The categories a product's rows file it under, in id order.
 async fn memberships_of(tx: &Connection, product_id: &str) -> anyhow::Result<Vec<String>> {
     let rows: Vec<(String,)> = fetch_all(
@@ -548,17 +555,12 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                     .await?;
                 }
             }
-            // The option rows, as the table keeps them: one per pair of keys,
-            // the first of two values folding to one.
+            // The option rows, as the table keeps them.
             let options: Vec<crate::ProductOption> = serde_json::from_str(&options_json)?;
-            let mut wanted: Vec<(String, String, String, String)> = Vec::new();
-            for row in option_rows(&options) {
-                if !wanted.iter().any(|(name_key, value_key, _, _)| {
-                    *name_key == row.name_key && *value_key == row.value_key
-                }) {
-                    wanted.push((row.name_key, row.value_key, row.name, row.value));
-                }
-            }
+            let mut wanted: Vec<(String, String, String, String)> = distinct_option_rows(&options)
+                .into_iter()
+                .map(|row| (row.name_key, row.value_key, row.name, row.value))
+                .collect();
             wanted.sort();
             let were: Vec<(String, String, String, String)> = fetch_all(
                 tx,
@@ -692,6 +694,21 @@ pub(crate) fn option_rows(options: &[crate::ProductOption]) -> Vec<OptionRow> {
         .collect()
 }
 
+/// [`option_rows`] as `storefront_product_options` keeps them: one per pair
+/// of keys, the first of two values folding to one, in the options' order.
+pub(crate) fn distinct_option_rows(options: &[crate::ProductOption]) -> Vec<OptionRow> {
+    let mut rows: Vec<OptionRow> = Vec::new();
+    for row in option_rows(options) {
+        if !rows
+            .iter()
+            .any(|kept| kept.name_key == row.name_key && kept.value_key == row.value_key)
+        {
+            rows.push(row);
+        }
+    }
+    rows
+}
+
 /// The gallery as the local rows carry it.
 fn images_json(product: &ProductState) -> anyhow::Result<String> {
     let images: Vec<crate::Image> = product
@@ -817,14 +834,16 @@ async fn upsert_category(db: &Db, category: &CategoryState) -> anyhow::Result<()
 /// and under every live category below it, each once; so a product reaches
 /// a page through each of its categories and the unbroken run of live
 /// ancestors above it (an archived category stops the climb: its own page
-/// lists only what is filed straight under it). `subtree_count` is how many
-/// products a page lists, `product_count` how many are filed straight under
-/// the category; both move by the difference between the pages that listed
-/// the product and those that list it now. The pages that listed it are read
-/// back from the rows rather than worked out from where it was, so a repeated
-/// delivery changes nothing. A category the copy does not know yet (the
-/// product's event came before its own) is passed over here and counted when
-/// the category arrives, which counts everything again.
+/// lists only what is filed straight under it). The whole shop's page
+/// ([`WHOLE_SHOP`]) lists every counted product. `subtree_count` is how many
+/// products a page lists (`storefront_shop` for the whole shop's),
+/// `product_count` how many are filed straight under the category; both move
+/// by the difference between the pages that listed the product and those
+/// that list it now. The pages that listed it are read back from the rows
+/// rather than worked out from where it was, so a repeated delivery changes
+/// nothing. A category the copy does not know yet (the product's event came
+/// before its own) is passed over here and counted when the category
+/// arrives, which counts everything again.
 ///
 /// `was_counted` and `was_in` are what the rows said before this change,
 /// `is_counted` and `now_in` what the product says now.
@@ -846,7 +865,9 @@ async fn file_product(
         links.iter().map(|link| (link.id.as_str(), link)).collect();
     let listed_before: BTreeSet<String> = fetch_all::<(String,)>(
         conn,
-        "SELECT category_id FROM storefront_category_products WHERE product_id = ?1",
+        "SELECT category_id FROM storefront_category_products
+            INDEXED BY storefront_category_products_product
+         WHERE product_id = ?1",
         (product_id,),
     )
     .await?
@@ -854,32 +875,19 @@ async fn file_product(
     .map(|(id,)| id)
     .collect();
     let listed_now = if is_counted {
-        pages_listing(&tree, now_in.iter().map(String::as_str))
+        let mut pages = pages_listing(&tree, now_in.iter().map(String::as_str));
+        pages.insert(WHOLE_SHOP.to_owned());
+        pages
     } else {
         BTreeSet::new()
     };
     for category_id in listed_before.difference(&listed_now) {
-        execute(
-            conn,
-            "DELETE FROM storefront_category_products WHERE category_id = ?1 AND product_id = ?2",
-            (category_id.as_str(), product_id),
-        )
-        .await?;
-        execute(
-            conn,
-            "UPDATE storefront_categories SET subtree_count = subtree_count - 1 WHERE id = ?1",
-            (category_id.as_str(),),
-        )
-        .await?;
+        execute(conn, DELETE_LISTING, (category_id.as_str(), product_id)).await?;
+        count_listing(conn, category_id, -1).await?;
     }
     for category_id in listed_now.difference(&listed_before) {
         execute(conn, INSERT_LISTING, (category_id.as_str(), product_id)).await?;
-        execute(
-            conn,
-            "UPDATE storefront_categories SET subtree_count = subtree_count + 1 WHERE id = ?1",
-            (category_id.as_str(),),
-        )
-        .await?;
+        count_listing(conn, category_id, 1).await?;
     }
     if is_counted && listed_now.intersection(&listed_before).next().is_some() {
         // The pages that go on listing it sort it by keys that moved with it.
@@ -938,6 +946,37 @@ const INSERT_LISTING: &str = "INSERT INTO storefront_category_products (category
  SELECT ?1, id, updated_at, min_amount_cents, max_amount_cents, review_count, rating_x100
  FROM storefront_products WHERE id = ?2";
 
+/// Takes a product off a category's page: binds the category, then the
+/// product. The index is named: left to choose, Turso looked the row up by
+/// the category alone and read every row of the page (the whole shop's, for
+/// its page).
+const DELETE_LISTING: &str = "DELETE FROM storefront_category_products
+    INDEXED BY storefront_category_products_product
+ WHERE product_id = ?2 AND category_id = ?1";
+
+/// Moves the count of the page of `category_id` by `delta`, as a product is
+/// listed on it (1) or taken off (-1): the category's `subtree_count`, or
+/// the whole shop's count.
+async fn count_listing(conn: &Connection, category_id: &str, delta: i64) -> anyhow::Result<()> {
+    if category_id == WHOLE_SHOP {
+        execute(
+            conn,
+            "INSERT INTO storefront_shop (id, products) VALUES (1, ?1)
+             ON CONFLICT (id) DO UPDATE SET products = products + excluded.products",
+            (delta,),
+        )
+        .await?;
+    } else {
+        execute(
+            conn,
+            "UPDATE storefront_categories SET subtree_count = subtree_count + ?2 WHERE id = ?1",
+            (category_id, delta),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// The categories whose pages list a product filed under `categories`: each
 /// of them the tree knows and, above a live one, every live ancestor up to
 /// the first archived or unknown. The same reach as
@@ -969,11 +1008,12 @@ fn pages_listing<'a>(
 }
 
 /// Works out the counts of every category and the rows each one's page
-/// lists, from scratch, and writes what differs from the rows: what a
-/// category moved in the tree or archived calls for, since either changes
-/// what the pages below and above list, and what a category arriving after
-/// the products filed under it calls for. A product's own change goes
-/// through [`file_product`] instead. Returns how many rows it changed.
+/// lists, the whole shop's included, from scratch, and writes what differs
+/// from the rows: what a category moved in the tree or archived calls for,
+/// since either changes what the pages below and above list, and what a
+/// category arriving after the products filed under it calls for. A
+/// product's own change goes through [`file_product`] instead. Returns how
+/// many rows it changed.
 async fn refresh_category_counts(conn: &Connection) -> anyhow::Result<usize> {
     let links: Vec<CategoryLink> = fetch_all(
         conn,
@@ -984,9 +1024,9 @@ async fn refresh_category_counts(conn: &Connection) -> anyhow::Result<usize> {
     // Two scans joined here rather than one SQL join: Turso answers that
     // join by walking every product once per link, which made a recount of
     // a 1 300-product shop take seconds.
-    let unpublished: HashSet<String> = fetch_all::<(String,)>(
+    let published: BTreeSet<String> = fetch_all::<(String,)>(
         conn,
-        "SELECT id FROM storefront_products WHERE status <> 'published'",
+        "SELECT id FROM storefront_products WHERE status = 'published'",
         (),
     )
     .await?
@@ -1000,7 +1040,7 @@ async fn refresh_category_counts(conn: &Connection) -> anyhow::Result<usize> {
     )
     .await?
     .into_iter()
-    .filter(|(_, product_id)| !unpublished.contains(product_id))
+    .filter(|(_, product_id)| published.contains(product_id))
     .collect();
     // What is listed and should stay is taken out as it is met; what is
     // left over is listed by no page any more.
@@ -1029,10 +1069,31 @@ async fn refresh_category_counts(conn: &Connection) -> anyhow::Result<usize> {
             changed += 1;
         }
     }
+    // The whole shop's page lists every published product.
+    let was_counted: Option<(i64,)> =
+        fetch_optional(conn, "SELECT products FROM storefront_shop", ()).await?;
+    let counted = published.len() as i64;
+    if was_counted.map_or(0, |(products,)| products) != counted {
+        execute(
+            conn,
+            "INSERT INTO storefront_shop (id, products) VALUES (1, ?1)
+             ON CONFLICT (id) DO UPDATE SET products = excluded.products",
+            (counted,),
+        )
+        .await?;
+        changed += 1;
+    }
+    for product_id in &published {
+        if stale.remove(&(WHOLE_SHOP.to_owned(), product_id.clone())) {
+            continue;
+        }
+        execute(conn, INSERT_LISTING, (WHOLE_SHOP, product_id.as_str())).await?;
+        changed += 1;
+    }
     for (category_id, product_id) in stale {
         execute(
             conn,
-            "DELETE FROM storefront_category_products WHERE category_id = ?1 AND product_id = ?2",
+            DELETE_LISTING,
             (category_id.as_str(), product_id.as_str()),
         )
         .await?;
@@ -1143,6 +1204,14 @@ mod tests {
         .collect()
     }
 
+    /// What the whole shop's page counts.
+    async fn shop(db: &Db) -> i64 {
+        db.fetch_optional::<(i64,)>("SELECT products FROM storefront_shop", ())
+            .await
+            .unwrap()
+            .map_or(0, |(products,)| products)
+    }
+
     fn row(id: &str, product_count: i64, subtree_count: i64) -> (String, i64, i64) {
         (id.to_owned(), product_count, subtree_count)
     }
@@ -1164,13 +1233,16 @@ mod tests {
     async fn filing_a_product_moves_the_counts_it_reaches_and_agrees_with_a_recount() {
         let db = tree().await;
 
-        // Published two levels down: listed on its page and its ancestors'.
+        // Published two levels down: listed on its page and its ancestors',
+        // and on the whole shop's.
         product(&db, "p1", "published", &["travel"]).await;
         file(&db, "p1", None, Some((true, &["travel"]))).await;
         assert_eq!(
             counts(&db).await,
             [row("bedding", 0, 1), row("mats", 0, 1), row("travel", 1, 1)]
         );
+        assert_eq!(listed(&db, WHOLE_SHOP).await, ["p1"]);
+        assert_eq!(shop(&db).await, 1);
 
         // In a category and its parent: one product on the parent's page.
         product(&db, "p2", "published", &["bedding", "mats"]).await;
@@ -1185,9 +1257,16 @@ mod tests {
         product(&db, "p3", "draft", &["toys"]).await;
         file(&db, "p3", None, Some((false, &["toys"]))).await;
         assert_eq!(listed(&db, "toys").await, Vec::<String>::new());
+        assert_eq!(listed(&db, WHOLE_SHOP).await, ["p1", "p2"]);
         product(&db, "p3", "published", &["toys"]).await;
         file(&db, "p3", Some((false, &["toys"])), Some((true, &["toys"]))).await;
         assert_eq!(listed(&db, "toys").await, ["p3"]);
+        assert_eq!(shop(&db).await, 3);
+
+        // Filed nowhere: the whole shop's page lists it all the same.
+        product(&db, "p7", "published", &[]).await;
+        file(&db, "p7", None, Some((true, &[]))).await;
+        assert_eq!(listed(&db, WHOLE_SHOP).await, ["p1", "p2", "p3", "p7"]);
 
         // Under an archived category: its own page only, nothing climbs.
         product(&db, "p4", "published", &["old"]).await;
@@ -1224,6 +1303,7 @@ mod tests {
         .await;
         assert_eq!(listed(&db, "bedding").await, ["p2"]);
         assert_eq!(listed(&db, "travel").await, Vec::<String>::new());
+        assert!(!listed(&db, WHOLE_SHOP).await.contains(&"p1".to_owned()));
 
         // Moved from one branch to another.
         product(&db, "p2", "published", &["toys"]).await;
@@ -1249,10 +1329,47 @@ mod tests {
             .unwrap();
         file(&db, "p5", Some((true, &["vintage"])), None).await;
         assert_eq!(counts(&db).await, [row("old", 1, 1), row("toys", 3, 3)]);
+        assert_eq!(
+            listed(&db, WHOLE_SHOP).await,
+            ["p2", "p3", "p4", "p6", "p7"]
+        );
+        assert_eq!(shop(&db).await, 5);
 
         // Filed again with nothing changed: nothing moves.
         file(&db, "p3", Some((true, &["toys"])), Some((true, &["toys"]))).await;
         assert_eq!(counts(&db).await, [row("old", 1, 1), row("toys", 3, 3)]);
+        assert_eq!(shop(&db).await, 5);
+    }
+
+    /// A product's rows are found through the index on the product: named,
+    /// since Turso left to choose read a page's every row for one of them.
+    #[tokio::test]
+    async fn a_products_rows_are_read_through_its_own_index() {
+        let db = tree().await;
+        for (statement, params) in [
+            (DELETE_LISTING, vec!["toys", "p1"]),
+            (
+                "SELECT category_id FROM storefront_category_products
+                    INDEXED BY storefront_category_products_product
+                 WHERE product_id = ?1",
+                vec!["p1"],
+            ),
+            (
+                "UPDATE storefront_category_products SET review_count = 1 WHERE product_id = ?1",
+                vec!["p1"],
+            ),
+        ] {
+            let plan: Vec<(i64, i64, i64, String)> = db
+                .fetch_all(&format!("EXPLAIN QUERY PLAN {statement}"), params)
+                .await
+                .unwrap();
+            assert!(
+                plan.iter().any(|(_, _, _, step)| step
+                    .contains("USING COVERING INDEX storefront_category_products_product")
+                    || step.contains("USING INDEX storefront_category_products_product")),
+                "{statement}: {plan:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1262,9 +1379,10 @@ mod tests {
         product(&db, "p2", "published", &["toys"]).await;
         db.write(&(), |tx, ()| {
             Box::pin(async move {
-                // Four pages list a product: three up the bedding branch,
-                // one for the toy; plus the counts of those four.
-                assert_eq!(refresh_category_counts(tx).await?, 8);
+                // Four category pages list a product: three up the bedding
+                // branch, one for the toy; plus the counts of those four,
+                // and both products on the whole shop's page, with its count.
+                assert_eq!(refresh_category_counts(tx).await?, 11);
                 assert_eq!(refresh_category_counts(tx).await?, 0);
                 // Mats moves under Toys: the bedding page loses the mat, the
                 // toys page gains it.

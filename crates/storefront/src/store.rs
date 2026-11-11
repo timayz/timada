@@ -204,13 +204,13 @@ impl Store {
             None => false,
         };
         let db = self.inner.db.db();
+        // Kept as the whole shop's page lists and unlists them.
         let products: i64 = db
-            .fetch_scalar(
-                "SELECT count(*) FROM storefront_products WHERE status = 'published'",
-                (),
-            )
+            .fetch_optional::<(i64,)>("SELECT products FROM storefront_shop", ())
             .await
-            .unwrap_or(0);
+            .ok()
+            .flatten()
+            .map_or(0, |(products,)| products);
         let last_event_at: Option<i64> = db
             .fetch_scalar("SELECT max(updated_at) FROM storefront_products", ())
             .await
