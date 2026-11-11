@@ -108,6 +108,8 @@ pub const REVIEW_NOT_PENDING: &str = "review_not_pending";
 /// Not a domain refusal: what the upload endpoint answers for a file that is
 /// not a picture it takes, or one too large.
 pub const REVIEW_INVALID_PHOTO: &str = "review_invalid_photo";
+/// The shop's pictures take all the room they may: no photo can be taken.
+pub const REVIEW_STORAGE_FULL: &str = "review_storage_full";
 
 /// Every code above, so one read back from an answer maps to a
 /// `&'static str` again.
@@ -125,5 +127,6 @@ pub const SHOPPER_CODES: &[&str] = &[
     REVIEW_PHOTO_NOT_FOUND,
     REVIEW_NOT_PENDING,
     REVIEW_INVALID_PHOTO,
+    REVIEW_STORAGE_FULL,
     timada_core::WRITES_PAUSED,
 ];

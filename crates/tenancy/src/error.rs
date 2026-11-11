@@ -74,6 +74,8 @@ pub enum TenancyError {
     Suspended,
     #[error("this tenant is not suspended")]
     NotSuspended,
+    #[error("a picture quota is a number of bytes above zero, or none")]
+    InvalidMediaQuota,
     #[error("a role name is 2 to 32 lowercase letters, digits and dashes")]
     InvalidRole,
     #[error("this role name is reserved")]
@@ -134,6 +136,7 @@ impl TenancyError {
             Self::Forbidden => "not_allowed",
             Self::Suspended => "tenant_suspended",
             Self::NotSuspended => "not_suspended",
+            Self::InvalidMediaQuota => "invalid_media_quota",
             Self::InvalidRole => "invalid_role",
             Self::ReservedRole => "reserved_role",
             Self::InvalidRoleLabel => "invalid_role_label",

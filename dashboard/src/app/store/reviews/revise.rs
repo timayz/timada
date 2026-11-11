@@ -18,7 +18,9 @@ use topcoat::{
     },
 };
 
-use super::{Answer, answer_error, read_upload, refused, render_photos, status, with_photos};
+use super::{
+    Answer, answer_error, read_upload, refused, render_photos, room_for_photos, status, with_photos,
+};
 
 #[route(POST)]
 pub async fn revise(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Json<Answer>)> {
@@ -33,6 +35,9 @@ pub async fn revise(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Js
     let Some(photos) = render_photos(cx, upload.files).await? else {
         return Ok(refused(REVIEW_INVALID_PHOTO));
     };
+    if let Some(code) = room_for_photos(cx, &access, &photos).await? {
+        return Ok(refused(code));
+    }
     let revision = ReviseReview {
         order_id: upload.order_id,
         product_id: upload.product_id,

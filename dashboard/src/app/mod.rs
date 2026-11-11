@@ -76,6 +76,8 @@ pub struct Services {
     pub authorizer: Arc<Authorizer>,
     /// Where the product pictures are kept and served from.
     pub media: Arc<Media>,
+    /// How much disk a tenant's pictures may take.
+    pub quota: Arc<crate::media::Quota>,
     /// Where the keys personal data is sealed under are kept.
     pub keys: Arc<KeyVault>,
     /// How often each client has been let through the limits, here and on
@@ -114,6 +116,7 @@ pub fn router(services: Services) -> Router {
         cluster,
         authorizer,
         media,
+        quota,
         keys,
         limits,
         email_codes,
@@ -179,6 +182,7 @@ pub fn router(services: Services) -> Router {
         .app_context(cluster)
         .app_context(authorizer)
         .app_context(media)
+        .app_context(quota)
         .app_context(keys)
         .app_context(email_codes)
         .app_context(shopper_codes)

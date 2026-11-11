@@ -213,9 +213,32 @@ pub struct MediaConfig {
     /// cache in front of it. A storefront is told to load pictures from here,
     /// so it has to work from a shopper's browser, not only from the server.
     pub public_url: String,
+    /// How much disk a tenant's pictures may take, in bytes, unless the
+    /// platform set it apart for that tenant; 0 is no quota.
+    #[serde(default = "default_tenant_quota_bytes")]
+    pub tenant_quota_bytes: u64,
+    /// How often, in seconds, this node compares its picture files with what
+    /// the store knows: orphans deleted, missing or wrong files fetched.
+    #[serde(default = "default_reconcile_check_secs")]
+    pub reconcile_check_secs: u64,
+}
+
+/// 5 GiB: tens of thousands of pictures in their two renditions.
+fn default_tenant_quota_bytes() -> u64 {
+    5 * 1024 * 1024 * 1024
+}
+
+/// Once a day.
+fn default_reconcile_check_secs() -> u64 {
+    24 * 60 * 60
 }
 
 impl MediaConfig {
+    /// The quota every tenant has unless set apart; `None` for none.
+    pub fn default_quota(&self) -> Option<u64> {
+        (self.tenant_quota_bytes > 0).then_some(self.tenant_quota_bytes)
+    }
+
     fn validate(&mut self) -> Result<(), ConfigError> {
         let url = self.public_url.trim_end_matches('/');
         if !(url.starts_with("http://") || url.starts_with("https://")) {

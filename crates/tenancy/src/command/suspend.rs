@@ -3,7 +3,7 @@
 
 use evento::{Executor, ProjectionAggregate};
 
-use crate::aggregator::{Resumed, Suspended};
+use crate::aggregator::{MediaQuotaSet, Resumed, Suspended};
 use crate::error::TenancyError;
 
 #[evento::command]
@@ -45,6 +45,31 @@ impl<E: Executor> super::Command<E> {
             .write()?
             .routing_key_opt(routing_key)
             .event(&Resumed)
+            .commit(&self.0)
+            .await?;
+        Ok(())
+    }
+
+    /// Sets how much disk the tenant's pictures may take, in bytes; `None`
+    /// puts it back on the platform's default. Zero is no quota at all and
+    /// is refused: the default serves for that.
+    pub async fn set_media_quota(
+        &self,
+        tenant_id: &str,
+        bytes: Option<u64>,
+        routing_key: Option<String>,
+    ) -> Result<(), TenancyError> {
+        if bytes == Some(0) {
+            return Err(TenancyError::InvalidMediaQuota);
+        }
+        let tenant = self.require_tenant(tenant_id).await?;
+        if tenant.media_quota_bytes == bytes {
+            return Ok(());
+        }
+        tenant
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&MediaQuotaSet { bytes })
             .commit(&self.0)
             .await?;
         Ok(())

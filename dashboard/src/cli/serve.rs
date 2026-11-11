@@ -36,6 +36,11 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // The pictures this node lacks are fetched off the subscriptions'
     // cursors (#468).
     let fetcher = crate::media::Fetcher::new(media.clone(), db.clone());
+    // How much disk a tenant's pictures may take.
+    let quota = Arc::new(crate::media::Quota::new(
+        db.clone(),
+        config.media.default_quota(),
+    ));
     let keys_sealer = crate::seal::keys_sealer(&config);
     if keys_sealer.is_none() {
         tracing::warn!(
@@ -73,6 +78,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         &config.aliexpress,
         config.mail.allow_private_hosts,
         executor.clone(),
+        quota.clone(),
         Arc::new(move |region| {
             let (index, of) = cluster::live_place(&live, crate::aliexpress::LIVE_WITHIN, region);
             timada_aliexpress::Share { index, of }
@@ -226,6 +232,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let workers = Workers::new(all_workers);
     let mailroom_sends = mailroom.start();
     let picture_fetches = fetcher.clone().start();
+    // This node's picture files against the store, once a day.
+    let picture_reconcile = crate::media::Reconcile::new(media.clone(), fetcher.clone()).start(
+        std::time::Duration::from_secs(config.media.reconcile_check_secs.max(60)),
+    );
     let checkout_answers = checkouts.clone().start();
     // What the balancer asks before sending traffic here, and what an
     // operator scrapes.
@@ -334,6 +344,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         cluster: cluster.clone(),
         authorizer,
         media,
+        quota: quota.clone(),
         keys,
         limits,
         email_codes: crate::seal::email_codes(&config),
@@ -368,6 +379,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     cluster_watch.abort();
     mailroom_sends.abort();
     picture_fetches.abort();
+    picture_reconcile.abort();
     checkout_answers.abort();
     review_requests.abort();
     lapsed_checkouts.abort();

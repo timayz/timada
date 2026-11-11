@@ -24,7 +24,7 @@ use topcoat::{
 use super::mail_url;
 use crate::app::t::slug::require_tenant;
 use crate::app::tenants::{error_code, tenancy};
-use crate::media::Media;
+use crate::media::{Media, Quota, Room, STORAGE_FULL};
 
 /// Saves the branding. A new logo replaces the old one; none uploaded keeps
 /// it, unless "remove the logo" is ticked.
@@ -72,6 +72,13 @@ pub async fn save(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
             Ok(rendered) => rendered,
             Err(refusal) => return refuse(refusal.code()),
         };
+        let room = app_context::<Arc<Quota>>(cx)
+            .room_for(tenant, rendered.picture.bytes())
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        if let Room::Full { .. } = room {
+            return refuse(STORAGE_FULL);
+        }
         let id = new_image_id();
         // On a majority of nodes before it is recorded, as a product
         // picture is.

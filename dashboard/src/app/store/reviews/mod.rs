@@ -26,7 +26,8 @@ use serde::Serialize;
 use timada_catalog::new_image_id;
 use timada_orders::STOREFRONT_ACTOR;
 use timada_reviews::{
-    REVIEW_INVALID_PHOTO, REVIEW_INVALID_RATING, ReviewError, ReviewPhoto, SubmitReview,
+    REVIEW_INVALID_PHOTO, REVIEW_INVALID_RATING, REVIEW_STORAGE_FULL, ReviewError, ReviewPhoto,
+    SubmitReview,
 };
 use timada_tenancy::ApiKeyAccess;
 use topcoat::{
@@ -39,7 +40,7 @@ use topcoat::{
     },
 };
 
-use crate::media::{Media, Rendered};
+use crate::media::{Media, Quota, Rendered, Room};
 
 pub mod revise;
 
@@ -136,6 +137,26 @@ async fn render_photos(cx: &Cx, files: Vec<Bytes>) -> Result<Option<Vec<(ReviewP
     Ok(Some(photos))
 }
 
+/// Whether the shop has room for these photos; the code to answer when not.
+async fn room_for_photos(
+    cx: &Cx,
+    access: &ApiKeyAccess,
+    photos: &[(ReviewPhoto, Rendered)],
+) -> Result<Option<&'static str>> {
+    let wanted: u64 = photos.iter().map(|(photo, _)| photo.picture.bytes()).sum();
+    if wanted == 0 {
+        return Ok(None);
+    }
+    let room = app_context::<Arc<Quota>>(cx)
+        .room_for(&access.tenant, wanted)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    Ok(match room {
+        Room::Enough => None,
+        Room::Full { .. } => Some(REVIEW_STORAGE_FULL),
+    })
+}
+
 /// Stores the photos and copies them to a majority of nodes, then runs
 /// `record`; on any failure, the files just stored are deleted again.
 async fn with_photos<F, Fut>(
@@ -186,6 +207,9 @@ pub async fn submit(cx: &Cx, mut multipart: Multipart) -> Result<(StatusCode, Js
     let Some(photos) = render_photos(cx, upload.files).await? else {
         return Ok(refused(REVIEW_INVALID_PHOTO));
     };
+    if let Some(code) = room_for_photos(cx, &access, &photos).await? {
+        return Ok(refused(code));
+    }
     let draft = SubmitReview {
         order_id: upload.order_id,
         product_id: upload.product_id,

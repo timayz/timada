@@ -148,6 +148,10 @@ pub fn describe_error(code: &str) -> &'static str {
         "unsupported_image" => "Upload a JPEG, PNG, WebP or GIF picture.",
         "image_too_large" => "A picture is at most 8 MiB.",
         "image_too_big" => "A picture is at most 25 million pixels (5000 × 5000).",
+        "storage_full" => {
+            "The shop's pictures take all the space it has. Remove some first, or ask the platform for more."
+        }
+        "invalid_media_quota" => "A picture quota is a number of megabytes above zero, or blank.",
         "no_image" => "Choose a picture to upload.",
         "invalid_alt" => "The text describing a picture is at most 200 characters.",
         "image_not_found" => "This picture is no longer on the product.",

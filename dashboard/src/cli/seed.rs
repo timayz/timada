@@ -234,8 +234,12 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?,
             media.clone(),
-            tenant.id.clone(),
+            &tenant,
             false,
+            Arc::new(crate::media::Quota::new(
+                store_db.clone(),
+                config.media.default_quota(),
+            )),
         ))
     };
     let report = timada_catalog_import::import(

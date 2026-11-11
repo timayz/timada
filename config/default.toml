@@ -96,8 +96,18 @@ dir = "data/media"
 # The address this node's /media is reached at from the outside, or of a cache
 # in front of it. Shoppers' browsers load the product pictures from here, so it
 # has to work from outside the server. Shown on each tenant's API keys page for
-# its storefront to be configured with.
+# its storefront to be configured with. Put a cache in front of it in
+# production (see docs/architecture.md, "Product pictures"): the files never
+# change, so it may keep them for as long as it likes.
 public_url = "https://timada.localhost/media"
+# How much disk one tenant's pictures may take, in bytes, in their two
+# renditions (a few tens of kilobytes per picture). The platform can set it
+# apart for a tenant on its admin page. 0 is no quota.
+tenant_quota_bytes = 5368709120
+# How often, in seconds, this node compares its picture files with what the
+# store knows: files nobody references any more are deleted, files missing or
+# damaged are fetched from the other nodes again.
+reconcile_check_secs = 86400
 
 [data_keys]
 # Directory holding the keys personal data is encrypted with: one per shopper

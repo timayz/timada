@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use timada_catalog::{MAX_IMAGE_BYTES, new_image_id};
 use timada_catalog_import::{BoxFuture, Images, StoredImage};
+use timada_tenancy::TenantState;
 
-use crate::media::Media;
+use crate::media::{Media, Quota, Room};
 
 pub struct MediaImages {
     client: reqwest::Client,
@@ -17,6 +18,9 @@ pub struct MediaImages {
     /// Fetches only from public hosts: the addresses come from outside
     /// (a merchant, a supplier), not from the operator.
     public_only: bool,
+    /// How much the tenant's pictures may take, and what they take.
+    quota: Arc<Quota>,
+    limit: Option<u64>,
 }
 
 impl MediaImages {
@@ -28,20 +32,23 @@ impl MediaImages {
     pub fn new(
         client: reqwest::Client,
         media: Arc<Media>,
-        tenant_id: impl Into<String>,
+        tenant: &TenantState,
         public_only: bool,
+        quota: Arc<Quota>,
     ) -> Self {
         Self {
             client,
             media,
-            tenant_id: tenant_id.into(),
+            tenant_id: tenant.id.clone(),
             public_only,
+            limit: quota.limit_of(tenant),
+            quota,
         }
     }
 
     /// Renders the bytes into what the shop keeps, then stores them under a
     /// fresh id; `what` names them in the log. `None` when they are not a
-    /// picture the shop takes.
+    /// picture the shop takes, or the shop has no room left for them.
     async fn keep(&self, bytes: bytes::Bytes, what: &str) -> anyhow::Result<Option<StoredImage>> {
         if bytes.is_empty() {
             tracing::warn!(what, "picture empty, left out");
@@ -54,6 +61,19 @@ impl MediaImages {
                 return Ok(None);
             }
         };
+        if let Room::Full { used, limit } = self
+            .quota
+            .room(&self.tenant_id, self.limit, rendered.picture.bytes())
+            .await?
+        {
+            tracing::warn!(
+                what,
+                used,
+                limit,
+                "the shop's pictures take all the room they may: left out"
+            );
+            return Ok(None);
+        }
         let image_id = new_image_id();
         let picture = self
             .media

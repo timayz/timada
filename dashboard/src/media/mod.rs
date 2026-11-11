@@ -73,11 +73,15 @@ use crate::db::Db;
 use crate::peers::{self, Peers, is_id};
 
 pub mod fetcher;
+pub mod quota;
 pub mod read_model;
+pub mod reconcile;
 mod schema;
 
 pub use fetcher::Fetcher;
+pub use quota::{Quota, Room, STORAGE_FULL};
 pub use read_model::{logo_subscription, subscription};
+pub use reconcile::Reconcile;
 pub use schema::{LOGO_SUBSCRIPTION, MIGRATIONS, NODE_MIGRATIONS, SUBSCRIPTION, TABLES};
 
 /// The route a node takes a copy of a picture on, below `/cluster/media`.
@@ -904,6 +908,8 @@ pub(crate) mod tests {
             &MediaConfig {
                 dir: "data/media".into(),
                 public_url: "https://shop.example/media".into(),
+                tenant_quota_bytes: 0,
+                reconcile_check_secs: 86_400,
             },
             None,
         );
