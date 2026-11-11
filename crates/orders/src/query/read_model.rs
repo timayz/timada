@@ -15,7 +15,7 @@ use evento::{
     metadata::RawEvent,
     subscription::{Context, SubscriptionBuilder},
 };
-use timada_core::db::{Db, Value, execute, params_from_iter};
+use timada_core::db::{Db, Value, execute, params_from_iter, tenant_search_key};
 use timada_core::{MailStatus, Sending};
 
 use crate::aggregator::{Cart, Order, OrderMail};
@@ -199,9 +199,10 @@ pub(crate) async fn upsert_order(
                     country, item_count, total_cents, currency, placed_at, updated_at, payment_id,
                     refunded_cents, discount_id, discount_code, discount_cents, fulfilled_at,
                     supplier, payment_state, capture_before, capture_requested_at,
-                    cancel_requested_at, paid_at, refund_requested_at, hold_reminder_at, state)
+                    cancel_requested_at, paid_at, refund_requested_at, hold_reminder_at, state,
+                    search_text)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                    ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
+                    ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)
                  ON CONFLICT (tenant_id, id) DO UPDATE SET
                     status = excluded.status, updated_at = excluded.updated_at,
                     refunded_cents = excluded.refunded_cents, discount_id = excluded.discount_id,
@@ -258,6 +259,15 @@ pub(crate) async fn upsert_order(
                     ),
                     Value::from(order.hold_reminder_due_at().map(|at| at as i64)),
                     Value::from(state.as_str()),
+                    // Left out of the update, like the three it is made of,
+                    // so its index builds no segment after the first write.
+                    Value::from(tenant_search_key(
+                        tenant_id,
+                        &format!(
+                            "{} {} {}",
+                            order.reference, order.email, order.shipping.name
+                        ),
+                    )),
                 ]),
             )
             .await?;

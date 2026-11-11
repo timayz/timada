@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use timada_core::db::{Db, FromRow, Tally};
+use timada_core::page::{Cursor, Page, PageFrom, Side, read_page};
 
 use crate::command::{Price, ProductStatus};
 use crate::value_object::format_money;
@@ -196,81 +197,33 @@ fn search_of(tenant_id: &str, filter: &ProductFilter<'_>) -> (Option<String>, Se
     }
 }
 
-/// Where a page of the list stands: the last change (unix seconds) and the
-/// id of a row, the list being ordered by both, most recent first.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProductCursor {
-    pub updated_at: i64,
-    pub id: String,
-}
-
-impl ProductCursor {
-    fn of(row: &ProductRow) -> Self {
-        Self {
-            updated_at: row.updated_at,
-            id: row.id.clone(),
-        }
+/// Where a row stands in the list: its last change and its id.
+fn cursor_of(row: &ProductRow) -> Cursor {
+    Cursor {
+        at: row.updated_at,
+        id: row.id.clone(),
     }
-
-    /// As a link carries it: `{updated_at}-{id}`.
-    pub fn param(&self) -> String {
-        format!("{}-{}", self.updated_at, self.id)
-    }
-
-    /// What [`param`](Self::param) wrote; `None` for anything else.
-    pub fn parse(param: &str) -> Option<Self> {
-        let (updated_at, id) = param.trim().split_once('-')?;
-        Some(Self {
-            updated_at: updated_at.parse().ok()?,
-            id: id.to_owned(),
-        })
-    }
-}
-
-/// Which page of the list to read.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum ProductPage<'a> {
-    /// The most recently changed products.
-    #[default]
-    First,
-    /// The products changed before the cursor's row.
-    Older(&'a ProductCursor),
-    /// The products changed after the cursor's row, the page just before.
-    Newer(&'a ProductCursor),
-}
-
-/// A page of the list, with where the pages on either side start.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ProductsPage {
-    pub rows: Vec<ProductRow>,
-    /// The cursor of the newer page, `None` on the first one.
-    pub newer: Option<ProductCursor>,
-    /// The cursor of the older page, `None` on the last one.
-    pub older: Option<ProductCursor>,
 }
 
 /// A page of the products of a tenant the filter matches, most recently
-/// changed first, `limit` rows at most. Each page is read from where the
-/// one beside it stopped, never by skipping the rows before it, so a deep
-/// page costs what the first one does.
+/// changed first, `limit` rows at most (see [`timada_core::page`]).
 pub async fn products_of_tenant(
     db: &Db,
     tenant_id: &str,
     filter: &ProductFilter<'_>,
-    page: ProductPage<'_>,
+    from: PageFrom<'_>,
     limit: i64,
-) -> Result<ProductsPage> {
+) -> Result<Page<ProductRow>> {
     let (search, how) = search_of(tenant_id, filter);
     let older_statement = page_statement(how, filter, true);
     let newer_statement = page_statement(how, filter, false);
-    let read = |older: bool, cursor: Option<&ProductCursor>| {
-        let statement = if older {
-            older_statement.as_str()
-        } else {
-            newer_statement.as_str()
+    let read = |side: Side, cursor: Option<Cursor>, n: i64| {
+        let statement = match side {
+            Side::Older => older_statement.as_str(),
+            Side::Newer => newer_statement.as_str(),
         };
-        let (updated_at, id) = cursor
-            .map(|cursor| (cursor.updated_at, cursor.id.clone()))
+        let (at, id) = cursor
+            .map(|cursor| (cursor.at, cursor.id))
             .unwrap_or((i64::MAX, String::new()));
         db.fetch_all::<ProductRow>(
             statement,
@@ -279,47 +232,13 @@ pub async fn products_of_tenant(
                 search.clone(),
                 filter.category.map(str::to_owned),
                 filter.status_value(),
-                updated_at,
+                at,
                 id,
-                // One more than shown: whether there is a page beyond.
-                limit + 1,
+                n,
             ),
         )
     };
-    let older_from = |cursor: Option<&ProductCursor>, mut rows: Vec<ProductRow>| {
-        let older = (rows.len() as i64 > limit).then(|| {
-            rows.truncate(limit as usize);
-            ProductCursor::of(rows.last().expect("a full page"))
-        });
-        ProductsPage {
-            rows,
-            newer: cursor.cloned(),
-            older,
-        }
-    };
-    match page {
-        ProductPage::First => Ok(older_from(None, read(true, None).await?)),
-        ProductPage::Older(cursor) => {
-            let mut page = older_from(Some(cursor), read(true, Some(cursor)).await?);
-            // The newer page starts right above this one's first row.
-            page.newer = page.rows.first().map(ProductCursor::of).or(page.newer);
-            Ok(page)
-        }
-        ProductPage::Newer(cursor) => {
-            let mut rows = read(false, Some(cursor)).await?;
-            if rows.len() as i64 <= limit {
-                // Nothing newer beyond it: that is the first page, full.
-                return Ok(older_from(None, read(true, None).await?));
-            }
-            rows.truncate(limit as usize);
-            rows.reverse();
-            Ok(ProductsPage {
-                newer: rows.first().map(ProductCursor::of),
-                older: rows.last().map(ProductCursor::of),
-                rows,
-            })
-        }
-    }
+    read_page(from, limit, read, cursor_of).await
 }
 
 /// How many products [`products_of_tenant`] lists over all its pages: an

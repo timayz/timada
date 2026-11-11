@@ -21,6 +21,7 @@ pub mod db;
 pub mod email;
 pub mod keys;
 pub mod money;
+pub mod page;
 pub mod picture;
 pub mod sending;
 pub mod share;

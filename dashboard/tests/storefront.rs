@@ -1652,11 +1652,12 @@ async fn a_store_with_a_checkout_key_sells() {
         &h.db,
         &acme.id,
         &timada_orders::OrderFilter::default(),
-        0,
+        timada_core::page::PageFrom::First,
         10,
     )
     .await
-    .unwrap();
+    .unwrap()
+    .rows;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].reference, placed.reference);
     assert_eq!(rows[0].total_label(), "39.00 €");

@@ -7,9 +7,10 @@ pub mod create;
 pub mod product_id;
 
 use timada_catalog::{
-    CatalogError, Command, MAX_NAME_LEN, ProductCursor, ProductFilter, ProductPage, ProductStatus,
-    categories_of_tenant, count_products, products_of_tenant,
+    CatalogError, Command, MAX_NAME_LEN, ProductFilter, ProductStatus, categories_of_tenant,
+    count_products, products_of_tenant,
 };
+use timada_core::page::{Cursor, PageFrom};
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
     Result,
@@ -153,13 +154,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let status = status_filter(query.status.as_deref());
     // What the links carry: the parameter as given, when it was.
     let status_param = query.status.as_deref().map(str::trim);
-    let after = query.after.as_deref().and_then(ProductCursor::parse);
-    let before = query.before.as_deref().and_then(ProductCursor::parse);
-    let page = match (&after, &before) {
-        (Some(after), _) => ProductPage::Older(after),
-        (None, Some(before)) => ProductPage::Newer(before),
-        (None, None) => ProductPage::First,
-    };
+    let after = query.after.as_deref().and_then(Cursor::parse);
+    let before = query.before.as_deref().and_then(Cursor::parse);
+    let page = PageFrom::of(after.as_ref(), before.as_ref());
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
     let pool = app_context::<Db>(cx);

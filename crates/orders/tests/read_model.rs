@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use timada_core::page::PageFrom;
 use timada_core::{Claimant, MailStatus};
 use timada_orders::{
     Command, OrderFilter, OrderStatus, cart_refused_returns, count_open_carts, count_orders,
@@ -35,7 +36,10 @@ async fn orders_and_carts_are_listed() {
     }
     let all = OrderFilter::default();
 
-    let rows = orders_of_tenant(&pool, TENANT, &all, 0, 10).await.unwrap();
+    let rows = orders_of_tenant(&pool, TENANT, &all, PageFrom::First, 10)
+        .await
+        .unwrap()
+        .rows;
     assert_eq!(rows.len(), 3);
     assert_eq!(
         order_count(&pool, TENANT).await.unwrap(),
@@ -61,10 +65,39 @@ async fn orders_and_carts_are_listed() {
         .unwrap();
     assert_eq!(cancelled_row.payment_state, "paid", "taken, then refunded");
 
-    let only_cancelled = OrderFilter::default().status(Some(OrderStatus::Cancelled));
-    let rows = orders_of_tenant(&pool, TENANT, &only_cancelled, 0, 10)
+    // Two at a time: the second page goes on where the first stopped, and
+    // the page above it is the first again.
+    let first = orders_of_tenant(&pool, TENANT, &all, PageFrom::First, 2)
         .await
         .unwrap();
+    let second = orders_of_tenant(
+        &pool,
+        TENANT,
+        &all,
+        PageFrom::Older(first.older.as_ref().expect("more below")),
+        2,
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.rows.len(), 1);
+    assert!(second.older.is_none());
+    assert!(first.rows.iter().all(|row| row.id != second.rows[0].id));
+    let back = orders_of_tenant(
+        &pool,
+        TENANT,
+        &all,
+        PageFrom::Newer(second.newer.as_ref().expect("a page above")),
+        2,
+    )
+    .await
+    .unwrap();
+    assert_eq!(back, first);
+
+    let only_cancelled = OrderFilter::default().status(Some(OrderStatus::Cancelled));
+    let rows = orders_of_tenant(&pool, TENANT, &only_cancelled, PageFrom::First, 10)
+        .await
+        .unwrap()
+        .rows;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, cancelled.order_id);
 
@@ -72,6 +105,13 @@ async fn orders_and_carts_are_listed() {
     assert_eq!(count_orders(&pool, TENANT, &by_reference).await.unwrap(), 1);
     let by_email = OrderFilter::default().search(Some("ADA@example"));
     assert_eq!(count_orders(&pool, TENANT, &by_email).await.unwrap(), 3);
+    // The name it ships to, accents and case aside; a search too short for
+    // the index still finds the rows; another tenant's search finds none.
+    let by_name = OrderFilter::default().search(Some("LOVÉLACE"));
+    assert_eq!(count_orders(&pool, TENANT, &by_name).await.unwrap(), 3);
+    let short = OrderFilter::default().search(Some("da"));
+    assert_eq!(count_orders(&pool, TENANT, &short).await.unwrap(), 3);
+    assert_eq!(count_orders(&pool, "other", &by_name).await.unwrap(), 0);
     let of_email = orders_of_email(&pool, TENANT, &checkout().email.to_lowercase(), 10)
         .await
         .unwrap();
@@ -229,9 +269,10 @@ async fn an_order_kept_open_without_its_hold_waits_for_the_merchant() {
         .unwrap();
     orders.settle_outside(ALICE, &settled, None).await.unwrap();
     assert_eq!(due().await, std::slice::from_ref(&unread));
-    let rows = orders_of_tenant(&pool, TENANT, &OrderFilter::default(), 0, 10)
+    let rows = orders_of_tenant(&pool, TENANT, &OrderFilter::default(), PageFrom::First, 10)
         .await
-        .unwrap();
+        .unwrap()
+        .rows;
     let row = rows.iter().find(|row| row.id == settled).unwrap();
     assert_eq!(row.status(), OrderStatus::Paid);
     assert_eq!(row.payment_state, "settled_outside");

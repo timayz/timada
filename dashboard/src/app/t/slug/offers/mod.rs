@@ -9,7 +9,8 @@ pub mod offer_id;
 
 use std::collections::HashMap;
 
-use timada_catalog::{ProductFilter, ProductPage, ProductStatus, format_money, products_of_tenant};
+use timada_catalog::{ProductFilter, ProductStatus, format_money, products_of_tenant};
+use timada_core::page::PageFrom;
 use timada_discounts::{MAX_OFFER_TITLE_LEN, Offer, unix_now};
 use timada_tenancy::{PERMISSION_DISCOUNTS_MANAGE, PERMISSION_DISCOUNTS_READ};
 use topcoat::{
@@ -74,7 +75,7 @@ async fn catalog_items(
         pool,
         &access.tenant.id,
         &ProductFilter::default(),
-        ProductPage::First,
+        PageFrom::First,
         PICKER_PRODUCTS,
     )
     .await

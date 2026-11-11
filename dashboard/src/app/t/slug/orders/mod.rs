@@ -5,6 +5,7 @@
 
 pub mod order_id;
 
+use timada_core::page::{Cursor, PageFrom};
 use timada_orders::{Command, OrderFilter, OrderStatus, count_orders, orders_of_tenant};
 use timada_tenancy::PERMISSION_ORDERS_READ;
 use topcoat::{
@@ -24,8 +25,8 @@ use crate::components::table::{
 };
 use crate::db::Db;
 use crate::ui::{
-    LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
-    section_card, status_badge,
+    LINK, Shell, Tone, cursor_pager, document, empty_row, filter_bar, format_time, notice,
+    page_header, section_card, status_badge,
 };
 
 const PAGE_SIZE: i64 = 50;
@@ -36,8 +37,10 @@ struct OrdersQuery {
     status: Option<String>,
     /// Matches the reference, the e-mail address or the name it ships to.
     q: Option<String>,
-    /// 1-based.
-    page: Option<i64>,
+    /// The cursor of the row the page starts after (older orders).
+    after: Option<String>,
+    /// The cursor of the row the page ends before (newer orders).
+    before: Option<String>,
     error: Option<String>,
     message: Option<String>,
 }
@@ -49,7 +52,9 @@ struct OrdersLink<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     q: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    page: Option<i64>,
+    after: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before: Option<&'a str>,
 }
 
 /// The list of the orders matching an e-mail address.
@@ -58,7 +63,8 @@ pub fn orders_of_email_url(cx: &Cx, slug: &str, email: &str) -> String {
         .query(OrdersLink {
             status: None,
             q: Some(email),
-            page: None,
+            after: None,
+            before: None,
         })
         .resolve(cx)
 }
@@ -77,7 +83,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<OrdersQuery>(cx)?;
     let q = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let status = query.status.as_deref().and_then(OrderStatus::parse);
-    let page_number = query.page.unwrap_or(1).max(1);
+    let after = query.after.as_deref().and_then(Cursor::parse);
+    let before = query.before.as_deref().and_then(Cursor::parse);
+    let from = PageFrom::of(after.as_ref(), before.as_ref());
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
     let pool = app_context::<Db>(cx);
@@ -85,28 +93,33 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let total = count_orders(pool, &tenant.id, &filter)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    let rows = orders_of_tenant(
-        pool,
-        &tenant.id,
-        &filter,
-        (page_number - 1) * PAGE_SIZE,
-        PAGE_SIZE,
-    )
-    .await
-    .map_err(topcoat::Error::from_anyhow)?;
-    let pages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
+    let listed = orders_of_tenant(pool, &tenant.id, &filter, from, PAGE_SIZE)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let rows = listed.rows;
     let slug = tenant.slug.clone();
     let page_link = {
         let slug = slug.clone();
-        move |page: i64| {
+        move |after: Option<&str>, before: Option<&str>| {
             href!(index, Slug(slug.clone()))
                 .query(OrdersLink {
                     status: status.map(OrderStatus::as_str),
                     q,
-                    page: Some(page),
+                    after,
+                    before,
                 })
                 .resolve(cx)
         }
+    };
+    let newer = listed
+        .newer
+        .map(|cursor| page_link(None, Some(&cursor.param())));
+    let older = listed
+        .older
+        .map(|cursor| page_link(Some(&cursor.param()), None));
+    let summary = match total {
+        1 => "1 order".to_owned(),
+        n => format!("{n} orders"),
     };
     let title = format!("Orders · {}", tenant.name);
 
@@ -167,12 +180,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     )
                 )
-                pager(
-                    page: page_number,
-                    pages: pages,
-                    previous: (page_number > 1).then(|| page_link(page_number - 1)),
-                    next: (page_number < pages).then(|| page_link(page_number + 1)),
-                )
+                cursor_pager(summary: &summary, newer: newer, older: older)
             )
         )
     })

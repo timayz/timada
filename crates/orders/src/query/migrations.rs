@@ -10,8 +10,11 @@ pub const MIGRATION_APP: &str = "orders";
 /// order's row carries the whole order as its page shows it (`state`, the
 /// [`OrderRecord`](crate::OrderRecord) JSON); a cart's row, the payments of
 /// it the provider would not give back (`refused_returns`); and
-/// `orders_order_mails` where each mail to the shopper about an order stands;
-/// `orders_tallies` how many orders and open carts each tenant has, for its
+/// `orders_order_mails` where each mail to the shopper about an order stands.
+/// An order's `search_text` is its reference, e-mail address and name as a
+/// search finds them (`timada_core::db::tenant_search_key`), written once:
+/// none of the three changes after the order is placed. `orders_tallies`
+/// holds how many orders and open carts each tenant has, for its
 /// home (see `ORDERS` and `OPEN_CARTS`).
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
@@ -46,15 +49,18 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 paid_at INTEGER,
                 hold_reminder_at INTEGER,
                 state TEXT NOT NULL,
+                search_text TEXT NOT NULL,
                 PRIMARY KEY (tenant_id, id)
             );
-        CREATE INDEX orders_orders_placed ON orders_orders (tenant_id, placed_at);
+        CREATE INDEX orders_orders_placed ON orders_orders (tenant_id, placed_at, id);
         CREATE INDEX orders_orders_hold_reminder ON orders_orders (hold_reminder_at)
                 WHERE hold_reminder_at IS NOT NULL;
         CREATE INDEX orders_orders_payment_due ON orders_orders (tenant_id, placed_at)
                 WHERE status = 'authorized' OR cancel_requested_at IS NOT NULL
                     OR refund_requested_at IS NOT NULL;
-        CREATE INDEX orders_orders_status ON orders_orders (tenant_id, status, placed_at);
+        CREATE INDEX orders_orders_status ON orders_orders (tenant_id, status, placed_at, id);
+        CREATE INDEX orders_orders_search ON orders_orders USING fts(search_text)
+                WITH (tokenizer = 'ngram', min_gram = 3, max_gram = 3);
         CREATE INDEX orders_orders_discount ON orders_orders (tenant_id, discount_id)
                 WHERE discount_id IS NOT NULL;
         CREATE INDEX orders_orders_email ON orders_orders (tenant_id, email, placed_at);
