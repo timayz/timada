@@ -8,9 +8,16 @@
 //! HTTP (`GET /store/orders/{order_id}/documents`, see [`crate::cart`]).
 //! The storefront draws the PDF from what it was answered.
 
+use std::collections::{HashMap, VecDeque};
+use std::net::IpAddr;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
 use timada_invoicing::IssuedDocument;
 use topcoat_core::context::Cx;
 use topcoat_core::error::Result;
+use topcoat_router::error::too_many_requests;
+use topcoat_router::request::client_ip;
 
 use crate::cart::NO_BODY;
 use crate::context::store;
@@ -62,8 +69,9 @@ impl Store {
             return Ok(None);
         };
         let file_name = timada_invoicing::pdf::file_name(&document);
-        let bytes =
-            tokio::task::spawn_blocking(move || timada_invoicing::pdf::render(&document)).await??;
+        let bytes = timada_invoicing::pdf::render_cached(document)
+            .await?
+            .to_vec();
         Ok(Some(DocumentPdf { file_name, bytes }))
     }
 }
@@ -75,15 +83,84 @@ pub async fn documents(cx: &Cx, order_id: &str) -> Result<Vec<IssuedDocument>> {
     store(cx).documents(order_id).await.map_err(into_error)
 }
 
+/// How many PDFs one address may open within [`PDF_WINDOW`]: far more than
+/// a shopper reads, few enough that a script cannot keep the storefront
+/// drawing them. A document opened again comes from memory; this bounds the
+/// asking itself, each one a call to the dashboard.
+const PDFS_PER_ADDRESS: usize = 30;
+const PDF_WINDOW: Duration = Duration::from_secs(600);
+
+/// Past this many addresses, a call also forgets those that opened nothing
+/// within the window.
+const SWEEP_ABOVE: usize = 10_000;
+
+/// Whether `ip` may open one more PDF now, counting it when it may; the
+/// seconds until it may again when it may not.
+fn allow_pdf(ip: IpAddr, now: Instant) -> Result<(), u64> {
+    static OPENED: OnceLock<Mutex<HashMap<IpAddr, VecDeque<Instant>>>> = OnceLock::new();
+    let mut opened = OPENED
+        .get_or_init(Default::default)
+        .lock()
+        .expect("pdf limit poisoned");
+    if opened.len() > SWEEP_ABOVE {
+        opened.retain(|_, times| {
+            times
+                .back()
+                .is_some_and(|last| now.duration_since(*last) < PDF_WINDOW)
+        });
+    }
+    let times = opened.entry(ip).or_default();
+    while times
+        .front()
+        .is_some_and(|first| now.duration_since(*first) >= PDF_WINDOW)
+    {
+        times.pop_front();
+    }
+    if times.len() >= PDFS_PER_ADDRESS {
+        let first = *times.front().expect("a full window");
+        let wait = PDF_WINDOW.saturating_sub(now.duration_since(first));
+        return Err(wait.as_secs().max(1));
+    }
+    times.push_back(now);
+    Ok(())
+}
+
 /// One of an order's documents as PDF; `None` when it is not one of that
-/// order's (or not issued).
+/// order's (or not issued). An address opening more than
+/// [`PDFS_PER_ADDRESS`] within ten minutes is answered 429.
 pub async fn document_pdf(
     cx: &Cx,
     order_id: &str,
     document_id: &str,
 ) -> Result<Option<DocumentPdf>> {
+    if let Some(ip) = client_ip(cx)
+        && let Err(wait) = allow_pdf(ip, Instant::now())
+    {
+        return Err(too_many_requests(wait).into());
+    }
     store(cx)
         .document_pdf(order_id, document_id)
         .await
         .map_err(into_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_address_opens_so_many_pdfs_per_window() {
+        let ip: IpAddr = "203.0.113.9".parse().unwrap();
+        let other: IpAddr = "203.0.113.10".parse().unwrap();
+        let start = Instant::now();
+        for _ in 0..PDFS_PER_ADDRESS {
+            assert!(allow_pdf(ip, start).is_ok());
+        }
+        assert_eq!(allow_pdf(ip, start), Err(PDF_WINDOW.as_secs()));
+        assert!(allow_pdf(other, start).is_ok(), "each address its own");
+        assert!(
+            allow_pdf(ip, start + PDF_WINDOW).is_ok(),
+            "the window moved"
+        );
+    }
 }

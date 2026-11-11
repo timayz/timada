@@ -29,10 +29,10 @@ pub async fn pdf(cx: &Cx) -> Result<impl IntoResponse> {
         .map_err(|err| topcoat::Error::from_anyhow(err.into()))?
         .ok_or_else(not_found)?;
     let name = timada_invoicing::pdf::file_name(&document);
-    let bytes = tokio::task::spawn_blocking(move || timada_invoicing::pdf::render(&document))
+    let bytes = timada_invoicing::pdf::render_cached(document)
         .await
-        .map_err(|err| topcoat::Error::from_anyhow(err.into()))?
-        .map_err(topcoat::Error::from_anyhow)?;
+        .map_err(topcoat::Error::from_anyhow)?
+        .to_vec();
     Ok((
         [
             (CONTENT_TYPE, "application/pdf".to_owned()),
