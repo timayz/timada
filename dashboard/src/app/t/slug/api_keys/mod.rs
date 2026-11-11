@@ -90,6 +90,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let media_url = app_context::<std::sync::Arc<Media>>(cx).tenant_url(&access.tenant.id);
+    // What the shop's pictures take, against what they may.
+    let usage = app_context::<std::sync::Arc<crate::media::Quota>>(cx)
+        .usage_of(&access.tenant)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let storage_label = match usage.limit {
+        Some(limit) => format!(
+            "{} of {}",
+            crate::media::quota::format_bytes(usage.used),
+            crate::media::quota::format_bytes(limit)
+        ),
+        None => crate::media::quota::format_bytes(usage.used),
+    };
     let api_url = app_context::<Config>(cx)
         .server
         .url
@@ -150,6 +163,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         })
                     )
                     fact(term: "Picture address", <code data-media-url="">(&media_url)</code>)
+                    fact(term: "Picture storage", attrs: attributes! { data-media-usage=(usage.used) }, (&storage_label))
                     fact(term: "Dashboard address", <code data-api-url="">(&api_url)</code>)
                 )
             )

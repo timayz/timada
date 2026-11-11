@@ -535,6 +535,28 @@ no stream read. A miss on `/media` for a file the store knows fetches it from a 
 before answering, so a node that has not got a picture yet serves it all the same; a
 miss for a file the store does not know is a 404 at once, no peer asked.
 
+A tenant's pictures may take `media.tenant_quota_bytes` (5 GiB by default; 0 is no
+quota) unless the platform set a quota apart for it on its admin page
+(`MediaQuotaSet` on the tenant, in MiB on the form); what it uses is the sum of its
+rows in `media_files` (`dashboard/src/media/quota.rs`), shown on its API keys page.
+An upload, a review's photos or an import's picture that would go past it is refused
+(`storage_full`, `review_storage_full`; an import leaves the picture out). The check
+reads the read model as it stands, so two uploads landing together may overshoot by a
+picture. Once a day (`media.reconcile_check_secs`) each node walks `media.dir`
+(`dashboard/src/media/reconcile.rs`): a file the store does not know is deleted once a
+day old (an upload whose commit failed, a node that died between storing and
+recording), a file held at another size than recorded is deleted and wanted again, and
+a file the store knows and the disk lacks is wanted; the run is logged.
+
+In production put a cache in front of `media.public_url` (a CDN, or the proxy's own
+cache): a picture is served with `Cache-Control: public, max-age=31536000, immutable`,
+so the cache may keep it for good, and the nodes then serve each file about once. Have
+the cache serve what it holds when a node is down (`stale-if-error`, or the proxy's
+equivalent), so a storefront kept up by its own copy of the catalog keeps its pictures
+too (#454 covers the HTML; the pictures are the dashboard's). A node rebuilt on a new
+machine should still get `data/media` copied from a peer (`rsync`) before its first
+`serve`; the fetcher and the misses cover what the copy lacks.
+
 ## Reviews
 
 Only a buyer reviews: a review is written from a paid order (its money taken, not only
@@ -856,7 +878,7 @@ work this node also takes on, trusted proxies), `database` (the one file), `auth
 lifetime, sign-in limits, OIDC providers), `mail` (the platform's server), `secrets`
 (the one key the shops' secrets are sealed under; omit it and no shop can connect
 payments, mail servers or shopper accounts), `media` (the pictures' directory and
-public address), `data_keys` (the personal-data key vault), `payments` (Stripe's
+public address, the default quota, the daily reconcile), `data_keys` (the personal-data key vault), `payments` (Stripe's
 address, for the stand-in), `invoicing` (the VAT-number check, the euro reference
 rates), `reviews`
 (the review-request timer), `newsletter` (the send sweep), `automations` (the run

@@ -1408,6 +1408,10 @@ mod tests {
                 &config,
                 false,
                 Evento::new(store.clone()),
+                Arc::new(crate::media::Quota::new(
+                    crate::db::Db::from(store.clone()),
+                    None,
+                )),
                 Arc::new(|_| timada_aliexpress::Share::ALONE),
             )
             .unwrap();

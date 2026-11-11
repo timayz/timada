@@ -55,3 +55,36 @@ async fn suspension_is_idempotent_and_reversible() {
     assert!(!resumed.is_suspended());
     assert_eq!(resumed.name, tenant.name);
 }
+
+#[tokio::test]
+async fn the_platform_sets_a_picture_quota_and_takes_it_back() {
+    let cmd = command().await;
+    let tenant = create_tenant(&cmd, "Acme", &new_id()).await;
+    assert_eq!(tenant.media_quota_bytes, None, "the platform's default");
+
+    cmd.set_media_quota(&tenant.id, Some(2 << 30))
+        .await
+        .unwrap();
+    let with = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(with.media_quota_bytes, Some(2 << 30));
+    // The same again writes nothing.
+    cmd.set_media_quota(&tenant.id, Some(2 << 30))
+        .await
+        .unwrap();
+    assert_eq!(
+        cmd.load_tenant(&tenant.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .aggregate_version,
+        with.aggregate_version
+    );
+    let err = cmd.set_media_quota(&tenant.id, Some(0)).await.unwrap_err();
+    assert!(matches!(err, TenancyError::InvalidMediaQuota), "{err}");
+
+    cmd.set_media_quota(&tenant.id, None).await.unwrap();
+    let back = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(back.media_quota_bytes, None);
+    let err = cmd.set_media_quota(&new_id(), None).await.unwrap_err();
+    assert!(matches!(err, TenancyError::NotFound), "{err}");
+}

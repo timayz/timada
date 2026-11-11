@@ -65,6 +65,8 @@ pub struct Aliexpress {
     budget: CallBudget,
     /// Which of the nodes up this one is, at the moment of asking.
     share: ShareOf,
+    /// How much disk a tenant's pictures may take.
+    quota: Arc<crate::media::Quota>,
     /// The reads after pushes that may run at once ([`PUSH_READS`]).
     push_reads: tokio::sync::Semaphore,
     /// The reads after pushes under way or waiting their turn.
@@ -88,6 +90,7 @@ impl Aliexpress {
         config: &AliexpressConfig,
         allow_private_hosts: bool,
         platform: Executor,
+        quota: Arc<crate::media::Quota>,
         share: ShareOf,
     ) -> anyhow::Result<Arc<Self>> {
         // reqwest's rustls needs the process-wide crypto provider named.
@@ -127,6 +130,7 @@ impl Aliexpress {
             order_read_every_secs: config.order_read_every_secs.max(1),
             parcel_read_every_secs: config.parcel_read_every_secs.max(1),
             budget: CallBudget::new(config.calls_per_day),
+            quota,
             share,
             push_reads: tokio::sync::Semaphore::new(PUSH_READS),
             push_reads_running: std::sync::atomic::AtomicUsize::new(0),
@@ -390,13 +394,14 @@ impl Aliexpress {
         }
     }
 
-    /// Keeps a tenant's imported pictures.
-    pub fn images(&self, media: Arc<Media>, tenant_id: &str) -> MediaImages {
+    /// Keeps a tenant's imported pictures, within its quota.
+    pub fn images(&self, media: Arc<Media>, tenant: &TenantState) -> MediaImages {
         MediaImages::new(
             self.pictures.clone(),
             media,
-            tenant_id,
+            tenant,
             !self.allow_private_hosts,
+            self.quota.clone(),
         )
     }
 
@@ -717,7 +722,7 @@ impl Aliexpress {
             return Ok(AddResult::NotLinked);
         }
         let catalog = timada_catalog::Command::new(store.clone(), &tenant.id);
-        let images = self.images(media, &tenant.id);
+        let images = self.images(media, tenant);
         let outcome = timada_aliexpress::add_combinations(
             &catalog,
             actor,

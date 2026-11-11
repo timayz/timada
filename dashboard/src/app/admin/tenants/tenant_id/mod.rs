@@ -1,5 +1,6 @@
 //! `/admin/tenants/{tenant_id}`: one tenant and the actions on it.
 
+pub mod quota;
 pub mod resume;
 pub mod suspend;
 
@@ -28,6 +29,7 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::db::Db;
+use crate::media::quota::format_bytes;
 use crate::store_api::StoreConnections;
 use crate::ui::{
     LINK, Shell, document, empty_row, fact, facts, format_time, icons, notice, page_header,
@@ -79,6 +81,28 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             .unwrap_or_else(|| user_id.to_owned())
     };
     let suspended = tenant.is_suspended();
+    // What its pictures take, against what they may.
+    let usage = app_context::<Arc<crate::media::Quota>>(cx)
+        .usage_of(&tenant)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let pictures_label = match usage.limit {
+        Some(limit) => format!(
+            "{} of {}{}",
+            format_bytes(usage.used),
+            format_bytes(limit),
+            if usage.own_limit {
+                ""
+            } else {
+                " (the platform's default)"
+            }
+        ),
+        None => format!("{}, no quota", format_bytes(usage.used)),
+    };
+    let quota_mib = tenant
+        .media_quota_bytes
+        .map(|bytes| (bytes / (1024 * 1024)).to_string())
+        .unwrap_or_default();
     let title = format!("{} · Tenants", tenant.name);
     let pending_label = format!(
         "{pending} pending invitation{}",
@@ -107,6 +131,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         attrs: attributes! { data-tenant-status="" },
                         (status_label(suspended))
                         if let Some(reason) = &tenant.suspended { ": " (reason) }
+                    )
+                    fact(
+                        term: "Pictures",
+                        attrs: attributes! { data-tenant-pictures=(usage.used) },
+                        (&pictures_label)
                     )
                     fact(
                         term: "Storefronts",
@@ -144,6 +173,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     )
                 )
+            )
+
+            section_card(
+                title: Some("Picture storage"),
+                description: Some("How much disk the tenant's pictures may take, in their two renditions. Blank puts it back on the platform's default."),
+                <form method="post" action=(href!(quota::quota, TenantId(tenant.id.clone()))) class="flex flex-wrap items-end gap-3">
+                    field(
+                        attrs: attributes! { class="grow sm:max-w-xs" },
+                        field_label(attrs: attributes! { for="media-quota" }, "Quota, in MiB")
+                        input(attrs: attributes! { id="media-quota" name="quota_mib" type="number" min="1" step="1" inputmode="numeric" value=(&quota_mib) })
+                    )
+                    button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, "Set the quota")
+                </form>
             )
 
             section_card(

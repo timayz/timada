@@ -755,6 +755,8 @@ mod tests {
                 &crate::config::MediaConfig {
                     dir: std::env::temp_dir(),
                     public_url: "https://media.example".to_owned(),
+                    tenant_quota_bytes: 0,
+                    reconcile_check_secs: 86_400,
                 },
                 None,
             )))

@@ -15,7 +15,7 @@ use topcoat::{
 
 use super::super::{ProductId, Tab, act, product_tab_url};
 use crate::app::t::slug::require_tenant;
-use crate::media::Media;
+use crate::media::{Media, Quota, Room, STORAGE_FULL};
 
 /// Takes an uploaded picture: renders it into the two sizes the shop keeps,
 /// writes them, then records it. A commit that fails takes the files with
@@ -64,6 +64,14 @@ pub async fn upload(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
         Ok(rendered) => rendered,
         Err(refusal) => return refuse(refusal.code()),
     };
+    // Within what the shop's pictures may take.
+    let room = app_context::<Arc<Quota>>(cx)
+        .room_for(&access.tenant, rendered.picture.bytes())
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    if let Room::Full { .. } = room {
+        return refuse(STORAGE_FULL);
+    }
     let image_id = new_image_id();
     act(
         cx,
