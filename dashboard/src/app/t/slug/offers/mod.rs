@@ -9,7 +9,7 @@ pub mod offer_id;
 
 use std::collections::HashMap;
 
-use timada_catalog::{ProductFilter, ProductStatus, format_money, products_of_tenant};
+use timada_catalog::{ProductFilter, ProductPage, ProductStatus, format_money, products_of_tenant};
 use timada_discounts::{MAX_OFFER_TITLE_LEN, Offer, unix_now};
 use timada_tenancy::{PERMISSION_DISCOUNTS_MANAGE, PERMISSION_DISCOUNTS_READ};
 use topcoat::{
@@ -74,11 +74,12 @@ async fn catalog_items(
         pool,
         &access.tenant.id,
         &ProductFilter::default(),
-        0,
+        ProductPage::First,
         PICKER_PRODUCTS,
     )
     .await
-    .map_err(topcoat::Error::from_anyhow)?;
+    .map_err(topcoat::Error::from_anyhow)?
+    .rows;
     let catalog = timada_catalog::Command::new(access.executor()?.clone(), access.tenant_id());
     let mut items = Vec::new();
     let mut products = Vec::new();

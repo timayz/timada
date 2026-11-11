@@ -289,9 +289,52 @@ pub fn fts_query(q: &str) -> Option<String> {
     (cleaned.chars().count() >= 3).then(|| format!("\"{cleaned}\""))
 }
 
+/// What sets a tenant's rows apart in a full-text index shared by every
+/// tenant: the last characters of its id, which are the random ones of a
+/// ULID. Other tenants may share some of its runs of three; the query still
+/// compares `tenant_id`, the token only spares it everyone else's matches.
+fn tenant_token(tenant_id: &str) -> String {
+    let folded: Vec<char> = search_key(tenant_id)
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect();
+    folded[folded.len().saturating_sub(16)..].iter().collect()
+}
+
+/// Between the token and the text: a control character, which no query
+/// holds ([`fts_query`] drops them), so no phrase runs from one into the
+/// other.
+const TOKEN_END: char = '\u{1f}';
+
+/// [`search_key`] for a column of a full-text index shared by every tenant:
+/// the tenant's token first, which [`tenant_fts_query`] asks for too.
+pub fn tenant_search_key(tenant_id: &str, text: &str) -> String {
+    format!("{}{TOKEN_END}{}", tenant_token(tenant_id), search_key(text))
+}
+
+/// [`fts_query`] over columns made by [`tenant_search_key`]: the phrase and
+/// the tenant's token both required, so the index answers with that
+/// tenant's rows only.
+pub fn tenant_fts_query(tenant_id: &str, q: &str) -> Option<String> {
+    let phrase = fts_query(q)?;
+    Some(format!("+\"{}\" +{phrase}", tenant_token(tenant_id)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tenant_keys_lead_with_the_random_end_of_the_id() {
+        let id = "01JC5Z8Q7M3N4P5R6S7T8V9W0X";
+        assert_eq!(tenant_search_key(id, "Mug"), "3n4p5r6s7t8v9w0x\u{1f}mug");
+        assert_eq!(
+            tenant_fts_query(id, "Thé"),
+            Some("+\"3n4p5r6s7t8v9w0x\" +\"the\"".into())
+        );
+        assert_eq!(tenant_search_key("tenant-zeta", ""), "tenantzeta\u{1f}");
+        assert_eq!(tenant_fts_query(id, "ab"), None);
+    }
 
     #[test]
     fn search_keys_fold_case_and_accents() {

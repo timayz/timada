@@ -7,8 +7,8 @@ pub mod create;
 pub mod product_id;
 
 use timada_catalog::{
-    CatalogError, Command, MAX_NAME_LEN, ProductFilter, ProductStatus, categories_of_tenant,
-    count_products, products_of_tenant,
+    CatalogError, Command, MAX_NAME_LEN, ProductCursor, ProductFilter, ProductPage, ProductStatus,
+    categories_of_tenant, count_products, products_of_tenant,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
@@ -30,8 +30,8 @@ use crate::components::table::{
 };
 use crate::db::Db;
 use crate::ui::{
-    LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
-    section_card, status_badge,
+    LINK, Shell, Tone, cursor_pager, document, empty_row, filter_bar, format_time, notice,
+    page_header, section_card, status_badge,
 };
 
 const PAGE_SIZE: i64 = 50;
@@ -45,8 +45,10 @@ struct ProductsQuery {
     /// One of the stored status values, or `all` for every status; absent
     /// (or anything else) lists the published products.
     status: Option<String>,
-    /// 1-based.
-    page: Option<i64>,
+    /// The cursor of the row the page starts after (older products).
+    after: Option<String>,
+    /// The cursor of the row the page ends before (newer products).
+    before: Option<String>,
     error: Option<String>,
     message: Option<String>,
 }
@@ -60,7 +62,9 @@ struct ProductsLink<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    page: Option<i64>,
+    after: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before: Option<&'a str>,
 }
 
 /// The value of the status filter that lists every product.
@@ -149,7 +153,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let status = status_filter(query.status.as_deref());
     // What the links carry: the parameter as given, when it was.
     let status_param = query.status.as_deref().map(str::trim);
-    let page_number = query.page.unwrap_or(1).max(1);
+    let after = query.after.as_deref().and_then(ProductCursor::parse);
+    let before = query.before.as_deref().and_then(ProductCursor::parse);
+    let page = match (&after, &before) {
+        (Some(after), _) => ProductPage::Older(after),
+        (None, Some(before)) => ProductPage::Newer(before),
+        (None, None) => ProductPage::First,
+    };
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
     let pool = app_context::<Db>(cx);
@@ -160,32 +170,37 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let total = count_products(pool, &tenant.id, &filter)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    let rows = products_of_tenant(
-        pool,
-        &tenant.id,
-        &filter,
-        (page_number - 1) * PAGE_SIZE,
-        PAGE_SIZE,
-    )
-    .await
-    .map_err(topcoat::Error::from_anyhow)?;
+    let listed = products_of_tenant(pool, &tenant.id, &filter, page, PAGE_SIZE)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let rows = listed.rows;
     let category_rows = categories_of_tenant(pool, &tenant.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    let pages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
     let slug = tenant.slug.clone();
     let page_link = {
         let slug = slug.clone();
-        move |page: i64| {
+        move |after: Option<&str>, before: Option<&str>| {
             href!(index, Slug(slug.clone()))
                 .query(ProductsLink {
                     q,
                     category,
                     status: status_param,
-                    page: Some(page),
+                    after,
+                    before,
                 })
                 .resolve(cx)
         }
+    };
+    let newer = listed
+        .newer
+        .map(|cursor| page_link(None, Some(&cursor.param())));
+    let older = listed
+        .older
+        .map(|cursor| page_link(Some(&cursor.param()), None));
+    let summary = match total {
+        1 => "1 product".to_owned(),
+        n => format!("{n} products"),
     };
     let title = format!("Products · {}", tenant.name);
 
@@ -253,12 +268,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     )
                 )
-                pager(
-                    page: page_number,
-                    pages: pages,
-                    previous: (page_number > 1).then(|| page_link(page_number - 1)),
-                    next: (page_number < pages).then(|| page_link(page_number + 1)),
-                )
+                cursor_pager(summary: &summary, newer: newer, older: older)
             )
 
             if can_manage {
