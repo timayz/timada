@@ -325,6 +325,8 @@ The run's subject is the cart: a condition sees its total (what the shopper was
 about to pay), its items and whether it was **ordered since**, read when the run
 reaches it, so "Wait 23 hours, then if not ordered since, e-mail a reminder" is a
 reminder a day later. A run whose cart becomes an order is cancelled before its
-next step. **E-mail the customer** goes to the address of the cart's latest
-request, as a mail with nothing of an order (`AutomationCustomer`); linking back
-to the cart itself is not offered yet.
+next step; one whose cart was dropped meanwhile, nobody having touched it for
+`[carts] idle_days`, finds it gone: a condition sees nothing of it, and a mail or
+a message about it is skipped. **E-mail the customer** goes to the address of the
+cart's latest request, as a mail with nothing of an order (`AutomationCustomer`);
+linking back to the cart itself is not offered yet.

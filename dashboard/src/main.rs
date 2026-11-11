@@ -11,6 +11,7 @@ mod config;
 mod db;
 mod ecb;
 mod hold_reminders;
+mod idle_carts;
 mod invitation_mails;
 mod invoicing;
 mod key_vault;

@@ -261,6 +261,14 @@ by construction.
    credit notes (`/store/orders/{order_id}/documents`, which the storefront draws as PDF
    itself) and where its parcels are (`/store/orders/{order_id}/parcels`).
    An id the tenant has no cart or order under, another tenant's included, is 404.
+   A cart starts with its first item, checked first and written in one go, so an item
+   refused leaves nothing; each key, and each visitor at a shop (`X-Shopper-IP`), starts
+   only so many within `[store]`'s window (`carts_per_key`, `carts_per_ip`; 429
+   `too_many_carts`). A cart nobody touched for `[carts] idle_days`, with no payment
+   open, none on its way back and no request to pay unanswered, is dropped
+   (`Cart::Expired`, `idle_carts.rs`: each node on a timer, its own part of the carts
+   among the nodes up): every command and reader then finds no such cart, a storefront
+   starts another, and its row leaves `orders_carts`; its events stay in the store.
    What a shopper does is therefore written by the dashboard in the key's tenant, and
    a storefront's connection never appends: a read naming any other stream of the
    tenant, a shopper's sign-in challenge say, fails, and so does every write. Scopes are strings recorded with
@@ -903,7 +911,8 @@ address, for the stand-in), `invoicing` (the VAT-number check, the euro referenc
 rates), `reviews`
 (the review-request timer), `newsletter` (the send sweep), `automations` (the run
 timer, the abandoned-checkout delay), `store` (the limits on what a storefront hands
-in), `invitations` (their limits), `aliexpress` (the platform's app), `store_api`
+in and the carts it starts), `carts` (how long an idle cart is kept), `invitations`
+(their limits), `aliexpress` (the platform's app), `store_api`
 (omit to not expose it), `cluster` (omit for a single node), `monitoring`.
 `config/dev.local.toml` is the developer's own file and is ignored by git;
 `config/e2e.toml` is what the browser suite runs on. Configuration is written for

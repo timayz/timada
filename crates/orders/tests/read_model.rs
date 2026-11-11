@@ -17,7 +17,7 @@ async fn orders_and_carts_are_listed() {
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
 
     let left = cart_with(&orders, &mug, 3).await;
-    let _empty = orders.create_cart(SHOPPER).await.unwrap();
+    let _emptied = emptied_cart(&orders, &mug).await;
     let ordered = cart_with(&orders, &mug, 2).await;
     let placed = pay(&orders, &ordered, checkout()).await;
     let cancelled_cart = cart_with(&orders, &mug, 1).await;
@@ -421,4 +421,56 @@ async fn an_orders_row_carries_the_order_whole_with_its_mails_and_refused_return
         cart_refused_returns(&pool, TENANT, &cart_id).await.unwrap(),
         vec![(second.payment_id, "charge already captured".to_owned())]
     );
+}
+
+#[tokio::test]
+async fn a_dropped_cart_leaves_the_carts_table_and_a_replay_leaves_it_out() {
+    const IDLE: u64 = 30 * 24 * 60 * 60;
+    let (executor, pool) = executor_with_pool().await;
+    let orders = Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let kept = cart_with(&orders, &mug, 1).await;
+    let left = cart_with(&orders, &mug, 2).await;
+    let follow = || async {
+        read_model_subscription::<evento::Turso>(pool.clone())
+            .run_once(&executor)
+            .await
+            .unwrap();
+    };
+    let listed = || async {
+        let mut ids: Vec<String> = open_carts(&pool, TENANT, 0, 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
+        ids.sort();
+        ids
+    };
+    follow().await;
+    let mut both = vec![kept.clone(), left.clone()];
+    both.sort();
+    assert_eq!(listed().await, both);
+
+    let touched = orders.load_cart(&left).await.unwrap().unwrap().updated_at;
+    let dropped = orders
+        .expire_cart(DASHBOARD, &left, touched + IDLE, IDLE)
+        .await
+        .unwrap();
+    assert!(dropped);
+    follow().await;
+    assert_eq!(listed().await, vec![kept.clone()]);
+
+    // A rebuild reads every event again into an empty table: the dropped
+    // cart's first events do not put its row back on the way.
+    pool.execute("DELETE FROM orders_carts", ()).await.unwrap();
+    pool.execute("DELETE FROM subscriber", ()).await.unwrap();
+    follow().await;
+    assert_eq!(listed().await, vec![kept]);
+    let rows: i64 = pool
+        .fetch_scalar("SELECT count(*) FROM orders_carts", ())
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
 }

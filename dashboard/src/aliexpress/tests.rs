@@ -545,14 +545,9 @@ impl Shop {
                 .unwrap();
         }
         let orders = timada_orders::Command::new(self.store.clone(), &self.tenant.id);
-        let cart_id = orders
-            .create_cart(timada_orders::STOREFRONT_ACTOR)
-            .await
-            .unwrap();
         orders
-            .add_to_cart(
+            .start_cart(
                 timada_orders::STOREFRONT_ACTOR,
-                &cart_id,
                 timada_orders::CartItem {
                     product_id: self.product_id.clone(),
                     variant_id: Some(product.variants[0].id.clone()),
@@ -1604,14 +1599,9 @@ async fn a_cart_add_of_a_product_not_imported_asks_for_nothing() {
         .unwrap();
     catalog.publish_product(ALICE, &mug.id).await.unwrap();
     let orders = timada_orders::Command::new(shop.store.clone(), &shop.tenant.id);
-    let cart_id = orders
-        .create_cart(timada_orders::STOREFRONT_ACTOR)
-        .await
-        .unwrap();
     orders
-        .add_to_cart(
+        .start_cart(
             timada_orders::STOREFRONT_ACTOR,
-            &cart_id,
             timada_orders::CartItem {
                 product_id: mug.id.clone(),
                 variant_id: None,

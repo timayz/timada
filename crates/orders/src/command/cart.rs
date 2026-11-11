@@ -7,13 +7,13 @@ use timada_discounts::{
 use ulid::Ulid;
 
 use crate::aggregator::{
-    Created, DiscountApplied, DiscountRemoved, ItemAdded, ItemRemoved, QuantitySet,
+    Created, DiscountApplied, DiscountRemoved, Expired, ItemAdded, ItemRemoved, QuantitySet,
 };
 use crate::error::OrderError;
 use crate::value_object::{MAX_CART_LINES, MAX_LINE_QUANTITY};
 
-use super::CartState;
 use super::checkout::{QuoteSource, StoreCatalog, require_in_stock, require_sellable};
+use super::{CartState, cart_projection};
 
 /// A product, or one variant of it, and how many.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -26,23 +26,85 @@ pub struct CartItem {
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
-    /// Starts an empty cart and returns its id.
-    pub async fn create_cart(
+    /// Starts a cart holding `item` and returns its id. The item is checked
+    /// as [`add_to_cart`](Self::add_to_cart) checks one, before anything is
+    /// written, and the cart is written whole in one go: an item refused
+    /// leaves no cart behind.
+    pub async fn start_cart(
         &self,
         actor: &str,
+        item: CartItem,
         routing_key: Option<String>,
     ) -> Result<String, OrderError> {
+        if !(1..=MAX_LINE_QUANTITY).contains(&item.quantity) {
+            return Err(OrderError::InvalidQuantity);
+        }
         let cart_id = Ulid::generate().to_string();
+        self.require_sellable(&item).await?;
+        self.require_in_stock(
+            &cart_id,
+            &item.product_id,
+            item.variant_id.as_deref(),
+            item.quantity,
+        )
+        .await?;
         evento::append(&cart_id)
             .original_version(0)
             .routing_key_opt(routing_key)
             .event(&Created {
                 created_by: actor.to_owned(),
             })
+            .event(&ItemAdded {
+                product_id: item.product_id,
+                variant_id: item.variant_id,
+                quantity: item.quantity,
+                added_by: actor.to_owned(),
+            })
             .tenant(&self.tenant)
             .commit(&self.executor)
             .await?;
         Ok(cart_id)
+    }
+
+    /// Drops the cart if nobody touched it for `idle_secs` by `now` and
+    /// nothing about it could still move money ([`CartState::is_idle`]):
+    /// `Ok(true)` when it was dropped, `Ok(false)` for a cart that is not
+    /// there, was dropped already or is not idle. Written at the version
+    /// read, so a change landing first (the shopper back, another node
+    /// dropping it) keeps it, for another look to judge.
+    pub async fn expire_cart(
+        &self,
+        actor: &str,
+        cart_id: &str,
+        now: u64,
+        idle_secs: u64,
+        routing_key: Option<String>,
+    ) -> Result<bool, OrderError> {
+        let Some(cart) = cart_projection()
+            .load(cart_id)
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await?
+        else {
+            return Ok(false);
+        };
+        if !cart.is_idle(now, idle_secs) {
+            return Ok(false);
+        }
+        let written = cart
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&Expired {
+                expired_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await;
+        match written {
+            Ok(_) => Ok(true),
+            Err(evento::WriteError::InvalidOriginalVersion) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
     }
 
     /// Adds `quantity` of a product on sale to the cart, on the line of that

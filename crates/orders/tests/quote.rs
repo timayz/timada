@@ -42,9 +42,8 @@ async fn the_shown_quote_is_priced_from_the_read_model_and_agrees_with_the_exact
         .set_default_delivery_days(ALICE, Some(DeliveryDays { min: 2, max: 4 }))
         .await
         .unwrap();
-    let cart_id = orders.create_cart(SHOPPER).await.unwrap();
-    orders
-        .add_to_cart(SHOPPER, &cart_id, item(&mug, None, 2))
+    let cart_id = orders
+        .start_cart(SHOPPER, item(&mug, None, 2))
         .await
         .unwrap();
     let cart = orders
@@ -95,9 +94,8 @@ async fn the_shown_quote_reads_stock_and_sale_from_the_read_model() {
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
     let (mat, beige, _blue) = varied_product(&catalog, "Mat").await;
     catalog.set_stock(ALICE, &mug, None, 1).await.unwrap();
-    let cart_id = orders.create_cart(SHOPPER).await.unwrap();
-    orders
-        .add_to_cart(SHOPPER, &cart_id, item(&mug, None, 1))
+    let cart_id = orders
+        .start_cart(SHOPPER, item(&mug, None, 1))
         .await
         .unwrap();
     let cart = orders

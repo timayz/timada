@@ -6,6 +6,10 @@ pub enum OrderError {
     CartNotFound,
     #[error("this cart has already been ordered")]
     CheckedOut,
+    /// The storefront started as many carts as the dashboard lets it, for
+    /// this visitor or for every visitor, within the window: try later.
+    #[error("too many carts started: try again in a few minutes")]
+    TooManyCarts,
     #[error("a quantity is a whole number from 1 to 99")]
     InvalidQuantity,
     #[error("a cart holds at most fifty different items")]
@@ -164,6 +168,7 @@ impl OrderError {
         Some(match self {
             Self::CartNotFound => "cart_not_found",
             Self::CheckedOut => "cart_checked_out",
+            Self::TooManyCarts => crate::TOO_MANY_CARTS,
             Self::InvalidQuantity => "invalid_quantity",
             Self::TooManyLines => "too_many_lines",
             Self::Unavailable { .. } => "product_unavailable",

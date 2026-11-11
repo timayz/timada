@@ -5,7 +5,8 @@
 //!
 //! Each handler reloads the strict write model of the stream the event
 //! belongs to and rewrites its row, so delivery may repeat (the subscription
-//! is at-least-once) without the row drifting. One subscription follows
+//! is at-least-once) without the row drifting; a cart dropped for idleness
+//! (`Cart::Expired`) has its row deleted instead. One subscription follows
 //! every tenant's streams: each row carries the tenant of the event that made
 //! it, and it writes into the read-model database it is given.
 
@@ -94,6 +95,16 @@ async fn on_cart_event<E: Executor>(
     else {
         return Ok(());
     };
+    // A dropped cart leaves the table; the load reads the stream to its end,
+    // so a replay never puts its row back on the way there.
+    if cart.is_expired() {
+        db.execute(
+            "DELETE FROM orders_carts WHERE tenant_id = ?1 AND id = ?2",
+            (event.tenant.as_str(), cart.id.as_str()),
+        )
+        .await?;
+        return Ok(());
+    }
     upsert_cart(&db, &event.tenant, &cart).await
 }
 

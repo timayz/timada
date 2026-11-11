@@ -12,7 +12,8 @@
 //! An id the tenant has no cart or order under is 404 `{"error":
 //! "cart_not_found"}` (or `order_not_found`), another tenant's included: the
 //! gateway is pinned to the key's tenant, so an id from elsewhere is simply
-//! not there. A refusal to show the shopper is 422 with
+//! not there. So is a cart dropped after lying idle (`Cart::Expired`, see
+//! [`crate::idle_carts`]). A refusal to show the shopper is 422 with
 //! [`timada_orders::wire::Refusal`]; the shop not taking writes for the
 //! moment is 503 with `writes_paused`. Bodies and answers are JSON, the
 //! shapes those of [`timada_orders::wire`]. The routes under
@@ -107,17 +108,13 @@ pub async fn cart(orders: &Command<Executor>, db: &Db, cart_id: &str) -> anyhow:
 }
 
 /// `POST /store/carts` with a [`CartItem`]: starts a cart holding it and
-/// answers 201 with its id ([`Started`]). A refusal of the item is answered
-/// as such and the storefront learns no id: the cart started for it stays
-/// empty in the tenant's store, as it did when the storefront itself wrote
-/// the two events.
+/// answers 201 with its id ([`Started`]). The item is checked before the
+/// cart is written, in one write: a refusal of the item is answered as such
+/// and leaves nothing in the tenant's store. How many carts a storefront
+/// may start is the route's to hold ([`crate::rate_limit::allow_new_cart`]).
 pub async fn start(orders: &Command<Executor>, item: CartItem) -> anyhow::Result<Answer> {
-    let cart_id = match orders.create_cart(STOREFRONT_ACTOR).await {
-        Ok(id) => id,
-        Err(err) => return refused(err),
-    };
-    match orders.add_to_cart(STOREFRONT_ACTOR, &cart_id, item).await {
-        Ok(_) => Ok((
+    match orders.start_cart(STOREFRONT_ACTOR, item).await {
+        Ok(cart_id) => Ok((
             StatusCode::CREATED,
             serde_json::to_value(Started { id: cart_id })?,
         )),

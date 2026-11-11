@@ -31,16 +31,16 @@ use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BusinessBuyersAccepted, BusinessBuyersRefused,
     BuyerIdentified, CancellationRequested, Cancelled, CaptureFailed, CaptureRequested, CheckedOut,
     CheckoutClaimed, CheckoutRequested, Claimed, Created, DiscountApplied, DiscountGranted,
-    DiscountRemoved, Discounted, Fulfilled, HoldLapseReminded, InvoicingFailed, InvoicingRequested,
-    ItemAdded, ItemRemoved, LanguageGiven, LanguageSet, MailClaimed, MailDeferred, MailFailed,
-    MailSent, MailUndeliverable, MethodAdded, MethodChanged, MethodRemoved, NewsletterOptInSet,
-    NewsletterOptedIn, Owed as MailOwed, Paid, PaymentCancelled, PaymentRefused, PaymentReleased,
-    PaymentRequested, PaymentReturnRefused, PaymentReturnRequested, PaymentReturned,
-    PaymentsDisabled, PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded,
-    Released as ReferenceReleased, SettledOutside, ShippingCharged, ShippingGranted,
-    ShippingMethodChosen, StorefrontAddressCleared, StorefrontAddressSet, SupplierOrderRefused,
-    SupplierOrderRuledOut, SupplierOrderStarted, SupplierOrderUncertain, TimeZoneGiven,
-    TimeZoneSet,
+    DiscountRemoved, Discounted, Expired, Fulfilled, HoldLapseReminded, InvoicingFailed,
+    InvoicingRequested, ItemAdded, ItemRemoved, LanguageGiven, LanguageSet, MailClaimed,
+    MailDeferred, MailFailed, MailSent, MailUndeliverable, MethodAdded, MethodChanged,
+    MethodRemoved, NewsletterOptInSet, NewsletterOptedIn, Owed as MailOwed, Paid, PaymentCancelled,
+    PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturnRefused,
+    PaymentReturnRequested, PaymentReturned, PaymentsDisabled, PaymentsEnabled, Placed,
+    QuantitySet, RefundRequested, Refunded, Released as ReferenceReleased, SettledOutside,
+    ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
+    StorefrontAddressSet, SupplierOrderRefused, SupplierOrderRuledOut, SupplierOrderStarted,
+    SupplierOrderUncertain, TimeZoneGiven, TimeZoneSet,
 };
 use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
 
@@ -271,11 +271,34 @@ pub struct CartState {
     pub created_at: u64,
     /// Unix seconds of the last event.
     pub updated_at: u64,
+    /// Unix seconds of `Expired`, once the cart was dropped. A storefront is
+    /// never answered about such a cart, so this does not travel.
+    #[serde(skip)]
+    pub expired_at: Option<u64>,
 }
 
 impl CartState {
     pub fn is_checked_out(&self) -> bool {
         self.order_id.is_some()
+    }
+
+    /// Whether the cart was dropped, nobody having touched it for long:
+    /// [`Command::load_cart`] no longer finds it.
+    pub fn is_expired(&self) -> bool {
+        self.expired_at.is_some()
+    }
+
+    /// Whether the cart may be dropped at `now` (unix seconds): not an
+    /// order, not dropped already, no event for `idle_secs`, and nothing
+    /// about it that could still move money: no payment open, none on its
+    /// way back, no request to pay waiting for its answer.
+    pub fn is_idle(&self, now: u64, idle_secs: u64) -> bool {
+        !self.is_checked_out()
+            && !self.is_expired()
+            && !self.is_paying()
+            && self.return_requested_at().is_none()
+            && self.unanswered_since().is_none()
+            && now.saturating_sub(self.updated_at) >= idle_secs
     }
 
     /// How many items, all lines together.
@@ -440,6 +463,7 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_language_given())
         .handler(on_time_zone_given())
         .handler(on_newsletter_opted_in())
+        .handler(on_expired())
         .strict()
 }
 
@@ -496,6 +520,13 @@ async fn on_item_removed(event: Event<ItemRemoved>, cart: &mut CartState) -> any
 #[evento::handler]
 async fn on_checked_out(event: Event<CheckedOut>, cart: &mut CartState) -> anyhow::Result<()> {
     cart.order_id = Some(event.data.order_id.to_owned());
+    cart.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_expired(event: Event<Expired>, cart: &mut CartState) -> anyhow::Result<()> {
+    cart.expired_at = Some(event.timestamp);
     cart.updated_at = event.timestamp;
     Ok(())
 }
@@ -1895,12 +1926,16 @@ async fn on_order_mail_failed(
 // =============================================================================
 
 impl<E: Executor> Command<E> {
+    /// The cart, or `None` for one the tenant has not, or no longer has: a
+    /// cart dropped for idleness ([`CartState::is_expired`]) is gone for
+    /// every command and every reader but the read model.
     pub async fn load_cart(&self, cart_id: &str) -> anyhow::Result<Option<CartState>> {
-        cart_projection()
+        Ok(cart_projection()
             .load(cart_id)
             .tenant(&self.tenant)
             .execute(&self.executor)
-            .await
+            .await?
+            .filter(|cart| !cart.is_expired()))
     }
 
     pub async fn load_order(&self, order_id: &str) -> anyhow::Result<Option<OrderState>> {

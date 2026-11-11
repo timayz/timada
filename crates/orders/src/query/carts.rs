@@ -68,8 +68,8 @@ pub async fn count_open_carts(db: &Db, tenant_id: &str) -> anyhow::Result<i64> {
     .await
 }
 
-/// Where a page of [`paying_carts_before`] stopped: the last row's
-/// `updated_at` and `id`. The next page starts after it.
+/// Where a page of [`paying_carts_before`] or [`idle_carts_before`] stopped:
+/// the last row's `updated_at` and `id`. The next page starts after it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CartCursor {
     pub updated_at: i64,
@@ -89,12 +89,13 @@ impl From<&CartRow> for CartCursor {
 /// at `before` (unix seconds) or earlier: the shops a sweep of lapsed
 /// checkouts has anything to look at for. Each is then paged through
 /// [`paying_carts_before`] on its own, so one shop's rows never hide
-/// another's.
+/// another's. Read from `orders_carts_paying`, which holds the paying carts
+/// only: a handful, however many carts the shops keep.
 pub async fn paying_tenants_before(db: &Db, before: i64) -> anyhow::Result<Vec<String>> {
     let rows: Vec<(String,)> = db
         .fetch_all(
             "SELECT DISTINCT tenant_id FROM orders_carts
-             WHERE status = 'paying' AND order_id IS NULL AND updated_at <= ?1
+             WHERE status = 'paying' AND updated_at <= ?1
              ORDER BY tenant_id",
             (before,),
         )
@@ -120,10 +121,56 @@ pub async fn paying_carts_before(
     db.fetch_all(
         "SELECT tenant_id, id, order_id, status, line_count, item_count, created_at, updated_at
          FROM orders_carts
-         WHERE tenant_id = ?1 AND status = 'paying' AND order_id IS NULL AND updated_at <= ?2
+         WHERE tenant_id = ?1 AND status = 'paying' AND updated_at <= ?2
            AND (updated_at > ?3 OR (updated_at = ?3 AND id > ?4))
          ORDER BY updated_at, id LIMIT ?5",
         (tenant_id, before, after_updated_at, after_id, limit),
+    )
+    .await
+}
+
+/// A cart a look for idle ones may drop: whose it is, and where the look
+/// goes on after it.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+pub struct IdleCart {
+    pub tenant_id: String,
+    pub id: String,
+    /// Unix seconds of its last change.
+    pub updated_at: i64,
+}
+
+impl From<&IdleCart> for CartCursor {
+    fn from(row: &IdleCart) -> Self {
+        Self {
+            updated_at: row.updated_at,
+            id: row.id.clone(),
+        }
+    }
+}
+
+/// The carts of every tenant last changed at `before` (unix seconds) or
+/// earlier that, as the read model sees them, nothing could still move money
+/// for: no order, no payment open, none on its way back, no request to pay
+/// unanswered. What a look for idle carts may drop; the write model decides
+/// each ([`CartState::is_idle`](crate::CartState::is_idle)). A page of
+/// `limit` rows, the ones after `after` when given, oldest first. Read from
+/// `orders_carts_idle`, so a look walks the idle carts, not every open one.
+pub async fn idle_carts_before(
+    db: &Db,
+    before: i64,
+    after: Option<&CartCursor>,
+    limit: i64,
+) -> anyhow::Result<Vec<IdleCart>> {
+    let (after_updated_at, after_id) = after
+        .map(|cursor| (cursor.updated_at, cursor.id.as_str()))
+        .unwrap_or((i64::MIN, ""));
+    db.fetch_all(
+        "SELECT tenant_id, id, updated_at FROM orders_carts
+         WHERE status = 'open' AND updated_at <= ?1
+           AND return_requested_at IS NULL AND unanswered_since IS NULL
+           AND (updated_at > ?2 OR (updated_at = ?2 AND id > ?3))
+         ORDER BY updated_at, id LIMIT ?4",
+        (before, after_updated_at, after_id, limit),
     )
     .await
 }

@@ -151,6 +151,9 @@ pub struct Payment {
 
 /// The payment provider the dashboard speaks to.
 pub const PROVIDER_STRIPE: &str = "stripe";
+/// The refusal of a new cart when the storefront started as many as the
+/// dashboard lets it within its window ([`OrderError::TooManyCarts`](crate::OrderError::TooManyCarts)).
+pub const TOO_MANY_CARTS: &str = "too_many_carts";
 /// The refusal of a request to pay when the merchant has no payments set up,
 /// or the provider failed.
 pub const PAYMENTS_UNAVAILABLE: &str = "payments_unavailable";

@@ -214,6 +214,7 @@ event timada-orders/Cart::Created { created_by: String }
 event timada-orders/Cart::DiscountApplied { code: String, applied_by: String }
 event timada-orders/Cart::DiscountGranted { request_id: String, discount_id: String, code: String, subtotal_cents: u64, amount_cents: u64, granted_by: String }
 event timada-orders/Cart::DiscountRemoved { removed_by: String }
+event timada-orders/Cart::Expired { expired_by: String }
 event timada-orders/Cart::ItemAdded { product_id: String, variant_id: Option<String>, quantity: u32, added_by: String }
 event timada-orders/Cart::ItemRemoved { product_id: String, variant_id: Option<String>, removed_by: String }
 event timada-orders/Cart::LanguageGiven { request_id: String, language: String, given_by: String }

@@ -573,7 +573,11 @@ pub fn say(code: &str) -> &'static str {
             "Indiquez un numéro de téléphone : le transporteur peut avoir à vous joindre."
         }
         "invalid_note" => "La remarque est trop longue.",
-        "cart_not_found" | "cart_checked_out" => "Ce panier a déjà été commandé.",
+        "cart_checked_out" => "Ce panier a déjà été commandé.",
+        "cart_not_found" => "Ce panier n'existe plus : ajoutez de nouveau vos articles.",
+        "too_many_carts" => {
+            "Trop de paniers commencés en peu de temps : réessayez dans quelques minutes."
+        }
         "discount_unknown" => "Ce code promo n'est pas valable.",
         "discount_inactive" => "Ce code promo ne peut pas être utilisé pour le moment.",
         "discount_currency" => "Ce code promo concerne une autre devise.",

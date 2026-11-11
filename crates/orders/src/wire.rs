@@ -102,6 +102,7 @@ impl Refusal {
         match error.as_str() {
             "cart_not_found" => OrderError::CartNotFound,
             "cart_checked_out" => OrderError::CheckedOut,
+            crate::TOO_MANY_CARTS => OrderError::TooManyCarts,
             "invalid_quantity" => OrderError::InvalidQuantity,
             "too_many_lines" => OrderError::TooManyLines,
             "product_unavailable" => OrderError::Unavailable {
@@ -210,6 +211,7 @@ mod tests {
         let errors = [
             OrderError::CartNotFound,
             OrderError::CheckedOut,
+            OrderError::TooManyCarts,
             OrderError::InvalidQuantity,
             OrderError::EmptyCart,
             OrderError::PriceChanged { total_cents: 1250 },

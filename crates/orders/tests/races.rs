@@ -293,9 +293,8 @@ async fn an_order_placed_at_once_elsewhere_gives_its_reference_back() {
     let orders = Command::new(elsewhere.clone(), TENANT);
     let catalog: Catalog = timada_catalog::Command::new(executor.clone(), TENANT);
     let mug = product(&catalog, "Mug", 1250, "EUR").await;
-    let cart_id = orders.create_cart(SHOPPER).await.unwrap();
-    orders
-        .add_to_cart(SHOPPER, &cart_id, item(&mug, None, 1))
+    let cart_id = orders
+        .start_cart(SHOPPER, item(&mug, None, 1))
         .await
         .unwrap();
     let (_, payment) = open_payment_on(&orders, &cart_id).await;

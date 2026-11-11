@@ -13,7 +13,8 @@ use crate::value_object::{Checkpoint, OrderLine, Payment, ShippingAddress};
 /// (`CheckoutRequested`), the dashboard prices the cart and opens a payment
 /// with the provider (`PaymentRequested`) or says why it cannot
 /// (`PaymentRefused`); the order exists once the provider holds the money on
-/// the shopper's card, and the money is taken later.
+/// the shopper's card, and the money is taken later. A cart nobody touches
+/// for long is dropped (`Expired`).
 #[evento::aggregate(name = "timada-orders/Cart")]
 pub enum Cart {
     Created {
@@ -226,6 +227,15 @@ pub enum Cart {
         /// again, after an error or a restart, it goes on under its claim.
         claimant: String,
         claimed_by: String,
+    },
+    /// Final: nobody touched the cart for as long as the dashboard keeps an
+    /// idle one, and nothing about it could still move money (no payment
+    /// open, none on its way back, no request to pay unanswered), so it is
+    /// dropped. It takes no more changes, and to whoever still names it
+    /// there is no such cart: a storefront starts another. Written by the
+    /// dashboard, never a shopper.
+    Expired {
+        expired_by: String,
     },
 }
 

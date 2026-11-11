@@ -743,11 +743,9 @@ impl<G: PaymentGateway + 'static> Harness<G> {
             .unwrap();
         catalog.publish_product("alice", &mug.id).await.unwrap();
         let orders = timada_orders::Command::new(store, &tenant.id);
-        let cart_id = orders.create_cart(STOREFRONT_ACTOR).await.unwrap();
-        orders
-            .add_to_cart(
+        let cart_id = orders
+            .start_cart(
                 STOREFRONT_ACTOR,
-                &cart_id,
                 CartItem {
                     product_id: mug.id.clone(),
                     variant_id: None,
@@ -1506,11 +1504,9 @@ async fn a_distance_sale_in_another_currency_counts_at_the_euro_rate() {
     let hat = priced_in("Hat", "USD").await;
     let scarf = priced_in("Scarf", "CHF").await;
     let cart_of = async |product_id: &str| {
-        let cart_id = orders.create_cart(STOREFRONT_ACTOR).await.unwrap();
         orders
-            .add_to_cart(
+            .start_cart(
                 STOREFRONT_ACTOR,
-                &cart_id,
                 CartItem {
                     product_id: product_id.to_owned(),
                     variant_id: None,
@@ -1518,8 +1514,7 @@ async fn a_distance_sale_in_another_currency_counts_at_the_euro_rate() {
                 },
             )
             .await
-            .unwrap();
-        cart_id
+            .unwrap()
     };
     let to_germany = Checkout {
         shipping: ShippingAddress {
@@ -1780,11 +1775,9 @@ async fn a_late_payment_places_the_order_or_gives_its_hold_back() {
     };
     // A cart of one mug, with a code or not, asked to pay: the payment opened.
     let cart_with = async |code: Option<&str>, email: &str| {
-        let cart_id = orders.create_cart(STOREFRONT_ACTOR).await.unwrap();
-        orders
-            .add_to_cart(
+        let cart_id = orders
+            .start_cart(
                 STOREFRONT_ACTOR,
-                &cart_id,
                 CartItem {
                     product_id: mug.id.clone(),
                     variant_id: None,
@@ -2115,6 +2108,57 @@ async fn a_second_payment_of_a_cart_is_given_back() {
         }
     );
     assert_eq!(h.stripe.cancelled.lock().unwrap().len(), 1);
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn a_late_word_about_a_payment_of_a_dropped_cart_changes_nothing() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let (cart_id, _) = h.cart(&acme).await;
+    let PaymentAnswer::Requested(payment) = h.ask(&acme, &cart_id, None).await else {
+        panic!("a payment is opened");
+    };
+    // Confirmed too late, and Stripe would not give it back, for good (a
+    // disputed charge, say): the merchant's to settle in Stripe.
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    orders
+        .request_payment_return(
+            DASHBOARD_ACTOR,
+            &cart_id,
+            &payment.payment_id,
+            "out_of_stock",
+        )
+        .await
+        .unwrap();
+    orders
+        .refuse_payment_return(DASHBOARD_ACTOR, &cart_id, &payment.payment_id, "disputed")
+        .await
+        .unwrap();
+    h.stripe.authorize(&payment.payment_id);
+    let body = authorized(&payment.payment_id);
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::NotReturned {
+            reason: "disputed".into()
+        }
+    );
+
+    // Nothing about the cart moves money any more, so it is dropped once it
+    // lay idle: told again, the dashboard leaves it at that rather than
+    // try to place an order of a cart it no longer has, for Stripe to retry.
+    let dropped = orders
+        .expire_cart(DASHBOARD_ACTOR, &cart_id, u64::MAX / 2, 1)
+        .await
+        .unwrap();
+    assert!(dropped);
+    assert_eq!(
+        h.webhook(&acme, &body, signed(&body)).await,
+        Outcome::Ignored
+    );
+    assert!(h.stripe.cancelled.lock().unwrap().is_empty());
+    assert!(h.stripe.refunds.lock().unwrap().is_empty());
     h.finish().await;
 }
 
@@ -3108,11 +3152,9 @@ async fn an_order_that_cannot_be_invoiced_is_given_up_on_and_asked_again() {
         .await
         .unwrap();
     catalog.publish_product("alice", &hat.id).await.unwrap();
-    let cart_id = orders.create_cart(STOREFRONT_ACTOR).await.unwrap();
-    orders
-        .add_to_cart(
+    let cart_id = orders
+        .start_cart(
             STOREFRONT_ACTOR,
-            &cart_id,
             CartItem {
                 product_id: hat.id.clone(),
                 variant_id: None,

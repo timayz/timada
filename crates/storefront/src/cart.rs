@@ -53,9 +53,12 @@
 //! The library keeps no notion of whose cart is whose: the host remembers
 //! the cart id, typically in a cookie.
 
+use std::net::IpAddr;
+
 use anyhow::Context as _;
 use topcoat_core::context::Cx;
 use topcoat_core::error::Result;
+use topcoat_router::request::client_ip;
 
 use timada_catalog::DeliveryDays;
 use timada_invoicing::tax;
@@ -509,6 +512,9 @@ impl Fetched {
 /// Nothing to send.
 pub(crate) const NO_BODY: Option<&()> = None;
 
+/// The header the visitor's address travels in to the dashboard.
+const SHOPPER_IP: &str = "x-shopper-ip";
+
 impl Store {
     fn orders(&self) -> anyhow::Result<Command<evento::Evento>> {
         Ok(Command::unscoped(self.executor()?.clone()))
@@ -524,6 +530,18 @@ impl Store {
         path: &str,
         body: Option<&impl serde::Serialize>,
     ) -> anyhow::Result<Fetched> {
+        self.cart_call_from(method, path, body, None).await
+    }
+
+    /// [`cart_call`](Self::cart_call) on behalf of the visitor at `ip`,
+    /// which the dashboard counts the carts started by.
+    async fn cart_call_from(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&impl serde::Serialize>,
+        ip: Option<IpAddr>,
+    ) -> anyhow::Result<Fetched> {
         let api = self
             .api()
             .context("no dashboard address: set StoreConfig::api_url to sell")?;
@@ -533,6 +551,9 @@ impl Store {
             .bearer_auth(&api.token);
         if let Some(body) = body {
             request = request.json(body);
+        }
+        if let Some(ip) = ip {
+            request = request.header(SHOPPER_IP, ip.to_string());
         }
         let response = reach(request.send().await)?;
         let status = response.status();
@@ -544,9 +565,11 @@ impl Store {
         match status.as_u16() {
             200 | 201 => Ok(Fetched::Found(body)),
             404 => Ok(Fetched::NotFound),
-            // 422: refused; 503: the shop is not taking writes for the moment
-            // (`writes_paused`). Both carry what to show the shopper.
-            422 | 503 => {
+            // 422: refused; 429: as many carts started as the dashboard lets
+            // this visitor or this storefront (`too_many_carts`); 503: the
+            // shop is not taking writes for the moment (`writes_paused`). All
+            // carry what to show the shopper.
+            422 | 429 | 503 => {
                 let refusal: Refusal =
                     serde_json::from_slice(&body).context("the dashboard's answer is not one")?;
                 Ok(Fetched::Refused(refusal.into_error()))
@@ -731,13 +754,15 @@ impl Store {
         .written()
     }
 
-    /// See [`add_to_cart`].
+    /// See [`add_to_cart`]. `ip` is the visitor's address, which the
+    /// dashboard counts the carts started by.
     pub async fn add_to_cart(
         &self,
         cart_id: Option<&str>,
         product_id: &str,
         variant_id: Option<&str>,
         quantity: u32,
+        ip: Option<IpAddr>,
     ) -> anyhow::Result<Refusable<String>> {
         let item = CartItem {
             product_id: product_id.to_owned(),
@@ -760,7 +785,7 @@ impl Store {
             }
         }
         match self
-            .cart_call(reqwest::Method::POST, "carts", Some(&item))
+            .cart_call_from(reqwest::Method::POST, "carts", Some(&item), ip)
             .await?
             .parsed::<Started>()?
         {
@@ -996,7 +1021,10 @@ pub async fn cart(cx: &Cx, cart_id: &str) -> Result<Option<CartView>> {
 
 /// Adds `quantity` of a product (one variant of it, when it sells variants)
 /// to the cart and returns the cart's id: `cart_id` itself, or a new cart
-/// when there is none yet or it was already ordered or is unknown.
+/// when there is none yet, or it was ordered, dropped after lying idle or is
+/// unknown. The dashboard lets each visitor, and each storefront, start only
+/// so many carts within a while (`too_many_carts` past it); the visitor is
+/// the request's client, as the host's trusted proxies report it.
 pub async fn add_to_cart(
     cx: &Cx,
     cart_id: Option<&str>,
@@ -1005,7 +1033,7 @@ pub async fn add_to_cart(
     quantity: u32,
 ) -> Result<Refusable<String>> {
     store(cx)
-        .add_to_cart(cart_id, product_id, variant_id, quantity)
+        .add_to_cart(cart_id, product_id, variant_id, quantity, client_ip(cx))
         .await
         .map_err(into_error)
 }
