@@ -3,7 +3,8 @@
 //! stored. Values are written the French way here; the Typst template of
 //! the document's layout version places them.
 
-use std::sync::OnceLock;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use typst::foundations::{Array, Dict, IntoValue, Value};
 use typst_as_lib::{TypstEngine, TypstTemplateMainFile};
@@ -53,6 +54,92 @@ pub fn render(document: &IssuedDocument) -> anyhow::Result<Vec<u8>> {
         ..PdfOptions::default()
     };
     typst_pdf::pdf(&compiled, &options).map_err(|err| anyhow::anyhow!("no PDF: {err:?}"))
+}
+
+/// How many bytes of PDFs [`render_cached`] keeps: a few hundred
+/// documents.
+const CACHE_BYTES: usize = 32 * 1024 * 1024;
+
+/// The PDFs drawn last, so a document opened again is not drawn again: up
+/// to a number of bytes of them, the one asked for longest ago dropped
+/// first. Keyed by document id and layout version, which say the whole PDF:
+/// an issued document never changes. It is only asked after the caller
+/// has read the document, so it never decides who sees one.
+#[derive(Debug)]
+pub struct PdfCache {
+    max_bytes: usize,
+    /// Most recently asked for last.
+    entries: Mutex<VecDeque<Cached>>,
+}
+
+#[derive(Debug)]
+struct Cached {
+    document_id: String,
+    template: u16,
+    bytes: Arc<[u8]>,
+}
+
+impl PdfCache {
+    pub fn new(max_bytes: usize) -> Self {
+        Self {
+            max_bytes,
+            entries: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// The PDF of a document drawn before, now the most recently asked for.
+    pub fn get(&self, document: &IssuedDocument) -> Option<Arc<[u8]>> {
+        let mut entries = self.entries.lock().expect("pdf cache poisoned");
+        let at = entries.iter().position(|cached| {
+            cached.document_id == document.document_id && cached.template == document.template
+        })?;
+        let cached = entries.remove(at)?;
+        let bytes = cached.bytes.clone();
+        entries.push_back(cached);
+        Some(bytes)
+    }
+
+    /// Keeps the PDF of a document, dropping the ones asked for longest ago
+    /// past the size. A PDF larger than the whole cache is not kept.
+    pub fn put(&self, document: &IssuedDocument, bytes: Arc<[u8]>) {
+        if bytes.len() > self.max_bytes {
+            return;
+        }
+        let mut entries = self.entries.lock().expect("pdf cache poisoned");
+        entries.retain(|cached| {
+            cached.document_id != document.document_id || cached.template != document.template
+        });
+        entries.push_back(Cached {
+            document_id: document.document_id.clone(),
+            template: document.template,
+            bytes,
+        });
+        let mut total: usize = entries.iter().map(|cached| cached.bytes.len()).sum();
+        while total > self.max_bytes {
+            let Some(oldest) = entries.pop_front() else {
+                break;
+            };
+            total -= oldest.bytes.len();
+        }
+    }
+}
+
+/// [`render`], off the async threads, through the process's [`PdfCache`]: a
+/// document opened again is served from memory.
+pub async fn render_cached(document: IssuedDocument) -> anyhow::Result<Arc<[u8]>> {
+    static CACHE: OnceLock<PdfCache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| PdfCache::new(CACHE_BYTES));
+    if let Some(bytes) = cache.get(&document) {
+        return Ok(bytes);
+    }
+    let (document, bytes) = tokio::task::spawn_blocking(move || {
+        let bytes = render(&document);
+        (document, bytes)
+    })
+    .await?;
+    let bytes: Arc<[u8]> = Arc::from(bytes?);
+    cache.put(&document, bytes.clone());
+    Ok(bytes)
 }
 
 /// The French name of an EU country, or its code.
@@ -445,6 +532,32 @@ mod tests {
     use super::*;
     use crate::rates::ExchangeRate;
     use crate::value_object::{InvoiceLine, Seller, VatSubtotal, lines_breakdown};
+
+    #[test]
+    fn the_cache_keeps_the_last_asked_within_its_size() {
+        let cache = PdfCache::new(10);
+        let mut first = invoice(None);
+        first.document_id = "first".into();
+        let mut second = invoice(None);
+        second.document_id = "second".into();
+        let mut third = invoice(None);
+        third.document_id = "third".into();
+        cache.put(&first, Arc::from(vec![1u8; 4]));
+        cache.put(&second, Arc::from(vec![2u8; 4]));
+        // Asking for the first makes the second the oldest.
+        assert_eq!(cache.get(&first).as_deref(), Some(&[1u8; 4][..]));
+        cache.put(&third, Arc::from(vec![3u8; 4]));
+        assert!(cache.get(&second).is_none(), "dropped past the size");
+        assert!(cache.get(&first).is_some());
+        assert!(cache.get(&third).is_some());
+        // Another layout version is another PDF.
+        let mut redrawn = first.clone();
+        redrawn.template += 1;
+        assert!(cache.get(&redrawn).is_none());
+        // Larger than the whole cache: not kept.
+        cache.put(&second, Arc::from(vec![2u8; 11]));
+        assert!(cache.get(&second).is_none());
+    }
 
     fn invoice(vat_number: Option<&str>) -> IssuedDocument {
         let rate = vat_number.map(|_| 2000);
