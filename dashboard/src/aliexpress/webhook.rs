@@ -7,7 +7,7 @@
 //! again.
 //!
 //! The subscription below reads the order again, on the node its forward
-//! belongs to ([`Share`](timada_aliexpress::Share)), as the sweep would. The
+//! belongs to ([`Share`](timada_core::Share)), as the sweep would. The
 //! sweep then has no reason to read it for a while, so the app's calls go by
 //! what happens to the orders, not by how many are open. A second push for
 //! the same news finds nothing left to record (`record_checked` writes
@@ -304,7 +304,8 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use evento::Evento;
-    use timada_aliexpress::{Share, ae_order_index_id, claim_ae_order};
+    use timada_aliexpress::{ae_order_index_id, claim_ae_order};
+    use timada_core::Share;
 
     use super::*;
     use crate::config::AliexpressConfig;

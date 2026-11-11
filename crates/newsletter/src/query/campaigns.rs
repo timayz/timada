@@ -1,6 +1,16 @@
-//! Queries over `newsletter_campaigns`, `newsletter_editions` and
+//! Queries over `newsletter_campaigns`, `newsletter_editions`,
+//! `newsletter_edition_zones`, `newsletter_audience` and
 //! `newsletter_deliveries`: the campaigns page of a tenant, and what the
 //! sending still owes.
+//!
+//! The counts are the read model's own columns and rows, kept as the
+//! deliveries and the subscribers change (see `read_model`): a page never
+//! counts over the deliveries, nor the sending over the subscribers.
+//!
+//! What is owed is walked by subscriber id, from where the last walk
+//! stopped, and only the part of a node's [`Share`]: each node mails its
+//! own subscribers, and goes on from the last one it looked at rather than
+//! through everyone mailed already.
 //!
 //! Every lookup in `newsletter_deliveries` names its index (`INDEXED BY`):
 //! Turso's planner costs each column of the composite primary key as unique
@@ -10,6 +20,9 @@
 //! names for a table's `PRIMARY KEY` constraint. Issue #336 has the plans
 //! and timings; `tests/query_plans.rs` runs them again.
 
+use std::collections::BTreeMap;
+
+use timada_core::Share;
 use timada_core::db::{Db, FromRow};
 
 use crate::query::SubscriberRow;
@@ -39,28 +52,6 @@ pub struct CampaignRow {
     pub cadence: Option<String>,
 }
 
-/// A select of campaigns with their counts, then `$tail` (literal SQL, so
-/// the queries stay literals).
-macro_rules! select_campaigns {
-    ($tail:literal) => {
-        concat!(
-            "SELECT c.*,
-                (SELECT COUNT(*) FROM newsletter_deliveries d INDEXED BY newsletter_deliveries_campaign
-                 WHERE d.tenant_id = c.tenant_id AND d.campaign_id = c.id
-                   AND d.failed = 0 AND d.skipped = 0)
-                 AS delivered,
-                (SELECT COUNT(*) FROM newsletter_deliveries d INDEXED BY newsletter_deliveries_campaign
-                 WHERE d.tenant_id = c.tenant_id AND d.campaign_id = c.id AND d.failed = 1)
-                 AS failed,
-                (SELECT COUNT(*) FROM newsletter_deliveries d INDEXED BY newsletter_deliveries_campaign
-                 WHERE d.tenant_id = c.tenant_id AND d.campaign_id = c.id AND d.skipped = 1)
-                 AS skipped
-             FROM newsletter_campaigns c ",
-            $tail
-        )
-    };
-}
-
 /// The tenant's campaigns, newest first.
 pub async fn campaigns_of_tenant(
     db: &Db,
@@ -69,11 +60,10 @@ pub async fn campaigns_of_tenant(
     offset: u32,
 ) -> anyhow::Result<Vec<CampaignRow>> {
     db.fetch_all(
-        select_campaigns!(
-            "WHERE c.tenant_id = ?1
-         ORDER BY c.created_at DESC, c.id DESC
-         LIMIT ?2 OFFSET ?3"
-        ),
+        "SELECT * FROM newsletter_campaigns
+         WHERE tenant_id = ?1
+         ORDER BY created_at DESC, id DESC
+         LIMIT ?2 OFFSET ?3",
         (tenant_id, i64::from(limit), i64::from(offset)),
     )
     .await
@@ -97,7 +87,7 @@ pub async fn campaign_row(
     campaign_id: &str,
 ) -> anyhow::Result<Option<CampaignRow>> {
     db.fetch_optional(
-        select_campaigns!("WHERE c.tenant_id = ?1 AND c.id = ?2"),
+        "SELECT * FROM newsletter_campaigns WHERE tenant_id = ?1 AND id = ?2",
         (tenant_id, campaign_id),
     )
     .await
@@ -116,30 +106,60 @@ pub async fn sending_campaigns(db: &Db) -> anyhow::Result<Vec<(String, String)>>
 }
 
 /// Up to `limit` confirmed subscribers (in `language`, when given) that the
-/// campaign was not mailed to yet, by id. The read model is a moment
-/// behind: one claimed a moment ago may come back, and its claim is then
-/// refused.
+/// campaign was not mailed to yet, `share`'s part of them, by id from the
+/// first after `after` (`""` for the first of all). `campaign_id` is what
+/// the deliveries are keyed by: the campaign sent at once, or the edition of
+/// a scheduled one. The read model is a moment behind: one claimed a moment
+/// ago may come back, and its claim is then refused.
 pub async fn undelivered_subscribers(
     db: &Db,
     tenant_id: &str,
     campaign_id: &str,
     language: Option<&str>,
+    share: Share,
+    after: &str,
     limit: u32,
 ) -> anyhow::Result<Vec<SubscriberRow>> {
     db.fetch_all(
         "SELECT s.* FROM newsletter_subscribers s
-         WHERE s.tenant_id = ?1 AND s.status = 'confirmed'
+            INDEXED BY sqlite_autoindex_newsletter_subscribers_1
+         WHERE s.tenant_id = ?1 AND s.id > ?4 AND s.status = 'confirmed'
            AND (?3 IS NULL OR s.language = ?3)
+           AND s.shard % ?5 = ?6
            AND NOT EXISTS (
                SELECT 1 FROM newsletter_deliveries d
                  INDEXED BY sqlite_autoindex_newsletter_deliveries_1
                WHERE d.tenant_id = s.tenant_id AND d.edition_id = ?2
                  AND d.subscriber_id = s.id)
          ORDER BY s.id
-         LIMIT ?4",
-        (tenant_id, campaign_id, language, i64::from(limit)),
+         LIMIT ?7",
+        (
+            tenant_id,
+            campaign_id,
+            language,
+            after,
+            share.of as i64,
+            share.index as i64,
+            i64::from(limit),
+        ),
     )
     .await
+}
+
+/// Whether any confirmed subscriber (in `language`, when given) is still
+/// owed the campaign (or the edition `campaign_id` names), whichever node's
+/// part they are.
+pub async fn anyone_owed(
+    db: &Db,
+    tenant_id: &str,
+    campaign_id: &str,
+    language: Option<&str>,
+) -> anyhow::Result<bool> {
+    Ok(
+        !undelivered_subscribers(db, tenant_id, campaign_id, language, Share::ALONE, "", 1)
+            .await?
+            .is_empty(),
+    )
 }
 
 /// How many confirmed subscribers (in `language`, when given) a campaign
@@ -151,12 +171,12 @@ pub async fn count_audience(
 ) -> anyhow::Result<u64> {
     let (count,): (i64,) = db
         .fetch_one(
-            "SELECT COUNT(*) FROM newsletter_subscribers
-         WHERE tenant_id = ?1 AND status = 'confirmed' AND (?2 IS NULL OR language = ?2)",
+            "SELECT COALESCE(SUM(confirmed), 0) FROM newsletter_audience
+             WHERE tenant_id = ?1 AND (?2 IS NULL OR language = ?2)",
             (tenant_id, language),
         )
         .await?;
-    Ok(count as u64)
+    Ok(count.max(0) as u64)
 }
 
 /// The scheduled campaigns, every tenant's: `(tenant id, campaign id)`.
@@ -208,42 +228,30 @@ pub async fn editions_of_campaign(
     limit: u32,
 ) -> anyhow::Result<Vec<EditionRow>> {
     db.fetch_all(
-        "SELECT e.*,
-            (SELECT COUNT(*) FROM newsletter_deliveries d
-                INDEXED BY sqlite_autoindex_newsletter_deliveries_1
-             WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id
-               AND d.failed = 0 AND d.skipped = 0)
-             AS delivered,
-            (SELECT COUNT(*) FROM newsletter_deliveries d
-                INDEXED BY sqlite_autoindex_newsletter_deliveries_1
-             WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id AND d.failed = 1)
-             AS failed,
-            (SELECT COUNT(*) FROM newsletter_deliveries d
-                INDEXED BY sqlite_autoindex_newsletter_deliveries_1
-             WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id AND d.skipped = 1)
-             AS skipped
-         FROM newsletter_editions e
-         WHERE e.tenant_id = ?1 AND e.campaign_id = ?2
-         ORDER BY e.opened_at DESC, e.id DESC
+        "SELECT * FROM newsletter_editions
+         WHERE tenant_id = ?1 AND campaign_id = ?2
+         ORDER BY opened_at DESC, id DESC
          LIMIT ?3",
         (tenant_id, campaign_id, i64::from(limit)),
     )
     .await
 }
 
-/// Where an edition stands in one time zone.
-#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+/// Where an edition stands in one time zone, from the read model's counts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ZoneProgress {
     /// The subscribers' IANA zone, the shop's for those without one.
     pub zone: String,
-    /// Mailed (or tried) so far.
+    /// Mailed (or tried) so far, counted in the zone the subscriber had
+    /// when mailed.
     pub delivered: i64,
-    /// Confirmed (in the edition's language) and not mailed yet.
-    pub owed: i64,
+    /// Confirmed (in the edition's language) now, mailed already or not.
+    pub audience: i64,
 }
 
 /// An edition's progress by the subscribers' time zone; `shop_zone` stands
-/// in for subscribers without one. Only zones with someone mailed or owed.
+/// in for subscribers without one. Only zones with someone mailed or on the
+/// list, by zone.
 pub async fn edition_progress(
     db: &Db,
     tenant_id: &str,
@@ -251,28 +259,54 @@ pub async fn edition_progress(
     language: Option<&str>,
     shop_zone: &str,
 ) -> anyhow::Result<Vec<ZoneProgress>> {
-    db.fetch_all(
-        "SELECT zone, SUM(mailed) AS delivered, SUM(waiting) AS owed FROM (
-            SELECT COALESCE(s.time_zone, ?4) AS zone,
-                CASE WHEN d.subscriber_id IS NOT NULL AND d.skipped = 0 THEN 1 ELSE 0 END
-                    AS mailed,
-                CASE WHEN d.subscriber_id IS NULL AND s.status = 'confirmed'
-                     AND (?3 IS NULL OR s.language = ?3) THEN 1 ELSE 0 END AS waiting
-            FROM newsletter_subscribers s
-            LEFT JOIN newsletter_deliveries d INDEXED BY sqlite_autoindex_newsletter_deliveries_1
-              ON d.tenant_id = s.tenant_id AND d.edition_id = ?2 AND d.subscriber_id = s.id
-            WHERE s.tenant_id = ?1)
-         GROUP BY zone
-         HAVING SUM(mailed) + SUM(waiting) > 0
-         ORDER BY zone",
-        (tenant_id, edition_id, language, shop_zone),
+    let conn = db.connect()?;
+    let mailed: Vec<(String, i64)> = timada_core::db::fetch_all(
+        &conn,
+        "SELECT time_zone, mailed FROM newsletter_edition_zones
+         WHERE tenant_id = ?1 AND edition_id = ?2",
+        (tenant_id, edition_id),
     )
-    .await
+    .await?;
+    let audience: Vec<(String, i64)> = timada_core::db::fetch_all(
+        &conn,
+        "SELECT time_zone, confirmed FROM newsletter_audience
+         WHERE tenant_id = ?1 AND (?2 IS NULL OR language = ?2)",
+        (tenant_id, language),
+    )
+    .await?;
+    let mut zones: BTreeMap<String, ZoneProgress> = BTreeMap::new();
+    for (time_zone, delivered, confirmed) in mailed
+        .into_iter()
+        .map(|(time_zone, count)| (time_zone, count, 0))
+        .chain(
+            audience
+                .into_iter()
+                .map(|(time_zone, count)| (time_zone, 0, count)),
+        )
+    {
+        let zone = if time_zone.is_empty() {
+            shop_zone.to_owned()
+        } else {
+            time_zone
+        };
+        let progress = zones.entry(zone.clone()).or_insert_with(|| ZoneProgress {
+            zone,
+            ..ZoneProgress::default()
+        });
+        progress.delivered += delivered;
+        progress.audience += confirmed;
+    }
+    Ok(zones
+        .into_values()
+        .filter(|zone| zone.delivered > 0 || zone.audience > 0)
+        .collect())
 }
 
 /// Up to `limit` confirmed subscribers in `zone` (in `language`, when
-/// given) that the edition was not mailed to yet, by id; `shop_zone` stands
-/// in for subscribers without one.
+/// given) that the edition was not mailed to yet, `share`'s part of them, by
+/// id from the first after `after`; `shop_zone` stands in for subscribers
+/// without one.
+#[allow(clippy::too_many_arguments)]
 pub async fn undelivered_in_zone(
     db: &Db,
     tenant_id: &str,
@@ -280,26 +314,33 @@ pub async fn undelivered_in_zone(
     language: Option<&str>,
     shop_zone: &str,
     zone: &str,
+    share: Share,
+    after: &str,
     limit: u32,
 ) -> anyhow::Result<Vec<SubscriberRow>> {
     db.fetch_all(
         "SELECT s.* FROM newsletter_subscribers s
-         WHERE s.tenant_id = ?1 AND s.status = 'confirmed'
+            INDEXED BY sqlite_autoindex_newsletter_subscribers_1
+         WHERE s.tenant_id = ?1 AND s.id > ?6 AND s.status = 'confirmed'
            AND (?3 IS NULL OR s.language = ?3)
            AND COALESCE(s.time_zone, ?4) = ?5
+           AND s.shard % ?7 = ?8
            AND NOT EXISTS (
                SELECT 1 FROM newsletter_deliveries d
                  INDEXED BY sqlite_autoindex_newsletter_deliveries_1
                WHERE d.tenant_id = s.tenant_id AND d.edition_id = ?2
                  AND d.subscriber_id = s.id)
          ORDER BY s.id
-         LIMIT ?6",
+         LIMIT ?9",
         (
             tenant_id,
             edition_id,
             language,
             shop_zone,
             zone,
+            after,
+            share.of as i64,
+            share.index as i64,
             i64::from(limit),
         ),
     )

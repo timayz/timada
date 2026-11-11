@@ -80,8 +80,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         executor.clone(),
         quota.clone(),
         Arc::new(move |region| {
-            let (index, of) = cluster::live_place(&live, crate::aliexpress::LIVE_WITHIN, region);
-            timada_aliexpress::Share { index, of }
+            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, region);
+            timada_core::Share { index, of }
         }),
     )?;
     // The order confirmations and the notices of contact messages are
@@ -295,17 +295,22 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     )
     .start(payments_every);
 
-    // A campaign a merchant sent goes out a batch at a time.
+    // A campaign a merchant sent goes out from every node, each mailing its
+    // own part of the subscribers, a lane per shop.
+    let live = cluster.clone();
     let newsletter_sends = crate::newsletter_sends::NewsletterSends::new(
         db.clone(),
         executor.clone(),
         background_mail.clone(),
-        keys.clone(),
+        keys.ring(),
+        Arc::new(move || {
+            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, None);
+            timada_core::Share { index, of }
+        }),
         config.newsletter.mails_per_check,
+        std::time::Duration::from_secs(config.newsletter.send_check_secs.max(1)),
     )
-    .start(std::time::Duration::from_secs(
-        config.newsletter.send_check_secs.max(1),
-    ));
+    .start();
 
     // The runs of the shops' automation scenarios move on a timer.
     let automation_runs = crate::automations::runner::Runner::new(

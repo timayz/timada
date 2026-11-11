@@ -54,13 +54,15 @@ picked. Deleting a server leaves what it was picked for without one: shop mails 
 go out through the platform's server, and marketing waits. A server set up before shops
 could have several is listed as their first, picked for both.
 
-A server switched for marketing while a campaign goes out sends its next batches. A
+A server switched for marketing while a campaign goes out sends its next mails. A
 shop whose server stops accepting mail does not fall back to another one, nor to the
 platform's server. The send fails and is recorded, so a broken setup shows instead of
 being hidden: the codes, invitations, confirmations, order mails and message notices
 are retried by the mailroom (see [Sending in the background](#sending-in-the-background)),
 which gives up after about a day; the review requests, newsletters and hold reminders
-are claimed before they are sent, so one that fails is logged and not retried.
+are claimed before they are sent, so one that fails is logged and not retried. A
+campaign's mails stop at the first failure the server is to blame for, until the
+next look.
 
 ## Sending in the background
 

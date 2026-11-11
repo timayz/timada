@@ -136,6 +136,11 @@ pub async fn open(
     Ok((cluster, executor))
 }
 
+/// How long a node may go unheard before the others share out its part of
+/// the work ([`timada_core::Share`]): the AliExpress reads, the newsletter
+/// mails.
+pub const LIVE_WITHIN: Duration = Duration::from_secs(30);
+
 /// This node, as the work it claims names it (`node-2`): its id in the
 /// cluster, the same across restarts.
 pub fn node_name(cluster: &Cluster) -> String {

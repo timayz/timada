@@ -91,7 +91,7 @@ pub enum AliexpressProduct {
     CombinationRestored { sku_id: String, restored_by: String },
     /// A read of AliExpress was asked for: by a member, who waits for its
     /// outcome, or by the dashboard on its own ([`ALIEXPRESS_ACTOR`](crate::ALIEXPRESS_ACTOR)).
-    /// One node reads it ([`Share`](crate::Share)).
+    /// One node reads it ([`Share`](timada_core::Share)).
     SyncRequested { requested_by: String },
 }
 

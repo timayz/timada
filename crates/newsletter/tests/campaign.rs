@@ -5,9 +5,10 @@ use timada_core::db::Db;
 use std::sync::Arc;
 
 use common::*;
+use timada_core::Share;
 use timada_newsletter::{
-    CampaignDraft, CampaignStatus, NewsletterError, RequestSubscription, SOURCE_FORM, campaign_row,
-    campaigns_of_tenant, count_audience, read_model_subscription, sending_campaigns,
+    CampaignDraft, CampaignStatus, NewsletterError, RequestSubscription, SOURCE_FORM, anyone_owed,
+    campaign_row, campaigns_of_tenant, count_audience, read_model_subscription, sending_campaigns,
     undelivered_subscribers,
 };
 
@@ -196,7 +197,7 @@ async fn sending_walks_the_confirmed_subscribers_in_the_campaigns_language() {
     );
 
     // A batch of one, then the rest: what was delivered is not owed again.
-    let first = undelivered_subscribers(&pool, TENANT, &french, Some("fr"), 1)
+    let first = undelivered_subscribers(&pool, TENANT, &french, Some("fr"), Share::ALONE, "", 1)
         .await
         .unwrap();
     assert_eq!(first.len(), 1);
@@ -207,7 +208,7 @@ async fn sending_walks_the_confirmed_subscribers_in_the_campaigns_language() {
             .unwrap()
     );
     catch_up(&executor, &pool, &keys).await;
-    let rest = undelivered_subscribers(&pool, TENANT, &french, Some("fr"), 10)
+    let rest = undelivered_subscribers(&pool, TENANT, &french, Some("fr"), Share::ALONE, "", 10)
         .await
         .unwrap();
     assert_eq!(rest.len(), 1);
@@ -225,14 +226,14 @@ async fn sending_walks_the_confirmed_subscribers_in_the_campaigns_language() {
         .unwrap();
     catch_up(&executor, &pool, &keys).await;
     assert!(
-        undelivered_subscribers(&pool, TENANT, &french, Some("fr"), 10)
+        undelivered_subscribers(&pool, TENANT, &french, Some("fr"), Share::ALONE, "", 10)
             .await
             .unwrap()
             .is_empty()
     );
     // The other campaign still owes everyone confirmed.
     assert_eq!(
-        undelivered_subscribers(&pool, TENANT, &everyone, None, 10)
+        undelivered_subscribers(&pool, TENANT, &everyone, None, Share::ALONE, "", 10)
             .await
             .unwrap()
             .len(),
@@ -251,6 +252,52 @@ async fn sending_walks_the_confirmed_subscribers_in_the_campaigns_language() {
     assert_eq!(
         (draft_row.status.as_str(), draft_row.delivered),
         ("draft", 0)
+    );
+}
+
+/// Each node walks its own part of what a campaign owes, a page at a time
+/// from the last subscriber it read: the parts cover everyone, once.
+#[tokio::test]
+async fn a_node_walks_its_own_part_of_the_subscribers_from_where_it_stopped() {
+    let (executor, pool) = executor_with_pool().await;
+    let newsletter = timada_newsletter::Command::new(executor.clone(), TENANT);
+    let keys = Arc::new(MemoryKeys::default());
+    for n in 0..10 {
+        subscribe(&newsletter, &keys, &format!("reader{n}@example.com"), "fr").await;
+    }
+    let campaign = newsletter
+        .draft_campaign(ALICE, draft("News"))
+        .await
+        .unwrap();
+    catch_up(&executor, &pool, &keys).await;
+
+    let mut seen = Vec::new();
+    for share in [Share { index: 0, of: 2 }, Share { index: 1, of: 2 }] {
+        let mut after = String::new();
+        loop {
+            let page = undelivered_subscribers(&pool, TENANT, &campaign, None, share, &after, 3)
+                .await
+                .unwrap();
+            for row in &page {
+                assert!(share.owns(&row.id), "{} is not {share:?}'s", row.id);
+                assert!(row.id > after, "{} comes back after {after}", row.id);
+            }
+            let Some(last) = page.last() else {
+                break;
+            };
+            after = last.id.clone();
+            seen.extend(page.into_iter().map(|row| row.id));
+        }
+    }
+    assert_eq!(seen.len(), 10);
+    seen.sort();
+    seen.dedup();
+    assert_eq!(seen.len(), 10, "a subscriber in both parts");
+    assert!(anyone_owed(&pool, TENANT, &campaign, None).await.unwrap());
+    assert!(
+        !anyone_owed(&pool, TENANT, &campaign, Some("en"))
+            .await
+            .unwrap()
     );
 }
 

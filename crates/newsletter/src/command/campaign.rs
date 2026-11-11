@@ -554,7 +554,10 @@ impl<E: Executor> super::Command<E> {
 
     /// Takes the mailing of a campaign to a subscriber, before it goes out.
     /// Returns whether this caller took it: `false` when it was taken
-    /// already, by another node say.
+    /// already, by another node say. Written without a read first: the
+    /// nodes mail each their own part of the subscribers, so a claim is
+    /// refused only when two nodes disagreed for a moment on who is up, or
+    /// the read model had not caught up with a claim yet.
     pub async fn claim_delivery(
         &self,
         actor: &str,
@@ -562,15 +565,6 @@ impl<E: Executor> super::Command<E> {
         subscriber_id: &str,
         routing_key: Option<String>,
     ) -> Result<bool, NewsletterError> {
-        // Read first: on a cluster every node of the region tries this, so
-        // the ones that lost are told by a read, not by a refused write.
-        if self
-            .load_delivery(&delivery_id(campaign_id, subscriber_id))
-            .await?
-            .is_some()
-        {
-            return Ok(false);
-        }
         let claimed = evento::append(delivery_id(campaign_id, subscriber_id))
             .original_version(0)
             .routing_key_opt(routing_key)
@@ -590,7 +584,8 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// Takes the mailing of an edition to a subscriber, before it goes out.
-    /// Returns whether this caller took it.
+    /// Returns whether this caller took it, as
+    /// [`claim_delivery`](Self::claim_delivery) does.
     pub async fn claim_edition_delivery(
         &self,
         actor: &str,
@@ -599,15 +594,6 @@ impl<E: Executor> super::Command<E> {
         subscriber_id: &str,
         routing_key: Option<String>,
     ) -> Result<bool, NewsletterError> {
-        // Read first: on a cluster every node of the region tries this, so
-        // the ones that lost are told by a read, not by a refused write.
-        if self
-            .load_delivery(&delivery_id(edition_id, subscriber_id))
-            .await?
-            .is_some()
-        {
-            return Ok(false);
-        }
         let claimed = evento::append(delivery_id(edition_id, subscriber_id))
             .original_version(0)
             .routing_key_opt(routing_key)

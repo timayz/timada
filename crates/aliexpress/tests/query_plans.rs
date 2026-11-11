@@ -5,7 +5,8 @@
 
 use std::time::Instant;
 
-use timada_aliexpress::{MIGRATIONS, NODE_MIGRATIONS, Share, links_due};
+use timada_aliexpress::{MIGRATIONS, NODE_MIGRATIONS, links_due};
+use timada_core::Share;
 use timada_core::db::{Db, Turso};
 
 /// How many products of each shop, one huge catalogue among the small ones.
@@ -43,7 +44,7 @@ async fn links_due_on_a_platform_with_more_products_than_it_can_read() {
                     format!(
                         "('{tenant}', '{id}', '{id}', '{id}', 'linked', 0, 0, {tried}, NULL, 0, 0, 0, \
                          {tried}, {}, {wanted}, {published}, '[]')",
-                        timada_aliexpress::shard_of(&id)
+                        timada_core::shard_of(&id)
                     )
                 })
                 .collect();

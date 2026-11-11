@@ -1,17 +1,17 @@
-//! Probes of the per-request joins under Turso's planner (issue #336): each
-//! seeds a few thousand rows in a database file opened for several writers,
-//! prints `EXPLAIN QUERY PLAN` and a timing for the query as the page runs
-//! it and for the alternatives, and checks that the page's version answers
-//! the same. Ignored: they take seconds and their report is their point.
-//! Run them with
+//! Probes of the sending's reads under Turso's planner (issues #336, #469):
+//! each seeds a few thousand rows in a database file opened for several
+//! writers, prints `EXPLAIN QUERY PLAN` and a timing for the query as the
+//! sending runs it and for the alternatives, and checks that the sending's
+//! version answers the same. Ignored: they take seconds and their report is
+//! their point. Run them with
 //! `cargo test -p timada-newsletter --test query_plans -- --ignored --nocapture`.
 
 use std::time::Instant;
 
 use timada_core::db::{Connection, Db, IntoParams, Turso, execute, fetch_all};
+use timada_core::{Share, shard_of};
 use timada_newsletter::{
-    SubscriberRow, ZoneProgress, campaign_row, edition_progress, editions_of_campaign,
-    undelivered_in_zone, undelivered_subscribers,
+    SubscriberRow, edition_progress, undelivered_in_zone, undelivered_subscribers,
 };
 
 /// A database file opened for several writers, with the newsletter schema.
@@ -93,7 +93,9 @@ const ZONES: [Option<&str>; 4] = [
 /// Seeds `SUBSCRIBERS` subscribers, nine in ten confirmed and one in ten
 /// unsubscribed, half of them mailed by the edition (one in twenty of
 /// those skipped), plus another tenant's subscribers and deliveries of
-/// another edition to keep the indexes honest.
+/// another edition to keep the indexes honest. The counts are not kept:
+/// nothing here reads them but [`edition_progress_plan`], which seeds its
+/// own.
 async fn seed(conn: &Connection) {
     execute(conn, "BEGIN", ()).await.unwrap();
     execute(
@@ -125,8 +127,8 @@ async fn seed(conn: &Connection) {
         execute(
             conn,
             "INSERT INTO newsletter_subscribers (tenant_id, id, email, language, source, status,
-                requested_at, confirmed_at, unsubscribed_at, updated_at, time_zone)
-             VALUES (?1, ?2, ?3, ?4, 'form', ?5, ?6, ?6, NULL, ?6, ?7)",
+                requested_at, confirmed_at, unsubscribed_at, updated_at, time_zone, shard)
+             VALUES (?1, ?2, ?3, ?4, 'form', ?5, ?6, ?6, NULL, ?6, ?7, ?8)",
             (
                 TENANT,
                 id.as_str(),
@@ -135,6 +137,7 @@ async fn seed(conn: &Connection) {
                 status,
                 n as i64,
                 ZONES[n % ZONES.len()],
+                i64::from(shard_of(&id)),
             ),
         )
         .await
@@ -164,9 +167,14 @@ async fn seed(conn: &Connection) {
         execute(
             conn,
             "INSERT INTO newsletter_subscribers (tenant_id, id, email, language, source, status,
-                requested_at, confirmed_at, unsubscribed_at, updated_at, time_zone)
-             VALUES ('other', ?1, ?2, 'en', 'form', 'confirmed', ?3, ?3, NULL, ?3, NULL)",
-            (id.as_str(), format!("o{n}@example.com"), n as i64),
+                requested_at, confirmed_at, unsubscribed_at, updated_at, time_zone, shard)
+             VALUES ('other', ?1, ?2, 'en', 'form', 'confirmed', ?3, ?3, NULL, ?3, NULL, ?4)",
+            (
+                id.as_str(),
+                format!("o{n}@example.com"),
+                n as i64,
+                i64::from(shard_of(&id)),
+            ),
         )
         .await
         .unwrap();
@@ -174,134 +182,8 @@ async fn seed(conn: &Connection) {
     execute(conn, "COMMIT", ()).await.unwrap();
 }
 
-const LEFT_JOIN: &str = "SELECT zone, SUM(mailed) AS delivered, SUM(waiting) AS owed FROM (
-            SELECT COALESCE(s.time_zone, ?4) AS zone,
-                CASE WHEN d.subscriber_id IS NOT NULL AND d.skipped = 0 THEN 1 ELSE 0 END
-                    AS mailed,
-                CASE WHEN d.subscriber_id IS NULL AND s.status = 'confirmed'
-                     AND (?3 IS NULL OR s.language = ?3) THEN 1 ELSE 0 END AS waiting
-            FROM newsletter_subscribers s
-            LEFT JOIN newsletter_deliveries d
-              ON d.tenant_id = s.tenant_id AND d.edition_id = ?2 AND d.subscriber_id = s.id
-            WHERE s.tenant_id = ?1)
-         GROUP BY zone
-         HAVING SUM(mailed) + SUM(waiting) > 0
-         ORDER BY zone";
-
-/// The join as the page ran it, the deliveries' primary key forced.
-const LEFT_JOIN_INDEXED: &str = "SELECT zone, SUM(mailed) AS delivered, SUM(waiting) AS owed FROM (
-            SELECT COALESCE(s.time_zone, ?4) AS zone,
-                CASE WHEN d.subscriber_id IS NOT NULL AND d.skipped = 0 THEN 1 ELSE 0 END
-                    AS mailed,
-                CASE WHEN d.subscriber_id IS NULL AND s.status = 'confirmed'
-                     AND (?3 IS NULL OR s.language = ?3) THEN 1 ELSE 0 END AS waiting
-            FROM newsletter_subscribers s
-            LEFT JOIN newsletter_deliveries d INDEXED BY sqlite_autoindex_newsletter_deliveries_1
-              ON d.tenant_id = s.tenant_id AND d.edition_id = ?2 AND d.subscriber_id = s.id
-            WHERE s.tenant_id = ?1)
-         GROUP BY zone
-         HAVING SUM(mailed) + SUM(waiting) > 0
-         ORDER BY zone";
-
-#[tokio::test]
-#[ignore = "a probe: seeds thousands of rows and prints plans and timings"]
-async fn edition_progress_plan() {
-    let (store, db) = database().await;
-    let conn = store.connect().unwrap();
-    seed(&conn).await;
-    let params = || (TENANT, EDITION, Some("en"), "Europe/London");
-
-    println!(
-        "edition_progress: {SUBSCRIBERS} subscribers, {} mailed",
-        SUBSCRIBERS / 2
-    );
-    report_plan(
-        &conn,
-        "LEFT JOIN subscribers -> deliveries",
-        LEFT_JOIN,
-        params(),
-    )
-    .await;
-    // Reported only: this is the plan the planner picks today (the wrong
-    // index), and it changes once tursodatabase/turso#8664 is fixed.
-    let joined: Vec<ZoneProgress> = timed("LEFT JOIN", 1, || fetch_all(&conn, LEFT_JOIN, params()))
-        .await
-        .unwrap();
-    assert_eq!(joined.len(), ZONES.len());
-
-    let plan = report_plan(
-        &conn,
-        "LEFT JOIN, INDEXED BY the primary key",
-        LEFT_JOIN_INDEXED,
-        params(),
-    )
-    .await;
-    assert_step(&plan, &format!("{DELIVERY_BY_KEY} LEFT-JOIN"));
-    let indexed: Vec<ZoneProgress> = timed("LEFT JOIN INDEXED BY", 10, || {
-        fetch_all(&conn, LEFT_JOIN_INDEXED, params())
-    })
-    .await
-    .unwrap();
-    assert_eq!(indexed, joined);
-
-    report_plan(
-        &conn,
-        "subscribers alone",
-        "SELECT id, time_zone, status, language FROM newsletter_subscribers WHERE tenant_id = ?1",
-        (TENANT,),
-    )
-    .await;
-    report_plan(
-        &conn,
-        "deliveries alone",
-        "SELECT subscriber_id, skipped FROM newsletter_deliveries
-         WHERE tenant_id = ?1 AND edition_id = ?2",
-        (TENANT, EDITION),
-    )
-    .await;
-    let two_scans = timed("two scans joined here", 10, || async {
-        let subscribers: Vec<(String, Option<String>, String, Option<String>)> = fetch_all(
-            &conn,
-            "SELECT id, time_zone, status, language FROM newsletter_subscribers
-             WHERE tenant_id = ?1",
-            (TENANT,),
-        )
-        .await
-        .unwrap();
-        let deliveries: std::collections::HashMap<String, bool> = fetch_all::<(String, bool)>(
-            &conn,
-            "SELECT subscriber_id, skipped FROM newsletter_deliveries
-             WHERE tenant_id = ?1 AND edition_id = ?2",
-            (TENANT, EDITION),
-        )
-        .await
-        .unwrap()
-        .into_iter()
-        .collect();
-        subscribers.len() + deliveries.len()
-    })
-    .await;
-    assert_eq!(two_scans, SUBSCRIBERS + SUBSCRIBERS / 2);
-
-    let page = timed("the page's query", 10, || {
-        edition_progress(&db, TENANT, EDITION, Some("en"), "Europe/London")
-    })
-    .await
-    .unwrap();
-    assert_eq!(page, joined);
-}
-
-const NOT_EXISTS: &str = "SELECT s.* FROM newsletter_subscribers s
-         WHERE s.tenant_id = ?1 AND s.status = 'confirmed'
-           AND (?3 IS NULL OR s.language = ?3)
-           AND NOT EXISTS (
-               SELECT 1 FROM newsletter_deliveries d
-               WHERE d.tenant_id = s.tenant_id AND d.edition_id = ?2
-                 AND d.subscriber_id = s.id)
-         ORDER BY s.id
-         LIMIT ?4";
-
-const NOT_EXISTS_INDEXED: &str = "SELECT s.* FROM newsletter_subscribers s
+/// What one node's walk read before #469: everyone owed, from the top.
+const FROM_THE_TOP: &str = "SELECT s.* FROM newsletter_subscribers s
          WHERE s.tenant_id = ?1 AND s.status = 'confirmed'
            AND (?3 IS NULL OR s.language = ?3)
            AND NOT EXISTS (
@@ -311,47 +193,95 @@ const NOT_EXISTS_INDEXED: &str = "SELECT s.* FROM newsletter_subscribers s
          ORDER BY s.id
          LIMIT ?4";
 
+/// The walk without naming the subscribers' index.
+const WALK_UNINDEXED: &str = "SELECT s.* FROM newsletter_subscribers s
+         WHERE s.tenant_id = ?1 AND s.id > ?4 AND s.status = 'confirmed'
+           AND (?3 IS NULL OR s.language = ?3)
+           AND s.shard % ?5 = ?6
+           AND NOT EXISTS (
+               SELECT 1 FROM newsletter_deliveries d INDEXED BY sqlite_autoindex_newsletter_deliveries_1
+               WHERE d.tenant_id = s.tenant_id AND d.edition_id = ?2
+                 AND d.subscriber_id = s.id)
+         ORDER BY s.id
+         LIMIT ?7";
+
+/// The walk as the sending runs it.
+const WALK: &str = "SELECT s.* FROM newsletter_subscribers s
+            INDEXED BY sqlite_autoindex_newsletter_subscribers_1
+         WHERE s.tenant_id = ?1 AND s.id > ?4 AND s.status = 'confirmed'
+           AND (?3 IS NULL OR s.language = ?3)
+           AND s.shard % ?5 = ?6
+           AND NOT EXISTS (
+               SELECT 1 FROM newsletter_deliveries d INDEXED BY sqlite_autoindex_newsletter_deliveries_1
+               WHERE d.tenant_id = s.tenant_id AND d.edition_id = ?2
+                 AND d.subscriber_id = s.id)
+         ORDER BY s.id
+         LIMIT ?7";
+
 #[tokio::test]
 #[ignore = "a probe: seeds thousands of rows and prints plans and timings"]
 async fn undelivered_subscribers_plan() {
     let (store, db) = database().await;
     let conn = store.connect().unwrap();
     seed(&conn).await;
-    let params = || (TENANT, EDITION, Some("en"), 50i64);
+    let share = Share { index: 1, of: 3 };
+    // Where a walk stands halfway through the mailed half.
+    let after = format!("subscriber-{:06}", SUBSCRIBERS / 4);
 
     println!(
         "undelivered_subscribers: {SUBSCRIBERS} subscribers, {} mailed",
         SUBSCRIBERS / 2
     );
-    report_plan(&conn, "NOT EXISTS a delivery", NOT_EXISTS, params()).await;
-    let plain: Vec<SubscriberRow> =
-        timed("NOT EXISTS", 1, || fetch_all(&conn, NOT_EXISTS, params()))
-            .await
-            .unwrap();
-    assert_eq!(plain.len(), 50);
-
-    let plan = report_plan(
+    report_plan(
         &conn,
-        "NOT EXISTS, INDEXED BY the primary key",
-        NOT_EXISTS_INDEXED,
-        params(),
+        "from the top, every node's",
+        FROM_THE_TOP,
+        (TENANT, EDITION, Some("en"), 50i64),
     )
     .await;
-    assert_step(&plan, DELIVERY_BY_KEY);
-    let indexed: Vec<SubscriberRow> = timed("NOT EXISTS INDEXED BY", 10, || {
-        fetch_all(&conn, NOT_EXISTS_INDEXED, params())
+    timed("from the top", 10, || {
+        fetch_all::<SubscriberRow>(&conn, FROM_THE_TOP, (TENANT, EDITION, Some("en"), 50i64))
     })
     .await
     .unwrap();
-    assert_eq!(indexed, plain);
 
-    let page = timed("the sweep's query", 10, || {
-        undelivered_subscribers(&db, TENANT, EDITION, Some("en"), 50)
+    let params = || {
+        (
+            TENANT,
+            EDITION,
+            Some("en"),
+            after.as_str(),
+            share.of as i64,
+            share.index as i64,
+            50i64,
+        )
+    };
+    report_plan(&conn, "the walk, unindexed", WALK_UNINDEXED, params()).await;
+    let unindexed: Vec<SubscriberRow> = timed("the walk, unindexed", 10, || {
+        fetch_all(&conn, WALK_UNINDEXED, params())
     })
     .await
     .unwrap();
-    assert_eq!(page, plain);
-    let in_zone = timed("the sweep's query, in a zone", 10, || {
+    let plan = report_plan(&conn, "the walk", WALK, params()).await;
+    assert_step(
+        &plan,
+        "INDEX sqlite_autoindex_newsletter_subscribers_1 (tenant_id=? AND id>?)",
+    );
+    assert_step(&plan, DELIVERY_BY_KEY);
+    let walked: Vec<SubscriberRow> = timed("the walk", 10, || fetch_all(&conn, WALK, params()))
+        .await
+        .unwrap();
+    assert_eq!(walked, unindexed);
+    assert_eq!(walked.len(), 50);
+    assert!(walked.iter().all(|s| share.owns(&s.id) && s.id > after));
+
+    let page = timed("the sending's query", 10, || {
+        undelivered_subscribers(&db, TENANT, EDITION, Some("en"), share, &after, 50)
+    })
+    .await
+    .unwrap();
+    assert_eq!(page, walked);
+    let in_zone = timed("the sending's query, in a zone", 10, || {
         undelivered_in_zone(
             &db,
             TENANT,
@@ -359,6 +289,8 @@ async fn undelivered_subscribers_plan() {
             Some("en"),
             "Europe/London",
             "Europe/Paris",
+            share,
+            &after,
             50,
         )
     })
@@ -368,106 +300,72 @@ async fn undelivered_subscribers_plan() {
     assert!(
         in_zone
             .iter()
-            .all(|s| s.time_zone.as_deref() == Some("Europe/Paris"))
+            .all(|s| s.time_zone.as_deref() == Some("Europe/Paris") && share.owns(&s.id))
     );
 }
 
 #[tokio::test]
 #[ignore = "a probe: seeds thousands of rows and prints plans and timings"]
-async fn delivery_counts_plan() {
+async fn edition_progress_plan() {
     let (store, db) = database().await;
     let conn = store.connect().unwrap();
-    seed(&conn).await;
+    execute(&conn, "BEGIN", ()).await.unwrap();
+    for (n, zone) in ZONES.iter().enumerate() {
+        let zone = zone.unwrap_or_default();
+        for language in ["en", "fr"] {
+            execute(
+                &conn,
+                "INSERT INTO newsletter_audience (tenant_id, language, time_zone, confirmed)
+                 VALUES (?1, ?2, ?3, ?4)",
+                (TENANT, language, zone, (SUBSCRIBERS / 8) as i64),
+            )
+            .await
+            .unwrap();
+        }
+        execute(
+            &conn,
+            "INSERT INTO newsletter_edition_zones (tenant_id, edition_id, time_zone, mailed)
+             VALUES (?1, ?2, ?3, ?4)",
+            (TENANT, EDITION, zone, (n * 100) as i64),
+        )
+        .await
+        .unwrap();
+    }
+    execute(&conn, "COMMIT", ()).await.unwrap();
 
-    println!(
-        "delivery counts: {} deliveries of the campaign",
-        SUBSCRIBERS / 2
-    );
-    report_plan(
-        &conn,
-        "deliveries of an edition",
-        "SELECT subscriber_id, skipped FROM newsletter_deliveries
-         WHERE tenant_id = ?1 AND edition_id = ?2",
-        (TENANT, EDITION),
-    )
-    .await;
     let plan = report_plan(
         &conn,
-        "deliveries of an edition, INDEXED BY the primary key",
-        "SELECT subscriber_id, skipped FROM newsletter_deliveries
-            INDEXED BY sqlite_autoindex_newsletter_deliveries_1
+        "an edition's mails by zone",
+        "SELECT time_zone, mailed FROM newsletter_edition_zones
          WHERE tenant_id = ?1 AND edition_id = ?2",
         (TENANT, EDITION),
     )
     .await;
     assert_step(
         &plan,
-        "SEARCH newsletter_deliveries USING INDEX sqlite_autoindex_newsletter_deliveries_1 \
-         (tenant_id=? AND edition_id=?)",
+        "INDEX sqlite_autoindex_newsletter_edition_zones_1 (tenant_id=? AND edition_id=?)",
     );
-    report_plan(
-        &conn,
-        "a campaign's counts",
-        "SELECT (SELECT COUNT(*) FROM newsletter_deliveries d
-                 WHERE d.tenant_id = c.tenant_id AND d.campaign_id = c.id AND d.failed = 1)
-         FROM newsletter_campaigns c WHERE c.tenant_id = ?1 AND c.id = ?2",
-        (TENANT, "campaign-1"),
-    )
-    .await;
     let plan = report_plan(
         &conn,
-        "a campaign's counts, INDEXED BY the campaign index",
-        "SELECT (SELECT COUNT(*) FROM newsletter_deliveries d INDEXED BY newsletter_deliveries_campaign
-                 WHERE d.tenant_id = c.tenant_id AND d.campaign_id = c.id AND d.failed = 1)
-         FROM newsletter_campaigns c WHERE c.tenant_id = ?1 AND c.id = ?2",
-        (TENANT, "campaign-1"),
+        "the audience by zone",
+        "SELECT time_zone, confirmed FROM newsletter_audience
+         WHERE tenant_id = ?1 AND (?2 IS NULL OR language = ?2)",
+        (TENANT, Some("en")),
     )
     .await;
     assert_step(
         &plan,
-        "SEARCH d USING INDEX newsletter_deliveries_campaign (tenant_id=? AND campaign_id=?)",
+        "INDEX sqlite_autoindex_newsletter_audience_1 (tenant_id=?",
     );
-    let campaign = timed("campaign_row", 10, || {
-        campaign_row(&db, TENANT, "campaign-1")
-    })
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(
-        campaign.delivered + campaign.skipped,
-        (SUBSCRIBERS / 2) as i64
-    );
-    report_plan(
-        &conn,
-        "an edition's counts",
-        "SELECT (SELECT COUNT(*) FROM newsletter_deliveries d
-                 WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id AND d.failed = 1)
-         FROM newsletter_editions e WHERE e.tenant_id = ?1 AND e.campaign_id = ?2",
-        (TENANT, "campaign-1"),
-    )
-    .await;
-    let plan = report_plan(
-        &conn,
-        "an edition's counts, INDEXED BY the primary key",
-        "SELECT (SELECT COUNT(*) FROM newsletter_deliveries d
-                    INDEXED BY sqlite_autoindex_newsletter_deliveries_1
-                 WHERE d.tenant_id = e.tenant_id AND d.edition_id = e.id AND d.failed = 1)
-         FROM newsletter_editions e WHERE e.tenant_id = ?1 AND e.campaign_id = ?2",
-        (TENANT, "campaign-1"),
-    )
-    .await;
-    assert_step(
-        &plan,
-        "SEARCH d USING INDEX sqlite_autoindex_newsletter_deliveries_1 \
-         (tenant_id=? AND edition_id=?)",
-    );
-    let editions = timed("editions_of_campaign", 10, || {
-        editions_of_campaign(&db, TENANT, "campaign-1", 10)
+    let progress = timed("the sending's query", 10, || {
+        edition_progress(&db, TENANT, EDITION, Some("en"), "Europe/London")
     })
     .await
     .unwrap();
-    assert_eq!(
-        editions[0].delivered + editions[0].skipped,
-        (SUBSCRIBERS / 2) as i64
+    assert_eq!(progress.len(), ZONES.len());
+    assert!(
+        progress
+            .iter()
+            .all(|zone| zone.audience == (SUBSCRIBERS / 8) as i64)
     );
 }

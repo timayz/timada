@@ -8,7 +8,7 @@
 //! lives. An event per read would spend a consensus round on each and run
 //! an item's stream into the 65,535 versions a stream holds within a few
 //! years, for a timestamp only this node's sweep goes by: the items and the
-//! orders are shared out among the nodes up ([`Share`](crate::Share)), so
+//! orders are shared out among the nodes up ([`Share`](timada_core::Share)), so
 //! the node that reads one is the node that needs to know when it last did.
 //! What the store does know (the last read recorded, the last one asked
 //! for, the order's last change) is read beside it, and the later of the two
