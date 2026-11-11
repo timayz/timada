@@ -18,9 +18,10 @@ use evento::{
 };
 use std::sync::Arc;
 
-use timada_core::db::Db;
+use timada_core::db::{Db, execute};
 
 use crate::command::{Shopper, shopper_projection};
+use crate::query::SHOPPERS;
 use timada_core::keys::KeyRing as ShopperKeyRing;
 
 /// The cursor identity of the read-model subscription, in the store.
@@ -78,12 +79,20 @@ pub(crate) async fn delete_shopper(
     tenant_id: &str,
     shopper_id: &str,
 ) -> anyhow::Result<()> {
-    db.execute(
-        "DELETE FROM shoppers_shoppers WHERE tenant_id = ?1 AND id = ?2",
-        (tenant_id, shopper_id),
-    )
-    .await?;
-    Ok(())
+    let env = (tenant_id, shopper_id);
+    db.write(&env, |tx, (tenant_id, shopper_id)| {
+        Box::pin(async move {
+            let was = SHOPPERS.of(tx, tenant_id, shopper_id).await?;
+            execute(
+                tx,
+                "DELETE FROM shoppers_shoppers WHERE tenant_id = ?1 AND id = ?2",
+                (*tenant_id, *shopper_id),
+            )
+            .await?;
+            SHOPPERS.settle(tx, tenant_id, shopper_id, was).await
+        })
+    })
+    .await
 }
 
 /// Writes the row of a shopper as the write model sees it; `updated_at` is
@@ -94,24 +103,32 @@ pub(crate) async fn upsert_shopper(
     shopper: &Shopper,
     updated_at: u64,
 ) -> anyhow::Result<()> {
-    db.execute(
-        "INSERT INTO shoppers_shoppers (tenant_id, id, email, registered_at, address_count,
-            updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT (tenant_id, id) DO UPDATE SET
-            email = excluded.email,
-            registered_at = excluded.registered_at,
-            address_count = excluded.address_count,
-            updated_at = MAX(updated_at, excluded.updated_at)",
-        (
-            tenant_id,
-            shopper.id.as_str(),
-            shopper.email.as_str(),
-            shopper.registered_at as i64,
-            shopper.addresses.len() as i64,
-            updated_at as i64,
-        ),
-    )
-    .await?;
-    Ok(())
+    let env = (tenant_id, shopper, updated_at);
+    db.write(&env, |tx, (tenant_id, shopper, updated_at)| {
+        Box::pin(async move {
+            let was = SHOPPERS.of(tx, tenant_id, &shopper.id).await?;
+            execute(
+                tx,
+                "INSERT INTO shoppers_shoppers (tenant_id, id, email, registered_at,
+                    address_count, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (tenant_id, id) DO UPDATE SET
+                    email = excluded.email,
+                    registered_at = excluded.registered_at,
+                    address_count = excluded.address_count,
+                    updated_at = MAX(updated_at, excluded.updated_at)",
+                (
+                    *tenant_id,
+                    shopper.id.as_str(),
+                    shopper.email.as_str(),
+                    shopper.registered_at as i64,
+                    shopper.addresses.len() as i64,
+                    *updated_at as i64,
+                ),
+            )
+            .await?;
+            SHOPPERS.settle(tx, tenant_id, &shopper.id, was).await
+        })
+    })
+    .await
 }

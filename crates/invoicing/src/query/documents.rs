@@ -1,6 +1,6 @@
 //! Queries over `invoicing_documents`, for the invoicing pages of a tenant.
 
-use timada_core::db::{Db, FromRow};
+use timada_core::db::{Db, FromRow, Tally};
 
 use crate::value_object::format_amount_fr;
 
@@ -59,12 +59,16 @@ pub async fn documents_of_tenant(
 }
 
 pub async fn count_documents(db: &Db, tenant_id: &str) -> anyhow::Result<i64> {
-    db.fetch_scalar(
-        "SELECT COUNT(*) FROM invoicing_documents WHERE tenant_id = ?1",
-        (tenant_id,),
-    )
-    .await
+    DOCUMENTS.read(db, tenant_id).await
 }
+
+/// What [`count_documents`] counts, kept by the read model as it writes the
+/// rows.
+pub const DOCUMENTS: Tally = Tally {
+    table: "invoicing_tallies",
+    name: "documents",
+    counted: "SELECT count(*) FROM invoicing_documents WHERE tenant_id = ?1 AND id = ?2",
+};
 
 /// The invoice and the credit notes of an order, in the order they were
 /// issued.

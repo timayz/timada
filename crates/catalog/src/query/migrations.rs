@@ -9,7 +9,8 @@ pub const MIGRATION_APP: &str = "catalog";
 /// The catalog read models: products with what a search finds them by and
 /// what a cart is priced with (their combinations, the shop's delivery
 /// time), the categories with their counts, which product is in which
-/// category, and the stock of each thing sold.
+/// category, the stock of each thing sold, and how many products each
+/// tenant has (`catalog_tallies`, one row per count, see `PRODUCTS`).
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
     &[Migration::up(
@@ -121,6 +122,12 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             on_hand INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             PRIMARY KEY (tenant_id, product_id, variant_id)
+        );
+        CREATE TABLE catalog_tallies (
+            tenant_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            n INTEGER NOT NULL,
+            PRIMARY KEY (tenant_id, name)
         );",
     )],
 );
@@ -134,4 +141,5 @@ pub const TABLES: &[&str] = &[
     "catalog_categories",
     "catalog_product_categories",
     "catalog_stock",
+    "catalog_tallies",
 ];

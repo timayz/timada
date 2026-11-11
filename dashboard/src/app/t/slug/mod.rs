@@ -29,9 +29,9 @@ pub mod time_zone;
 
 use std::sync::Arc;
 
-use timada_catalog::{ProductFilter, count_products};
+use timada_catalog::product_count;
 use timada_invoicing::count_documents;
-use timada_orders::{OrderFilter, count_open_carts, count_orders};
+use timada_orders::{count_open_carts, order_count};
 use timada_reviews::{ReviewFilter, ReviewStatus, count_reviews};
 use timada_shoppers::count_shoppers;
 use timada_support::{MessageFilter, MessageStatus, count_messages};
@@ -250,7 +250,7 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
     let attention = |n: u64| if n > 0 { Tone::Warning } else { Tone::Neutral };
     let mut tiles = Vec::new();
     if nav.products {
-        let n = count_products(app_context::<Db>(cx), id, &ProductFilter::default())
+        let n = product_count(pool, id)
             .await
             .map_err(topcoat::Error::from_anyhow)?;
         tiles.push(Tile {
@@ -263,7 +263,7 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
         });
     }
     if nav.orders {
-        let n = count_orders(pool, id, &OrderFilter::default())
+        let n = order_count(pool, id)
             .await
             .map_err(topcoat::Error::from_anyhow)?;
         tiles.push(Tile {

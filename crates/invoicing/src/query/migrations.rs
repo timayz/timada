@@ -48,10 +48,20 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 PRIMARY KEY (tenant_id, document_id, rate_bps)
             );
         CREATE INDEX invoicing_vat_lines_issued ON invoicing_vat_lines (tenant_id, regime, issued_at);
-        CREATE INDEX invoicing_vat_lines_company ON invoicing_vat_lines (company_id, regime, issued_at);",
+        CREATE INDEX invoicing_vat_lines_company ON invoicing_vat_lines (company_id, regime, issued_at);
+        CREATE TABLE invoicing_tallies (
+                tenant_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                n INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, name)
+            );",
     )],
 );
 
 /// The tables the migration creates: what a node empties before copying its
 /// store from a peer, so the subscriptions fill them again.
-pub const TABLES: &[&str] = &["invoicing_documents", "invoicing_vat_lines"];
+pub const TABLES: &[&str] = &[
+    "invoicing_documents",
+    "invoicing_vat_lines",
+    "invoicing_tallies",
+];

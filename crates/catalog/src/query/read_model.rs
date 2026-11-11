@@ -36,7 +36,7 @@ use crate::command::{
     CategoryState, ProductState, StockState, StockSummary, category_projection,
     delivery_default_projection, product_projection, stock_projection,
 };
-use crate::query::refresh_category_counts;
+use crate::query::{PRODUCTS, refresh_category_counts};
 
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-catalog/read-models";
@@ -228,6 +228,7 @@ pub(crate) async fn delete_product_rows(
                 (*tenant_id, *product_id),
             )
             .await?;
+            let was = PRODUCTS.of(tx, tenant_id, product_id).await?;
             for statement in [
                 "DELETE FROM catalog_product_categories WHERE tenant_id = ?1 AND product_id = ?2",
                 "DELETE FROM catalog_stock WHERE tenant_id = ?1 AND product_id = ?2",
@@ -236,6 +237,7 @@ pub(crate) async fn delete_product_rows(
             ] {
                 execute(tx, statement, (*tenant_id, *product_id)).await?;
             }
+            PRODUCTS.settle(tx, tenant_id, product_id, was).await?;
             if was_counted.is_some_and(|(counted,)| counted) {
                 refresh_category_counts(tx, tenant_id).await?;
             }
@@ -370,6 +372,9 @@ pub async fn upsert_product(
                     .await?;
                 }
             }
+            PRODUCTS
+                .settle(tx, tenant_id, &product.id, i64::from(was.is_some()))
+                .await?;
             let categories_as_before = was_in.iter().map(|(id,)| id).eq(product.categories.iter());
             if !categories_as_before {
                 execute(

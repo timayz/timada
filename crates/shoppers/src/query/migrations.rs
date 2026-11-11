@@ -21,10 +21,16 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX shoppers_shoppers_registered ON shoppers_shoppers
-                (tenant_id, registered_at DESC);",
+                (tenant_id, registered_at DESC);
+        CREATE TABLE shoppers_tallies (
+                tenant_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                n INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, name)
+            );",
     )],
 );
 
 /// The tables the migration creates: what a node empties before copying its
 /// store from a peer, so the subscriptions fill them again.
-pub const TABLES: &[&str] = &["shoppers_shoppers"];
+pub const TABLES: &[&str] = &["shoppers_shoppers", "shoppers_tallies"];
