@@ -18,14 +18,16 @@ use crate::cluster::Executor;
 use crate::db::Db;
 use crate::payments::SuppliedGoods;
 
-/// How long a payment waits for the reads of its cart. Payments are answered
-/// one at a time and shoppers wait: a slow AliExpress must not hold them up.
-/// The reads carry on past it, and the next payment finds them done.
-const READ_WAIT: Duration = Duration::from_secs(3);
+/// How long a payment waits for the reads of its cart. The shopper waits
+/// for it on the checkout page, and the sale is safe without it (the order
+/// is bought from the supplier at its price of the day, the money held
+/// until then): a slow AliExpress must not hold the shopper up. The reads
+/// carry on past it, and the next payment finds them done.
+const READ_WAIT: Duration = Duration::from_secs(2);
 
 /// How long payments go by the last reads once AliExpress did not answer in
-/// time. Payments of every shop go through one queue, so an outage costs one
-/// wait per minute on a node instead of one per payment.
+/// time: an outage costs the payments under way one wait, then none for a
+/// minute on this node, instead of one per payment.
 const UNREADABLE_SECS: u64 = 60;
 
 pub struct AliexpressGoods {

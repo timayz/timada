@@ -134,6 +134,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // The mails the sagas owe go out from here, off the subscriptions'
     // cursors, a lane per shop: one shop's mail server never holds up the
     // others' codes, invitations and confirmations.
+    let euro_rates: Arc<dyn crate::ecb::EuroRates> = Arc::new(crate::ecb::EcbClient::new(
+        config.invoicing.euro_rates_url.clone(),
+    ));
     let mailroom = crate::mailroom::Mailroom::new(
         db.clone(),
         executor.clone(),
@@ -143,10 +146,25 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         url.clone(),
         cluster::node_name(&cluster),
     );
+    // The requests to pay are answered off the payments subscription's
+    // cursor too, a lane per cart, several carts at once (#467).
+    let checkouts = crate::payments::Checkouts::new(
+        payments.clone(),
+        euro_rates.clone(),
+        Arc::new(crate::aliexpress::payment_reads::AliexpressGoods::new(
+            aliexpress.clone(),
+            db.clone(),
+            executor.clone(),
+        )),
+        executor.clone(),
+        db.clone(),
+        cluster::node_name(&cluster),
+    );
     let deps = Arc::new(Deps {
         db: db.clone(),
         store: executor.clone(),
         mailroom: mailroom.clone(),
+        checkouts: checkouts.clone(),
         media: media.clone(),
         keys: keys.clone(),
         payments: payments.clone(),
@@ -154,10 +172,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         vies: Arc::new(crate::vies::ViesClient::new(
             config.invoicing.vies_url.clone(),
         )),
-        euro_rates: Arc::new(crate::ecb::EcbClient::new(
-            config.invoicing.euro_rates_url.clone(),
-        )),
-        node: cluster::node_name(&cluster),
+        euro_rates,
     });
     let planned = planned(&config.server);
     let copied = cluster.health().joined_at_start;
@@ -206,6 +221,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     }
     let workers = Workers::new(all_workers);
     let mailroom_sends = mailroom.start();
+    let checkout_answers = checkouts.clone().start();
     // What the balancer asks before sending traffic here, and what an
     // operator scrapes.
     let readiness = Arc::new(crate::readiness::Readiness::new(
@@ -323,6 +339,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         aliexpress,
         store: connections,
         workers: workers.clone(),
+        checkouts,
         readiness,
         config,
     });
@@ -345,6 +362,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     }
     cluster_watch.abort();
     mailroom_sends.abort();
+    checkout_answers.abort();
     review_requests.abort();
     lapsed_checkouts.abort();
     pending_payments.abort();
@@ -367,14 +385,14 @@ pub struct Deps {
     pub store: Executor,
     /// Where the mails the sagas owe are handed to be sent.
     pub mailroom: Arc<crate::mailroom::Mailroom>,
+    /// Where the requests to pay are handed to be answered.
+    pub checkouts: Arc<crate::payments::Checkouts>,
     pub media: Arc<crate::media::Media>,
     pub keys: Arc<crate::key_vault::KeyVault>,
     pub payments: Arc<crate::payments::Payments>,
     pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
     pub vies: Arc<dyn crate::vies::Vies>,
     pub euro_rates: Arc<dyn crate::ecb::EuroRates>,
-    /// This node, as the work it claims names it.
-    pub node: String,
 }
 
 /// Builds one subscription from the parts.
@@ -557,18 +575,7 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
         crate::newsletter_keys::subscription(d.keys.clone())
     }),
     ("payments", Kind::Sharded, |d| {
-        crate::payments::subscription(crate::payments::Checkouts::new(
-            d.payments.clone(),
-            d.euro_rates.clone(),
-            Arc::new(crate::aliexpress::payment_reads::AliexpressGoods::new(
-                d.aliexpress.clone(),
-                d.db.clone(),
-                d.store.clone(),
-            )),
-            d.store.clone(),
-            d.db.clone(),
-            d.node.clone(),
-        ))
+        crate::payments::subscription(d.checkouts.clone())
     }),
     ("order payments", Kind::Sharded, |d| {
         crate::payments::order_payments_subscription(
