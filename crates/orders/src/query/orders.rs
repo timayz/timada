@@ -1,7 +1,8 @@
 //! Queries over `orders_orders`, for the orders pages of a tenant.
 
 use timada_core::MailStatus;
-use timada_core::db::{Db, FromRow, Tally};
+use timada_core::db::{Db, FromRow, Tally, tenant_fts_query};
+use timada_core::page::{Cursor, Page, PageFrom, Side, read_page};
 
 use crate::command::{OrderRefund, OrderState, OrderStatus, OutsideSettlement};
 use timada_catalog::format_money;
@@ -190,34 +191,125 @@ impl<'a> OrderFilter<'a> {
 
 use timada_core::like_contains as contains;
 
-/// The orders of a tenant the filter matches, newest first.
+/// How `?2` searches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Search {
+    None,
+    /// A `LIKE` pattern, for a search too short for the index.
+    Pattern,
+    /// A phrase for the full-text index, with the tenant's token.
+    Phrase,
+}
+
+/// What `?2` is and how the statements read it.
+fn search_of(tenant_id: &str, filter: &OrderFilter<'_>) -> (Option<String>, Search) {
+    match (
+        filter.q,
+        filter.q.and_then(|q| tenant_fts_query(tenant_id, q)),
+    ) {
+        (_, Some(phrase)) => (Some(phrase), Search::Phrase),
+        (Some(q), None) => (Some(contains(q)), Search::Pattern),
+        (None, None) => (None, Search::None),
+    }
+}
+
+/// A statement over the orders of a tenant (`?1`) the filter matches,
+/// naming only the conditions it sets (`?2` the search, `?3` the status;
+/// one left out is `?N IS NULL`, so the numbering holds), as the products
+/// list does: `?N IS NULL OR …` hid the indexes from the planner. `index`
+/// is named outright when given.
+fn orders_statement(
+    select: &str,
+    index: Option<&str>,
+    search: Search,
+    filter: &OrderFilter<'_>,
+    tail: &str,
+) -> String {
+    let index = index
+        .map(|index| format!("INDEXED BY {index}"))
+        .unwrap_or_default();
+    let search = match search {
+        Search::None => "?2 IS NULL",
+        Search::Pattern => {
+            "(reference LIKE ?2 ESCAPE '\\' OR email LIKE ?2 ESCAPE '\\'
+                OR name LIKE ?2 ESCAPE '\\')"
+        }
+        Search::Phrase => "fts_match(search_text, ?2)",
+    };
+    let status = match filter.status {
+        Some(_) => "status = ?3",
+        None => "?3 IS NULL",
+    };
+    format!(
+        "{select} FROM orders_orders {index}
+         WHERE tenant_id = ?1 AND {search} AND {status} {tail}"
+    )
+}
+
+/// Where a row stands in the list: when it was placed and its id.
+fn cursor_of(row: &OrderRow) -> Cursor {
+    Cursor {
+        at: row.placed_at,
+        id: row.id.clone(),
+    }
+}
+
+/// A page of the orders of a tenant the filter matches, newest first,
+/// `limit` rows at most (see [`timada_core::page`]). Without a phrase the
+/// page is read off `orders_orders_placed` or `orders_orders_status` from
+/// the cursor (the bound on `placed_at` alone lets it start there rather
+/// than walk down to it); a phrase is left to the full-text index, which
+/// answers with this tenant's matches only.
 pub async fn orders_of_tenant(
     db: &Db,
     tenant_id: &str,
     filter: &OrderFilter<'_>,
-    offset: i64,
+    from: PageFrom<'_>,
     limit: i64,
-) -> anyhow::Result<Vec<OrderRow>> {
-    db.fetch_all(
-        "SELECT tenant_id, id, reference, cart_id, status, email, name, country, item_count,
-            total_cents, currency, placed_at, updated_at, payment_id, refunded_cents,
-            discount_id, discount_code, discount_cents, supplier, payment_state, capture_before,
-            paid_at
-         FROM orders_orders
-         WHERE tenant_id = ?1 AND (?2 IS NULL OR status = ?2)
-           AND (?3 IS NULL OR reference LIKE ?3 ESCAPE '\\' OR email LIKE ?3 ESCAPE '\\'
-                OR name LIKE ?3 ESCAPE '\\')
-         ORDER BY placed_at DESC, id DESC LIMIT ?4 OFFSET ?5",
-        (
-            tenant_id,
-            filter.status.map(OrderStatus::as_str),
-            filter.q.map(contains),
-            limit,
-            offset,
-        ),
-    )
-    .await
+) -> anyhow::Result<Page<OrderRow>> {
+    let (search, how) = search_of(tenant_id, filter);
+    let index = match (how, filter.status) {
+        (Search::Phrase, _) => None,
+        (_, Some(_)) => Some("orders_orders_status"),
+        (_, None) => Some("orders_orders_placed"),
+    };
+    let statement = |tail: &str| orders_statement(ORDER_COLUMNS, index, how, filter, tail);
+    let older = statement(
+        "AND placed_at <= ?4 AND (placed_at < ?4 OR id < ?5)
+         ORDER BY placed_at DESC, id DESC LIMIT ?6",
+    );
+    let newer = statement(
+        "AND placed_at >= ?4 AND (placed_at > ?4 OR id > ?5)
+         ORDER BY placed_at ASC, id ASC LIMIT ?6",
+    );
+    let read = |side: Side, cursor: Option<Cursor>, n: i64| {
+        let statement = match side {
+            Side::Older => older.as_str(),
+            Side::Newer => newer.as_str(),
+        };
+        let (at, id) = cursor
+            .map(|cursor| (cursor.at, cursor.id))
+            .unwrap_or((i64::MAX, String::new()));
+        db.fetch_all::<OrderRow>(
+            statement,
+            (
+                tenant_id.to_owned(),
+                search.clone(),
+                filter.status.map(OrderStatus::as_str),
+                at,
+                id,
+                n,
+            ),
+        )
+    };
+    read_page(from, limit, read, cursor_of).await
 }
+
+/// The columns of [`OrderRow`].
+const ORDER_COLUMNS: &str = "SELECT tenant_id, id, reference, cart_id, status, email, name,
+    country, item_count, total_cents, currency, placed_at, updated_at, payment_id,
+    refunded_cents, discount_id, discount_code, discount_cents, supplier, payment_state,
+    capture_before, paid_at";
 
 /// How many orders a tenant has, whatever their status: what its home
 /// shows. Kept by the read model as it writes the rows.
@@ -232,22 +324,16 @@ pub async fn order_count(db: &Db, tenant_id: &str) -> anyhow::Result<i64> {
     ORDERS.read(db, tenant_id).await
 }
 
-/// How many orders [`orders_of_tenant`] would list.
+/// How many orders [`orders_of_tenant`] lists over all its pages.
 pub async fn count_orders(
     db: &Db,
     tenant_id: &str,
     filter: &OrderFilter<'_>,
 ) -> anyhow::Result<i64> {
+    let (search, how) = search_of(tenant_id, filter);
     db.fetch_scalar(
-        "SELECT count(*) FROM orders_orders
-         WHERE tenant_id = ?1 AND (?2 IS NULL OR status = ?2)
-           AND (?3 IS NULL OR reference LIKE ?3 ESCAPE '\\' OR email LIKE ?3 ESCAPE '\\'
-                OR name LIKE ?3 ESCAPE '\\')",
-        (
-            tenant_id,
-            filter.status.map(OrderStatus::as_str),
-            filter.q.map(contains),
-        ),
+        &orders_statement("SELECT count(*)", None, how, filter, ""),
+        (tenant_id, search, filter.status.map(OrderStatus::as_str)),
     )
     .await
 }

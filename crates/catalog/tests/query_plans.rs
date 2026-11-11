@@ -8,13 +8,13 @@
 use std::time::Instant;
 
 use timada_catalog::{
-    ProductCursor, ProductFilter, ProductPage, ProductStatus, Search, count_products,
-    page_statement, products_of_tenant,
+    ProductFilter, ProductStatus, Search, count_products, page_statement, products_of_tenant,
 };
 use timada_core::db::{
     Connection, Db, IntoParams, Turso, Value, execute, fetch_all, fetch_scalar, params_from_iter,
     search_key, tenant_search_key,
 };
+use timada_core::page::{Cursor, PageFrom};
 
 /// A database file opened for several writers, with the catalog schema.
 async fn database() -> (Turso, Db) {
@@ -225,7 +225,7 @@ async fn the_list_reads_its_pages_off_the_index() {
     .await;
 
     let first = timed("published, first page", 20, || {
-        products_of_tenant(&db, SHOP, &published, ProductPage::First, 50)
+        products_of_tenant(&db, SHOP, &published, PageFrom::First, 50)
     })
     .await
     .unwrap();
@@ -240,23 +240,23 @@ async fn the_list_reads_its_pages_off_the_index() {
     .await
     .unwrap()
     .remove(0);
-    let deep = ProductCursor {
-        updated_at: last.0,
+    let deep = Cursor {
+        at: last.0,
         id: last.1,
     };
     let page = timed("published, deepest page", 20, || {
-        products_of_tenant(&db, SHOP, &published, ProductPage::Older(&deep), 50)
+        products_of_tenant(&db, SHOP, &published, PageFrom::Older(&deep), 50)
     })
     .await
     .unwrap();
     assert_eq!(page.rows.len(), 50);
     timed("published, back up from the deepest", 20, || {
-        products_of_tenant(&db, SHOP, &published, ProductPage::Newer(&deep), 50)
+        products_of_tenant(&db, SHOP, &published, PageFrom::Newer(&deep), 50)
     })
     .await
     .unwrap();
     timed("every status, first page", 20, || {
-        products_of_tenant(&db, SHOP, &every, ProductPage::First, 50)
+        products_of_tenant(&db, SHOP, &every, PageFrom::First, 50)
     })
     .await
     .unwrap();
@@ -285,7 +285,7 @@ async fn the_list_reads_its_pages_off_the_index() {
     let candle = published.clone().search(Some("candle"));
     let short = published.clone().search(Some("cu"));
     let matched = timed("search, the list's page", 10, || {
-        products_of_tenant(&db, SHOP, &candle, ProductPage::First, 50)
+        products_of_tenant(&db, SHOP, &candle, PageFrom::First, 50)
     })
     .await
     .unwrap();
@@ -296,7 +296,7 @@ async fn the_list_reads_its_pages_off_the_index() {
     .await
     .unwrap();
     timed("short search, the list's page", 10, || {
-        products_of_tenant(&db, SHOP, &short, ProductPage::First, 50)
+        products_of_tenant(&db, SHOP, &short, PageFrom::First, 50)
     })
     .await
     .unwrap();

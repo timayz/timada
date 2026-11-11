@@ -1,10 +1,11 @@
 mod common;
 
 use timada_core::db::Db;
+use timada_core::page::PageFrom;
 
 use common::*;
 use timada_catalog::{
-    Command, DefineVariant, OptionSelection, ProductFilter, ProductPage, ProductStatus, Sellable,
+    Command, DefineVariant, OptionSelection, ProductFilter, ProductStatus, Sellable,
     categories_of_product, categories_of_tenant, category_by_id, count_products, live_child_count,
     product_by_id, product_count, products_of_tenant, read_model_subscription, sellable, tree_of,
     upsert_product,
@@ -42,7 +43,7 @@ async fn products_are_listed_searched_counted_and_stay_idempotent() {
         2,
         "the home's count"
     );
-    let rows = products_of_tenant(&pool, TENANT, &all, ProductPage::First, 50)
+    let rows = products_of_tenant(&pool, TENANT, &all, PageFrom::First, 50)
         .await
         .unwrap()
         .rows;
@@ -63,7 +64,7 @@ async fn products_are_listed_searched_counted_and_stay_idempotent() {
         &pool,
         TENANT,
         &all.clone().search(Some("MUG")),
-        ProductPage::First,
+        PageFrom::First,
         50,
     )
     .await
@@ -74,7 +75,7 @@ async fn products_are_listed_searched_counted_and_stay_idempotent() {
     let published = all.clone().status(Some(ProductStatus::Published));
     assert_eq!(count_products(&pool, TENANT, &published).await.unwrap(), 1);
     assert_eq!(
-        products_of_tenant(&pool, TENANT, &published, ProductPage::First, 50)
+        products_of_tenant(&pool, TENANT, &published, PageFrom::First, 50)
             .await
             .unwrap()
             .rows[0]
@@ -134,7 +135,7 @@ async fn an_archived_product_leaves_its_slug_to_the_next_one() {
         &pool,
         TENANT,
         &ProductFilter::default().search(Some("blue-mug")),
-        ProductPage::First,
+        PageFrom::First,
         50,
     )
     .await
@@ -250,7 +251,7 @@ async fn the_category_tree_carries_its_product_counts() {
     let in_bedding = ProductFilter::default().category(Some(&bedding.id));
     assert_eq!(count_products(&pool, TENANT, &in_bedding).await.unwrap(), 1);
     assert_eq!(
-        products_of_tenant(&pool, TENANT, &in_bedding, ProductPage::First, 50)
+        products_of_tenant(&pool, TENANT, &in_bedding, PageFrom::First, 50)
             .await
             .unwrap()
             .rows[0]
@@ -442,7 +443,7 @@ async fn a_search_reads_the_index_of_its_own_tenant() {
         0,
         "and so is the old slug"
     );
-    let found = products_of_tenant(&pool, TENANT, &search("tea c"), ProductPage::First, 50)
+    let found = products_of_tenant(&pool, TENANT, &search("tea c"), PageFrom::First, 50)
         .await
         .unwrap()
         .rows;
@@ -557,19 +558,19 @@ async fn the_list_pages_from_where_the_page_beside_it_stopped() {
     }
     catch_up(&executor, &pool).await;
     let all = ProductFilter::default();
-    let ids = |page: &timada_catalog::ProductsPage| {
+    let ids = |page: &timada_core::page::Page<timada_catalog::ProductRow>| {
         page.rows
             .iter()
             .map(|row| row.id.clone())
             .collect::<Vec<_>>()
     };
-    let every = products_of_tenant(&pool, TENANT, &all, ProductPage::First, 50)
+    let every = products_of_tenant(&pool, TENANT, &all, PageFrom::First, 50)
         .await
         .unwrap();
     assert_eq!(every.rows.len(), 5);
     assert_eq!((every.newer.as_ref(), every.older.as_ref()), (None, None));
 
-    let first = products_of_tenant(&pool, TENANT, &all, ProductPage::First, 2)
+    let first = products_of_tenant(&pool, TENANT, &all, PageFrom::First, 2)
         .await
         .unwrap();
     assert_eq!(ids(&first), ids(&every)[..2]);
@@ -578,7 +579,7 @@ async fn the_list_pages_from_where_the_page_beside_it_stopped() {
         "nothing is newer than the first page"
     );
     let older = first.older.clone().expect("more below");
-    let second = products_of_tenant(&pool, TENANT, &all, ProductPage::Older(&older), 2)
+    let second = products_of_tenant(&pool, TENANT, &all, PageFrom::Older(&older), 2)
         .await
         .unwrap();
     assert_eq!(ids(&second), ids(&every)[2..4]);
@@ -586,7 +587,7 @@ async fn the_list_pages_from_where_the_page_beside_it_stopped() {
         &pool,
         TENANT,
         &all,
-        ProductPage::Older(second.older.as_ref().expect("more below")),
+        PageFrom::Older(second.older.as_ref().expect("more below")),
         2,
     )
     .await
@@ -600,7 +601,7 @@ async fn the_list_pages_from_where_the_page_beside_it_stopped() {
         &pool,
         TENANT,
         &all,
-        ProductPage::Newer(third.newer.as_ref().expect("a page above")),
+        PageFrom::Newer(third.newer.as_ref().expect("a page above")),
         2,
     )
     .await
@@ -611,7 +612,7 @@ async fn the_list_pages_from_where_the_page_beside_it_stopped() {
         &pool,
         TENANT,
         &all,
-        ProductPage::Newer(back.newer.as_ref().expect("a page above")),
+        PageFrom::Newer(back.newer.as_ref().expect("a page above")),
         2,
     )
     .await
@@ -620,8 +621,8 @@ async fn the_list_pages_from_where_the_page_beside_it_stopped() {
 
     // A cursor round-trips through a link.
     assert_eq!(
-        timada_catalog::ProductCursor::parse(&older.param()),
+        timada_core::page::Cursor::parse(&older.param()),
         Some(older)
     );
-    assert_eq!(timada_catalog::ProductCursor::parse("x-1"), None);
+    assert_eq!(timada_core::page::Cursor::parse("x-1"), None);
 }
