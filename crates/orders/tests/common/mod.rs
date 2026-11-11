@@ -149,9 +149,18 @@ pub fn billing() -> ShippingAddress {
 
 /// A cart holding `quantity` of the product.
 pub async fn cart_with(orders: &Orders, product_id: &str, quantity: u32) -> String {
-    let cart_id = orders.create_cart(SHOPPER).await.unwrap();
     orders
-        .add_to_cart(SHOPPER, &cart_id, item(product_id, None, quantity))
+        .start_cart(SHOPPER, item(product_id, None, quantity))
+        .await
+        .unwrap()
+}
+
+/// A cart whose every line was taken out again: what is left of one a
+/// shopper emptied.
+pub async fn emptied_cart(orders: &Orders, product_id: &str) -> String {
+    let cart_id = cart_with(orders, product_id, 1).await;
+    orders
+        .remove_from_cart(SHOPPER, &cart_id, product_id, None)
         .await
         .unwrap();
     cart_id

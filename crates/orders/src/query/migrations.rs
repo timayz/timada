@@ -74,6 +74,10 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             );
         CREATE INDEX orders_carts_open ON orders_carts (tenant_id, updated_at)
                 WHERE order_id IS NULL;
+        CREATE INDEX orders_carts_paying ON orders_carts (tenant_id, updated_at, id)
+                WHERE status = 'paying';
+        CREATE INDEX orders_carts_idle ON orders_carts (updated_at, id)
+                WHERE status = 'open';
         CREATE INDEX orders_carts_returning ON orders_carts (return_requested_at)
                 WHERE return_requested_at IS NOT NULL;
         CREATE INDEX orders_carts_unanswered ON orders_carts (unanswered_since)

@@ -47,6 +47,9 @@ pub struct Config {
     /// default.
     #[serde(default)]
     pub store: StoreConfig,
+    /// How long carts nobody touches are kept; every setting has a default.
+    #[serde(default)]
+    pub carts: CartsConfig,
     /// How many invitations members may send; every setting has a default.
     #[serde(default)]
     pub invitations: InvitationsConfig,
@@ -351,9 +354,9 @@ fn default_automation_abandoned_after_secs() -> u64 {
     60 * 60
 }
 
-/// What storefronts may ask of this node for their shoppers. Each node counts
-/// on its own: behind a balancer over N nodes, a client may get up to N
-/// times these limits.
+/// What storefronts may ask for their shoppers. The limits hold across the
+/// cluster: a node asks the others what they let through before letting one
+/// more through (`rate_limit.rs`).
 #[derive(Debug, Deserialize, Clone)]
 pub struct StoreConfig {
     /// Sign-in codes one shopper's address may have mailed, at one shop,
@@ -389,6 +392,19 @@ pub struct StoreConfig {
     /// The window both sign-up limits count over, in seconds.
     #[serde(default = "default_newsletter_signups_window_secs")]
     pub newsletter_signups_window_secs: u64,
+    /// Carts one visitor's address may start, at one shop, within the
+    /// window, a start refused for its item included: the limit is checked
+    /// before the store is read. A shopper keeps the cart of their first
+    /// add, so this holds back visitors that do not.
+    #[serde(default = "default_carts_per_ip")]
+    pub carts_per_ip: u32,
+    /// Carts one API key may start within the window, whoever the visitors,
+    /// refused starts included.
+    #[serde(default = "default_carts_per_key")]
+    pub carts_per_key: u32,
+    /// The window both cart limits count over, in seconds.
+    #[serde(default = "default_carts_window_secs")]
+    pub carts_window_secs: u64,
 }
 
 impl Default for StoreConfig {
@@ -403,6 +419,9 @@ impl Default for StoreConfig {
             newsletter_signups_per_ip: default_newsletter_signups_per_ip(),
             newsletter_signups_per_key: default_newsletter_signups_per_key(),
             newsletter_signups_window_secs: default_newsletter_signups_window_secs(),
+            carts_per_ip: default_carts_per_ip(),
+            carts_per_key: default_carts_per_key(),
+            carts_window_secs: default_carts_window_secs(),
         }
     }
 }
@@ -440,6 +459,18 @@ fn default_newsletter_signups_per_key() -> u32 {
 }
 
 fn default_newsletter_signups_window_secs() -> u64 {
+    60 * 60
+}
+
+fn default_carts_per_ip() -> u32 {
+    30
+}
+
+fn default_carts_per_key() -> u32 {
+    5_000
+}
+
+fn default_carts_window_secs() -> u64 {
     60 * 60
 }
 
@@ -482,12 +513,62 @@ impl StoreConfig {
                 "store.newsletter_signups_window_secs",
                 self.newsletter_signups_window_secs,
             ),
+            ("store.carts_per_ip", u64::from(self.carts_per_ip)),
+            ("store.carts_per_key", u64::from(self.carts_per_key)),
+            ("store.carts_window_secs", self.carts_window_secs),
         ] {
             if value == 0 {
                 return Err(ConfigError::Message(format!(
                     "{name} must be greater than 0"
                 )));
             }
+        }
+        Ok(())
+    }
+}
+
+/// How long carts nobody touches are kept. One that lay idle that long, with
+/// nothing about it that could still move money, is dropped
+/// (`idle_carts.rs`): the shopper's next visit starts another, and the
+/// shop's list of open carts forgets it.
+#[derive(Debug, Deserialize, Clone)]
+pub struct CartsConfig {
+    /// Days a cart is kept after its last change, at least 1.
+    #[serde(default = "default_carts_idle_days")]
+    pub idle_days: u64,
+    /// How often, in seconds, this node looks for idle carts to drop.
+    #[serde(default = "default_carts_check_secs")]
+    pub check_secs: u64,
+}
+
+impl Default for CartsConfig {
+    fn default() -> Self {
+        Self {
+            idle_days: default_carts_idle_days(),
+            check_secs: default_carts_check_secs(),
+        }
+    }
+}
+
+fn default_carts_idle_days() -> u64 {
+    30
+}
+
+fn default_carts_check_secs() -> u64 {
+    60 * 60
+}
+
+impl CartsConfig {
+    /// How long a cart is kept after its last change.
+    pub fn idle(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.idle_days.saturating_mul(24 * 60 * 60))
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.idle_days == 0 {
+            return Err(ConfigError::Message(
+                "carts.idle_days must be greater than 0".into(),
+            ));
         }
         Ok(())
     }
@@ -856,6 +937,7 @@ impl Config {
         config.server.validate()?;
         config.media.validate()?;
         config.store.validate()?;
+        config.carts.validate()?;
         config.invitations.validate()?;
         if let Some(store_api) = &config.store_api {
             store_api.validate()?;

@@ -244,11 +244,11 @@ async fn a_request_is_priced_once_and_refused_when_it_cannot_go_ahead() {
 #[tokio::test]
 async fn an_empty_cart_or_a_bad_address_cannot_ask_to_pay() {
     let (orders, catalog) = store().await;
-    let empty = orders.create_cart(SHOPPER).await.unwrap();
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let empty = emptied_cart(&orders, &mug).await;
     let refused = orders.request_checkout(SHOPPER, &empty, checkout()).await;
     assert!(matches!(refused, Err(OrderError::EmptyCart)), "{refused:?}");
 
-    let mug = product(&catalog, "Mug", 1250, "EUR").await;
     let cart_id = cart_with(&orders, &mug, 1).await;
     let refused = orders
         .request_checkout(

@@ -478,7 +478,8 @@ impl<E: Store> Runner<E> {
     }
 
     /// The customer's address, and the order the mail is about when there
-    /// is one; `None` once the address is gone (erased).
+    /// is one; `None` once the address is gone (erased, or on a cart dropped
+    /// after lying idle).
     async fn recipient(
         &self,
         tenant: &TenantState,
@@ -596,7 +597,7 @@ impl<E: Store> Runner<E> {
         };
         let Some((address, order)) = self.recipient(tenant, subject, &run.subject_id).await? else {
             return Ok(Acted::Skipped(
-                "The customer's address is gone (erased).".into(),
+                "The customer's address is gone (erased, or its cart dropped).".into(),
             ));
         };
         let Some(address) = normalize_email(&address) else {
@@ -1272,11 +1273,9 @@ mod tests {
             .unwrap();
         catalog.publish_product(MEMBER, &product.id).await.unwrap();
         let orders = timada_orders::Command::new(store.clone(), TENANT);
-        let cart = orders.create_cart("storefront").await.unwrap();
-        orders
-            .add_to_cart(
+        let cart = orders
+            .start_cart(
                 "storefront",
-                &cart,
                 timada_orders::CartItem {
                     product_id: product.id.clone(),
                     variant_id: None,

@@ -229,11 +229,15 @@ pub async fn reconcile(
                     code: pending.code.clone(),
                 });
             }
+            // A cart gone (dropped after lying idle, which only one with no
+            // payment open is) has no card form left to close.
             match orders
                 .cancel_payment(DASHBOARD_ACTOR, cart_id, &status.payment_id)
                 .await
             {
-                Ok(()) | Err(OrderError::PaymentNotFound) => Ok(Outcome::Ignored),
+                Ok(()) | Err(OrderError::PaymentNotFound | OrderError::CartNotFound) => {
+                    Ok(Outcome::Ignored)
+                }
                 Err(err) => Err(err.into()),
             }
         }
@@ -292,12 +296,17 @@ pub async fn reconcile(
                 )
                 .await;
             }
+            // A cart gone has nothing a payment could buy: one is dropped
+            // after lying idle only once every payment of it was settled
+            // (cancelled, given back, or left to the merchant in Stripe), so
+            // this is a late word about one of those.
+            let Some(cart) = cart else {
+                tracing::warn!(%tenant_id, %cart_id, payment = %status.payment_id, "a payment of a cart the shop no longer has: nothing to place");
+                return Ok(Outcome::Ignored);
+            };
             // Not an order yet: the holds its checkout took may have lapsed
             // since, so they are taken again before the order is placed.
-            if let Some(cart) = cart.as_ref()
-                && let Some(gone) =
-                    retake_holds(&store, tenant_id, cart, &status.payment_id).await?
-            {
+            if let Some(gone) = retake_holds(&store, tenant_id, &cart, &status.payment_id).await? {
                 tracing::warn!(%tenant_id, payment = %status.payment_id, code = %gone, "a late payment finds what it held gone: given back");
                 return give_payment_back(payments, account, &orders, cart_id, status, gone).await;
             }

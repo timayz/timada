@@ -565,17 +565,13 @@ async fn a_checkout_key_reads_how_the_shop_sells_and_never_a_cart_or_order() {
     // The dashboard fills the cart for the storefront (`/store/carts/*`),
     // in the tenant, and says how the shop takes payment.
     let dashboard = timada_orders::Command::new(merchant.clone(), &acme.id);
-    let cart_id = dashboard
-        .create_cart(timada_orders::STOREFRONT_ACTOR)
-        .await
-        .unwrap();
     let item = timada_orders::CartItem {
         product_id: mug.id.clone(),
         variant_id: None,
         quantity: 2,
     };
-    dashboard
-        .add_to_cart(timada_orders::STOREFRONT_ACTOR, &cart_id, item.clone())
+    let cart_id = dashboard
+        .start_cart(timada_orders::STOREFRONT_ACTOR, item.clone())
         .await
         .unwrap();
     dashboard
@@ -625,7 +621,7 @@ async fn a_checkout_key_reads_how_the_shop_sells_and_never_a_cart_or_order() {
     // Nor does it write: filling a cart and asking to pay are the
     // dashboard's, which a storefront asks over HTTP.
     let refused = orders
-        .create_cart(timada_orders::STOREFRONT_ACTOR)
+        .start_cart(timada_orders::STOREFRONT_ACTOR, item.clone())
         .await
         .unwrap_err();
     assert!(

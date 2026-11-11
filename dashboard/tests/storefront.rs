@@ -1536,18 +1536,18 @@ async fn a_store_with_a_checkout_key_sells() {
 
     // The first add makes the cart; the next ones go to it.
     let cart_id = store
-        .add_to_cart(None, &mug.id, None, 2)
+        .add_to_cart(None, &mug.id, None, 2, None)
         .await
         .unwrap()
         .unwrap();
     let same = store
-        .add_to_cart(Some(&cart_id), &mug.id, None, 1)
+        .add_to_cart(Some(&cart_id), &mug.id, None, 1, None)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(same, cart_id);
     let refused = store
-        .add_to_cart(Some(&cart_id), &mug.id, None, 0)
+        .add_to_cart(Some(&cart_id), &mug.id, None, 0, None)
         .await
         .unwrap();
     assert!(
@@ -1637,7 +1637,7 @@ async fn a_store_with_a_checkout_key_sells() {
     assert_eq!(cart.order_id.as_deref(), Some(placed.order_id.as_str()));
     // A cart already ordered: the next add starts a new one.
     let next = store
-        .add_to_cart(Some(&cart_id), &mug.id, None, 1)
+        .add_to_cart(Some(&cart_id), &mug.id, None, 1, None)
         .await
         .unwrap()
         .unwrap();
@@ -1668,7 +1668,7 @@ async fn a_store_with_a_checkout_key_sells() {
         .await
         .unwrap();
     let err = window
-        .add_to_cart(None, &mug.id, None, 1)
+        .add_to_cart(None, &mug.id, None, 1, None)
         .await
         .unwrap_err();
     assert!(format!("{err:#}").contains("store:checkout"), "{err:#}");
@@ -1734,7 +1734,7 @@ async fn a_checkout_knows_how_to_pay_and_the_vat_in_the_total() {
     // A mug: 20 % French VAT is in its price, and in Germany's too while
     // the merchant sells little abroad; none on an export.
     let cart_id = store
-        .add_to_cart(None, &mug, None, 1)
+        .add_to_cart(None, &mug, None, 1, None)
         .await
         .unwrap()
         .unwrap();
@@ -1748,7 +1748,7 @@ async fn a_checkout_knows_how_to_pay_and_the_vat_in_the_total() {
 
     // With a book at 5.5 %, each rate on its own sum.
     store
-        .add_to_cart(Some(&cart_id), &book, None, 1)
+        .add_to_cart(Some(&cart_id), &book, None, 1, None)
         .await
         .unwrap()
         .unwrap();
@@ -1818,7 +1818,7 @@ async fn a_store_shows_the_checkout_offers_and_prices_one_unit() {
 
     // A mug in the cart: the tracker is offered, illustrated from the copy.
     let cart_id = store
-        .add_to_cart(None, &mug, None, 1)
+        .add_to_cart(None, &mug, None, 1, None)
         .await
         .unwrap()
         .unwrap();
@@ -1836,7 +1836,7 @@ async fn a_store_shows_the_checkout_offers_and_prices_one_unit() {
 
     // Two trackers added: one line, one unit of it at the offer.
     store
-        .add_to_cart(Some(&cart_id), &tracker, None, 2)
+        .add_to_cart(Some(&cart_id), &tracker, None, 2, None)
         .await
         .unwrap()
         .unwrap();
@@ -2196,17 +2196,37 @@ async fn code_endpoint(platform: cluster::Executor, limits: config::StoreConfig)
 /// read model, which the dashboard's subscription keeps current; here
 /// nothing runs it, so the stand-in catches it up before each answer.
 async fn dashboard_endpoint(platform: cluster::Executor, db: Db) -> String {
+    serve_dashboard(platform, db, None).await
+}
+
+/// [`dashboard_endpoint`], holding the carts started (`POST /store/carts`)
+/// to `limits` as the route does.
+async fn limited_dashboard_endpoint(
+    platform: cluster::Executor,
+    db: Db,
+    limits: config::StoreConfig,
+) -> String {
+    serve_dashboard(platform, db, Some(limits)).await
+}
+
+async fn serve_dashboard(
+    platform: cluster::Executor,
+    db: Db,
+    limits: Option<config::StoreConfig>,
+) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let catching_up = Arc::new(tokio::sync::Mutex::new(()));
+    let limiter = Arc::new(rate_limit::RateLimiter::new(None));
     tokio::spawn(async move {
         loop {
-            let Ok((mut socket, _)) = listener.accept().await else {
+            let Ok((mut socket, peer)) = listener.accept().await else {
                 return;
             };
             let platform = platform.clone();
             let db = db.clone();
             let catching_up = catching_up.clone();
+            let (limits, limiter) = (limits.clone(), limiter.clone());
             tokio::spawn(async move {
                 {
                     let _one_at_a_time = catching_up.lock().await;
@@ -2231,8 +2251,30 @@ async fn dashboard_endpoint(platform: cluster::Executor, db: Db) -> String {
                         (StatusCode::FORBIDDEN, json!({}))
                     }
                     Ok(access) => {
-                        let orders = store_carts::gateway(platform, &access.tenant.id);
-                        dispatch(&orders, &db, &method, &path, &body).await.unwrap()
+                        let starts = method == "POST" && path == "/store/carts";
+                        let allowed = match limits.as_ref().filter(|_| starts) {
+                            Some(limits) => {
+                                rate_limit::allow_new_cart(
+                                    &limiter,
+                                    limits,
+                                    &access.key.id,
+                                    &access.tenant.id,
+                                    header(&head, "x-shopper-ip").as_deref(),
+                                    Some(peer.ip()),
+                                )
+                                .await
+                            }
+                            None => true,
+                        };
+                        if allowed {
+                            let orders = store_carts::gateway(platform, &access.tenant.id);
+                            dispatch(&orders, &db, &method, &path, &body).await.unwrap()
+                        } else {
+                            (
+                                StatusCode::TOO_MANY_REQUESTS,
+                                json!({ "error": timada_orders::TOO_MANY_CARTS }),
+                            )
+                        }
                     }
                 };
                 respond(socket, status, &answer).await;
@@ -2440,6 +2482,78 @@ async fn sign_in_codes_are_held_to_a_limit_per_shopper_and_per_key() {
     // The key has had four codes mailed (the refusal cost it none): no
     // more, whoever the shopper.
     assert_eq!(ask(Some("198.51.100.9")).await, Err("too_many_requests"));
+
+    store.shutdown().await;
+    h.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn carts_started_are_held_to_a_limit_per_visitor_and_per_key() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h
+        .key_with(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
+        .await;
+    let catalog = h.catalog(&acme);
+    let mug = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Blue Mug".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .price_product("alice", &mug.id, 1250, "EUR")
+        .await
+        .unwrap();
+    catalog.publish_product("alice", &mug.id).await.unwrap();
+    let api = limited_dashboard_endpoint(
+        h.platform.0.clone(),
+        h.db.clone(),
+        config::StoreConfig {
+            carts_per_ip: 2,
+            carts_per_key: 4,
+            carts_window_secs: 600,
+            ..config::StoreConfig::default()
+        },
+    )
+    .await;
+    let store = Store::connect(h.config(&token).api_url(api), h.local_db("carts").await)
+        .await
+        .unwrap();
+    let add = async |cart_id: Option<&str>, ip: Option<&str>| {
+        store
+            .add_to_cart(cart_id, &mug.id, None, 1, ip.map(|ip| ip.parse().unwrap()))
+            .await
+            .unwrap()
+    };
+    let too_many = |refused: &timada_storefront::Refusable<String>| {
+        matches!(refused, Err(timada_storefront::OrderError::TooManyCarts))
+    };
+
+    // One visitor starts their two carts, the third is refused, and the
+    // visitor next to them still starts theirs.
+    let first = add(None, Some("203.0.113.7")).await.unwrap();
+    add(None, Some("203.0.113.7")).await.unwrap();
+    let refused = add(None, Some("203.0.113.7")).await;
+    assert!(too_many(&refused), "{refused:?}");
+    add(None, Some("2001:db8::7")).await.unwrap();
+    // Past the limit, the visitor still fills the cart they have.
+    assert_eq!(
+        add(Some(first.as_str()), Some("203.0.113.7"))
+            .await
+            .unwrap(),
+        first
+    );
+    // Without the visitor's address, the storefront's own counts.
+    add(None, None).await.unwrap();
+    // The key has started four carts (the refusal cost it none): no more,
+    // whoever the visitor.
+    let refused = add(None, Some("198.51.100.9")).await;
+    assert!(too_many(&refused), "{refused:?}");
 
     store.shutdown().await;
     h.finish().await;
@@ -2897,7 +3011,7 @@ async fn a_dashboard_that_is_away_is_told_as_unavailable_not_as_a_failure() {
         ("the cart", store.cart("c1").await.err()),
         (
             "adding to it",
-            store.add_to_cart(None, "p1", None, 1).await.err(),
+            store.add_to_cart(None, "p1", None, 1, None).await.err(),
         ),
         ("the shopper", store.shopper("tk").await.err()),
         ("an order", store.order("o1").await.err()),
@@ -2936,7 +3050,7 @@ async fn a_dashboard_that_is_away_is_told_as_unavailable_not_as_a_failure() {
     .await
     .unwrap();
     let refused = paused_shop
-        .add_to_cart(None, "p1", None, 1)
+        .add_to_cart(None, "p1", None, 1, None)
         .await
         .expect("a refusal is not a failure")
         .unwrap_err();
