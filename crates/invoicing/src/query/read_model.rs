@@ -12,6 +12,7 @@ use evento::{
 use timada_core::db::{Db, Value, execute, params_from_iter};
 
 use crate::aggregator::book::{CreditNoteIssued, InvoiceIssued};
+use crate::query::DOCUMENTS;
 use crate::value_object::{DocumentKind, VatSubtotal, document_label};
 
 /// The cursor identity of the read-model subscription, in the store.
@@ -116,6 +117,7 @@ async fn upsert(db: &Db, tenant_id: &str, row: Row<'_>) -> anyhow::Result<()> {
     let env = (tenant_id, row);
     db.write(&env, |tx, (tenant_id, row)| {
         Box::pin(async move {
+            let was = DOCUMENTS.of(tx, tenant_id, row.id).await?;
             for subtotal in row.vat {
                 execute(
                     tx,
@@ -170,7 +172,7 @@ async fn upsert(db: &Db, tenant_id: &str, row: Row<'_>) -> anyhow::Result<()> {
                 ]),
             )
             .await?;
-            Ok(())
+            DOCUMENTS.settle(tx, tenant_id, row.id, was).await
         })
     })
     .await

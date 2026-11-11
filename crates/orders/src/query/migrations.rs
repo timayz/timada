@@ -10,7 +10,9 @@ pub const MIGRATION_APP: &str = "orders";
 /// order's row carries the whole order as its page shows it (`state`, the
 /// [`OrderRecord`](crate::OrderRecord) JSON); a cart's row, the payments of
 /// it the provider would not give back (`refused_returns`); and
-/// `orders_order_mails` where each mail to the shopper about an order stands.
+/// `orders_order_mails` where each mail to the shopper about an order stands;
+/// `orders_tallies` how many orders and open carts each tenant has, for its
+/// home (see `ORDERS` and `OPEN_CARTS`).
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
     &[Migration::up(
@@ -98,6 +100,12 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 sent_at INTEGER,
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, order_id, mail)
+            );
+        CREATE TABLE orders_tallies (
+                tenant_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                n INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, name)
             );",
     )],
 );
@@ -109,4 +117,5 @@ pub const TABLES: &[&str] = &[
     "orders_carts",
     "orders_order_products",
     "orders_order_mails",
+    "orders_tallies",
 ];
