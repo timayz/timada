@@ -303,28 +303,43 @@ impl StockView {
     }
 }
 
+/// How many stock streams [`stocks_of`] reads at once.
+const STOCK_READS: usize = 8;
+
 /// The stock of each thing the product sells, read from their own streams
 /// so a change shows at once: one entry per variant, or one for a product
-/// without variants.
+/// without variants. Each is a pointer and a generation of up to a thousand
+/// events, so they are read a few at a time rather than one after another.
 async fn stocks_of(access: &TenantAccess, product: &ProductState) -> Result<Vec<StockView>> {
-    let gateway = catalog(access)?;
+    let executor = access.executor()?.clone();
+    let tenant = access.tenant_id().to_owned();
     let now = crate::auth::now();
-    let ids: Vec<Option<&str>> = if product.variants.is_empty() {
+    let ids: Vec<Option<String>> = if product.variants.is_empty() {
         vec![None]
     } else {
         product
             .variants
             .iter()
-            .map(|v| Some(v.id.as_str()))
+            .map(|v| Some(v.id.clone()))
             .collect()
     };
     let mut stocks = Vec::with_capacity(ids.len());
-    for variant_id in ids {
-        let stock = gateway
-            .load_stock(&product.id, variant_id)
-            .await
-            .map_err(topcoat::Error::from_anyhow)?;
-        stocks.push(StockView::of(stock.as_ref(), now));
+    for chunk in ids.chunks(STOCK_READS) {
+        let mut reads = tokio::task::JoinSet::new();
+        for (n, variant_id) in chunk.iter().cloned().enumerate() {
+            let gateway = timada_catalog::Command::new(executor.clone(), tenant.clone());
+            let product_id = product.id.clone();
+            reads.spawn(async move {
+                let stock = gateway.load_stock(&product_id, variant_id.as_deref()).await;
+                (n, stock)
+            });
+        }
+        let mut read = reads.join_all().await;
+        read.sort_by_key(|(n, _)| *n);
+        for (_, stock) in read {
+            let stock = stock.map_err(topcoat::Error::from_anyhow)?;
+            stocks.push(StockView::of(stock.as_ref(), now));
+        }
     }
     Ok(stocks)
 }
@@ -519,7 +534,23 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .iter()
         .map(|option| OptionRow::of(option, &product))
         .collect();
-    let stocks = stocks_of(&access, &product).await?;
+    // A product no longer linked has no AliExpress tab to come back to.
+    let tab = match Tab::of(query.tab.as_deref()) {
+        Tab::AliExpress if link.is_none() => Tab::Overview,
+        tab => tab,
+    };
+    // Only the tabs that show the stock read it: the overview for a product
+    // counted on its own, the variants tab for each variant.
+    let shows_stock = match tab {
+        Tab::Overview => !has_variants_of(&product),
+        Tab::Variants => true,
+        _ => false,
+    };
+    let stocks = if shows_stock {
+        stocks_of(&access, &product).await?
+    } else {
+        vec![StockView::default(); product.variants.len().max(1)]
+    };
     let variants: Vec<VariantRow> = product
         .variants
         .iter()
@@ -595,11 +626,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .map(|p| timada_core::format_amount(p.amount_cents))
         .unwrap_or_default();
-    // A product no longer linked has no AliExpress tab to come back to.
-    let tab = match Tab::of(query.tab.as_deref()) {
-        Tab::AliExpress if link.is_none() => Tab::Overview,
-        tab => tab,
-    };
     let page_tab = |of: Tab, label: &'static str, count: Option<usize>| PageTab {
         label,
         href: product_tab_url(cx, &slug, &product.id, of, None, None),
