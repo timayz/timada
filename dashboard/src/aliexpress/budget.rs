@@ -11,7 +11,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use timada_aliexpress::Share;
+use timada_core::Share;
 
 const SECS_PER_DAY: f64 = 86_400.0;
 

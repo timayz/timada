@@ -3,7 +3,8 @@
 //! time zone, the keys personal data is sealed under ([`keys`]), what a
 //! stream keeps of a mailed code or link ([`codes`]) and where its mail
 //! stands ([`sending`]), when a claim on a slug or a code may be taken over
-//! ([`claim`]), and the small rules every
+//! ([`claim`]), which of the nodes up takes a piece of work ([`share`]),
+//! and the small rules every
 //! context would otherwise write for itself: the canonical form of an
 //! e-mail address ([`email`]), of a slug ([`slug`]) and of a currency
 //! ([`currency`]), the clock ([`time`]), calendar dates ([`civil`]), an
@@ -22,6 +23,7 @@ pub mod keys;
 pub mod money;
 pub mod picture;
 pub mod sending;
+pub mod share;
 pub mod slug;
 pub mod sql;
 pub mod time;
@@ -41,6 +43,7 @@ pub use sending::{
     Claim, Claimant, LEASE_SECS, Outcome as MailOutcome, RETRY_DELAYS_SECS, Record as MailRecord,
     Sending, Status as MailStatus,
 };
+pub use share::{Share, shard_of};
 pub use slug::{
     MIN_SLUG_LEN, SLUG_SUFFIX_LEN, normalize_slug, slugify, suffixed_slug, truncate_slug,
 };
