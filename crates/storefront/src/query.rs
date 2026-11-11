@@ -1,11 +1,15 @@
 //! What a storefront page reads: the published products of the local copy.
 
-use std::collections::BTreeMap;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+
 use timada_catalog::{DeliveryDays, TreeNode, TreeOf, tree_of};
-use timada_core::db::{Db, FromRow, Json, Row};
+use timada_core::db::{Db, FromRow, FromValue, Json, Row, Value, fts_query, params_from_iter};
+use timada_core::like_contains;
 use timada_core::{Picture, Rendition};
 
 use crate::money::MoneyFormat;
+use crate::read_model::{OptionRow, WHOLE_SHOP, distinct_option_rows};
 
 /// A picture of a product, in the two sizes the store keeps it
 /// ([`timada_core::Rendition`]): the page rendition (`url`, `width`,
@@ -379,20 +383,17 @@ impl ProductSort {
 
 /// A page of the catalog: 1-based `page`, `per_page` capped at
 /// [`MAX_PER_PAGE`], an optional search over name and slug, a category whose
-/// page it is, the categories a product must be in (any of them), the products
-/// to leave out and the order.
+/// page it is (the whole shop's otherwise), a price band, options, the
+/// products to leave out and the order.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProductQuery {
     pub page: u32,
     pub per_page: u32,
     pub q: Option<String>,
     /// A category whose page this is: the products in it and in everything
-    /// below it.
+    /// below it. Without one, the whole shop's: every published product.
     pub category: Option<String>,
-    /// Products filed directly under any of these; empty means every
-    /// category.
-    pub categories: Vec<String>,
-    /// Products to leave out, by id: what "related products" needs.
+    /// Products to leave out, by id: what the home's second rail needs.
     pub exclude: Vec<String>,
     /// The least a product may cost, in minor units: one whose dearest
     /// price is under it is out.
@@ -413,7 +414,6 @@ impl Default for ProductQuery {
             per_page: DEFAULT_PER_PAGE,
             q: None,
             category: None,
-            categories: Vec::new(),
             exclude: Vec::new(),
             min_cents: None,
             max_cents: None,
@@ -444,12 +444,6 @@ impl ProductQuery {
     /// every category below it.
     pub fn in_category(mut self, id: impl Into<String>) -> Self {
         self.category = Some(id.into());
-        self
-    }
-
-    /// Only products filed directly under one of these categories.
-    pub fn in_categories(mut self, ids: impl IntoIterator<Item = String>) -> Self {
-        self.categories = ids.into_iter().collect();
         self
     }
 
@@ -526,240 +520,456 @@ impl ProductPage {
     }
 }
 
-use timada_core::db::fts_query as phrase;
-use timada_core::like_contains as contains;
-
-/// Where a page of products comes from, `?1` being what was searched for.
-/// With a phrase ([`phrase`]: `q` long enough for the index, as one folded
-/// phrase) the full-text index over `slug_search` and `name_search` narrows
-/// the products first, so a search costs what it matches. Without one, `?1`
-/// is a `LIKE` pattern or `NULL`.
-macro_rules! products_from {
-    (phrase) => {
-        "FROM storefront_products p
-         WHERE p.id IN (SELECT id FROM storefront_products
-                        WHERE fts_match(slug_search, name_search, ?1)) "
-    };
-    (pattern) => {
-        "FROM storefront_products p
-         WHERE (?1 IS NULL OR p.slug LIKE ?1 ESCAPE '\\' OR p.name LIKE ?1 ESCAPE '\\') "
-    };
-}
-
-/// What a page of products is filtered by besides the search, shared by the
-/// count, the list and the facets so they never disagree. `?2` is the JSON
-/// array of category ids (`[]` for every category), `?3` the JSON ids to leave
-/// out, `?4` a category whose page it is (read from what the subscription
-/// stored for it, so a sub-category costs nothing more), `?7` and `?8` the
-/// price band a product's own range must overlap, `?9` the JSON array of
-/// `[option key, value key]` pairs it must every one of (`[]` for none).
-macro_rules! products_where {
+/// The columns of a product (`p`) as [`Product`] reads them.
+macro_rules! product_columns {
     () => {
-        "AND p.status = 'published'
-           AND (?2 = '[]' OR p.id IN (SELECT product_id FROM storefront_product_categories
-                WHERE category_id IN (SELECT value FROM json_each(?2))))
-           AND (?3 = '[]' OR p.id NOT IN (SELECT value FROM json_each(?3)))
-           AND (?4 IS NULL OR p.id IN (SELECT product_id FROM storefront_category_products
-                WHERE category_id = ?4))
-           AND (?7 IS NULL OR p.max_amount_cents >= ?7)
-           AND (?8 IS NULL OR p.min_amount_cents <= ?8)
-           AND (?9 = '[]' OR (SELECT count(*) FROM json_each(?9) o
-                WHERE EXISTS (SELECT 1 FROM storefront_product_options po
-                    WHERE po.product_id = p.id
-                      AND po.name_key = json_extract(o.value, '$[0]')
-                      AND po.value_key = json_extract(o.value, '$[1]')))
-                = json_array_length(?9)) "
+        "p.id, p.slug, p.name, p.description, p.amount_cents, p.currency, p.updated_at,
+         p.images_json, p.options_json, p.variants_json, p.attributes_json, p.min_amount_cents,
+         p.max_amount_cents, p.review_count, p.rating_x100, p.stock_json, p.in_stock,
+         p.delivery_min_days, p.delivery_max_days"
     };
 }
 
-/// One page of the list, ordered by `$order`: each order is its own statement
-/// over the same filter, so every statement stays a literal.
-macro_rules! products_page {
-    ($from:ident, $order:literal) => {
-        concat!(
-            "SELECT p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
-                p.updated_at, p.images_json, p.options_json, p.variants_json,
-                p.attributes_json, p.min_amount_cents, p.max_amount_cents, p.review_count,
-                p.rating_x100, p.stock_json, p.in_stock, p.delivery_min_days, p.delivery_max_days ",
-            products_from!($from),
-            products_where!(),
-            $order,
-            " LIMIT ?5 OFFSET ?6"
-        )
-    };
+/// A statement written for one query, with its values in the order they
+/// are bound. A condition the query leaves out is not written at all: over
+/// `?N IS NULL OR …` Turso's planner loses its indexes.
+#[derive(Default)]
+struct Statement {
+    sql: String,
+    values: Vec<Value>,
 }
 
-macro_rules! products_count {
-    ($from:ident) => {
-        concat!("SELECT count(*) ", products_from!($from), products_where!())
-    };
+impl Statement {
+    /// Binds `value` and returns its placeholder.
+    fn bind(&mut self, value: impl Into<Value>) -> String {
+        self.values.push(value.into());
+        format!("?{}", self.values.len())
+    }
+
+    /// Binds each of `values` and returns their placeholders, comma
+    /// separated.
+    fn bind_all<'a>(&mut self, values: impl IntoIterator<Item = &'a String>) -> String {
+        values
+            .into_iter()
+            .map(|value| self.bind(value.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    async fn fetch_all<T: FromRow>(self, db: &Db) -> anyhow::Result<Vec<T>> {
+        db.fetch_all(&self.sql, params_from_iter(self.values)).await
+    }
+
+    async fn fetch_scalar<T: FromValue>(self, db: &Db) -> anyhow::Result<T> {
+        db.fetch_scalar(&self.sql, params_from_iter(self.values))
+            .await
+    }
 }
 
-/// Newest first, and by what a shopper would actually pay: the cheapest a
-/// product can be going up, the dearest going down. One with no price sorts
-/// last either way.
-macro_rules! products_pages {
-    ($from:ident) => {
-        [
-            products_page!($from, "ORDER BY p.updated_at DESC, p.id DESC"),
-            products_page!(
-                $from,
-                "ORDER BY p.min_amount_cents IS NULL, p.min_amount_cents ASC, p.id DESC"
-            ),
-            products_page!(
-                $from,
-                "ORDER BY p.max_amount_cents IS NULL, p.max_amount_cents DESC, p.id DESC"
-            ),
-            products_page!(
-                $from,
-                "ORDER BY p.review_count = 0, p.rating_x100 DESC, p.review_count DESC, p.id DESC"
-            ),
-        ]
-    };
+/// How a query looks for what a shopper typed.
+enum Search {
+    /// Through the full-text index over `slug_search` and `name_search`:
+    /// `q` long enough for it, as one folded phrase ([`fts_query`]).
+    Phrase(String),
+    /// A `LIKE` pattern over slug and name, for a shorter `q`: a pass over
+    /// the published rows.
+    Pattern(String),
 }
 
-const PAGES: [&str; 4] = products_pages!(pattern);
-const COUNT: &str = products_count!(pattern);
-const SEARCH_PAGES: [&str; 4] = products_pages!(phrase);
-const SEARCH_COUNT: &str = products_count!(phrase);
+impl ProductQuery {
+    fn searched(&self) -> Option<Search> {
+        let q = self.q.as_deref()?;
+        Some(match fts_query(q) {
+            Some(phrase) => Search::Phrase(phrase),
+            None => Search::Pattern(like_contains(q)),
+        })
+    }
 
-/// The values option `?10` takes among the products the filter keeps, each
-/// with its count, in key order; one spelling per key.
-macro_rules! products_facet {
-    ($from:ident) => {
-        concat!(
-            "SELECT po.value_key, min(po.value), count(*)
-             FROM storefront_product_options po
-             WHERE po.name_key = ?10
-               AND po.product_id IN (SELECT p.id ",
-            products_from!($from),
-            products_where!(),
-            ") GROUP BY po.value_key ORDER BY po.value_key"
-        )
-    };
-}
+    /// The page whose rows the query reads: its category's, else the whole
+    /// shop's.
+    fn page_rows(&self) -> &str {
+        self.category.as_deref().unwrap_or(WHOLE_SHOP)
+    }
 
-const FACET: &str = products_facet!(pattern);
-const SEARCH_FACET: &str = products_facet!(phrase);
+    /// The option pairs a product must take, but those on the option
+    /// `aside` (the one a facet counts).
+    fn options_but<'a>(
+        &'a self,
+        aside: Option<&'a str>,
+    ) -> impl Iterator<Item = &'a (String, String)> {
+        self.options
+            .iter()
+            .filter(move |(name, _)| Some(name.as_str()) != aside)
+    }
 
-/// The `?9` bind: the pairs as a JSON array of two-element arrays.
-fn options_json(options: &[(String, String)]) -> String {
-    serde_json::to_string(options).unwrap_or_else(|_| "[]".to_owned())
+    /// Whether anything narrows the page's rows besides the products left
+    /// out.
+    fn narrowed(&self) -> bool {
+        self.min_cents.is_some() || self.max_cents.is_some() || !self.options.is_empty()
+    }
 }
 
 impl ProductSort {
-    /// Its statement among the four of [`products_pages`].
-    fn index(self) -> usize {
+    /// The order a page's rows (`cp`) are read in, and the index holding
+    /// them in that order.
+    fn order(self) -> (&'static str, &'static str) {
         match self {
-            ProductSort::Newest => 0,
-            ProductSort::PriceAsc => 1,
-            ProductSort::PriceDesc => 2,
-            ProductSort::TopRated => 3,
+            Self::Newest => (
+                "storefront_category_products_newest",
+                "cp.updated_at DESC, cp.product_id DESC",
+            ),
+            Self::PriceAsc => (
+                "storefront_category_products_price_asc",
+                "cp.min_amount_cents IS NULL, cp.min_amount_cents ASC, cp.product_id DESC",
+            ),
+            Self::PriceDesc => (
+                "storefront_category_products_price_desc",
+                "cp.max_amount_cents IS NULL, cp.max_amount_cents DESC, cp.product_id DESC",
+            ),
+            Self::TopRated => (
+                "storefront_category_products_top_rated",
+                "cp.review_count = 0, cp.rating_x100 DESC, cp.review_count DESC, \
+                 cp.product_id DESC",
+            ),
         }
     }
+
+    /// [`order`](Self::order), over what a search found.
+    fn compare(self, a: &Found, b: &Found) -> Ordering {
+        let by = match self {
+            Self::Newest => b.updated_at.cmp(&a.updated_at),
+            Self::PriceAsc => (a.min_amount_cents.is_none(), a.min_amount_cents)
+                .cmp(&(b.min_amount_cents.is_none(), b.min_amount_cents)),
+            Self::PriceDesc => a
+                .max_amount_cents
+                .is_none()
+                .cmp(&b.max_amount_cents.is_none())
+                .then(b.max_amount_cents.cmp(&a.max_amount_cents)),
+            Self::TopRated => (a.review_count == 0)
+                .cmp(&(b.review_count == 0))
+                .then(b.rating_x100.cmp(&a.rating_x100))
+                .then(b.review_count.cmp(&a.review_count)),
+        };
+        by.then_with(|| b.id.cmp(&a.id))
+    }
 }
 
-/// One page of a category, read off what the subscription keeps for it: the
-/// rows are already in `$order` in an index of their own, so the page costs
-/// its own size however large the store is. `?1` is the category, `?2` and
-/// `?3` the limit and offset.
-macro_rules! category_page {
-    ($order:literal) => {
-        concat!(
-            "SELECT p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
-                p.updated_at, p.images_json, p.options_json, p.variants_json,
-                p.attributes_json, p.min_amount_cents, p.max_amount_cents, p.review_count,
-                p.rating_x100, p.stock_json, p.in_stock, p.delivery_min_days, p.delivery_max_days
-             FROM storefront_category_products cp
-             JOIN storefront_products p ON p.id = cp.product_id
-             WHERE cp.category_id = ?1 ",
-            $order,
-            " LIMIT ?2 OFFSET ?3"
-        )
-    };
+/// The rows of the query's page (`cp`) it keeps: its band, the option pairs
+/// they must take but those on `aside`, and none of the products it leaves
+/// out.
+fn page_conditions(statement: &mut Statement, query: &ProductQuery, aside: Option<&str>) -> String {
+    let mut conditions = vec![format!(
+        "cp.category_id = {}",
+        statement.bind(query.page_rows())
+    )];
+    if let Some(min) = query.min_cents {
+        conditions.push(format!("cp.max_amount_cents >= {}", statement.bind(min)));
+    }
+    if let Some(max) = query.max_cents {
+        conditions.push(format!("cp.min_amount_cents <= {}", statement.bind(max)));
+    }
+    for (name, value) in query.options_but(aside) {
+        let (name, value) = (
+            statement.bind(name.as_str()),
+            statement.bind(value.as_str()),
+        );
+        conditions.push(format!(
+            "EXISTS (SELECT 1 FROM storefront_product_options po
+                     WHERE po.product_id = cp.product_id AND po.name_key = {name}
+                       AND po.value_key = {value})"
+        ));
+    }
+    if !query.exclude.is_empty() {
+        let ids = statement.bind_all(&query.exclude);
+        conditions.push(format!("cp.product_id NOT IN ({ids})"));
+    }
+    conditions.join(" AND ")
 }
 
-const CATEGORY_NEWEST: &str = category_page!("ORDER BY cp.updated_at DESC, cp.product_id DESC");
-const CATEGORY_PRICE_ASC: &str = category_page!(
-    "ORDER BY cp.min_amount_cents IS NULL, cp.min_amount_cents ASC, cp.product_id DESC"
-);
-const CATEGORY_PRICE_DESC: &str = category_page!(
-    "ORDER BY cp.max_amount_cents IS NULL, cp.max_amount_cents DESC, cp.product_id DESC"
-);
-const CATEGORY_TOP_RATED: &str = category_page!(
-    "ORDER BY cp.review_count = 0, cp.rating_x100 DESC, cp.review_count DESC, cp.product_id DESC"
-);
+/// One page of the query's rows, read off the index that holds them in its
+/// order: it costs its own length and its offset, however large the shop.
+/// The index is named, so the plan never rests on the planner's pick.
+fn page_statement(query: &ProductQuery, limit: i64, offset: i64) -> Statement {
+    let (index, order) = query.sort.order();
+    let mut statement = Statement::default();
+    let conditions = page_conditions(&mut statement, query, None);
+    let (limit, offset) = (statement.bind(limit), statement.bind(offset));
+    statement.sql = format!(
+        "SELECT {} FROM storefront_category_products cp INDEXED BY {index}
+         JOIN storefront_products p ON p.id = cp.product_id
+         WHERE {conditions} ORDER BY {order} LIMIT {limit} OFFSET {offset}",
+        product_columns!()
+    );
+    statement
+}
 
-/// The published products a query matches, in the order it asks for.
-pub async fn published_products(db: &Db, query: &ProductQuery) -> anyhow::Result<ProductPage> {
-    let per_page = i64::from(query.per_page.clamp(1, MAX_PER_PAGE));
-    let page = query.page.max(1);
-    // A search long enough for the index reads it; a shorter one is a
-    // `LIKE` over the rows.
-    let phrase = query.q.as_deref().and_then(phrase);
-    let (pages, count) = if phrase.is_some() {
-        (SEARCH_PAGES, SEARCH_COUNT)
+/// How many of the query's rows there are, counted over them.
+fn count_statement(query: &ProductQuery) -> Statement {
+    let mut statement = Statement::default();
+    let conditions = page_conditions(&mut statement, query, None);
+    statement.sql =
+        format!("SELECT count(*) FROM storefront_category_products cp WHERE {conditions}");
+    statement
+}
+
+/// Which of the products the query leaves out its page lists, each looked
+/// up on its own through the index on the product: given `product_id IN
+/// (…)` there, Turso read the whole index.
+fn left_out_statement(query: &ProductQuery) -> Statement {
+    let mut statement = Statement::default();
+    let page = statement.bind(query.page_rows());
+    let ids: BTreeSet<&String> = query.exclude.iter().collect();
+    statement.sql = ids
+        .into_iter()
+        .map(|id| {
+            format!(
+                "SELECT product_id FROM storefront_category_products
+                    INDEXED BY storefront_category_products_product
+                 WHERE product_id = {} AND category_id = {page}",
+                statement.bind(id.as_str())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
+    statement
+}
+
+/// How many products the query lists over every page: the count kept for
+/// its page when nothing narrows the rows, less the products left out that
+/// the page lists; counted over the rows otherwise.
+async fn listed_total(db: &Db, query: &ProductQuery) -> anyhow::Result<i64> {
+    if query.narrowed() {
+        return count_statement(query).fetch_scalar(db).await;
+    }
+    let listed = page_count(db, query.page_rows()).await?;
+    if query.exclude.is_empty() {
+        return Ok(listed);
+    }
+    let left_out: Vec<(String,)> = left_out_statement(query).fetch_all(db).await?;
+    Ok(listed - left_out.len() as i64)
+}
+
+/// How many products the page of `category_id` lists, as its rows keep it.
+async fn page_count(db: &Db, category_id: &str) -> anyhow::Result<i64> {
+    let count: Option<(i64,)> = if category_id == WHOLE_SHOP {
+        db.fetch_optional("SELECT products FROM storefront_shop", ())
+            .await?
     } else {
-        (PAGES, COUNT)
+        db.fetch_optional(
+            "SELECT subtree_count FROM storefront_categories WHERE id = ?1",
+            (category_id,),
+        )
+        .await?
     };
-    let search = phrase.or_else(|| query.q.as_deref().map(contains));
-    // A JSON array, read back by `json_each`: one bind for any number of ids.
-    let categories = serde_json::to_string(&query.categories).unwrap_or_else(|_| "[]".to_owned());
-    let exclude = serde_json::to_string(&query.exclude).unwrap_or_else(|_| "[]".to_owned());
-    let options = options_json(&query.options);
-    let offset = i64::from(page - 1) * per_page;
-    // A category's page as it is, with nothing else to match: the count and
-    // the order the subscription stored.
-    if let Some(category) = query.category.as_deref()
-        && search.is_none()
-        && query.categories.is_empty()
-        && query.exclude.is_empty()
-        && query.min_cents.is_none()
-        && query.max_cents.is_none()
-        && query.options.is_empty()
-    {
-        let total: Option<(i64,)> = db
-            .fetch_optional(
-                "SELECT subtree_count FROM storefront_categories WHERE id = ?1",
+    Ok(count.map_or(0, |(count,)| count))
+}
+
+/// What a search reads of each product it finds: enough to narrow, order
+/// and count them here.
+struct Found {
+    id: String,
+    updated_at: i64,
+    min_amount_cents: Option<i64>,
+    max_amount_cents: Option<i64>,
+    review_count: i64,
+    rating_x100: i64,
+    /// Its option rows, as `storefront_product_options` holds them: read
+    /// only when the search narrows by options or counts their values.
+    options: Vec<OptionRow>,
+}
+
+impl FromRow for Found {
+    fn from_row(row: &Row<'_>) -> anyhow::Result<Self> {
+        let options: Vec<ProductOption> = row.get::<Json<_>>("options_json")?.0;
+        Ok(Self {
+            id: row.get("id")?,
+            updated_at: row.get("updated_at")?,
+            min_amount_cents: row.get("min_amount_cents")?,
+            max_amount_cents: row.get("max_amount_cents")?,
+            review_count: row.get("review_count")?,
+            rating_x100: row.get("rating_x100")?,
+            options: distinct_option_rows(&options),
+        })
+    }
+}
+
+impl Found {
+    /// Whether it takes every one of `pairs`.
+    fn takes<'a>(&self, mut pairs: impl Iterator<Item = &'a (String, String)>) -> bool {
+        pairs.all(|(name, value)| {
+            self.options
+                .iter()
+                .any(|row| row.name_key == *name && row.value_key == *value)
+        })
+    }
+}
+
+/// The published products a search finds that the rest of the query keeps,
+/// but for its option pairs on `aside`, in no particular order; with their
+/// option rows when `options` asks for them.
+///
+/// The full-text index answers on its own: asked inside a join, or for ids
+/// a join then looked up, Turso ran the match once per row of the other
+/// side, seconds for a common word. So the statement reads the band off the
+/// product rows as well, and the rest is worked out here: the category's
+/// page (its rows' ids), the products left out, and the options, from the
+/// options a row shows, folded as the option rows are.
+async fn found(
+    db: &Db,
+    query: &ProductQuery,
+    search: &Search,
+    aside: Option<&str>,
+    options: bool,
+) -> anyhow::Result<Vec<Found>> {
+    let mut found: Vec<Found> = found_statement(query, search, aside, options)
+        .fetch_all(db)
+        .await?;
+    if let Some(category) = query.category.as_deref() {
+        let listed: HashSet<String> = db
+            .fetch_all::<(String,)>(
+                "SELECT product_id FROM storefront_category_products WHERE category_id = ?1",
                 (category,),
             )
-            .await?;
-        let total = total.map_or(0, |(count,)| count);
-        let statement = match query.sort {
-            ProductSort::Newest => CATEGORY_NEWEST,
-            ProductSort::PriceAsc => CATEGORY_PRICE_ASC,
-            ProductSort::PriceDesc => CATEGORY_PRICE_DESC,
-            ProductSort::TopRated => CATEGORY_TOP_RATED,
-        };
-        let items = db
-            .fetch_all(statement, (category, per_page, offset))
-            .await?;
-        return Ok(ProductPage {
-            items,
-            page,
-            per_page: per_page as u32,
-            total,
-        });
+            .await?
+            .into_iter()
+            .map(|(id,)| id)
+            .collect();
+        found.retain(|product| listed.contains(&product.id));
     }
-    let params = || {
-        (
-            search.as_deref(),
-            categories.as_str(),
-            exclude.as_str(),
-            query.category.as_deref(),
-            per_page,
-            offset,
-            query.min_cents,
-            query.max_cents,
-            options.as_str(),
-        )
+    found.retain(|product| {
+        !query.exclude.contains(&product.id) && product.takes(query.options_but(aside))
+    });
+    Ok(found)
+}
+
+/// What [`found`] asks the full-text index (or the rows, for a pattern):
+/// the published products matching, within the band, with their option rows
+/// when `options` asks for them or the query narrows by options other than
+/// `aside`.
+fn found_statement(
+    query: &ProductQuery,
+    search: &Search,
+    aside: Option<&str>,
+    options: bool,
+) -> Statement {
+    let mut statement = Statement::default();
+    let mut conditions = vec![match search {
+        Search::Phrase(phrase) => format!(
+            "fts_match(p.slug_search, p.name_search, {})",
+            statement.bind(phrase.as_str())
+        ),
+        Search::Pattern(pattern) => {
+            let pattern = statement.bind(pattern.as_str());
+            format!("(p.slug LIKE {pattern} ESCAPE '\\' OR p.name LIKE {pattern} ESCAPE '\\')")
+        }
+    }];
+    conditions.push("p.status = 'published'".to_owned());
+    if let Some(min) = query.min_cents {
+        conditions.push(format!("p.max_amount_cents >= {}", statement.bind(min)));
+    }
+    if let Some(max) = query.max_cents {
+        conditions.push(format!("p.min_amount_cents <= {}", statement.bind(max)));
+    }
+    let options = options || query.options_but(aside).next().is_some();
+    statement.sql = format!(
+        "SELECT p.id, p.updated_at, p.min_amount_cents, p.max_amount_cents, p.review_count,
+            p.rating_x100, {} AS options_json
+         FROM storefront_products p WHERE {}",
+        if options { "p.options_json" } else { "'[]'" },
+        conditions.join(" AND ")
+    );
+    statement
+}
+
+/// One page of what a search finds, ordered here, and how many it finds.
+async fn found_page(
+    db: &Db,
+    query: &ProductQuery,
+    search: &Search,
+    limit: i64,
+    offset: i64,
+) -> anyhow::Result<(Vec<Product>, i64)> {
+    let mut found = found(db, query, search, None, false).await?;
+    found.sort_by(|a, b| query.sort.compare(a, b));
+    let total = found.len() as i64;
+    let ids = found
+        .into_iter()
+        .skip(usize::try_from(offset).unwrap_or(usize::MAX))
+        .take(usize::try_from(limit).unwrap_or(0))
+        .map(|product| product.id)
+        .collect();
+    Ok((products_in_order(db, ids).await?, total))
+}
+
+/// The published products of `ids`, in that order.
+async fn products_in_order(db: &Db, ids: Vec<String>) -> anyhow::Result<Vec<Product>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // One placeholder per id, read through the primary key (see
+    // [`published_products_by_ids`]).
+    let statement = format!(
+        concat!(
+            "SELECT ",
+            product_columns!(),
+            " FROM storefront_products p WHERE p.id IN ({}) AND p.status = 'published'"
+        ),
+        timada_core::db::placeholders(ids.len())
+    );
+    let mut products: Vec<Product> = db.fetch_all(&statement, ids.clone()).await?;
+    products.sort_by_key(|product| ids.iter().position(|id| *id == product.id));
+    Ok(products)
+}
+
+/// The values option `name_key` takes among what a search found, each with
+/// how many take it, in key order: the facet statement's count, worked out
+/// here.
+fn facet_of(found: &[Found], name_key: &str) -> Vec<FacetValue> {
+    let mut values: BTreeMap<&str, (&str, i64)> = BTreeMap::new();
+    for row in found
+        .iter()
+        .flat_map(|product| &product.options)
+        .filter(|row| row.name_key == name_key)
+    {
+        let (label, count) = values
+            .entry(row.value_key.as_str())
+            .or_insert((row.value.as_str(), 0));
+        *label = (*label).min(row.value.as_str());
+        *count += 1;
+    }
+    values
+        .into_iter()
+        .map(|(key, (label, count))| FacetValue {
+            key: key.to_owned(),
+            label: label.to_owned(),
+            count,
+        })
+        .collect()
+}
+
+/// The published products a query matches, in the order it asks for.
+///
+/// Without a search, the page's rows are read in the order they are kept in
+/// and the count is the one kept for the page when only products left out
+/// narrow it: a listing costs its own length, whatever the size of the
+/// shop. A search reads what it finds off the full-text index (a `LIKE`
+/// pass for a `q` too short for it) and orders and counts it here.
+pub async fn published_products(db: &Db, query: &ProductQuery) -> anyhow::Result<ProductPage> {
+    let per_page = query.per_page.clamp(1, MAX_PER_PAGE);
+    let page = query.page.max(1);
+    let limit = i64::from(per_page);
+    let offset = i64::from(page - 1) * limit;
+    let (items, total) = match query.searched() {
+        Some(search) => found_page(db, query, &search, limit, offset).await?,
+        None => (
+            page_statement(query, limit, offset).fetch_all(db).await?,
+            listed_total(db, query).await?,
+        ),
     };
-    let total: i64 = db.fetch_scalar(count, params()).await?;
-    let items = db.fetch_all(pages[query.sort.index()], params()).await?;
     Ok(ProductPage {
         items,
         page,
-        per_page: per_page as u32,
+        per_page,
         total,
     })
 }
@@ -775,78 +985,118 @@ pub async fn published_option_values(
     option: &str,
 ) -> anyhow::Result<Vec<FacetValue>> {
     let name_key = facet_key(option);
-    let phrase = query.q.as_deref().and_then(phrase);
-    let statement = if phrase.is_some() {
-        SEARCH_FACET
-    } else {
-        FACET
-    };
-    let search = phrase.or_else(|| query.q.as_deref().map(contains));
-    let categories = serde_json::to_string(&query.categories).unwrap_or_else(|_| "[]".to_owned());
-    let exclude = serde_json::to_string(&query.exclude).unwrap_or_else(|_| "[]".to_owned());
-    let others: Vec<(String, String)> = query
-        .options
-        .iter()
-        .filter(|(name, _)| *name != name_key)
-        .cloned()
-        .collect();
-    let rows: Vec<(String, String, i64)> = db
-        .fetch_all(
-            statement,
-            (
-                search.as_deref(),
-                categories.as_str(),
-                exclude.as_str(),
-                query.category.as_deref(),
-                // `?5` and `?6` are the page's limit and offset, which a facet
-                // has no use for; every number up to the last one still needs
-                // a value.
-                0i64,
-                0i64,
-                query.min_cents,
-                query.max_cents,
-                options_json(&others),
-                name_key.as_str(),
-            ),
-        )
-        .await?;
+    if let Some(search) = query.searched() {
+        let found = found(db, query, &search, Some(name_key.as_str()), true).await?;
+        return Ok(facet_of(&found, &name_key));
+    }
+    let rows: Vec<(String, String, i64)> = facet_statement(query, &name_key).fetch_all(db).await?;
     Ok(rows
         .into_iter()
         .map(|(key, label, count)| FacetValue { key, label, count })
         .collect())
 }
 
+/// The values option `name_key` takes among the query's rows, each with how
+/// many take it, the query's own pairs on it set aside.
+fn facet_statement(query: &ProductQuery, name_key: &str) -> Statement {
+    let mut statement = Statement::default();
+    let conditions = page_conditions(&mut statement, query, Some(name_key));
+    let name = statement.bind(name_key);
+    statement.sql = format!(
+        "SELECT po.value_key, min(po.value), count(*)
+         FROM storefront_category_products cp
+         JOIN storefront_product_options po ON po.product_id = cp.product_id AND po.name_key = {name}
+         WHERE {conditions}
+         GROUP BY po.value_key ORDER BY po.value_key"
+    );
+    statement
+}
+
 /// What goes well with a cart holding `product_ids`: the published products
-/// sharing a category with any of them, newest first, none of them already
+/// the pages of their categories list, newest first, none of them already
 /// in it. With no category to go by, the newest products.
 pub async fn published_cart_recommendations(
     db: &Db,
     product_ids: &[String],
     limit: u32,
 ) -> anyhow::Result<Vec<Product>> {
-    let ids = serde_json::to_string(product_ids).unwrap_or_else(|_| "[]".to_owned());
-    let categories: Vec<(String,)> = db
-        .fetch_all(
-            "SELECT DISTINCT category_id FROM storefront_product_categories
-             WHERE product_id IN (SELECT value FROM json_each(?1))",
-            (ids,),
+    let mut categories: Vec<String> = if product_ids.is_empty() {
+        Vec::new()
+    } else {
+        db.fetch_all::<(String,)>(
+            &format!(
+                "SELECT DISTINCT category_id FROM storefront_product_categories
+                 WHERE product_id IN ({})",
+                timada_core::db::placeholders(product_ids.len())
+            ),
+            product_ids.to_vec(),
         )
-        .await?;
-    let query = ProductQuery::default()
-        .per_page(limit)
-        .in_categories(categories.into_iter().map(|(id,)| id))
-        .exclude_all(product_ids.iter().cloned());
-    Ok(published_products(db, &query).await?.items)
+        .await?
+        .into_iter()
+        .map(|(id,)| id)
+        .collect()
+    };
+    if categories.is_empty() {
+        categories.push(WHOLE_SHOP.to_owned());
+    }
+    newest_listed_on(db, &categories, product_ids, limit).await
 }
 
-/// One published product, by slug.
+/// The newest published products the pages of `categories` list, none of
+/// `exclude`, at most `limit`: each page's newest read off its index and
+/// merged here, so the cost is the number of pages, not their length.
+async fn newest_listed_on(
+    db: &Db,
+    categories: &[String],
+    exclude: &[String],
+    limit: u32,
+) -> anyhow::Result<Vec<Product>> {
+    let mut newest: Vec<(i64, String)> = Vec::new();
+    for category in categories {
+        newest.extend(
+            newest_statement(category, exclude, limit)
+                .fetch_all::<(i64, String)>(db)
+                .await?,
+        );
+    }
+    // Newest first; a product two of the pages list comes twice, alike.
+    newest.sort_unstable_by(|a, b| b.cmp(a));
+    newest.dedup();
+    newest.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    products_in_order(db, newest.into_iter().map(|(_, id)| id).collect()).await
+}
+
+/// The newest of the page of `category`, none of `exclude`, `limit` at
+/// most, read off the index holding them newest first.
+fn newest_statement(category: &str, exclude: &[String], limit: u32) -> Statement {
+    let mut statement = Statement::default();
+    let page = statement.bind(category);
+    let left_out = if exclude.is_empty() {
+        String::new()
+    } else {
+        format!("AND product_id NOT IN ({})", statement.bind_all(exclude))
+    };
+    let limit = statement.bind(i64::from(limit));
+    statement.sql = format!(
+        "SELECT updated_at, product_id FROM storefront_category_products
+            INDEXED BY storefront_category_products_newest
+         WHERE category_id = {page} {left_out}
+         ORDER BY updated_at DESC, product_id DESC LIMIT {limit}"
+    );
+    statement
+}
+
+/// One published product, by slug. The slug's index keeps every product not
+/// archived: named, with its condition repeated, so the product is read off
+/// it; left to choose, Turso walked every published product.
 pub async fn published_product_by_slug(db: &Db, slug: &str) -> anyhow::Result<Option<Product>> {
     db.fetch_optional(
-        "SELECT id, slug, name, description, amount_cents, currency, updated_at,
-            images_json, options_json, variants_json, attributes_json,
-            min_amount_cents, max_amount_cents, review_count, rating_x100, stock_json, in_stock,
-            delivery_min_days, delivery_max_days
-         FROM storefront_products WHERE slug = ?1 AND status = 'published'",
+        concat!(
+            "SELECT ",
+            product_columns!(),
+            " FROM storefront_products p INDEXED BY storefront_products_slug
+             WHERE p.slug = ?1 AND p.status <> 'archived' AND p.status = 'published'"
+        ),
         (slug,),
     )
     .await
@@ -864,12 +1114,11 @@ pub async fn published_products_by_ids(db: &Db, ids: &[&str]) -> anyhow::Result<
     // cart cost the whole catalogue; given the ids it reads them one by one
     // through the primary key (see the `probe` tests).
     let statement = format!(
-        "SELECT id, slug, name, description, amount_cents, currency, updated_at,
-            images_json, options_json, variants_json, attributes_json,
-            min_amount_cents, max_amount_cents, review_count, rating_x100, stock_json, in_stock,
-            delivery_min_days, delivery_max_days
-         FROM storefront_products
-         WHERE id IN ({}) AND status = 'published'",
+        concat!(
+            "SELECT ",
+            product_columns!(),
+            " FROM storefront_products p WHERE p.id IN ({}) AND p.status = 'published'"
+        ),
         timada_core::db::placeholders(ids.len())
     );
     // Owned before the await: a parameter iterator borrowing `&[&str]`
@@ -1114,27 +1363,26 @@ pub async fn published_product_categories(
     .await
 }
 
-/// The published products sharing a category with `product`, newest first,
-/// without `product` itself.
+/// The published products the pages of `product`'s categories list, newest
+/// first, without `product` itself: more from the shelves it is on.
 pub async fn published_related_products(
     db: &Db,
     product: &Product,
     limit: u32,
 ) -> anyhow::Result<Vec<Product>> {
-    let categories: Vec<(String,)> = db
-        .fetch_all(
+    let categories: Vec<String> = db
+        .fetch_all::<(String,)>(
             "SELECT category_id FROM storefront_product_categories WHERE product_id = ?1",
             (product.id.as_str(),),
         )
-        .await?;
+        .await?
+        .into_iter()
+        .map(|(id,)| id)
+        .collect();
     if categories.is_empty() {
         return Ok(Vec::new());
     }
-    let query = ProductQuery::default()
-        .per_page(limit)
-        .in_categories(categories.into_iter().map(|(id,)| id))
-        .exclude(product.id.clone());
-    Ok(published_products(db, &query).await?.items)
+    newest_listed_on(db, &categories, std::slice::from_ref(&product.id), limit).await
 }
 
 #[cfg(test)]
@@ -1279,7 +1527,7 @@ mod sql {
     }
 
     /// A collar from 9.90 to 59.90 in rose or blue, a grey basket at 34.90,
-    /// an unpriced service, and a draft nobody sees; the first two in a
+    /// an unpriced service, and a draft nobody sees; the first two filed in a
     /// category whose stored count is 2.
     async fn catalog() -> Db {
         let db = db().await;
@@ -1304,6 +1552,13 @@ mod sql {
         .unwrap();
         for product in ["collar", "basket"] {
             db.execute(
+                "INSERT INTO storefront_product_categories (product_id, category_id)
+                 VALUES (?1, 'cat')",
+                (product,),
+            )
+            .await
+            .unwrap();
+            db.execute(
                 "INSERT INTO storefront_category_products (category_id, product_id,
                     updated_at, min_amount_cents, max_amount_cents, review_count, rating_x100)
                  SELECT 'cat', id, updated_at, min_amount_cents, max_amount_cents, review_count,
@@ -1314,6 +1569,24 @@ mod sql {
             .await
             .unwrap();
         }
+        // The whole shop's page: every published product, and its count.
+        db.execute(
+            "INSERT INTO storefront_category_products (category_id, product_id, updated_at,
+                min_amount_cents, max_amount_cents, review_count, rating_x100)
+             SELECT '', id, updated_at, min_amount_cents, max_amount_cents, review_count,
+                rating_x100
+             FROM storefront_products WHERE status = 'published'",
+            (),
+        )
+        .await
+        .unwrap();
+        db.execute(
+            "INSERT INTO storefront_shop (id, products)
+             SELECT 1, count(*) FROM storefront_products WHERE status = 'published'",
+            (),
+        )
+        .await
+        .unwrap();
         db
     }
 
@@ -1324,6 +1597,385 @@ mod sql {
 
     fn owned(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|id| (*id).to_owned()).collect()
+    }
+
+    /// Eight products named `item0` to `item7` (and found by that name), each
+    /// with its own mix of change time, prices and reviews, ties and gaps
+    /// included: what the sorts must agree on.
+    async fn varied() -> Db {
+        let db = db().await;
+        /// Its change time, its price range, its reviews and their average.
+        type Item = (i64, Option<(i64, i64)>, i64, i64);
+        let rows: [Item; 8] = [
+            (5, Some((1000, 1000)), 0, 0),
+            (5, Some((500, 9000)), 3, 450),
+            (9, None, 1, 500),
+            (1, Some((500, 500)), 3, 450),
+            (9, Some((2000, 2500)), 0, 0),
+            (3, None, 10, 450),
+            (7, Some((1000, 9000)), 2, 300),
+            (2, Some((300, 4000)), 0, 0),
+        ];
+        for (n, (updated_at, range, review_count, rating)) in rows.into_iter().enumerate() {
+            let id = format!("item{n}");
+            db.execute(
+                "INSERT INTO storefront_products (id, slug, name, description, currency, status,
+                    updated_at, images_json, options_json, variants_json, attributes_json,
+                    min_amount_cents, max_amount_cents, review_count, rating_x100, slug_search,
+                    name_search)
+                 VALUES (?1, ?1, ?1, '', 'EUR', 'published', ?2, '[]', '[]', '[]', '[]', ?3,
+                    ?4, ?5, ?6, ?1, ?1)",
+                (
+                    id.as_str(),
+                    updated_at,
+                    range.map(|(min, _)| min),
+                    range.map(|(_, max)| max),
+                    review_count,
+                    rating,
+                ),
+            )
+            .await
+            .unwrap();
+        }
+        db.execute(
+            "INSERT INTO storefront_category_products (category_id, product_id, updated_at,
+                min_amount_cents, max_amount_cents, review_count, rating_x100)
+             SELECT '', id, updated_at, min_amount_cents, max_amount_cents, review_count,
+                rating_x100
+             FROM storefront_products",
+            (),
+        )
+        .await
+        .unwrap();
+        db.execute(
+            "INSERT INTO storefront_shop (id, products) VALUES (1, 8)",
+            (),
+        )
+        .await
+        .unwrap();
+        db
+    }
+
+    #[tokio::test]
+    async fn a_search_orders_as_the_listing_does() {
+        let db = varied().await;
+        for sort in [
+            ProductSort::Newest,
+            ProductSort::PriceAsc,
+            ProductSort::PriceDesc,
+            ProductSort::TopRated,
+        ] {
+            let listed = ids(&db, ProductQuery::default().sort(sort)).await;
+            assert_eq!(listed.1, 8);
+            // The index, then the rows for a query too short for it.
+            for q in ["item", "it"] {
+                assert_eq!(
+                    ids(&db, ProductQuery::default().sort(sort).search(q)).await,
+                    listed,
+                    "{sort:?} searched for {q:?}"
+                );
+            }
+            // A page further down, of either.
+            let second = ProductQuery::default().sort(sort).per_page(3).page(2);
+            assert_eq!(
+                ids(&db, second.clone().search("item")).await,
+                ids(&db, second).await,
+                "{sort:?}, second page"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_search_keeps_what_the_rest_of_the_query_keeps() {
+        let db = catalog().await;
+        let found = |query: ProductQuery| ids(&db, query.sort(ProductSort::PriceAsc));
+        // A pattern, too short for the index: the draft stays out.
+        assert_eq!(
+            found(ProductQuery::default().search("a")).await,
+            (owned(&["collar", "basket"]), 2)
+        );
+        // A phrase, through the index.
+        assert_eq!(
+            found(ProductQuery::default().search("COLLA")).await,
+            (owned(&["collar"]), 1)
+        );
+        let a = ProductQuery::default().search("a");
+        assert_eq!(
+            found(a.clone().priced_between(Some(5000), None)).await,
+            (owned(&["collar"]), 1)
+        );
+        assert_eq!(
+            found(a.clone().with_option("Couleur", "Gris")).await,
+            (owned(&["basket"]), 1)
+        );
+        assert_eq!(
+            found(a.clone().exclude("collar")).await,
+            (owned(&["basket"]), 1)
+        );
+        assert_eq!(
+            found(a.clone().in_category("cat")).await,
+            (owned(&["collar", "basket"]), 2)
+        );
+        assert_eq!(
+            found(ProductQuery::default().search("servi").in_category("cat"))
+                .await
+                .1,
+            0
+        );
+        // The facet of a search: its own colour set aside, its band kept.
+        async fn colours(db: &Db, query: ProductQuery) -> Vec<(String, i64)> {
+            published_option_values(db, &query, "Couleur")
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|value| (value.key, value.count))
+                .collect()
+        }
+        assert_eq!(
+            colours(&db, a.clone().with_option("Couleur", "Rose")).await,
+            [("bleu".into(), 1), ("gris".into(), 1), ("rose".into(), 1)]
+        );
+        assert_eq!(
+            colours(&db, a.priced_between(Some(5000), Some(7000))).await,
+            [("bleu".into(), 1), ("rose".into(), 1)]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_whole_shop_counts_what_it_lists_but_what_it_leaves_out() {
+        let db = catalog().await;
+        let total = |query: ProductQuery| async { ids(&db, query).await.1 };
+        assert_eq!(total(ProductQuery::default()).await, 3);
+        assert_eq!(total(ProductQuery::default().exclude("collar")).await, 2);
+        // A product the page does not list, or one named twice, changes
+        // nothing more.
+        assert_eq!(total(ProductQuery::default().exclude("draft")).await, 3);
+        assert_eq!(
+            total(
+                ProductQuery::default()
+                    .exclude("collar")
+                    .exclude("collar")
+                    .exclude("missing")
+            )
+            .await,
+            2
+        );
+        assert_eq!(
+            total(ProductQuery::default().in_category("cat").exclude("basket")).await,
+            1
+        );
+        assert_eq!(
+            ids(
+                &db,
+                ProductQuery::default()
+                    .exclude("collar")
+                    .sort(ProductSort::PriceAsc)
+            )
+            .await
+            .0,
+            owned(&["basket", "service"])
+        );
+    }
+
+    #[tokio::test]
+    async fn related_products_come_from_the_shelves_it_is_on() {
+        let db = catalog().await;
+        let by_id = |id: &'static str| {
+            let db = db.clone();
+            async move {
+                published_products_by_ids(&db, &[id])
+                    .await
+                    .unwrap()
+                    .pop()
+                    .unwrap()
+            }
+        };
+        let related = |product: Product| {
+            let db = db.clone();
+            async move {
+                published_related_products(&db, &product, 4)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|p| p.id)
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(related(by_id("collar").await).await, ["basket"]);
+        // Filed nowhere: nothing to go by.
+        assert!(related(by_id("service").await).await.is_empty());
+        let offered = |ids: &[&str], limit: u32| {
+            let db = db.clone();
+            let ids: Vec<String> = ids.iter().map(|id| (*id).to_owned()).collect();
+            async move {
+                published_cart_recommendations(&db, &ids, limit)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|p| p.id)
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(offered(&["collar"], 4).await, ["basket"]);
+        // A cart with nothing filed anywhere, or empty: the newest, none of
+        // its own (the change times tie, so the ids decide).
+        assert_eq!(offered(&["service"], 4).await, ["collar", "basket"]);
+        assert_eq!(offered(&[], 2).await, ["service", "collar"]);
+    }
+
+    #[tokio::test]
+    async fn a_product_is_found_by_slug_while_published() {
+        let db = catalog().await;
+        let found = |slug: &'static str| {
+            let db = db.clone();
+            async move {
+                published_product_by_slug(&db, slug)
+                    .await
+                    .unwrap()
+                    .map(|p| p.id)
+            }
+        };
+        assert_eq!(found("collar").await.as_deref(), Some("collar"));
+        assert_eq!(found("draft").await, None);
+        assert_eq!(found("missing").await, None);
+    }
+
+    /// The `detail` of each step of `statement`'s plan.
+    async fn plan_of(db: &Db, statement: &Statement) -> Vec<String> {
+        db.fetch_all::<(i64, i64, i64, String)>(
+            &format!("EXPLAIN QUERY PLAN {}", statement.sql),
+            params_from_iter(statement.values.clone()),
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(_, _, _, detail)| detail)
+        .collect()
+    }
+
+    /// Fails unless a step of `plan` searches `index` (rather than scanning
+    /// it whole), and when any step sorts.
+    fn reads_in_order(plan: &[String], index: &str) {
+        assert!(
+            plan.iter()
+                .any(|step| step.starts_with("SEARCH") && step.contains(index)),
+            "no step searches {index}:\n{}",
+            plan.join("\n")
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|step| step.contains("SORTER") || step.contains("B-TREE")),
+            "the plan sorts:\n{}",
+            plan.join("\n")
+        );
+    }
+
+    /// The plans the statements are written for: a page read off the index
+    /// of its order, never sorted, whatever narrows it; a search answered
+    /// by the full-text index alone; the counts and facets off the page's
+    /// rows, never the product rows.
+    #[tokio::test]
+    async fn the_statements_read_the_indexes_they_are_written_for() {
+        let db = catalog().await;
+        let narrowed = ProductQuery::default()
+            .in_category("cat")
+            .priced_between(Some(100), Some(9000))
+            .with_option("Couleur", "Rose")
+            .exclude("basket");
+        for sort in [
+            ProductSort::Newest,
+            ProductSort::PriceAsc,
+            ProductSort::PriceDesc,
+            ProductSort::TopRated,
+        ] {
+            let (index, _) = sort.order();
+            for query in [ProductQuery::default(), narrowed.clone()] {
+                let plan = plan_of(&db, &page_statement(&query.sort(sort), 24, 48)).await;
+                reads_in_order(&plan, index);
+            }
+        }
+        for statement in [
+            count_statement(&narrowed),
+            facet_statement(&narrowed, "couleur"),
+        ] {
+            let plan = plan_of(&db, &statement).await;
+            assert!(
+                !plan.iter().any(|step| step.contains("storefront_products ")
+                    || step.ends_with("storefront_products")
+                    || step.contains(" p ")),
+                "reads the product rows:\n{}",
+                plan.join("\n")
+            );
+        }
+        let left_out = plan_of(
+            &db,
+            &left_out_statement(&narrowed.clone().exclude("collar").exclude("basket")),
+        )
+        .await;
+        let lookups: Vec<&String> = left_out
+            .iter()
+            .filter(|step| step.contains("storefront_category_products"))
+            .collect();
+        assert_eq!(lookups.len(), 2, "{left_out:?}");
+        assert!(
+            lookups.iter().all(|step| step.starts_with("SEARCH")
+                && step.contains("storefront_category_products_product (product_id=? AND")),
+            "{left_out:?}"
+        );
+        // Ids given as a list, to the primary keys: one lookup each.
+        for (sql, index) in [
+            (
+                "SELECT p.id FROM storefront_products p
+                 WHERE p.id IN (?1, ?2) AND p.status = 'published'",
+                "sqlite_autoindex_storefront_products_1 (id=?)",
+            ),
+            (
+                "SELECT DISTINCT category_id FROM storefront_product_categories
+                 WHERE product_id IN (?1, ?2)",
+                "sqlite_autoindex_storefront_product_categories_1 (product_id=?)",
+            ),
+        ] {
+            let plan = plan_of(
+                &db,
+                &Statement {
+                    sql: sql.to_owned(),
+                    values: vec![Value::from("collar"), Value::from("basket")],
+                },
+            )
+            .await;
+            assert!(
+                plan.iter()
+                    .any(|step| step.starts_with("SEARCH") && step.contains(index)),
+                "{sql}: {plan:?}"
+            );
+        }
+        let search = ProductQuery::default().search("collar");
+        let phrase = search.searched().unwrap();
+        for options in [false, true] {
+            let plan = plan_of(&db, &found_statement(&search, &phrase, None, options)).await;
+            assert_eq!(plan, ["QUERY INDEX METHOD fts"], "with options: {options}");
+        }
+        reads_in_order(
+            &plan_of(&db, &newest_statement("cat", &["basket".to_owned()], 4)).await,
+            "storefront_category_products_newest",
+        );
+        let by_slug = Statement {
+            sql: concat!(
+                "SELECT ",
+                product_columns!(),
+                " FROM storefront_products p INDEXED BY storefront_products_slug
+                 WHERE p.slug = ?1 AND p.status <> 'archived' AND p.status = 'published'"
+            )
+            .to_owned(),
+            values: vec![Value::from("collar")],
+        };
+        let plan = plan_of(&db, &by_slug).await;
+        assert!(
+            plan.iter()
+                .all(|step| step.contains("storefront_products_slug")),
+            "{plan:?}"
+        );
     }
 
     #[tokio::test]
@@ -1486,363 +2138,5 @@ mod sql {
     }
 }
 
-/// The plans and timings of the per-request joins under Turso's planner
-/// (#336): a few thousand products in a temporary database opened the way
-/// an app opens its own, each statement explained and timed. Run by hand:
-/// `cargo test -p timada-storefront probe -- --ignored --nocapture`.
 #[cfg(test)]
-mod probe {
-    use std::time::{Duration, Instant};
-
-    use timada_core::db::{Turso, execute};
-
-    use super::*;
-    use crate::migrations::migrate;
-
-    const PRODUCTS: i64 = 3_000;
-    const CATEGORIES: i64 = 60;
-    const RUNS: u32 = 50;
-
-    /// Three thousand products, four in five published, each filed under two
-    /// of sixty categories; the category rows a page reads filled for the
-    /// published ones, as the subscription would.
-    async fn catalog() -> Db {
-        let db = Db::from(Turso::temporary_concurrent().await.unwrap());
-        migrate(&db).await.unwrap();
-        db.write(&(), |tx, ()| {
-            Box::pin(async move {
-                for i in 0..PRODUCTS {
-                    let id = format!("p{i:05}");
-                    let status = if i % 5 == 0 { "draft" } else { "published" };
-                    let min = 100 + (i * 37) % 9_000;
-                    execute(
-                        tx,
-                        "INSERT INTO storefront_products (id, slug, name, description,
-                            amount_cents, currency, status, updated_at, images_json,
-                            options_json, variants_json, attributes_json, min_amount_cents,
-                            max_amount_cents, review_count, rating_x100, slug_search,
-                            name_search)
-                         VALUES (?1, ?1, ?1, '', ?2, 'EUR', ?3, ?4, '[]', '[]', '[]', '[]',
-                            ?2, ?5, ?6, ?7, ?1, ?1)",
-                        (
-                            id.as_str(),
-                            min,
-                            status,
-                            i,
-                            min + (i % 7) * 100,
-                            i % 11,
-                            (i % 5) * 100,
-                        ),
-                    )
-                    .await?;
-                    for category in [i % CATEGORIES, (i / 50) % CATEGORIES] {
-                        let category = format!("c{category:03}");
-                        execute(
-                            tx,
-                            "INSERT OR IGNORE INTO storefront_product_categories
-                                (product_id, category_id) VALUES (?1, ?2)",
-                            (id.as_str(), category.as_str()),
-                        )
-                        .await?;
-                        if status == "published" {
-                            execute(
-                                tx,
-                                "INSERT OR IGNORE INTO storefront_category_products
-                                    (category_id, product_id, updated_at, min_amount_cents,
-                                     max_amount_cents, review_count, rating_x100)
-                                 SELECT ?2, id, updated_at, min_amount_cents, max_amount_cents,
-                                    review_count, rating_x100
-                                 FROM storefront_products WHERE id = ?1",
-                                (id.as_str(), category.as_str()),
-                            )
-                            .await?;
-                        }
-                    }
-                }
-                for c in 0..CATEGORIES {
-                    let id = format!("c{c:03}");
-                    execute(
-                        tx,
-                        "INSERT INTO storefront_categories (id, slug, name, description, body,
-                            parent_id, position, archived, in_menu, updated_at)
-                         VALUES (?1, ?1, ?1, '', '', NULL, ?2, ?3, 1, 1)",
-                        (id.as_str(), c, i64::from(c % 10 == 9)),
-                    )
-                    .await?;
-                }
-                Ok(())
-            })
-        })
-        .await
-        .unwrap();
-        db
-    }
-
-    /// What `EXPLAIN QUERY PLAN` says of `sql`, one line per step.
-    async fn plan(db: &Db, sql: &str, params: impl timada_core::db::IntoParams) -> String {
-        let rows: Vec<(i64, i64, i64, String)> = db
-            .fetch_all(&format!("EXPLAIN QUERY PLAN {sql}"), params)
-            .await
-            .unwrap();
-        rows.into_iter()
-            .map(|(_, _, _, detail)| format!("\n    {detail}"))
-            .collect()
-    }
-
-    /// How long `run` takes on average over [`RUNS`], after one warm-up, and
-    /// how many rows it read.
-    async fn timed<F, Fut>(mut run: F) -> (Duration, usize)
-    where
-        F: FnMut() -> Fut,
-        Fut: Future<Output = usize>,
-    {
-        run().await;
-        let started = Instant::now();
-        let mut rows = 0;
-        for _ in 0..RUNS {
-            rows = run().await;
-        }
-        (started.elapsed() / RUNS, rows)
-    }
-
-    fn report(name: &str, plan: &str, took: Duration, rows: usize) {
-        tracing::info!(target: "probe", %name, rows, ?took, plan = %plan);
-    }
-
-    const PRODUCT_COLUMNS: &str = "p.id, p.slug, p.name, p.description, p.amount_cents, p.currency,
-        p.updated_at, p.images_json, p.options_json, p.variants_json, p.attributes_json,
-        p.min_amount_cents, p.max_amount_cents, p.review_count, p.rating_x100, p.stock_json,
-        p.in_stock, p.delivery_min_days, p.delivery_max_days";
-
-    #[tokio::test]
-    #[ignore = "measures Turso's plans; run by hand with --ignored --nocapture"]
-    async fn category_page() {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter("probe=info")
-            .with_test_writer()
-            .try_init();
-        let db = catalog().await;
-        let category = "c007";
-        let (limit, offset) = (24i64, 24i64);
-
-        // As shipped: the join, the page cut on the category rows.
-        let sql = CATEGORY_NEWEST;
-        let plan_join = plan(&db, sql, (category, limit, offset)).await;
-        let (took, rows) = timed(|| async {
-            let items: Vec<Product> = db.fetch_all(sql, (category, limit, offset)).await.unwrap();
-            items.len()
-        })
-        .await;
-        report("category page: join", &plan_join, took, rows);
-
-        // The ids of the page first, then the products among them, put back
-        // in the page's order here.
-        let ids_sql = "SELECT product_id FROM storefront_category_products
-             WHERE category_id = ?1
-             ORDER BY updated_at DESC, product_id DESC LIMIT ?2 OFFSET ?3";
-        let by_ids_sql = format!(
-            "SELECT {PRODUCT_COLUMNS} FROM storefront_products p
-             WHERE p.id IN (SELECT value FROM json_each(?1))"
-        );
-        let plan_two = format!(
-            "{}\n  then{}",
-            plan(&db, ids_sql, (category, limit, offset)).await,
-            plan(&db, &by_ids_sql, ("[\"p00001\"]",)).await
-        );
-        let (took, rows) = timed(|| async {
-            let ids: Vec<(String,)> = db
-                .fetch_all(ids_sql, (category, limit, offset))
-                .await
-                .unwrap();
-            let ids: Vec<&str> = ids.iter().map(|(id,)| id.as_str()).collect();
-            let json = serde_json::to_string(&ids).unwrap();
-            let mut items: Vec<Product> = db.fetch_all(&by_ids_sql, (json,)).await.unwrap();
-            items.sort_by_key(|p| ids.iter().position(|id| *id == p.id));
-            items.len()
-        })
-        .await;
-        report("category page: two statements", &plan_two, took, rows);
-
-        // The join written the other way round, should the planner follow
-        // the text.
-        let sql = format!(
-            "SELECT {PRODUCT_COLUMNS}
-             FROM storefront_products p
-             JOIN storefront_category_products cp ON cp.product_id = p.id
-             WHERE cp.category_id = ?1
-             ORDER BY cp.updated_at DESC, cp.product_id DESC LIMIT ?2 OFFSET ?3"
-        );
-        let plan_reversed = plan(&db, &sql, (category, limit, offset)).await;
-        let (took, rows) = timed(|| async {
-            let items: Vec<Product> = db.fetch_all(&sql, (category, limit, offset)).await.unwrap();
-            items.len()
-        })
-        .await;
-        report(
-            "category page: join, products first",
-            &plan_reversed,
-            took,
-            rows,
-        );
-
-        // A `CROSS JOIN` tells SQLite's planner to keep the order written.
-        let sql = format!(
-            "SELECT {PRODUCT_COLUMNS}
-             FROM storefront_category_products cp
-             CROSS JOIN storefront_products p ON p.id = cp.product_id
-             WHERE cp.category_id = ?1
-             ORDER BY cp.updated_at DESC, cp.product_id DESC LIMIT ?2 OFFSET ?3"
-        );
-        let plan_cross = plan(&db, &sql, (category, limit, offset)).await;
-        let (took, rows) = timed(|| async {
-            let items: Vec<Product> = db.fetch_all(&sql, (category, limit, offset)).await.unwrap();
-            items.len()
-        })
-        .await;
-        report("category page: cross join", &plan_cross, took, rows);
-    }
-
-    #[tokio::test]
-    #[ignore = "measures Turso's plans; run by hand with --ignored --nocapture"]
-    async fn product_categories() {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter("probe=info")
-            .with_test_writer()
-            .try_init();
-        let db = catalog().await;
-        let product = "p01234";
-
-        // As shipped: the join.
-        let sql = "SELECT c.id, c.slug, c.name, c.description, c.parent_id, c.position, c.in_menu
-             FROM storefront_categories c
-             JOIN storefront_product_categories pc ON pc.category_id = c.id
-             WHERE pc.product_id = ?1 AND c.archived = 0
-             ORDER BY c.position, c.name, c.id";
-        let plan_join = plan(&db, sql, (product,)).await;
-        let (took, rows) = timed(|| async {
-            let items: Vec<Category> = db.fetch_all(sql, (product,)).await.unwrap();
-            items.len()
-        })
-        .await;
-        report("product categories: join", &plan_join, took, rows);
-
-        // The links as a subquery the categories are looked up in.
-        let sql = "SELECT c.id, c.slug, c.name, c.description, c.parent_id, c.position, c.in_menu
-             FROM storefront_categories c
-             WHERE c.archived = 0
-               AND c.id IN (SELECT category_id FROM storefront_product_categories
-                            WHERE product_id = ?1)
-             ORDER BY c.position, c.name, c.id";
-        let plan_in = plan(&db, sql, (product,)).await;
-        let (took, rows) = timed(|| async {
-            let items: Vec<Category> = db.fetch_all(sql, (product,)).await.unwrap();
-            items.len()
-        })
-        .await;
-        report("product categories: IN subquery", &plan_in, took, rows);
-
-        // An `EXISTS` over the links, one per category.
-        let sql = "SELECT c.id, c.slug, c.name, c.description, c.parent_id, c.position, c.in_menu
-             FROM storefront_categories c
-             WHERE c.archived = 0
-               AND EXISTS (SELECT 1 FROM storefront_product_categories pc
-                           WHERE pc.product_id = ?1 AND pc.category_id = c.id)
-             ORDER BY c.position, c.name, c.id";
-        let plan_exists = plan(&db, sql, (product,)).await;
-        let (took, rows) = timed(|| async {
-            let items: Vec<Category> = db.fetch_all(sql, (product,)).await.unwrap();
-            items.len()
-        })
-        .await;
-        report("product categories: EXISTS", &plan_exists, took, rows);
-
-        // Two statements joined here.
-        let links_sql =
-            "SELECT category_id FROM storefront_product_categories WHERE product_id = ?1";
-        let categories_sql = "SELECT id, slug, name, description, parent_id, position, in_menu
-             FROM storefront_categories
-             WHERE archived = 0 AND id IN (SELECT value FROM json_each(?1))
-             ORDER BY position, name, id";
-        let plan_two = format!(
-            "{}\n  then{}",
-            plan(&db, links_sql, (product,)).await,
-            plan(&db, categories_sql, ("[\"c001\"]",)).await
-        );
-        let (took, rows) = timed(|| async {
-            let links: Vec<(String,)> = db.fetch_all(links_sql, (product,)).await.unwrap();
-            let ids: Vec<&str> = links.iter().map(|(id,)| id.as_str()).collect();
-            let json = serde_json::to_string(&ids).unwrap();
-            let items: Vec<Category> = db.fetch_all(categories_sql, (json,)).await.unwrap();
-            items.len()
-        })
-        .await;
-        report("product categories: two statements", &plan_two, took, rows);
-    }
-
-    /// Not one of the two joins, but the shape the two-statement rewrite
-    /// would lean on, and what [`published_products_by_ids`] runs for a
-    /// cart: `id IN (SELECT value FROM json_each(?1))`.
-    #[tokio::test]
-    #[ignore = "measures Turso's plans; run by hand with --ignored --nocapture"]
-    async fn products_by_ids() {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter("probe=info")
-            .with_test_writer()
-            .try_init();
-        let db = catalog().await;
-        let ids: Vec<String> = (1..=6).map(|i| format!("p{:05}", i * 401)).collect();
-        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-        let json = serde_json::to_string(&ids).unwrap();
-
-        // As shipped.
-        let sql = format!(
-            "SELECT {PRODUCT_COLUMNS} FROM storefront_products p
-             WHERE p.id IN (SELECT value FROM json_each(?1)) AND p.status = 'published'"
-        );
-        let plan_json = plan(&db, &sql, (json.as_str(),)).await;
-        let (took, rows) = timed(|| async {
-            let items: Vec<Product> = db.fetch_all(&sql, (json.as_str(),)).await.unwrap();
-            items.len()
-        })
-        .await;
-        report("products by ids: IN json_each", &plan_json, took, rows);
-
-        // One placeholder per id.
-        let sql = format!(
-            "SELECT {PRODUCT_COLUMNS} FROM storefront_products p
-             WHERE p.id IN ({}) AND p.status = 'published'",
-            timada_core::db::placeholders(ids.len())
-        );
-        let params = || {
-            timada_core::db::params_from_iter(
-                ids.iter()
-                    .map(|id| timada_core::db::Value::Text((*id).to_owned())),
-            )
-        };
-        let plan_list = plan(&db, &sql, params()).await;
-        let (took, rows) = timed(|| async {
-            let items: Vec<Product> = db.fetch_all(&sql, params()).await.unwrap();
-            items.len()
-        })
-        .await;
-        report("products by ids: placeholders", &plan_list, took, rows);
-
-        // The ids read from the JSON first, then one lookup each.
-        let one_sql = format!(
-            "SELECT {PRODUCT_COLUMNS} FROM storefront_products p
-             WHERE p.id = ?1 AND p.status = 'published'"
-        );
-        let plan_each = plan(&db, &one_sql, ("p00401",)).await;
-        let (took, rows) = timed(|| async {
-            let mut items: Vec<Product> = Vec::new();
-            for id in &ids {
-                if let Some(p) = db.fetch_optional(&one_sql, (*id,)).await.unwrap() {
-                    items.push(p);
-                }
-            }
-            items.len()
-        })
-        .await;
-        report("products by ids: one lookup each", &plan_each, took, rows);
-    }
-}
+mod probe;

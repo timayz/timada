@@ -56,8 +56,6 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         CREATE UNIQUE INDEX storefront_products_slug ON storefront_products (slug)
             WHERE status <> 'archived';
         CREATE INDEX storefront_products_published ON storefront_products (status, updated_at);
-        CREATE INDEX storefront_products_price
-            ON storefront_products (status, min_amount_cents);
         CREATE INDEX storefront_products_fts ON storefront_products
             USING fts(slug_search, name_search)
             WITH (tokenizer = 'ngram', min_gram = 3, max_gram = 3);
@@ -101,7 +99,12 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             ON storefront_product_categories (category_id);
         -- A category's page reads its published products straight off these
         -- rows, in the order a shopper picked, without sorting: the sort keys
-        -- are copied from the product row.
+        -- are copied from the product row. The whole shop's page (every
+        -- published product, the home's rails, a search) has its rows here
+        -- too, under the category id '' that no category takes. A product's
+        -- rows are found through `storefront_category_products_product`,
+        -- which a statement naming both columns has to name: left to choose,
+        -- Turso reads one category's rows by the first column alone.
         CREATE TABLE storefront_category_products (
             category_id TEXT NOT NULL,
             product_id TEXT NOT NULL,
@@ -121,6 +124,15 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         CREATE INDEX storefront_category_products_top_rated ON storefront_category_products
             (category_id, review_count = 0, rating_x100 DESC, review_count DESC,
              product_id DESC);
+        CREATE INDEX storefront_category_products_product ON storefront_category_products
+            (product_id, category_id);
+        -- How many products the whole shop's page lists, kept as they are
+        -- listed and unlisted, as a category's row keeps its own count: one
+        -- row, none before the first product is listed.
+        CREATE TABLE storefront_shop (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            products INTEGER NOT NULL
+        );
         -- Published reviews only: one that is rejected leaves. `reply` and
         -- `replied_at` hold the merchant's public answer, while there is one.
         CREATE TABLE storefront_reviews (
@@ -138,6 +150,8 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         );
         CREATE INDEX storefront_reviews_product ON storefront_reviews
             (product_id, published_at DESC, id DESC);
+        CREATE INDEX storefront_reviews_latest ON storefront_reviews
+            (published_at DESC, id DESC);
         -- What is on the shelf of each thing the shop counts (`variant_id` ''
         -- for a product without variants). The product row carries what a
         -- page shows of it, worked out when the stock or the product changes.
@@ -185,6 +199,7 @@ pub const TABLES: &[&str] = &[
     "storefront_categories",
     "storefront_product_categories",
     "storefront_category_products",
+    "storefront_shop",
     "storefront_reviews",
     "storefront_stock",
     "storefront_pages",

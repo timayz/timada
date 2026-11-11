@@ -22,8 +22,10 @@ use crate::app::{boutique, c, own_page, p, price_line, support_client};
 const PRODUCTS: u32 = 4;
 const CATEGORIES: usize = 3;
 const PAGES_SHOWN: usize = 3;
-/// Under this many characters the dropdown stays empty.
-pub const MIN_CHARS: usize = 2;
+/// Under this many characters the dropdown stays empty: the full-text
+/// index is cut in runs of three, and a shorter query would be a pass over
+/// every product at each keystroke.
+pub const MIN_CHARS: usize = 3;
 
 #[topcoat::router::query_params(error = bad_request)]
 struct SearchQuery {
@@ -192,7 +194,7 @@ if (!form) return;
 const input = form.querySelector("input[name=q]");
 const drop = form.querySelector("[data-search-drop]");
 if (!input || !drop) return;
-const minChars = Number(form.dataset.searchMin || 2);
+const minChars = Number(form.dataset.searchMin || 3);
 let timer = null;
 let controller = null;
 let shown = "";
