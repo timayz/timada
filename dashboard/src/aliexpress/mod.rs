@@ -435,21 +435,39 @@ impl Aliexpress {
 /// What a read is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncMode<'a> {
-    /// The dashboard's own: it writes only what changed, and the link's
-    /// stream stays short however often the item is read; a price the rule's
-    /// stays close to, by the shop's tolerance, stays as it is.
+    /// The dashboard's own, from the sweep or a cart: it writes only what
+    /// changed, and the link's stream stays short however often the item is
+    /// read; a price the rule's stays close to, by the shop's tolerance,
+    /// stays as it is. What delivery costs is reused from the last time this
+    /// node asked, while the combination it was asked for costs the same and
+    /// that is less than [`DELIVERY_FRESH_SECS`] ago: one call for most
+    /// reads, not two.
     Routine,
+    /// Before a payment: as [`Routine`](Self::Routine), but delivery is asked
+    /// again every time, since the shopper pays by it.
+    Sale,
     /// The member `by` waits for it: its outcome is recorded in their name,
-    /// whatever that is, and every price follows its rule exactly.
+    /// whatever that is, every price follows its rule exactly, and delivery
+    /// is asked again.
     Asked { by: &'a str },
 }
+
+/// How long a routine read goes by the delivery this node last asked for
+/// an item, when the combination asked about still costs the same. Delivery
+/// seldom moves on its own; when it does, the shop prices by the old fee
+/// for a week at most, and every sale asks anew.
+pub const DELIVERY_FRESH_SECS: u64 = 7 * 24 * 60 * 60;
 
 impl SyncMode<'_> {
     fn actor(&self) -> &str {
         match self {
-            Self::Routine => ALIEXPRESS_ACTOR,
+            Self::Routine | Self::Sale => ALIEXPRESS_ACTOR,
             Self::Asked { by } => by,
         }
+    }
+
+    fn reuses_delivery(&self) -> bool {
+        matches!(self, Self::Routine)
     }
 
     fn records_everything(&self) -> bool {
@@ -512,8 +530,8 @@ impl Aliexpress {
             links.unlink(ALIEXPRESS_ACTOR, link_id).await?;
             return Ok(SyncResult::Unlinked);
         }
-        let product = match client
-            .product_delivered(&link.ae_product_id, &Self::market_of(settings))
+        let product = match self
+            .read_item(db, &client, &tenant.id, &link, settings, mode)
             .await
         {
             Ok(product) => Some(product),
@@ -536,7 +554,7 @@ impl Aliexpress {
         };
         let pricing = link.pricing.as_ref().or(tenant.aliexpress_pricing.as_ref());
         let tolerance_bps = match mode {
-            SyncMode::Routine => tenant.aliexpress_price_tolerance_bps,
+            SyncMode::Routine | SyncMode::Sale => tenant.aliexpress_price_tolerance_bps,
             SyncMode::Asked { .. } => 0,
         };
         let outcome = timada_aliexpress::apply_sync(
@@ -574,6 +592,62 @@ impl Aliexpress {
         };
         timada_aliexpress::note_read(db, &tenant.id, link_id, crate::auth::now()).await?;
         Ok(result)
+    }
+}
+
+impl Aliexpress {
+    /// Reads the item as `mode` wants it: its combinations, then what
+    /// delivering one costs and takes ([`Client::delivery`]), which a routine
+    /// read takes from this node's last answer instead
+    /// ([`timada_aliexpress::delivery_read`]) while the combination it was
+    /// asked for costs the same, the item is on sale and the answer is
+    /// fresh. What is asked is kept for the next routine read.
+    async fn read_item(
+        &self,
+        db: &Db,
+        client: &Client,
+        tenant_id: &str,
+        link: &LinkState,
+        settings: &AliexpressSettings,
+        mode: SyncMode<'_>,
+    ) -> Result<timada_aliexpress::AeProduct, timada_aliexpress::AeError> {
+        let market = Self::market_of(settings);
+        let mut product = client.product(&link.ae_product_id, &market).await?;
+        let now = crate::auth::now();
+        let kept = if mode.reuses_delivery() && product.on_sale() {
+            match timada_aliexpress::delivery_read(db, tenant_id, &link.id).await {
+                Ok(read) => read.filter(|read| {
+                    now.saturating_sub(read.read_at) < DELIVERY_FRESH_SECS
+                        && product
+                            .sku(&read.delivery.sku_id)
+                            .is_some_and(|sku| sku.cost_cents == Some(read.delivery.sku_cost_cents))
+                }),
+                Err(err) => {
+                    tracing::warn!(tenant = %tenant_id, link = %link.id, error = %err, "the delivery last read is not to be had: asking again");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let delivery = match kept {
+            Some(read) => Some(read.delivery),
+            None => {
+                let delivery = client.delivery(&product, &market).await?;
+                if let Some(delivery) = &delivery
+                    && let Err(err) =
+                        timada_aliexpress::note_delivery(db, tenant_id, &link.id, delivery, now)
+                            .await
+                {
+                    tracing::warn!(tenant = %tenant_id, link = %link.id, error = %err, "the delivery read is not kept for the next read");
+                }
+                delivery
+            }
+        };
+        if let Some(delivery) = delivery {
+            product.add_delivery(&delivery, &market.currency);
+        }
+        Ok(product)
     }
 }
 

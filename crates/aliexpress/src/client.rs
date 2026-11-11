@@ -17,7 +17,7 @@ use timada_orders::Checkpoint;
 
 use crate::address::AddressTree;
 use crate::forwarding::{choose_service, describe_options};
-use crate::model::{AeOrder, AeProduct, FreightOption, Market, Tokens};
+use crate::model::{AeOrder, AeProduct, Delivery, FreightOption, Market, Tokens};
 
 /// AliExpress's own gateway.
 pub const DEFAULT_API_URL: &str = "https://api-sg.aliexpress.com";
@@ -338,6 +338,31 @@ pub struct ParcelQuery {
     pub country: String,
 }
 
+/// Whether a parcel's journey, as its carrier tells it (oldest step first),
+/// ended at the door: its last step says the parcel was delivered or signed
+/// for, and not that it was not. AliExpress words the steps in English
+/// (`Delivered`, `Signed by recipient`, `Delivered to pickup point`) and
+/// gives no status beside them; a wording this misses only has the parcel
+/// followed on until its time is up ([`crate::parcels_due`]). The wording
+/// awaits the real-app test (#253).
+pub fn parcel_delivered(checkpoints: &[Checkpoint]) -> bool {
+    let Some(last) = checkpoints.last() else {
+        return false;
+    };
+    let said = last.description.to_ascii_lowercase();
+    let ended = said.contains("delivered") || said.contains("signed");
+    let undone = [
+        "not delivered",
+        "undelivered",
+        "unsuccessful",
+        "fail",
+        "returned",
+    ]
+    .iter()
+    .any(|word| said.contains(word));
+    ended && !undone
+}
+
 /// The steps of a parcel's journey in the answer to
 /// `aliexpress.logistics.ds.trackinginfo.query` (`details.details[]`, each
 /// an `event_date`, an `address` and an `event_desc`), oldest first as
@@ -484,18 +509,30 @@ impl Client {
         market: &Market,
     ) -> Result<AeProduct, AeError> {
         let mut product = self.product(product_id, market).await?;
-        if !product.on_sale() {
-            return Ok(product);
+        if let Some(delivery) = self.delivery(&product, market).await? {
+            product.add_delivery(&delivery, &market.currency);
         }
-        let Some(sku_id) = product
-            .delivery_sku(&market.currency)
-            .map(|sku| sku.id.clone())
-        else {
-            return Ok(product);
+        Ok(product)
+    }
+
+    /// What delivering `product` to the market's country costs and takes,
+    /// asked for one combination ([`AeProduct::delivery_sku`]) with the
+    /// service an order would ship with ([`choose_service`]); `None` for an
+    /// item no longer sold, or with no combination to ask about. One call.
+    pub async fn delivery(
+        &self,
+        product: &AeProduct,
+        market: &Market,
+    ) -> Result<Option<Delivery>, AeError> {
+        if !product.on_sale() {
+            return Ok(None);
+        }
+        let Some(sku) = product.delivery_sku(&market.currency) else {
+            return Ok(None);
         };
         let country = &market.ship_to_country;
         let options = self
-            .freight(product_id, &sku_id, 1, country, None, market)
+            .freight(&product.id, &sku.id, 1, country, None, market)
             .await?;
         let Some(service) = choose_service(&options) else {
             let message = if options.is_empty() {
@@ -508,9 +545,12 @@ impl Client {
             };
             return Err(AeError::new("freight", message));
         };
-        product.add_delivery(service.cents, &market.currency);
-        product.delivery_days = service.delivery_days();
-        Ok(product)
+        Ok(Some(Delivery {
+            sku_id: sku.id.clone(),
+            sku_cost_cents: sku.cost_cents.unwrap_or_default(),
+            fee_cents: service.cents,
+            days: service.delivery_days(),
+        }))
     }
 
     /// AliExpress's places in `country`, `None` for a country without a list.
@@ -751,6 +791,32 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_parcel_is_delivered_when_its_last_step_says_so() {
+        let step = |description: &str| Checkpoint {
+            at: "2026-11-09 08:00:00".into(),
+            place: String::new(),
+            description: description.into(),
+        };
+        assert!(!parcel_delivered(&[]));
+        assert!(!parcel_delivered(&[step("Shipment accepted by carrier")]));
+        assert!(!parcel_delivered(&[step("Out for delivery")]));
+        assert!(parcel_delivered(&[
+            step("Out for delivery"),
+            step("Delivered")
+        ]));
+        assert!(parcel_delivered(&[step("Signed by recipient")]));
+        assert!(parcel_delivered(&[step("Delivered to pickup point")]));
+        assert!(!parcel_delivered(&[
+            step("Delivered"),
+            step("Returned to sender")
+        ]));
+        assert!(!parcel_delivered(&[step(
+            "Not delivered: addressee absent"
+        )]));
+        assert!(!parcel_delivered(&[step("Delivery failed")]));
+    }
 
     #[test]
     fn parcel_events_are_read_leniently_and_a_refusal_is_an_error() {

@@ -17,6 +17,11 @@ pub const ORDER_STATUS_MESSAGE_TYPE: i64 = 53;
 /// What a push says of an order AliExpress closed without shipping it.
 pub const ORDER_CLOSED: &str = "OrderClosed";
 
+/// What a push says of an order whose goods the buyer confirmed receiving:
+/// its parcels are delivered, and followed no further. The name is the
+/// webhook documentation's; the real-app test (#253) is to show it comes.
+pub const ORDER_CONFIRMED: &str = "OrderConfirmed";
+
 /// Whether `authorization` signs `body` for the app: HMAC-SHA256 of the app
 /// key followed by the raw body, keyed by the app secret, in hex (either
 /// case), compared in constant time.
