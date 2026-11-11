@@ -238,6 +238,15 @@ const STORE_READ_MODELS: &[ReadModel] = &[
         migrations: &crate::saga_fault::MIGRATIONS,
         tables: crate::saga_fault::TABLES,
     },
+    // The pictures' files, as the store knows them (`media/schema.rs`),
+    // filled from the catalog's, the pages', the reviews' and the tenants'
+    // streams.
+    ReadModel {
+        name: Some("media"),
+        subscriptions: &[crate::media::SUBSCRIPTION, crate::media::LOGO_SUBSCRIPTION],
+        migrations: &crate::media::MIGRATIONS,
+        tables: crate::media::TABLES,
+    },
     ReadModel {
         name: Some("shoppers"),
         subscriptions: &[timada_shoppers::READ_MODEL_SUBSCRIPTION],
@@ -272,7 +281,10 @@ const STORE_READ_MODELS: &[ReadModel] = &[
 
 /// The tables that are this node's own in the store's database, no peer's
 /// and no read model's: a copy of the store from a peer leaves them alone.
-const NODE_TABLES: &[&Migrations<'static>] = &[&timada_aliexpress::NODE_MIGRATIONS];
+const NODE_TABLES: &[&Migrations<'static>] = &[
+    &timada_aliexpress::NODE_MIGRATIONS,
+    &crate::media::NODE_MIGRATIONS,
+];
 
 /// Applies the pending migrations of the read models in the store, and of
 /// this node's own tables (what [`open_store`] does; for a store a test

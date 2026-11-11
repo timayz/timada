@@ -153,7 +153,7 @@ pub fn router(services: Services) -> Router {
         // Product pictures: public, unauthenticated, cached forever. An id is
         // an unguessable ULID and the file at an address never changes.
         .serve_dir(MEDIA_ROUTE, media.dir().to_path_buf())
-        .layer(MediaCache::new())
+        .layer(MediaCache::new(media.clone(), db.clone()))
         .layer(BodyLimit::max(UPLOAD_LIMIT).at("/t"))
         // A picture another node copies here: the file alone.
         .layer(BodyLimit::max(UPLOAD_LIMIT).at(PEER_ROUTE))

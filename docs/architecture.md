@@ -520,10 +520,20 @@ with `cluster.secret` as a bearer token; a copy is taken only if it is WebP and 
 heavier than a rendition gets) and commits only once a majority of the cluster holds
 both, the same majority the commit itself needs; short of that the upload is refused
 and the copies are left unreferenced. Copies to the slower nodes carry on after the
-commit. Each node also runs a per-node subscription (`timada-dashboard/media`) that
-fetches from a peer's `/media` any picture added that it lacks (a node that was down
-during the upload, or a new one replaying the stream), keeping a copy only if its size
-and digest are the ones the event recorded, and deletes the pictures removed.
+commit. Each node also runs the `media` read model (`timada-dashboard/media` for the
+catalog, the pages and the reviews, `timada-dashboard/mail-logos` for the tenants):
+`media_files`, one row per rendition file the store knows with its size, digest and
+what references it, the same on every node; and `media_wanted`, the node's own list
+of files to fetch, which a per-node fetcher (`dashboard/src/media/fetcher.rs`) works
+off the subscription's cursor, several files at once, keeping a copy only if its size
+and digest are the ones recorded. A file every peer lacks is dropped with a warning
+(gone for good); a file some peer could not be asked for waits, longer each time, and
+is given up on after twelve hours, which `/admin/cluster` shows for a week. So a
+picture missing everywhere never stalls the subscription (#468, from #464). The
+subscription deletes the files of the pictures removed, by what referenced them, with
+no stream read. A miss on `/media` for a file the store knows fetches it from a peer
+before answering, so a node that has not got a picture yet serves it all the same; a
+miss for a file the store does not know is a 404 at once, no peer asked.
 
 ## Reviews
 

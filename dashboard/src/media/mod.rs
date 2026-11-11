@@ -22,10 +22,14 @@
 //! and is only recorded once a majority of nodes hold them, the same
 //! majority a commit needs: a picture the catalog knows survives whatever
 //! the events survive. Each node also follows the catalog's stream
-//! ([`subscription`]) and fetches from a peer any picture it lacks (a node
-//! that was down during an upload, or a new one), checking each copy against
-//! the size and digest the event recorded, and deletes the ones taken off a
-//! product.
+//! ([`subscription`], [`read_model`]): it records every picture's files in
+//! a read model and on its own list of files to fetch, which the
+//! [`Fetcher`] works off the cursor, taking from a peer what the node lacks
+//! (a node that was down during an upload, or a new one) and checking each
+//! copy against the size and digest the event recorded; and it deletes the
+//! files of the pictures taken off a product. A miss on `/media` for a file
+//! the store knows fetches it the same way before answering
+//! ([`MediaCache`]).
 //!
 //! A shop's mail logo is kept the same way too. Its uploads are recorded in the
 //! platform's stream rather than a tenant's, so [`logo_subscription`] follows
@@ -48,34 +52,33 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bytes::Bytes;
-use evento::subscription::{Context, SubscriptionBuilder};
-use evento::{Executor, metadata::Event};
 use image::{DynamicImage, GenericImageView, ImageDecoder, ImageReader, imageops::FilterType};
 use sha2::{Digest, Sha256};
-use timada_catalog::aggregator::{Deleted as ProductDeleted, ImageAdded, ImageRemoved};
-use timada_catalog::{MAX_IMAGE_BYTES, product_projection};
-use timada_core::{MAX_PICTURE_PIXELS, Picture, RENDITION_EXT, Rendition, RenditionFile};
-use timada_pages::aggregator::{
-    Deleted as PageDeleted, ImageAdded as PageImageAdded, ImageRemoved as PageImageRemoved,
+use timada_catalog::MAX_IMAGE_BYTES;
+use timada_core::{
+    MAX_PICTURE_PIXELS, Picture, RENDITION_EXT, RENDITION_MIME, Rendition, RenditionFile,
 };
-use timada_pages::page_projection;
-use timada_reviews::aggregator::{
-    PhotoRemoved as ReviewPhotoRemoved, Rejected as ReviewRejected, Revised as ReviewRevised,
-    Submitted as ReviewSubmitted,
-};
-use timada_reviews::review_projection;
-use timada_tenancy::aggregator::MailBrandingSet;
-use timada_tenancy::tenant_projection;
 use tokio::sync::Semaphore;
 
 use topcoat::context::Cx;
 use topcoat::router::{
     Body, HeaderValue, IntoPath, Layer, LayerFuture, Next, Path as RoutePath,
-    PathBuf as RoutePathBuf, StatusCode, header::CACHE_CONTROL, response::Response,
+    PathBuf as RoutePathBuf, StatusCode,
+    header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE},
+    response::Response,
 };
 
 use crate::config::MediaConfig;
+use crate::db::Db;
 use crate::peers::{self, Peers, is_id};
+
+pub mod fetcher;
+pub mod read_model;
+mod schema;
+
+pub use fetcher::Fetcher;
+pub use read_model::{logo_subscription, subscription};
+pub use schema::{LOGO_SUBSCRIPTION, MIGRATIONS, NODE_MIGRATIONS, SUBSCRIPTION, TABLES};
 
 /// The route a node takes a copy of a picture on, below `/cluster/media`.
 pub const PEER_ROUTE: &str = "/cluster/media";
@@ -89,6 +92,11 @@ pub const MAX_RENDITION_BYTES: u64 = 2 * 1024 * 1024;
 /// sends its pictures together.
 const RENDERS_AT_ONCE: usize = 2;
 
+/// How many renditions this node asks the peers for at once: the fetcher's
+/// lanes and the misses on `/media` together. A new node pulling a shop's
+/// pictures takes them this many at a time.
+pub const FETCHES_AT_ONCE: usize = 8;
+
 /// The WebP quality of each rendition, out of 100: the page one is looked
 /// at, the listing one is small anyway.
 const PAGE_QUALITY: f32 = 82.0;
@@ -101,6 +109,8 @@ pub struct Media {
     /// The other nodes, when there are any.
     peers: Option<Arc<Peers>>,
     renders: Semaphore,
+    /// How many pictures are being asked of the peers at once.
+    fetches: Semaphore,
 }
 
 /// What a picture turned out to be, once its first bytes were read.
@@ -152,6 +162,22 @@ impl Rendered {
     }
 }
 
+/// What asking the peers for a rendition came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fetch {
+    /// This node had it already.
+    Held,
+    /// Taken from a peer and stored.
+    Fetched,
+    /// Every peer that could be asked said it has no copy (or holds one that
+    /// is not the file recorded), and none was out of reach: the file is
+    /// gone for good, and so is asking again.
+    Gone,
+    /// Some peer could not be asked (down, or not serving), so a copy may
+    /// still be had later; why, for the log.
+    Unreachable(String),
+}
+
 impl Media {
     pub fn new(config: &MediaConfig, peers: Option<Arc<Peers>>) -> Self {
         Self {
@@ -159,6 +185,7 @@ impl Media {
             public_url: config.public_url.clone(),
             peers,
             renders: Semaphore::new(RENDERS_AT_ONCE),
+            fetches: Semaphore::new(FETCHES_AT_ONCE),
         }
     }
 
@@ -312,66 +339,79 @@ impl Media {
         listing.and(page)
     }
 
-    /// Makes sure this node holds every rendition of a picture the catalog
-    /// references, fetching from a peer that does what it lacks. A copy
-    /// fetched must be the size and have the digest the catalog recorded.
-    pub async fn fetch(
-        &self,
-        tenant_id: &str,
-        image_id: &str,
-        picture: &Picture,
-    ) -> anyhow::Result<()> {
-        for (rendition, recorded) in picture.files() {
-            self.fetch_rendition(tenant_id, image_id, rendition, recorded)
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn fetch_rendition(
+    /// Makes sure this node holds one rendition of a picture, asking the
+    /// peers in turn for what it lacks; a copy is kept only if it is the
+    /// size and has the digest recorded. A bounded number run at once. The
+    /// error is this node's own (a name that is not ours, a disk that will
+    /// not take the file); what the peers said is the [`Fetch`].
+    pub async fn fetch_rendition(
         &self,
         tenant_id: &str,
         image_id: &str,
         rendition: Rendition,
         recorded: &RenditionFile,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Fetch> {
         let path = self.path_of(tenant_id, rendition, image_id)?;
         let file = Picture::file(image_id, rendition);
         if tokio::fs::metadata(&path)
             .await
             .is_ok_and(|meta| meta.len() == recorded.size)
         {
-            return Ok(());
+            return Ok(Fetch::Held);
         }
         let Some(peers) = &self.peers else {
-            anyhow::bail!(
-                "picture {tenant_id}/{file} is missing and there is no peer to fetch it from"
-            );
+            // Alone, there is nobody to ask: the file is gone for good.
+            return Ok(Fetch::Gone);
         };
+        let _slot = self.fetches.acquire().await?;
+        let mut unreachable = None;
         for url in peers.urls() {
-            let fetched = async {
-                let response = peers
-                    .client()
-                    .get(format!("{url}{MEDIA_PATH}/{tenant_id}/{file}"))
-                    .send()
-                    .await?
-                    .error_for_status()?;
-                let bytes = response.bytes().await?;
-                check_copy(&bytes, recorded)?;
-                self.store(tenant_id, rendition, image_id, &bytes).await
-            }
-            .await;
-            match fetched {
-                Ok(()) => {
-                    tracing::info!(peer = %url, tenant = %tenant_id, %file, "fetched a picture from a peer");
-                    return Ok(());
+            let response = peers
+                .client()
+                .get(format!("{url}{MEDIA_PATH}/{tenant_id}/{file}"))
+                .send()
+                .await;
+            let response = match response {
+                Ok(response) if response.status() == reqwest::StatusCode::NOT_FOUND => {
+                    tracing::debug!(peer = %url, tenant = %tenant_id, %file, "peer has no copy");
+                    continue;
+                }
+                Ok(response) if response.status().is_success() => response,
+                Ok(response) => {
+                    // The peer is up but not serving: not an answer about
+                    // the file.
+                    tracing::debug!(peer = %url, tenant = %tenant_id, %file, status = %response.status(), "peer did not answer for the picture");
+                    unreachable
+                        .get_or_insert_with(|| format!("{url} answered {}", response.status()));
+                    continue;
                 }
                 Err(err) => {
-                    tracing::debug!(peer = %url, tenant = %tenant_id, %file, %err, "peer has no usable copy");
+                    tracing::debug!(peer = %url, tenant = %tenant_id, %file, %err, "peer not reached");
+                    unreachable.get_or_insert_with(|| format!("{url}: {err}"));
+                    continue;
                 }
+            };
+            let bytes = match response.bytes().await {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    unreachable.get_or_insert_with(|| format!("{url}: {err}"));
+                    continue;
+                }
+            };
+            if let Err(err) = check_copy(&bytes, recorded) {
+                // A copy that is not the file recorded is no copy; the
+                // peer's disk may hold an older upload under the id.
+                tracing::warn!(peer = %url, tenant = %tenant_id, %file, %err, "peer's copy is not the picture recorded");
+                continue;
             }
+            self.store(tenant_id, rendition, image_id, &bytes).await?;
+            tracing::info!(peer = %url, tenant = %tenant_id, %file, "fetched a picture from a peer");
+            return Ok(Fetch::Fetched);
         }
-        anyhow::bail!("no peer has picture {tenant_id}/{file}")
+        Ok(match unreachable {
+            Some(reason) => Fetch::Unreachable(reason),
+            None => Fetch::Gone,
+        })
     }
 
     /// Whether a request carries the cluster's secret. Without peers no
@@ -537,226 +577,6 @@ fn encode(image: &DynamicImage, quality: f32) -> Result<(Bytes, RenditionFile), 
     Ok((bytes, file))
 }
 
-/// The cursor identity of the subscription that keeps this node's copies in
-/// step with the catalog and the reviews, in the store.
-pub const SUBSCRIPTION: &str = "timada-dashboard/media";
-
-/// Follows every tenant's products: fetches each picture added that this node
-/// lacks and deletes each one removed. A fetch that fails is retried, with a
-/// growing delay; a picture removed since is skipped, so a node catching up
-/// on an old stream does not look for files nobody keeps any more.
-pub fn subscription<E: Executor>(media: Arc<Media>) -> SubscriptionBuilder<E> {
-    SubscriptionBuilder::new(SUBSCRIPTION)
-        .data(media)
-        .handler(on_image_added())
-        .handler(on_image_removed())
-        .handler(on_product_deleted())
-        .handler(on_review_submitted())
-        .handler(on_review_rejected())
-        .handler(on_review_photo_removed())
-        .handler(on_review_revised())
-        .handler(on_page_image_added())
-        .handler(on_page_image_removed())
-        .handler(on_page_deleted())
-        .any_routing_key()
-        // A picture is on a majority of nodes before it is recorded, so a
-        // fetch only fails while most of the cluster is down; then the worker
-        // ends and the node's supervisor starts it again from this event.
-        .retry(5)
-}
-
-/// The cursor identity of [`logo_subscription`], in the platform store.
-pub const LOGO_SUBSCRIPTION: &str = "timada-dashboard/mail-logos";
-
-/// Follows the tenants in the platform store (the default tenant, where they
-/// live: a shop's store key can write the same event in the shop's own
-/// tenant, under any `aggregate_id`, and such an event is never read) and
-/// fetches each mail logo this node lacks. A logo replaced since is skipped,
-/// as a removed product picture is. A replaced logo's file stays on disk,
-/// unreferenced.
-pub fn logo_subscription<E: Executor>(media: Arc<Media>) -> SubscriptionBuilder<E> {
-    SubscriptionBuilder::new(LOGO_SUBSCRIPTION)
-        .data(media)
-        .handler(on_mail_branding_set())
-        .any_routing_key()
-        .tenant("")
-        .retry(5)
-}
-
-#[evento::subscription]
-async fn on_mail_branding_set<E: Executor>(
-    context: &Context<'_, E>,
-    event: Event<MailBrandingSet>,
-) -> anyhow::Result<()> {
-    // Nothing is taken from the event but the stream it names: the branding
-    // fetched is the one the tenant holds now.
-    let Some(set) = &event.data.logo else {
-        return Ok(());
-    };
-    let media: Arc<Media> = context.extract();
-    let Some(logo) = tenant_projection()
-        .load(&event.aggregate_id)
-        .execute(context.executor)
-        .await?
-        .and_then(|tenant| tenant.mail_branding)
-        .and_then(|branding| branding.logo)
-        .filter(|logo| logo.id == set.id)
-    else {
-        return Ok(());
-    };
-    media
-        .fetch(&event.aggregate_id, &logo.id, &logo.picture)
-        .await
-}
-
-#[evento::subscription]
-async fn on_image_added<E: Executor>(
-    context: &Context<'_, E>,
-    event: Event<ImageAdded>,
-) -> anyhow::Result<()> {
-    let media: Arc<Media> = context.extract();
-    // Not the pictures of a deleted product: it still lists them, and
-    // nobody keeps them any more.
-    let still_there = product_projection()
-        .load(&event.aggregate_id)
-        .tenant(&event.tenant)
-        .execute(context.executor)
-        .await?
-        .filter(|product| !product.deleted)
-        .is_some_and(|product| {
-            product
-                .images
-                .iter()
-                .any(|image| image.id == event.data.image_id)
-        });
-    if !still_there {
-        return Ok(());
-    }
-    media
-        .fetch(&event.tenant, &event.data.image_id, &event.data.picture)
-        .await
-}
-
-#[evento::subscription]
-async fn on_image_removed<E: Executor>(
-    context: &Context<'_, E>,
-    event: Event<ImageRemoved>,
-) -> anyhow::Result<()> {
-    let media: Arc<Media> = context.extract();
-    media
-        .remove_image(&event.tenant, &event.data.image_id)
-        .await;
-    Ok(())
-}
-
-#[evento::subscription]
-async fn on_product_deleted<E: Executor>(
-    context: &Context<'_, E>,
-    event: Event<ProductDeleted>,
-) -> anyhow::Result<()> {
-    let media: Arc<Media> = context.extract();
-    // The deleted state still lists the pictures the product had.
-    let Some(product) = product_projection()
-        .load(&event.aggregate_id)
-        .tenant(&event.tenant)
-        .execute(context.executor)
-        .await?
-    else {
-        return Ok(());
-    };
-    for image in &product.images {
-        media.remove_image(&event.tenant, &image.id).await;
-    }
-    Ok(())
-}
-
-#[evento::subscription]
-async fn on_review_submitted<E: Executor>(
-    context: &Context<'_, E>,
-    event: Event<ReviewSubmitted>,
-) -> anyhow::Result<()> {
-    let media: Arc<Media> = context.extract();
-    // Only the photos still on a review that is not rejected: the others
-    // were deleted since, and nobody keeps them any more.
-    let Some(review) = review_projection()
-        .load(&event.aggregate_id)
-        .tenant(&event.tenant)
-        .execute(context.executor)
-        .await?
-        .filter(|review| !review.is_rejected())
-    else {
-        return Ok(());
-    };
-    for photo in &review.photos {
-        media
-            .fetch(&event.tenant, &photo.id, &photo.picture)
-            .await?;
-    }
-    Ok(())
-}
-
-#[evento::subscription]
-async fn on_review_rejected<E: Executor>(
-    context: &Context<'_, E>,
-    event: Event<ReviewRejected>,
-) -> anyhow::Result<()> {
-    let media: Arc<Media> = context.extract();
-    let Some(review) = review_projection()
-        .load(&event.aggregate_id)
-        .tenant(&event.tenant)
-        .execute(context.executor)
-        .await?
-    else {
-        return Ok(());
-    };
-    for photo in &review.photos {
-        media.remove_image(&event.tenant, &photo.id).await;
-    }
-    Ok(())
-}
-
-#[evento::subscription]
-async fn on_review_photo_removed<E: Executor>(
-    context: &Context<'_, E>,
-    event: Event<ReviewPhotoRemoved>,
-) -> anyhow::Result<()> {
-    let media: Arc<Media> = context.extract();
-    media
-        .remove_image(&event.tenant, &event.data.image_id)
-        .await;
-    Ok(())
-}
-
-#[evento::subscription]
-async fn on_review_revised<E: Executor>(
-    context: &Context<'_, E>,
-    event: Event<ReviewRevised>,
-) -> anyhow::Result<()> {
-    let media: Arc<Media> = context.extract();
-    for image_id in &event.data.removed {
-        media.remove_image(&event.tenant, image_id).await;
-    }
-    // As on a submission: only the added photos still on a review that is
-    // not rejected.
-    let Some(review) = review_projection()
-        .load(&event.aggregate_id)
-        .tenant(&event.tenant)
-        .execute(context.executor)
-        .await?
-        .filter(|review| !review.is_rejected())
-    else {
-        return Ok(());
-    };
-    for photo in &review.photos {
-        if event.data.added.iter().any(|added| added.id == photo.id) {
-            media
-                .fetch(&event.tenant, &photo.id, &photo.picture)
-                .await?;
-        }
-    }
-    Ok(())
-}
-
 /// Where the pictures are served from, and the catch-all the files sit
 /// under.
 pub const MEDIA_PATH: &str = "/media";
@@ -780,16 +600,70 @@ fn cache_control(status: StatusCode) -> &'static str {
     }
 }
 
-/// Sets that header on everything under `/media`.
+/// Sets that header on everything under `/media`, and answers a miss for a
+/// file the store knows by fetching it from a peer first: a node that has
+/// not got a picture yet (down during the upload, or still catching up)
+/// serves it all the same, and keeps it. A miss for a file the store does
+/// not know is a 404 at once, with no peer asked: an address nobody was
+/// given costs the peers nothing.
 pub struct MediaCache {
     path: RoutePathBuf,
+    media: Arc<Media>,
+    db: Db,
 }
 
 impl MediaCache {
-    pub fn new() -> Self {
+    pub fn new(media: Arc<Media>, db: Db) -> Self {
         Self {
             path: MEDIA_PATH.into_path().into_owned(),
+            media,
+            db,
         }
+    }
+
+    /// The tenant, rendition and picture a request path below `/media`
+    /// names, when it names one: `/media/<tenant>/<400|1200>/<id>.webp`.
+    fn parse_path(path: &str) -> Option<(String, Rendition, String)> {
+        let rest = path.strip_prefix(MEDIA_PATH)?.strip_prefix('/')?;
+        let mut parts = rest.split('/');
+        let (tenant_id, dir, file) = (parts.next()?, parts.next()?, parts.next()?);
+        if parts.next().is_some() || !is_id(tenant_id) {
+            return None;
+        }
+        let (rendition, image_id) = Media::parse_file(dir, file).ok()?;
+        Some((tenant_id.to_owned(), rendition, image_id))
+    }
+
+    /// The file for a miss, fetched from a peer when the store knows it and
+    /// a peer has it; `None` when it stays a miss.
+    async fn fetch_missing(&self, path: &str) -> Option<Bytes> {
+        let (tenant_id, rendition, image_id) = Self::parse_path(path)?;
+        let recorded = match read_model::recorded(&self.db, &tenant_id, &image_id, rendition).await
+        {
+            Ok(recorded) => recorded?,
+            Err(err) => {
+                tracing::warn!(%path, error = %format!("{err:#}"), "cannot look a missing picture up");
+                return None;
+            }
+        };
+        match self
+            .media
+            .fetch_rendition(&tenant_id, &image_id, rendition, &recorded)
+            .await
+        {
+            Ok(Fetch::Held | Fetch::Fetched) => {}
+            Ok(Fetch::Gone) => return None,
+            Ok(Fetch::Unreachable(reason)) => {
+                tracing::debug!(%path, %reason, "a missing picture could not be fetched for the request");
+                return None;
+            }
+            Err(err) => {
+                tracing::warn!(%path, error = %format!("{err:#}"), "a missing picture could not be fetched for the request");
+                return None;
+            }
+        }
+        let file = self.media.path_of(&tenant_id, rendition, &image_id).ok()?;
+        tokio::fs::read(&file).await.ok().map(Bytes::from)
     }
 }
 
@@ -800,7 +674,19 @@ impl Layer for MediaCache {
 
     fn handle<'cx>(&'cx self, cx: &'cx Cx, body: Body, next: Next<'cx>) -> LayerFuture<'cx> {
         Box::pin(async move {
+            let path = topcoat::router::request::original_uri(cx).path().to_owned();
             let mut response: Response = next.run(cx, body).await?;
+            if response.status() == StatusCode::NOT_FOUND
+                && let Some(bytes) = self.fetch_missing(&path).await
+            {
+                response = Response::new(Body::from(bytes.clone()));
+                let headers = response.headers_mut();
+                headers.insert(CONTENT_TYPE, HeaderValue::from_static(RENDITION_MIME));
+                headers.insert(
+                    CONTENT_LENGTH,
+                    HeaderValue::from_str(&bytes.len().to_string()).expect("digits"),
+                );
+            }
             let cache = cache_control(response.status());
             response
                 .headers_mut()
@@ -808,65 +694,6 @@ impl Layer for MediaCache {
             Ok(response)
         })
     }
-}
-
-#[evento::subscription]
-async fn on_page_image_added<E: Executor>(
-    context: &Context<'_, E>,
-    event: Event<PageImageAdded>,
-) -> anyhow::Result<()> {
-    let media: Arc<Media> = context.extract();
-    // Only a picture still on a page that is still there.
-    let still_there = page_projection()
-        .load(&event.aggregate_id)
-        .tenant(&event.tenant)
-        .execute(context.executor)
-        .await?
-        .filter(|page| !page.deleted)
-        .is_some_and(|page| {
-            page.images
-                .iter()
-                .any(|image| image.id == event.data.image_id)
-        });
-    if !still_there {
-        return Ok(());
-    }
-    media
-        .fetch(&event.tenant, &event.data.image_id, &event.data.picture)
-        .await
-}
-
-#[evento::subscription]
-async fn on_page_image_removed<E: Executor>(
-    context: &Context<'_, E>,
-    event: Event<PageImageRemoved>,
-) -> anyhow::Result<()> {
-    let media: Arc<Media> = context.extract();
-    media
-        .remove_image(&event.tenant, &event.data.image_id)
-        .await;
-    Ok(())
-}
-
-#[evento::subscription]
-async fn on_page_deleted<E: Executor>(
-    context: &Context<'_, E>,
-    event: Event<PageDeleted>,
-) -> anyhow::Result<()> {
-    let media: Arc<Media> = context.extract();
-    // The deleted state still lists the pictures the page had.
-    let Some(page) = page_projection()
-        .load(&event.aggregate_id)
-        .tenant(&event.tenant)
-        .execute(context.executor)
-        .await?
-    else {
-        return Ok(());
-    };
-    for image in &page.images {
-        media.remove_image(&event.tenant, &image.id).await;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -887,16 +714,107 @@ pub(crate) mod test_support {
     pub fn rendered(bytes: &[u8]) -> Rendered {
         render(bytes).expect("a picture")
     }
+
+    impl Media {
+        /// Every rendition of a picture, fetched or held; an error for one
+        /// that could not be had, for whatever reason.
+        pub async fn fetch(
+            &self,
+            tenant_id: &str,
+            image_id: &str,
+            picture: &Picture,
+        ) -> anyhow::Result<()> {
+            for (rendition, recorded) in picture.files() {
+                match self
+                    .fetch_rendition(tenant_id, image_id, rendition, recorded)
+                    .await?
+                {
+                    Fetch::Held | Fetch::Fetched => {}
+                    other => anyhow::bail!("{rendition:?} not fetched: {other:?}"),
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::test_support::{png, rendered};
     use super::*;
 
     const GIF: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xFF\xFF\xFF";
 
     use crate::peers::test_support::{SECRET, answering, down, peer};
+
+    /// A miss names a file the store knows or it stays a miss: only then is
+    /// a peer asked, and the file fetched is served and kept.
+    #[tokio::test]
+    async fn a_miss_for_a_known_file_fetches_it_from_a_peer() {
+        use super::fetcher::tests::fetcher_with;
+        use super::read_model::Source;
+
+        assert_eq!(
+            MediaCache::parse_path("/media/t1/400/i1.webp"),
+            Some(("t1".to_owned(), Rendition::Listing, "i1".to_owned()))
+        );
+        for path in [
+            "/media/t1/i1.webp",
+            "/media/t1/800/i1.webp",
+            "/media/t1/400/i1.png",
+            "/media/../400/i1.webp",
+            "/media/t1/400/i1.webp/x",
+            "/other/t1/400/i1.webp",
+        ] {
+            assert_eq!(MediaCache::parse_path(path), None, "{path}");
+        }
+
+        let upload = rendered(&png(900, 600, [7, 7, 7, 255]));
+        let (listing, page) = (upload.listing.clone(), upload.page.clone());
+        let has_it = answering(move |head, _| {
+            let body = if head.contains("/400/") {
+                listing.to_vec()
+            } else {
+                page.to_vec()
+            };
+            (200, body)
+        })
+        .await;
+        let (_store, fetcher) = fetcher_with(vec![has_it], 3).await;
+        let cache = MediaCache::new(fetcher.media.clone(), fetcher.db.clone());
+        // Unknown to the store: no peer asked, a miss.
+        assert!(
+            cache
+                .fetch_missing("/media/acme/400/i1.webp")
+                .await
+                .is_none()
+        );
+        fetcher
+            .record("acme", "i1", &upload.picture, Source::Product, "mat", 1)
+            .await
+            .unwrap();
+        let served = cache
+            .fetch_missing("/media/acme/400/i1.webp")
+            .await
+            .expect("fetched");
+        assert_eq!(served, upload.listing);
+        assert!(
+            fetcher
+                .media
+                .path_of("acme", Rendition::Listing, "i1")
+                .unwrap()
+                .is_file(),
+            "kept"
+        );
+        assert!(
+            !fetcher
+                .media
+                .path_of("acme", Rendition::Page, "i1")
+                .unwrap()
+                .exists(),
+            "only what was asked for"
+        );
+    }
 
     /// A picture served is kept for a year; a miss is not kept at all, so a
     /// cache in front never hides a picture this node copies later.
@@ -1001,17 +919,18 @@ mod tests {
     }
 
     /// A media store in a fresh directory, with these peers.
-    fn media(peers: Vec<String>, nodes: usize) -> Media {
+    pub(crate) fn media(peers: Vec<String>, nodes: usize) -> Media {
         let dir = std::env::temp_dir().join(format!("timada-media-{}", ulid::Ulid::generate()));
         Media {
             dir,
             public_url: "https://shop.example/media".into(),
             peers: Some(Arc::new(Peers::for_test(peers, nodes))),
             renders: Semaphore::new(RENDERS_AT_ONCE),
+            fetches: Semaphore::new(FETCHES_AT_ONCE),
         }
     }
 
-    fn alone(media: Media) -> Media {
+    pub(crate) fn alone(media: Media) -> Media {
         Media {
             peers: None,
             ..media
@@ -1196,43 +1115,5 @@ mod tests {
             .unwrap();
         media.remove_image("t1", "i1").await;
         assert!(!media.dir.join("t1/400/i1.webp").exists());
-    }
-
-    /// Tenants live in the platform's streams. A shop's store key can write a
-    /// `MailBrandingSet` in the shop's own tenant under another tenant's id:
-    /// nothing is fetched into that tenant's media for it.
-    #[tokio::test]
-    async fn a_branding_in_a_shops_tenant_fetches_nothing() {
-        let upload = rendered(&png(20, 20, [1, 2, 3, 255]));
-        let store = evento::Turso::in_memory_concurrent().await.unwrap();
-        evento::append("victim")
-            .original_version(0)
-            .event(&MailBrandingSet {
-                logo: Some(timada_tenancy::MailLogo {
-                    id: "i1".to_owned(),
-                    picture: upload.picture,
-                }),
-                accent: None,
-                footer: None,
-                set_by: "mallory".to_owned(),
-            })
-            .tenant("zeta")
-            .commit(&store)
-            .await
-            .unwrap();
-        let listing = upload.listing.clone();
-        let has_it = answering(move |_, _| (200, listing.to_vec())).await;
-        let media = Arc::new(media(vec![has_it], 1));
-
-        logo_subscription::<evento::Turso>(media.clone())
-            .ephemeral()
-            .run_once(&store)
-            .await
-            .unwrap();
-        assert!(
-            tokio::fs::metadata(media.path_of("victim", Rendition::Listing, "i1").unwrap())
-                .await
-                .is_err()
-        );
     }
 }

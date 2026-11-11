@@ -161,6 +161,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         Vec::new()
     };
+    // The pictures this node has yet to fetch from the others, and the ones
+    // it gave up on.
+    let pictures = crate::media::fetcher::summary(db)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let pictures_label = match (pictures.wanted, pictures.given_up) {
+        (0, 0) => "all here".to_owned(),
+        (wanted, 0) => format!("{wanted} to fetch from the other nodes"),
+        (wanted, given_up) => {
+            format!("{wanted} to fetch from the other nodes, {given_up} given up on")
+        }
+    };
     let mails_label = match (mails.owed, mails.failed) {
         (0, 0) => "none waiting".to_owned(),
         (owed, 0) => format!("{owed} waiting to be sent"),
@@ -247,6 +259,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         term: "Mails owed",
                         attrs: attributes! { data-mails-owed=(mails.owed) data-mails-failed=(mails.failed) },
                         (&mails_label)
+                    )
+                    fact(
+                        term: "Pictures wanted",
+                        attrs: attributes! { data-pictures-wanted=(pictures.wanted) data-pictures-given-up=(pictures.given_up) },
+                        (&pictures_label)
                     )
                     fact(
                         term: "Events given up on",
