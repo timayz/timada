@@ -18,6 +18,8 @@ mod config;
 mod db;
 #[path = "../src/mailroom/schema.rs"]
 mod mailroom;
+#[path = "../src/media/schema.rs"]
+mod media;
 #[path = "../src/read_only_store.rs"]
 mod read_only_store;
 #[path = "../src/saga_fault/mod.rs"]

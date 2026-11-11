@@ -21,6 +21,8 @@ mod ecb;
 mod invoicing;
 #[path = "../src/mailroom/schema.rs"]
 mod mailroom;
+#[path = "../src/media/schema.rs"]
+mod media;
 #[path = "../src/payments/mod.rs"]
 mod payments;
 #[path = "../src/saga_fault/mod.rs"]
