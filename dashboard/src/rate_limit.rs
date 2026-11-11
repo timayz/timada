@@ -12,8 +12,9 @@
 //! The policies built on it are how often a storefront may have a sign-in
 //! code mailed ([`allow_shopper_code`]), how often it may hand in a message
 //! from its contact form ([`allow_contact_message`]) or a sign-up to the
-//! shop's news ([`allow_newsletter_signup`]), and how often a password may
-//! be tried ([`allow_password_login`]).
+//! shop's news ([`allow_newsletter_signup`]), how often it may start a cart
+//! ([`allow_new_cart`]), and how often a password may be tried
+//! ([`allow_password_login`]).
 
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
@@ -377,6 +378,39 @@ pub async fn allow_newsletter_signup(
     .await
 }
 
+/// Whether a storefront may start one more cart, the way
+/// [`allow_shopper_code`] decides for codes: under both its key's limit and
+/// its visitor's, counted only when let through. A shopper starts a cart at
+/// their first add and keeps it (the storefront holds its id), so each cart
+/// started is a new stream in the tenant's store and a row in its read
+/// models, held until it lies idle long enough to be dropped: this is what
+/// keeps a visitor that never keeps the id from filling the store.
+pub async fn allow_new_cart(
+    limiter: &RateLimiter,
+    limits: &StoreConfig,
+    key_id: &str,
+    tenant_id: &str,
+    shopper_ip: Option<&str>,
+    peer: Option<IpAddr>,
+) -> bool {
+    allow_from_storefront(
+        limiter,
+        "cart",
+        &StorefrontLimits {
+            per_key: limits.carts_per_key,
+            per_ip: limits.carts_per_ip,
+            window: Duration::from_secs(limits.carts_window_secs),
+        },
+        Caller {
+            key_id,
+            tenant_id,
+            shopper_ip,
+            peer,
+        },
+    )
+    .await
+}
+
 /// Whether one more password may be tried for `email` from `peer`: under
 /// `[auth]`'s limit for the browser's address and for the e-mail address
 /// (counted from anywhere, so a password cannot be guessed from many
@@ -511,6 +545,9 @@ mod tests {
             newsletter_signups_per_ip: per_ip,
             newsletter_signups_per_key: per_key,
             newsletter_signups_window_secs: 3600,
+            carts_per_ip: per_ip,
+            carts_per_key: per_key,
+            carts_window_secs: 3600,
         }
     }
 
@@ -623,6 +660,31 @@ mod tests {
         assert!(
             !allow_contact_message(&limiter, &tight, "k2", "t1", Some("203.0.113.2"), None).await
         );
+    }
+
+    #[tokio::test]
+    async fn carts_are_counted_apart_per_visitor_and_per_key() {
+        let limiter = RateLimiter::new(None);
+        let one_each = limits(1, 100);
+        let ip = Some("203.0.113.9");
+        assert!(allow_new_cart(&limiter, &one_each, "k1", "t1", ip, None).await);
+        assert!(!allow_new_cart(&limiter, &one_each, "k1", "t1", ip, None).await);
+        // A visitor out of carts may still hand in a message, and start a
+        // cart at another shop.
+        assert!(allow_contact_message(&limiter, &one_each, "k1", "t1", ip, None).await);
+        assert!(allow_new_cart(&limiter, &one_each, "k2", "t2", ip, None).await);
+        // Without the visitor's address the caller's counts; without either,
+        // the key's own share only.
+        let peer = Some("198.51.100.1".parse().unwrap());
+        assert!(allow_new_cart(&limiter, &one_each, "k1", "t1", None, peer).await);
+        assert!(!allow_new_cart(&limiter, &one_each, "k1", "t1", None, peer).await);
+        assert!(allow_new_cart(&limiter, &one_each, "k1", "t1", None, None).await);
+        // The key's share holds whatever the visitors.
+        let tight = limits(100, 2);
+        let ask = |ip: &'static str| allow_new_cart(&limiter, &tight, "k3", "t3", Some(ip), None);
+        assert!(ask("203.0.113.1").await);
+        assert!(ask("203.0.113.2").await);
+        assert!(!ask("203.0.113.3").await);
     }
 
     #[tokio::test]

@@ -295,6 +295,22 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     )
     .start(payments_every);
 
+    // A cart nobody touched for `[carts] idle_days` is dropped, each node
+    // dropping its own part of them.
+    let live = cluster.clone();
+    let idle_carts = crate::idle_carts::IdleCarts::new(
+        db.clone(),
+        executor.clone(),
+        Arc::new(move || {
+            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, None);
+            timada_core::Share { index, of }
+        }),
+        config.carts.idle(),
+    )
+    .start(std::time::Duration::from_secs(
+        config.carts.check_secs.max(1),
+    ));
+
     // A campaign a merchant sent goes out from every node, each mailing its
     // own part of the subscribers, a lane per shop.
     let live = cluster.clone();
@@ -391,6 +407,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     pending_payments.abort();
     unanswered_checkouts.abort();
     hold_reminders.abort();
+    idle_carts.abort();
     newsletter_sends.abort();
     automation_runs.abort();
     aliexpress_sync.abort();

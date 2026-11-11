@@ -1,6 +1,7 @@
 //! `/t/{slug}/carts`: the carts shoppers are filling and have not ordered,
 //! the most recently touched first, for members with `orders:read`. One
-//! that stays still for days is a sale left behind.
+//! that stays still for days is a sale left behind; one still for `[carts]
+//! idle_days` is dropped and leaves the list.
 
 use timada_orders::{count_open_carts, open_carts};
 use timada_tenancy::PERMISSION_ORDERS_READ;
@@ -15,6 +16,7 @@ use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
+use crate::config::Config;
 use crate::db::Db;
 use crate::ui::{
     Shell, Tone, document, empty_row, format_time, page_header, pager, section_card, status_badge,
@@ -51,6 +53,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let pages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
+    let idle_days = app_context::<Config>(cx).carts.idle_days;
+    let description = format!(
+        "Carts holding something that were not ordered yet. A cart becomes an order at checkout and leaves this list; one nobody touched for {idle_days} {} is dropped.",
+        if idle_days == 1 { "day" } else { "days" }
+    );
     let page_link = {
         let slug = tenant.slug.clone();
         move |page: i64| {
@@ -68,7 +75,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             page_header(title: "Open carts", subtitle: Some("What shoppers are filling and have not ordered yet."))
 
             section_card(
-                description: Some("Carts holding something that were not ordered yet. A cart becomes an order at checkout and leaves this list."),
+                description: Some(description.as_str()),
                 table(
                     table_header(
                         table_row(

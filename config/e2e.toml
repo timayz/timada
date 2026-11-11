@@ -50,8 +50,8 @@ send_check_secs = 2
 [automations]
 check_secs = 1
 
-# Every spec signs shoppers in, sends messages and signs up to newsletters
-# from this one machine, so the limits are far above what the
+# Every spec signs shoppers in, sends messages, signs up to newsletters and
+# starts carts from this one machine, so the limits are far above what the
 # suite asks for.
 [store]
 shopper_codes_per_ip = 1000
@@ -60,6 +60,8 @@ contact_messages_per_ip = 1000
 contact_messages_per_key = 10000
 newsletter_signups_per_ip = 1000
 newsletter_signups_per_key = 10000
+carts_per_ip = 1000
+carts_per_key = 10000
 
 # AliExpress is the stand-in the spec starts (tests/e2e/aliexpress.ts); the
 # imported products are read again every few seconds, and at every payment. An

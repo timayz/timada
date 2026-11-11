@@ -176,13 +176,13 @@ dir = "data/shopper-keys"
 
 # What storefronts may ask for their shoppers. A storefront has the shop mail
 # sign-in codes, hands in the messages of its contact form and the sign-ups
-# to its news; past these limits it is refused for a while and nothing is
-# mailed or recorded. A shopper is the address the storefront reports for
-# them, and is counted per shop. The limits hold across every node: before
-# letting one through, a node asks the others (at their web_peers address)
-# what they let through. A node that does not answer within two seconds is
-# not counted, and two nodes deciding at the same moment may each let the
-# last one through.
+# to its news, and starts carts; past these limits it is refused for a while
+# and nothing is mailed or recorded. A shopper is the address the storefront
+# reports for them, and is counted per shop. The limits hold across every
+# node: before letting one through, a node asks the others (at their
+# web_peers address) what they let through. A node that does not answer
+# within two seconds is not counted, and two nodes deciding at the same
+# moment may each let the last one through.
 # [store]
 # # Codes one shopper's address may have mailed within the window.
 # shopper_codes_per_ip = 10
@@ -204,6 +204,24 @@ dir = "data/shopper-keys"
 # newsletter_signups_per_key = 500
 # # The window both sign-up limits count over, in seconds.
 # newsletter_signups_window_secs = 3600
+# # Carts one visitor's address may start within the window, a start refused
+# # for its item (out of stock, say) included. A shopper keeps the cart of
+# # their first add, so this holds back visitors that do not.
+# carts_per_ip = 30
+# # Carts one API key may start within the window, whoever the visitors.
+# carts_per_key = 5000
+# # The window both cart limits count over, in seconds.
+# carts_window_secs = 3600
+
+# Carts nobody touches are dropped after a while: the shopper's next visit
+# starts a new one, and the shop's list of open carts forgets them. A cart
+# with a payment open, one on its way back or a request to pay unanswered is
+# kept until that is settled. Every node drops its own part of them.
+# [carts]
+# # Days a cart is kept after its last change (at least 1).
+# idle_days = 30
+# # How often, in seconds, this node looks for carts to drop.
+# check_secs = 3600
 
 # How many invitations members may mail. Past either limit, the members page
 # refuses to send another one until older ones leave the window. Withdrawn

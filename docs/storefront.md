@@ -348,8 +348,21 @@ into the tenant's store whenever the merchant changes the Stripe settings.
   failing (`?` makes it a 500), the inner one a refusal to word for the shopper;
   `OrderError::code()` gives a stable code for a URL. The same calls exist as `Store`
   methods for code outside a request.
-- `add_to_cart` starts a new cart when it is given none, or one already ordered.
-  `set_cart_quantity` (0 removes the line) and `remove_from_cart` change a line.
+- `add_to_cart` starts a new cart when it is given none, or one already ordered,
+  dropped or unknown: the dashboard drops a cart nobody touched for a while
+  (`[carts] idle_days`, 30 days by default) once nothing about it can move money
+  any more. A cart starts with its first item, checked first, so a refusal leaves
+  no cart behind. `set_cart_quantity` (0 removes the line) and `remove_from_cart`
+  change a line.
+- The dashboard lets each visitor, and each key, start only so many carts within a
+  window (`[store]` `carts_per_ip`, `carts_per_key`; 30 and 5000 an hour by default,
+  held across its nodes): past it, `too_many_carts`, and no cart is started. A
+  start refused for its item counts too: the limit is checked before the store is
+  read. A shopper keeps the cart of their first add, so this holds back visitors
+  that keep no cookie. `add_to_cart(cx, …)` reports the request's client address
+  (`X-Shopper-IP`), so behind a reverse proxy the host must trust it
+  (`.trusted_proxies(…)` on its router), or all its shoppers share one address and
+  soon start no more carts. `Store::add_to_cart` takes the address itself.
 - A product that sells variants needs one (`variant_required`); one cart is one
   currency. A line whose product went off sale, or that wants more than is left
   (`out_of_stock`), shows in `CartView::unavailable`, and checkout waits until it is
@@ -510,7 +523,7 @@ delete_account(cx, &token).await?;                 // its key is destroyed, sess
   (`order.email == shopper.email`).
 - The dashboard holds each API key, and each shopper's address at a shop, to a number
   of codes within a window (`[store]` in its configuration; 100 and 10 per 10 minutes
-  by default, counted on each node): past it, `too_many_requests`, and no mail goes
+  by default, held across its nodes): past it, `too_many_requests`, and no mail goes
   out. `request_sign_in_code(cx, …)` reports the request's client address
   (`X-Shopper-IP`), so behind a reverse proxy the host must trust it
   (`.trusted_proxies(…)` on its router), or all its shoppers share one address.

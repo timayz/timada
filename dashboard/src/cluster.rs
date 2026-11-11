@@ -138,7 +138,7 @@ pub async fn open(
 
 /// How long a node may go unheard before the others share out its part of
 /// the work ([`timada_core::Share`]): the AliExpress reads, the newsletter
-/// mails.
+/// mails, the idle carts dropped.
 pub const LIVE_WITHIN: Duration = Duration::from_secs(30);
 
 /// This node, as the work it claims names it (`node-2`): its id in the
