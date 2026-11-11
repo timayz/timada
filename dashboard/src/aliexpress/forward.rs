@@ -1412,7 +1412,7 @@ mod tests {
                     crate::db::Db::from(store.clone()),
                     None,
                 )),
-                Arc::new(|_| timada_aliexpress::Share::ALONE),
+                Arc::new(|_| timada_core::Share::ALONE),
             )
             .unwrap();
             let company = CompanyState {

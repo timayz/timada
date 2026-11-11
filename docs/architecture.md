@@ -752,17 +752,34 @@ the merchant writes on `/t/{slug}/newsletter/campaigns` (`newsletter:manage`), a
 templates over the shop's variables and `{{ unsubscribe_url }}`, which every campaign
 must link to; it may go to the subscribers of one language only. It is a draft
 (`Drafted`, `Edited`) until sent (`SendRequested`), and can then no longer be edited.
-Nothing in the event store fires later, so every node sweeps the campaigns going out
-(`[newsletter] send_check_secs`, from `newsletter_campaigns`) and mails up to
-`mails_per_check` of each campaign's confirmed subscribers not mailed yet (from
-`newsletter_deliveries`). Each mail is claimed first: a `Delivery` stream per
-campaign and subscriber, written with `original_version(0)`, so a subscriber gets a
-campaign once however many nodes send it; a mail the server refuses is recorded
-(`Failed`) and not tried again. A subscriber the read model still owes but who left
-the list (or was erased) since is recorded as `Skipped`, so the campaign stops owing
-them; one whose personal-data key is not on this node yet is left for a later sweep
-(or another node) and holds the campaign open. A sweep that finds fewer owed than a
-batch, none of them left for later, writes `Finished`. Every mail carries
+Nothing in the event store fires later, so every node looks at the campaigns going
+out every `[newsletter] send_check_secs` (from `newsletter_campaigns`) and mails its
+own part of their confirmed subscribers not mailed yet (from `newsletter_deliveries`).
+A subscriber falls to one of the nodes up by the `shard` of their id
+(`timada_core::Share`, the rule the AliExpress reads follow), so the nodes send side
+by side rather than race for the same mails, and the part of a node no longer heard
+from is shared out among the others. Each look starts a lane per shop, up to 16 at
+once on a node, the shops served longest ago first: it mails one subscriber after
+the other through the shop's server until shortly before the next look or until
+`mails_per_check` of a campaign went out, so a fast server sends many and a slow one
+holds up its own shop only. A node walks each campaign's list by subscriber id from
+where it stopped (kept in memory), not through everyone mailed already, and once a
+whole pass over its own part found nobody to mail while someone is still owed, it
+walks everyone's: a node that is heard from but does not send (copying its store,
+catching up, its writes refused) holds its part back for a pass or two only. Each mail is claimed first: a `Delivery` stream per
+campaign and subscriber, written with `original_version(0)` and no read first, so a
+subscriber gets a campaign once even while two nodes disagree on who is up; a mail
+the server refuses is recorded (`Failed`) and not tried again, and a failure the
+server is to blame for, rather than the address, ends the shop's lane until the next
+look. A subscriber the read model still owes but who left the list (or was erased)
+since is recorded as `Skipped`, so the campaign stops owing them; one whose
+personal-data key is not on this node yet is left for the walk's next time through
+and holds the campaign open. A node whose walk reached the end of its part writes
+`Finished` once the read model owes nobody, whichever node's part. The pages read
+the counts from the rows themselves, kept by the read model as the deliveries and
+the subscribers change: delivered, failed and skipped on `newsletter_campaigns` and
+`newsletter_editions`, the confirmed subscribers by language and time zone in
+`newsletter_audience`. Every mail carries
 `List-Unsubscribe` and `List-Unsubscribe-Post:
 List-Unsubscribe=One-Click` (RFC 8058) pointing at the storefront's unsubscribe page,
 whose POST takes the subscriber off the list; a shop without a storefront address
@@ -770,8 +787,8 @@ holds its campaign back until it has one. Marketing never borrows the platform's
 server: a campaign goes through the mail server the shop picked for its marketing
 only, the send page and the test mail refuse without one (`mail_server_required`),
 and a sweep that finds none picked holds the campaign back, claiming nobody, until
-one is. The sender is looked up per batch, so a server switched mid-campaign sends
-the next batches.
+one is. The sender is looked up at each look, so a server switched mid-campaign sends
+the next mails.
 
 A campaign may go out on a schedule instead of at once (`ScheduleSet`: once, daily,
 weekly on some days or monthly on a day, between two dates, within a window of the
@@ -779,7 +796,10 @@ day, at a pace). Started (`ScheduleActivated`), each cycle of the cadence opens 
 `Edition` stream (its id derives from the campaign and the cycle, so a cycle opens
 once however many nodes look) holding the copy as it stood, and the sweep spreads
 the edition's mails over the window's slots (`crates/newsletter/src/schedule.rs`:
-at each slot passed, the share mailed so far grows). A slot is a time of the local
+at each slot passed, the share mailed so far grows). The share comes from the read
+model's counts (`newsletter_edition_zones`, the edition's mails by time zone, and
+`newsletter_audience`): each node mails its part of what a slot owes, and at a
+zone's last slot whoever is still owed there. A slot is a time of the local
 day: each subscriber's browser said where they live when they asked
 (`TimeZoneSet`, an IANA name, kept in clear), so 9:00 reaches Paris six hours
 before New York. A one-off edition still owed mails when its window closes rolls

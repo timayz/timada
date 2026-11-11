@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use evento::Evento;
 use timada_aliexpress::aggregator::SkuLink;
-use timada_aliexpress::{AeProduct, Share, map_product, track_imported};
+use timada_aliexpress::{AeProduct, map_product, track_imported};
 use timada_catalog_import::{ImportOptions, NoImages, import_one};
+use timada_core::Share;
 use timada_orders::{PROVIDER_STRIPE, Payment};
 use timada_tenancy::{
     AuthorizeAliexpress, ConfigureAliexpress, ConfigurePayments, CreateTenant, LegalIdentity,

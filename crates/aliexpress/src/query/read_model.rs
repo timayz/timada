@@ -23,7 +23,7 @@ use crate::command::{
     ForwardState, ForwardStatus, LinkState, LinkStatus, forward_projection, link_projection,
 };
 use crate::forwarding::{ForwardPlan, LinkedSkus, plan_items};
-use crate::value_object::{Share, shard_of};
+use timada_core::{Share, shard_of};
 
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-aliexpress/read-models";

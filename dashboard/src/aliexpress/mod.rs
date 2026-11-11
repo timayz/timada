@@ -16,8 +16,9 @@ use std::time::Duration;
 
 use timada_aliexpress::{
     AliexpressError, Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL, LinkState, Market,
-    RenewedTokens, Share, SyncRead, TokenRenewal,
+    RenewedTokens, SyncRead, TokenRenewal,
 };
+use timada_core::Share;
 use timada_tenancy::{AliexpressSettings, CompanyState, TenantState};
 
 use self::budget::CallBudget;
@@ -30,9 +31,6 @@ use crate::seal::Sealer;
 
 /// Who the dashboard says did what it does on its own.
 pub const ALIEXPRESS_ACTOR: &str = timada_aliexpress::ALIEXPRESS_ACTOR;
-
-/// How long a node may go unheard before the others share out what it reads.
-pub const LIVE_WITHIN: Duration = Duration::from_secs(30);
 
 /// How many times a read's record is tried when a request came in between.
 const RECORD_ATTEMPTS: usize = 3;

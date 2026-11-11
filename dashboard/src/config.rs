@@ -273,14 +273,17 @@ fn default_request_check_secs() -> u64 {
     60 * 60
 }
 
-/// How the shops' newsletter campaigns go out.
+/// How the shops' newsletter campaigns go out: every node mails its own
+/// part of a campaign's subscribers, one shop's mails one after the other,
+/// several shops at once.
 #[derive(Debug, Deserialize, Clone)]
 pub struct NewsletterConfig {
-    /// How often, in seconds, this node looks for campaigns still going out.
+    /// How often, in seconds, this node looks for campaigns still going out;
+    /// a shop's mails go out until shortly before the next look.
     #[serde(default = "default_send_check_secs")]
     pub send_check_secs: u64,
-    /// The most mails one campaign sends per look, so a large list goes out
-    /// over several and one shop does not hold the others up.
+    /// The most mails one campaign sends per look from this node, however
+    /// fast the shop's server takes them.
     #[serde(default = "default_mails_per_check")]
     pub mails_per_check: u32,
 }
@@ -299,7 +302,7 @@ fn default_send_check_secs() -> u64 {
 }
 
 fn default_mails_per_check() -> u32 {
-    100
+    1_000
 }
 
 /// How the shops' automation scenarios are run.
