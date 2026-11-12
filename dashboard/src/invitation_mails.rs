@@ -292,7 +292,9 @@ mod tests {
     async fn run(store: &Turso, room: &Arc<Mailroom>, now: u64) -> usize {
         pass(store, room).await;
         // The pass stamped the rows with the clock, which may have ticked
-        // past the test's `now` meanwhile: sweep at whichever is later.
+        // past the test's `now` meanwhile: sweep at whichever is later. A
+        // failed send is stamped with that later time too, so a test reads
+        // its retry off the stream rather than reckon it from `now`.
         room.sweep(now.max(crate::auth::now())).await.unwrap()
     }
 
@@ -372,10 +374,15 @@ mod tests {
             "node-a",
         );
         assert_eq!(run(&store, &down, now).await, 0);
-        assert!(matches!(
-            mail_of(&store, &pending.invitation.id).await,
-            Sending::Deferred { attempts: 1, .. }
-        ));
+        let mail = mail_of(&store, &pending.invitation.id).await;
+        let Sending::Deferred {
+            retry_at,
+            attempts: 1,
+            ..
+        } = mail
+        else {
+            panic!("{mail:?}");
+        };
         // Withdrawn before the retry: nothing goes out, nothing is owed.
         timada_tenancy::Command(Evento::new(store.clone()))
             .revoke_invitation("user-alice", &pending.invitation.id, now)
@@ -383,7 +390,7 @@ mod tests {
             .unwrap();
         let transport = MemoryTransport::new();
         let back = room(&store, transport.clone(), "node-a");
-        assert_eq!(run(&store, &back, now + RETRY_DELAYS_SECS[0]).await, 0);
+        assert_eq!(run(&store, &back, retry_at).await, 0);
         assert!(transport.sent().is_empty());
         assert!(rows(&store).await.is_empty());
     }
@@ -397,13 +404,17 @@ mod tests {
         shop_with_owner(&store).await;
         let sent = invite(&store, "dan@example.com").await;
         let id = sent.invitation.id.as_str();
-        let mut now = crate::auth::now();
         let down = room(
             &store,
             fake_smtp::transport(fake_smtp::closed_port()),
             "node-a",
         );
-        assert_eq!(run(&store, &down, now).await, 0);
+        pass(&store, &down).await;
+        // Read after the pass, the clock is no earlier than the row's due
+        // time: the sweep takes it, and the first send fails at exactly
+        // this time, which the schedule runs from.
+        let mut now = crate::auth::now();
+        assert_eq!(down.sweep(now).await.unwrap(), 0);
         for (tried, delay) in RETRY_DELAYS_SECS.iter().enumerate() {
             let Sending::Deferred {
                 retry_at, attempts, ..

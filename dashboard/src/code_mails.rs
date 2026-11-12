@@ -596,7 +596,11 @@ pub(crate) mod tests {
             fake_smtp::transport(fake_smtp::closed_port()),
             "node-a",
         );
-        assert_eq!(platform_run(&store, &down, now).await, 0);
+        platform_pass(&store, &down).await;
+        // Read after the pass, the clock is no earlier than the row's due
+        // time: the sweep takes it, and the send fails at exactly this time.
+        let tried_at = crate::auth::now();
+        assert_eq!(down.sweep(tried_at).await.unwrap(), 0);
         let challenge = identity
             .load_email_challenge("alice@example.com")
             .await
@@ -610,7 +614,7 @@ pub(crate) mod tests {
         else {
             panic!("{:?}", challenge.mail);
         };
-        assert_eq!((*retry_at, *attempts), (now + RETRY_DELAYS_SECS[0], 1));
+        assert_eq!((*retry_at, *attempts), (tried_at + RETRY_DELAYS_SECS[0], 1));
         assert!(!reason.is_empty());
         // The table follows: due at the retry, and not looked at before.
         platform_pass(&store, &down).await;
