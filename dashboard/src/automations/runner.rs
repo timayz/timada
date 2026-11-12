@@ -1,14 +1,25 @@
 //! Takes the runs through their steps: nothing in the event store fires
 //! later, so every node looks for the runs due (`automations_runs`) on a
-//! timer and moves each as far as it can now. Every move is written against
-//! the version the run was loaded at: a node that loses the race writes
-//! nothing and leaves the run to the winner.
+//! timer and moves each as far as it can now. The nodes share the runs out:
+//! each moves the ones whose id falls to it among the nodes up
+//! ([`timada_core::Share`]), and any run its node has not moved a while
+//! after it fell due ([`HELP_AFTER_SECS`]: that node stopped, or the nodes
+//! disagreed for a moment on who is up). Any node can move any run: what a
+//! move reads (the run, the scenario's state and its versions) follows
+//! every region. Every move is written against the version the run was
+//! loaded at and folded into the node's copy: a node that loses a race
+//! writes nothing and leaves the run to the winner, which goes on without
+//! reading the run back.
 //!
 //! A step that acts outside the run (a mail) is claimed first and acts only
 //! for the node whose claim is written; it is not tried again, since a
 //! member mailed twice is worse off than one not mailed. A claim whose
 //! outcome never comes (the node stopped) fails the step once its lease is
 //! over.
+//!
+//! Each look also starts the runs an event made that fell to another node
+//! and that it did not start (`automations_starts`), and finds the
+//! checkouts left unpaid, each node its own part of them.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,13 +27,14 @@ use std::time::Duration;
 
 use crate::db::Db;
 use timada_automations::{
-    AUTOMATION_ACTOR, ListenerState, RUN_HISTORY_SECS, RunState, Step, Transition,
+    AUTOMATION_ACTOR, RUN_HISTORY_SECS, RunState, ScenarioStatus, Step, Transition,
     catalog::{self, CodeValue, DISCORD, DISCOUNT, EMAIL, NOTIFY, Subject, WEBHOOK},
     due_runs,
     interpreter::{self, Next, STUCK_SETTINGS, STUCK_UNKNOWN},
-    left_checkouts, listener_of, normalize_email, opt_out_token, prune_checkouts, prune_runs,
-    scenario_name,
+    left_checkouts, normalize_email, opt_out_token, prune_checkouts, prune_runs, prune_starts,
+    record_detected, run_known, scenario_name, scenario_status, settle_start, starts_owed,
 };
+use timada_core::Share;
 use timada_core::keys::KeyRing;
 use timada_identity::UserRow;
 use timada_newsletter::{SubscriberStatus, subscriber_id};
@@ -36,7 +48,8 @@ use topcoat::context::{AppContext, Cx};
 
 use super::definitions::Definitions;
 use super::facts::facts_of;
-use crate::cluster::Executor;
+use super::triggers::TRIGGER_WINDOW_SECS;
+use crate::cluster::{Executor, ShareOf};
 use crate::mail::{
     CampaignCopy, automation_vars, marketing_sender, render_automated, send_automated,
     send_automation_notice,
@@ -59,6 +72,17 @@ const MAIL_HOLD_SECS: u64 = 3 * 24 * 60 * 60;
 /// older ones (a node away, the first look of a new scenario) start
 /// nothing.
 const LEFT_WINDOW_SECS: u64 = 3 * 24 * 60 * 60;
+/// How long a node leaves another its part of the work, in seconds: a run
+/// due, a run to start, a checkout to look at that much past its time is
+/// taken by any node. A node that stops drops out of the nodes up within
+/// [`crate::cluster::LIVE_WITHIN`], and its part goes to the others then;
+/// this is for a node still heard from that does not do its part, and for
+/// the moment the nodes disagree on who is up. At least [`HELP_LOOKS`]
+/// looks of a node doing its part fit in it, so the others do not race it.
+pub const HELP_AFTER_SECS: u64 = 2 * 60;
+/// The looks of the runner a node is left for its part, at the least: the
+/// wait is longer than [`HELP_AFTER_SECS`] when the looks are further apart.
+const HELP_LOOKS: u64 = 4;
 
 /// What a step that acts did.
 enum Acted {
@@ -108,6 +132,13 @@ pub struct Runner<E = Executor> {
     /// found left.
     abandoned_after: u64,
     runs_per_look: u32,
+    /// How often this node looks.
+    every: Duration,
+    /// How long, in seconds, the others leave a node its part of the work.
+    help_after: u64,
+    /// This node's place among the nodes up (in a region when asked for
+    /// one): which runs it moves, which checkouts it looks at.
+    place: ShareOf,
     definitions: Definitions,
 }
 
@@ -125,6 +156,8 @@ impl<E: Store> Runner<E> {
         allow_private_hosts: bool,
         abandoned_after: Duration,
         runs_per_look: u32,
+        every: Duration,
+        place: ShareOf,
     ) -> anyhow::Result<Arc<Self>> {
         // rustls needs a process-wide crypto provider; installing twice is fine.
         let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -145,14 +178,18 @@ impl<E: Store> Runner<E> {
             allow_private_hosts,
             abandoned_after: abandoned_after.as_secs(),
             runs_per_look: runs_per_look.max(1),
+            every,
+            help_after: HELP_AFTER_SECS.max(HELP_LOOKS * every.as_secs()),
+            place,
             definitions: Definitions::default(),
         }))
     }
 
-    /// Sweeps every `every`, the first time right away.
-    pub fn start(self: Arc<Self>, every: Duration) -> JoinHandle<()> {
+    /// Sweeps every `every` given to [`new`](Self::new), the first time
+    /// right away.
+    pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(every);
+            let mut tick = tokio::time::interval(self.every);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tick.tick().await;
@@ -163,15 +200,18 @@ impl<E: Store> Runner<E> {
         })
     }
 
-    /// Moves every run due by `now`. A run that fails to move is logged and
-    /// the others still go.
+    /// Moves every run due by `now` that falls to this node. A run that
+    /// fails to move is logged and the others still go.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
         prune_runs(&self.db, now.saturating_sub(RUN_HISTORY_SECS)).await?;
+        if let Err(err) = self.start_left_runs(now).await {
+            tracing::error!(error = %err, "runs other nodes left not started");
+        }
         if let Err(err) = self.find_left_checkouts(now).await {
             tracing::error!(error = %err, "checkouts left unpaid not looked for");
         }
         let mut tenants: HashMap<String, Option<TenantState>> = HashMap::new();
-        for (tenant_id, run_id) in due_runs(&self.db, now, self.runs_per_look).await? {
+        for (tenant_id, run_id) in self.due(now).await? {
             if !tenants.contains_key(&tenant_id) {
                 let tenant = timada_tenancy::Command(self.store.clone())
                     .load_tenant(&tenant_id)
@@ -192,7 +232,17 @@ impl<E: Store> Runner<E> {
         Ok(())
     }
 
-    /// Moves one run as far as it goes at `now`.
+    /// The runs due by `now` that this node moves: its own part of them,
+    /// and any its node left for a while ([`HELP_AFTER_SECS`]).
+    async fn due(&self, now: u64) -> anyhow::Result<Vec<(String, String)>> {
+        // The read model holds every region's runs, and any node moves any
+        // run: the share is among all the nodes up.
+        let share = (self.place)(None);
+        let help_before = now.saturating_sub(self.help_after);
+        due_runs(&self.db, now, share, help_before, self.runs_per_look).await
+    }
+
+    /// Moves one run as far as it goes at `now`, from one read of it.
     pub async fn advance(
         &self,
         tenant: &TenantState,
@@ -207,31 +257,26 @@ impl<E: Store> Runner<E> {
             if run.status.is_done() {
                 return Ok(());
             }
-            match listener_of(&self.db, &tenant.id, &run.scenario_id)
-                .await?
-                .map(|listener| listener.state())
-            {
-                Some(ListenerState::Active) => {}
-                Some(ListenerState::Archived) => {
+            // From the read model of the scenarios, which every node keeps
+            // whatever its region: the listeners are the trigger
+            // subscription's, which follows the node's region alone.
+            match scenario_status(&self.db, &tenant.id, &run.scenario_id).await? {
+                Some(ScenarioStatus::Active) => {}
+                Some(ScenarioStatus::Archived) => {
                     let cancel = Transition::Cancel {
                         reason: "The scenario was deleted.".into(),
                     };
                     automations
-                        .advance_run(AUTOMATION_ACTOR, &run, &[cancel])
+                        .advance_run(AUTOMATION_ACTOR, &mut run, &[cancel])
                         .await?;
                     return Ok(());
                 }
                 // Held, or published a moment ago and not seen here yet.
-                Some(ListenerState::Paused) | None => return Ok(()),
+                Some(ScenarioStatus::Paused | ScenarioStatus::Draft) | None => return Ok(()),
             }
             let Some(definition) = self
                 .definitions
-                .get(
-                    &self.store,
-                    &tenant.id,
-                    &run.scenario_id,
-                    run.scenario_version,
-                )
+                .get(&self.db, &tenant.id, &run.scenario_id, run.scenario_version)
                 .await?
             else {
                 return Ok(());
@@ -240,7 +285,7 @@ impl<E: Store> Runner<E> {
                 Next::Sleep(_) => return Ok(()),
                 Next::Finish => {
                     automations
-                        .advance_run(AUTOMATION_ACTOR, &run, &[Transition::Finish])
+                        .advance_run(AUTOMATION_ACTOR, &mut run, &[Transition::Finish])
                         .await?
                 }
                 Next::Wait(step, until) => {
@@ -249,7 +294,7 @@ impl<E: Store> Runner<E> {
                         until,
                     };
                     automations
-                        .advance_run(AUTOMATION_ACTOR, &run, &[wait])
+                        .advance_run(AUTOMATION_ACTOR, &mut run, &[wait])
                         .await?
                 }
                 Next::Branch(step) => {
@@ -257,7 +302,7 @@ impl<E: Store> Runner<E> {
                         .branch(tenant, &run, definition.subject(), step)
                         .await?;
                     automations
-                        .advance_run(AUTOMATION_ACTOR, &run, &[transition])
+                        .advance_run(AUTOMATION_ACTOR, &mut run, &[transition])
                         .await?
                 }
                 Next::Act(step) => {
@@ -275,16 +320,12 @@ impl<E: Store> Runner<E> {
                         attempt,
                     };
                     if !automations
-                        .advance_run(AUTOMATION_ACTOR, &run, &[claim])
+                        .advance_run(AUTOMATION_ACTOR, &mut run, &[claim])
                         .await?
                     {
                         return Ok(());
                     }
-                    let Some(claimed) = automations.load_run(run_id).await? else {
-                        return Ok(());
-                    };
-                    let outcome = match self.act(tenant, &claimed, definition.subject(), step).await
-                    {
+                    let outcome = match self.act(tenant, &run, definition.subject(), step).await {
                         Acted::Done(output) => Transition::Succeed {
                             step: step.id.clone(),
                             output,
@@ -306,9 +347,8 @@ impl<E: Store> Runner<E> {
                             retry_at: retry_at(now, attempt),
                         },
                     };
-                    run = claimed;
                     automations
-                        .advance_run(AUTOMATION_ACTOR, &run, &[outcome])
+                        .advance_run(AUTOMATION_ACTOR, &mut run, &[outcome])
                         .await?
                 }
                 Next::Lapsed(step, attempt) => {
@@ -319,7 +359,7 @@ impl<E: Store> Runner<E> {
                         retry_at: None,
                     };
                     automations
-                        .advance_run(AUTOMATION_ACTOR, &run, &[lapsed])
+                        .advance_run(AUTOMATION_ACTOR, &mut run, &[lapsed])
                         .await?
                 }
                 Next::Stuck(step, reason) => {
@@ -330,7 +370,7 @@ impl<E: Store> Runner<E> {
                         retry_at: None,
                     };
                     automations
-                        .advance_run(AUTOMATION_ACTOR, &run, &[stuck])
+                        .advance_run(AUTOMATION_ACTOR, &mut run, &[stuck])
                         .await?
                 }
             };
@@ -338,10 +378,6 @@ impl<E: Store> Runner<E> {
             if !moved {
                 return Ok(());
             }
-            let Some(next) = automations.load_run(run_id).await? else {
-                return Ok(());
-            };
-            run = next;
         }
         Ok(())
     }
@@ -845,17 +881,52 @@ impl<E: Store> Runner<E> {
 }
 
 impl<E: Store> Runner<E> {
+    /// Starts the runs an event made that fell to another node and that it
+    /// did not start within a while ([`HELP_AFTER_SECS`]) of this node
+    /// keeping them. A run the read model holds was started; one it does
+    /// not is read from the store before it is written, as the read model
+    /// may be behind. One kept longer ago than the trigger window (this
+    /// node was away) starts nothing, as an event that old would not.
+    async fn start_left_runs(&self, now: u64) -> anyhow::Result<()> {
+        prune_starts(&self.db, now.saturating_sub(TRIGGER_WINDOW_SECS)).await?;
+        let before = now.saturating_sub(self.help_after);
+        for owed in starts_owed(&self.db, before, self.runs_per_look).await? {
+            if !run_known(&self.db, &owed.tenant_id, &owed.run_id).await? {
+                let automations =
+                    timada_automations::Command::new(self.store.clone(), &owed.tenant_id);
+                if automations.load_run(&owed.run_id).await?.is_none()
+                    && automations
+                        .start_run(AUTOMATION_ACTOR, &owed.start())
+                        .await?
+                {
+                    tracing::info!(tenant = %owed.tenant_id, scenario = %owed.scenario_id, trigger = %owed.trigger, "automation run started for another node");
+                }
+            }
+            settle_start(&self.db, &owed.tenant_id, &owed.run_id).await?;
+        }
+        Ok(())
+    }
+
     /// Records the checkouts no order followed within the delay: each one
-    /// starts the scenarios on that trigger, once whichever node finds it.
+    /// starts the scenarios on that trigger. Only the nodes of the region a
+    /// checkout was asked in follow it, and each looks at its own part of
+    /// them, then at any another node left for a while
+    /// ([`HELP_AFTER_SECS`]).
     async fn find_left_checkouts(&self, now: u64) -> anyhow::Result<()> {
         let to = now.saturating_sub(self.abandoned_after);
         let from = to.saturating_sub(LEFT_WINDOW_SECS);
+        let help_before = to.saturating_sub(self.help_after);
         prune_checkouts(&self.db, from).await?;
-        for (tenant_id, cart_id, request_id) in
-            left_checkouts(&self.db, from, to, self.runs_per_look).await?
-        {
-            let orders = timada_orders::Command::new(self.store.clone(), &tenant_id);
-            let Some(cart) = orders.load_cart(&cart_id).await? else {
+        let mut shares: HashMap<Option<String>, Share> = HashMap::new();
+        for left in left_checkouts(&self.db, from, to, self.runs_per_look).await? {
+            let share = *shares
+                .entry(left.region.clone())
+                .or_insert_with(|| (self.place)(left.region.as_deref()));
+            if !share.owns(&left.cart_id) && left.requested_at as u64 > help_before {
+                continue;
+            }
+            let orders = timada_orders::Command::new(self.store.clone(), &left.tenant_id);
+            let Some(cart) = orders.load_cart(&left.cart_id).await? else {
                 continue;
             };
             // Ordered meanwhile, or asked again since: not left, or not yet.
@@ -863,12 +934,38 @@ impl<E: Store> Runner<E> {
                 .requests
                 .last()
                 .map(|request| request.request_id.as_str());
-            if cart.order_id.is_some() || latest != Some(request_id.as_str()) {
+            if cart.order_id.is_some() || latest != Some(left.request_id.as_str()) {
                 continue;
             }
-            timada_automations::Command::new(self.store.clone(), &tenant_id)
-                .detect_abandoned_checkout(AUTOMATION_ACTOR, &cart_id, &request_id)
-                .await?;
+            // Written in the request's region, whose nodes follow the
+            // checkout: they all see it found, whichever of them found it.
+            let automations = timada_automations::Command::new(self.store.clone(), &left.tenant_id);
+            let detected = match &left.region {
+                Some(region) => {
+                    automations
+                        .detect_abandoned_checkout_with_routing(
+                            AUTOMATION_ACTOR,
+                            &left.cart_id,
+                            &left.request_id,
+                            region,
+                        )
+                        .await?
+                }
+                None => {
+                    automations
+                        .detect_abandoned_checkout(
+                            AUTOMATION_ACTOR,
+                            &left.cart_id,
+                            &left.request_id,
+                        )
+                        .await?
+                }
+            };
+            // Found already, by another node: this one stops looking at it
+            // without waiting to see that node's event.
+            if !detected {
+                record_detected(&self.db, &left.tenant_id, &left.cart_id, &left.request_id).await?;
+            }
         }
         Ok(())
     }
@@ -942,6 +1039,7 @@ mod tests {
     use std::sync::Mutex;
 
     use evento::Evento;
+    use evento::ProjectionAggregate;
     use timada_automations::{
         Command, Definition, Lane, Outcome, RunStatus, Slot,
         catalog::{CONDITION, SUBSCRIBER_CONFIRMED, WAIT},
@@ -998,11 +1096,7 @@ mod tests {
     /// The trigger subscription, caught up: the listeners, then the runs
     /// the events start.
     async fn follow(store: &Evento, db: &Db) {
-        super::super::triggers::subscription(db.clone(), store.clone())
-            .no_retry()
-            .run_once(store)
-            .await
-            .unwrap();
+        follow_at(store, db, alone()).await;
     }
 
     /// The runs' read model, caught up.
@@ -1040,6 +1134,27 @@ mod tests {
     }
 
     fn runner(store: &Evento, db: &Db, keys: &Arc<MemoryKeys>) -> Arc<Runner<Evento>> {
+        runner_at(store, db, keys, alone())
+    }
+
+    /// A runner on a node whose place among the nodes up is `place`.
+    fn runner_at(
+        store: &Evento,
+        db: &Db,
+        keys: &Arc<MemoryKeys>,
+        place: ShareOf,
+    ) -> Arc<Runner<Evento>> {
+        runner_every(store, db, keys, place, Duration::from_secs(15))
+    }
+
+    /// The same, looking every `every`.
+    fn runner_every(
+        store: &Evento,
+        db: &Db,
+        keys: &Arc<MemoryKeys>,
+        place: ShareOf,
+        every: Duration,
+    ) -> Arc<Runner<Evento>> {
         Runner::new(
             db.clone(),
             store.clone(),
@@ -1052,8 +1167,29 @@ mod tests {
             true,
             Duration::from_secs(3600),
             10,
+            every,
+            place,
         )
         .unwrap()
+    }
+
+    /// A node on its own: every run is its.
+    fn alone() -> ShareOf {
+        Arc::new(|_| Share::ALONE)
+    }
+
+    /// A node none of the work falls to: another node has it all.
+    fn none_of_it() -> ShareOf {
+        Arc::new(|_| Share { index: 1, of: 1 })
+    }
+
+    /// The trigger subscription on a node at `place`, caught up.
+    async fn follow_at(store: &Evento, db: &Db, place: ShareOf) {
+        super::super::triggers::subscription(db.clone(), store.clone(), place)
+            .no_retry()
+            .run_once(store)
+            .await
+            .unwrap();
     }
 
     /// The shop, with no member to tell.
@@ -1121,7 +1257,7 @@ mod tests {
 
     async fn the_run(store: &Evento, db: &Db) -> Option<RunState> {
         catch_up(store, db).await;
-        let due = due_runs(db, crate::auth::now() + 10_000_000, 10)
+        let due = due_runs(db, crate::auth::now() + 10_000_000, Share::ALONE, 0, 10)
             .await
             .unwrap();
         let (_, id) = due.first()?;
@@ -1142,7 +1278,9 @@ mod tests {
         // Seen again (a redelivery, another node): still one run.
         follow(&store, &db).await;
         catch_up(&store, &db).await;
-        let due = due_runs(&db, crate::auth::now() + 1, 10).await.unwrap();
+        let due = due_runs(&db, crate::auth::now() + 1, Share::ALONE, 0, 10)
+            .await
+            .unwrap();
         assert_eq!(due.len(), 1);
 
         let run_id = &due[0].1;
@@ -1198,7 +1336,8 @@ mod tests {
         assert_eq!(held.status, RunStatus::Running);
 
         automations.resume_scenario(MEMBER, &id).await.unwrap();
-        follow(&store, &db).await;
+        // The runner reads the scenario's state from the read model.
+        catch_up(&store, &db).await;
         runner
             .advance(&shop(), &run.id, crate::auth::now())
             .await
@@ -1343,12 +1482,141 @@ mod tests {
         // The hour is over: found left once, whatever the looks.
         runner.sweep(now + 3601).await.unwrap();
         runner.sweep(now + 3602).await.unwrap();
+        // The second look found it found already: it looks no more.
+        assert!(
+            left_checkouts(&db, 0, now + 2, 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
         follow(&store, &db).await;
         let run = the_run(&store, &db).await.unwrap();
         assert_eq!(run.trigger, timada_automations::catalog::CHECKOUT_ABANDONED);
         assert_eq!(run.subject_id, cart);
         catch_up(&store, &db).await;
-        assert_eq!(due_runs(&db, now + 10_000_000, 10).await.unwrap().len(), 1);
+        let due = due_runs(&db, now + 10_000_000, Share::ALONE, 0, 10)
+            .await
+            .unwrap();
+        assert_eq!(due.len(), 1);
+    }
+
+    /// An event whose run falls to another node starts nothing here; this
+    /// node starts it only once that node left it for a while.
+    #[tokio::test]
+    async fn a_run_another_node_is_to_start_is_started_here_only_if_it_does_not() {
+        let (store, db) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        publish(&store, &welcome()).await;
+        follow_at(&store, &db, none_of_it()).await;
+        subscribe(&store, &keys, "ada@example.com").await;
+        follow_at(&store, &db, none_of_it()).await;
+        assert!(the_run(&store, &db).await.is_none(), "not this node's");
+        let now = crate::auth::now();
+        let owed = starts_owed(&db, now, 10).await.unwrap();
+        assert_eq!(owed.len(), 1);
+
+        let runner = runner_at(&store, &db, &keys, none_of_it());
+        // Its node has a while to start it.
+        runner.sweep(now).await.unwrap();
+        assert!(the_run(&store, &db).await.is_none());
+        assert_eq!(starts_owed(&db, now, 10).await.unwrap().len(), 1);
+        // It did not: this node does, once.
+        runner.sweep(now + HELP_AFTER_SECS).await.unwrap();
+        let run = the_run(&store, &db).await.unwrap();
+        assert_eq!(run.id, owed[0].run_id);
+        assert_eq!(run.subject_id, owed[0].subject_id);
+        assert!(starts_owed(&db, now, 10).await.unwrap().is_empty());
+    }
+
+    /// A run its node started is only forgotten by the others: no second
+    /// write.
+    #[tokio::test]
+    async fn a_run_its_node_started_is_left_alone() {
+        let (store, db) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        publish(&store, &welcome()).await;
+        follow_at(&store, &db, none_of_it()).await;
+        subscribe(&store, &keys, "ada@example.com").await;
+        follow_at(&store, &db, none_of_it()).await;
+        let now = crate::auth::now();
+        let owed = starts_owed(&db, now, 10).await.unwrap();
+        let automations = Command::new(store.clone(), TENANT);
+        // Its node starts it.
+        assert!(
+            automations
+                .start_run("node-2", &owed[0].start())
+                .await
+                .unwrap()
+        );
+        catch_up(&store, &db).await;
+
+        runner_at(&store, &db, &keys, none_of_it())
+            .start_left_runs(now + HELP_AFTER_SECS)
+            .await
+            .unwrap();
+        assert!(starts_owed(&db, now, 10).await.unwrap().is_empty());
+        let run = automations
+            .load_run(&owed[0].run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.aggregate_version().unwrap(), 1, "started once");
+    }
+
+    /// A run due that falls to another node is moved by it; this node moves
+    /// it only once that node left it for a while.
+    #[tokio::test]
+    async fn a_run_due_that_falls_to_another_node_waits_for_it_a_while() {
+        let (store, db) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        publish(&store, &welcome()).await;
+        follow(&store, &db).await;
+        subscribe(&store, &keys, "ada@example.com").await;
+        follow(&store, &db).await;
+        let run = the_run(&store, &db).await.unwrap();
+        let now = crate::auth::now();
+        let due = vec![(TENANT.to_owned(), run.id.clone())];
+
+        assert_eq!(runner(&store, &db, &keys).due(now).await.unwrap(), due);
+        let elsewhere = runner_at(&store, &db, &keys, none_of_it());
+        assert!(
+            elsewhere.due(now).await.unwrap().is_empty(),
+            "not this node's to move"
+        );
+        assert_eq!(elsewhere.due(now + HELP_AFTER_SECS).await.unwrap(), due);
+
+        // Looks a minute apart: that node is left four of them.
+        let slow = runner_every(&store, &db, &keys, none_of_it(), Duration::from_secs(60));
+        assert!(slow.due(now + HELP_AFTER_SECS).await.unwrap().is_empty());
+        assert_eq!(slow.due(now + 4 * 60).await.unwrap(), due);
+    }
+
+    /// A node outside the scenario's region has no listener for it (the
+    /// trigger subscription follows the node's region): it moves the run
+    /// all the same, from the scenarios' read model.
+    #[tokio::test]
+    async fn a_run_moves_on_a_node_that_has_no_listener_for_it() {
+        let (store, db) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        publish(&store, &welcome()).await;
+        follow(&store, &db).await;
+        subscribe(&store, &keys, "ada@example.com").await;
+        follow(&store, &db).await;
+        let run = the_run(&store, &db).await.unwrap();
+        db.execute("DELETE FROM automations_listeners", ())
+            .await
+            .unwrap();
+
+        runner(&store, &db, &keys)
+            .advance(&shop(), &run.id, crate::auth::now())
+            .await
+            .unwrap();
+        let moved = Command::new(store.clone(), TENANT)
+            .load_run(&run.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(moved.status, RunStatus::Finished);
     }
 
     #[test]

@@ -3,9 +3,10 @@ mod common;
 use timada_core::db::Db;
 
 use common::*;
+use evento::ProjectionAggregate;
 use timada_automations::{
-    Command, ScenarioFilter, ScenarioStatus, count_scenarios, read_model_subscription,
-    scenarios_of_tenant,
+    Command, Definition, ScenarioFilter, ScenarioStatus, catalog::WAIT, count_scenarios,
+    published_definition, read_model_subscription, scenarios_of_tenant,
 };
 
 async fn catch_up(executor: &evento::Turso, pool: &Db) {
@@ -105,4 +106,71 @@ async fn a_saved_draft_lists_its_trigger_and_steps() {
     assert_eq!(rows[0].trigger.as_deref(), Some("order.placed"));
     assert_eq!(rows[0].steps, 3);
     assert_eq!(rows[0].status(), ScenarioStatus::Draft);
+}
+
+/// Every version keeps the definition it was published with, for the runs
+/// started on it; the write model keeps the one running only.
+#[tokio::test]
+async fn every_version_is_kept_as_published() {
+    let (executor, pool) = executor_with_pool().await;
+    let automations = Command::new(executor.clone(), TENANT);
+    let id = automations
+        .create_scenario(ALICE, "Big orders")
+        .await
+        .unwrap();
+    let first = big_orders();
+    automations
+        .publish_scenario(ALICE, &id, 1, "Big orders", &first)
+        .await
+        .unwrap();
+    // Saved many times, then published again.
+    let mut second = first.clone();
+    let condition = second.steps[0].id.clone();
+    for n in 0..20 {
+        second.insert(&branch(&condition, 1, n), WAIT).unwrap();
+        let base = automations
+            .load_scenario(&id)
+            .await
+            .unwrap()
+            .unwrap()
+            .aggregate_version()
+            .unwrap();
+        automations
+            .save_scenario(ALICE, &id, base, "Big orders", &second)
+            .await
+            .unwrap();
+    }
+    let state = automations.load_scenario(&id).await.unwrap().unwrap();
+    let base = state.aggregate_version().unwrap();
+    automations
+        .publish_scenario(ALICE, &id, base, "Big orders", &second)
+        .await
+        .unwrap();
+
+    catch_up(&executor, &pool).await;
+    // Delivery may repeat: the versions stay as published.
+    catch_up(&executor, &pool).await;
+
+    let read = |version: u32| {
+        let pool = pool.clone();
+        let id = id.clone();
+        async move {
+            published_definition(&pool, TENANT, &id, version)
+                .await
+                .unwrap()
+                .map(|json| Definition::from_json(&json).unwrap())
+        }
+    };
+    assert_eq!(read(1).await, Some(first));
+    assert_eq!(read(2).await, Some(second.clone()));
+    assert_eq!(read(3).await, None);
+    assert_eq!(
+        published_definition(&pool, "tenant-other", &id, 1)
+            .await
+            .unwrap(),
+        None
+    );
+    let state = automations.load_scenario(&id).await.unwrap().unwrap();
+    assert_eq!(state.version, 2);
+    assert_eq!(state.live_definition().unwrap(), Some(second));
 }

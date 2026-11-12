@@ -1,4 +1,8 @@
-use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use evento::{
+    Executor, Projection, ProjectionAggregate, ProjectionCursor, WriteError, metadata::Event,
+};
 
 use crate::aggregator::run::{
     Branched, Cancelled, Finished, Started, StepClaimed, StepFailed, StepSkipped, StepSucceeded,
@@ -111,6 +115,72 @@ impl RunState {
         });
         self.updated_at = at;
     }
+
+    /// Folds one move in, as written at `at`: what the projection does with
+    /// each move's event, and what [`advance_run`](super::Command::advance_run)
+    /// does with the moves it wrote, so the node that moves a run goes on
+    /// without reading it back.
+    fn apply(&mut self, transition: &Transition, at: u64) {
+        match transition {
+            Transition::Wait { step, until } => {
+                self.record(step, Outcome::Waiting { until: *until }, at);
+                self.status = RunStatus::Waiting;
+            }
+            Transition::Branch { step, branch } => {
+                self.record(step, Outcome::Branched(*branch), at);
+                self.status = RunStatus::Running;
+            }
+            Transition::Claim { step, attempt } => {
+                self.record(step, Outcome::Claimed { attempt: *attempt }, at);
+                self.status = RunStatus::Running;
+            }
+            Transition::Succeed { step, output } => {
+                let output = output.clone();
+                self.record(step, Outcome::Succeeded { output }, at);
+                self.status = RunStatus::Running;
+            }
+            Transition::Skip { step, reason } => {
+                let reason = short(reason);
+                self.record(step, Outcome::Skipped { reason }, at);
+                self.status = RunStatus::Running;
+            }
+            Transition::Fail {
+                step,
+                attempt,
+                reason,
+                retry_at,
+            } => {
+                let reason = short(reason);
+                self.record(
+                    step,
+                    Outcome::Failed {
+                        attempt: *attempt,
+                        reason: reason.clone(),
+                        retry_at: *retry_at,
+                    },
+                    at,
+                );
+                if retry_at.is_none() {
+                    self.status = RunStatus::Failed;
+                    self.reason = Some(reason);
+                    self.ended_at = Some(at);
+                } else {
+                    self.status = RunStatus::Running;
+                }
+            }
+            Transition::Finish => {
+                self.status = RunStatus::Finished;
+                self.updated_at = at;
+                self.ended_at = Some(at);
+            }
+            Transition::Cancel { reason } => {
+                self.status = RunStatus::Cancelled;
+                self.reason = Some(short(reason));
+                self.updated_at = at;
+                self.ended_at = Some(at);
+            }
+        }
+    }
 }
 
 pub fn run_projection<E: Executor>() -> Projection<E, RunState> {
@@ -144,33 +214,31 @@ async fn on_started(event: Event<Started>, state: &mut RunState) -> anyhow::Resu
 
 #[evento::handler]
 async fn on_waiting(event: Event<Waiting>, state: &mut RunState) -> anyhow::Result<()> {
-    let until = event.data.until;
-    state.record(
-        &event.data.step,
-        Outcome::Waiting { until },
-        event.timestamp,
-    );
-    state.status = RunStatus::Waiting;
+    let wait = Transition::Wait {
+        step: event.data.step.to_owned(),
+        until: event.data.until,
+    };
+    state.apply(&wait, event.timestamp);
     Ok(())
 }
 
 #[evento::handler]
 async fn on_branched(event: Event<Branched>, state: &mut RunState) -> anyhow::Result<()> {
-    let branch = event.data.branch;
-    state.record(&event.data.step, Outcome::Branched(branch), event.timestamp);
-    state.status = RunStatus::Running;
+    let branch = Transition::Branch {
+        step: event.data.step.to_owned(),
+        branch: event.data.branch,
+    };
+    state.apply(&branch, event.timestamp);
     Ok(())
 }
 
 #[evento::handler]
 async fn on_step_claimed(event: Event<StepClaimed>, state: &mut RunState) -> anyhow::Result<()> {
-    let attempt = event.data.attempt;
-    state.record(
-        &event.data.step,
-        Outcome::Claimed { attempt },
-        event.timestamp,
-    );
-    state.status = RunStatus::Running;
+    let claim = Transition::Claim {
+        step: event.data.step.to_owned(),
+        attempt: event.data.attempt,
+    };
+    state.apply(&claim, event.timestamp);
     Ok(())
 }
 
@@ -179,64 +247,49 @@ async fn on_step_succeeded(
     event: Event<StepSucceeded>,
     state: &mut RunState,
 ) -> anyhow::Result<()> {
-    let output = event.data.output.to_owned();
-    state.record(
-        &event.data.step,
-        Outcome::Succeeded { output },
-        event.timestamp,
-    );
-    state.status = RunStatus::Running;
+    let succeed = Transition::Succeed {
+        step: event.data.step.to_owned(),
+        output: event.data.output.to_owned(),
+    };
+    state.apply(&succeed, event.timestamp);
     Ok(())
 }
 
 #[evento::handler]
 async fn on_step_skipped(event: Event<StepSkipped>, state: &mut RunState) -> anyhow::Result<()> {
-    let reason = event.data.reason.to_owned();
-    state.record(
-        &event.data.step,
-        Outcome::Skipped { reason },
-        event.timestamp,
-    );
-    state.status = RunStatus::Running;
+    let skip = Transition::Skip {
+        step: event.data.step.to_owned(),
+        reason: event.data.reason.to_owned(),
+    };
+    state.apply(&skip, event.timestamp);
     Ok(())
 }
 
 #[evento::handler]
 async fn on_step_failed(event: Event<StepFailed>, state: &mut RunState) -> anyhow::Result<()> {
     let data = &event.data;
-    state.record(
-        &data.step,
-        Outcome::Failed {
-            attempt: data.attempt,
-            reason: data.reason.to_owned(),
-            retry_at: data.retry_at,
-        },
-        event.timestamp,
-    );
-    if data.retry_at.is_none() {
-        state.status = RunStatus::Failed;
-        state.reason = Some(data.reason.to_owned());
-        state.ended_at = Some(event.timestamp);
-    } else {
-        state.status = RunStatus::Running;
-    }
+    let fail = Transition::Fail {
+        step: data.step.to_owned(),
+        attempt: data.attempt,
+        reason: data.reason.to_owned(),
+        retry_at: data.retry_at,
+    };
+    state.apply(&fail, event.timestamp);
     Ok(())
 }
 
 #[evento::handler]
 async fn on_finished(event: Event<Finished>, state: &mut RunState) -> anyhow::Result<()> {
-    state.status = RunStatus::Finished;
-    state.updated_at = event.timestamp;
-    state.ended_at = Some(event.timestamp);
+    state.apply(&Transition::Finish, event.timestamp);
     Ok(())
 }
 
 #[evento::handler]
 async fn on_cancelled(event: Event<Cancelled>, state: &mut RunState) -> anyhow::Result<()> {
-    state.status = RunStatus::Cancelled;
-    state.reason = Some(event.data.reason.to_owned());
-    state.updated_at = event.timestamp;
-    state.ended_at = Some(event.timestamp);
+    let cancel = Transition::Cancel {
+        reason: event.data.reason.to_owned(),
+    };
+    state.apply(&cancel, event.timestamp);
     Ok(())
 }
 
@@ -291,10 +344,21 @@ fn short(reason: &str) -> String {
     reason.chars().take(500).collect()
 }
 
+/// Now, in unix seconds.
+fn clock() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Starts the run an event makes of a scenario; whether this call
-    /// started it (`false`: started already, by another node say).
+    /// started it (`false`: started already, by another node say). Written
+    /// without a read first: each node starts its own part of the runs, so
+    /// a start is refused only when two nodes disagreed for a moment on who
+    /// is up, or a node went over events it had seen; a node starting a run
+    /// that fell to another reads first ([`load_run`](Self::load_run)).
     pub async fn start_run(
         &self,
         actor: &str,
@@ -302,11 +366,6 @@ impl<E: Executor> super::Command<E> {
         routing_key: Option<String>,
     ) -> Result<bool, AutomationError> {
         let id = run_id(&start.scenario_id, &start.trigger_event_id);
-        // Read first: most of the time another node started it already, and
-        // a refused write costs a round of consensus.
-        if self.load_run(&id).await?.is_some() {
-            return Ok(false);
-        }
         let started = evento::append(&id)
             .original_version(0)
             .routing_key_opt(routing_key)
@@ -329,15 +388,17 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// Writes moves of a run, in one commit, against the version `run` was
-    /// loaded at: whether they were written (`false`: another node moved
-    /// the run meanwhile, and nothing was).
+    /// loaded at, and folds them into `run`: whether they were written
+    /// (`false`: another node moved the run meanwhile; nothing was, and
+    /// `run` is as it was).
     pub async fn advance_run(
         &self,
         actor: &str,
-        run: &RunState,
+        run: &mut RunState,
         transitions: &[Transition],
         routing_key: Option<String>,
     ) -> Result<bool, AutomationError> {
+        let version = run.aggregate_version()?;
         let mut write = run.write()?;
         write.routing_key_opt(routing_key);
         let by = actor.to_owned();
@@ -390,10 +451,19 @@ impl<E: Executor> super::Command<E> {
             };
         }
         match write.tenant(&self.tenant).commit(&self.executor).await {
-            Ok(_) => Ok(true),
-            Err(WriteError::InvalidOriginalVersion) => Ok(false),
-            Err(err) => Err(err.into()),
+            Ok(_) => {}
+            Err(WriteError::InvalidOriginalVersion) => return Ok(false),
+            Err(err) => return Err(err.into()),
         }
+        // The store stamps the events with its own clock, a moment later:
+        // the copy's times are this node's, which is all it decides with.
+        let at = clock();
+        for transition in transitions {
+            run.apply(transition, at);
+        }
+        // Written, so the stream took one version per move.
+        run.set_aggregate_version(version + transitions.len() as u16);
+        Ok(true)
     }
 
     /// Stops a run before its end; ended already is a no-op (`false`).
@@ -404,7 +474,7 @@ impl<E: Executor> super::Command<E> {
         reason: &str,
         routing_key: Option<String>,
     ) -> Result<bool, AutomationError> {
-        let Some(run) = self.load_run(run_id).await? else {
+        let Some(mut run) = self.load_run(run_id).await? else {
             return Err(AutomationError::RunNotFound);
         };
         if run.status.is_done() {
@@ -413,7 +483,7 @@ impl<E: Executor> super::Command<E> {
         let cancelled = self
             .advance_run_opt(
                 actor,
-                &run,
+                &mut run,
                 &[Transition::Cancel {
                     reason: reason.to_owned(),
                 }],

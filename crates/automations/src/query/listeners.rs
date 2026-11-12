@@ -6,7 +6,9 @@
 //!
 //! The host builds that subscription from [`listener_subscription`] and adds
 //! a handler per trigger event; each looks the listeners of its trigger up
-//! with [`listeners_for`].
+//! with [`listeners_for`]. Its cursor is [`TRIGGER_SUBSCRIPTION`]: the
+//! tables it keeps (the listeners, the checkouts, the starts left to other
+//! nodes) are rebuilt with the read models, from the start of the store.
 
 use evento::{
     Executor,
@@ -39,12 +41,15 @@ impl Listener {
     }
 }
 
-/// The base of the subscription that starts runs: it keeps the listeners
-/// from the scenarios' events, into `db` (the read-model database, which
-/// must be allowed to write). The host adds `.data(…)` and a handler per
-/// trigger event, then `.any_routing_key()` and its retry policy.
-pub fn listener_subscription<E: Executor>(key: &'static str, db: Db) -> SubscriptionBuilder<E> {
-    SubscriptionBuilder::new(key)
+/// The cursor identity of the subscription that starts runs, in the store.
+pub const TRIGGER_SUBSCRIPTION: &str = "timada-automations/triggers";
+
+/// The base of the subscription that starts runs ([`TRIGGER_SUBSCRIPTION`]):
+/// it keeps the listeners from the scenarios' events, into `db` (the
+/// read-model database, which must be allowed to write). The host adds
+/// `.data(…)` and a handler per trigger event, then its retry policy.
+pub fn listener_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
+    SubscriptionBuilder::new(TRIGGER_SUBSCRIPTION)
         .data(db)
         .handler(on_scenario_published())
         .handler(on_scenario_paused())

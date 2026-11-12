@@ -31,7 +31,7 @@ pub const MAX_VALUE_LEN: usize = 200;
 pub const DEFINITION_SCHEMA: u32 = 1;
 
 /// Where a scenario stands.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub enum ScenarioStatus {
     /// Never published: nothing runs.
     #[default]

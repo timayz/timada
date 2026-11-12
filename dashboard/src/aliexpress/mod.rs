@@ -22,7 +22,7 @@ use timada_core::Share;
 use timada_tenancy::{AliexpressSettings, CompanyState, TenantState};
 
 use self::budget::CallBudget;
-use crate::cluster::Executor;
+use crate::cluster::{Executor, ShareOf};
 use crate::config::AliexpressConfig;
 use crate::db::Db;
 use crate::media::Media;
@@ -76,11 +76,6 @@ pub struct Aliexpress {
 /// How many reads after pushes run at once on a node: a burst of pushes
 /// waits its turn rather than all asking AliExpress together.
 const PUSH_READS: usize = 4;
-
-/// Which of the nodes up this one is, at the moment of asking: among those
-/// doing a region's work when asked for one (`Some(region)`), among them all
-/// otherwise.
-pub type ShareOf = Arc<dyn Fn(Option<&str>) -> Share + Send + Sync>;
 
 impl Aliexpress {
     pub fn new(

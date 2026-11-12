@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
 use crate::aggregator::scenario::{Archived, Created, Paused, Published, Renamed, Resumed, Saved};
@@ -7,10 +5,13 @@ use crate::definition::{Definition, Problem};
 use crate::error::AutomationError;
 use crate::value_object::{ScenarioStatus, checked_name, new_scenario_id};
 
-/// The write model of a scenario.
+/// The write model of a scenario. Snapshotted on each node: every save
+/// carries the whole draft, so a scenario saved often would otherwise be
+/// read back draft by draft at every load. It keeps the version running
+/// only; the runs and their pages read the versions before it from the read
+/// model ([`published_definition`](crate::published_definition)).
 #[evento::projection(id = id, name = "timada-automations/ScenarioState")]
-#[evento::snapshot(none)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct ScenarioState {
     pub id: String,
     pub name: String,
@@ -21,9 +22,6 @@ pub struct ScenarioState {
     pub version: u32,
     /// The definition of that version, as JSON.
     pub live: String,
-    /// Every version ever published, as JSON, by number: a run carries on
-    /// with the one it started on.
-    pub versions: BTreeMap<u32, String>,
     pub status: ScenarioStatus,
     /// Unix seconds of `Created`.
     pub created_at: u64,
@@ -45,15 +43,6 @@ impl ScenarioState {
             return Ok(None);
         }
         Ok(Some(Definition::from_json(&self.live)?))
-    }
-
-    /// A version published, read; `None` for one never published.
-    pub fn version_definition(&self, version: u32) -> anyhow::Result<Option<Definition>> {
-        self.versions
-            .get(&version)
-            .map(|json| Definition::from_json(json))
-            .transpose()
-            .map_err(Into::into)
     }
 
     /// Whether the draft holds what the version running does not (always,
@@ -104,9 +93,6 @@ async fn on_published(event: Event<Published>, state: &mut ScenarioState) -> any
     state.draft = event.data.definition.to_owned();
     state.live = event.data.definition.to_owned();
     state.version = event.data.version;
-    state
-        .versions
-        .insert(event.data.version, event.data.definition.to_owned());
     state.status = ScenarioStatus::Active;
     state.published_at = Some(event.timestamp);
     state.updated_at = event.timestamp;
