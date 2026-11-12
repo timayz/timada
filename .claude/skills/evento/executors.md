@@ -202,6 +202,7 @@ let client = evento_remote::Client::builder(addr)
     .tls(connector, server_name)                                // rustls TlsConnector + ServerName
     .request_timeout(Duration::from_secs(10))
     .connections(2)                                             // pool size; clones share it
+    .reconnect_backoff(min, max)                                // default 100ms → 5s; each delay drawn in [0, bound]
     .connect().await?;                                          // fails at once on a Rejection
 ```
 
