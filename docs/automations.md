@@ -217,7 +217,11 @@ however many wait, no look reads them.
 - **A paused scenario** holds its runs where they are, and no node reads them;
   resumed, they go on. A deleted one cancels them.
 - **A skipped step** (nobody to tell) lets the run go on; a failed one ends it.
-- **Ended runs** leave `automations_runs` after 90 days; their streams stay.
+- **Ended runs** leave `automations_runs` after 90 days, and the counts with
+  them; their streams stay. A look drops about a thousand, the longest ended
+  first, in a transaction of its own: a node back after days away clears its
+  backlog at that pace, never in one long write that the runs ending meanwhile
+  would keep running again.
 
 **Notify the team** mails, on the platform's mail server, the members allowed to
 see the run's subject (`orders:read` for an order, `customers:read` for a
@@ -230,7 +234,12 @@ start itself. A step added later that does (cancelling an order, say) must not
 be offered on the trigger it would fire.
 
 The runs of a scenario are listed under `/t/{slug}/automations/{id}/runs`, each
-with its steps; members with `automations:manage` cancel one under way.
+with its steps; members with `automations:manage` cancel one under way. The
+list is read a page at a time from where the page beside it stopped, off the
+index of the scenario's runs (or of its runs of the status asked for), so a deep
+page costs what the first one does however many runs the scenario keeps. How many
+there are, there and on the list of scenarios, is kept as the rows change
+(`automations_run_counts`, by scenario and status), never counted over the runs.
 
 ## Mails to customers
 

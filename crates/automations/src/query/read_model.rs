@@ -1,17 +1,21 @@
 //! The subscription that keeps `automations_scenarios`,
-//! `automations_versions` and `automations_runs` current for every tenant.
+//! `automations_versions`, `automations_runs` and `automations_run_counts`
+//! current for every tenant.
 //!
 //! Each handler reloads the strict write model of the stream and rewrites
 //! its row, so delivery may repeat (the subscription is at-least-once)
 //! without the row drifting; a version published is kept from its own
-//! event, once. A run's row also says whether its scenario is paused, as
-//! the scenario's row does: a scenario paused or going on again marks its
-//! runs under way. One subscription follows every tenant's streams (its
-//! cursor lives in the store): each row carries the tenant of the event that
-//! made it, and it writes into the read-model database it is given. The
-//! runner writes one column itself, on its own node: it puts a run's
-//! `next_at` off when it leaves the run as it was, until the run's next
-//! event writes the row again.
+//! event, once. A run's row moves its scenario's counts of runs by status
+//! when its status changes, by what the row held before, so a repeated
+//! delivery moves nothing. A run's row also says whether its scenario is
+//! paused, as the scenario's row does: a scenario paused or going on again
+//! marks its runs under way. One subscription follows every tenant's
+//! streams (its cursor lives in the store): each row carries the tenant of
+//! the event that made it, and it writes into the read-model database it is
+//! given. The runner writes the runs' rows too, on its own node: it puts a
+//! run's `next_at` off when it leaves the run as it was, until the run's
+//! next event writes the row again, and it drops the rows of runs that
+//! ended long ago, with their counts.
 
 use evento::{
     Executor,
@@ -26,6 +30,7 @@ use crate::command::{RunState, ScenarioState, run_projection, scenario_projectio
 use crate::definition::Definition;
 use crate::value_object::ScenarioStatus;
 
+use super::runs::count_listed;
 use super::scenarios::SCENARIO_STATUS;
 
 /// The cursor identity of the read-model subscription, in the store.
@@ -127,32 +132,56 @@ pub(super) const UPSERT_RUN: &str = "INSERT INTO automations_runs (tenant_id, id
         status = excluded.status, step = excluded.step, reason = excluded.reason,
         next_at = excluded.next_at, paused = excluded.paused, updated_at = excluded.updated_at";
 
+/// What [`upsert_run`] reads of a run's row before writing it: the status
+/// it is counted under. By the table's key, which the planner does not
+/// pick by itself (the indexes of a scenario's runs lead with the tenant
+/// too).
+pub(super) const RUN_STATUS: &str = "SELECT status FROM automations_runs
+        INDEXED BY sqlite_autoindex_automations_runs_1
+     WHERE tenant_id = ?1 AND id = ?2";
+
 /// Writes the row of a run as the write model sees it: `next_at` is when
 /// the runner looks at it again, none once it ended; `paused` whether its
 /// scenario is paused, as the scenarios' rows say, and then the run is not
 /// due; `shard` is which of the nodes up moves it
-/// ([`timada_core::shard_of`] of its id).
+/// ([`timada_core::shard_of`] of its id). In the same transaction, the run
+/// moves from the count of the status its row had (none for a run not
+/// listed yet) to the count of its status now: a write repeated moves
+/// nothing.
 pub(crate) async fn upsert_run(db: &Db, tenant_id: &str, run: &RunState) -> anyhow::Result<()> {
-    db.execute(
-        UPSERT_RUN,
-        (
-            tenant_id,
-            run.id.as_str(),
-            run.scenario_id.as_str(),
-            i64::from(run.scenario_version),
-            run.trigger.as_str(),
-            run.subject_id.as_str(),
-            run.status.as_str(),
-            run.log.last().map(|record| record.step.as_str()),
-            run.reason.as_deref(),
-            run.next_at().map(|at| at as i64),
-            i64::from(timada_core::shard_of(&run.id)),
-            run.started_at as i64,
-            run.updated_at as i64,
-        ),
-    )
-    .await?;
-    Ok(())
+    let row = (
+        tenant_id,
+        run.id.as_str(),
+        run.scenario_id.as_str(),
+        i64::from(run.scenario_version),
+        run.trigger.as_str(),
+        run.subject_id.as_str(),
+        run.status.as_str(),
+        run.log.last().map(|record| record.step.as_str()),
+        run.reason.as_deref(),
+        run.next_at().map(|at| at as i64),
+        i64::from(timada_core::shard_of(&run.id)),
+        run.started_at as i64,
+        run.updated_at as i64,
+    );
+    db.write(&row, |tx, row| {
+        Box::pin(async move {
+            let (tenant_id, run_id, scenario_id, status) = (row.0, row.1, row.2, row.6);
+            let was: Option<(String,)> =
+                fetch_optional(tx, RUN_STATUS, (tenant_id, run_id)).await?;
+            let was = was.map(|(was,)| was);
+            execute(tx, UPSERT_RUN, *row).await?;
+            // Most events of a run (a step taken, done) leave its status.
+            if was.as_deref() == Some(status) {
+                return Ok(());
+            }
+            if let Some(was) = &was {
+                count_listed(tx, tenant_id, scenario_id, was, -1).await?;
+            }
+            count_listed(tx, tenant_id, scenario_id, status, 1).await
+        })
+    })
+    .await
 }
 
 /// What [`upsert_scenario`] writes on the runs under way of a scenario
@@ -221,4 +250,211 @@ pub(crate) async fn upsert_scenario(
         })
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use timada_core::page::PageFrom;
+
+    use super::*;
+    use crate::query::{MIGRATIONS, RunFilter, count_runs, prune_runs, runs_of_scenario};
+    use crate::value_object::RunStatus::{self, *};
+
+    const TENANT: &str = "acme";
+
+    async fn db() -> Db {
+        let store = evento::Turso::in_memory_concurrent().await.unwrap();
+        let mut conn = store.connect().unwrap();
+        MIGRATIONS
+            .to_latest(&mut conn)
+            .await
+            .map_err(|(_, err)| err)
+            .unwrap();
+        Db::from(store)
+    }
+
+    /// A run of `sc1` started at 1,000, last written at `updated_at`.
+    fn run(id: &str, status: RunStatus, updated_at: u64) -> RunState {
+        RunState {
+            id: id.to_owned(),
+            scenario_id: "sc1".to_owned(),
+            scenario_version: 1,
+            trigger: "order.placed".to_owned(),
+            subject_id: format!("order-{id}"),
+            status,
+            started_at: 1_000,
+            updated_at,
+            ..RunState::default()
+        }
+    }
+
+    /// The runs of `sc1` the history counts, by status.
+    async fn counts(db: &Db) -> Vec<(RunStatus, u64)> {
+        let mut counts = Vec::new();
+        for status in RunStatus::ALL {
+            let filter = RunFilter {
+                status: Some(status),
+            };
+            let n = count_runs(db, TENANT, "sc1", &filter).await.unwrap();
+            if n > 0 {
+                counts.push((status, n));
+            }
+        }
+        counts
+    }
+
+    /// The ids of a page of `sc1`'s history.
+    async fn page(db: &Db, filter: &RunFilter, from: PageFrom<'_>, limit: i64) -> Vec<String> {
+        runs_of_scenario(db, TENANT, "sc1", filter, from, limit)
+            .await
+            .unwrap()
+            .rows
+            .into_iter()
+            .map(|row| row.id)
+            .collect()
+    }
+
+    /// A run counts once, under the status its row says; written again (a
+    /// delivery repeated), it counts the same.
+    #[tokio::test]
+    async fn the_counts_follow_each_run() {
+        let db = db().await;
+        upsert_run(&db, TENANT, &run("r1", Running, 1_000))
+            .await
+            .unwrap();
+        upsert_run(&db, TENANT, &run("r1", Running, 1_000))
+            .await
+            .unwrap();
+        upsert_run(&db, TENANT, &run("r2", Running, 1_000))
+            .await
+            .unwrap();
+        assert_eq!(counts(&db).await, [(Running, 2)]);
+
+        let mut waiting = run("r1", Waiting, 1_010);
+        waiting.log.push(crate::command::StepRecord {
+            step: "s1".to_owned(),
+            outcome: crate::command::Outcome::Waiting { until: 5_000 },
+            at: 1_010,
+        });
+        upsert_run(&db, TENANT, &waiting).await.unwrap();
+        for _ in 0..2 {
+            upsert_run(&db, TENANT, &run("r2", Finished, 1_020))
+                .await
+                .unwrap();
+        }
+        assert_eq!(counts(&db).await, [(Waiting, 1), (Finished, 1)]);
+        let every = RunFilter::default();
+        assert_eq!(count_runs(&db, TENANT, "sc1", &every).await.unwrap(), 2);
+        assert_eq!(count_runs(&db, TENANT, "sc2", &every).await.unwrap(), 0);
+        assert_eq!(
+            count_runs(&db, "tenant-other", "sc1", &every)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    /// Runs that ended long ago leave, the longest ended first, about as
+    /// many at once as asked (with every run that ended in the same second
+    /// as the last of them), and their counts with them; runs under way
+    /// stay, however old.
+    #[tokio::test]
+    async fn runs_ended_long_ago_leave_with_their_counts() {
+        let db = db().await;
+        for (id, status, at) in [
+            ("r1", Finished, 100),
+            ("r2", Failed, 200),
+            ("r3", Finished, 200),
+            ("r4", Cancelled, 300),
+            ("r5", Running, 50),
+            ("r6", Finished, 400),
+        ] {
+            upsert_run(&db, TENANT, &run(id, status, at)).await.unwrap();
+        }
+        assert_eq!(prune_runs(&db, 350, 1).await.unwrap(), 1);
+        assert_eq!(
+            counts(&db).await,
+            [(Running, 1), (Finished, 2), (Failed, 1), (Cancelled, 1)]
+        );
+        assert_eq!(prune_runs(&db, 350, 1).await.unwrap(), 2);
+        assert_eq!(
+            counts(&db).await,
+            [(Running, 1), (Finished, 1), (Cancelled, 1)]
+        );
+        assert_eq!(prune_runs(&db, 350, 10).await.unwrap(), 1);
+        assert_eq!(prune_runs(&db, 350, 10).await.unwrap(), 0);
+        assert_eq!(counts(&db).await, [(Running, 1), (Finished, 1)]);
+        let every = RunFilter::default();
+        assert_eq!(page(&db, &every, PageFrom::First, 10).await, ["r6", "r5"]);
+
+        // Written again (the read model replayed), a run dropped is listed
+        // and counted again, until the next look drops it.
+        upsert_run(&db, TENANT, &run("r1", Finished, 100))
+            .await
+            .unwrap();
+        assert_eq!(counts(&db).await, [(Running, 1), (Finished, 2)]);
+        assert_eq!(prune_runs(&db, 350, 10).await.unwrap(), 1);
+        assert_eq!(counts(&db).await, [(Running, 1), (Finished, 1)]);
+    }
+
+    /// The history is read a page at a time from where the page beside it
+    /// stopped, newest first and the runs started in the same second by
+    /// id, every status or one; another scenario's runs never show.
+    #[tokio::test]
+    async fn the_history_is_read_a_page_at_a_time() {
+        let db = db().await;
+        for n in 0..7u64 {
+            let status = if n % 3 == 0 { Failed } else { Finished };
+            let mut started = run(&format!("r{n}"), status, 2_000);
+            started.started_at = 1_000 + n / 2;
+            upsert_run(&db, TENANT, &started).await.unwrap();
+        }
+        let mut other = run("r9", Failed, 2_000);
+        other.scenario_id = "sc2".to_owned();
+        upsert_run(&db, TENANT, &other).await.unwrap();
+
+        let every = RunFilter::default();
+        let first = runs_of_scenario(&db, TENANT, "sc1", &every, PageFrom::First, 3)
+            .await
+            .unwrap();
+        let ids = |rows: &[crate::query::RunRow]| -> Vec<String> {
+            rows.iter().map(|row| row.id.clone()).collect()
+        };
+        assert_eq!(ids(&first.rows), ["r6", "r5", "r4"]);
+        assert_eq!(first.newer, None);
+        let older = first.older.unwrap();
+        let second = runs_of_scenario(&db, TENANT, "sc1", &every, PageFrom::Older(&older), 3)
+            .await
+            .unwrap();
+        assert_eq!(ids(&second.rows), ["r3", "r2", "r1"]);
+        let last = runs_of_scenario(
+            &db,
+            TENANT,
+            "sc1",
+            &every,
+            PageFrom::Older(second.older.as_ref().unwrap()),
+            3,
+        )
+        .await
+        .unwrap();
+        assert_eq!(ids(&last.rows), ["r0"]);
+        assert_eq!(last.older, None);
+        // Back up: the page above the last one, then the first page.
+        let back = PageFrom::Newer(last.newer.as_ref().unwrap());
+        assert_eq!(page(&db, &every, back, 3).await, ["r3", "r2", "r1"]);
+        let top = PageFrom::Newer(second.newer.as_ref().unwrap());
+        assert_eq!(page(&db, &every, top, 3).await, ["r6", "r5", "r4"]);
+
+        let failed = RunFilter {
+            status: Some(Failed),
+        };
+        let first = runs_of_scenario(&db, TENANT, "sc1", &failed, PageFrom::First, 2)
+            .await
+            .unwrap();
+        assert_eq!(ids(&first.rows), ["r6", "r3"]);
+        let next = PageFrom::Older(first.older.as_ref().unwrap());
+        assert_eq!(page(&db, &failed, next, 2).await, ["r0"]);
+        assert_eq!(count_runs(&db, TENANT, "sc1", &failed).await.unwrap(), 3);
+        assert_eq!(count_runs(&db, TENANT, "sc1", &every).await.unwrap(), 7);
+    }
 }

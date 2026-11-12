@@ -2,13 +2,14 @@ mod common;
 
 use timada_core::Share;
 use timada_core::db::Db;
+use timada_core::page::PageFrom;
 
 use common::*;
 use timada_automations::{
-    Command, DueRun, ListenerState, RunFilter, RunStatus, StartRun, Transition, due_runs,
-    listener_of, listener_subscription, listeners_for, owe_start, prune_runs, prune_starts,
-    put_off_run, read_model_subscription, run_id, run_known, runs_of_scenario, settle_start,
-    starts_owed,
+    Command, DueRun, ListenerState, RunFilter, RunStatus, StartRun, Transition, count_runs,
+    due_runs, listener_of, listener_subscription, listeners_for, owe_start, prune_runs,
+    prune_starts, put_off_run, read_model_subscription, run_id, run_known, runs_of_scenario,
+    settle_start, starts_owed,
 };
 
 async fn follow(executor: &evento::Turso, pool: &Db) {
@@ -156,9 +157,17 @@ async fn runs_are_listed_and_owed_a_look_until_they_end() {
             next_at: until as i64,
         }]
     );
-    let rows = runs_of_scenario(&pool, TENANT, "sc1", &RunFilter::default(), 10, 0)
-        .await
-        .unwrap();
+    let rows = runs_of_scenario(
+        &pool,
+        TENANT,
+        "sc1",
+        &RunFilter::default(),
+        PageFrom::First,
+        10,
+    )
+    .await
+    .unwrap()
+    .rows;
     assert_eq!(rows.len(), 2);
     let waiting = rows.iter().find(|row| row.id == id).unwrap();
     assert_eq!(waiting.status(), RunStatus::Waiting);
@@ -170,19 +179,38 @@ async fn runs_are_listed_and_owed_a_look_until_they_end() {
         &RunFilter {
             status: Some(RunStatus::Finished),
         },
+        PageFrom::First,
         10,
-        0,
     )
     .await
-    .unwrap();
+    .unwrap()
+    .rows;
     assert_eq!(finished.len(), 1);
-    // Ended runs leave the list after a while; the others stay.
-    assert_eq!(prune_runs(&pool, now() + 10).await.unwrap(), 1);
     assert_eq!(
-        runs_of_scenario(&pool, TENANT, "sc1", &RunFilter::default(), 10, 0)
+        count_runs(&pool, TENANT, "sc1", &RunFilter::default())
             .await
-            .unwrap()
-            .len(),
+            .unwrap(),
+        2
+    );
+    // Ended runs leave the list after a while, and its counts; the others
+    // stay.
+    assert_eq!(prune_runs(&pool, now() + 10, 100).await.unwrap(), 1);
+    let rows = runs_of_scenario(
+        &pool,
+        TENANT,
+        "sc1",
+        &RunFilter::default(),
+        PageFrom::First,
+        10,
+    )
+    .await
+    .unwrap()
+    .rows;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        count_runs(&pool, TENANT, "sc1", &RunFilter::default())
+            .await
+            .unwrap(),
         1
     );
 }
@@ -307,12 +335,20 @@ async fn the_runs_due_are_walked_and_a_run_put_off_waits() {
         .await
         .unwrap();
     put_off_run(&pool, moved, at + 300).await.unwrap();
-    let row = runs_of_scenario(&pool, TENANT, "sc1", &RunFilter::default(), 10, 0)
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|row| row.id == moved.id)
-        .unwrap();
+    let row = runs_of_scenario(
+        &pool,
+        TENANT,
+        "sc1",
+        &RunFilter::default(),
+        PageFrom::First,
+        10,
+    )
+    .await
+    .unwrap()
+    .rows
+    .into_iter()
+    .find(|row| row.id == moved.id)
+    .unwrap();
     assert_eq!(row.next_at, Some(until as i64));
 }
 

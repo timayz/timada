@@ -24,15 +24,16 @@ pub use scenarios::*;
 pub use starts::*;
 pub use versions::*;
 
-/// The plans the runner's reads are written for, under Turso's planner:
-/// each off its index and in its order, never a scan of its table nor a
-/// sort, however many rows there are.
+/// The plans the runner's reads and the pages' are written for, under
+/// Turso's planner: each off its index and in its order, never a scan of
+/// its table nor a sort, however many rows there are.
 #[cfg(test)]
 mod plans {
     use timada_core::db::{Db, IntoParams};
 
-    use super::{MIGRATIONS, checkouts, read_model, runs, scenarios, starts};
+    use super::{MIGRATIONS, RunFilter, checkouts, read_model, runs, scenarios, starts};
     use crate::catalog::CHECKOUT_ABANDONED;
+    use crate::value_object::RunStatus;
 
     async fn db() -> Db {
         let store = evento::Turso::in_memory_concurrent().await.unwrap();
@@ -101,6 +102,86 @@ mod plans {
         )
         .await;
         reads_in_order(&left, "automations_checkouts_open");
+        // Dropping the runs that ended long ago reads the ended ones only.
+        let until = plan_of(&db, runs::PRUNE_UNTIL, (100, 999)).await;
+        reads_in_order(&until, "automations_runs_ended");
+        searches(&until, "automations_runs_ended", "updated_at<?");
+        for statement in [runs::PRUNED_COUNTS, runs::PRUNE_RUNS] {
+            let plan = plan_of(&db, statement, (100,)).await;
+            searches(&plan, "automations_runs_ended", "updated_at<?");
+        }
+    }
+
+    /// A page of the run history reads its rows off the index of the
+    /// scenario's runs (of the status asked for), from either side of where
+    /// it stands, and its counts are the ones kept: never the runs of the
+    /// scenario, let alone of the tenant, as the list of scenarios.
+    #[tokio::test]
+    async fn the_run_history_reads_its_page_and_counts_only() {
+        let db = db().await;
+        let every = RunFilter::default();
+        let failed = RunFilter {
+            status: Some(RunStatus::Failed),
+        };
+        for (older, bound) in [(true, "started_at<=?"), (false, "started_at>=?")] {
+            let plan = plan_of(
+                &db,
+                &runs::page_statement(&every, older),
+                ("t1", "sc1", None::<String>, 40, "run-1", 51),
+            )
+            .await;
+            reads_in_order(&plan, "automations_runs_scenario");
+            searches(
+                &plan,
+                "automations_runs_scenario",
+                &format!("tenant_id=? AND scenario_id=? AND {bound}"),
+            );
+            let plan = plan_of(
+                &db,
+                &runs::page_statement(&failed, older),
+                ("t1", "sc1", "failed", 40, "run-1", 51),
+            )
+            .await;
+            reads_in_order(&plan, "automations_runs_scenario_status");
+            searches(
+                &plan,
+                "automations_runs_scenario_status",
+                &format!("tenant_id=? AND scenario_id=? AND status=? AND {bound}"),
+            );
+        }
+        let counts = plan_of(
+            &db,
+            &runs::count_statement(&every),
+            ("t1", "sc1", None::<String>),
+        )
+        .await;
+        searches(
+            &counts,
+            "sqlite_autoindex_automations_run_counts_1",
+            "tenant_id=? AND scenario_id=?",
+        );
+        let counts = plan_of(
+            &db,
+            &runs::count_statement(&failed),
+            ("t1", "sc1", "failed"),
+        )
+        .await;
+        searches(
+            &counts,
+            "sqlite_autoindex_automations_run_counts_1",
+            "tenant_id=? AND scenario_id=? AND status=?",
+        );
+        let listed = plan_of(
+            &db,
+            scenarios::SCENARIOS_OF_TENANT,
+            ("t1", None::<String>, 50, 0),
+        )
+        .await;
+        searches(
+            &listed,
+            "sqlite_autoindex_automations_run_counts_1",
+            "tenant_id=? AND scenario_id=?",
+        );
     }
 
     /// The writes and lookups by key name their index: another index leads
@@ -120,12 +201,22 @@ mod plans {
             "automations_runs_scenario",
             "tenant_id=? AND scenario_id=?",
         );
-        let status = plan_of(&db, scenarios::SCENARIO_STATUS, ("t1", "sc1")).await;
-        searches(
-            &status,
-            "sqlite_autoindex_automations_scenarios_1",
-            "tenant_id=? AND id=?",
-        );
+        for statement in [scenarios::SCENARIO_STATUS, scenarios::SCENARIO_NAME] {
+            let plan = plan_of(&db, statement, ("t1", "sc1")).await;
+            searches(
+                &plan,
+                "sqlite_autoindex_automations_scenarios_1",
+                "tenant_id=? AND id=?",
+            );
+        }
+        for statement in [runs::RUN_KNOWN, read_model::RUN_STATUS] {
+            let plan = plan_of(&db, statement, ("t1", "run-1")).await;
+            searches(
+                &plan,
+                "sqlite_autoindex_automations_runs_1",
+                "tenant_id=? AND id=?",
+            );
+        }
         let upsert = plan_of(
             &db,
             read_model::UPSERT_RUN,

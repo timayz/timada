@@ -7,6 +7,11 @@ use evento::turso::migrate::{Migration, Migrations};
 pub const MIGRATION_APP: &str = "automations";
 
 /// The read models of this context, one table each (see the columns).
+///
+/// A scenario's run history is read a page at a time off the index of its
+/// runs, or of its runs of one status, and its counts are kept as the rows
+/// change (`automations_run_counts`, the runs listed by scenario and
+/// status), never counted over the runs.
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
     &[Migration::up(
@@ -46,9 +51,18 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         CREATE INDEX automations_runs_due ON automations_runs (next_at, id)
                 WHERE next_at IS NOT NULL AND paused = 0;
         CREATE INDEX automations_runs_scenario ON automations_runs
-                (tenant_id, scenario_id, started_at DESC);
+                (tenant_id, scenario_id, started_at, id);
+        CREATE INDEX automations_runs_scenario_status ON automations_runs
+                (tenant_id, scenario_id, status, started_at, id);
         CREATE INDEX automations_runs_ended ON automations_runs (updated_at)
                 WHERE next_at IS NULL;
+        CREATE TABLE automations_run_counts (
+                tenant_id TEXT NOT NULL,
+                scenario_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                runs INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, scenario_id, status)
+            );
         CREATE TABLE automations_versions (
                 tenant_id TEXT NOT NULL,
                 scenario_id TEXT NOT NULL,
@@ -100,6 +114,7 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
 pub const TABLES: &[&str] = &[
     "automations_scenarios",
     "automations_runs",
+    "automations_run_counts",
     "automations_versions",
     "automations_listeners",
     "automations_checkouts",
