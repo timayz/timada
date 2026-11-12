@@ -200,11 +200,22 @@ order as it is then), a step to act, or the end. Every move is written against
 the run's version and folded into the runner's copy, so the run is read once a
 look: a node that loses a race writes nothing and leaves the run to the winner.
 
+A look counts the runs it moves, not the rows it reads. A run it leaves where it
+is (its shop suspended, a mail waiting for the shop to set up what it needs, a
+failure to move it) does not count: the node puts that run's row off five
+minutes (to when the run wakes, if the row was only behind), so the look goes on
+to the other shops' runs and the next looks do not read it again before then;
+any move of the run, by any node, writes the row again. A look reads at most four
+rows per run it may move. A paused scenario's runs are out of the walk
+altogether: `automations_runs.paused`, kept from the scenario's row, keeps them
+out of the index of the runs due until the scenario is resumed or deleted, so
+however many wait, no look reads them.
+
 - **A step that acts** is claimed first (`StepClaimed`); only the node whose
   claim is written acts. A notice is not sent twice: a claim whose outcome never
   comes (the node stopped) fails the step once its ten-minute lease is over.
-- **A paused scenario** holds its runs where they are; resumed, they go on. A
-  deleted one cancels them.
+- **A paused scenario** holds its runs where they are, and no node reads them;
+  resumed, they go on. A deleted one cancels them.
 - **A skipped step** (nobody to tell) lets the run go on; a failed one ends it.
 - **Ended runs** leave `automations_runs` after 90 days; their streams stay.
 
@@ -238,8 +249,8 @@ These mails are marketing, so:
   `newsletter:manage`, a server picked for marketing on `/t/{slug}/mail`, its
   storefront's address (the link points there) and the operator's secret
   (`[secrets] key`, which signs the links). A run that reaches a mail while
-  the shop lacks one of them waits for it, up to three days, then fails saying
-  which.
+  the shop lacks one of them waits for it, looked at again every five minutes,
+  up to three days, then fails saying which.
 - **Anyone can stop them.** The link is `{storefront}/emails/opt-out/{token}`,
   the token being `{opt_out_id}.{tag}`: the id is a hash of the address
   (`timada-automations/OptOut`, which keeps no address), the tag an HMAC of the

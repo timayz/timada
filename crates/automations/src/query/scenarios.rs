@@ -88,6 +88,12 @@ pub async fn count_scenarios(
     Ok(count as u64)
 }
 
+/// What [`scenario_status`] reads, by the table's key: the planner does
+/// not pick it by itself, as the listing's index leads with the tenant too.
+pub(super) const SCENARIO_STATUS: &str = "SELECT status FROM automations_scenarios
+        INDEXED BY sqlite_autoindex_automations_scenarios_1
+     WHERE tenant_id = ?1 AND id = ?2";
+
 /// Where one of the tenant's scenarios stands, as the read model last saw
 /// it: what the runner moves its runs by. It follows every region, so any
 /// node may move any run. `None` until the read model sees the scenario.
@@ -97,10 +103,7 @@ pub async fn scenario_status(
     scenario_id: &str,
 ) -> anyhow::Result<Option<ScenarioStatus>> {
     let row: Option<(String,)> = db
-        .fetch_optional(
-            "SELECT status FROM automations_scenarios WHERE tenant_id = ?1 AND id = ?2",
-            (tenant_id, scenario_id),
-        )
+        .fetch_optional(SCENARIO_STATUS, (tenant_id, scenario_id))
         .await?;
     Ok(row.map(|(status,)| ScenarioStatus::parse(&status).unwrap_or_default()))
 }
