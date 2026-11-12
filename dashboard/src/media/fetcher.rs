@@ -377,6 +377,7 @@ impl Fetcher {
 pub(crate) mod tests {
     use super::super::test_support::{png, rendered};
     use super::*;
+    use crate::disk::Durability;
     use crate::peers::test_support::{answering, down, peer};
     use timada_core::Picture;
 
@@ -530,7 +531,13 @@ pub(crate) mod tests {
         let (_store, fetcher) = fetcher_alone().await;
         fetcher
             .media
-            .store("acme", Rendition::Page, "i1", &upload.page)
+            .store(
+                "acme",
+                Rendition::Page,
+                "i1",
+                &upload.page,
+                Durability::Cached,
+            )
             .await
             .unwrap();
         want_picture(&fetcher, "i1", &upload.picture, 5).await;

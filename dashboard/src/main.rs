@@ -9,6 +9,7 @@ mod code_mails;
 mod components;
 mod config;
 mod db;
+mod disk;
 mod ecb;
 mod hold_reminders;
 mod idle_carts;

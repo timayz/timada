@@ -2,8 +2,11 @@
 //! the product pictures ([`crate::media`]) and the personal-data keys
 //! ([`crate::key_vault`]). A file is copied to a majority of the cluster
 //! before the event naming it is recorded, the same majority a commit needs,
-//! so it survives whatever the events survive. The rate limits ask the same
-//! nodes what they let through ([`crate::rate_limit`]).
+//! and each of those nodes syncs the file to its disk before it answers
+//! ([`crate::disk`]), as the store syncs each write: the file survives
+//! whatever the events survive, a power cut across the cluster included. The
+//! rate limits ask the same nodes what they let through
+//! ([`crate::rate_limit`]).
 
 use std::time::Duration;
 
