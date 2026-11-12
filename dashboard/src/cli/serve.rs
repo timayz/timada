@@ -301,7 +301,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         db.clone(),
         executor.clone(),
         Arc::new(move || {
-            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, None);
+            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, cluster::Among::All);
             timada_core::Share { index, of }
         }),
         config.carts.idle(),
@@ -319,7 +319,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         background_mail.clone(),
         keys.ring(),
         Arc::new(move || {
-            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, None);
+            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, cluster::Among::All);
             timada_core::Share { index, of }
         }),
         config.newsletter.mails_per_check,

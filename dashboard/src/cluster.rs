@@ -98,8 +98,8 @@ pub fn clear_catch_up_mark(store: &Path) -> Result<()> {
 /// Opens the node over the store at `store_path` and starts it. Single node
 /// when `cluster` is `None`. `region`, when set, is the default routing key
 /// stamped on every new aggregate this node writes; with `also_serves`, the
-/// regions whose work this node does, which it tells the other nodes
-/// ([`label`]).
+/// regions whose work this node does. It tells the other nodes which they
+/// are, or that it has none ([`label`]).
 ///
 /// When the store is marked for a copy (see [`mark_for_rejoin`]) and the
 /// node has peers, the store is emptied (the journal is kept), the read
@@ -116,18 +116,17 @@ pub async fn open(
     // The read models are derived data in the same file: dropped with the
     // store's rows, filled again by the subscriptions from the copied events.
     let read_models = store.clone();
-    let mut builder = Cluster::builder(store)
+    let (cluster, executor) = Cluster::builder(store)
         .settings(cluster.map(ClusterConfig::settings))
         .state_dir(state_dir(store_path))
+        .label(label(region, also_serves))
         .before_copy(move || async move {
             crate::db::reset_store_read_models(&read_models)
                 .await
                 .context("cannot empty the read models before copying the store")
-        });
-    if let Some(label) = label(region, also_serves) {
-        builder = builder.label(label);
-    }
-    let (cluster, executor) = builder.open().await?;
+        })
+        .open()
+        .await?;
     let mut executor = Evento::new(executor);
     if let Some(region) = region {
         tracing::info!(region, "default routing key");
@@ -148,38 +147,56 @@ pub fn node_name(cluster: &Cluster) -> String {
 }
 
 /// What a node tells the other nodes about itself with its gossip: the
-/// regions whose work it does, its own first (`eu us`, one word each as
-/// `Config::load` makes sure). Nothing without a region: such a node does
-/// every region's work, and says so by saying nothing.
-pub fn label(region: Option<&str>, also_serves: &[String]) -> Option<String> {
-    let region = region?;
-    let mut label = region.to_owned();
+/// regions whose events its sagas follow, its own first (`eu us`, one word
+/// each as `Config::load` makes sure). A node without a region follows the
+/// events written without one, which a label names with the empty word: it
+/// says the empty label. Every node says one, so a node whose label has not
+/// come in yet is never taken for a node without a region.
+pub fn label(region: Option<&str>, also_serves: &[String]) -> String {
+    let mut label = region.unwrap_or_default().to_owned();
     for served in also_serves {
         label.push(' ');
         label.push_str(served);
     }
-    Some(label)
+    label
 }
 
-/// Whether a node whose label is `label` does `region`'s work: a node
-/// without a region (no label) does every region's.
-pub fn serves(label: Option<&str>, region: &str) -> bool {
-    match label {
-        Some(label) => label.split(' ').any(|served| served == region),
-        None => true,
-    }
+/// Whether a node whose label is `label` sees the events written under
+/// `region` (`None`: without one), and so does their work.
+pub fn serves(label: &str, region: Option<&str>) -> bool {
+    let region = region.unwrap_or_default();
+    label.split(' ').any(|served| served == region)
 }
 
-/// `me`'s place among the nodes of `live` doing `region`'s work, and how
-/// many they are: `(index, of)`. Every node without a region counts; `me`
-/// always does, so it owns its part of what it alone saw. No region: every
-/// live node, for the work every node does (the sweeps over the read models).
-pub fn place_among(me: NodeId, live: &[LiveNode], region: Option<&str>) -> (u64, u64) {
+/// Which nodes a piece of work is shared out among.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Among<'a> {
+    /// Every node up: the work over the read models (the sweeps), which
+    /// every node keeps whole, whatever its region.
+    All,
+    /// The nodes up that see the events written under this region (`None`:
+    /// without one, which the nodes without a region see): the work a saga
+    /// is told about, which must fall to a node that sees its event, as the
+    /// sagas follow their node's region. A node whose label has not come in
+    /// yet counts for no region until it does.
+    Region(Option<&'a str>),
+}
+
+/// `me`'s place among the nodes of `live` that `among` names, and how many
+/// they are: `(index, of)`. `me` always counts, so it owns its part of what
+/// it alone saw.
+pub fn place_among(me: NodeId, live: &[LiveNode], among: Among<'_>) -> (u64, u64) {
     let mut index = 0;
     let mut of = 0;
     for node in live {
-        let counts =
-            node.id == me || region.is_none_or(|region| serves(node.label.as_deref(), region));
+        let counts = node.id == me
+            || match among {
+                Among::All => true,
+                Among::Region(region) => node
+                    .label
+                    .as_deref()
+                    .is_some_and(|label| serves(label, region)),
+            };
         if !counts {
             continue;
         }
@@ -191,24 +208,21 @@ pub fn place_among(me: NodeId, live: &[LiveNode], region: Option<&str>) -> (u64,
     (index, of.max(1))
 }
 
-/// This node's place among the nodes heard from within `within` that do
-/// `region`'s work ([`place_among`]): what the AliExpress reads of a
-/// region's items are shared out by, so a `us` item's read falls to a node
-/// that sees `us` events (evento's sagas follow the node's region).
-pub fn live_place(cluster: &Cluster, within: Duration, region: Option<&str>) -> (u64, u64) {
-    place_among(cluster.id(), &cluster.live(within), region)
+/// This node's place among the nodes heard from within `within` that
+/// `among` names ([`place_among`]).
+pub fn live_place(cluster: &Cluster, within: Duration, among: Among<'_>) -> (u64, u64) {
+    place_among(cluster.id(), &cluster.live(within), among)
 }
 
-/// Which of the nodes up this one is, at the moment of asking: among those
-/// doing a region's work when asked for one (`Some(region)`), among them all
-/// otherwise ([`live_place`] within [`LIVE_WITHIN`]).
-pub type ShareOf = Arc<dyn Fn(Option<&str>) -> timada_core::Share + Send + Sync>;
+/// Which of the nodes up this one is, at the moment of asking, among those
+/// the work is shared out among ([`live_place`] within [`LIVE_WITHIN`]).
+pub type ShareOf = Arc<dyn Fn(Among<'_>) -> timada_core::Share + Send + Sync>;
 
 /// [`ShareOf`] for the nodes `cluster` hears from.
 pub fn share_of(cluster: &Arc<Cluster>) -> ShareOf {
     let cluster = cluster.clone();
-    Arc::new(move |region: Option<&str>| {
-        let (index, of) = live_place(&cluster, LIVE_WITHIN, region);
+    Arc::new(move |among: Among<'_>| {
+        let (index, of) = live_place(&cluster, LIVE_WITHIN, among);
         timada_core::Share { index, of }
     })
 }
@@ -229,47 +243,89 @@ mod tests {
 
     #[test]
     fn a_label_names_the_regions_a_node_serves() {
-        assert_eq!(label(None, &[]), None);
-        assert_eq!(label(Some("eu"), &[]).as_deref(), Some("eu"));
+        assert_eq!(label(None, &[]), "");
+        assert_eq!(label(Some("eu"), &[]), "eu");
         assert_eq!(
-            label(Some("eu"), &["us".to_owned(), "ap".to_owned()]).as_deref(),
-            Some("eu us ap")
+            label(Some("eu"), &["us".to_owned(), "ap".to_owned()]),
+            "eu us ap"
         );
-        assert!(serves(Some("eu us ap"), "eu"));
-        assert!(serves(Some("eu us ap"), "ap"));
-        assert!(!serves(Some("eu us ap"), "a"));
-        assert!(!serves(Some("eu"), "us"));
-        assert!(
-            serves(None, "us"),
-            "a node without a region does every region's work"
-        );
+        assert!(serves("eu us ap", Some("eu")));
+        assert!(serves("eu us ap", Some("ap")));
+        assert!(!serves("eu us ap", Some("a")));
+        assert!(!serves("eu", Some("us")));
+        // A node without a region sees the events written without one, and
+        // those alone.
+        assert!(serves("", None));
+        assert!(!serves("", Some("us")));
+        assert!(!serves("eu us ap", None));
     }
 
     #[test]
     fn a_region_s_work_is_shared_among_the_nodes_serving_it() {
         // Node 0 serves eu, node 1 us, node 2 eu and also us.
         let all = live(&[(0, Some("eu")), (1, Some("us")), (2, Some("eu us"))]);
-        assert_eq!(place_among(NodeId(0), &all, Some("eu")), (0, 2));
-        assert_eq!(place_among(NodeId(2), &all, Some("eu")), (1, 2));
-        assert_eq!(place_among(NodeId(1), &all, Some("us")), (0, 2));
-        assert_eq!(place_among(NodeId(2), &all, Some("us")), (1, 2));
-        // Without a region, every node: the sweeps over every region's rows.
-        assert_eq!(place_among(NodeId(1), &all, None), (1, 3));
+        let (eu, us) = (Among::Region(Some("eu")), Among::Region(Some("us")));
+        assert_eq!(place_among(NodeId(0), &all, eu), (0, 2));
+        assert_eq!(place_among(NodeId(2), &all, eu), (1, 2));
+        assert_eq!(place_among(NodeId(1), &all, us), (0, 2));
+        assert_eq!(place_among(NodeId(2), &all, us), (1, 2));
+        // Every node, for the work over the read models.
+        assert_eq!(place_among(NodeId(1), &all, Among::All), (1, 3));
         // Node 1 is down: node 2 does us's work alone.
         let without_1 = live(&[(0, Some("eu")), (2, Some("eu us"))]);
-        assert_eq!(place_among(NodeId(2), &without_1, Some("us")), (0, 1));
-        assert_eq!(place_among(NodeId(0), &without_1, Some("eu")), (0, 2));
+        assert_eq!(place_among(NodeId(2), &without_1, us), (0, 1));
+        assert_eq!(place_among(NodeId(0), &without_1, eu), (0, 2));
+    }
+
+    #[test]
+    fn the_work_on_events_without_a_region_falls_to_the_nodes_without_one() {
+        // Halfway through giving the nodes a region: nodes 0 and 2 have none
+        // yet, node 1 serves eu. The events written without a region reach
+        // nodes 0 and 2 alone, eu's node 1 alone.
+        let all = live(&[(0, Some("")), (1, Some("eu")), (2, Some(""))]);
+        let keyless = Among::Region(None);
+        assert_eq!(place_among(NodeId(0), &all, keyless), (0, 2));
+        assert_eq!(place_among(NodeId(2), &all, keyless), (1, 2));
+        assert_eq!(
+            place_among(NodeId(1), &all, Among::Region(Some("eu"))),
+            (0, 1)
+        );
+        // The work over the read models is still every node's.
+        assert_eq!(place_among(NodeId(2), &all, Among::All), (2, 3));
+    }
+
+    #[test]
+    fn a_node_whose_label_has_not_come_in_counts_for_no_region() {
+        // Node 1 was heard from, but not its label: nobody knows yet whether
+        // it sees eu's events or those written without a region.
+        let all = live(&[(0, Some("eu")), (1, None), (2, Some(""))]);
+        assert_eq!(
+            place_among(NodeId(0), &all, Among::Region(Some("eu"))),
+            (0, 1)
+        );
+        assert_eq!(place_among(NodeId(2), &all, Among::Region(None)), (0, 1));
+        // It keeps the read models whole, as every node does.
+        assert_eq!(place_among(NodeId(2), &all, Among::All), (2, 3));
     }
 
     #[test]
     fn a_node_counts_itself_whatever_it_saw() {
-        // Node 0 saw a us event it does not serve (a node without a region
-        // sees every region's): it is still placed, among the us nodes.
-        let all = live(&[(0, Some("eu")), (1, Some("us")), (2, None)]);
-        assert_eq!(place_among(NodeId(0), &all, Some("us")), (0, 3));
-        assert_eq!(place_among(NodeId(2), &all, Some("us")), (1, 2));
+        // Node 0 is asked about a us event it does not serve (kept from
+        // before its region changed, say): it is still placed, among the us
+        // nodes. Node 1 does not count it and takes every us piece: node 0's
+        // part is taken twice, which the work bears, and none is dropped.
+        let all = live(&[(0, Some("eu")), (1, Some("us")), (2, Some(""))]);
+        let us = Among::Region(Some("us"));
+        assert_eq!(place_among(NodeId(0), &all, us), (0, 2));
+        assert_eq!(place_among(NodeId(1), &all, us), (0, 1));
         // A node alone, or one not yet in its own list, owns everything.
-        assert_eq!(place_among(NodeId(0), &[], Some("eu")), (0, 1));
-        assert_eq!(place_among(NodeId(0), &live(&[(0, None)]), None), (0, 1));
+        assert_eq!(
+            place_among(NodeId(0), &[], Among::Region(Some("eu"))),
+            (0, 1)
+        );
+        assert_eq!(
+            place_among(NodeId(0), &live(&[(0, None)]), Among::All),
+            (0, 1)
+        );
     }
 }

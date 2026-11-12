@@ -23,6 +23,7 @@ use super::payment_reads::AliexpressGoods;
 use super::subscription::reads_subscription;
 use super::sync::AliexpressSync;
 use super::{ALIEXPRESS_ACTOR, Aliexpress, SyncMode, SyncResult};
+use crate::cluster::Among;
 use crate::config::AliexpressConfig;
 use crate::db::Db;
 use crate::payments::fake::FakeGateway;
@@ -257,8 +258,11 @@ struct Shop {
     /// The payment provider, holding the payments of the orders to place.
     provider: Arc<FakeGateway>,
     payments: Arc<Payments>,
-    /// Which of the nodes up this one is.
+    /// Which of the nodes up this one is: what the sweeps go by.
     share: Arc<Mutex<Share>>,
+    /// Which of the nodes up that see an event's region this one is: what
+    /// the sagas go by.
+    region_share: Arc<Mutex<Share>>,
     tenant: TenantState,
     link_id: String,
     product_id: String,
@@ -272,7 +276,8 @@ impl Shop {
         let store = Evento::new(turso);
         let stand_in = StandIn::new();
         let share = Arc::new(Mutex::new(Share::ALONE));
-        let current = share.clone();
+        let region_share = Arc::new(Mutex::new(Share::ALONE));
+        let (all, region) = (share.clone(), region_share.clone());
         let quota = Arc::new(crate::media::Quota::new(db.clone(), None));
         let aliexpress = Aliexpress::new(
             Some(Sealer::new("aliexpress-test", "secret")),
@@ -291,7 +296,10 @@ impl Shop {
             false,
             store.clone(),
             quota,
-            Arc::new(move |_| *current.lock().unwrap()),
+            Arc::new(move |among| match among {
+                Among::All => *all.lock().unwrap(),
+                Among::Region(_) => *region.lock().unwrap(),
+            }),
         )
         .unwrap();
 
@@ -419,6 +427,7 @@ impl Shop {
             provider,
             payments,
             share,
+            region_share,
             tenant,
             link_id,
             product_id: imported.product_id,
@@ -814,12 +823,12 @@ async fn a_request_is_read_by_the_node_the_item_belongs_to() {
         .unwrap();
 
     // Not this node's: left to the other.
-    *shop.share.lock().unwrap() = shop.elsewhere();
+    *shop.region_share.lock().unwrap() = shop.elsewhere();
     shop.follow_requests().await;
     assert_eq!(shop.stand_in.reads(), 0);
 
     // A later one, this node's.
-    *shop.share.lock().unwrap() = Share::ALONE;
+    *shop.region_share.lock().unwrap() = Share::ALONE;
     shop.links()
         .request_sync(ALIEXPRESS_ACTOR, &shop.link_id)
         .await
@@ -1550,14 +1559,14 @@ async fn a_cart_add_asks_for_an_item_not_tried_lately_once() {
     let version = shop.version().await;
 
     // Not this node's: left to the other.
-    *shop.share.lock().unwrap() = shop.elsewhere();
+    *shop.region_share.lock().unwrap() = shop.elsewhere();
     shop.add_to_cart().await;
     shop.follow_requests().await;
     assert_eq!(shop.version().await, version);
     assert_eq!(shop.stand_in.reads(), 0);
 
     // This node's: asked for, and the request read in turn.
-    *shop.share.lock().unwrap() = Share::ALONE;
+    *shop.region_share.lock().unwrap() = Share::ALONE;
     shop.add_to_cart().await;
     shop.follow_requests().await;
     assert_eq!(shop.version().await, version + 1);
@@ -2490,12 +2499,12 @@ async fn a_push_is_read_by_the_node_its_order_belongs_to() {
     let shop = Shop::new().await;
     let forward_id = shop.placed_on_aliexpress().await;
 
-    *shop.share.lock().unwrap() = share_without(&forward_id);
+    *shop.region_share.lock().unwrap() = share_without(&forward_id);
     shop.push("8100000000000001", "OrderShipped").await;
     shop.follow_pushes().await;
     assert_eq!(shop.stand_in.reads(), 0);
 
-    *shop.share.lock().unwrap() = Share::ALONE;
+    *shop.region_share.lock().unwrap() = Share::ALONE;
     shop.push("8100000000000001", "OrderConfirmed").await;
     shop.follow_pushes().await;
     assert_eq!(shop.stand_in.reads(), 1);

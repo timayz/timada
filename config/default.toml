@@ -11,7 +11,9 @@ port = 3000
 # is tagged with it, and the background work on it (payments, supplier orders,
 # invoices, mails) is done by the nodes of that region alone; the pages and
 # their lists see every region. Omit for a single-region deployment, where
-# every node does all the work.
+# every node does all the work. Data keeps the region it was created in: the
+# background work on data created without one is done by the nodes without one
+# alone, and by no node once every node has a region.
 # region = "eu-west-1"
 # Regions whose background work this node also takes on, e.g. while that
 # region's nodes are down. Needs `region`.

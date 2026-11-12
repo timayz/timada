@@ -638,6 +638,25 @@ async fn a_key_cut_off_through_one_node_ends_its_connections_on_another() {
     }
 }
 
+/// How long a node may go unheard in the tests of who is up.
+const LIVE_WITHIN: Duration = Duration::from_secs(5);
+
+/// Waits until `node` takes `place` among the nodes heard from within
+/// [`LIVE_WITHIN`] that `among` names. Under load a node may stall for a
+/// moment: each comes to see it, and a node never heard from since it
+/// started would not.
+async fn sees(node: &Node, among: cluster::Among<'_>, place: (u64, u64)) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while cluster::live_place(&node.cluster, LIVE_WITHIN, among) != place {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{:?} for {among:?}, not {place:?}",
+            cluster::live_place(&node.cluster, LIVE_WITHIN, among)
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// Work spread over the nodes goes by who is up: idle nodes still hear from
 /// each other, so each has its place among all three; one that stops is left
 /// out once it has been silent long enough. A region's work is shared among
@@ -645,6 +664,8 @@ async fn a_key_cut_off_through_one_node_ends_its_connections_on_another() {
 /// (#442): node 0 serves `eu`, node 1 `us`, node 2 `eu` and also `us`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_nodes_up_share_out_what_they_do() {
+    use cluster::Among;
+
     let root = temp_root("live");
     let addrs = free_addrs().await;
     let tuning = Tuning::default();
@@ -653,40 +674,62 @@ async fn the_nodes_up_share_out_what_they_do() {
         Node::start_in(&root, 1, &addrs, tuning, Some("us"), &[]),
         Node::start_in(&root, 2, &addrs, tuning, Some("eu"), &["us"]),
     );
-    let within = Duration::from_secs(5);
-    // Under load a node may stall for a moment: each comes to see this, and a
-    // node never heard from since it started would not.
-    let sees = async |node: &Node, region: Option<&str>, live: (u64, u64)| {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-        while cluster::live_place(&node.cluster, within, region) != live {
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "{:?} for {region:?}, not {live:?}",
-                cluster::live_place(&node.cluster, within, region)
-            );
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    };
+    let (eu, us) = (Among::Region(Some("eu")), Among::Region(Some("us")));
 
     // Nothing is written: gossip alone keeps them in sight of each other.
-    tokio::time::sleep(within + Duration::from_secs(1)).await;
-    sees(&n0, None, (0, 3)).await;
-    sees(&n1, None, (1, 3)).await;
-    sees(&n2, None, (2, 3)).await;
+    tokio::time::sleep(LIVE_WITHIN + Duration::from_secs(1)).await;
+    sees(&n0, Among::All, (0, 3)).await;
+    sees(&n1, Among::All, (1, 3)).await;
+    sees(&n2, Among::All, (2, 3)).await;
     // eu's work is nodes 0 and 2's, us's nodes 1 and 2's.
-    sees(&n0, Some("eu"), (0, 2)).await;
-    sees(&n2, Some("eu"), (1, 2)).await;
-    sees(&n1, Some("us"), (0, 2)).await;
-    sees(&n2, Some("us"), (1, 2)).await;
+    sees(&n0, eu, (0, 2)).await;
+    sees(&n2, eu, (1, 2)).await;
+    sees(&n1, us, (0, 2)).await;
+    sees(&n2, us, (1, 2)).await;
 
     n1.stop().await;
-    sees(&n0, None, (0, 2)).await;
-    sees(&n2, None, (1, 2)).await;
+    sees(&n0, Among::All, (0, 2)).await;
+    sees(&n2, Among::All, (1, 2)).await;
     // Node 2 does us's work alone now.
-    sees(&n2, Some("us"), (0, 1)).await;
-    sees(&n2, Some("eu"), (1, 2)).await;
+    sees(&n2, us, (0, 1)).await;
+    sees(&n2, eu, (1, 2)).await;
 
     for node in [n0, n2] {
+        node.stop().await;
+    }
+}
+
+/// While some nodes have no region yet (#512): they alone see the events
+/// written without one, and share out that work among themselves, which
+/// each node learns from their empty label; a region's work stays with the
+/// nodes serving it. Nodes 0 and 2 have no region, node 1 serves `eu`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_nodes_without_a_region_share_the_work_on_events_without_one() {
+    use cluster::Among;
+
+    let root = temp_root("keyless");
+    let addrs = free_addrs().await;
+    let tuning = Tuning::default();
+    let (n0, n1, n2) = tokio::join!(
+        Node::start_in(&root, 0, &addrs, tuning, None, &[]),
+        Node::start_in(&root, 1, &addrs, tuning, Some("eu"), &[]),
+        Node::start_in(&root, 2, &addrs, tuning, None, &[]),
+    );
+    let (keyless, eu) = (Among::Region(None), Among::Region(Some("eu")));
+
+    tokio::time::sleep(LIVE_WITHIN + Duration::from_secs(1)).await;
+    sees(&n0, keyless, (0, 2)).await;
+    sees(&n2, keyless, (1, 2)).await;
+    // Node 1 alone sees eu's events: the nodes without a region never do.
+    sees(&n1, eu, (0, 1)).await;
+    sees(&n1, Among::All, (1, 3)).await;
+
+    n2.stop().await;
+    // Node 0 does the work on the events without a region alone now.
+    sees(&n0, keyless, (0, 1)).await;
+    sees(&n0, Among::All, (0, 2)).await;
+
+    for node in [n0, n1] {
         node.stop().await;
     }
 }

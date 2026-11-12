@@ -130,7 +130,10 @@ AliExpress no longer renews means an owner connects again.
 Each imported product, and each order placed on AliExpress, belongs to one of the
 nodes up, by a hash of its stream's id over the nodes heard from in the last 30
 seconds, so one node sweeps it and one node answers a request for it, and the app's
-quota is spent once. A node that stops is left out once it has been silent that long:
+quota is spent once. A request (a `SyncRequested`, a cart add, a push) is answered
+among the nodes that see it: those serving its region or, for one written without a
+region, the nodes without one, each counted once the regions it serves came in with
+its gossip. A node that stops is left out once it has been silent that long:
 what it held and had not read yet is shared out to the others, and the sweep finds it
 still due. Two nodes that disagree for a moment read one twice or leave it for later,
 neither of which harms it.
