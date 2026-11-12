@@ -117,7 +117,12 @@ export async function fillPlace(page: Page, place: Place) {
   if (place.province) {
     await page.getByLabel("Région / Province").selectOption(place.province);
   }
-  await page.getByLabel("Ville", { exact: true }).selectOption(place.city);
+  // "Ville" labels the typed city until the country's lists are back, and
+  // only then their list: asked for by its role, the list is waited for
+  // rather than the text box picked from.
+  await page
+    .getByRole("combobox", { name: "Ville", exact: true })
+    .selectOption(place.city);
   if (place.town) {
     await page.getByLabel("Commune", { exact: true }).selectOption(place.town);
   }
