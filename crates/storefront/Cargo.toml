@@ -30,6 +30,3 @@ reqwest.workspace = true
 bytes.workspace = true
 timada-invoicing = { path = "../invoicing", features = ["pdf"] }
 rand.workspace = true
-
-[dev-dependencies]
-tracing-subscriber.workspace = true
