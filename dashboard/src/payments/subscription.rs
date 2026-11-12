@@ -48,9 +48,8 @@ use super::webhook::OUT_OF_STOCK;
 use super::{
     Busy, DASHBOARD_ACTOR, METADATA_CART, METADATA_TENANT, NewPayment, Payments, SuppliedGoods,
 };
-use crate::db::Db;
 use crate::ecb::{EuroRates, RateAnswer};
-use crate::saga_fault::{Fault, give_up, recorded};
+use crate::saga_fault::{dead_letter, event_fault, recorded};
 
 /// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/payments";
@@ -103,8 +102,6 @@ pub struct Checkouts {
     /// The store, to write the answers with (a handler only borrows the one
     /// it runs on).
     store: Evento,
-    /// The table of requests given up on, for the cluster page.
-    db: Db,
     /// This node, as its claims name it.
     node: String,
     /// The requests waiting, and the carts being answered.
@@ -117,7 +114,8 @@ pub struct Checkouts {
 /// A request to pay waiting for a lane.
 #[derive(Debug, Clone)]
 struct Request {
-    /// The `CheckoutRequested`, for the table of events given up on.
+    /// The `CheckoutRequested`, for its dead letter should it be given up
+    /// on.
     event: evento::Event,
     request_id: String,
     /// Unix seconds: when the shopper asked.
@@ -188,7 +186,6 @@ impl Checkouts {
         euro_rates: Arc<dyn EuroRates>,
         goods: Arc<dyn SuppliedGoods>,
         store: Evento,
-        db: Db,
         node: impl Into<String>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -196,7 +193,6 @@ impl Checkouts {
             euro_rates,
             goods,
             store,
-            db,
             node: node.into(),
             desk: Mutex::default(),
             wake: Notify::new(),
@@ -315,8 +311,9 @@ impl Checkouts {
     /// meanwhile, and so does what it held for the checkout. Any other
     /// fault (a cart that cannot be priced, a hold that cannot be taken for
     /// a reason of its own) refuses the request for now
-    /// (`payments_unavailable`) and gives back what was held: the shopper
-    /// asks again, and the pass goes on to the other tenants (#483).
+    /// (`payments_unavailable`) and gives back what was held, and the request
+    /// is given up on, a dead letter of the subscription that queued it: the
+    /// shopper asks again, and the lane goes on to the next cart (#483).
     pub async fn answer(
         &self,
         event: &evento::Event,
@@ -329,26 +326,26 @@ impl Checkouts {
         let answered = self
             .try_answer(tenant_id, cart_id, request_id, requested_at, &mut holds)
             .await;
-        match answered {
-            Ok(()) => Ok(()),
-            Err(err) => match Fault::of(err) {
-                Fault::Store(err) => Err(err),
-                Fault::Event(reason) => {
-                    give_up(&self.db, SUBSCRIPTION, event, &reason, now()).await?;
-                    let refused = refuse_and_give_back(
-                        &self.store,
-                        tenant_id,
-                        cart_id,
-                        request_id,
-                        PAYMENTS_UNAVAILABLE,
-                        holds.as_ref(),
-                    )
-                    .await
-                    .map(|_| ());
-                    recorded(refused, "the refusal of the request to pay")
-                }
-            },
+        let Err(err) = answered else {
+            return Ok(());
+        };
+        if event_fault(&err).is_none() {
+            return Err(err);
         }
+        // Written first, so a refusal the store fails is tried again with
+        // the row already there; writing it again replaces it.
+        dead_letter(&self.store, SUBSCRIPTION, event, &err, now()).await?;
+        let refused = refuse_and_give_back(
+            &self.store,
+            tenant_id,
+            cart_id,
+            request_id,
+            PAYMENTS_UNAVAILABLE,
+            holds.as_ref(),
+        )
+        .await
+        .map(|_| ());
+        recorded(refused, "the refusal of the request to pay")
     }
 
     /// [`answer`](Self::answer) up to the fault; `holds` is what the
