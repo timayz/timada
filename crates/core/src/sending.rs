@@ -130,25 +130,6 @@ impl Sending {
         }
     }
 
-    /// The state once the send under way failed for `reason`, worth a retry
-    /// at `retry_at`: what a `MailDeferred` event folds to.
-    pub fn deferred(&self, retry_at: u64, reason: &str) -> Self {
-        Self::Deferred {
-            retry_at,
-            attempts: self.attempts() + 1,
-            reason: reason.to_owned(),
-        }
-    }
-
-    /// The state once the send under way failed for `reason` and no retry
-    /// is left: what a `MailFailed` event folds to.
-    pub fn failed(&self, reason: &str) -> Self {
-        Self::Failed {
-            reason: reason.to_owned(),
-            attempts: self.attempts() + 1,
-        }
-    }
-
     /// When the send under way, failing at `now` (unix seconds), may be
     /// tried again: `None` once the retries ([`RETRY_DELAYS_SECS`]) are
     /// used up, or the next would come after the intent itself lapses at
@@ -171,7 +152,9 @@ impl Sending {
     /// already, or the node reporting a failure no longer holds the claim (its lease lapsed and another node took the send: its
     /// word on the server is stale, and would count a try that node never
     /// made). A send that did go out is recorded whoever reports it: the
-    /// mail is in the shopper's hands.
+    /// mail is in the shopper's hands. A failure carries the tries made so
+    /// far, this one included, so whoever reads the event knows the count
+    /// without folding the stream.
     pub fn record(&self, outcome: Outcome<'_>, expires_at: u64) -> Record {
         if self.is_settled() {
             return Record::Nothing;
@@ -183,13 +166,16 @@ impl Sending {
                 if !self.is_held_by(node) {
                     return Record::Nothing;
                 }
+                let attempts = self.attempts() + 1;
                 match self.retry_at(now, expires_at) {
                     Some(retry_at) => Record::Deferred {
                         retry_at,
+                        attempts,
                         reason: reason.to_owned(),
                     },
                     None => Record::Failed {
                         reason: reason.to_owned(),
+                        attempts,
                     },
                 }
             }
@@ -269,12 +255,16 @@ pub enum Outcome<'a> {
 pub enum Record {
     Sent,
     Undeliverable(String),
+    /// `attempts` tries so far, this one included; the next at `retry_at`.
     Deferred {
         retry_at: u64,
+        attempts: u32,
         reason: String,
     },
+    /// Given up on after `attempts` tries.
     Failed {
         reason: String,
+        attempts: u32,
     },
     /// Nothing: settled already, or a stale report.
     Nothing,
@@ -306,35 +296,74 @@ mod tests {
         assert!(!Sending::Pending.is_settled());
     }
 
+    /// What a context's fold makes of the event written for `record`.
+    fn fold(mail: &Sending, record: Record) -> Sending {
+        match record {
+            Record::Sent => Sending::Sent,
+            Record::Undeliverable(reason) => Sending::Undeliverable { reason },
+            Record::Deferred {
+                retry_at,
+                attempts,
+                reason,
+            } => Sending::Deferred {
+                retry_at,
+                attempts,
+                reason,
+            },
+            Record::Failed { reason, attempts } => Sending::Failed { reason, attempts },
+            Record::Nothing => mail.clone(),
+        }
+    }
+
     /// A send that fails waits longer each time, any node may take the next
-    /// try once it is due, and the last failure gives the mail up.
+    /// try once it is due, and the last failure gives the mail up. Each
+    /// failure says how many tries were made so far.
     #[test]
     fn a_failing_send_is_deferred_with_growing_waits_then_given_up() {
         let now = 1_000;
-        let mut mail = Sending::Pending.claimed("node-1", now + LEASE_SECS);
+        let not_sent = |node| Outcome::NotSent {
+            node,
+            reason: "connection refused",
+            now,
+        };
+        let mut node = "node-1";
+        let mut mail = Sending::Pending.claimed(node, now + LEASE_SECS);
         for (tried, delay) in RETRY_DELAYS_SECS.iter().enumerate() {
-            let retry_at = mail.retry_at(now, u64::MAX).expect("a retry is left");
-            assert_eq!(retry_at, now + delay, "try {}", tried + 1);
-            mail = mail.deferred(retry_at, "connection refused");
+            let retry_at = now + delay;
+            let record = mail.record(not_sent(node), u64::MAX);
+            assert_eq!(
+                record,
+                Record::Deferred {
+                    retry_at,
+                    attempts: tried as u32 + 1,
+                    reason: "connection refused".into(),
+                },
+                "try {}",
+                tried + 1
+            );
+            mail = fold(&mail, record);
             assert_eq!(mail.attempts(), tried as u32 + 1);
             assert!(!mail.is_settled());
             assert_eq!(mail.claim("node-2", retry_at - 1), Claim::Leave);
             assert_eq!(mail.claim("node-1", retry_at - 1), Claim::Leave);
             assert_eq!(mail.claim("node-2", retry_at), Claim::Take);
             // The claim carries the count on.
-            mail = mail.claimed("node-2", retry_at + LEASE_SECS);
+            node = "node-2";
+            mail = mail.claimed(node, retry_at + LEASE_SECS);
             assert_eq!(mail.attempts(), tried as u32 + 1);
-            assert_eq!(mail.claim("node-2", retry_at), Claim::Held);
+            assert_eq!(mail.claim(node, retry_at), Claim::Held);
         }
         assert_eq!(mail.retry_at(now, u64::MAX), None);
-        let failed = mail.failed("connection refused");
+        let record = mail.record(not_sent(node), u64::MAX);
         assert_eq!(
-            failed,
-            Sending::Failed {
+            record,
+            Record::Failed {
                 reason: "connection refused".into(),
                 attempts: RETRY_DELAYS_SECS.len() as u32 + 1,
             }
         );
+        let failed = fold(&mail, record);
+        assert_eq!(failed.attempts(), RETRY_DELAYS_SECS.len() as u32 + 1);
         assert!(failed.is_settled());
         assert!(!failed.is_undeliverable());
         assert_eq!(failed.claim("node-1", now + 1_000_000), Claim::Leave);
@@ -360,20 +389,22 @@ mod tests {
             claimed.record(not_sent("node-1"), now + 600),
             Record::Deferred {
                 retry_at: now + RETRY_DELAYS_SECS[0],
+                attempts: 1,
                 reason: "no answer".into(),
             }
         );
-        let late = Sending::Pending.claimed("node-1", now + LEASE_SECS);
-        let late = late
-            .deferred(now, "x")
-            .deferred(now, "x")
-            .deferred(now, "x")
-            .deferred(now, "x");
-        let late = late.claimed("node-1", now + LEASE_SECS);
+        // Four tries failed already.
+        let late = Sending::Deferred {
+            retry_at: now,
+            attempts: 4,
+            reason: "x".into(),
+        }
+        .claimed("node-1", now + LEASE_SECS);
         assert_eq!(
             late.record(not_sent("node-1"), now + 600),
             Record::Failed {
                 reason: "no answer".into(),
+                attempts: 5,
             },
             "the fifth wait (15 min) is past a 10-minute code"
         );

@@ -304,9 +304,11 @@ async fn on_notice_deferred(
     event: Event<MailDeferred>,
     state: &mut MessageNotificationState,
 ) -> anyhow::Result<()> {
-    state.sending = state
-        .sending
-        .deferred(event.data.retry_at, &event.data.reason);
+    state.sending = Sending::Deferred {
+        retry_at: event.data.retry_at,
+        attempts: event.data.attempts,
+        reason: event.data.reason.clone(),
+    };
     state.updated_at = event.timestamp;
     Ok(())
 }
@@ -316,7 +318,10 @@ async fn on_notice_failed(
     event: Event<MailFailed>,
     state: &mut MessageNotificationState,
 ) -> anyhow::Result<()> {
-    state.sending = state.sending.failed(&event.data.reason);
+    state.sending = Sending::Failed {
+        reason: event.data.reason.clone(),
+        attempts: event.data.attempts,
+    };
     state.updated_at = event.timestamp;
     Ok(())
 }

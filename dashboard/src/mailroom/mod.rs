@@ -146,7 +146,8 @@ impl Kind {
     }
 }
 
-/// What the stream said, for the table.
+/// What the stream said, for the table: where the mail stands, never by how
+/// much it moved, so the same change written twice leaves the row as once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
     /// A new intent: owed from now, until `expires_at` (unix seconds), its
@@ -154,10 +155,15 @@ pub enum Change {
     Owed { version: u16, expires_at: u64 },
     /// A node took the send until `until`: nothing to look at before.
     Claimed { until: u64 },
-    /// The send failed; the next try is at `retry_at`.
-    Deferred { retry_at: u64, reason: String },
-    /// Given up on.
-    Failed { reason: String },
+    /// The send failed, `attempts` tries in all as the stream counts them;
+    /// the next try is at `retry_at`.
+    Deferred {
+        retry_at: u64,
+        attempts: u32,
+        reason: String,
+    },
+    /// Given up on after `attempts` tries.
+    Failed { reason: String, attempts: u32 },
     /// Sent, refused for good, or the stream moved on: nothing owed.
     Settled,
 }
@@ -274,7 +280,9 @@ impl Mailroom {
     }
 
     /// Records what a stream of `kind` in `tenant_id` said, from its
-    /// subscription. Safe to repeat: a replayed event writes the same row.
+    /// subscription. Safe to repeat: a subscription delivers at least once,
+    /// and a replayed or redelivered event writes the same row; the tries
+    /// are the stream's own count, set, never added to (#521).
     pub async fn record(
         &self,
         kind: Kind,
@@ -320,30 +328,42 @@ impl Mailroom {
                     )
                     .await?;
             }
-            Change::Deferred { retry_at, reason } => {
+            Change::Deferred {
+                retry_at,
+                attempts,
+                reason,
+            } => {
                 self.db
                     .execute(
-                        "UPDATE owed_mails SET due_at = ?4, attempts = attempts + 1, reason = ?5,
-                            updated_at = ?6
+                        "UPDATE owed_mails SET due_at = ?4, attempts = ?5, reason = ?6,
+                            updated_at = ?7
                          WHERE kind = ?1 AND tenant_id = ?2 AND stream_id = ?3 AND failed = 0",
                         (
                             kind,
                             tenant_id,
                             stream_id,
                             retry_at as i64,
+                            i64::from(attempts),
                             reason.as_str(),
                             now,
                         ),
                     )
                     .await?;
             }
-            Change::Failed { reason } => {
+            Change::Failed { reason, attempts } => {
                 self.db
                     .execute(
-                        "UPDATE owed_mails SET failed = 1, attempts = attempts + 1, reason = ?4,
-                            updated_at = ?5
+                        "UPDATE owed_mails SET failed = 1, attempts = ?4, reason = ?5,
+                            updated_at = ?6
                          WHERE kind = ?1 AND tenant_id = ?2 AND stream_id = ?3",
-                        (kind, tenant_id, stream_id, reason.as_str(), now),
+                        (
+                            kind,
+                            tenant_id,
+                            stream_id,
+                            i64::from(attempts),
+                            reason.as_str(),
+                            now,
+                        ),
                     )
                     .await?;
             }
@@ -697,8 +717,9 @@ pub(crate) mod tests {
 
     /// The table follows the stream: an intent owes, a claim puts the next
     /// look off to the lease's end, a deferral to the retry, an outcome
-    /// removes the row, a failure keeps it for the page; a lapsed intent
-    /// and an old failure are forgotten by the sweep.
+    /// removes the row, a failure keeps it for the page, with the tries the
+    /// stream counted however often the change came; a lapsed intent and an
+    /// old failure are forgotten by the sweep.
     #[tokio::test]
     async fn the_table_follows_what_the_stream_says() {
         let store = store().await;
@@ -731,18 +752,22 @@ pub(crate) mod tests {
         assert_eq!(rows_now.len(), 2);
         assert_eq!(rows_now[0].due_at, now as i64 + 300);
         assert_eq!(rows_now[1].due_at, now as i64);
-        room.record(
-            Kind::Invitation,
-            "",
-            "inv-1",
-            Change::Deferred {
-                retry_at: now + 30,
-                reason: "connection refused".into(),
-            },
-            now + 2,
-        )
-        .await
-        .unwrap();
+        // Delivered twice, as a subscription may after a crash (#521).
+        for _ in 0..2 {
+            room.record(
+                Kind::Invitation,
+                "",
+                "inv-1",
+                Change::Deferred {
+                    retry_at: now + 30,
+                    attempts: 1,
+                    reason: "connection refused".into(),
+                },
+                now + 2,
+            )
+            .await
+            .unwrap();
+        }
         let deferred = &rows(&store).await[0];
         assert_eq!((deferred.due_at, deferred.attempts), (now as i64 + 30, 1));
         assert_eq!(deferred.reason, "connection refused");
@@ -756,6 +781,7 @@ pub(crate) mod tests {
             "inv-1",
             Change::Failed {
                 reason: "still refused".into(),
+                attempts: 2,
             },
             now + 4,
         )
@@ -788,6 +814,7 @@ pub(crate) mod tests {
             "inv-3",
             Change::Failed {
                 reason: "gone".into(),
+                attempts: 1,
             },
             now,
         )

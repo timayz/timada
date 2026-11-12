@@ -279,7 +279,11 @@ async fn on_mail_deferred(
     event: Event<MailDeferred>,
     state: &mut SubscriberState,
 ) -> anyhow::Result<()> {
-    state.mail = state.mail.deferred(event.data.retry_at, &event.data.reason);
+    state.mail = Sending::Deferred {
+        retry_at: event.data.retry_at,
+        attempts: event.data.attempts,
+        reason: event.data.reason.clone(),
+    };
     Ok(())
 }
 
@@ -288,7 +292,10 @@ async fn on_mail_failed(
     event: Event<MailFailed>,
     state: &mut SubscriberState,
 ) -> anyhow::Result<()> {
-    state.mail = state.mail.failed(&event.data.reason);
+    state.mail = Sending::Failed {
+        reason: event.data.reason.clone(),
+        attempts: event.data.attempts,
+    };
     Ok(())
 }
 
