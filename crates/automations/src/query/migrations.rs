@@ -37,16 +37,25 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 step TEXT,
                 reason TEXT,
                 next_at INTEGER,
+                shard INTEGER NOT NULL,
                 started_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, id)
             );
-        CREATE INDEX automations_runs_due ON automations_runs (next_at)
+        CREATE INDEX automations_runs_due ON automations_runs (next_at, id)
                 WHERE next_at IS NOT NULL;
         CREATE INDEX automations_runs_scenario ON automations_runs
                 (tenant_id, scenario_id, started_at DESC);
         CREATE INDEX automations_runs_ended ON automations_runs (updated_at)
                 WHERE next_at IS NULL;
+        CREATE TABLE automations_versions (
+                tenant_id TEXT NOT NULL,
+                scenario_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                definition TEXT NOT NULL,
+                published_at INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, scenario_id, version)
+            );
         CREATE TABLE automations_listeners (
                 tenant_id TEXT NOT NULL,
                 scenario_id TEXT NOT NULL,
@@ -63,12 +72,25 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 cart_id TEXT NOT NULL,
                 request_id TEXT NOT NULL,
                 requested_at INTEGER NOT NULL,
+                region TEXT,
                 ordered INTEGER NOT NULL,
                 detected INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, cart_id)
             );
         CREATE INDEX automations_checkouts_open ON automations_checkouts (requested_at)
-                WHERE ordered = 0 AND detected = 0;",
+                WHERE ordered = 0 AND detected = 0;
+        CREATE TABLE automations_starts (
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                scenario_id TEXT NOT NULL,
+                scenario_version INTEGER NOT NULL,
+                trigger TEXT NOT NULL,
+                trigger_event_id TEXT NOT NULL,
+                subject_id TEXT NOT NULL,
+                kept_at INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, run_id)
+            );
+        CREATE INDEX automations_starts_kept ON automations_starts (kept_at);",
     )],
 );
 
@@ -77,6 +99,8 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
 pub const TABLES: &[&str] = &[
     "automations_scenarios",
     "automations_runs",
+    "automations_versions",
     "automations_listeners",
     "automations_checkouts",
+    "automations_starts",
 ];

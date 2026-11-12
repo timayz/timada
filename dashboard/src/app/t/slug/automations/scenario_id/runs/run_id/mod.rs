@@ -1,15 +1,15 @@
 //! `/t/{slug}/automations/{scenario_id}/runs/{run_id}`: one run, step by
 //! step, from its own stream (so it is never behind), against the version
-//! of the scenario it started on. Members with `automations:manage` cancel
-//! a run under way ([`cancel`]).
+//! of the scenario it started on, as the read model keeps it. Members with
+//! `automations:manage` cancel a run under way ([`cancel`]).
 
 pub mod cancel;
 
-use timada_automations::{RunStatus, catalog};
+use timada_automations::{Definition, RunStatus, catalog, published_definition};
 use timada_tenancy::{PERMISSION_AUTOMATIONS_MANAGE, PERMISSION_AUTOMATIONS_READ};
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, app_context},
     router::{error::not_found, href, module_param, page, path_param, query_params},
     view::{View, attributes, view},
 };
@@ -23,6 +23,7 @@ use crate::app::auth::Flash;
 use crate::app::t::slug::{Slug, TenantNav, require_tenant};
 use crate::automations::runner::subject_link;
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
+use crate::db::Db;
 use crate::ui::{
     LINK, Shell, document, fact, facts, format_time, notice, page_header, section_card,
     status_badge,
@@ -79,9 +80,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let can_manage = access.can(cx, PERMISSION_AUTOMATIONS_MANAGE).await?;
     let nav = TenantNav::of(cx, &access).await?;
     let tenant = access.tenant;
-    let definition = scenario
-        .version_definition(run.scenario_version)
-        .map_err(topcoat::Error::from_anyhow)?;
+    let definition = published_definition(
+        app_context::<Db>(cx),
+        &tenant.id,
+        &scenario.id,
+        run.scenario_version,
+    )
+    .await
+    .map_err(topcoat::Error::from_anyhow)?
+    .map(|json| Definition::from_json(&json))
+    .transpose()
+    .map_err(|err| topcoat::Error::from_anyhow(err.into()))?;
     let lines: Vec<Line> = run
         .log
         .iter()

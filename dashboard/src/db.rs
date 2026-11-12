@@ -155,6 +155,10 @@ pub struct ReadModel {
     /// The cursor keys of the subscriptions that fill its tables, as the
     /// crates name them (a node with a region prefixes them with it).
     pub subscriptions: &'static [&'static str],
+    /// The cursor keys of the sagas that keep tables of their own among its
+    /// tables: forgotten with the others when it is rebuilt, but no measure
+    /// of how far behind it is, as a saga follows its region alone.
+    pub sagas: &'static [&'static str],
     migrations: &'static Migrations<'static>,
     tables: &'static [&'static str],
 }
@@ -175,6 +179,7 @@ const STORE_READ_MODELS: &[ReadModel] = &[
     ReadModel {
         name: Some("identity"),
         subscriptions: &[timada_identity::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
         migrations: &timada_identity::MIGRATIONS,
         tables: timada_identity::TABLES,
     },
@@ -185,42 +190,49 @@ const STORE_READ_MODELS: &[ReadModel] = &[
             timada_tenancy::MEMBER_AUDIT_SUBSCRIPTION,
             timada_tenancy::ALIEXPRESS_ACCOUNTS_SUBSCRIPTION,
         ],
+        sagas: &[],
         migrations: &timada_tenancy::MIGRATIONS,
         tables: timada_tenancy::TABLES,
     },
     ReadModel {
         name: Some("catalog"),
         subscriptions: &[timada_catalog::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
         migrations: &timada_catalog::MIGRATIONS,
         tables: timada_catalog::TABLES,
     },
     ReadModel {
         name: Some("pages"),
         subscriptions: &[timada_pages::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
         migrations: &timada_pages::MIGRATIONS,
         tables: timada_pages::TABLES,
     },
     ReadModel {
         name: Some("reviews"),
         subscriptions: &[timada_reviews::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
         migrations: &timada_reviews::MIGRATIONS,
         tables: timada_reviews::TABLES,
     },
     ReadModel {
         name: Some("discounts"),
         subscriptions: &[timada_discounts::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
         migrations: &timada_discounts::MIGRATIONS,
         tables: timada_discounts::TABLES,
     },
     ReadModel {
         name: Some("support"),
         subscriptions: &[timada_support::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
         migrations: &timada_support::MIGRATIONS,
         tables: timada_support::TABLES,
     },
     ReadModel {
         name: Some("orders"),
         subscriptions: &[timada_orders::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
         migrations: &timada_orders::MIGRATIONS,
         tables: timada_orders::TABLES,
     },
@@ -229,12 +241,14 @@ const STORE_READ_MODELS: &[ReadModel] = &[
     ReadModel {
         name: None,
         subscriptions: &[],
+        sagas: &[],
         migrations: &crate::mailroom::MIGRATIONS,
         tables: crate::mailroom::TABLES,
     },
     ReadModel {
         name: None,
         subscriptions: &[],
+        sagas: &[],
         migrations: &crate::saga_fault::MIGRATIONS,
         tables: crate::saga_fault::TABLES,
     },
@@ -244,36 +258,44 @@ const STORE_READ_MODELS: &[ReadModel] = &[
     ReadModel {
         name: Some("media"),
         subscriptions: &[crate::media::SUBSCRIPTION, crate::media::LOGO_SUBSCRIPTION],
+        sagas: &[],
         migrations: &crate::media::MIGRATIONS,
         tables: crate::media::TABLES,
     },
     ReadModel {
         name: Some("shoppers"),
         subscriptions: &[timada_shoppers::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
         migrations: &timada_shoppers::MIGRATIONS,
         tables: timada_shoppers::TABLES,
     },
     ReadModel {
         name: Some("invoicing"),
         subscriptions: &[timada_invoicing::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
         migrations: &timada_invoicing::MIGRATIONS,
         tables: timada_invoicing::TABLES,
     },
     ReadModel {
         name: Some("newsletter"),
         subscriptions: &[timada_newsletter::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
         migrations: &timada_newsletter::MIGRATIONS,
         tables: timada_newsletter::TABLES,
     },
     ReadModel {
         name: Some("automations"),
         subscriptions: &[timada_automations::READ_MODEL_SUBSCRIPTION],
+        // The subscription that starts runs keeps the listeners, the
+        // checkouts and the starts left to other nodes among these tables.
+        sagas: &[timada_automations::TRIGGER_SUBSCRIPTION],
         migrations: &timada_automations::MIGRATIONS,
         tables: timada_automations::TABLES,
     },
     ReadModel {
         name: Some("aliexpress"),
         subscriptions: &[timada_aliexpress::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
         migrations: &timada_aliexpress::MIGRATIONS,
         tables: timada_aliexpress::TABLES,
     },
@@ -365,6 +387,7 @@ pub async fn rebuild_read_model(store: &Store, read_model: &ReadModel) -> Result
         let fills = read_model
             .subscriptions
             .iter()
+            .chain(read_model.sagas)
             .any(|own| key == *own || key.ends_with(&format!(".{own}")));
         if fills {
             db.execute("DELETE FROM subscriber WHERE key = ?1", [key.as_str()])
@@ -513,6 +536,54 @@ mod tests {
         assert!(
             read_model("mailroom").is_none(),
             "the sagas' tables are not rebuilt alone"
+        );
+    }
+
+    /// A rebuild also forgets the cursor of a saga that keeps tables among
+    /// the read model's (the automations' listeners): it fills them again
+    /// from the start of the store, rather than leave them empty.
+    #[tokio::test]
+    async fn a_rebuild_forgets_the_sagas_that_keep_its_tables() {
+        use evento::Evento;
+
+        let turso = Turso::in_memory_concurrent().await.unwrap();
+        migrate_store_read_models(&turso).await.unwrap();
+        let store = Evento::new(turso.clone()).default_routing_key("eu");
+        let db = Db::from(turso.clone());
+        let automations = timada_automations::Command::new(store.clone(), "acme");
+        let id = automations
+            .create_scenario("alice", "Big orders")
+            .await
+            .unwrap();
+        automations.archive_scenario("alice", &id).await.unwrap();
+        timada_automations::read_model_subscription::<Evento>(db.clone())
+            .run_once(&store)
+            .await
+            .unwrap();
+        timada_automations::listener_subscription::<Evento>(db.clone())
+            .run_once(&store)
+            .await
+            .unwrap();
+        let cursor = |key: &str| {
+            let db = db.clone();
+            let key = format!("eu.{key}");
+            async move {
+                db.fetch_scalar::<i64>("SELECT count(*) FROM subscriber WHERE key = ?1", [key])
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(cursor(timada_automations::TRIGGER_SUBSCRIPTION).await, 1);
+
+        rebuild_read_model(&turso, read_model("automations").unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(cursor(timada_automations::READ_MODEL_SUBSCRIPTION).await, 0);
+        assert_eq!(
+            cursor(timada_automations::TRIGGER_SUBSCRIPTION).await,
+            0,
+            "the saga's cursor is forgotten with its tables"
         );
     }
 
