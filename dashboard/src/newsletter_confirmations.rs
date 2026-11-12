@@ -260,7 +260,7 @@ pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::
 #[cfg(test)]
 mod tests {
     use evento::{Evento, Turso};
-    use timada_core::{RETRY_DELAYS_SECS, Sending};
+    use timada_core::Sending;
     use timada_newsletter::{RequestOutcome, RequestSubscription, SOURCE_FORM};
     use topcoat::mail::{Mailbox, MemoryTransport};
 
@@ -312,7 +312,9 @@ mod tests {
     async fn run(store: &Turso, room: &Arc<Mailroom>, now: u64) -> usize {
         pass(store, room).await;
         // The pass stamped the rows with the clock, which may have ticked
-        // past the test's `now` meanwhile: sweep at whichever is later.
+        // past the test's `now` meanwhile: sweep at whichever is later. A
+        // failed send is stamped with that later time too, so a test reads
+        // its retry off the stream rather than reckon it from `now`.
         room.sweep(now.max(crate::auth::now())).await.unwrap()
     }
 
@@ -402,14 +404,19 @@ mod tests {
             "node-a",
         );
         assert_eq!(run(&store, &down, now + 1).await, 0);
-        assert!(matches!(
-            sending(&store, "ada@example.com").await,
-            Sending::Deferred { attempts: 1, .. }
-        ));
+        let mail = sending(&store, "ada@example.com").await;
+        let Sending::Deferred {
+            retry_at,
+            attempts: 1,
+            ..
+        } = mail
+        else {
+            panic!("{mail:?}");
+        };
         // The server back at the retry: sent.
         let transport = MemoryTransport::new();
         let back = room_with(&store, mail_context(transport.clone()), vault, "node-b");
-        assert_eq!(run(&store, &back, now + 1 + RETRY_DELAYS_SECS[0]).await, 1);
+        assert_eq!(run(&store, &back, retry_at).await, 1);
         assert_eq!(transport.sent().len(), 1);
         assert_eq!(sending(&store, "ada@example.com").await, Sending::Sent);
     }

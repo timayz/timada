@@ -280,7 +280,7 @@ mod tests {
 #[cfg(test)]
 mod saga_tests {
     use evento::{Evento, Turso};
-    use timada_core::{RETRY_DELAYS_SECS, Sending};
+    use timada_core::Sending;
     use timada_support::ReceiveMessage;
     use timada_tenancy::CreateTenant;
     use topcoat::mail::{Mailbox, MemoryTransport};
@@ -350,7 +350,9 @@ mod saga_tests {
     async fn run(store: &Turso, room: &Arc<Mailroom>, now: u64) -> usize {
         pass(store, room).await;
         // The pass stamped the rows with the clock, which may have ticked
-        // past the test's `now` meanwhile: sweep at whichever is later.
+        // past the test's `now` meanwhile: sweep at whichever is later. A
+        // failed send is stamped with that later time too, so a test reads
+        // its retry off the stream rather than reckon it from `now`.
         room.sweep(now.max(crate::auth::now())).await.unwrap()
     }
 
@@ -415,13 +417,18 @@ mod saga_tests {
         let now = crate::auth::now();
 
         assert_eq!(run(&store, &down, now).await, 0);
-        assert!(matches!(
-            notice_of(&store, &shop, &message).await,
-            Sending::Deferred { attempts: 1, .. }
-        ));
+        let notice = notice_of(&store, &shop, &message).await;
+        let Sending::Deferred {
+            retry_at,
+            attempts: 1,
+            ..
+        } = notice
+        else {
+            panic!("{notice:?}");
+        };
         let transport = MemoryTransport::new();
         let back = room_with(&store, mail_context(transport.clone()), keys, "node-b");
-        assert_eq!(run(&store, &back, now + RETRY_DELAYS_SECS[0]).await, 1);
+        assert_eq!(run(&store, &back, retry_at).await, 1);
         assert_eq!(transport.sent().len(), 1);
         assert_eq!(notice_of(&store, &shop, &message).await, Sending::Sent);
 
@@ -431,7 +438,7 @@ mod saga_tests {
             .forget_message(&*back.keys.for_tenant(&shop), "user-alice", &erased)
             .await
             .unwrap();
-        assert_eq!(run(&store, &back, now + RETRY_DELAYS_SECS[0]).await, 0);
+        assert_eq!(run(&store, &back, retry_at).await, 0);
         assert_eq!(transport.sent().len(), 1);
         assert!(rows(&store).await.is_empty());
         assert_eq!(notice_of(&store, &shop, &erased).await, Sending::Pending);
