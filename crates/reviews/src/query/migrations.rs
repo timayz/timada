@@ -6,8 +6,12 @@ use evento::turso::migrate::{Migration, Migrations};
 /// The app name under which these migrations are recorded.
 pub const MIGRATION_APP: &str = "reviews";
 
-/// `reviews_reviews` (one row per review of a tenant) and
-/// `reviews_product_ratings` (a product's published reviews, counted).
+/// `reviews_reviews` (one row per review of a tenant),
+/// `reviews_product_ratings` (a product's published reviews, counted),
+/// `reviews_requests` (the review request each fulfilled order owes: when it
+/// falls due under the shop's policy, until it is mailed) and
+/// `reviews_request_policies` (each shop's delay, `NULL` when it never asks;
+/// no row is the default).
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
     &[Migration::up(
@@ -44,8 +48,17 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         CREATE TABLE reviews_requests (
             tenant_id TEXT NOT NULL,
             order_id TEXT NOT NULL,
-            mailed_at INTEGER NOT NULL,
+            fulfilled_at INTEGER,
+            due_at INTEGER,
+            mailed_at INTEGER,
             PRIMARY KEY (tenant_id, order_id)
+        );
+        CREATE INDEX reviews_requests_due ON reviews_requests (due_at, tenant_id, order_id)
+            WHERE due_at IS NOT NULL;
+        CREATE INDEX reviews_requests_fulfilled ON reviews_requests (tenant_id, fulfilled_at);
+        CREATE TABLE reviews_request_policies (
+            tenant_id TEXT NOT NULL PRIMARY KEY,
+            delay_days INTEGER
         );",
     )],
 );
@@ -56,4 +69,5 @@ pub const TABLES: &[&str] = &[
     "reviews_reviews",
     "reviews_product_ratings",
     "reviews_requests",
+    "reviews_request_policies",
 ];

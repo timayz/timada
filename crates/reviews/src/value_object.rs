@@ -14,6 +14,12 @@ pub const MAX_REPLY_LEN: usize = 1000;
 pub const DEFAULT_REQUEST_DELAY_DAYS: u8 = 7;
 /// The longest a merchant may wait before asking.
 pub const MAX_REQUEST_DELAY_DAYS: u8 = 60;
+/// How late a request may still go out after it fell due, in seconds:
+/// enough for a node to have been down, while a shop that just turned the
+/// requests on (or a node that just joined) does not mail its whole history.
+pub const REQUEST_WINDOW_SECS: u64 = 3 * DAY_SECS;
+/// A day, in seconds.
+pub(crate) const DAY_SECS: u64 = 24 * 60 * 60;
 /// How long a mailed review link opens its order, in seconds.
 pub const REVIEW_LINK_TTL_SECS: u64 = 60 * 24 * 60 * 60;
 

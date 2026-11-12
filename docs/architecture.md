@@ -592,12 +592,17 @@ Some days after an order is fulfilled (7 unless the merchant picks 0 to 60, or t
 it off, on the Reviews page: the `ReviewRequests` stream), its buyer is mailed under
 the shop's name with a link to `{storefront}/reviews/{token}`. Nothing in the event
 store fires later, so every node runs a timer (`[reviews] request_check_secs`) that
-looks in the shared read model for orders fulfilled in the last 63 days
-(`orders_orders.fulfilled_at`) and mails those due within the last 3 days: a node
-that was down catches up, and a shop that turns the mails on does not mail its
-history. The first node to write an order's `ReviewRequest` stream
-(`original_version(0)`) sends. Nothing is claimed while the shop has no storefront
-address, or once every product of the order is reviewed. The token is 32 random bytes
+walks the requests the reviews read model says are due and not mailed yet
+(`reviews_requests.due_at`, indexed where set, 200 to a statement from where the last
+one stopped) and mails those due within the last 3 days: a node that was down catches
+up, and a shop that turns the mails on does not mail its history. The read model
+follows the orders as they leave (`Fulfilled`) and the shop's policy, so a change of
+delay moves the orders that can still be asked about, and a request mailed leaves the
+list; the policy as it stands still decides, the read model only says where to look.
+The first node to write an order's `ReviewRequest` stream (`original_version(0)`)
+sends. Nothing is claimed while the shop has no storefront address, or once every
+product of the order is reviewed; such an order stays listed until its 3 days are
+over, and the walk goes on past it. The token is 32 random bytes
 whose hash names a `ReviewLink` stream (valid 60 days), so a storefront key reading
 the store learns nothing it can use. The storefront resolves the token from the
 store, remembers the order as if its own browser had placed it, and sends the shopper
