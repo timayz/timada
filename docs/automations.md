@@ -176,7 +176,8 @@ starts a run of that version, one before it never does. An event older than an
 hour is history being replayed and starts nothing.
 
 The nodes share the runs out rather than race for them: each starts the runs
-whose id falls to it among the nodes up of the event's region
+whose id falls to it among the nodes up that see the event, those of its region
+or, for an event written without one, the nodes without a region
 (`timada_core::Share`), with one write and no read, and keeps the others in
 `automations_starts`. Two minutes after keeping one (counted from then, not from
 the event: a node going through events late is about as late as the others), a
@@ -357,8 +358,9 @@ the store says "nothing happened", so:
 2. Every look of the runner finds the requests older than the delay that no order
    followed, in shops with a published scenario on this trigger, and checks each
    against the cart itself (ordered since, or asked again: not left). The nodes of
-   the region the request was made in share them out as they share the runs: each
-   looks at its own, and at any other two minutes later. It writes a
+   the region the request was made in (for a request made without one, the nodes
+   without a region) share them out as they share the runs: each looks at its own,
+   and at any other two minutes later. It writes a
    `timada-automations/AbandonedCheckout` stream (`Detected`, id hashed from the
    cart and the request, at version 0, in the request's region so all its nodes
    see it), so a checkout is found left once whichever node finds it. Requests

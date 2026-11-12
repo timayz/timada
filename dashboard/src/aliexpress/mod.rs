@@ -22,7 +22,7 @@ use timada_core::Share;
 use timada_tenancy::{AliexpressSettings, CompanyState, TenantState};
 
 use self::budget::CallBudget;
-use crate::cluster::{Executor, ShareOf};
+use crate::cluster::{Among, Executor, ShareOf};
 use crate::config::AliexpressConfig;
 use crate::db::Db;
 use crate::media::Media;
@@ -179,15 +179,16 @@ impl Aliexpress {
     /// the sweeps over every shop's rows read here, and this node's part of
     /// the app's calls.
     pub fn share(&self) -> Share {
-        (self.share)(None)
+        (self.share)(Among::All)
     }
 
     /// Which of the nodes up that see `region`'s events this one is: which of
     /// the items and orders a saga is told about it reads. The sagas follow
     /// the node's region, so an event of `region` reaches the nodes serving
-    /// it alone, and its item must fall to one of them.
+    /// it alone (one written without a region, the nodes without one), and
+    /// its item must fall to one of them.
     pub fn share_in(&self, region: Option<&str>) -> Share {
-        (self.share)(region)
+        (self.share)(Among::Region(region))
     }
 
     /// Whether companies can connect here: the platform has an app and can

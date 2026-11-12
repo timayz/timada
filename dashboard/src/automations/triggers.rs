@@ -1,7 +1,8 @@
 //! Starts the runs: every event that is a trigger starts a run of each
 //! published scenario of the shop listening to it. The nodes of the event's
-//! region all run this subscription and share the runs out: each starts the
-//! ones whose id falls to it among them ([`timada_core::Share`]), with one
+//! region (for an event written without one, the nodes without a region)
+//! all run this subscription and share the runs out: each starts the ones
+//! whose id falls to it among them ([`timada_core::Share`]), with one
 //! write and no read, and keeps the others in `automations_starts`, where
 //! the runner starts any a node has not started a while later (it stopped,
 //! or the nodes disagreed on who is up). A run's id is derived from the
@@ -12,7 +13,7 @@
 //! events ([`timada_automations::listener_subscription`]): the order of the
 //! store decides which events a publication sees.
 
-use crate::cluster::ShareOf;
+use crate::cluster::{Among, ShareOf};
 use crate::db::Db;
 use evento::{
     Evento, Executor,
@@ -32,7 +33,8 @@ pub const TRIGGER_WINDOW_SECS: u64 = 60 * 60;
 #[derive(Clone)]
 struct TenantStore(Evento);
 
-/// This node's place among the nodes up of a region: which runs it starts.
+/// This node's place among the nodes up that see an event (those of its
+/// region, or without one): which runs it starts.
 #[derive(Clone)]
 struct Place(ShareOf);
 
@@ -64,8 +66,9 @@ pub fn subscription<E: Executor>(db: Db, store: Evento, place: ShareOf) -> Subsc
 
 /// Starts a run of every scenario of the tenant listening to `trigger`:
 /// the ones that fall to this node among the nodes of `region` (the
-/// event's routing key) now, the others kept for the runner to start if
-/// their node does not. Only a store failure is an error: it is retried.
+/// event's routing key; `None`, the nodes without a region) now, the others
+/// kept for the runner to start if their node does not. Only a store
+/// failure is an error: it is retried.
 async fn start<E: Executor>(
     context: &Context<'_, E>,
     tenant: &str,
@@ -85,7 +88,7 @@ async fn start<E: Executor>(
     }
     let store: TenantStore = context.extract();
     let place: Place = context.extract();
-    let share = (place.0)(region);
+    let share = (place.0)(Among::Region(region));
     let automations = timada_automations::Command::new(store.0.clone(), tenant);
     for listener in listeners {
         // Published after the event (the same second, in another order).
