@@ -20,7 +20,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // recreates the read models, so their pools open afterwards. Write pool
     // before read pool: it creates the file a read-only connection cannot.
     let store = db::open_store(&config.database.path).await?;
-    let (cluster, executor) = cluster::open(
+    // The store twice over the same node: as the node reads it (behind a
+    // read barrier with peers), for the pages; and from this node's file as
+    // it stands, for the subscriptions and the storefronts (#466).
+    let (cluster, executor, local) = cluster::open(
         config.cluster.as_ref(),
         config.server.region.as_deref(),
         &config.server.also_serves,
@@ -113,13 +116,14 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
                 let connections = connections.clone();
                 move || store_api::closing_subscription(connections.clone())
             },
-            &executor,
+            &local,
         )
         .await?,
     ];
     let store_api = store_api::serve(
         config.store_api.as_ref(),
         executor.clone(),
+        local.clone(),
         connections.clone(),
     )
     .await?;
@@ -134,7 +138,11 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 
     // Every subscription follows the stream from its saved cursor under a
     // supervisor (`workers`): a worker that fails is started again from the
-    // event that failed, and the cluster page says so. After this start
+    // event that failed, and the cluster page says so. Each reads from this
+    // node's file (`local`): a handler reads streams already behind the event
+    // it handles, which the node has applied before handing the event over,
+    // and a write it makes on a stale read is refused for its version, the
+    // write it missed then applied here for the retry. After this start
     // copied the store from a peer, the read models are empty: each
     // subscription first catches up over the copied events, so the pages
     // never show an empty shop, and the router takes requests afterwards.
@@ -146,7 +154,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     ));
     let mailroom = crate::mailroom::Mailroom::new(
         db.clone(),
-        executor.clone(),
+        local.0.clone(),
         background_mail.clone(),
         keys.clone(),
         payments.clone(),
@@ -161,14 +169,14 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         Arc::new(crate::aliexpress::payment_reads::AliexpressGoods::new(
             aliexpress.clone(),
             db.clone(),
-            executor.clone(),
+            local.0.clone(),
         )),
-        executor.clone(),
+        local.0.clone(),
         cluster::node_name(&cluster),
     );
     let deps = Arc::new(Deps {
         db: db.clone(),
-        store: executor.clone(),
+        store: local.0.clone(),
         mailroom: mailroom.clone(),
         checkouts: checkouts.clone(),
         media: media.clone(),
@@ -219,9 +227,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             }
             let name = name.clone();
             let builder = make(&deps);
-            let executor = executor.clone();
+            let local = local.clone();
             catching_up.spawn(async move {
-                if let Err(err) = workers::catch_up(&name, builder, &executor).await {
+                if let Err(err) = workers::catch_up(&name, builder, &local).await {
                     tracing::error!(error = %format!("{err:#}"), "the {name} subscription did not catch up before serving");
                 }
             });
@@ -238,7 +246,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     }
     for (name, _kind, make) in planned {
         let deps = deps.clone();
-        all_workers.push(workers::start(name, move || make(&deps), &executor).await?);
+        all_workers.push(workers::start(name, move || make(&deps), &local).await?);
     }
     let workers = Workers::new(all_workers);
     let mailroom_sends = mailroom.start();
@@ -376,6 +384,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 
     let router = app::router(Services {
         executor,
+        local,
         db,
         providers,
         webauthn,
@@ -441,6 +450,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
 pub struct Deps {
     /// The read models in the store's database.
     pub db: db::Db,
+    /// The store read from this node's file, which the sagas write back
+    /// through.
     pub store: Executor,
     /// Where the mails the sagas owe are handed to be sent.
     pub mailroom: Arc<crate::mailroom::Mailroom>,

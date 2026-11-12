@@ -70,6 +70,8 @@ const NOW: u64 = 1_800_000_000;
 struct Harness {
     cluster: Arc<Cluster>,
     platform: Command<cluster::Executor>,
+    /// The same store, read from the node's file.
+    local: cluster::LocalReads,
     /// The store's file, read directly for what the node recorded in it.
     store: db::Store,
     /// The read models in the store's database.
@@ -107,9 +109,10 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
     db::migrate_store_read_models(&store).await.unwrap();
     let store_db = db::Db::from(store.clone());
-    let (cluster, platform) = cluster::open(None, None, &[], &dir.join("timada.db"), store.clone())
-        .await
-        .unwrap();
+    let (cluster, platform, local) =
+        cluster::open(None, None, &[], &dir.join("timada.db"), store.clone())
+            .await
+            .unwrap();
     let connections = StoreConnections::new();
     let (tls_cert, tls_key) = match tls {
         Some((cert, key)) => (Some(cert), Some(key)),
@@ -130,13 +133,19 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
         listen: addr,
         ..config
     };
-    let server = store_api::serve(Some(&config), platform.clone(), connections.clone())
-        .await
-        .unwrap()
-        .unwrap();
+    let server = store_api::serve(
+        Some(&config),
+        platform.clone(),
+        local.clone(),
+        connections.clone(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     Harness {
         cluster,
         platform: Command(platform),
+        local,
         store,
         db: store_db,
         dir,
@@ -2273,8 +2282,11 @@ async fn serve_dashboard(
                 let path = request_line.next().unwrap_or_default().to_owned();
                 let token = header(&head, "authorization")
                     .and_then(|value| value.strip_prefix("Bearer ").map(str::to_owned));
+                // One node: the store reads its own file through either
+                // handle.
+                let local = cluster::LocalReads(platform.clone());
                 let access = match token {
-                    Some(token) => Command(platform.clone()).authenticate_api_key(&token).await,
+                    Some(token) => store_api::authenticate(&local, &platform, &token).await,
                     None => Err(timada_tenancy::TenancyError::ApiKeyInvalid),
                 };
                 let (status, answer) = match access {
@@ -2300,7 +2312,9 @@ async fn serve_dashboard(
                         };
                         if allowed {
                             let orders = store_carts::gateway(platform, &access.tenant.id);
-                            dispatch(&orders, &db, &method, &path, &body).await.unwrap()
+                            dispatch(&orders, &local, &db, &method, &path, &body)
+                                .await
+                                .unwrap()
                         } else {
                             (
                                 StatusCode::TOO_MANY_REQUESTS,
@@ -2320,6 +2334,7 @@ async fn serve_dashboard(
 /// `dashboard/src/app/store` lays them out.
 async fn dispatch(
     orders: &timada_orders::Command<cluster::Executor>,
+    local: &cluster::LocalReads,
     db: &Db,
     method: &str,
     path: &str,
@@ -2331,7 +2346,7 @@ async fn dispatch(
             Some(item) => store_carts::start(orders, item).await?,
             None => store_carts::bad_request(),
         },
-        ("GET", ["store", "carts", id]) => store_carts::cart(orders, db, id).await?,
+        ("GET", ["store", "carts", id]) => store_carts::cart(orders, local, db, id).await?,
         ("POST", ["store", "carts", id, "items"]) => match store_carts::parse(body) {
             Some(item) => store_carts::add_item(orders, id, item).await?,
             None => store_carts::bad_request(),
@@ -2350,7 +2365,7 @@ async fn dispatch(
             store_carts::remove_discount(orders, id).await?
         }
         ("POST", ["store", "carts", id, "checkout"]) => match store_carts::parse(body) {
-            Some(checkout) => store_carts::checkout(orders, id, checkout).await?,
+            Some(checkout) => store_carts::checkout(orders, local, id, checkout).await?,
             None => store_carts::bad_request(),
         },
         ("GET", ["store", "carts", id, "requests", request_id]) => {
@@ -2404,17 +2419,17 @@ async fn the_dashboard_answers_for_one_cart_or_order_of_the_key_tenant() {
         .run_once(&h.platform.0)
         .await
         .unwrap();
-    let (status, answer) = store_carts::cart(&acme_orders, &h.db, &cart_id)
+    let (status, answer) = store_carts::cart(&acme_orders, &h.local, &h.db, &cart_id)
         .await
         .unwrap();
     assert_eq!(status, StatusCode::OK);
     assert_eq!(answer["cart"]["id"], json!(cart_id));
     assert_eq!(answer["quote"]["total_cents"], json!(1250));
     for (status, answer) in [
-        store_carts::cart(&globex_orders, &h.db, &cart_id)
+        store_carts::cart(&globex_orders, &h.local, &h.db, &cart_id)
             .await
             .unwrap(),
-        store_carts::cart(&acme_orders, &h.db, "01J00000000000000000000000")
+        store_carts::cart(&acme_orders, &h.local, &h.db, "01J00000000000000000000000")
             .await
             .unwrap(),
         store_carts::add_item(&globex_orders, &cart_id, item.clone())
@@ -3001,10 +3016,15 @@ async fn a_shop_started_while_the_store_is_away_opens_and_catches_up_later() {
         tls_cert: None,
         tls_key: None,
     };
-    let server = store_api::serve(Some(&config), h.platform.0.clone(), h.connections.clone())
-        .await
-        .unwrap()
-        .unwrap();
+    let server = store_api::serve(
+        Some(&config),
+        h.platform.0.clone(),
+        h.local.clone(),
+        h.connections.clone(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     eventually("the shop connects and the product arrives", async || {
         published(&db).await == vec!["Blue Mug".to_owned()]
     })
@@ -3097,10 +3117,15 @@ async fn a_dashboard_that_is_away_is_told_as_unavailable_not_as_a_failure() {
         tls_cert: None,
         tls_key: None,
     };
-    let server = store_api::serve(Some(&config), h.platform.0.clone(), h.connections.clone())
-        .await
-        .unwrap()
-        .unwrap();
+    let server = store_api::serve(
+        Some(&config),
+        h.platform.0.clone(),
+        h.local.clone(),
+        h.connections.clone(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let on_own_server = Store::connect(
         StoreConfig::new(away, &token).request_timeout(Duration::from_millis(500)),
         h.local_db("abandoned").await,

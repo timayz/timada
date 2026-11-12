@@ -15,6 +15,7 @@ use topcoat::{
 };
 
 use super::{Answer, deliver, gateway};
+use crate::cluster::LocalReads;
 use crate::db::Db;
 use crate::store_carts;
 
@@ -26,5 +27,13 @@ pub async fn index(cx: &Cx) -> Result<Answer> {
         Ok(orders) => orders,
         Err(answer) => return Ok(answer),
     };
-    deliver(store_carts::cart(&orders, app_context::<Db>(cx), path_param::<CartId>(cx)).await)
+    deliver(
+        store_carts::cart(
+            &orders,
+            app_context::<LocalReads>(cx),
+            app_context::<Db>(cx),
+            path_param::<CartId>(cx),
+        )
+        .await,
+    )
 }
