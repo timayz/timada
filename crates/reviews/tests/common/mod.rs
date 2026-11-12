@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use timada_core::db::Db;
-use timada_orders::aggregator::{Cancelled, Paid, Placed};
+use timada_orders::aggregator::{Cancelled, Fulfilled, Paid, Placed};
 use timada_orders::{OrderLine, Payment, ShippingAddress};
 use timada_reviews::{Command, ReviewPhoto, ReviewState, SubmitReview};
 
@@ -79,6 +79,29 @@ pub async fn paid_order(executor: &evento::Turso, order_id: &str) {
         .commit(executor)
         .await
         .unwrap();
+}
+
+/// Ships the order made by [`paid_order`]; returns when it left (unix
+/// seconds).
+pub async fn fulfil(executor: &evento::Turso, order_id: &str) -> u64 {
+    evento::append(order_id)
+        .original_version(2)
+        .event(&Fulfilled {
+            tracking: None,
+            tracking_url: None,
+            fulfilled_by: ALICE.to_owned(),
+        })
+        .tenant(TENANT)
+        .commit(executor)
+        .await
+        .unwrap();
+    timada_orders::Command::new(executor.clone(), TENANT)
+        .load_order(order_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .fulfilled_at
+        .unwrap()
 }
 
 /// Cancels the order made by [`paid_order`].

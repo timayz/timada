@@ -197,17 +197,16 @@ pub(crate) async fn upsert_order(
                 tx,
                 "INSERT INTO orders_orders (tenant_id, id, reference, cart_id, status, email, name,
                     country, item_count, total_cents, currency, placed_at, updated_at, payment_id,
-                    refunded_cents, discount_id, discount_code, discount_cents, fulfilled_at,
-                    supplier, payment_state, capture_before, capture_requested_at,
-                    cancel_requested_at, paid_at, refund_requested_at, hold_reminder_at, state,
-                    search_text)
+                    refunded_cents, discount_id, discount_code, discount_cents, supplier,
+                    payment_state, capture_before, capture_requested_at, cancel_requested_at,
+                    paid_at, refund_requested_at, hold_reminder_at, state, search_text)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-                    ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)
+                    ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
                  ON CONFLICT (tenant_id, id) DO UPDATE SET
                     status = excluded.status, updated_at = excluded.updated_at,
                     refunded_cents = excluded.refunded_cents, discount_id = excluded.discount_id,
                     discount_code = excluded.discount_code, discount_cents = excluded.discount_cents,
-                    fulfilled_at = excluded.fulfilled_at, supplier = excluded.supplier,
+                    supplier = excluded.supplier,
                     payment_state = excluded.payment_state,
                     capture_before = excluded.capture_before,
                     capture_requested_at = excluded.capture_requested_at,
@@ -234,7 +233,6 @@ pub(crate) async fn upsert_order(
                     Value::from(order.discount.as_ref().map(|d| d.discount_id.as_str())),
                     Value::from(order.discount.as_ref().map(|d| d.code.as_str())),
                     Value::from(order.discount.as_ref().map_or(0, |d| d.amount_cents as i64)),
-                    Value::from(order.fulfilled_at.map(|at| at as i64)),
                     Value::from(order.supplier.as_deref()),
                     Value::from(order.payment_state()),
                     Value::from(order.payment.capture_before.map(|at| at as i64)),

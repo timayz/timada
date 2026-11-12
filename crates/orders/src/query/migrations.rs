@@ -39,7 +39,6 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 discount_id TEXT,
                 discount_code TEXT,
                 discount_cents INTEGER NOT NULL,
-                fulfilled_at INTEGER,
                 supplier TEXT,
                 payment_state TEXT NOT NULL,
                 capture_before INTEGER,
@@ -64,8 +63,6 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         CREATE INDEX orders_orders_discount ON orders_orders (tenant_id, discount_id)
                 WHERE discount_id IS NOT NULL;
         CREATE INDEX orders_orders_email ON orders_orders (tenant_id, email, placed_at);
-        CREATE INDEX orders_orders_fulfilled ON orders_orders (fulfilled_at)
-                WHERE fulfilled_at IS NOT NULL;
         CREATE TABLE orders_carts (
                 tenant_id TEXT NOT NULL,
                 id TEXT NOT NULL,
