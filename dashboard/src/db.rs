@@ -596,7 +596,7 @@ mod tests {
                  WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%' \
                  AND name NOT LIKE '\\_evento%' ESCAPE '\\' \
                  AND name NOT LIKE '\\_\\_turso\\_internal%' ESCAPE '\\' \
-                 AND name NOT IN ('event', 'snapshot', 'subscriber', 'meta') \
+                 AND name NOT IN ('event', 'snapshot', 'subscriber', 'dead_letter', 'meta') \
                  AND name NOT LIKE 'idx\\_%' ESCAPE '\\' AND name NOT LIKE 'cluster\\_%' ESCAPE '\\'",
                 (),
             )

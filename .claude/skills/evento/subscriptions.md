@@ -23,6 +23,7 @@ let sub: Subscription = SubscriptionBuilder::<evento::Sqlite>::new("deposit-noti
     .delay(Duration::from_secs(10))   // delay before first poll
     .poll_interval(Duration::from_millis(250)) // fallback re-poll cadence; default 250ms
     .continue_on_error()              // continue past handler errors instead of stopping
+    .dead_letter()                    // or: retry the failing event, then record it as a DeadLetter and go on
     .strict()                         // fail if an event has no handler
     .start(&executor)                 // spawn background task
     .await?;
@@ -82,6 +83,7 @@ Read filters are derived from the registered handlers: with `strict()` off, each
 
 - Each retry re-runs from the current cursor — only events that were not yet acknowledged are replayed.
 - After all retries exhaust: `continue_on_error()` → log + continue on the next wake-up; otherwise the task exits.
+- With `.dead_letter()` the retries are per event: once they are spent the event is recorded (`exec.dead_letters(key, limit)`), acknowledged, and the pass goes on; `.fault(|err| ..)` returns `Some(Fault::Store)` to fail the pass instead, `Some(Fault::Event)` to dead-letter without the retries. `builder.redeliver(exec, &letter)` runs one again and removes it on success. The executor must keep dead letters (SQL, Turso, Fjall, a cluster node, a `Sidecar`; not a bare remote client).
 
 Since already-acknowledged events are never replayed but a failed batch resumes from the last ack, handlers must be **idempotent** (key side effects on `event.id`, a ULID).
 
@@ -167,7 +169,7 @@ To pause a subscription externally, set `enabled = false` on its row — the wor
 
 **Read-model writer (custom table).** Subscription with `.routing_key(...)` per partition, handlers that upsert into a SQL table keyed by `event.aggregate_id`. Combine with `evento::append(id).original_version(v)` for cross-aggregate event emission.
 
-**Side-effects (email/webhook).** Subscription with `.retry(n).continue_on_error()` so a flaky external API doesn't kill the worker. Make handlers idempotent by keying on `event.id` (a ULID).
+**Side-effects (email/webhook).** Subscription with `.retry(n).dead_letter()` (or `.continue_on_error()` when a log line is enough) so a flaky external API doesn't kill the worker. Make handlers idempotent by keying on `event.id` (a ULID).
 
 **One-shot catch-up.** `SubscriptionBuilder::new(key).handler(…).run_once(&executor)` processes everything from the cursor to head and returns — useful for migrations / backfills and tests.
 
