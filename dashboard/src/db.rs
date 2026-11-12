@@ -236,21 +236,13 @@ const STORE_READ_MODELS: &[ReadModel] = &[
         migrations: &timada_orders::MIGRATIONS,
         tables: timada_orders::TABLES,
     },
-    // The dashboard's own: the mails its sagas owe (`mailroom/schema.rs`)
-    // and the events they gave up on (`saga_fault/schema.rs`).
+    // The dashboard's own: the mails its sagas owe (`mailroom/schema.rs`).
     ReadModel {
         name: None,
         subscriptions: &[],
         sagas: &[],
         migrations: &crate::mailroom::MIGRATIONS,
         tables: crate::mailroom::TABLES,
-    },
-    ReadModel {
-        name: None,
-        subscriptions: &[],
-        sagas: &[],
-        migrations: &crate::saga_fault::MIGRATIONS,
-        tables: crate::saga_fault::TABLES,
     },
     // The pictures' files, as the store knows them (`media/schema.rs`),
     // filled from the catalog's, the pages', the reviews' and the tenants'

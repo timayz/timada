@@ -106,10 +106,11 @@ Recurring patterns:
   The sagas that issue invoices, answer checkouts and take payments tell the two apart
   with `dashboard/src/saga_fault.rs`: a typed domain error is the event's own and is
   recorded on its stream (`Order::InvoicingFailed`, `Order::CaptureFailed`, a refusal
-  of the checkout) and in the node's `saga_given_up` table, which `/admin/cluster`
-  lists; the merchant or the shopper re-drives it (`Order::InvoicingRequested`, "Take
-  the payment again", paying again). Anything untyped is a read of the store that
-  failed, and fails the pass. Calls to outside services inside a pass are bounded:
+  of the checkout), then given up on as an evento dead letter (the subscription's
+  `.dead_letter()` mode, told by `saga_fault::fault` whose error it is), which
+  `/admin/cluster` lists for a week; the merchant or the shopper re-drives it
+  (`Order::InvoicingRequested`, "Take the payment again", paying again). Anything
+  untyped is a read of the store that failed, and fails the pass. Calls to outside services inside a pass are bounded:
   VIES is asked once for five seconds (the invoice then carries the buyer's number as
   "not checked", VAT charged), Stripe answers reads in five seconds and writes in
   twenty, or the call counts as no answer.

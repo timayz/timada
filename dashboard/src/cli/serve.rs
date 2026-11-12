@@ -164,7 +164,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             executor.clone(),
         )),
         executor.clone(),
-        db.clone(),
         cluster::node_name(&cluster),
     );
     let deps = Arc::new(Deps {
@@ -249,6 +248,12 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         std::time::Duration::from_secs(config.media.reconcile_check_secs.max(60)),
     );
     let checkout_answers = checkouts.clone().start();
+    // The events the sagas gave up on stay on the cluster page a week.
+    let dead_letters = crate::saga_fault::start_forgetting(
+        executor.clone(),
+        db.clone(),
+        crate::saga_fault::FORGET_EVERY,
+    );
     // What the balancer asks before sending traffic here, and what an
     // operator scrapes.
     let readiness = Arc::new(crate::readiness::Readiness::new(
@@ -415,6 +420,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     picture_fetches.abort();
     picture_reconcile.abort();
     checkout_answers.abort();
+    dead_letters.abort();
     review_requests.abort();
     lapsed_checkouts.abort();
     pending_payments.abort();
@@ -635,11 +641,7 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
         crate::payments::subscription(d.checkouts.clone())
     }),
     ("order payments", Kind::Sharded, |d| {
-        crate::payments::order_payments_subscription(
-            d.payments.clone(),
-            d.store.clone(),
-            d.db.clone(),
-        )
+        crate::payments::order_payments_subscription(d.payments.clone(), d.store.clone())
     }),
     ("discount usage", Kind::Sharded, |d| {
         timada_orders::discount_usage_subscription(d.store.clone())
@@ -668,7 +670,6 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
             d.vies.clone(),
             d.euro_rates.clone(),
             d.store.clone(),
-            d.db.clone(),
         )
     }),
     // The mails a command owes are handed to the mailroom from here, after

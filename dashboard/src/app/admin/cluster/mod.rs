@@ -12,32 +12,35 @@ use topcoat::{
 };
 
 use crate::app::admin::require_admin;
-use crate::cluster::{Cluster, NodeHealth, PeerState};
+use crate::cluster::{Cluster, Executor, NodeHealth, PeerState};
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::mailroom::{self, OwedMail};
-use crate::saga_fault::{self, GivenUp};
+use crate::saga_fault;
 use crate::store_api::StoreConnections;
 use crate::ui::{
     Shell, Tone, document, empty_row, fact, facts, icons, page_header, section_card, status_badge,
 };
 use crate::workers::{WorkerState, Workers};
+use evento::DeadLetter;
 use topcoat::icon::icon;
 
 /// The most mails given up on the page lists.
 const FAILED_MAILS_SHOWN: i64 = 50;
 
 /// The most events given up on the page lists.
-const GIVEN_UP_SHOWN: i64 = 50;
+const GIVEN_UP_SHOWN: usize = 50;
 
-/// The subscription an event given up on belongs to, as a person reads it.
-fn subscription_label(given_up: &GivenUp) -> &str {
-    given_up
+/// The saga an event given up on belongs to, as a person reads it: its
+/// subscription's key without the region and the crate (`invoicing` for
+/// `eu.timada-dashboard/invoicing`).
+fn saga_label(letter: &DeadLetter) -> &str {
+    letter
         .subscription
         .rsplit_once('/')
-        .map_or(given_up.subscription.as_str(), |(_, name)| name)
+        .map_or(letter.subscription.as_str(), |(_, name)| name)
 }
 
 /// What a mail given up on says, for its row.
@@ -180,17 +183,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     // The events the sagas gave up on this week: a fault of the one order's
     // or cart's own, recorded on it rather than holding every tenant behind
-    // it.
-    let given_up_count = saga_fault::given_up_count(db)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?;
-    let given_up = if given_up_count > 0 {
-        saga_fault::given_up(db, GIVEN_UP_SHOWN)
+    // it, and kept by evento as a dead letter beside the saga's cursor.
+    let (given_up_count, given_up) =
+        saga_fault::dead_letters(app_context::<Executor>(cx), db, GIVEN_UP_SHOWN)
             .await
-            .map_err(topcoat::Error::from_anyhow)?
-    } else {
-        Vec::new()
-    };
+            .map_err(topcoat::Error::from_anyhow)?;
     let given_up_label = match given_up_count {
         0 => "none this week".to_owned(),
         1 => "1 this week, recorded on its order or cart".to_owned(),
@@ -341,13 +338,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             )
                         )
                         table_body(
-                            for row in &given_up {
+                            for letter in &given_up {
                                 table_row(
-                                    attrs: attributes! { data-given-up-event=(row.stream_id.as_str()) },
-                                    table_cell((subscription_label(row)))
-                                    table_cell((&row.event) " of " (if row.tenant_id.is_empty() { "the platform's".to_owned() } else { format!("tenant {}", row.tenant_id) }) ", stream " <span class="font-mono">(&row.stream_id)</span>)
-                                    table_cell((&row.reason))
-                                    table_cell(<time datetime=(row.given_up_at)>(crate::ui::format_time(row.given_up_at.max(0) as u64))</time>)
+                                    attrs: attributes! { data-given-up-event=(letter.aggregate_id.as_str()) },
+                                    table_cell((saga_label(letter)))
+                                    table_cell((&letter.name) " of " (if letter.tenant.is_empty() { "the platform's".to_owned() } else { format!("tenant {}", letter.tenant) }) ", stream " <span class="font-mono">(&letter.aggregate_id)</span>)
+                                    table_cell((saga_fault::one_line(&letter.error)))
+                                    table_cell(<time datetime=(letter.timestamp)>(crate::ui::format_time(letter.timestamp))</time>)
                                 )
                             }
                         )

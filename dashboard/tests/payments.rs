@@ -25,7 +25,7 @@ mod mailroom;
 mod media;
 #[path = "../src/payments/mod.rs"]
 mod payments;
-#[path = "../src/saga_fault/mod.rs"]
+#[path = "../src/saga_fault.rs"]
 mod saga_fault;
 #[path = "../src/seal.rs"]
 mod seal;
@@ -568,7 +568,6 @@ async fn harness_on<G: PaymentGateway + 'static>(
             rates.clone(),
             goods.clone(),
             platform.clone(),
-            store_db.clone(),
             "node-0",
         );
         let answering = payments::subscription(checkouts.clone());
@@ -576,11 +575,7 @@ async fn harness_on<G: PaymentGateway + 'static>(
         checkout_answers = Some(checkouts.start());
     }
     for builder in [
-        payments::order_payments_subscription(
-            subscribed.clone(),
-            platform.clone(),
-            store_db.clone(),
-        ),
+        payments::order_payments_subscription(subscribed.clone(), platform.clone()),
         timada_orders::discount_usage_subscription(platform.clone()),
         timada_orders::stock_usage_subscription(platform.clone()),
         invoicing::subscription(
@@ -588,7 +583,6 @@ async fn harness_on<G: PaymentGateway + 'static>(
             Arc::new(FakeVies),
             rates.clone(),
             platform.clone(),
-            store_db.clone(),
         ),
     ] {
         subscriptions.push(builder.start(&platform).await.unwrap());
@@ -1204,7 +1198,6 @@ async fn nodes_answering_one_request_at_once_hold_and_open_once() {
             fake_rates(),
             h.goods.clone(),
             h.store(&acme),
-            h.db.clone(),
             name,
         )
     };
@@ -3137,8 +3130,8 @@ async fn a_vat_number_vies_cannot_check_is_invoiced_with_vat_and_said_unchecked(
 /// The invoicing saga gives an order up rather than hold every tenant's
 /// invoices behind it: a distance sale in dollars needs the Bank's rate and
 /// the Bank is away when the invoice is issued. The failure is recorded on
-/// the order and on the node, the next order is invoiced, and the merchant
-/// asks again once the Bank is back.
+/// the order and as a dead letter on the node, the next order is invoiced,
+/// and the merchant asks again once the Bank is back.
 #[tokio::test]
 async fn an_order_that_cannot_be_invoiced_is_given_up_on_and_asked_again() {
     let h = harness().await;
@@ -3215,12 +3208,21 @@ async fn an_order_that_cannot_be_invoiced_is_given_up_on_and_asked_again() {
             .is_none(),
         "not invoiced"
     );
-    let given_up = saga_fault::given_up(&h.db, 10).await.unwrap();
+    // The dead letter is written once the handler returned, after the
+    // failure it recorded on the order.
+    let store = h.store(&acme);
+    let given_up = eventually(async || {
+        let (count, given_up) = saga_fault::dead_letters(&store, &h.db, 10).await.unwrap();
+        (count > 0).then_some(given_up)
+    })
+    .await;
     assert_eq!(given_up.len(), 1, "{given_up:?}");
     assert_eq!(given_up[0].subscription, invoicing::SUBSCRIPTION);
-    assert_eq!(given_up[0].stream_id, order_id);
-    assert_eq!(given_up[0].event, "Paid");
-    assert_eq!(given_up[0].reason, failure);
+    assert_eq!(given_up[0].aggregate_id, order_id);
+    assert_eq!(given_up[0].name, "Paid");
+    assert_eq!(given_up[0].tenant, acme.id);
+    assert_eq!(given_up[0].attempts, 1, "given up at once, no retries");
+    assert_eq!(saga_fault::one_line(&given_up[0].error), failure);
 
     // The pass went on: the next order, in euros, is invoiced.
     let next = h.buy(&acme, checkout(None)).await;

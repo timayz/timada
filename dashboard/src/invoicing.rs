@@ -10,13 +10,14 @@
 //! the day. The invoicing crate decides the VAT from them.
 //!
 //! The pass serves every tenant of the region, so only the store's own
-//! faults fail it ([`Fault`]). A document that cannot be issued for a
+//! faults fail it (`saga_fault`). A document that cannot be issued for a
 //! reason of the order's own (lines that do not add up, a credit note too
 //! large, no euro rate for a sale that needs one) is recorded on the order
-//! (`Order::InvoicingFailed`) and the event acknowledged; the merchant sees
-//! it on the order page and asks again (`Order::InvoicingRequested`), which
-//! issues whatever the order is owed: the invoice if it has none, the credit
-//! note of every refund that has none.
+//! (`Order::InvoicingFailed`) and the event given up on, a dead letter; the
+//! merchant sees it on the order page and asks again
+//! (`Order::InvoicingRequested`), which issues whatever the order is owed:
+//! the invoice if it has none, the credit note of every refund that has
+//! none.
 
 use evento::{
     Evento, Executor,
@@ -36,9 +37,8 @@ use timada_orders::aggregator::{InvoicingRequested, Paid, Refunded, SettledOutsi
 use timada_tenancy::LegalIdentity;
 
 use crate::cluster::Executor as Store;
-use crate::db::Db;
 use crate::ecb::{EuroRates, RateAnswer};
-use crate::saga_fault::{Fault, give_up, recorded};
+use crate::saga_fault::{event_fault, fault, recorded};
 use crate::vies::{Vies, ViesAnswer};
 
 /// The cursor identity of the subscription, in the store.
@@ -55,21 +55,18 @@ struct Platform(Store);
 struct TenantStore(Evento);
 
 /// Follows every tenant's orders. Every node runs it:
-/// issuing is safe to repeat and to race (see `timada_invoicing`). `db`
-/// holds the table of events given up on.
+/// issuing is safe to repeat and to race (see `timada_invoicing`).
 pub fn subscription<E: Executor>(
     platform: Store,
     vies: Arc<dyn Vies>,
     euro_rates: Arc<dyn EuroRates>,
     store: Evento,
-    db: Db,
 ) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(Platform(platform))
         .data(vies)
         .data(euro_rates)
         .data(TenantStore(store))
-        .data(db)
         .handler(on_paid())
         .handler(on_settled_outside())
         .handler(on_invoicing_requested())
@@ -78,6 +75,10 @@ pub fn subscription<E: Executor>(
         // routing key), so a region's nodes do its work and the other
         // regions' nodes leave it to them.
         .retry(5)
+        // An order's own fault, recorded on it, gives the event up: a dead
+        // letter, and the pass goes on to the other tenants.
+        .dead_letter()
+        .fault(fault)
 }
 
 fn now() -> u64 {
@@ -132,7 +133,7 @@ async fn on_invoicing_requested<E: Executor>(
 
 /// Issues what the order `event` is about is owed and has not got: its
 /// invoice, the credit note of each of its refunds. A fault of the order's
-/// own is recorded on it and the event acknowledged; the store's fails the
+/// own is recorded on it and the event given up on; the store's fails the
 /// pass.
 async fn issue_owed<E: Executor>(
     context: &Context<'_, E>,
@@ -162,21 +163,18 @@ async fn issue_owed<E: Executor>(
         }
         anyhow::Ok(())
     };
-    match issued.await {
-        Ok(()) => Ok(()),
-        Err(err) => match Fault::of(err) {
-            Fault::Store(err) => Err(err),
-            Fault::Event(reason) => {
-                let db: Db = context.extract();
-                give_up(&db, SUBSCRIPTION, event, &reason, now()).await?;
-                let failure = orders
-                    .record_invoicing_failure(ISSUER, order_id, &reason)
-                    .await
-                    .map_err(anyhow::Error::from);
-                recorded(failure, "the invoicing failure")
-            }
-        },
-    }
+    let Err(err) = issued.await else {
+        return Ok(());
+    };
+    let Some(reason) = event_fault(&err) else {
+        return Err(err);
+    };
+    let failure = orders
+        .record_invoicing_failure(ISSUER, order_id, &reason)
+        .await
+        .map_err(anyhow::Error::from);
+    recorded(failure, "the invoicing failure")?;
+    Err(err)
 }
 
 /// Issues the invoice of `order`, paid at `paid_at` (unix seconds) by
@@ -403,20 +401,17 @@ async fn on_refunded<E: Executor>(
         event.data.amount_cents,
     )
     .await;
-    match credited {
-        Ok(()) => Ok(()),
-        Err(err) => match Fault::of(err) {
-            Fault::Store(err) => Err(err),
-            Fault::Event(reason) => {
-                let db: Db = context.extract();
-                give_up(&db, SUBSCRIPTION, &event, &reason, now()).await?;
-                let store: TenantStore = context.extract();
-                let failure = timada_orders::Command::new(store.0, &event.tenant)
-                    .record_invoicing_failure(ISSUER, &event.aggregate_id, &reason)
-                    .await
-                    .map_err(anyhow::Error::from);
-                recorded(failure, "the invoicing failure")
-            }
-        },
-    }
+    let Err(err) = credited else {
+        return Ok(());
+    };
+    let Some(reason) = event_fault(&err) else {
+        return Err(err);
+    };
+    let store: TenantStore = context.extract();
+    let failure = timada_orders::Command::new(store.0, &event.tenant)
+        .record_invoicing_failure(ISSUER, &event.aggregate_id, &reason)
+        .await
+        .map_err(anyhow::Error::from);
+    recorded(failure, "the invoicing failure")?;
+    Err(err)
 }

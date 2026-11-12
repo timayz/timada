@@ -27,8 +27,6 @@ mod peers;
 mod rate_limit;
 #[path = "../src/read_only_store.rs"]
 mod read_only_store;
-#[path = "../src/saga_fault/mod.rs"]
-mod saga_fault;
 #[path = "../src/store_api.rs"]
 mod store_api;
 #[path = "../src/store_carts.rs"]
