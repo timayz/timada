@@ -306,7 +306,7 @@ pub(crate) async fn send(
 #[cfg(test)]
 mod tests {
     use evento::{Evento, Turso};
-    use timada_core::{MailStatus, RETRY_DELAYS_SECS, Sending};
+    use timada_core::{MailStatus, Sending};
     use timada_orders::{PROVIDER_STRIPE, Payment, ShippingAddress};
     use timada_tenancy::{ConfigurePayments, CreateTenant, TenantState};
     use topcoat::mail::{Mailbox, MemoryTransport, Transport};
@@ -405,7 +405,9 @@ mod tests {
     async fn run(store: &Turso, room: &Arc<Mailroom>, now: u64) -> usize {
         pass(store, room).await;
         // The pass stamped the rows with the clock, which may have ticked
-        // past the test's `now` meanwhile: sweep at whichever is later.
+        // past the test's `now` meanwhile: sweep at whichever is later. A
+        // failed send is stamped with that later time too, so a test reads
+        // its retry off the stream rather than reckon it from `now`.
         room.sweep(now.max(crate::auth::now())).await.unwrap()
     }
 
@@ -485,16 +487,21 @@ mod tests {
         let now = crate::auth::now();
 
         assert_eq!(run(&store, &down, now).await, 0);
-        assert!(matches!(
-            mail_of(&store, &shop, ShopMailKind::OrderConfirmation).await,
-            Sending::Deferred { attempts: 1, .. }
-        ));
+        let mail = mail_of(&store, &shop, ShopMailKind::OrderConfirmation).await;
+        let Sending::Deferred {
+            retry_at,
+            attempts: 1,
+            ..
+        } = mail
+        else {
+            panic!("{mail:?}");
+        };
         assert_eq!(
             shown(&store, &shop).await,
             [("order_confirmation".to_owned(), MailStatus::Retrying)]
         );
         // Not before the retry is due.
-        assert_eq!(run(&store, &down, now).await, 0);
+        assert_eq!(run(&store, &down, retry_at - 1).await, 0);
         assert_eq!(
             mail_of(&store, &shop, ShopMailKind::OrderConfirmation)
                 .await
@@ -504,7 +511,7 @@ mod tests {
 
         let transport = MemoryTransport::new();
         let back = node(&store, transport.clone(), &gateway, "node-b");
-        assert_eq!(run(&store, &back, now + RETRY_DELAYS_SECS[0]).await, 1);
+        assert_eq!(run(&store, &back, retry_at).await, 1);
         assert_eq!(transport.sent().len(), 1);
         assert_eq!(
             mail_of(&store, &shop, ShopMailKind::OrderConfirmation).await,
