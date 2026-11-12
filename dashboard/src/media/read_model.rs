@@ -476,6 +476,7 @@ mod tests {
     use super::super::fetcher::tests::{fetcher_alone, wanted};
     use super::super::test_support::{png, rendered};
     use super::*;
+    use crate::disk::Durability;
     use timada_tenancy::MailLogo;
 
     fn picture() -> Picture {
@@ -542,6 +543,7 @@ mod tests {
                 Rendition::Listing,
                 "i1",
                 &rendered(&png(900, 600, [1, 2, 3, 255])).listing,
+                Durability::Cached,
             )
             .await
             .unwrap();

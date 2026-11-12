@@ -78,11 +78,11 @@ fn list_files(tenant_dir: &Path) -> std::io::Result<Vec<OnDisk>> {
                 .ok()
                 .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
                 .map_or(0, |since| since.as_secs());
-            // A rendition's file, or a half-written one left behind: either
-            // way a file of ours, judged by the store's knowledge of it.
+            // A rendition's file. Anything else, a temporary file a write
+            // left behind included, keeps its own name, which the store
+            // never knows.
             let image_id = name
                 .strip_suffix(&format!(".{RENDITION_EXT}"))
-                .or_else(|| name.strip_suffix(&format!(".{RENDITION_EXT}.part")))
                 .filter(|id| is_id(id))
                 .unwrap_or(name);
             files.push(OnDisk {
@@ -231,7 +231,7 @@ impl Reconcile {
         Ok(report)
     }
 
-    /// Deletes one file on disk, a half-written one included.
+    /// Deletes one file on disk.
     async fn remove(&self, tenant_id: &str, file: &OnDisk) {
         if is_id(&file.image_id) {
             if let Ok(path) = self
@@ -239,9 +239,6 @@ impl Reconcile {
                 .path_of(tenant_id, file.rendition, &file.image_id)
             {
                 let _ = tokio::fs::remove_file(&path).await;
-                let _ =
-                    tokio::fs::remove_file(path.with_extension(format!("{RENDITION_EXT}.part")))
-                        .await;
             }
         } else {
             // A name that is not a picture's: whatever it is, it is in our
@@ -265,6 +262,7 @@ mod tests {
     use super::super::read_model::Source;
     use super::super::test_support::{png, rendered};
     use super::*;
+    use crate::disk::Durability;
 
     /// A file the store knows and the disk holds as recorded stays; one
     /// held at another size goes and is wanted again; one the disk lacks is
@@ -282,23 +280,34 @@ mod tests {
                 .await
                 .unwrap();
         }
+        let cached = Durability::Cached;
         media
-            .store("acme", Rendition::Listing, "i1", &upload.listing)
+            .store("acme", Rendition::Listing, "i1", &upload.listing, cached)
             .await
             .unwrap();
         media
-            .store("acme", Rendition::Page, "i1", &upload.page)
+            .store("acme", Rendition::Page, "i1", &upload.page, cached)
             .await
             .unwrap();
         media
-            .store("acme", Rendition::Listing, "i2", b"RIFF....WEBPshort")
+            .store(
+                "acme",
+                Rendition::Listing,
+                "i2",
+                b"RIFF....WEBPshort",
+                cached,
+            )
             .await
             .unwrap();
         // Unknown to the store: an orphan, fresh.
         media
-            .store("acme", Rendition::Page, "orphan", &upload.page)
+            .store("acme", Rendition::Page, "orphan", &upload.page, cached)
             .await
             .unwrap();
+        // A temporary file a write left behind next to a file kept: a stray
+        // of its own, whatever its name starts with.
+        let i1_listing = media.path_of("acme", Rendition::Listing, "i1").unwrap();
+        let leftover = crate::disk::write_partial(&i1_listing, b"half").unwrap();
         // The wanted rows the recording left: cleared, so the run's own show.
         fetcher
             .db
@@ -314,7 +323,7 @@ mod tests {
                 tenants: 1,
                 kept: 2,
                 orphans_removed: 0,
-                orphans_young: 1,
+                orphans_young: 2,
                 wrong_size: 1,
                 missing: 1,
             }
@@ -335,10 +344,13 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|row| row.image_id == "i2"));
 
-        // A day later the orphan goes; what is wanted stays wanted.
+        // A day later the orphan and the leftover go, the file kept beside
+        // it stays; what is wanted stays wanted.
         let report = reconcile.run(now + ORPHAN_AFTER_SECS + 1).await.unwrap();
-        assert_eq!(report.orphans_removed, 1);
+        assert_eq!(report.orphans_removed, 2);
         assert_eq!(report.orphans_young, 0);
+        assert!(!leftover.exists());
+        assert!(i1_listing.exists());
         assert_eq!(report.missing, 2, "i2's two files, still lacking");
         assert!(
             !media

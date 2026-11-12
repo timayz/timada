@@ -533,7 +533,11 @@ The node taking an upload stores the renditions, copies each to the other nodes
 with `cluster.secret` as a bearer token; a copy is taken only if it is WebP and no
 heavier than a rendition gets) and commits only once a majority of the cluster holds
 both, the same majority the commit itself needs; short of that the upload is refused
-and the copies are left unreferenced. Copies to the slower nodes carry on after the
+and the copies are left unreferenced. Each node of that majority syncs the files to its
+disk, names and all, before it answers, so a power cut across the cluster keeps the
+picture with the event; a copy a node fetches has its bytes synced before its name, so
+no node serves an empty file after a power cut.
+Copies to the slower nodes carry on after the
 commit. Each node also runs the `media` read model (`timada-dashboard/media` for the
 catalog, the pages and the reviews, `timada-dashboard/mail-logos` for the tenants):
 `media_files`, one row per rendition file the store knows with its size, digest and
@@ -653,14 +657,20 @@ the support messages use them too (below). The dashboard keeps the keys in
 random, so a tenant's keys spread evenly over 64 directories, some sixteen thousand
 files in each at a million accounts. Like a picture, a key is on a majority of the
 cluster before `Registered` commits (`PUT /cluster/keys/<tenant>/<key id>`, with
-`cluster.secret`). Nothing serves these files to the outside: a node lacking a key asks
+`cluster.secret`), and each node of that majority syncs it to its disk, name and all,
+before it answers (`dashboard/src/disk.rs`), as the store syncs each write: a power cut
+across the cluster keeps the key with the event.
+Nothing serves these files to the outside: a node lacking a key asks
 all its peers at once on the same route, with a `GET` carrying the secret, and takes a
 peer that has not answered within two seconds for out of reach. Each node follows the
 tenants' `Shopper` streams (`timada-dashboard/shopper-keys`) to fetch the keys of new
 accounts and destroy those of deleted ones. Destroying puts an empty file, the
 tombstone, in the key's place in one step (a rename), and a key only ever takes a name
 no file holds yet (a hard link from a temporary file), so a copy or a fetch still under
-way cannot bring a key back. Tombstones are kept for good: an address whose account was
+way cannot bring a key back. A tombstone's name is synced too, or a power cut would
+bring the key back; and every key file's bytes reach the disk before its name, a fetched
+one's included, since a power cut would otherwise leave an empty file, which reads as a
+tombstone. Tombstones are kept for good: an address whose account was
 deleted asks for its old key when it signs in again, and a peer that has not caught up
 with the deletion would otherwise hand it back. The read model opens the address for
 the Customers list with the key, and fails its pass while a key on its way from a peer
