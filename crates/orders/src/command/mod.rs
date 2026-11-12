@@ -1904,9 +1904,11 @@ async fn on_order_mail_deferred(
     event: Event<MailDeferred>,
     state: &mut OrderMailState,
 ) -> anyhow::Result<()> {
-    state.sending = state
-        .sending
-        .deferred(event.data.retry_at, &event.data.reason);
+    state.sending = Sending::Deferred {
+        retry_at: event.data.retry_at,
+        attempts: event.data.attempts,
+        reason: event.data.reason.clone(),
+    };
     state.updated_at = event.timestamp;
     Ok(())
 }
@@ -1916,7 +1918,10 @@ async fn on_order_mail_failed(
     event: Event<MailFailed>,
     state: &mut OrderMailState,
 ) -> anyhow::Result<()> {
-    state.sending = state.sending.failed(&event.data.reason);
+    state.sending = Sending::Failed {
+        reason: event.data.reason.clone(),
+        attempts: event.data.attempts,
+    };
     state.updated_at = event.timestamp;
     Ok(())
 }

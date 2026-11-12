@@ -137,10 +137,18 @@ impl<E: Executor> super::Command<E> {
             match record {
                 MailRecord::Sent => write.event(&MailSent),
                 MailRecord::Undeliverable(reason) => write.event(&MailUndeliverable { reason }),
-                MailRecord::Deferred { retry_at, reason } => {
-                    write.event(&MailDeferred { retry_at, reason })
+                MailRecord::Deferred {
+                    retry_at,
+                    attempts,
+                    reason,
+                } => write.event(&MailDeferred {
+                    retry_at,
+                    attempts,
+                    reason,
+                }),
+                MailRecord::Failed { reason, attempts } => {
+                    write.event(&MailFailed { reason, attempts })
                 }
-                MailRecord::Failed { reason } => write.event(&MailFailed { reason }),
                 MailRecord::Nothing => unreachable!("returned above"),
             };
             match write.tenant(&self.tenant).commit(&self.executor).await {

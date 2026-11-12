@@ -1140,9 +1140,11 @@ async fn on_invitation_mail_deferred(
     event: Event<MailDeferred>,
     invitation: &mut InvitationState,
 ) -> anyhow::Result<()> {
-    invitation.mail = invitation
-        .mail
-        .deferred(event.data.retry_at, &event.data.reason);
+    invitation.mail = Sending::Deferred {
+        retry_at: event.data.retry_at,
+        attempts: event.data.attempts,
+        reason: event.data.reason.clone(),
+    };
     Ok(())
 }
 
@@ -1151,7 +1153,10 @@ async fn on_invitation_mail_failed(
     event: Event<MailFailed>,
     invitation: &mut InvitationState,
 ) -> anyhow::Result<()> {
-    invitation.mail = invitation.mail.failed(&event.data.reason);
+    invitation.mail = Sending::Failed {
+        reason: event.data.reason.clone(),
+        attempts: event.data.attempts,
+    };
     Ok(())
 }
 

@@ -327,10 +327,18 @@ impl<E: Executor> super::Command<E> {
             match record {
                 MailRecord::Sent => writer.event(&MailSent),
                 MailRecord::Undeliverable(reason) => writer.event(&MailUndeliverable { reason }),
-                MailRecord::Deferred { retry_at, reason } => {
-                    writer.event(&MailDeferred { retry_at, reason })
+                MailRecord::Deferred {
+                    retry_at,
+                    attempts,
+                    reason,
+                } => writer.event(&MailDeferred {
+                    retry_at,
+                    attempts,
+                    reason,
+                }),
+                MailRecord::Failed { reason, attempts } => {
+                    writer.event(&MailFailed { reason, attempts })
                 }
-                MailRecord::Failed { reason } => writer.event(&MailFailed { reason }),
                 MailRecord::Nothing => unreachable!("returned above"),
             };
             match writer.tenant(&self.tenant).commit(&self.executor).await {
