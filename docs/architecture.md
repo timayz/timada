@@ -143,8 +143,9 @@ data/timada.db            the store: every tenant's events (the platform's own i
 data/media/<id>/          one per tenant: the product pictures, the review photos, the
                           pages' pictures and the mail logo, each as two WebP renditions,
                           400/<image id>.webp and 1200/<image id>.webp
-data/shopper-keys/<id>/   one per tenant: each shopper account's and each contact message's
-                          key, sealed, named <key id> (<key id>.gone once destroyed)
+data/shopper-keys/<id>/   one per tenant: each shopper account's, newsletter subscriber's and
+                          contact message's key, sealed, at <first character>/<key id> (an
+                          empty file once destroyed)
 <merchant app>/storefront.db  the shop's replica (`STORE_DB`): subscription cursor,
                           snapshots, product and category rows
 ```
@@ -201,12 +202,17 @@ by construction.
    joining, which installs a peer's store page by page (4 MiB at a time) before
    anything is served; then the read-model subscriptions catch up from it, all at
    once (each writes tables of its own), before the node listens. The pictures and
-   keys this node keeps are not in the store: their subscriptions walk their
-   events again from the start and fetch from a peer only what the disk lacks, so
-   a node rebuilt on a new machine should get `data/media` and
-   `data/shopper-keys` copied from a peer (`rsync`) before its first `serve`; a
-   picture a node has not got yet is answered 404 with `Cache-Control: no-store`,
-   so no cache in front keeps the miss. The
+   keys this node keeps are not in the store. Before the read models catch up, it
+   copies every key from a peer, a page of a thousand at a time (`GET
+   /cluster/keys`, then `GET /cluster/keys/<tenant>?after=<key id>`), as the
+   read models open each shopper's data with its key and would otherwise ask the
+   peers for each in turn; a peer that fails part of the way leaves the rest to
+   the next, and what none hands over is asked for key by key. The pictures'
+   subscriptions walk their events again from the start and
+   fetch from a peer only what the disk lacks, so a node rebuilt on a new machine
+   should get `data/media` copied from a peer (`rsync`) before its first `serve`;
+   a picture a node has not got yet is answered 404 with `Cache-Control:
+   no-store`, so no cache in front keeps the miss. The
    `rebuild <read-model>…` command (server stopped; `rebuild --list` names them)
    does the same for one read model after a change to its tables or handlers:
    it drops and recreates its tables, forgets the cursors of the subscriptions
@@ -637,18 +643,25 @@ The sealing itself (`timada_core::keys`: a random 256-bit key, AES-GCM, the ciph
 bound to the owner id, the key id and the field's name) and the `Keys` trait the
 contexts ask for keys through are shared by every context that records personal data;
 the support messages use them too (below). The dashboard keeps the keys in
-`data_keys.dir/<tenant>/<key id>`, each sealed with `[secrets] key` (no section, no
-shopper accounts and no contact messages), and like a picture on a majority of the
+`data_keys.dir/<tenant>/<first character of the key id>/<key id>`, each sealed with
+`[secrets] key` (no section, no shopper accounts and no contact messages): a key id is
+random, so a tenant's keys spread evenly over 64 directories, some sixteen thousand
+files in each at a million accounts. Like a picture, a key is on a majority of the
 cluster before `Registered` commits (`PUT /cluster/keys/<tenant>/<key id>`, with
 `cluster.secret`). Nothing serves these files to the outside: a node lacking a key asks
-its peers on the same route with a `GET` carrying the secret. Each node follows the
+all its peers at once on the same route, with a `GET` carrying the secret, and takes a
+peer that has not answered within two seconds for out of reach. Each node follows the
 tenants' `Shopper` streams (`timada-dashboard/shopper-keys`) to fetch the keys of new
-accounts and destroy those of deleted ones. Destroying writes a `<key id>.gone`
-tombstone before removing the file, so a copy or a fetch still under way cannot bring a
-key back. The read model opens the address for the Customers list with the key, and
-retries until a key on its way from a peer arrives. A backup of this directory brings
-deleted accounts back when restored, so keep it short-lived or skip it; losing it on
-every node loses every account's data.
+accounts and destroy those of deleted ones. Destroying puts an empty file, the
+tombstone, in the key's place in one step (a rename), and a key only ever takes a name
+no file holds yet (a hard link from a temporary file), so a copy or a fetch still under
+way cannot bring a key back. Tombstones are kept for good: an address whose account was
+deleted asks for its old key when it signs in again, and a peer that has not caught up
+with the deletion would otherwise hand it back. The read model opens the address for
+the Customers list with the key, and fails its pass while a key on its way from a peer
+has not arrived, to be started again from that event. A backup of this directory
+brings deleted accounts back when restored, so keep it short-lived or skip it; losing
+it on every node loses every account's data.
 
 A storefront signs its shoppers in over HTTP, not through the store API, under
 `/store/shoppers/*` with its key as a bearer token (it must allow `store:checkout`):
