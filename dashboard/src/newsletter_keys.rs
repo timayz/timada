@@ -37,6 +37,11 @@ async fn on_requested<E: Executor>(
     event: Event<Requested>,
 ) -> anyhow::Result<()> {
     let vault: Arc<KeyVault> = context.extract();
+    // Held here already (copied as it was recorded, or as this node
+    // joined), or destroyed since: nothing to fetch nor to look up.
+    if vault.knows(&event.tenant, &event.data.key_id).await? {
+        return Ok(());
+    }
     let still_used = subscriber_projection()
         .load(&event.aggregate_id)
         .tenant(&event.tenant)

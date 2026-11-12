@@ -1,5 +1,5 @@
 //! The other nodes of the cluster, as the files every node keeps reach them:
-//! the product pictures ([`crate::media`]) and the shopper keys
+//! the product pictures ([`crate::media`]) and the personal-data keys
 //! ([`crate::key_vault`]). A file is copied to a majority of the cluster
 //! before the event naming it is recorded, the same majority a commit needs,
 //! so it survives whatever the events survive. The rate limits ask the same
@@ -234,6 +234,19 @@ pub(crate) mod test_support {
     pub async fn down() -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         format!("http://{}", listener.local_addr().unwrap())
+    }
+
+    /// A peer that takes every connection and never answers.
+    pub async fn silent() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+        format!("http://{addr}")
     }
 }
 

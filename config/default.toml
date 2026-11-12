@@ -113,14 +113,15 @@ reconcile_check_secs = 86400
 
 [data_keys]
 # Directory holding the keys personal data is encrypted with: one per shopper
-# account and one per contact-form message, one sub-directory per tenant. A
-# shopper's e-mail address and saved addresses, and what a visitor wrote
-# through the contact form, are recorded only encrypted with their key, so
-# deleting an account or erasing a message deletes its key and leaves what was
-# recorded unreadable for good. Every node keeps every key, sealed with
-# secrets.key. Keep backups of this directory short-lived, or not at all:
-# restoring an old copy brings deleted data back. Losing it on every node
-# loses every account and every message.
+# account, newsletter subscriber and contact-form message, one sub-directory
+# per tenant. A shopper's e-mail address and saved addresses, a subscriber's
+# address, and what a visitor wrote through the contact form, are recorded
+# only encrypted with their key, so deleting an account or erasing a message
+# deletes its key and leaves what was recorded unreadable for good. Every node
+# keeps every key, sealed with secrets.key; a node that joins copies them from
+# another before it serves. Keep backups of this directory short-lived, or not
+# at all: restoring an old copy brings deleted data back. Losing it on every
+# node loses every account and every message.
 dir = "data/shopper-keys"
 
 # Card payments. Each tenant connects its own Stripe account on
