@@ -44,6 +44,18 @@ impl ScenarioFilter {
     }
 }
 
+/// What [`scenarios_of_tenant`] reads. Each scenario's runs are the
+/// counts the read model keeps of them, by status (a few rows), never a
+/// count of the runs: a scenario on a busy trigger keeps tens of thousands.
+pub(super) const SCENARIOS_OF_TENANT: &str = "SELECT s.*,
+        (SELECT COALESCE(SUM(c.runs), 0) FROM automations_run_counts c
+         WHERE c.tenant_id = s.tenant_id AND c.scenario_id = s.id) AS runs
+     FROM automations_scenarios s
+     WHERE s.tenant_id = ?1
+       AND ((?2 IS NULL AND s.status <> 'archived') OR s.status = ?2)
+     ORDER BY s.updated_at DESC, s.id DESC
+     LIMIT ?3 OFFSET ?4";
+
 /// The tenant's scenarios, last changed first.
 pub async fn scenarios_of_tenant(
     db: &Db,
@@ -53,14 +65,7 @@ pub async fn scenarios_of_tenant(
     offset: u32,
 ) -> anyhow::Result<Vec<ScenarioRow>> {
     db.fetch_all(
-        "SELECT s.*,
-            (SELECT COUNT(*) FROM automations_runs r
-             WHERE r.tenant_id = s.tenant_id AND r.scenario_id = s.id) AS runs
-         FROM automations_scenarios s
-         WHERE s.tenant_id = ?1
-           AND ((?2 IS NULL AND s.status <> 'archived') OR s.status = ?2)
-         ORDER BY s.updated_at DESC, s.id DESC
-         LIMIT ?3 OFFSET ?4",
+        SCENARIOS_OF_TENANT,
         (
             tenant_id,
             filter.status(),
@@ -108,17 +113,21 @@ pub async fn scenario_status(
     Ok(row.map(|(status,)| ScenarioStatus::parse(&status).unwrap_or_default()))
 }
 
-/// The name of one of the tenant's scenarios.
+/// What [`scenario_name`] reads, by the table's key, as
+/// [`SCENARIO_STATUS`] does.
+pub(super) const SCENARIO_NAME: &str = "SELECT name FROM automations_scenarios
+        INDEXED BY sqlite_autoindex_automations_scenarios_1
+     WHERE tenant_id = ?1 AND id = ?2";
+
+/// The name of one of the tenant's scenarios: what the runner says in a
+/// notice or a webhook call.
 pub async fn scenario_name(
     db: &Db,
     tenant_id: &str,
     scenario_id: &str,
 ) -> anyhow::Result<Option<String>> {
     let row: Option<(String,)> = db
-        .fetch_optional(
-            "SELECT name FROM automations_scenarios WHERE tenant_id = ?1 AND id = ?2",
-            (tenant_id, scenario_id),
-        )
+        .fetch_optional(SCENARIO_NAME, (tenant_id, scenario_id))
         .await?;
     Ok(row.map(|(name,)| name))
 }

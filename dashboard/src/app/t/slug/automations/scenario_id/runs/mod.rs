@@ -1,7 +1,7 @@
 //! `/t/{slug}/automations/{scenario_id}/runs`: what a published scenario
 //! did, run by run, for members with `automations:read`; newest first, from
-//! the shared read model (a moment behind). Runs that ended leave the list
-//! after 90 days.
+//! the shared read model (a moment behind), a page at a time from where the
+//! page beside it stopped. Runs that ended leave the list after 90 days.
 
 pub mod run_id;
 
@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use timada_automations::{
     Definition, RunFilter, RunStatus, catalog, count_runs, published_definition, runs_of_scenario,
 };
+use timada_core::page::{Cursor, PageFrom};
 use timada_tenancy::PERMISSION_AUTOMATIONS_READ;
 use topcoat::{
     Result,
@@ -29,17 +30,20 @@ use crate::components::table::{
 };
 use crate::db::Db;
 use crate::ui::{
-    LINK, Shell, document, empty_row, filter_bar, format_time, notice, page_header, pager,
+    LINK, Shell, cursor_pager, document, empty_row, filter_bar, format_time, notice, page_header,
     section_card, status_badge,
 };
 
-const PAGE_SIZE: u32 = 50;
+const PAGE_SIZE: i64 = 50;
 const ALL: &str = "all";
 
 #[topcoat::router::query_params(error = bad_request)]
 struct RunsQuery {
     status: Option<String>,
-    page: Option<u32>,
+    /// The cursor of the row the page starts after (older runs).
+    after: Option<String>,
+    /// The cursor of the row the page ends before (newer runs).
+    before: Option<String>,
     error: Option<String>,
     message: Option<String>,
 }
@@ -48,7 +52,9 @@ struct RunsQuery {
 struct RunsLink<'a> {
     status: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    page: Option<u32>,
+    after: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    before: Option<&'a str>,
 }
 
 /// One row as the page shows it.
@@ -71,7 +77,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<RunsQuery>(cx)?;
     let scenario = require_scenario(&access, cx).await?;
     let status = query.status.as_deref().and_then(RunStatus::parse);
-    let page_number = query.page.unwrap_or(1).max(1);
+    let after = query.after.as_deref().and_then(Cursor::parse);
+    let before = query.before.as_deref().and_then(Cursor::parse);
+    let from = PageFrom::of(after.as_ref(), before.as_ref());
     let nav = TenantNav::of(cx, &access).await?;
     let tenant = access.tenant;
     let pool = app_context::<Db>(cx);
@@ -79,16 +87,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let total = count_runs(pool, &tenant.id, &scenario.id, &filter)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    let found = runs_of_scenario(
-        pool,
-        &tenant.id,
-        &scenario.id,
-        &filter,
-        PAGE_SIZE,
-        (page_number - 1) * PAGE_SIZE,
-    )
-    .await
-    .map_err(topcoat::Error::from_anyhow)?;
+    let listed = runs_of_scenario(pool, &tenant.id, &scenario.id, &filter, from, PAGE_SIZE)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let found = listed.rows;
     // The versions the runs listed started on, each read once; one this
     // build cannot read names no step.
     let mut definitions: HashMap<i64, Option<Definition>> = HashMap::new();
@@ -135,19 +137,29 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             }
         })
         .collect();
-    let pages = total.div_ceil(u64::from(PAGE_SIZE)) as u32;
     let status_value = status.map_or(ALL, RunStatus::as_str);
     let page_link = {
         let slug = slug.clone();
         let id = scenario.id.clone();
-        move |page: u32| {
+        move |after: Option<&str>, before: Option<&str>| {
             href!(index, Slug(slug.clone()), ScenarioId(id.clone()))
                 .query(RunsLink {
                     status: status_value,
-                    page: Some(page),
+                    after,
+                    before,
                 })
                 .resolve(cx)
         }
+    };
+    let newer = listed
+        .newer
+        .map(|cursor| page_link(None, Some(&cursor.param())));
+    let older = listed
+        .older
+        .map(|cursor| page_link(Some(&cursor.param()), None));
+    let summary = match total {
+        1 => "1 run".to_owned(),
+        n => format!("{n} runs"),
     };
     let title = format!("Runs · {} · Automations · {}", scenario.name, tenant.name);
     let back = scenario_url(cx, &slug, &scenario.id, None, None);
@@ -208,12 +220,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     )
                 )
-                pager(
-                    page: i64::from(page_number),
-                    pages: i64::from(pages),
-                    previous: (page_number > 1).then(|| page_link(page_number - 1)),
-                    next: (page_number < pages).then(|| page_link(page_number + 1)),
-                )
+                cursor_pager(summary: &summary, newer: newer, older: older)
             )
         )
     })

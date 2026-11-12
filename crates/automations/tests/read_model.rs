@@ -44,6 +44,22 @@ async fn scenarios_are_listed_by_status() {
         .await
         .unwrap();
     automations.archive_scenario(ALICE, &gone).await.unwrap();
+    // Two runs of the live one, and one of a scenario not listed.
+    let runs = [
+        (live.as_str(), "ev1"),
+        (live.as_str(), "ev2"),
+        ("sc-other", "ev1"),
+    ];
+    for (scenario, event) in runs {
+        let start = StartRun {
+            scenario_id: scenario.to_owned(),
+            scenario_version: 1,
+            trigger: "order.placed".into(),
+            trigger_event_id: event.into(),
+            subject_id: "order-1".into(),
+        };
+        automations.start_run(ALICE, &start).await.unwrap();
+    }
 
     catch_up(&executor, &pool).await;
     // Delivery may repeat: the rows do not drift.
@@ -61,10 +77,12 @@ async fn scenarios_are_listed_by_status() {
     assert_eq!(row.version, 1);
     assert_eq!(row.steps, 3);
     assert!(!row.unpublished);
+    assert_eq!(row.runs, 2);
     let row = rows.iter().find(|row| row.id == draft).unwrap();
     assert_eq!(row.status(), ScenarioStatus::Draft);
     assert_eq!(row.trigger, None);
     assert!(row.unpublished);
+    assert_eq!(row.runs, 0);
 
     let archived = scenarios_of_tenant(&pool, TENANT, &only(ScenarioStatus::Archived), 10, 0)
         .await

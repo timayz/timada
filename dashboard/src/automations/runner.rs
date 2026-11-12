@@ -103,6 +103,11 @@ const LOOK_AGAIN_SECS: u64 = 5 * 60;
 /// may move: the runs it leaves as they were do not count against
 /// `runs_per_check`, but a look does not read them without end.
 const ROWS_PER_MOVE: u32 = 4;
+/// About how many rows of runs that ended 90 days ago one look drops, in a
+/// short transaction: looking every 15 seconds (the default), over five
+/// million a day, far more than runs end. A backlog (a node back after days
+/// away) goes at that pace.
+const PRUNED_PER_LOOK: u32 = 1_000;
 
 /// What a look did with a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,10 +240,14 @@ impl<E: Store> Runner<E> {
         })
     }
 
-    /// Starts the runs other nodes left, looks for the checkouts left
-    /// unpaid, then moves the runs due by `now` that fall to this node.
+    /// Drops the rows of runs that ended long ago, starts the runs other
+    /// nodes left, looks for the checkouts left unpaid, then moves the runs
+    /// due by `now` that fall to this node.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
-        prune_runs(&self.db, now.saturating_sub(RUN_HISTORY_SECS)).await?;
+        let ended_before = now.saturating_sub(RUN_HISTORY_SECS);
+        if let Err(err) = prune_runs(&self.db, ended_before, PRUNED_PER_LOOK).await {
+            tracing::error!(error = %err, "runs ended long ago not dropped");
+        }
         if let Err(err) = self.start_left_runs(now).await {
             tracing::error!(error = %err, "runs other nodes left not started");
         }
