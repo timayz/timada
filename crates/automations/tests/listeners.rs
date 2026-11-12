@@ -5,9 +5,10 @@ use timada_core::db::Db;
 
 use common::*;
 use timada_automations::{
-    Command, ListenerState, RunFilter, RunStatus, StartRun, Transition, due_runs, listener_of,
-    listener_subscription, listeners_for, owe_start, prune_runs, prune_starts,
-    read_model_subscription, run_id, run_known, runs_of_scenario, settle_start, starts_owed,
+    Command, DueRun, ListenerState, RunFilter, RunStatus, StartRun, Transition, due_runs,
+    listener_of, listener_subscription, listeners_for, owe_start, prune_runs, prune_starts,
+    put_off_run, read_model_subscription, run_id, run_known, runs_of_scenario, settle_start,
+    starts_owed,
 };
 
 async fn follow(executor: &evento::Turso, pool: &Db) {
@@ -107,7 +108,7 @@ async fn runs_are_listed_and_owed_a_look_until_they_end() {
     automations.start_run(ALICE, &start("ev1")).await.unwrap();
     automations.start_run(ALICE, &start("ev2")).await.unwrap();
     catch_up().await;
-    let due = due_runs(&pool, now() + 1, Share::ALONE, 0, 10)
+    let due = due_runs(&pool, now() + 1, Share::ALONE, 0, None, 10)
         .await
         .unwrap();
     assert_eq!(due.len(), 2);
@@ -140,14 +141,20 @@ async fn runs_are_listed_and_owed_a_look_until_they_end() {
 
     // The waiting one is owed a look once its wait is over, the other never.
     assert!(
-        due_runs(&pool, now() + 1, Share::ALONE, 0, 10)
+        due_runs(&pool, now() + 1, Share::ALONE, 0, None, 10)
             .await
             .unwrap()
             .is_empty()
     );
     assert_eq!(
-        due_runs(&pool, until, Share::ALONE, 0, 10).await.unwrap(),
-        vec![(TENANT.to_owned(), id.clone())]
+        due_runs(&pool, until, Share::ALONE, 0, None, 10)
+            .await
+            .unwrap(),
+        vec![DueRun {
+            tenant_id: TENANT.to_owned(),
+            id: id.clone(),
+            next_at: until as i64,
+        }]
     );
     let rows = runs_of_scenario(&pool, TENANT, "sc1", &RunFilter::default(), 10, 0)
         .await
@@ -209,20 +216,104 @@ async fn the_nodes_share_out_the_runs_due() {
     let mut seen = Vec::new();
     for index in 0..3 {
         let share = Share { index, of: 3 };
-        let mine = due_runs(&pool, later, share, 0, 100).await.unwrap();
+        let mine = due_runs(&pool, later, share, 0, None, 100).await.unwrap();
         assert!(!mine.is_empty(), "node {index} has a part");
-        assert!(mine.iter().all(|(_, id)| share.owns(id)));
-        seen.extend(mine);
+        assert!(mine.iter().all(|run| share.owns(&run.id)));
+        seen.extend(mine.into_iter().map(|run| run.id));
     }
     seen.sort();
     seen.dedup();
     assert_eq!(seen.len(), 30, "every run falls to one node");
 
     // Due since before `help_before`: any node takes it.
-    let all = due_runs(&pool, later, Share { index: 0, of: 3 }, later, 100)
+    let all = due_runs(&pool, later, Share { index: 0, of: 3 }, later, None, 100)
         .await
         .unwrap();
     assert_eq!(all.len(), 30);
+}
+
+/// A look walks the runs due page after page, each from where the one
+/// before stopped, and leaves the runs it put off out of the next looks
+/// until their time.
+#[tokio::test]
+async fn the_runs_due_are_walked_and_a_run_put_off_waits() {
+    let (executor, pool) = executor_with_pool().await;
+    let automations = Command::new(executor.clone(), TENANT);
+    for n in 0..5 {
+        automations
+            .start_run(
+                ALICE,
+                &StartRun {
+                    scenario_id: "sc1".into(),
+                    scenario_version: 1,
+                    trigger: "order.placed".into(),
+                    trigger_event_id: format!("ev{n}"),
+                    subject_id: format!("order-{n}"),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    read_model_subscription::<evento::Turso>(pool.clone())
+        .run_once(&executor)
+        .await
+        .unwrap();
+    let at = now() + 1;
+    let all = due_runs(&pool, at, Share::ALONE, 0, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 5);
+    let first = due_runs(&pool, at, Share::ALONE, 0, None, 2).await.unwrap();
+    let second = due_runs(&pool, at, Share::ALONE, 0, first.last(), 2)
+        .await
+        .unwrap();
+    let third = due_runs(&pool, at, Share::ALONE, 0, second.last(), 2)
+        .await
+        .unwrap();
+    let walked: Vec<DueRun> = [first, second, third].concat();
+    assert_eq!(walked, all, "every run once, in order");
+
+    // Put off: not due before then, on this node.
+    let held = &all[0];
+    put_off_run(&pool, held, at + 300).await.unwrap();
+    let due = due_runs(&pool, at, Share::ALONE, 0, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(due, all[1..].to_vec());
+    let later = due_runs(&pool, at + 300, Share::ALONE, 0, None, 10)
+        .await
+        .unwrap();
+    assert_eq!(later.len(), 5);
+    assert_eq!(later[4].id, held.id);
+
+    // A row written since the walk read it (the run moved) is left as the
+    // read model wrote it.
+    let moved = &all[1];
+    let mut run = automations.load_run(&moved.id).await.unwrap().unwrap();
+    let until = now() + 3600;
+    automations
+        .advance_run(
+            ALICE,
+            &mut run,
+            &[Transition::Wait {
+                step: "s1".into(),
+                until,
+            }],
+        )
+        .await
+        .unwrap();
+    read_model_subscription::<evento::Turso>(pool.clone())
+        .run_once(&executor)
+        .await
+        .unwrap();
+    put_off_run(&pool, moved, at + 300).await.unwrap();
+    let row = runs_of_scenario(&pool, TENANT, "sc1", &RunFilter::default(), 10, 0)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == moved.id)
+        .unwrap();
+    assert_eq!(row.next_at, Some(until as i64));
 }
 
 /// A run another node is to start is kept until it is started or too old.

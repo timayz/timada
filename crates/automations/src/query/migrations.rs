@@ -37,13 +37,14 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 step TEXT,
                 reason TEXT,
                 next_at INTEGER,
+                paused INTEGER NOT NULL,
                 shard INTEGER NOT NULL,
                 started_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX automations_runs_due ON automations_runs (next_at, id)
-                WHERE next_at IS NOT NULL;
+                WHERE next_at IS NOT NULL AND paused = 0;
         CREATE INDEX automations_runs_scenario ON automations_runs
                 (tenant_id, scenario_id, started_at DESC);
         CREATE INDEX automations_runs_ended ON automations_runs (updated_at)

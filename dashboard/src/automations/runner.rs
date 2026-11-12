@@ -11,6 +11,14 @@
 //! writes nothing and leaves the run to the winner, which goes on without
 //! reading the run back.
 //!
+//! A look moves `runs_per_check` runs at most, the most overdue first. A
+//! run it leaves as it was (its shop suspended, a mail waiting for the shop
+//! to set up what it needs, its version not seen here yet, a failure to
+//! move it) does not count: its row on this node is put off
+//! ([`LOOK_AGAIN_SECS`]), so the look goes on to the others and the next
+//! ones do not read it again before then, and no number of held runs fills
+//! a look. A paused scenario's runs are not due at all until it goes on.
+//!
 //! A step that acts outside the run (a mail) is claimed first and acts only
 //! for the node whose claim is written; it is not tried again, since a
 //! member mailed twice is worse off than one not mailed. A claim whose
@@ -27,12 +35,13 @@ use std::time::Duration;
 
 use crate::db::Db;
 use timada_automations::{
-    AUTOMATION_ACTOR, RUN_HISTORY_SECS, RunState, ScenarioStatus, Step, Transition,
+    AUTOMATION_ACTOR, DueRun, RUN_HISTORY_SECS, RunState, ScenarioStatus, Step, Transition,
     catalog::{self, CodeValue, DISCORD, DISCOUNT, EMAIL, NOTIFY, Subject, WEBHOOK},
     due_runs,
     interpreter::{self, Next, STUCK_SETTINGS, STUCK_UNKNOWN},
     left_checkouts, normalize_email, opt_out_token, prune_checkouts, prune_runs, prune_starts,
-    record_detected, run_known, scenario_name, scenario_status, settle_start, starts_owed,
+    put_off_run, record_detected, run_known, scenario_name, scenario_status, settle_start,
+    starts_owed,
 };
 use timada_core::Share;
 use timada_core::keys::KeyRing;
@@ -83,6 +92,32 @@ pub const HELP_AFTER_SECS: u64 = 2 * 60;
 /// The looks of the runner a node is left for its part, at the least: the
 /// wait is longer than [`HELP_AFTER_SECS`] when the looks are further apart.
 const HELP_LOOKS: u64 = 4;
+/// How long, in seconds, a run this node left as it was waits before the
+/// node looks at it again: one held (its shop suspended, a mail waiting
+/// for the shop to set up what it needs, its scenario or version not seen
+/// here yet), ended or moved by another node since its row was written,
+/// or not moved for a failure. Any move of the run, by any node, writes
+/// its row again.
+const LOOK_AGAIN_SECS: u64 = 5 * 60;
+/// How many rows of the runs due one look reads at most for each run it
+/// may move: the runs it leaves as they were do not count against
+/// `runs_per_check`, but a look does not read them without end.
+const ROWS_PER_MOVE: u32 = 4;
+
+/// What a look did with a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Looked {
+    /// This node moved it on, a step or more (it may have ended).
+    Moved,
+    /// Nothing to do before then: it moved since its row was written (a
+    /// wait began, another node acts on a step), which the row does not
+    /// show yet.
+    Asleep(u64),
+    /// Left as it was: held (a mail waiting for the shop to set up what it
+    /// needs, its scenario paused or its version not seen here yet), or
+    /// nothing to do (ended, moved by another node first, not stored).
+    Left,
+}
 
 /// What a step that acts did.
 enum Acted {
@@ -200,8 +235,8 @@ impl<E: Store> Runner<E> {
         })
     }
 
-    /// Moves every run due by `now` that falls to this node. A run that
-    /// fails to move is logged and the others still go.
+    /// Starts the runs other nodes left, looks for the checkouts left
+    /// unpaid, then moves the runs due by `now` that fall to this node.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
         prune_runs(&self.db, now.saturating_sub(RUN_HISTORY_SECS)).await?;
         if let Err(err) = self.start_left_runs(now).await {
@@ -210,52 +245,117 @@ impl<E: Store> Runner<E> {
         if let Err(err) = self.find_left_checkouts(now).await {
             tracing::error!(error = %err, "checkouts left unpaid not looked for");
         }
+        self.move_due_runs(now).await
+    }
+
+    /// Walks the runs due by `now` that fall to this node, the most overdue
+    /// first, until `runs_per_check` of them moved, or it read
+    /// [`ROWS_PER_MOVE`] rows per run it may move. A run it leaves as it
+    /// was is put off on this node, to when it wakes if it sleeps, else
+    /// [`LOOK_AGAIN_SECS`] later: the walk goes on past it, and the next
+    /// looks do not read it before then. A run that fails to move is logged
+    /// and put off the same.
+    async fn move_due_runs(&self, now: u64) -> anyhow::Result<()> {
+        let most_read = self.runs_per_look.saturating_mul(ROWS_PER_MOVE);
         let mut tenants: HashMap<String, Option<TenantState>> = HashMap::new();
-        for (tenant_id, run_id) in self.due(now).await? {
-            if !tenants.contains_key(&tenant_id) {
-                let tenant = timada_tenancy::Command(self.store.clone())
-                    .load_tenant(&tenant_id)
-                    .await?;
-                tenants.insert(tenant_id.clone(), tenant);
+        let (mut moved, mut read) = (0, 0);
+        let mut after: Option<DueRun> = None;
+        while moved < self.runs_per_look && read < most_read {
+            let page = self.due(now, after.as_ref(), self.runs_per_look).await?;
+            let last = page.len() < self.runs_per_look as usize;
+            for due in &page {
+                if moved == self.runs_per_look || read == most_read {
+                    break;
+                }
+                read += 1;
+                match self.look(&mut tenants, due, now).await {
+                    Looked::Moved => moved += 1,
+                    Looked::Asleep(until) => self.put_off(due, until).await,
+                    Looked::Left => self.put_off(due, now + LOOK_AGAIN_SECS).await,
+                }
             }
-            let Some(tenant) = tenants.get(&tenant_id).and_then(Option::as_ref) else {
-                continue;
-            };
-            // A suspended shop's runs wait for it.
-            if tenant.is_suspended() {
-                continue;
+            if last {
+                break;
             }
-            if let Err(err) = self.advance(tenant, &run_id, now).await {
-                tracing::error!(tenant = %tenant_id, run = %run_id, error = %err, "automation run not moved");
-            }
+            after = page.into_iter().last();
         }
         Ok(())
     }
 
-    /// The runs due by `now` that this node moves: its own part of them,
-    /// and any its node left for a while ([`HELP_AFTER_SECS`]).
-    async fn due(&self, now: u64) -> anyhow::Result<Vec<(String, String)>> {
+    /// Looks at one run of the walk: its shop, read once a look, then the
+    /// run.
+    async fn look(
+        &self,
+        tenants: &mut HashMap<String, Option<TenantState>>,
+        due: &DueRun,
+        now: u64,
+    ) -> Looked {
+        if !tenants.contains_key(&due.tenant_id) {
+            let tenant = timada_tenancy::Command(self.store.clone())
+                .load_tenant(&due.tenant_id)
+                .await
+                .unwrap_or_else(|err| {
+                    tracing::error!(tenant = %due.tenant_id, error = %err, "shop not read: its automation runs wait");
+                    None
+                });
+            tenants.insert(due.tenant_id.clone(), tenant);
+        }
+        match tenants.get(&due.tenant_id).and_then(Option::as_ref) {
+            // A suspended shop's runs wait for it.
+            Some(tenant) if !tenant.is_suspended() => {
+                self.advance(tenant, &due.id, now)
+                    .await
+                    .unwrap_or_else(|err| {
+                        tracing::error!(tenant = %due.tenant_id, run = %due.id, error = %err, "automation run not moved");
+                        Looked::Left
+                    })
+            }
+            _ => Looked::Left,
+        }
+    }
+
+    /// Puts this node's next look at a run it left as it was off to
+    /// `until`. One not put off (the write failed) is read again at the
+    /// next look, nothing worse.
+    async fn put_off(&self, due: &DueRun, until: u64) {
+        if let Err(err) = put_off_run(&self.db, due, until).await {
+            tracing::warn!(tenant = %due.tenant_id, run = %due.id, error = %format!("{err:#}"), "automation run not put off");
+        }
+    }
+
+    /// The runs due by `now` that this node moves, `limit` at most after
+    /// `after`: its own part of them, and any its node left for a while
+    /// ([`HELP_AFTER_SECS`]).
+    async fn due(
+        &self,
+        now: u64,
+        after: Option<&DueRun>,
+        limit: u32,
+    ) -> anyhow::Result<Vec<DueRun>> {
         // The read model holds every region's runs, and any node moves any
         // run: the share is among all the nodes up.
         let share = (self.place)(None);
         let help_before = now.saturating_sub(self.help_after);
-        due_runs(&self.db, now, share, help_before, self.runs_per_look).await
+        due_runs(&self.db, now, share, help_before, after, limit).await
     }
 
-    /// Moves one run as far as it goes at `now`, from one read of it.
+    /// Moves one run as far as it goes at `now`, from one read of it, and
+    /// says what came of it.
     pub async fn advance(
         &self,
         tenant: &TenantState,
         run_id: &str,
         now: u64,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Looked> {
         let automations = timada_automations::Command::new(self.store.clone(), &tenant.id);
         let Some(mut run) = automations.load_run(run_id).await? else {
-            return Ok(());
+            return Ok(Looked::Left);
         };
+        // What the look comes to where the run stops: moved, once it moved.
+        let mut looked = Looked::Left;
         for _ in 0..MOVES_PER_LOOK {
             if run.status.is_done() {
-                return Ok(());
+                return Ok(looked);
             }
             // From the read model of the scenarios, which every node keeps
             // whatever its region: the listeners are the trigger
@@ -266,23 +366,26 @@ impl<E: Store> Runner<E> {
                     let cancel = Transition::Cancel {
                         reason: "The scenario was deleted.".into(),
                     };
-                    automations
+                    let cancelled = automations
                         .advance_run(AUTOMATION_ACTOR, &mut run, &[cancel])
                         .await?;
-                    return Ok(());
+                    return Ok(if cancelled { Looked::Moved } else { looked });
                 }
                 // Held, or published a moment ago and not seen here yet.
-                Some(ScenarioStatus::Paused | ScenarioStatus::Draft) | None => return Ok(()),
+                Some(ScenarioStatus::Paused | ScenarioStatus::Draft) | None => return Ok(looked),
             }
             let Some(definition) = self
                 .definitions
                 .get(&self.db, &tenant.id, &run.scenario_id, run.scenario_version)
                 .await?
             else {
-                return Ok(());
+                return Ok(looked);
             };
             let moved = match interpreter::next(&definition, &run, now) {
-                Next::Sleep(_) => return Ok(()),
+                // Unless this look moved it, its row showed it due: it moved
+                // since, and the row does not show it yet.
+                Next::Sleep(_) if looked == Looked::Moved => return Ok(looked),
+                Next::Sleep(until) => return Ok(Looked::Asleep(until)),
                 Next::Finish => {
                     automations
                         .advance_run(AUTOMATION_ACTOR, &mut run, &[Transition::Finish])
@@ -312,7 +415,7 @@ impl<E: Store> Runner<E> {
                         && self.mail_blocked(tenant).await?.is_some()
                         && now < run.updated_at + MAIL_HOLD_SECS
                     {
-                        return Ok(());
+                        return Ok(looked);
                     }
                     let attempt = run.attempts(&step.id) + 1;
                     let claim = Transition::Claim {
@@ -323,8 +426,10 @@ impl<E: Store> Runner<E> {
                         .advance_run(AUTOMATION_ACTOR, &mut run, &[claim])
                         .await?
                     {
-                        return Ok(());
+                        return Ok(looked);
                     }
+                    // Claimed: it moved, whatever comes of the step.
+                    looked = Looked::Moved;
                     let outcome = match self.act(tenant, &run, definition.subject(), step).await {
                         Acted::Done(output) => Transition::Succeed {
                             step: step.id.clone(),
@@ -376,10 +481,11 @@ impl<E: Store> Runner<E> {
             };
             // Another node moved it meanwhile: it carries on from there.
             if !moved {
-                return Ok(());
+                return Ok(looked);
             }
+            looked = Looked::Moved;
         }
-        Ok(())
+        Ok(looked)
     }
 
     /// Checks a condition on the subject as it is now: the lane it sends
@@ -1041,9 +1147,9 @@ mod tests {
     use evento::Evento;
     use evento::ProjectionAggregate;
     use timada_automations::{
-        Command, Definition, Lane, Outcome, RunStatus, Slot,
-        catalog::{CONDITION, SUBSCRIBER_CONFIRMED, WAIT},
-        read_model_subscription,
+        Command, Definition, Lane, Outcome, RunStatus, Slot, StartRun,
+        catalog::{CONDITION, ORDER_PLACED, SUBSCRIBER_CONFIRMED, WAIT},
+        read_model_subscription, run_id,
     };
     use timada_core::{Key, Keys};
     use timada_newsletter::{RequestOutcome, RequestSubscription, SOURCE_FORM};
@@ -1155,6 +1261,18 @@ mod tests {
         place: ShareOf,
         every: Duration,
     ) -> Arc<Runner<Evento>> {
+        runner_moving(store, db, keys, place, every, 10)
+    }
+
+    /// The same, moving `runs_per_look` runs a look at most.
+    fn runner_moving(
+        store: &Evento,
+        db: &Db,
+        keys: &Arc<MemoryKeys>,
+        place: ShareOf,
+        every: Duration,
+        runs_per_look: u32,
+    ) -> Arc<Runner<Evento>> {
         Runner::new(
             db.clone(),
             store.clone(),
@@ -1166,7 +1284,7 @@ mod tests {
             Duration::from_secs(5),
             true,
             Duration::from_secs(3600),
-            10,
+            runs_per_look,
             every,
             place,
         )
@@ -1257,14 +1375,26 @@ mod tests {
 
     async fn the_run(store: &Evento, db: &Db) -> Option<RunState> {
         catch_up(store, db).await;
-        let due = due_runs(db, crate::auth::now() + 10_000_000, Share::ALONE, 0, 10)
-            .await
-            .unwrap();
-        let (_, id) = due.first()?;
+        let due = due_runs(
+            db,
+            crate::auth::now() + 10_000_000,
+            Share::ALONE,
+            0,
+            None,
+            10,
+        )
+        .await
+        .unwrap();
         Command::new(store.clone(), TENANT)
-            .load_run(id)
+            .load_run(&due.first()?.id)
             .await
             .unwrap()
+    }
+
+    /// The ids of the runs a node at `runner` moves at `now`.
+    async fn due_ids(runner: &Runner<Evento>, now: u64) -> Vec<String> {
+        let due = runner.due(now, None, 100).await.unwrap();
+        due.into_iter().map(|run| run.id).collect()
     }
 
     #[tokio::test]
@@ -1278,12 +1408,12 @@ mod tests {
         // Seen again (a redelivery, another node): still one run.
         follow(&store, &db).await;
         catch_up(&store, &db).await;
-        let due = due_runs(&db, crate::auth::now() + 1, Share::ALONE, 0, 10)
+        let due = due_runs(&db, crate::auth::now() + 1, Share::ALONE, 0, None, 10)
             .await
             .unwrap();
         assert_eq!(due.len(), 1);
 
-        let run_id = &due[0].1;
+        let run_id = &due[0].id;
         runner(&store, &db, &keys)
             .advance(&shop(), run_id, crate::auth::now())
             .await
@@ -1321,16 +1451,26 @@ mod tests {
         follow(&store, &db).await;
         subscribe(&store, &keys, "ada@example.com").await;
         follow(&store, &db).await;
+        let run = the_run(&store, &db).await.unwrap();
         let automations = Command::new(store.clone(), TENANT);
         automations.pause_scenario(MEMBER, &id).await.unwrap();
         follow(&store, &db).await;
+        catch_up(&store, &db).await;
 
-        let run = the_run(&store, &db).await.unwrap();
+        // Not due: no look reads it.
         let runner = runner(&store, &db, &keys);
-        runner
+        assert!(
+            due_ids(&runner, crate::auth::now() + 10_000_000)
+                .await
+                .is_empty()
+        );
+        // Moved all the same (a look that read it a moment before the
+        // pause), it stays where it is.
+        let looked = runner
             .advance(&shop(), &run.id, crate::auth::now())
             .await
             .unwrap();
+        assert_eq!(looked, Looked::Left);
         let held = automations.load_run(&run.id).await.unwrap().unwrap();
         assert!(held.log.is_empty());
         assert_eq!(held.status, RunStatus::Running);
@@ -1338,6 +1478,10 @@ mod tests {
         automations.resume_scenario(MEMBER, &id).await.unwrap();
         // The runner reads the scenario's state from the read model.
         catch_up(&store, &db).await;
+        assert_eq!(
+            due_ids(&runner, crate::auth::now()).await,
+            vec![run.id.clone()]
+        );
         runner
             .advance(&shop(), &run.id, crate::auth::now())
             .await
@@ -1494,10 +1638,178 @@ mod tests {
         assert_eq!(run.trigger, timada_automations::catalog::CHECKOUT_ABANDONED);
         assert_eq!(run.subject_id, cart);
         catch_up(&store, &db).await;
-        let due = due_runs(&db, now + 10_000_000, Share::ALONE, 0, 10)
+        let due = due_runs(&db, now + 10_000_000, Share::ALONE, 0, None, 10)
             .await
             .unwrap();
         assert_eq!(due.len(), 1);
+    }
+
+    /// A shop of the store's own, owned by the member.
+    async fn shop_in(store: &Evento, name: &str) -> TenantState {
+        timada_tenancy::Command(store.clone())
+            .create_tenant(timada_tenancy::CreateTenant {
+                name: name.to_owned(),
+                owner_user_id: MEMBER.to_owned(),
+            })
+            .await
+            .unwrap()
+    }
+
+    /// Publishes `definition` in a shop: the scenario's id.
+    async fn publish_in(store: &Evento, tenant_id: &str, definition: &Definition) -> String {
+        let automations = Command::new(store.clone(), tenant_id);
+        let id = automations
+            .create_scenario(MEMBER, "Scenario")
+            .await
+            .unwrap();
+        automations
+            .publish_scenario(MEMBER, &id, 1, "Scenario", definition)
+            .await
+            .unwrap();
+        id
+    }
+
+    /// Starts a run of version 1 of a shop's scenario, as an order placed
+    /// would: the run's id.
+    async fn start_in(store: &Evento, tenant_id: &str, scenario_id: &str, event: &str) -> String {
+        Command::new(store.clone(), tenant_id)
+            .start_run(
+                MEMBER,
+                &StartRun {
+                    scenario_id: scenario_id.to_owned(),
+                    scenario_version: 1,
+                    trigger: ORDER_PLACED.to_owned(),
+                    trigger_event_id: event.to_owned(),
+                    subject_id: format!("order-{event}"),
+                },
+            )
+            .await
+            .unwrap();
+        run_id(scenario_id, event)
+    }
+
+    /// "When an order is placed, `kind`", configured with `pairs`.
+    fn on_orders(kind: &str, pairs: &[(&str, &str)]) -> Definition {
+        let mut definition = Definition::default();
+        definition.set_trigger(ORDER_PLACED).unwrap();
+        let step = definition.insert(&Slot::new(Lane::Root, 0), kind).unwrap();
+        definition.configure(&step, settings(pairs)).unwrap();
+        assert_eq!(definition.check(), vec![]);
+        definition
+    }
+
+    /// The runs a look leaves as they were (a suspended shop's, here) do
+    /// not count against what it moves: it goes on past them to the other
+    /// shops' runs, and puts them off on this node, so the next looks do
+    /// not read them again before then.
+    #[tokio::test]
+    async fn held_runs_do_not_keep_a_look_from_the_others() {
+        let (store, db) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        let held = shop_in(&store, "Held Shop").await;
+        timada_tenancy::Command(store.clone())
+            .suspend_tenant(&held.id, "unpaid")
+            .await
+            .unwrap();
+        let open = shop_in(&store, "Open Shop").await;
+        let scenario = publish_in(
+            &store,
+            &open.id,
+            &on_orders(NOTIFY, &[("subject", "An order")]),
+        )
+        .await;
+        let mut waiting = Vec::new();
+        for n in 0..3 {
+            waiting.push(start_in(&store, &held.id, "sc-held", &format!("ev{n}")).await);
+        }
+        let run = start_in(&store, &open.id, &scenario, "ev1").await;
+        catch_up(&store, &db).await;
+        // The suspended shop's runs are the most overdue, and more than a
+        // look moves.
+        db.execute(
+            "UPDATE automations_runs SET next_at = next_at - 60 WHERE tenant_id = ?1",
+            (held.id.as_str(),),
+        )
+        .await
+        .unwrap();
+
+        let now = crate::auth::now();
+        let runner = runner_moving(&store, &db, &keys, alone(), Duration::from_secs(15), 2);
+        runner.sweep(now).await.unwrap();
+        let moved = Command::new(store.clone(), &open.id)
+            .load_run(&run)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(moved.status, RunStatus::Finished);
+
+        catch_up(&store, &db).await;
+        assert!(due_ids(&runner, now).await.is_empty(), "put off");
+        let mut later = due_ids(&runner, now + LOOK_AGAIN_SECS).await;
+        later.sort();
+        waiting.sort();
+        assert_eq!(later, waiting);
+    }
+
+    /// A run whose row shows it due though it moved since (another node
+    /// began its wait, which the read model does not show yet) is put off
+    /// to when it wakes.
+    #[tokio::test]
+    async fn a_run_moved_since_its_row_was_written_is_put_off_until_it_wakes() {
+        let (store, db) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        let shop = shop_in(&store, "Acme").await;
+        let wait = on_orders(WAIT, &[("amount", "1"), ("unit", "hours")]);
+        let scenario = publish_in(&store, &shop.id, &wait).await;
+        let run = start_in(&store, &shop.id, &scenario, "ev1").await;
+        catch_up(&store, &db).await;
+        let now = crate::auth::now();
+        let runner = runner(&store, &db, &keys);
+        let looked = runner.advance(&shop, &run, now).await.unwrap();
+        assert_eq!(looked, Looked::Moved);
+        assert_eq!(due_ids(&runner, now).await, vec![run.clone()]);
+
+        runner.sweep(now).await.unwrap();
+        assert!(due_ids(&runner, now + 3599).await.is_empty());
+        assert_eq!(due_ids(&runner, now + 3600).await, vec![run]);
+    }
+
+    /// A run at a mail to the customer waits for what the shop must set up
+    /// (here the operator's secret, which signs the opt-out links): a look
+    /// that finds it so leaves it and puts it off, and once the hold is
+    /// over the step fails, saying what is missing.
+    #[tokio::test]
+    async fn a_run_held_at_a_mail_is_put_off_then_fails_once_the_hold_is_over() {
+        let (store, db) = store().await;
+        let keys = Arc::new(MemoryKeys::default());
+        let shop = shop_in(&store, "Acme").await;
+        let mail = on_orders(
+            EMAIL,
+            &[
+                ("subject", "Thanks"),
+                ("html", "<p>{{ unsubscribe_url }}</p>"),
+            ],
+        );
+        let scenario = publish_in(&store, &shop.id, &mail).await;
+        let run = start_in(&store, &shop.id, &scenario, "ev1").await;
+        catch_up(&store, &db).await;
+
+        let now = crate::auth::now();
+        let runner = runner(&store, &db, &keys);
+        runner.sweep(now).await.unwrap();
+        let automations = Command::new(store.clone(), &shop.id);
+        let held = automations.load_run(&run).await.unwrap().unwrap();
+        assert!(held.log.is_empty());
+        assert!(due_ids(&runner, now + LOOK_AGAIN_SECS - 1).await.is_empty());
+        assert_eq!(
+            due_ids(&runner, now + LOOK_AGAIN_SECS).await,
+            vec![run.clone()]
+        );
+
+        runner.sweep(now + MAIL_HOLD_SECS).await.unwrap();
+        let failed = automations.load_run(&run).await.unwrap().unwrap();
+        assert_eq!(failed.status, RunStatus::Failed);
+        assert!(failed.reason.unwrap().contains("secret"));
     }
 
     /// An event whose run falls to another node starts nothing here; this
@@ -1575,20 +1887,20 @@ mod tests {
         follow(&store, &db).await;
         let run = the_run(&store, &db).await.unwrap();
         let now = crate::auth::now();
-        let due = vec![(TENANT.to_owned(), run.id.clone())];
+        let due = vec![run.id.clone()];
 
-        assert_eq!(runner(&store, &db, &keys).due(now).await.unwrap(), due);
+        assert_eq!(due_ids(&runner(&store, &db, &keys), now).await, due);
         let elsewhere = runner_at(&store, &db, &keys, none_of_it());
         assert!(
-            elsewhere.due(now).await.unwrap().is_empty(),
+            due_ids(&elsewhere, now).await.is_empty(),
             "not this node's to move"
         );
-        assert_eq!(elsewhere.due(now + HELP_AFTER_SECS).await.unwrap(), due);
+        assert_eq!(due_ids(&elsewhere, now + HELP_AFTER_SECS).await, due);
 
         // Looks a minute apart: that node is left four of them.
         let slow = runner_every(&store, &db, &keys, none_of_it(), Duration::from_secs(60));
-        assert!(slow.due(now + HELP_AFTER_SECS).await.unwrap().is_empty());
-        assert_eq!(slow.due(now + 4 * 60).await.unwrap(), due);
+        assert!(due_ids(&slow, now + HELP_AFTER_SECS).await.is_empty());
+        assert_eq!(due_ids(&slow, now + 4 * 60).await, due);
     }
 
     /// A node outside the scenario's region has no listener for it (the

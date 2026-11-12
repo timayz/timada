@@ -4,21 +4,29 @@
 //! Each handler reloads the strict write model of the stream and rewrites
 //! its row, so delivery may repeat (the subscription is at-least-once)
 //! without the row drifting; a version published is kept from its own
-//! event, once. One subscription follows every tenant's streams (its cursor
-//! lives in the store): each row carries the tenant of the event that made
-//! it, and it writes into the read-model database it is given.
+//! event, once. A run's row also says whether its scenario is paused, as
+//! the scenario's row does: a scenario paused or going on again marks its
+//! runs under way. One subscription follows every tenant's streams (its
+//! cursor lives in the store): each row carries the tenant of the event that
+//! made it, and it writes into the read-model database it is given. The
+//! runner writes one column itself, on its own node: it puts a run's
+//! `next_at` off when it leaves the run as it was, until the run's next
+//! event writes the row again.
 
 use evento::{
     Executor,
     metadata::{Event, RawEvent},
     subscription::{Context, SubscriptionBuilder},
 };
-use timada_core::db::Db;
+use timada_core::db::{Db, execute, fetch_optional};
 
 use crate::aggregator::run::Run as RunStream;
 use crate::aggregator::scenario::{Published, Scenario as ScenarioStream};
 use crate::command::{RunState, ScenarioState, run_projection, scenario_projection};
 use crate::definition::Definition;
+use crate::value_object::ScenarioStatus;
+
+use super::scenarios::SCENARIO_STATUS;
 
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-automations/read-models";
@@ -104,17 +112,29 @@ async fn on_run_event<E: Executor>(
     upsert_run(&db, &event.tenant, &state).await
 }
 
+/// What [`upsert_run`] writes. Whether the run's scenario is paused is
+/// read off the scenario's row, by the table's key (which the planner does
+/// not pick by itself, as the listing's index leads with the tenant too).
+pub(super) const UPSERT_RUN: &str = "INSERT INTO automations_runs (tenant_id, id, scenario_id,
+        scenario_version, trigger, subject_id, status, step, reason, next_at, paused, shard,
+        started_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+        EXISTS (SELECT 1 FROM automations_scenarios
+                    INDEXED BY sqlite_autoindex_automations_scenarios_1
+                WHERE tenant_id = ?1 AND id = ?3 AND status = 'paused'),
+        ?11, ?12, ?13)
+     ON CONFLICT (tenant_id, id) DO UPDATE SET
+        status = excluded.status, step = excluded.step, reason = excluded.reason,
+        next_at = excluded.next_at, paused = excluded.paused, updated_at = excluded.updated_at";
+
 /// Writes the row of a run as the write model sees it: `next_at` is when
-/// the runner looks at it again, none once it ended; `shard` is which of
-/// the nodes up moves it ([`timada_core::shard_of`] of its id).
+/// the runner looks at it again, none once it ended; `paused` whether its
+/// scenario is paused, as the scenarios' rows say, and then the run is not
+/// due; `shard` is which of the nodes up moves it
+/// ([`timada_core::shard_of`] of its id).
 pub(crate) async fn upsert_run(db: &Db, tenant_id: &str, run: &RunState) -> anyhow::Result<()> {
     db.execute(
-        "INSERT INTO automations_runs (tenant_id, id, scenario_id, scenario_version, trigger,
-            subject_id, status, step, reason, next_at, shard, started_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-         ON CONFLICT (tenant_id, id) DO UPDATE SET
-            status = excluded.status, step = excluded.step, reason = excluded.reason,
-            next_at = excluded.next_at, updated_at = excluded.updated_at",
+        UPSERT_RUN,
         (
             tenant_id,
             run.id.as_str(),
@@ -135,9 +155,20 @@ pub(crate) async fn upsert_run(db: &Db, tenant_id: &str, run: &RunState) -> anyh
     Ok(())
 }
 
+/// What [`upsert_scenario`] writes on the runs under way of a scenario
+/// paused, or going on again, off the index of a scenario's runs (which
+/// the planner does not pick by itself, as the table's key leads with the
+/// tenant too).
+pub(super) const PAUSE_RUNS: &str =
+    "UPDATE automations_runs INDEXED BY automations_runs_scenario SET paused = ?3
+     WHERE tenant_id = ?1 AND scenario_id = ?2 AND next_at IS NOT NULL";
+
 /// Writes the row of a scenario as the write model sees it. The trigger and
 /// the count of steps are the running version's once published, the
-/// draft's before.
+/// draft's before. A scenario paused, or going on again (resumed,
+/// published again, deleted: a deleted one's runs are due, to be
+/// cancelled), marks its runs under way so, in the same transaction: the
+/// runner reads none of a paused scenario's runs until it goes on.
 pub(crate) async fn upsert_scenario(
     db: &Db,
     tenant_id: &str,
@@ -150,27 +181,44 @@ pub(crate) async fn upsert_scenario(
     };
     // A definition this build cannot read lists without its trigger.
     let shown = Definition::from_json(shown).unwrap_or_default();
-    db.execute(
-        "INSERT INTO automations_scenarios (tenant_id, id, name, status, trigger, version,
-            unpublished, steps, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-         ON CONFLICT (tenant_id, id) DO UPDATE SET
-            name = excluded.name, status = excluded.status, trigger = excluded.trigger,
-            version = excluded.version, unpublished = excluded.unpublished,
-            steps = excluded.steps, updated_at = excluded.updated_at",
-        (
-            tenant_id,
-            scenario.id.as_str(),
-            scenario.name.as_str(),
-            scenario.status.as_str(),
-            shown.trigger.as_ref().map(|trigger| trigger.kind.as_str()),
-            i64::from(scenario.version),
-            scenario.has_unpublished_changes(),
-            shown.count() as i64,
-            scenario.created_at as i64,
-            scenario.updated_at as i64,
-        ),
-    )
-    .await?;
-    Ok(())
+    let row = (
+        tenant_id,
+        scenario.id.as_str(),
+        scenario.name.as_str(),
+        scenario.status.as_str(),
+        shown.trigger.as_ref().map(|trigger| trigger.kind.as_str()),
+        i64::from(scenario.version),
+        scenario.has_unpublished_changes(),
+        shown.count() as i64,
+        scenario.created_at as i64,
+        scenario.updated_at as i64,
+    );
+    let paused = scenario.status == ScenarioStatus::Paused;
+    db.write(&(row, paused), |tx, (row, paused)| {
+        Box::pin(async move {
+            let (tenant_id, scenario_id) = (row.0, row.1);
+            let stored: Option<(String,)> =
+                fetch_optional(tx, SCENARIO_STATUS, (tenant_id, scenario_id)).await?;
+            let was_paused = stored.is_some_and(|(status,)| {
+                ScenarioStatus::parse(&status) == Some(ScenarioStatus::Paused)
+            });
+            if was_paused != *paused {
+                execute(tx, PAUSE_RUNS, (tenant_id, scenario_id, *paused)).await?;
+            }
+            execute(
+                tx,
+                "INSERT INTO automations_scenarios (tenant_id, id, name, status, trigger, version,
+                    unpublished, steps, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT (tenant_id, id) DO UPDATE SET
+                    name = excluded.name, status = excluded.status, trigger = excluded.trigger,
+                    version = excluded.version, unpublished = excluded.unpublished,
+                    steps = excluded.steps, updated_at = excluded.updated_at",
+                *row,
+            )
+            .await?;
+            Ok(())
+        })
+    })
+    .await
 }
