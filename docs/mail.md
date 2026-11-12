@@ -100,9 +100,10 @@ How a send went is recorded on the stream (`timada_core::Sending`):
   failure over the claim another node took since.
 
 `/admin/cluster` counts the mails this node still owes and lists the ones given up on
-for a week, with the last failure's reason. The members page shows an invitation that
-is being retried or was given up on, so the inviter can invite again; an order's page
-shows each of its mails the same way.
+for a week, with how many tries were made (as the mail's stream counts them: each
+`MailDeferred` and `MailFailed` carries the count) and the last failure's reason. The
+members page shows an invitation that is being retried or was given up on, so the
+inviter can invite again; an order's page shows each of its mails the same way.
 
 An order mail the platform's server would send is checked against the payment
 provider before it is claimed: an order whose payment the provider does not know as

@@ -74,9 +74,10 @@ async fn on_received<E: Executor>(
     .await
 }
 
-/// Follows a notice's own stream into the table: where its sending stands
-/// after this event is what the stream says now, which names the message
-/// the row is keyed by.
+/// Follows a notice's own stream into the table: whichever of its events
+/// this is, the row is written from where the stream stands now, which
+/// names the message the row is keyed by. A pass that handles several of
+/// its events writes the same row each time.
 #[evento::subscription_all]
 async fn on_notification_event<E: Executor>(
     context: &Context<'_, E>,
@@ -426,6 +427,10 @@ mod saga_tests {
         else {
             panic!("{notice:?}");
         };
+        // A pass handles the three events of the notice's stream: the table
+        // counts the one try they record (#521).
+        pass(&store, &down).await;
+        assert_eq!(rows(&store).await[0].attempts, 1);
         let transport = MemoryTransport::new();
         let back = room_with(&store, mail_context(transport.clone()), keys, "node-b");
         assert_eq!(run(&store, &back, retry_at).await, 1);

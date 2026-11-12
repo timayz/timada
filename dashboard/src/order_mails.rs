@@ -155,9 +155,10 @@ async fn on_cancelled<E: Executor>(
     .await
 }
 
-/// Follows a mail's own stream into the table: where its sending stands
-/// after this event is what the stream says now, which names the order and
-/// the mail the row is keyed by.
+/// Follows a mail's own stream into the table: whichever of its events this
+/// is, the row is written from where the stream stands now, which names the
+/// order and the mail the row is keyed by. A pass that handles several of
+/// its events writes the same row each time.
 #[evento::subscription_all]
 async fn on_order_mail_event<E: Executor>(
     context: &Context<'_, E>,
@@ -190,19 +191,24 @@ async fn on_order_mail_event<E: Executor>(
 }
 
 /// What the table records of a mail's stream in state `sending`: nothing
-/// while no node took it (the intent's row stands as it is).
+/// while no node took it (the intent's row stands as it is). The tries are
+/// the stream's own count (#521).
 pub(crate) fn change_of(sending: &Sending) -> Option<Change> {
     Some(match sending {
         Sending::Pending => return None,
         Sending::Claimed { until, .. } => Change::Claimed { until: *until },
         Sending::Deferred {
-            retry_at, reason, ..
+            retry_at,
+            attempts,
+            reason,
         } => Change::Deferred {
             retry_at: *retry_at,
+            attempts: *attempts,
             reason: reason.clone(),
         },
-        Sending::Failed { reason, .. } => Change::Failed {
+        Sending::Failed { reason, attempts } => Change::Failed {
             reason: reason.clone(),
+            attempts: *attempts,
         },
         Sending::Sent | Sending::Undeliverable { .. } => Change::Settled,
     })
@@ -306,7 +312,7 @@ pub(crate) async fn send(
 #[cfg(test)]
 mod tests {
     use evento::{Evento, Turso};
-    use timada_core::{MailStatus, Sending};
+    use timada_core::{MailStatus, RETRY_DELAYS_SECS, Sending};
     use timada_orders::{PROVIDER_STRIPE, Payment, ShippingAddress};
     use timada_tenancy::{ConfigurePayments, CreateTenant, TenantState};
     use topcoat::mail::{Mailbox, MemoryTransport, Transport};
@@ -508,6 +514,9 @@ mod tests {
                 .attempts(),
             1
         );
+        // The pass handled the three events of the mail's stream: the table
+        // counts the one try they record (#521).
+        assert_eq!(rows(&store).await[0].attempts, 1);
 
         let transport = MemoryTransport::new();
         let back = node(&store, transport.clone(), &gateway, "node-b");
@@ -517,6 +526,43 @@ mod tests {
             mail_of(&store, &shop, ShopMailKind::OrderConfirmation).await,
             Sending::Sent
         );
+    }
+
+    /// A shop's server down for good: every try of the schedule fails, and
+    /// the last gives the mail up. The cluster page counts the tries the
+    /// mail's stream made, however many of its events each pass handled
+    /// (#521).
+    #[tokio::test]
+    async fn a_server_down_for_good_gives_the_mail_up_after_the_schedule() {
+        let store = store().await;
+        let gateway = FakeGateway::new();
+        let down = node(
+            &store,
+            fake_smtp::transport(fake_smtp::closed_port()),
+            &gateway,
+            "node-a",
+        );
+        let shop = shop_with_order(&store, &down, &gateway).await;
+
+        assert_eq!(run(&store, &down, crate::auth::now()).await, 0);
+        for tried in 1..=RETRY_DELAYS_SECS.len() {
+            let mail = mail_of(&store, &shop, ShopMailKind::OrderConfirmation).await;
+            let Sending::Deferred { retry_at, .. } = mail else {
+                panic!("try {tried}: {mail:?}");
+            };
+            assert_eq!(run(&store, &down, retry_at).await, 0);
+        }
+        let tries = RETRY_DELAYS_SECS.len() as u32 + 1;
+        let mail = mail_of(&store, &shop, ShopMailKind::OrderConfirmation).await;
+        assert!(
+            matches!(&mail, Sending::Failed { attempts, .. } if *attempts == tries),
+            "{mail:?}"
+        );
+        pass(&store, &down).await;
+        let owed = rows(&store).await;
+        assert_eq!(owed.len(), 1);
+        assert!(owed[0].failed);
+        assert_eq!(owed[0].attempts, i64::from(tries));
     }
 
     /// The platform's server speaks for the orders the checkout placed

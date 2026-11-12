@@ -140,6 +140,7 @@ async fn on_mail_deferred<E: Executor>(
         &event.aggregate_id,
         Change::Deferred {
             retry_at: event.data.retry_at,
+            attempts: event.data.attempts,
             reason: event.data.reason.clone(),
         },
     )
@@ -156,6 +157,7 @@ async fn on_mail_failed<E: Executor>(
         &event.aggregate_id,
         Change::Failed {
             reason: event.data.reason.clone(),
+            attempts: event.data.attempts,
         },
     )
     .await
