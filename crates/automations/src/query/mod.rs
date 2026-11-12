@@ -31,7 +31,7 @@ pub use versions::*;
 mod plans {
     use timada_core::db::{Db, IntoParams};
 
-    use super::{MIGRATIONS, checkouts, runs, starts};
+    use super::{MIGRATIONS, checkouts, read_model, runs, scenarios, starts};
     use crate::catalog::CHECKOUT_ABANDONED;
 
     async fn db() -> Db {
@@ -73,11 +73,25 @@ mod plans {
         );
     }
 
+    /// Fails unless a step of `plan` searches `index` by `key` (the
+    /// columns it seeks on): an index read whole names it too.
+    fn searches(plan: &[String], index: &str, key: &str) {
+        assert!(
+            plan.iter().any(|step| step.starts_with("SEARCH")
+                && step.contains(&format!("INDEX {index} ({key})"))),
+            "no step searches {index} by {key}:\n{}",
+            plan.join("\n")
+        );
+    }
+
     #[tokio::test]
     async fn the_runner_reads_off_its_indexes() {
         let db = db().await;
-        let due = plan_of(&db, runs::DUE_RUNS, (100, 3, 1, 50, 200)).await;
-        reads_in_order(&due, "automations_runs_due");
+        let first = plan_of(&db, runs::DUE_RUNS, (100, 3, 1, 50, i64::MIN, "", 200)).await;
+        reads_in_order(&first, "automations_runs_due");
+        let next = plan_of(&db, runs::DUE_RUNS, (100, 3, 1, 50, 40, "run-1", 200)).await;
+        reads_in_order(&next, "automations_runs_due");
+        searches(&next, "automations_runs_due", "next_at>=? AND next_at<=?");
         let owed = plan_of(&db, starts::STARTS_OWED, (100, 200)).await;
         reads_in_order(&owed, "automations_starts_kept");
         let left = plan_of(
@@ -87,5 +101,55 @@ mod plans {
         )
         .await;
         reads_in_order(&left, "automations_checkouts_open");
+    }
+
+    /// The writes and lookups by key name their index: another index leads
+    /// with the tenant too, and the planner picks that one by itself.
+    #[tokio::test]
+    async fn the_runs_rows_are_written_by_their_keys() {
+        let db = db().await;
+        let put_off = plan_of(&db, runs::PUT_OFF_RUN, ("t1", "run-1", 40, 400)).await;
+        searches(
+            &put_off,
+            "sqlite_autoindex_automations_runs_1",
+            "tenant_id=? AND id=?",
+        );
+        let pause = plan_of(&db, read_model::PAUSE_RUNS, ("t1", "sc1", true)).await;
+        searches(
+            &pause,
+            "automations_runs_scenario",
+            "tenant_id=? AND scenario_id=?",
+        );
+        let status = plan_of(&db, scenarios::SCENARIO_STATUS, ("t1", "sc1")).await;
+        searches(
+            &status,
+            "sqlite_autoindex_automations_scenarios_1",
+            "tenant_id=? AND id=?",
+        );
+        let upsert = plan_of(
+            &db,
+            read_model::UPSERT_RUN,
+            (
+                "t1",
+                "run-1",
+                "sc1",
+                1,
+                "order.placed",
+                "order-1",
+                "running",
+                None::<String>,
+                None::<String>,
+                40,
+                7,
+                1,
+                1,
+            ),
+        )
+        .await;
+        searches(
+            &upsert,
+            "sqlite_autoindex_automations_scenarios_1",
+            "tenant_id=? AND id=?",
+        );
     }
 }
