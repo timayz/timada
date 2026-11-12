@@ -72,17 +72,15 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         crate::seal::mail_sealer(&config),
         config.mail.allow_private_hosts,
     );
-    let live = cluster.clone();
+    // This node's place among the nodes up, for the work they share out.
+    let place = cluster::share_of(&cluster);
     let aliexpress = crate::aliexpress::Aliexpress::new(
         crate::seal::aliexpress_sealer(&config),
         &config.aliexpress,
         config.mail.allow_private_hosts,
         executor.clone(),
         quota.clone(),
-        Arc::new(move |region| {
-            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, region);
-            timada_core::Share { index, of }
-        }),
+        place.clone(),
     )?;
     // The order confirmations and the notices of contact messages are
     // mailed from the subscriptions, outside any request: they get their
@@ -179,6 +177,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         keys: keys.clone(),
         payments: payments.clone(),
         aliexpress: aliexpress.clone(),
+        place: place.clone(),
         vies: Arc::new(crate::vies::ViesClient::new(
             config.invoicing.vies_url.clone(),
         )),
@@ -328,7 +327,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     )
     .start();
 
-    // The runs of the shops' automation scenarios move on a timer.
+    // The runs of the shops' automation scenarios move on a timer, each
+    // node moving its own part of them.
     let automation_runs = crate::automations::runner::Runner::new(
         db.clone(),
         executor.clone(),
@@ -341,10 +341,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.mail.allow_private_hosts,
         std::time::Duration::from_secs(config.automations.abandoned_after_secs.max(60)),
         config.automations.runs_per_check,
+        std::time::Duration::from_secs(config.automations.check_secs.max(1)),
+        place,
     )?
-    .start(std::time::Duration::from_secs(
-        config.automations.check_secs.max(1),
-    ));
+    .start();
 
     // The products imported from AliExpress are read again as the day's calls
     // allow, and the accounts and open orders on a timer.
@@ -433,6 +433,9 @@ pub struct Deps {
     pub keys: Arc<crate::key_vault::KeyVault>,
     pub payments: Arc<crate::payments::Payments>,
     pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
+    /// This node's place among the nodes up: which of the work a saga is
+    /// told about falls to it.
+    pub place: cluster::ShareOf,
     pub vies: Arc<dyn crate::vies::Vies>,
     pub euro_rates: Arc<dyn crate::ecb::EuroRates>,
 }
@@ -644,7 +647,7 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
         crate::newsletter::subscription(d.keys.clone(), d.store.clone())
     }),
     ("automation triggers", Kind::Sharded, |d| {
-        crate::automations::triggers::subscription(d.db.clone(), d.store.clone())
+        crate::automations::triggers::subscription(d.db.clone(), d.store.clone(), d.place.clone())
     }),
     ("invoices", Kind::Sharded, |d| {
         crate::invoicing::subscription(

@@ -161,12 +161,14 @@ dir = "data/shopper-keys"
 # # the shop's server takes them.
 # mails_per_check = 1000
 
-# A shop's automation scenarios run from every node: each run moves on a
-# timer, step by step, and each step acts once whichever node moves it.
+# A shop's automation scenarios run from every node: each node starts and
+# moves its own part of the runs, on a timer, step by step, and takes over
+# the runs another node left for two minutes (or four looks, if longer).
+# Each step acts once whichever node moves it.
 # [automations]
 # # How often, in seconds, this node looks for runs whose next step is due.
 # check_secs = 15
-# # The most runs one look moves.
+# # The most runs one look of this node moves.
 # runs_per_check = 200
 # # How long, in seconds, a scenario's webhook call may take.
 # webhook_timeout_secs = 10

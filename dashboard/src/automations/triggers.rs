@@ -1,12 +1,18 @@
 //! Starts the runs: every event that is a trigger starts a run of each
-//! published scenario of the shop listening to it. Every node runs this
-//! subscription; a run's id is derived from the scenario and the event, so
-//! the node whose `Started` commits first is the one that starts it.
+//! published scenario of the shop listening to it. The nodes of the event's
+//! region all run this subscription and share the runs out: each starts the
+//! ones whose id falls to it among them ([`timada_core::Share`]), with one
+//! write and no read, and keeps the others in `automations_starts`, where
+//! the runner starts any a node has not started a while later (it stopped,
+//! or the nodes disagreed on who is up). A run's id is derived from the
+//! scenario and the event and written at version 0, so it starts once
+//! however many nodes try.
 //!
 //! The listeners are kept by the same subscription, from the scenarios' own
 //! events ([`timada_automations::listener_subscription`]): the order of the
 //! store decides which events a publication sees.
 
+use crate::cluster::ShareOf;
 use crate::db::Db;
 use evento::{
     Evento, Executor,
@@ -14,26 +20,30 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use timada_automations::{
-    AUTOMATION_ACTOR, StartRun, catalog, listener_subscription, listeners_for, record_checked_out,
-    record_checkout, record_detected,
+    AUTOMATION_ACTOR, StartRun, catalog, listener_subscription, listeners_for, owe_start,
+    record_checked_out, record_checkout, record_detected, run_id,
 };
-
-/// The cursor identity of the subscription, in the store.
-pub const SUBSCRIPTION: &str = "timada-dashboard/automation-triggers";
 
 /// An event older than this is history being replayed (a node catching up,
 /// or the first start of this subscription): it starts nothing.
-const TRIGGER_WINDOW_SECS: u64 = 60 * 60;
+pub const TRIGGER_WINDOW_SECS: u64 = 60 * 60;
 
 /// The store, to start the runs in.
 #[derive(Clone)]
 struct TenantStore(Evento);
 
+/// This node's place among the nodes up of a region: which runs it starts.
+#[derive(Clone)]
+struct Place(ShareOf);
+
 /// Follows every tenant's trigger events. `db` is the read-model
-/// database, which must be allowed to write (the listeners live there).
-pub fn subscription<E: Executor>(db: Db, store: Evento) -> SubscriptionBuilder<E> {
-    listener_subscription(SUBSCRIPTION, db)
+/// database, which must be allowed to write (the listeners live there);
+/// `place` says which of the runs an event of a region starts are this
+/// node's to start.
+pub fn subscription<E: Executor>(db: Db, store: Evento, place: ShareOf) -> SubscriptionBuilder<E> {
+    listener_subscription(db)
         .data(TenantStore(store))
+        .data(Place(place))
         .handler(on_order_placed())
         .handler(on_order_fulfilled())
         .handler(on_order_cancelled())
@@ -52,8 +62,10 @@ pub fn subscription<E: Executor>(db: Db, store: Evento) -> SubscriptionBuilder<E
         .retry(5)
 }
 
-/// Starts a run of every scenario of the tenant listening to `trigger`.
-/// Only a store failure is an error: it is retried.
+/// Starts a run of every scenario of the tenant listening to `trigger`:
+/// the ones that fall to this node among the nodes of `region` (the
+/// event's routing key) now, the others kept for the runner to start if
+/// their node does not. Only a store failure is an error: it is retried.
 async fn start<E: Executor>(
     context: &Context<'_, E>,
     tenant: &str,
@@ -61,6 +73,7 @@ async fn start<E: Executor>(
     event_id: String,
     subject_id: &str,
     at: u64,
+    region: Option<&str>,
 ) -> anyhow::Result<()> {
     if crate::auth::now().saturating_sub(at) > TRIGGER_WINDOW_SECS {
         return Ok(());
@@ -71,24 +84,27 @@ async fn start<E: Executor>(
         return Ok(());
     }
     let store: TenantStore = context.extract();
+    let place: Place = context.extract();
+    let share = (place.0)(region);
     let automations = timada_automations::Command::new(store.0.clone(), tenant);
     for listener in listeners {
         // Published after the event (the same second, in another order).
         if (at as i64) < listener.since {
             continue;
         }
-        let started = automations
-            .start_run(
-                AUTOMATION_ACTOR,
-                &StartRun {
-                    scenario_id: listener.scenario_id.clone(),
-                    scenario_version: listener.version as u32,
-                    trigger: trigger.to_owned(),
-                    trigger_event_id: event_id.clone(),
-                    subject_id: subject_id.to_owned(),
-                },
-            )
-            .await?;
+        let start = StartRun {
+            scenario_id: listener.scenario_id.clone(),
+            scenario_version: listener.version as u32,
+            trigger: trigger.to_owned(),
+            trigger_event_id: event_id.clone(),
+            subject_id: subject_id.to_owned(),
+        };
+        let run = run_id(&start.scenario_id, &start.trigger_event_id);
+        if !share.owns(&run) {
+            owe_start(&db, tenant, &run, &start, crate::auth::now()).await?;
+            continue;
+        }
+        let started = automations.start_run(AUTOMATION_ACTOR, &start).await?;
         if started {
             tracing::info!(tenant, scenario = %listener.scenario_id, trigger, "automation run started");
         }
@@ -108,6 +124,7 @@ async fn on_order_placed<E: Executor>(
         event.id.to_string(),
         &event.aggregate_id,
         event.timestamp,
+        event.routing_key.as_deref(),
     )
     .await
 }
@@ -124,6 +141,7 @@ async fn on_order_fulfilled<E: Executor>(
         event.id.to_string(),
         &event.aggregate_id,
         event.timestamp,
+        event.routing_key.as_deref(),
     )
     .await
 }
@@ -140,6 +158,7 @@ async fn on_order_cancelled<E: Executor>(
         event.id.to_string(),
         &event.aggregate_id,
         event.timestamp,
+        event.routing_key.as_deref(),
     )
     .await
 }
@@ -156,6 +175,7 @@ async fn on_order_refunded<E: Executor>(
         event.id.to_string(),
         &event.aggregate_id,
         event.timestamp,
+        event.routing_key.as_deref(),
     )
     .await
 }
@@ -172,6 +192,7 @@ async fn on_shopper_registered<E: Executor>(
         event.id.to_string(),
         &event.aggregate_id,
         event.timestamp,
+        event.routing_key.as_deref(),
     )
     .await
 }
@@ -188,6 +209,7 @@ async fn on_subscriber_confirmed<E: Executor>(
         event.id.to_string(),
         &event.aggregate_id,
         event.timestamp,
+        event.routing_key.as_deref(),
     )
     .await
 }
@@ -204,6 +226,7 @@ async fn on_review_submitted<E: Executor>(
         event.id.to_string(),
         &event.aggregate_id,
         event.timestamp,
+        event.routing_key.as_deref(),
     )
     .await
 }
@@ -220,6 +243,7 @@ async fn on_review_published<E: Executor>(
         event.id.to_string(),
         &event.aggregate_id,
         event.timestamp,
+        event.routing_key.as_deref(),
     )
     .await
 }
@@ -236,6 +260,7 @@ async fn on_message_received<E: Executor>(
         event.id.to_string(),
         &event.aggregate_id,
         event.timestamp,
+        event.routing_key.as_deref(),
     )
     .await
 }
@@ -254,6 +279,7 @@ async fn on_checkout_requested<E: Executor>(
         &event.aggregate_id,
         &event.data.request_id,
         event.timestamp,
+        event.routing_key.as_deref(),
     )
     .await
 }
@@ -287,6 +313,7 @@ async fn on_checkout_abandoned<E: Executor>(
         event.id.to_string(),
         &event.data.cart_id,
         event.timestamp,
+        event.routing_key.as_deref(),
     )
     .await
 }

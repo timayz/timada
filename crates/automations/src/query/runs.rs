@@ -1,6 +1,7 @@
 //! Queries over `automations_runs`: a scenario's run history, and the runs
 //! the runner owes a look.
 
+use timada_core::Share;
 use timada_core::db::{Db, FromRow};
 
 use crate::value_object::RunStatus;
@@ -79,18 +80,49 @@ pub async fn count_runs(
     Ok(count as u64)
 }
 
-/// The runs due by `now`, every tenant's: `(tenant id, run id)`, the most
-/// overdue first. The read model is a moment behind: a run moved on a
-/// moment ago may come back, and the runner then finds nothing to do.
-pub async fn due_runs(db: &Db, now: u64, limit: u32) -> anyhow::Result<Vec<(String, String)>> {
+/// What [`due_runs`] reads: off the index of the runs due, in its order.
+pub(super) const DUE_RUNS: &str =
+    "SELECT tenant_id, id FROM automations_runs INDEXED BY automations_runs_due
+     WHERE next_at IS NOT NULL AND next_at <= ?1
+       AND (shard % ?2 = ?3 OR next_at <= ?4)
+     ORDER BY next_at, id
+     LIMIT ?5";
+
+/// The runs due by `now`, every tenant's, that a node with `share` moves:
+/// its own part of them, and any due at `help_before` or earlier, which
+/// their own node has not moved (it stopped, or the nodes disagreed for a
+/// moment on who is up). `(tenant id, run id)`, the most overdue first. The
+/// read model is a moment behind: a run moved on a moment ago may come
+/// back, and the runner then finds nothing to do.
+pub async fn due_runs(
+    db: &Db,
+    now: u64,
+    share: Share,
+    help_before: u64,
+    limit: u32,
+) -> anyhow::Result<Vec<(String, String)>> {
     db.fetch_all(
-        "SELECT tenant_id, id FROM automations_runs
-         WHERE next_at IS NOT NULL AND next_at <= ?1
-         ORDER BY next_at, id
-         LIMIT ?2",
-        (now as i64, i64::from(limit)),
+        DUE_RUNS,
+        (
+            now as i64,
+            share.of as i64,
+            share.index as i64,
+            help_before as i64,
+            i64::from(limit),
+        ),
     )
     .await
+}
+
+/// Whether the read model holds a run: it was started, by whichever node.
+pub async fn run_known(db: &Db, tenant_id: &str, run_id: &str) -> anyhow::Result<bool> {
+    let found: Option<(i64,)> = db
+        .fetch_optional(
+            "SELECT 1 FROM automations_runs WHERE tenant_id = ?1 AND id = ?2",
+            (tenant_id, run_id),
+        )
+        .await?;
+    Ok(found.is_some())
 }
 
 /// Drops the rows of runs that ended before `before` (the store keeps

@@ -84,6 +84,12 @@ Every event carries who did it. The tenant's store is readable by every
 storefront key of the tenant (`read_only_store.rs`), so no automation event holds
 personal data or a secret.
 
+Each `Saved` carries the whole draft, so the scenario's write model
+(`ScenarioState`: the name, the draft, the version running) is snapshotted on each
+node rather than read back save by save. It keeps no earlier version: each one is
+kept as published in the read model `automations_versions`, from its `Published`
+event, and the runs pinned to it and their pages read it there.
+
 ## The editor
 
 `/t/{slug}/automations/{id}` (`automations:manage`; `automations:read` sees the
@@ -159,8 +165,8 @@ when the run gets to it.
 | `StepFailed { step, attempt, reason, retry_at }` | it did not act; without `retry_at` the run ends there |
 | `Finished`, `Cancelled { reason }` | the end, or a stop (a member, or the scenario deleted) |
 
-**What starts runs.** One subscription on every node
-(`timada-dashboard/automation-triggers`, `automations/triggers.rs`) follows the
+**What starts runs.** One subscription (`timada-automations/triggers`,
+`automations/triggers.rs`), on every node of the event's region, follows the
 trigger events: an order placed, shipped, cancelled or refunded, a customer
 account made, a newsletter subscription confirmed, a review submitted or
 published, a contact message received. The same subscription keeps
@@ -169,14 +175,30 @@ and `Archived`, so the order of the store decides: an event after a publication
 starts a run of that version, one before it never does. An event older than an
 hour is history being replayed and starts nothing.
 
+The nodes share the runs out rather than race for them: each starts the runs
+whose id falls to it among the nodes up of the event's region
+(`timada_core::Share`), with one write and no read, and keeps the others in
+`automations_starts`. Two minutes after keeping one (counted from then, not from
+the event: a node going through events late is about as late as the others), a
+node starts it unless the read model shows it started, reading the store first:
+its node stopped, or the nodes disagreed for a moment on who is up. A start
+written twice is refused once, nothing more.
+
 **What moves them.** Nothing in the event store fires later, so every node looks
 for the runs due on a timer (`[automations] check_secs`, at most
-`runs_per_check` runs a look, from `automations_runs`). The runner
+`runs_per_check` runs a look, from `automations_runs`): its own part of them
+(`shard`, the run id's place among the nodes up), and any run its node has not
+moved two minutes after it fell due (or four looks, when they are further apart).
+A node that stops drops out of the nodes up within 30 seconds, and its runs go to
+the others then. Any node can move any run, whatever its region: the scenario's
+state comes from `automations_scenarios` and its versions from
+`automations_versions`, which every node keeps. The runner
 (`automations/runner.rs`) loads a run and its version's definition, and a pure
 walk (`interpreter::next`) says what comes next: a wait to begin, a condition to
 check (on the subject's facts read now, so a condition after a wait sees the
 order as it is then), a step to act, or the end. Every move is written against
-the run's version: a node that loses the race writes nothing.
+the run's version and folded into the runner's copy, so the run is read once a
+look: a node that loses a race writes nothing and leaves the run to the winner.
 
 - **A step that acts** is claimed first (`StepClaimed`); only the node whose
   claim is written acts. A notice is not sent twice: a claim whose outcome never
@@ -314,10 +336,13 @@ the store says "nothing happened", so:
    becomes an order (`Cart::CheckedOut`) is marked ordered there.
 2. Every look of the runner finds the requests older than the delay that no order
    followed, in shops with a published scenario on this trigger, and checks each
-   against the cart itself (ordered since, or asked again: not left). It writes a
+   against the cart itself (ordered since, or asked again: not left). The nodes of
+   the region the request was made in share them out as they share the runs: each
+   looks at its own, and at any other two minutes later. It writes a
    `timada-automations/AbandonedCheckout` stream (`Detected`, id hashed from the
-   cart and the request, at version 0), so a checkout is found left once whichever
-   node finds it. Requests older than three days past the delay start nothing.
+   cart and the request, at version 0, in the request's region so all its nodes
+   see it), so a checkout is found left once whichever node finds it. Requests
+   older than three days past the delay start nothing.
 3. `Detected` is the trigger event: it starts the runs like the others, about the
    cart.
 

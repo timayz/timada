@@ -3,27 +3,42 @@
 //! it knows when an order follows), and what the runner looks over for
 //! checkouts left unpaid.
 
-use timada_core::db::Db;
+use timada_core::db::{Db, FromRow};
 
 use crate::catalog::CHECKOUT_ABANDONED;
 
-/// Records a cart's latest checkout request; a new one starts over.
+/// A checkout no order followed, as [`left_checkouts`] finds it.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+pub struct LeftCheckout {
+    pub tenant_id: String,
+    pub cart_id: String,
+    pub request_id: String,
+    /// Unix seconds of the request.
+    pub requested_at: i64,
+    /// The region the request was made in (its routing key): the nodes that
+    /// do that region's work are the ones that saw it.
+    pub region: Option<String>,
+}
+
+/// Records a cart's latest checkout request, made in `region`; a new one
+/// starts over.
 pub async fn record_checkout(
     db: &Db,
     tenant_id: &str,
     cart_id: &str,
     request_id: &str,
     requested_at: u64,
+    region: Option<&str>,
 ) -> anyhow::Result<()> {
     db.execute(
         "INSERT INTO automations_checkouts (tenant_id, cart_id, request_id, requested_at,
-            ordered, detected)
-         VALUES (?1, ?2, ?3, ?4, 0, 0)
+            region, ordered, detected)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, 0)
          ON CONFLICT (tenant_id, cart_id) DO UPDATE SET
             request_id = excluded.request_id, requested_at = excluded.requested_at,
-            detected = 0
+            region = excluded.region, detected = 0
          WHERE automations_checkouts.ordered = 0",
-        (tenant_id, cart_id, request_id, requested_at as i64),
+        (tenant_id, cart_id, request_id, requested_at as i64, region),
     )
     .await?;
     Ok(())
@@ -55,24 +70,30 @@ pub async fn record_detected(
     Ok(())
 }
 
+/// What [`left_checkouts`] reads: off the index of the open checkouts, in
+/// its order.
+pub(super) const LEFT_CHECKOUTS: &str =
+    "SELECT c.tenant_id, c.cart_id, c.request_id, c.requested_at, c.region
+     FROM automations_checkouts c INDEXED BY automations_checkouts_open
+     WHERE c.ordered = 0 AND c.detected = 0
+       AND c.requested_at >= ?1 AND c.requested_at <= ?2
+       AND EXISTS (SELECT 1 FROM automations_listeners l
+                   WHERE l.tenant_id = c.tenant_id AND l.trigger = ?3
+                     AND l.state = 'active')
+     ORDER BY c.requested_at
+     LIMIT ?4";
+
 /// The checkouts asked for between `from` and `to` (unix seconds) that no
 /// order followed and nobody found left yet, in shops with a scenario on
-/// that trigger: `(tenant id, cart id, request id)`.
+/// that trigger, the oldest first.
 pub async fn left_checkouts(
     db: &Db,
     from: u64,
     to: u64,
     limit: u32,
-) -> anyhow::Result<Vec<(String, String, String)>> {
+) -> anyhow::Result<Vec<LeftCheckout>> {
     db.fetch_all(
-        "SELECT c.tenant_id, c.cart_id, c.request_id FROM automations_checkouts c
-         WHERE c.ordered = 0 AND c.detected = 0
-           AND c.requested_at >= ?1 AND c.requested_at <= ?2
-           AND EXISTS (SELECT 1 FROM automations_listeners l
-                       WHERE l.tenant_id = c.tenant_id AND l.trigger = ?3
-                         AND l.state = 'active')
-         ORDER BY c.requested_at
-         LIMIT ?4",
+        LEFT_CHECKOUTS,
         (from as i64, to as i64, CHECKOUT_ABANDONED, i64::from(limit)),
     )
     .await

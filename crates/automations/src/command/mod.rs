@@ -2,7 +2,8 @@
 //!
 //! A write model folds *all* events of its stream (`strict()`), so the
 //! version it observes, and `write()` sends as `original_version`, never
-//! goes stale. None is snapshotted: a scenario is saved a handful of times.
+//! goes stale. A scenario's is snapshotted, since each save carries the
+//! whole draft; a run's is a few small events and is not.
 
 mod opt_out;
 mod run;

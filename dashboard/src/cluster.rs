@@ -199,6 +199,20 @@ pub fn live_place(cluster: &Cluster, within: Duration, region: Option<&str>) -> 
     place_among(cluster.id(), &cluster.live(within), region)
 }
 
+/// Which of the nodes up this one is, at the moment of asking: among those
+/// doing a region's work when asked for one (`Some(region)`), among them all
+/// otherwise ([`live_place`] within [`LIVE_WITHIN`]).
+pub type ShareOf = Arc<dyn Fn(Option<&str>) -> timada_core::Share + Send + Sync>;
+
+/// [`ShareOf`] for the nodes `cluster` hears from.
+pub fn share_of(cluster: &Arc<Cluster>) -> ShareOf {
+    let cluster = cluster.clone();
+    Arc::new(move |region: Option<&str>| {
+        let (index, of) = live_place(&cluster, LIVE_WITHIN, region);
+        timada_core::Share { index, of }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

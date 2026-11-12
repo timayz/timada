@@ -5,7 +5,11 @@
 
 pub mod run_id;
 
-use timada_automations::{RunFilter, RunStatus, catalog, count_runs, runs_of_scenario};
+use std::collections::HashMap;
+
+use timada_automations::{
+    Definition, RunFilter, RunStatus, catalog, count_runs, published_definition, runs_of_scenario,
+};
 use timada_tenancy::PERMISSION_AUTOMATIONS_READ;
 use topcoat::{
     Result,
@@ -85,24 +89,32 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     )
     .await
     .map_err(topcoat::Error::from_anyhow)?;
+    // The versions the runs listed started on, each read once; one this
+    // build cannot read names no step.
+    let mut definitions: HashMap<i64, Option<Definition>> = HashMap::new();
+    for row in &found {
+        if definitions.contains_key(&row.scenario_version) {
+            continue;
+        }
+        let definition =
+            published_definition(pool, &tenant.id, &scenario.id, row.scenario_version as u32)
+                .await
+                .map_err(topcoat::Error::from_anyhow)?
+                .and_then(|json| Definition::from_json(&json).ok());
+        definitions.insert(row.scenario_version, definition);
+    }
     let slug = tenant.slug.clone();
     let rows: Vec<Row> = found
         .iter()
         .map(|row| {
             let subject = catalog::trigger_kind(&row.trigger).map(|kind| kind.subject);
-            let definition = scenario
-                .version_definition(row.scenario_version as u32)
-                .ok()
-                .flatten();
+            let definition = definitions
+                .get(&row.scenario_version)
+                .and_then(Option::as_ref);
             let step = row
                 .step
                 .as_deref()
-                .and_then(|id| {
-                    definition
-                        .as_ref()?
-                        .find(id)
-                        .map(|step| step_label(&step.kind))
-                })
+                .and_then(|id| definition?.find(id).map(|step| step_label(&step.kind)))
                 .unwrap_or("—");
             Row {
                 href: href!(

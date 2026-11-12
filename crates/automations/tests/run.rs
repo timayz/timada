@@ -1,8 +1,9 @@
 mod common;
 
 use common::*;
+use evento::ProjectionAggregate;
 use timada_automations::{
-    AutomationError, Command, Outcome, RunStatus, StartRun, Transition,
+    AutomationError, Command, Outcome, RunState, RunStatus, StartRun, Transition,
     interpreter::{self, Next},
     run_id,
 };
@@ -58,26 +59,40 @@ async fn a_run_moved_on_by_another_node_is_not_moved_twice() {
         .await
         .unwrap();
     let id = run_id("sc1", "ev1");
-    let run = automations.load_run(&id).await.unwrap().unwrap();
+    let mut run = automations.load_run(&id).await.unwrap().unwrap();
+    // Another node's copy, read at the same version.
+    let mut other = run.clone();
     let claim = [Transition::Claim {
         step: "s1".into(),
         attempt: 1,
     }];
-    assert!(automations.advance_run(ALICE, &run, &claim).await.unwrap());
-    // The same version again: refused, nothing written.
-    assert!(!automations.advance_run(BOB, &run, &claim).await.unwrap());
-    let run = automations.load_run(&id).await.unwrap().unwrap();
-    assert_eq!(run.attempts("s1"), 1);
+    assert!(
+        automations
+            .advance_run(ALICE, &mut run, &claim)
+            .await
+            .unwrap()
+    );
+    // The same version again: refused, nothing written, the copy as it was.
+    assert!(
+        !automations
+            .advance_run(BOB, &mut other, &claim)
+            .await
+            .unwrap()
+    );
+    assert_eq!(other.attempts("s1"), 0);
+    let stored = automations.load_run(&id).await.unwrap().unwrap();
+    assert_eq!(stored.attempts("s1"), 1);
     assert_eq!(
-        run.latest("s1").unwrap().outcome,
+        stored.latest("s1").unwrap().outcome,
         Outcome::Claimed { attempt: 1 }
     );
-    // An outcome and the end, in one commit.
+    // An outcome and the end, in one commit, from the copy that wrote the
+    // claim: it holds what it wrote.
     assert!(
         automations
             .advance_run(
                 ALICE,
-                &run,
+                &mut run,
                 &[
                     Transition::Succeed {
                         step: "s1".into(),
@@ -89,9 +104,76 @@ async fn a_run_moved_on_by_another_node_is_not_moved_twice() {
             .await
             .unwrap()
     );
-    let run = automations.load_run(&id).await.unwrap().unwrap();
-    assert_eq!(run.status, RunStatus::Finished);
-    assert_eq!(run.next_at(), None);
+    let stored = automations.load_run(&id).await.unwrap().unwrap();
+    assert_eq!(stored.status, RunStatus::Finished);
+    assert_eq!(stored.next_at(), None);
+}
+
+/// The copy a node moves a run with holds what it wrote, as the run read
+/// back does, so the node goes on without reading it.
+#[tokio::test]
+async fn a_moved_copy_is_the_run_as_stored() {
+    let automations = command().await;
+    automations
+        .start_run(ALICE, &start("sc1", "ev1"))
+        .await
+        .unwrap();
+    let id = run_id("sc1", "ev1");
+    let mut run = automations.load_run(&id).await.unwrap().unwrap();
+    let long = "x".repeat(600);
+    for moves in [
+        vec![Transition::Branch {
+            step: "s1".into(),
+            branch: 1,
+        }],
+        vec![Transition::Wait {
+            step: "s2".into(),
+            until: 9_999_999_999,
+        }],
+        vec![Transition::Claim {
+            step: "s3".into(),
+            attempt: 1,
+        }],
+        vec![
+            Transition::Fail {
+                step: "s3".into(),
+                attempt: 1,
+                reason: long.clone(),
+                retry_at: Some(9_999_999_999),
+            },
+            Transition::Skip {
+                step: "s4".into(),
+                reason: long.clone(),
+            },
+        ],
+        vec![Transition::Cancel {
+            reason: long.clone(),
+        }],
+    ] {
+        assert!(
+            automations
+                .advance_run(ALICE, &mut run, &moves)
+                .await
+                .unwrap()
+        );
+        let stored = automations.load_run(&id).await.unwrap().unwrap();
+        assert_eq!(
+            run.aggregate_version().unwrap(),
+            stored.aggregate_version().unwrap()
+        );
+        assert_eq!(run.status, stored.status);
+        assert_eq!(run.reason, stored.reason);
+        assert_eq!(run.ended_at.is_some(), stored.ended_at.is_some());
+        let log = |run: &RunState| -> Vec<(String, Outcome)> {
+            run.log
+                .iter()
+                .map(|record| (record.step.clone(), record.outcome.clone()))
+                .collect()
+        };
+        assert_eq!(log(&run), log(&stored));
+    }
+    // Reasons are kept short, in the copy as in the store.
+    assert_eq!(run.reason.as_deref().map(str::len), Some(500));
 }
 
 #[tokio::test]
@@ -102,11 +184,11 @@ async fn a_step_failing_for_good_ends_the_run_and_a_retry_does_not() {
         .await
         .unwrap();
     let id = run_id("sc1", "ev1");
-    let run = automations.load_run(&id).await.unwrap().unwrap();
+    let mut run = automations.load_run(&id).await.unwrap().unwrap();
     automations
         .advance_run(
             ALICE,
-            &run,
+            &mut run,
             &[Transition::Fail {
                 step: "s1".into(),
                 attempt: 1,
@@ -116,13 +198,13 @@ async fn a_step_failing_for_good_ends_the_run_and_a_retry_does_not() {
         )
         .await
         .unwrap();
-    let run = automations.load_run(&id).await.unwrap().unwrap();
+    let mut run = automations.load_run(&id).await.unwrap().unwrap();
     assert_eq!(run.status, RunStatus::Running);
     assert_eq!(run.next_at(), Some(9_999_999_999));
     automations
         .advance_run(
             ALICE,
-            &run,
+            &mut run,
             &[Transition::Fail {
                 step: "s1".into(),
                 attempt: 2,
@@ -183,7 +265,7 @@ async fn a_run_walks_its_scenario() {
         .await
         .unwrap();
     let id = run_id("sc1", "ev1");
-    let run = automations.load_run(&id).await.unwrap().unwrap();
+    let mut run = automations.load_run(&id).await.unwrap().unwrap();
     assert_eq!(
         interpreter::next(&definition, &run, now),
         Next::Branch(condition)
@@ -192,15 +274,21 @@ async fn a_run_walks_its_scenario() {
         step: condition.id.clone(),
         branch: 0,
     }];
-    automations.advance_run(ALICE, &run, &branch).await.unwrap();
-    let run = automations.load_run(&id).await.unwrap().unwrap();
+    automations
+        .advance_run(ALICE, &mut run, &branch)
+        .await
+        .unwrap();
+    let mut run = automations.load_run(&id).await.unwrap().unwrap();
     assert_eq!(interpreter::next(&definition, &run, now), Next::Act(notify));
     let claim = [Transition::Claim {
         step: notify.id.clone(),
         attempt: 1,
     }];
-    automations.advance_run(ALICE, &run, &claim).await.unwrap();
-    let run = automations.load_run(&id).await.unwrap().unwrap();
+    automations
+        .advance_run(ALICE, &mut run, &claim)
+        .await
+        .unwrap();
+    let mut run = automations.load_run(&id).await.unwrap().unwrap();
     let claimed_at = run.latest(&notify.id).unwrap().at;
     let lapses = claimed_at + timada_automations::CLAIM_LEASE_SECS;
     // Another node acting on it: wait for the lease, then call it lost.
@@ -216,7 +304,10 @@ async fn a_run_walks_its_scenario() {
         step: notify.id.clone(),
         output: "{}".into(),
     }];
-    automations.advance_run(ALICE, &run, &done).await.unwrap();
+    automations
+        .advance_run(ALICE, &mut run, &done)
+        .await
+        .unwrap();
     let run = automations.load_run(&id).await.unwrap().unwrap();
     assert_eq!(interpreter::next(&definition, &run, now), Next::Finish);
 
@@ -226,13 +317,16 @@ async fn a_run_walks_its_scenario() {
         .await
         .unwrap();
     let id = run_id("sc1", "ev2");
-    let run = automations.load_run(&id).await.unwrap().unwrap();
+    let mut run = automations.load_run(&id).await.unwrap().unwrap();
     let branch = [Transition::Branch {
         step: condition.id.clone(),
         branch: 1,
     }];
-    automations.advance_run(ALICE, &run, &branch).await.unwrap();
-    let run = automations.load_run(&id).await.unwrap().unwrap();
+    automations
+        .advance_run(ALICE, &mut run, &branch)
+        .await
+        .unwrap();
+    let mut run = automations.load_run(&id).await.unwrap().unwrap();
     let until = now + 24 * 60 * 60;
     assert_eq!(
         interpreter::next(&definition, &run, now),
@@ -243,7 +337,7 @@ async fn a_run_walks_its_scenario() {
         until,
     }];
     automations
-        .advance_run(ALICE, &run, &waiting)
+        .advance_run(ALICE, &mut run, &waiting)
         .await
         .unwrap();
     let run = automations.load_run(&id).await.unwrap().unwrap();
@@ -289,9 +383,9 @@ async fn a_run_ends_where_the_lane_it_chose_ends() {
             output: "{}".into(),
         },
     ] {
-        let run = automations.load_run(&id).await.unwrap().unwrap();
+        let mut run = automations.load_run(&id).await.unwrap().unwrap();
         automations
-            .advance_run(ALICE, &run, &[transition])
+            .advance_run(ALICE, &mut run, &[transition])
             .await
             .unwrap();
     }

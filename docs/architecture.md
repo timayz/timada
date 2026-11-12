@@ -835,12 +835,14 @@ script on top that presses the same buttons; the "+" menu of a slot and Move / M
 here do everything without it. The list is `automations_scenarios`
 (`automations:read`).
 
-Publishing freezes the draft as a numbered version. A trigger event starts a `Run`
-of every published scenario listening to it (`timada-dashboard/automation-triggers`,
-on every node; the run's id derives from the scenario and the event, so it starts
-once), and every node moves the runs due on a timer (`[automations] check_secs`,
-`runs_per_check`), each move written against the run's version so one node acts.
-The details are in `docs/automations.md`.
+Publishing freezes the draft as a numbered version, kept as published in a read
+model for the runs pinned to it. A trigger event starts a `Run` of every published
+scenario listening to it (`timada-automations/triggers`; the run's id derives from
+the scenario and the event, so it starts once), and the runs due move on a timer
+(`[automations] check_secs`, `runs_per_check`), each move written against the run's
+version so one node acts. The nodes share both out: each starts and moves the runs
+that fall to it among the nodes up, and takes over any run another node left for
+two minutes. The details are in `docs/automations.md`.
 
 ## Shop pages
 
