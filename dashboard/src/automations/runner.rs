@@ -58,7 +58,7 @@ use topcoat::context::{AppContext, Cx};
 use super::definitions::Definitions;
 use super::facts::facts_of;
 use super::triggers::TRIGGER_WINDOW_SECS;
-use crate::cluster::{Executor, ShareOf};
+use crate::cluster::{Among, Executor, ShareOf};
 use crate::mail::{
     CampaignCopy, automation_vars, marketing_sender, render_automated, send_automated,
     send_automation_notice,
@@ -176,8 +176,8 @@ pub struct Runner<E = Executor> {
     every: Duration,
     /// How long, in seconds, the others leave a node its part of the work.
     help_after: u64,
-    /// This node's place among the nodes up (in a region when asked for
-    /// one): which runs it moves, which checkouts it looks at.
+    /// This node's place among the nodes up (all of them, or those that see
+    /// a region's events): which runs it moves, which checkouts it looks at.
     place: ShareOf,
     definitions: Definitions,
 }
@@ -343,7 +343,7 @@ impl<E: Store> Runner<E> {
     ) -> anyhow::Result<Vec<DueRun>> {
         // The read model holds every region's runs, and any node moves any
         // run: the share is among all the nodes up.
-        let share = (self.place)(None);
+        let share = (self.place)(Among::All);
         let help_before = now.saturating_sub(self.help_after);
         due_runs(&self.db, now, share, help_before, after, limit).await
     }
@@ -1024,9 +1024,9 @@ impl<E: Store> Runner<E> {
 
     /// Records the checkouts no order followed within the delay: each one
     /// starts the scenarios on that trigger. Only the nodes of the region a
-    /// checkout was asked in follow it, and each looks at its own part of
-    /// them, then at any another node left for a while
-    /// ([`HELP_AFTER_SECS`]).
+    /// checkout was asked in (without one, the nodes without a region)
+    /// follow it, and each looks at its own part of them, then at any
+    /// another node left for a while ([`HELP_AFTER_SECS`]).
     async fn find_left_checkouts(&self, now: u64) -> anyhow::Result<()> {
         let to = now.saturating_sub(self.abandoned_after);
         let from = to.saturating_sub(LEFT_WINDOW_SECS);
@@ -1036,7 +1036,7 @@ impl<E: Store> Runner<E> {
         for left in left_checkouts(&self.db, from, to, self.runs_per_look).await? {
             let share = *shares
                 .entry(left.region.clone())
-                .or_insert_with(|| (self.place)(left.region.as_deref()));
+                .or_insert_with(|| (self.place)(Among::Region(left.region.as_deref())));
             if !share.owns(&left.cart_id) && left.requested_at as u64 > help_before {
                 continue;
             }
@@ -1305,9 +1305,27 @@ mod tests {
         Arc::new(|_| Share::ALONE)
     }
 
-    /// A node none of the work falls to: another node has it all.
-    fn none_of_it() -> ShareOf {
-        Arc::new(|_| Share { index: 1, of: 1 })
+    /// A share that owns nothing: another node has it all.
+    const NONE: Share = Share { index: 1, of: 1 };
+
+    /// A node none of a region's work falls to (another node of the region
+    /// has it all), though every run due among all the nodes up is its:
+    /// what a start, and a look at the checkouts left, go by.
+    fn none_of_the_region() -> ShareOf {
+        Arc::new(|among| match among {
+            Among::All => Share::ALONE,
+            Among::Region(_) => NONE,
+        })
+    }
+
+    /// A node none of the runs due falls to among all the nodes up (another
+    /// node has them all), though a region's work is its: what the walk over
+    /// the runs goes by.
+    fn none_of_the_runs() -> ShareOf {
+        Arc::new(|among| match among {
+            Among::All => NONE,
+            Among::Region(_) => Share::ALONE,
+        })
     }
 
     /// The trigger subscription on a node at `place`, caught up.
@@ -1632,6 +1650,14 @@ mod tests {
         runner.sweep(now).await.unwrap();
         follow(&store, &db).await;
         assert!(the_run(&store, &db).await.is_none());
+        // The hour is over, but the request's region falls to another node:
+        // left to it a while.
+        runner_at(&store, &db, &keys, none_of_the_region())
+            .sweep(now + 3601)
+            .await
+            .unwrap();
+        follow(&store, &db).await;
+        assert!(the_run(&store, &db).await.is_none());
         // The hour is over: found left once, whatever the looks.
         runner.sweep(now + 3601).await.unwrap();
         runner.sweep(now + 3602).await.unwrap();
@@ -1828,15 +1854,15 @@ mod tests {
         let (store, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         publish(&store, &welcome()).await;
-        follow_at(&store, &db, none_of_it()).await;
+        follow_at(&store, &db, none_of_the_region()).await;
         subscribe(&store, &keys, "ada@example.com").await;
-        follow_at(&store, &db, none_of_it()).await;
+        follow_at(&store, &db, none_of_the_region()).await;
         assert!(the_run(&store, &db).await.is_none(), "not this node's");
         let now = crate::auth::now();
         let owed = starts_owed(&db, now, 10).await.unwrap();
         assert_eq!(owed.len(), 1);
 
-        let runner = runner_at(&store, &db, &keys, none_of_it());
+        let runner = runner_at(&store, &db, &keys, none_of_the_region());
         // Its node has a while to start it.
         runner.sweep(now).await.unwrap();
         assert!(the_run(&store, &db).await.is_none());
@@ -1856,9 +1882,9 @@ mod tests {
         let (store, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         publish(&store, &welcome()).await;
-        follow_at(&store, &db, none_of_it()).await;
+        follow_at(&store, &db, none_of_the_region()).await;
         subscribe(&store, &keys, "ada@example.com").await;
-        follow_at(&store, &db, none_of_it()).await;
+        follow_at(&store, &db, none_of_the_region()).await;
         let now = crate::auth::now();
         let owed = starts_owed(&db, now, 10).await.unwrap();
         let automations = Command::new(store.clone(), TENANT);
@@ -1871,7 +1897,7 @@ mod tests {
         );
         catch_up(&store, &db).await;
 
-        runner_at(&store, &db, &keys, none_of_it())
+        runner_at(&store, &db, &keys, none_of_the_region())
             .start_left_runs(now + HELP_AFTER_SECS)
             .await
             .unwrap();
@@ -1899,7 +1925,7 @@ mod tests {
         let due = vec![run.id.clone()];
 
         assert_eq!(due_ids(&runner(&store, &db, &keys), now).await, due);
-        let elsewhere = runner_at(&store, &db, &keys, none_of_it());
+        let elsewhere = runner_at(&store, &db, &keys, none_of_the_runs());
         assert!(
             due_ids(&elsewhere, now).await.is_empty(),
             "not this node's to move"
@@ -1907,7 +1933,13 @@ mod tests {
         assert_eq!(due_ids(&elsewhere, now + HELP_AFTER_SECS).await, due);
 
         // Looks a minute apart: that node is left four of them.
-        let slow = runner_every(&store, &db, &keys, none_of_it(), Duration::from_secs(60));
+        let slow = runner_every(
+            &store,
+            &db,
+            &keys,
+            none_of_the_runs(),
+            Duration::from_secs(60),
+        );
         assert!(due_ids(&slow, now + HELP_AFTER_SECS).await.is_empty());
         assert_eq!(due_ids(&slow, now + 4 * 60).await, due);
     }

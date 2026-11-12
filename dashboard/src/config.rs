@@ -168,8 +168,13 @@ pub struct ServerConfig {
     /// the nodes of the region alone, so a region's work is done by its own
     /// nodes and not N times across the cluster; the AliExpress reads a
     /// region's events ask for are shared out among those nodes, which tell
-    /// each other the regions they serve. One word. Absent: no routing key,
-    /// and every node does every region's work.
+    /// each other the regions they serve. One word. Absent: no routing key;
+    /// the sagas follow the events written without one (every event, in a
+    /// cluster that never had regions), and the nodes without a region
+    /// share that work. A stream keeps the key it was created with: the
+    /// work on the streams created before the nodes had a region stays with
+    /// the nodes without one, so no node does it once every node has a
+    /// region (#517).
     #[serde(default)]
     pub region: Option<String>,
     /// Regions whose background work this node also takes on, e.g. while
@@ -977,7 +982,7 @@ impl ServerConfig {
         }
         if !self.also_serves.is_empty() && self.region.is_none() {
             return Err(ConfigError::Message(
-                "server.also_serves needs server.region: a node without a region already does every region's work".into(),
+                "server.also_serves needs server.region: a node takes on other regions' work besides its own region's".into(),
             ));
         }
         for (i, served) in self.also_serves.iter().enumerate() {
