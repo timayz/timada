@@ -34,6 +34,14 @@
 //! would otherwise hand it back to whoever asks, and the shoppers context
 //! asks for the key of a deleted account again when its address signs in
 //! once more.
+//!
+//! Every key file, a tombstone too, is on the disk before it takes its name
+//! ([`crate::disk`]), so a power cut never leaves an empty one, which would
+//! read as a tombstone. The name is synced as well where something counts
+//! on it: a key put, and a peer's copy of one, before the event naming the
+//! key commits, and every tombstone, whose loss would bring the key back. A
+//! key this node fetched, or copied as it joined, may lose its name to a
+//! power cut, and is then asked for again.
 
 use std::collections::VecDeque;
 use std::io;
@@ -50,6 +58,7 @@ use timada_core::{Key, Keys};
 use tokio::task::JoinSet;
 
 use crate::config::DataKeysConfig;
+use crate::disk::{self, Durability};
 use crate::peers::{self, Peers, is_id};
 use crate::seal::Sealer;
 
@@ -70,6 +79,12 @@ pub const FETCH_TIMEOUT: Duration = Duration::from_secs(2);
 /// How many keys a page of a tenant's carries, as a node copies them from a
 /// peer: some hundred kilobytes.
 pub const PAGE_LEN: usize = 1000;
+
+/// How many keys of a page a node writes at once as it copies them. Each is
+/// synced to the disk before it takes its name, and a disk takes many syncs
+/// at once in about the time of one: on a consumer NVMe, 64 at once copied a
+/// shop's keys three times as fast as 16.
+const WRITES_AT_ONCE: usize = 64;
 
 /// What a key is sealed for: its tenant and its id, so a sealed file copied
 /// under another tenant or name opens nothing.
@@ -165,7 +180,8 @@ impl KeyVault {
         if !valid {
             return Ok(false);
         }
-        self.store(tenant_id, key_id, sealed.to_vec()).await
+        self.store(tenant_id, key_id, sealed.to_vec(), Durability::Synced)
+            .await
     }
 
     /// The sealed key, for a peer that lacks it: `None` when this node does
@@ -188,7 +204,7 @@ impl KeyVault {
         }
         let bucket = self.bucket(tenant_id, key_id);
         let key_id = key_id.to_owned();
-        on_disk(move || destroy_at(&bucket, &key_id)).await
+        on_disk(move || destroy_at(&bucket, &key_id, Durability::Synced)).await
     }
 
     /// Whether this node holds the key or destroyed it: either way there is
@@ -312,20 +328,17 @@ impl KeyVault {
             };
             checked.push((key.id.clone(), sealed));
         }
+        // Several at once ([`WRITES_AT_ONCE`]), each lane a run of the page.
         let tenant_dir = self.dir.join(tenant_id);
-        on_disk(move || {
-            for (key_id, sealed) in &checked {
-                let bucket = tenant_dir.join(bucket_name(key_id));
-                match sealed {
-                    Some(sealed) => {
-                        store_at(&bucket, key_id, sealed)?;
-                    }
-                    None => destroy_at(&bucket, key_id)?,
-                }
-            }
-            Ok(checked.len())
-        })
-        .await
+        let mut lanes = JoinSet::new();
+        for lane in checked.chunks(checked.len().div_ceil(WRITES_AT_ONCE).max(1)) {
+            let (tenant_dir, lane) = (tenant_dir.clone(), lane.to_vec());
+            lanes.spawn_blocking(move || take_lane(&tenant_dir, &lane));
+        }
+        while let Some(taken) = lanes.join_next().await {
+            taken??;
+        }
+        Ok(checked.len())
     }
 
     /// The directory of a key's file. The names must be ids ([`is_id`]).
@@ -343,10 +356,16 @@ impl KeyVault {
     }
 
     /// Writes a sealed key, unless it was destroyed: `false` then.
-    async fn store(&self, tenant_id: &str, key_id: &str, sealed: Vec<u8>) -> anyhow::Result<bool> {
+    async fn store(
+        &self,
+        tenant_id: &str,
+        key_id: &str,
+        sealed: Vec<u8>,
+        durability: Durability,
+    ) -> anyhow::Result<bool> {
         let bucket = self.bucket(tenant_id, key_id);
         let key_id = key_id.to_owned();
-        on_disk(move || store_at(&bucket, &key_id, &sealed)).await
+        on_disk(move || store_at(&bucket, &key_id, &sealed, durability)).await
     }
 
     /// The key a sealed file holds; `None` when it is not one. A key is
@@ -399,7 +418,10 @@ impl KeyVault {
             });
             match fetched {
                 Ok(Some((key, sealed))) => {
-                    if !self.store(tenant_id, key_id, sealed).await? {
+                    if !self
+                        .store(tenant_id, key_id, sealed, Durability::Cached)
+                        .await?
+                    {
                         return Ok(None);
                     }
                     tracing::info!(peer = %url, tenant = %tenant_id, "fetched a key from a peer");
@@ -476,41 +498,75 @@ fn read_held(path: &Path) -> io::Result<Held> {
     }
 }
 
-/// A temporary file next to a key's, holding `bytes`. Its name carries a
-/// `.`, so no listing takes it for a key.
-fn write_partial(bucket: &Path, key_id: &str, bytes: &[u8]) -> io::Result<PathBuf> {
-    std::fs::create_dir_all(bucket)?;
-    let partial = bucket.join(format!("{key_id}.{}.part", ulid::Ulid::generate()));
-    std::fs::write(&partial, bytes)?;
-    Ok(partial)
-}
-
 /// Writes a sealed key in `bucket` under its id, unless a file holds the
 /// name already: the key itself, which stays, or its tombstone, which
-/// nothing replaces. The bytes are written in full before the name appears
-/// (a hard link from a temporary file, which fails rather than replace), so
-/// a reader never sees half a key. `false` when the key was destroyed.
-fn store_at(bucket: &Path, key_id: &str, sealed: &[u8]) -> io::Result<bool> {
-    let partial = write_partial(bucket, key_id, sealed)?;
+/// nothing replaces. The bytes are on the disk before the name appears (a
+/// hard link from a temporary file, which fails rather than replace), so
+/// neither a reader nor a power cut ever finds half a key, or an empty file
+/// that would read as its tombstone; with [`Durability::Synced`] the name is
+/// too when this returns. `false` when the key was destroyed.
+fn store_at(
+    bucket: &Path,
+    key_id: &str,
+    sealed: &[u8],
+    durability: Durability,
+) -> io::Result<bool> {
     let path = bucket.join(key_id);
+    let partial = disk::write_partial(&path, sealed)?;
     let linked = std::fs::hard_link(&partial, &path);
     let _ = std::fs::remove_file(&partial);
-    match linked {
-        Ok(()) => Ok(true),
+    let held = match linked {
+        Ok(()) => true,
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-            Ok(matches!(read_held(&path)?, Held::Sealed(_)))
+            matches!(read_held(&path)?, Held::Sealed(_))
         }
-        Err(err) => Err(err),
+        Err(err) => return Err(err),
+    };
+    // A key held already may be a copy fetched, its name not synced yet.
+    if held && durability == Durability::Synced {
+        disk::sync_dir(bucket)?;
     }
+    Ok(held)
 }
 
 /// Puts the tombstone in a key's place in one step: the key, if this node
-/// held it, is gone the moment the tombstone is there.
-fn destroy_at(bucket: &Path, key_id: &str) -> io::Result<()> {
-    let partial = write_partial(bucket, key_id, b"")?;
-    std::fs::rename(&partial, bucket.join(key_id)).inspect_err(|_| {
+/// held it, is gone the moment the tombstone is there. A tombstone must
+/// survive a power cut, or the key comes back: with [`Durability::Cached`]
+/// the caller syncs `bucket` itself, once for a batch.
+fn destroy_at(bucket: &Path, key_id: &str, durability: Durability) -> io::Result<()> {
+    let path = bucket.join(key_id);
+    let partial = disk::write_partial(&path, b"")?;
+    std::fs::rename(&partial, &path).inspect_err(|_| {
         let _ = std::fs::remove_file(&partial);
-    })
+    })?;
+    match durability {
+        Durability::Synced => disk::sync_dir(bucket),
+        Durability::Cached => Ok(()),
+    }
+}
+
+/// Writes keys and tombstones a peer handed over, in their ids' order, below
+/// a tenant's directory. A key's name is left to the kernel, the peers
+/// holding the key; a tombstone's is synced, once per directory.
+fn take_lane(tenant_dir: &Path, keys: &[(String, Option<Vec<u8>>)]) -> io::Result<()> {
+    let mut destroyed: Vec<PathBuf> = Vec::new();
+    for (key_id, sealed) in keys {
+        let bucket = tenant_dir.join(bucket_name(key_id));
+        match sealed {
+            Some(sealed) => {
+                store_at(&bucket, key_id, sealed, Durability::Cached)?;
+            }
+            None => {
+                destroy_at(&bucket, key_id, Durability::Cached)?;
+                if destroyed.last() != Some(&bucket) {
+                    destroyed.push(bucket);
+                }
+            }
+        }
+    }
+    destroyed
+        .iter()
+        .try_for_each(|bucket| disk::sync_dir(bucket))
 }
 
 /// The names in `dir` that are ids, in order; none when it does not exist.
@@ -577,7 +633,9 @@ impl Keys for TenantKeys {
         anyhow::ensure!(is_id(&self.tenant_id) && is_id(key_id), "not a key id");
         let sealed = sealer.seal_bytes_for(&owner(&self.tenant_id, key_id), key.as_bytes())?;
         anyhow::ensure!(
-            vault.store(&self.tenant_id, key_id, sealed.clone()).await?,
+            vault
+                .store(&self.tenant_id, key_id, sealed.clone(), Durability::Synced)
+                .await?,
             "key {key_id} was destroyed"
         );
         let Some(peers) = &vault.peers else {
@@ -624,6 +682,7 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+    use crate::disk::test_support::Syncs;
     use crate::peers::test_support::{SECRET, answering, down, peer, silent};
 
     const OPERATOR_SECRET: &str = "a-test-secret-of-thirty-two-chars!!";
@@ -757,6 +816,34 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    /// What something counts on is on the disk, name and all, by the time it
+    /// is acknowledged: a key put, a peer's copy of one, a tombstone. A key
+    /// fetched from a peer has its bytes there before its name, which a
+    /// power cut may take back.
+    #[tokio::test]
+    async fn a_key_counted_on_is_synced_name_and_all() {
+        let key = Key::generate();
+        let vault = vault(Some(Peers::for_test(
+            vec![peer(200, sealed_as("t1", "k2", &key)).await],
+            3,
+        )));
+        let keys = vault.for_tenant("t1");
+        // The directories a first key creates, out of the way.
+        keys.put("k0", &Key::generate()).await.unwrap();
+        let mut syncs = Syncs::below(&vault.dir);
+
+        keys.put("k1", &Key::generate()).await.unwrap();
+        assert_eq!(syncs.take(), ["t1/k/", "t1/k/k1"]);
+        let copy = sealed_as("t1", "k3", &Key::generate());
+        assert!(vault.accept("t1", "k3", copy).await.unwrap());
+        assert_eq!(syncs.take(), ["t1/k/", "t1/k/k3"]);
+        keys.delete("k1").await.unwrap();
+        assert_eq!(syncs.take(), ["t1/k/", "t1/k/k1"]);
+
+        assert_eq!(keys.get("k2").await.unwrap(), Some(key));
+        assert_eq!(syncs.take(), ["t1/k/k2"], "fetched: the bytes alone");
     }
 
     #[tokio::test]
@@ -930,6 +1017,7 @@ mod tests {
 
         // The first peer is down; the second hands its keys over two at a
         // time.
+        let mut syncs = Syncs::below(&dir);
         let joined = vault_in(
             dir,
             Some(Peers::for_test(
@@ -938,6 +1026,23 @@ mod tests {
             )),
         );
         assert_eq!(joined.copy_from_peers().await.unwrap(), 5);
+        // Every key's bytes; of the names, only the tombstone's, and each
+        // directory created into the one above it.
+        assert_eq!(
+            syncs.take(),
+            [
+                "/",
+                "t1/",
+                "t1/",
+                "t1/a/a1",
+                "t1/b/b1",
+                "t1/b/b2",
+                "t1/g/",
+                "t1/g/gone",
+                "t2/",
+                "t2/c/c1"
+            ]
+        );
         for (tenant, key_id, key) in kept {
             assert!(
                 joined.knows(tenant, key_id).await.unwrap(),
@@ -961,10 +1066,36 @@ mod tests {
         );
     }
 
+    /// How long a key put takes on this machine's disk (`PUTS` of them, 100
+    /// unless set), alone: each is synced, name and all. Run by hand: `cargo
+    /// test -p timada-dashboard --bin timada-dashboard probe -- --ignored
+    /// --nocapture --test-threads=1`.
+    #[tokio::test]
+    #[ignore]
+    async fn probe_a_key_put() {
+        let count: u32 = std::env::var("PUTS")
+            .ok()
+            .and_then(|count| count.parse().ok())
+            .unwrap_or(100);
+        let vault = vault(None);
+        let keys = vault.for_tenant("t1");
+        // The 64 directories made first, as a shop's are.
+        for first in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_".chars() {
+            std::fs::create_dir_all(vault.bucket("t1", &first.to_string())).unwrap();
+        }
+        let started = Instant::now();
+        for _ in 0..count {
+            let key_id = timada_core::keys::new_key_id();
+            keys.put(&key_id, &Key::generate()).await.unwrap();
+        }
+        let took = started.elapsed();
+        println!("{count} keys put in {took:?}, {:?} each", took / count);
+        let _ = std::fs::remove_dir_all(&vault.dir);
+    }
+
     /// How long a joining node takes to copy a large shop's keys (`KEYS` of
     /// them, 100,000 unless set) from a peer on the same machine, in pages
-    /// of [`PAGE_LEN`]. Run by hand: `cargo test -p timada-dashboard --bin
-    /// timada-dashboard probe -- --ignored --nocapture`.
+    /// of [`PAGE_LEN`]. Run by hand, as [`probe_a_key_put`].
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]
     async fn probe_a_large_shops_copy() {
@@ -973,13 +1104,19 @@ mod tests {
             .and_then(|count| count.parse().ok())
             .unwrap_or(100_000);
         let source = vault(None);
-        let keys = source.for_tenant("t1");
+        // Written straight to the peer's disk, unsynced: what is measured
+        // is the copy.
         let started = Instant::now();
         for _ in 0..count {
             let key_id = timada_core::keys::new_key_id();
-            keys.put(&key_id, &Key::generate()).await.unwrap();
+            let sealed = sealer()
+                .seal_bytes_for(&owner("t1", &key_id), Key::generate().as_bytes())
+                .unwrap();
+            let bucket = source.bucket("t1", &key_id);
+            std::fs::create_dir_all(&bucket).unwrap();
+            std::fs::write(bucket.join(&key_id), sealed).unwrap();
         }
-        println!("{count} keys put in {:?}", started.elapsed());
+        println!("{count} keys written in {:?}", started.elapsed());
         let joined = vault(Some(Peers::for_test(
             vec![copying_peer(&source, PAGE_LEN).await],
             3,

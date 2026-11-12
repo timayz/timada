@@ -21,7 +21,11 @@
 //! takes none with it. An upload copies the renditions to the other nodes
 //! and is only recorded once a majority of nodes hold them, the same
 //! majority a commit needs: a picture the catalog knows survives whatever
-//! the events survive. Each node also follows the catalog's stream
+//! the events survive. This node and each peer sync the files to the disk,
+//! names and all, before they answer ([`crate::disk`]), as the store syncs
+//! each write, so that holds through a power cut across the cluster too; a
+//! copy a node fetches has its bytes on the disk before its name, so no file
+//! is ever served empty. Each node also follows the catalog's stream
 //! ([`subscription`], [`read_model`]): it records every picture's files in
 //! a read model and on its own list of files to fetch, which the
 //! [`Fetcher`] works off the cursor, taking from a peer what the node lacks
@@ -70,6 +74,7 @@ use topcoat::router::{
 
 use crate::config::MediaConfig;
 use crate::db::Db;
+use crate::disk::{self, Durability};
 use crate::peers::{self, Peers, is_id};
 
 pub mod fetcher;
@@ -287,7 +292,8 @@ impl Media {
     ) -> anyhow::Result<Picture> {
         let kept = async {
             for rendition in Rendition::ALL {
-                self.store(tenant_id, rendition, image_id, rendered.bytes(rendition))
+                let bytes = rendered.bytes(rendition);
+                self.store(tenant_id, rendition, image_id, bytes, Durability::Synced)
                     .await?;
             }
             self.replicate(tenant_id, image_id, &rendered).await
@@ -300,21 +306,32 @@ impl Media {
         Ok(rendered.picture)
     }
 
-    /// Writes one rendition. The bytes land in a temporary file first, so a
-    /// reader never sees a half-written one.
+    /// Writes one rendition. The bytes are on the disk before the file takes
+    /// its name ([`disk::write_partial`]), so neither a reader nor a power
+    /// cut ever finds a half-written or empty one; with
+    /// [`Durability::Synced`] the name is too when this returns.
     pub async fn store(
         &self,
         tenant_id: &str,
         rendition: Rendition,
         image_id: &str,
         bytes: &[u8],
+        durability: Durability,
     ) -> anyhow::Result<()> {
         let path = self.path_of(tenant_id, rendition, image_id)?;
-        let dir = path.parent().expect("a rendition directory");
-        tokio::fs::create_dir_all(dir).await?;
-        let partial = path.with_extension(format!("{RENDITION_EXT}.part"));
-        tokio::fs::write(&partial, bytes).await?;
-        tokio::fs::rename(&partial, &path).await?;
+        let bytes = bytes.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let partial = disk::write_partial(&path, &bytes)?;
+            std::fs::rename(&partial, &path).inspect_err(|_| {
+                let _ = std::fs::remove_file(&partial);
+            })?;
+            let dir = path.parent().expect("a rendition directory");
+            match durability {
+                Durability::Synced => disk::sync_dir(dir),
+                Durability::Cached => Ok(()),
+            }
+        })
+        .await??;
         Ok(())
     }
 
@@ -408,7 +425,8 @@ impl Media {
                 tracing::warn!(peer = %url, tenant = %tenant_id, %file, %err, "peer's copy is not the picture recorded");
                 continue;
             }
-            self.store(tenant_id, rendition, image_id, &bytes).await?;
+            self.store(tenant_id, rendition, image_id, &bytes, Durability::Cached)
+                .await?;
             tracing::info!(peer = %url, tenant = %tenant_id, %file, "fetched a picture from a peer");
             return Ok(Fetch::Fetched);
         }
@@ -444,7 +462,8 @@ impl Media {
         if !valid {
             return Ok(false);
         }
-        self.store(tenant_id, rendition, &image_id, bytes).await?;
+        self.store(tenant_id, rendition, &image_id, bytes, Durability::Synced)
+            .await?;
         Ok(true)
     }
 
@@ -746,6 +765,7 @@ pub(crate) mod test_support {
 pub(crate) mod tests {
     use super::test_support::{png, rendered};
     use super::*;
+    use crate::disk::test_support::Syncs;
 
     const GIF: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xFF\xFF\xFF";
 
@@ -969,6 +989,30 @@ pub(crate) mod tests {
         assert!(single.keep("t1", "i1", upload).await.is_ok());
     }
 
+    /// An upload's files are on the disk, names and all, before the upload
+    /// is recorded, and so is the copy a peer takes of one.
+    #[tokio::test]
+    async fn a_picture_counted_on_is_synced_name_and_all() {
+        let upload = rendered(&png(900, 600, [10, 200, 10, 255]));
+        let media = media(vec![peer(204, b"").await], 3);
+        // The directories a first picture creates, out of the way.
+        media.keep("t1", "i0", upload.clone()).await.unwrap();
+        let mut syncs = Syncs::below(&media.dir);
+
+        media.keep("t1", "i1", upload.clone()).await.unwrap();
+        assert_eq!(
+            syncs.take(),
+            ["t1/1200/", "t1/1200/i1.webp", "t1/400/", "t1/400/i1.webp"]
+        );
+        assert!(
+            media
+                .accept("t1", "400", "i2.webp", &upload.listing)
+                .await
+                .unwrap()
+        );
+        assert_eq!(syncs.take(), ["t1/400/", "t1/400/i2.webp"]);
+    }
+
     /// A node lacking a picture takes it from the first peer whose copy is
     /// the one recorded, rendition by rendition.
     #[tokio::test]
@@ -985,10 +1029,17 @@ pub(crate) mod tests {
         })
         .await;
         let media = media(vec![down().await, peer(404, b"").await, has_it], 4);
+        let mut syncs = Syncs::below(&media.dir);
         media
             .fetch("t1", "i1", &upload.picture)
             .await
             .expect("fetched");
+        // The bytes, not the names (those synced are the directories
+        // created, each into the one above it).
+        assert_eq!(
+            syncs.take(),
+            ["/", "t1/", "t1/", "t1/1200/i1.webp", "t1/400/i1.webp"]
+        );
         for (rendition, file) in upload.picture.files() {
             let stored = tokio::fs::read(media.path_of("t1", rendition, "i1").unwrap())
                 .await
@@ -1088,7 +1139,13 @@ pub(crate) mod tests {
             );
             assert!(
                 media
-                    .store(tenant, Rendition::Page, image, &upload.page)
+                    .store(
+                        tenant,
+                        Rendition::Page,
+                        image,
+                        &upload.page,
+                        Durability::Cached
+                    )
                     .await
                     .is_err(),
                 "stored {tenant}/{image}"
@@ -1116,7 +1173,13 @@ pub(crate) mod tests {
         assert!(above.is_file());
         // While a picture of ours goes.
         media
-            .store("t1", Rendition::Listing, "i1", &upload.listing)
+            .store(
+                "t1",
+                Rendition::Listing,
+                "i1",
+                &upload.listing,
+                Durability::Cached,
+            )
             .await
             .unwrap();
         media.remove_image("t1", "i1").await;
