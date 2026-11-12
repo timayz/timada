@@ -2607,7 +2607,9 @@ async fn a_discount_code_is_charged_held_and_invoiced() {
         (cart_id.clone(), h.ask_with(&acme, &cart_id, checkout).await)
     };
 
-    // Stripe fails: the use is given back.
+    // Stripe fails: the use is given back, the code's and Ada's. The
+    // refusal is written first (it decides whether anything goes back), so
+    // the answer comes before the give-back.
     h.stripe
         .down
         .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -2616,8 +2618,16 @@ async fn a_discount_code_is_charged_held_and_invoiced() {
         answer,
         PaymentAnswer::Refused("payments_unavailable".into())
     );
-    let usage = discounts.load_usage(&ten.id).await.unwrap().unwrap();
-    assert!(usage.reserved.is_empty());
+    eventually(async || {
+        let usage = discounts.load_usage(&ten.id).await.unwrap().unwrap();
+        let ada = discounts
+            .load_buyer(&ten.id, "ada@example.org")
+            .await
+            .unwrap()
+            .unwrap();
+        (usage.reserved.is_empty() && ada.cart_id.is_none()).then_some(())
+    })
+    .await;
     h.stripe
         .down
         .store(false, std::sync::atomic::Ordering::SeqCst);
