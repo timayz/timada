@@ -1,6 +1,6 @@
 //! One key personal data is sealed under: a peer stores it here before
-//! recording what it seals, and a peer lacking it asks for it here. Only the nodes may: nothing outside
-//! the cluster ever reads a key.
+//! recording what it seals, and a peer lacking it asks for it here. Only the
+//! nodes may: nothing outside the cluster ever reads a key.
 
 use std::sync::Arc;
 
@@ -10,22 +10,18 @@ use topcoat::{
     context::{Cx, app_context},
     router::{
         StatusCode,
-        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE},
+        header::{CACHE_CONTROL, CONTENT_TYPE},
         module_param, path_param,
-        request::headers,
         response::{IntoResponse, Response},
         route,
     },
 };
 
 use super::TenantId;
+use crate::app::cluster::keys::authorized;
 use crate::key_vault::KeyVault;
 
 module_param!(pub key_id);
-
-fn authorized(cx: &Cx, vault: &KeyVault) -> bool {
-    vault.authorizes(headers(cx).get(AUTHORIZATION).map(|value| value.as_bytes()))
-}
 
 /// Stores the copy. 401 without the cluster's secret, 422 for a name or
 /// bytes that are not a key, or a key this node destroyed.

@@ -191,6 +191,19 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             tracing::info!(
                 "the store was copied from a peer: the read models catch up before serving"
             );
+            // The keys first, page by page from a peer: the read models open
+            // each shopper's, subscriber's and message's data with its key,
+            // and would otherwise ask the peers for each in turn. Whatever a
+            // peer could not hand over is asked for that way.
+            match keys.copy_from_peers().await {
+                Ok(taken) => {
+                    tracing::info!(keys = taken, "copied the personal-data keys from a peer")
+                }
+                Err(err) => tracing::warn!(
+                    error = %format!("{err:#}"),
+                    "the personal-data keys were not all copied from a peer: the read models ask for each one missing"
+                ),
+            }
         } else {
             tracing::info!("a read model was rebuilt: the read models catch up before serving");
         }
