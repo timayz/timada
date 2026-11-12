@@ -1,16 +1,21 @@
 //! Asks the buyers of fulfilled orders, some days later, what they think of
 //! what they bought: a mail under the shop's name with a link that opens the
 //! order's review forms on the storefront, without the browser that placed
-//! it. Nothing in the event store fires later, so every node sweeps the
-//! fulfilled orders it knows of on a timer; the node that claims an order's
-//! request first is the one that mails it.
+//! it. Nothing in the event store fires later, so every node sweeps on a
+//! timer the requests the reviews read model says are due and not mailed
+//! ([`review_requests_due`]), a page at a time from where the last one
+//! stopped: an order that cannot be asked about (its shop has no storefront
+//! yet, it was refunded, everything on it is reviewed already) stays listed
+//! until its window closes, and holds up no other. The node that claims an
+//! order's request first is the one that mails it.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::db::Db;
-use timada_orders::{FulfilledOrder, OrderState, OrderStatus, fulfilled_between};
-use timada_reviews::{MAX_REQUEST_DELAY_DAYS, review_id};
+use timada_orders::{OrderState, OrderStatus};
+use timada_reviews::{DueReviewRequest, REQUEST_WINDOW_SECS, review_id, review_requests_due};
 use tokio::task::JoinHandle;
 use topcoat::context::{AppContext, Cx};
 
@@ -22,30 +27,35 @@ pub const MAILER: &str = "timada-dashboard";
 
 const DAY_SECS: u64 = 24 * 60 * 60;
 
-/// How late a request may still go out after it fell due: enough for a node
-/// to have been down, while a shop that just turned the requests on (or a
-/// node that just joined) does not mail its whole history.
-pub const WINDOW_SECS: u64 = 3 * DAY_SECS;
+/// The most due requests one statement reads, every shop together.
+const REQUESTS_PER_PAGE: u32 = 200;
 
 /// Whether an order fulfilled at `fulfilled_at` is asked about at `now`,
 /// `days` after it left.
 pub fn is_due(fulfilled_at: u64, days: u8, now: u64) -> bool {
     let due = fulfilled_at + u64::from(days) * DAY_SECS;
-    due <= now && now < due + WINDOW_SECS
+    due <= now && now < due + REQUEST_WINDOW_SECS
 }
 
 /// The sweep, with what it needs outside any request.
 pub struct ReviewRequests {
-    /// The read models: the orders that left.
+    /// The read models: the requests due.
     db: Db,
     /// The store, every tenant's.
     store: Executor,
     mail: Arc<AppContext>,
+    /// How many due requests one statement reads.
+    page_len: u32,
 }
 
 impl ReviewRequests {
     pub fn new(db: Db, store: Executor, mail: Arc<AppContext>) -> Arc<Self> {
-        Arc::new(Self { db, store, mail })
+        Arc::new(Self {
+            db,
+            store,
+            mail,
+            page_len: REQUESTS_PER_PAGE,
+        })
     }
 
     /// Sweeps every `every`, the first time right away.
@@ -62,57 +72,73 @@ impl ReviewRequests {
         })
     }
 
-    /// Mails the buyers whose request is due at `now`, tenant by tenant. A
-    /// tenant that fails is logged and the others still go.
-    pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
-        let from = now.saturating_sub(u64::from(MAX_REQUEST_DELAY_DAYS) * DAY_SECS + WINDOW_SECS);
-        let orders = fulfilled_between(&self.db, from as i64, now as i64 + 1).await?;
-        for tenant in orders.chunk_by(|a, b| a.tenant_id == b.tenant_id) {
-            let tenant_id = &tenant[0].tenant_id;
-            if let Err(err) = self.sweep_tenant(tenant_id, tenant, now).await {
-                tracing::error!(tenant = %tenant_id, error = %err, "review requests not sent");
+    /// Mails the buyers whose request is due at `now`, page by page and shop
+    /// by shop within a page. A shop that fails is logged and the others
+    /// still go. Returns how many were mailed.
+    pub async fn sweep(&self, now: u64) -> anyhow::Result<usize> {
+        let mut mailed = 0;
+        let mut after = None;
+        loop {
+            let page = review_requests_due(&self.db, now, after.as_ref(), self.page_len).await?;
+            let mut shops: BTreeMap<&str, Vec<DueReviewRequest>> = BTreeMap::new();
+            for request in &page {
+                shops
+                    .entry(request.tenant_id.as_str())
+                    .or_default()
+                    .push(request.clone());
             }
+            for (tenant_id, due) in shops {
+                match self.sweep_tenant(tenant_id, &due, now).await {
+                    Ok(count) => mailed += count,
+                    Err(err) => {
+                        tracing::error!(tenant = %tenant_id, error = %err, "review requests not sent");
+                    }
+                }
+            }
+            if page.len() < self.page_len as usize {
+                return Ok(mailed);
+            }
+            after = page.last().cloned();
         }
-        Ok(())
     }
 
     async fn sweep_tenant(
         &self,
         tenant_id: &str,
-        orders: &[FulfilledOrder],
+        due: &[DueReviewRequest],
         now: u64,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<usize> {
         let Some(tenant) = timada_tenancy::Command(self.store.clone())
             .load_tenant(tenant_id)
             .await?
         else {
-            return Ok(());
+            return Ok(0);
         };
         if tenant.is_suspended() {
-            return Ok(());
+            return Ok(0);
         }
         let cx = Cx::new(self.mail.clone());
-        ask_buyers(&self.store, &cx, &tenant, orders, now).await?;
-        Ok(())
+        ask_buyers(&self.store, &cx, &tenant, due, now).await
     }
 }
 
-/// Mails the buyer of each of `orders` (one tenant's) whose request is due
-/// at `now`. Returns how many were mailed.
+/// Mails the buyer of each of `due` (one tenant's requests) whose request is
+/// due at `now` under the shop's policy as it stands: the read model only
+/// said where to look. Returns how many were mailed.
 pub async fn ask_buyers<E: evento::Executor + Clone>(
     store: &E,
     cx: &Cx,
     tenant: &timada_tenancy::TenantState,
-    orders: &[FulfilledOrder],
+    due: &[DueReviewRequest],
     now: u64,
 ) -> anyhow::Result<usize> {
     let reviews = timada_reviews::Command::new(store.clone(), &tenant.id);
     let Some(days) = reviews.review_requests().await?.delay_days() else {
         return Ok(0);
     };
-    let due: Vec<&FulfilledOrder> = orders
+    let due: Vec<&DueReviewRequest> = due
         .iter()
-        .filter(|order| is_due(order.fulfilled_at as u64, days, now))
+        .filter(|request| is_due(request.fulfilled_at as u64, days, now))
         .collect();
     if due.is_empty() {
         return Ok(0);
@@ -124,11 +150,10 @@ pub async fn ask_buyers<E: evento::Executor + Clone>(
         return Ok(0);
     };
     let mut mailed = 0;
-    for order in due {
-        if reviews.load_review_request(&order.id).await?.is_some() {
-            continue;
-        }
-        let Some(order) = shop.load_order(&order.id).await? else {
+    for request in due {
+        // A request mailed is not listed; one mailed a moment ago, which the
+        // read model has not seen yet, its claim finds taken.
+        let Some(order) = shop.load_order(&request.order_id).await? else {
             continue;
         };
         let products = unreviewed(&reviews, &order).await?;
@@ -224,8 +249,70 @@ mod tests {
         (cx, transport)
     }
 
-    /// A paid order of a mug and some tea, fulfilled now. Returns its row.
-    async fn fulfilled(store: &evento::Turso, order_id: &str) -> FulfilledOrder {
+    /// The store's database with the reviews read model in it.
+    async fn read_models(store: &evento::Turso) -> Db {
+        let mut conn = store.connect().unwrap();
+        timada_reviews::MIGRATIONS
+            .to_latest(&mut conn)
+            .await
+            .map_err(|(_, err)| err)
+            .unwrap();
+        Db::from(store.clone())
+    }
+
+    /// The reviews read model, caught up with the store.
+    async fn catch_up(store: &evento::Turso, db: &Db) {
+        timada_reviews::read_model_subscription::<evento::Turso>(db.clone())
+            .run_once(store)
+            .await
+            .unwrap();
+    }
+
+    /// A shop on the platform, with a storefront unless `storefront` says
+    /// otherwise.
+    async fn shop_named(store: &evento::Turso, name: &str, storefront: bool) -> String {
+        let tenant = timada_tenancy::Command(store.clone())
+            .create_tenant(timada_tenancy::CreateTenant {
+                name: name.to_owned(),
+                owner_user_id: "user-alice".to_owned(),
+            })
+            .await
+            .unwrap();
+        if storefront {
+            with_storefront_in(store, &tenant.id).await;
+        }
+        tenant.id
+    }
+
+    /// The sweep over `store`, reading `page_len` requests at a time, and
+    /// what it mails.
+    fn sweeper(store: &evento::Turso, db: &Db, page_len: u32) -> (ReviewRequests, MemoryTransport) {
+        let transport = MemoryTransport::new();
+        let mut mail = AppContext::new();
+        mail.insert(MailConfig::builder().transport(transport.clone()).build());
+        mail.insert(MailSender("Timada <no-reply@example.com>".parse().unwrap()));
+        mail.insert(crate::shop_mail::ShopMail::new(None, false));
+        let sweep = ReviewRequests {
+            db: db.clone(),
+            store: evento::Evento::new(store.clone()),
+            mail: Arc::new(mail),
+            page_len,
+        };
+        (sweep, transport)
+    }
+
+    /// A paid order of a mug and some tea, fulfilled now. Returns its
+    /// request, due a week later as the default policy says.
+    async fn fulfilled(store: &evento::Turso, order_id: &str) -> DueReviewRequest {
+        fulfilled_in(store, "tenant-1", order_id).await
+    }
+
+    /// The same, in `tenant_id`.
+    async fn fulfilled_in(
+        store: &evento::Turso,
+        tenant_id: &str,
+        order_id: &str,
+    ) -> DueReviewRequest {
         let line = |product_id: &str, name: &str| OrderLine {
             product_id: product_id.to_owned(),
             name: name.to_owned(),
@@ -234,7 +321,7 @@ mod tests {
             ..Default::default()
         };
         evento::append(order_id)
-            .tenant("tenant-1")
+            .tenant(tenant_id)
             .original_version(0)
             .event(&Placed {
                 reference: format!("REF-{order_id}"),
@@ -265,20 +352,26 @@ mod tests {
             .commit(store)
             .await
             .unwrap();
-        let order = timada_orders::Command::new(store.clone(), "tenant-1")
+        let order = timada_orders::Command::new(store.clone(), tenant_id)
             .load_order(order_id)
             .await
             .unwrap()
             .unwrap();
-        FulfilledOrder {
-            tenant_id: "tenant-1".to_owned(),
-            id: order_id.to_owned(),
-            fulfilled_at: order.fulfilled_at.unwrap() as i64,
+        let fulfilled_at = order.fulfilled_at.unwrap();
+        DueReviewRequest {
+            tenant_id: tenant_id.to_owned(),
+            order_id: order_id.to_owned(),
+            fulfilled_at: fulfilled_at as i64,
+            due_at: (fulfilled_at + 7 * DAY_SECS) as i64,
         }
     }
 
     async fn with_storefront(store: &evento::Turso) {
-        timada_orders::Command::new(store.clone(), "tenant-1")
+        with_storefront_in(store, "tenant-1").await;
+    }
+
+    async fn with_storefront_in(store: &evento::Turso, tenant_id: &str) {
+        timada_orders::Command::new(store.clone(), tenant_id)
             .set_storefront_address("user-alice", Some(SHOP))
             .await
             .unwrap();
@@ -289,8 +382,12 @@ mod tests {
         let left = 1_000_000;
         assert!(!is_due(left, 7, left + 7 * DAY_SECS - 1));
         assert!(is_due(left, 7, left + 7 * DAY_SECS));
-        assert!(is_due(left, 7, left + 7 * DAY_SECS + WINDOW_SECS - 1));
-        assert!(!is_due(left, 7, left + 7 * DAY_SECS + WINDOW_SECS));
+        assert!(is_due(
+            left,
+            7,
+            left + 7 * DAY_SECS + REQUEST_WINDOW_SECS - 1
+        ));
+        assert!(!is_due(left, 7, left + 7 * DAY_SECS + REQUEST_WINDOW_SECS));
         assert!(is_due(left, 0, left));
     }
 
@@ -359,7 +456,7 @@ mod tests {
         let store = store().await;
         with_storefront(&store).await;
         let order = fulfilled(&store, "order-1").await;
-        let late = order.fulfilled_at as u64 + 7 * DAY_SECS + WINDOW_SECS;
+        let late = order.fulfilled_at as u64 + 7 * DAY_SECS + REQUEST_WINDOW_SECS;
         let (cx, transport) = mail();
         assert_eq!(
             ask_buyers(&store, &cx, &shop("Acme"), &[order], late)
@@ -484,5 +581,67 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn a_sweep_mails_each_request_due_once_and_lists_it_no_more() {
+        let store = store().await;
+        let db = read_models(&store).await;
+        let tenant = shop_named(&store, "Acme Tea", true).await;
+        let order = fulfilled_in(&store, &tenant, "order-1").await;
+        catch_up(&store, &db).await;
+        let (sweep, transport) = sweeper(&store, &db, REQUESTS_PER_PAGE);
+        let week = order.due_at as u64;
+
+        assert_eq!(sweep.sweep(week - 1).await.unwrap(), 0, "not yet");
+        assert_eq!(
+            review_requests_due(&db, week, None, 10).await.unwrap(),
+            std::slice::from_ref(&order)
+        );
+        assert_eq!(sweep.sweep(week).await.unwrap(), 1);
+        catch_up(&store, &db).await;
+        assert!(
+            review_requests_due(&db, week, None, 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "mailed, so no longer listed"
+        );
+        assert_eq!(sweep.sweep(week + 60).await.unwrap(), 0);
+        assert_eq!(transport.sent().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_shop_that_cannot_be_asked_holds_up_no_other() {
+        let store = store().await;
+        let db = read_models(&store).await;
+        // Its orders fall due first, and stay listed: no storefront to link.
+        let stuck = shop_named(&store, "No Storefront", false).await;
+        for n in 0..3 {
+            fulfilled_in(&store, &stuck, &format!("stuck-{n}")).await;
+        }
+        let open = shop_named(&store, "Acme Tea", true).await;
+        let order = fulfilled_in(&store, &open, "order-1").await;
+        catch_up(&store, &db).await;
+
+        // One request read at a time: the walk carries on past the stuck
+        // shop's three.
+        let (sweep, transport) = sweeper(&store, &db, 1);
+        let now = order.due_at as u64;
+        assert_eq!(sweep.sweep(now).await.unwrap(), 1);
+        assert_eq!(transport.sent().len(), 1);
+        assert_eq!(
+            review_requests_due(&db, now, None, 10).await.unwrap().len(),
+            4,
+            "the read model has not seen the claim yet"
+        );
+        catch_up(&store, &db).await;
+        let left: Vec<String> = review_requests_due(&db, now, None, 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|request| request.order_id)
+            .collect();
+        assert_eq!(left, ["stuck-0", "stuck-1", "stuck-2"]);
     }
 }

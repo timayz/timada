@@ -462,27 +462,6 @@ pub async fn owed_payment_id(db: &Db, tenant_id: &str) -> anyhow::Result<Option<
     Ok(row.map(|(payment_id,)| payment_id))
 }
 
-/// An order that left, across every tenant this node follows.
-#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
-pub struct FulfilledOrder {
-    pub tenant_id: String,
-    pub id: String,
-    /// Unix seconds.
-    pub fulfilled_at: i64,
-}
-
-/// The orders of every tenant fulfilled in `[from, to)` (Unix seconds),
-/// grouped by tenant.
-pub async fn fulfilled_between(db: &Db, from: i64, to: i64) -> anyhow::Result<Vec<FulfilledOrder>> {
-    db.fetch_all(
-        "SELECT tenant_id, id, fulfilled_at FROM orders_orders
-         WHERE fulfilled_at >= ?1 AND fulfilled_at < ?2 AND status = 'fulfilled'
-         ORDER BY tenant_id, fulfilled_at, id",
-        (from, to),
-    )
-    .await
-}
-
 /// Whether any order of the tenant ever held the product, cancelled or
 /// refunded ones included: once sold, a product stays on record and may be
 /// archived but not deleted.
