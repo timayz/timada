@@ -7974,7 +7974,6 @@ dependencies = [
  "topcoat-view",
  "topcoat-view-macro",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
