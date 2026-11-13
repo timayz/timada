@@ -1,5 +1,5 @@
-//! What every bounded context shares: the refusal code of a write the
-//! store is not taking right now, the reading of a shopper's language and
+//! What every bounded context shares: the refusal codes of a write the
+//! store did not take, the reading of a shopper's language and
 //! time zone, the keys personal data is sealed under ([`keys`]), what a
 //! stream keeps of a mailed code or link ([`codes`]) and where its mail
 //! stands ([`sending`]), when a claim on a slug or a code may be taken over
@@ -58,19 +58,68 @@ pub use time::unix_now;
 /// through again once the node is back or given up.
 pub const WRITES_PAUSED: &str = "writes_paused";
 
-/// `Some(WRITES_PAUSED)` when `err` is a write the store refused for the
-/// moment ([`WriteError::Unavailable`]), `None` for any other write failure.
+/// The refusal code pages and the store API carry when the store did not
+/// take one write, though it takes writes: too few of the cluster's nodes
+/// held it in time (evento's
+/// [`Invalidated`](evento::cluster::Invalidated)), at each of the attempts
+/// evento makes before it gives up. Every node may be up, and nothing was
+/// written: sent again, the request very likely goes through.
+pub const WRITE_NOT_TAKEN: &str = "write_not_taken";
+
+/// The refusal code of a write the store refused for the moment
+/// ([`WriteError::Unavailable`]): [`WRITE_NOT_TAKEN`] when too few nodes
+/// held it in time, [`WRITES_PAUSED`] for any other cause. `None` for any
+/// other write failure.
 pub fn write_refusal(err: &WriteError) -> Option<&'static str> {
     match err {
+        WriteError::Unavailable(cause) if not_taken(cause) => Some(WRITE_NOT_TAKEN),
         WriteError::Unavailable(_) => Some(WRITES_PAUSED),
         _ => None,
     }
 }
 
+/// Whether `code` is one of [`write_refusal`]'s: the store's doing, not the
+/// request's, so the store API answers it with a 503 rather than a 422.
+pub fn is_write_refusal(code: &str) -> bool {
+    code == WRITES_PAUSED || code == WRITE_NOT_TAKEN
+}
+
+/// The write error a code of [`write_refusal`] stands for, `None` for any
+/// other code: what a client of the dashboard makes of a refusal that came
+/// back over HTTP, so that its pages word it as the dashboard's own would.
+pub fn refused_write(code: &str) -> Option<WriteError> {
+    match code {
+        WRITES_PAUSED => Some(WriteError::Unavailable(anyhow::anyhow!(
+            "the shop is not taking writes right now"
+        ))),
+        WRITE_NOT_TAKEN => Some(WriteError::Unavailable(NotTaken.into())),
+        _ => None,
+    }
+}
+
+/// The cause [`refused_write`] gives a [`WRITE_NOT_TAKEN`] that came back
+/// over HTTP, where evento's own does not travel.
+#[derive(Debug)]
+struct NotTaken;
+
+impl std::fmt::Display for NotTaken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("too few nodes held the write in time, and nothing was written")
+    }
+}
+
+impl std::error::Error for NotTaken {}
+
+/// Whether `cause`, of a [`WriteError::Unavailable`], is a write too few
+/// nodes held in time, as evento or [`refused_write`] tells it.
+fn not_taken(cause: &anyhow::Error) -> bool {
+    cause.is::<evento::cluster::Invalidated>() || cause.is::<NotTaken>()
+}
+
 /// Whether a write failed because of the store rather than because of the
-/// write: the store is not taking writes for the moment
-/// ([`WriteError::Unavailable`]), or the write kept losing to another on the
-/// same stream past the command's own retries
+/// write: the store is not taking writes for the moment, or did not take
+/// this one ([`WriteError::Unavailable`]), or the write kept losing to
+/// another on the same stream past the command's own retries
 /// ([`WriteError::InvalidOriginalVersion`]). Both pass once the store is back
 /// or the other writer is done, so a saga fails its pass on them and tries
 /// again: nothing else would progress either. Every other write error is the
@@ -180,5 +229,36 @@ mod tests {
         let broken = WriteError::Unknown(anyhow::anyhow!("disk gone"));
         assert_eq!(write_refusal(&broken), None);
         assert_eq!(write_refusal(&WriteError::InvalidOriginalVersion), None);
+    }
+
+    /// A write too few nodes held in time is not a paused store: it has a
+    /// code of its own, which sagas retry like any store fault.
+    #[test]
+    fn a_write_too_few_nodes_held_is_not_taken_not_paused() {
+        use evento::cluster::Invalidated;
+        use evento::cluster::protocol::{Timestamp, TxnId};
+
+        let invalidated = WriteError::Unavailable(
+            Invalidated {
+                txn: TxnId(Timestamp::MIN),
+            }
+            .into(),
+        );
+        assert_eq!(write_refusal(&invalidated), Some(WRITE_NOT_TAKEN));
+        assert!(is_store_write_fault(&invalidated));
+        assert!(is_write_refusal(WRITE_NOT_TAKEN));
+        assert!(is_write_refusal(WRITES_PAUSED));
+        assert!(!is_write_refusal("failed"));
+    }
+
+    /// A refusal code that came back over HTTP is the write error the
+    /// dashboard gave it from, as far as [`write_refusal`] tells.
+    #[test]
+    fn a_refusal_code_comes_back_as_its_write_error() {
+        for code in [WRITES_PAUSED, WRITE_NOT_TAKEN] {
+            let err = refused_write(code).expect(code);
+            assert_eq!(write_refusal(&err), Some(code));
+        }
+        assert!(refused_write("failed").is_none());
     }
 }

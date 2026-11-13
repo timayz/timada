@@ -40,7 +40,8 @@ pub struct MessageDraft {
 
 /// Why the dashboard did not take a message: a code to word in the shop's
 /// language (`message_invalid_name`, `message_invalid_email`,
-/// `message_invalid_body`, `too_many_requests`, `writes_paused`).
+/// `message_invalid_body`, `too_many_requests`, `writes_paused`,
+/// `write_not_taken`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MessageRefusal(&'static str);
 
@@ -108,7 +109,8 @@ impl Store {
         }
         // 422: the message was refused; 429: too many from this visitor or
         // this storefront; 503: the shop is not taking writes for the
-        // moment (`writes_paused`). All carry a code to show.
+        // moment (`writes_paused`), or did not take this one
+        // (`write_not_taken`). All carry a code to show.
         if status.is_success() || matches!(status.as_u16(), 422 | 429 | 503) {
             let answer: Answer =
                 serde_json::from_slice(&body).context("the dashboard's answer is not one")?;

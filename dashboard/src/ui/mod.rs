@@ -408,6 +408,9 @@ pub fn describe_error(code: &str) -> &'static str {
         "writes_paused" => {
             "Changes are temporarily not accepted while a node is away. Please try again in a few minutes."
         }
+        "write_not_taken" => {
+            "This change did not go through, and nothing was saved. Please try again."
+        }
         _ => "Something went wrong. Please try again.",
     }
 }

@@ -63,9 +63,10 @@ pub fn refused(status: StatusCode, code: &str) -> Result<Answer> {
 /// failure.
 pub fn answer_error(err: ShopperError) -> Result<Answer> {
     match err.code() {
-        // The shop is not taking writes for the moment: not the shopper's
-        // doing, so a 503 the storefront can word as "try again later".
-        Some(code) if code == timada_core::WRITES_PAUSED => {
+        // The shop is not taking writes for the moment, or did not take
+        // this one: not the shopper's doing, so a 503 the storefront can word
+        // as "try again".
+        Some(code) if timada_core::is_write_refusal(code) => {
             refused(StatusCode::SERVICE_UNAVAILABLE, code)
         }
         Some(code) if err.is_user_facing() => {

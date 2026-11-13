@@ -102,4 +102,5 @@ pub const SHOPPER_CODES: &[&str] = &[
     NEWSLETTER_UNAVAILABLE,
     NEWSLETTER_TOO_MANY_REQUESTS,
     timada_core::WRITES_PAUSED,
+    timada_core::WRITE_NOT_TAKEN,
 ];

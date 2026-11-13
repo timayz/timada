@@ -20,9 +20,9 @@
 //!
 //! Answers: 404 `{"error": "cart_not_found"}` for a cart the tenant has not
 //! (another tenant's included, and one dropped after lying idle), 422 with a
-//! `Refusal` to show the shopper, 503 `writes_paused`, 400 for a body that is
-//! not what the call takes; 401 for a missing, unknown or revoked key, 403
-//! for a key that may not sell.
+//! `Refusal` to show the shopper, 503 `writes_paused` or `write_not_taken`,
+//! 400 for a body that is not what the call takes; 401 for a missing,
+//! unknown or revoked key, 403 for a key that may not sell.
 //!
 //! Each key, and each visitor at a shop, may start only so many carts within
 //! `[store]`'s window: past it, 429 `{"error": "too_many_carts"}` and nothing

@@ -62,4 +62,5 @@ pub const SHOPPER_CODES: &[&str] = &[
     MESSAGE_INVALID_BODY,
     SUPPORT_TOO_MANY_REQUESTS,
     timada_core::WRITES_PAUSED,
+    timada_core::WRITE_NOT_TAKEN,
 ];

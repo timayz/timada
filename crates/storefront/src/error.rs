@@ -16,7 +16,8 @@
 //! for it (a load balancer's "no available server" page, not a refusal the
 //! dashboard wrote); the store API connection not being up, or a request
 //! on it failing. A refusal the dashboard answered (a 422, or a 503 whose
-//! body carries `writes_paused`) is not this: it is a refusal to show.
+//! body carries `writes_paused` or `write_not_taken`) is not this: it is a
+//! refusal to show.
 
 use std::fmt;
 
@@ -107,7 +108,8 @@ pub(crate) async fn reach_body(response: reqwest::Response) -> anyhow::Result<by
 /// Whether `status` is a proxy answering for a dashboard that is not
 /// there (502, 503, 504) with something other than a refusal the dashboard
 /// wrote: a 503 whose body is JSON with an `error` is the dashboard's own
-/// (`writes_paused`), anything else at those statuses is the proxy's.
+/// (`writes_paused`, `write_not_taken`), anything else at those statuses is
+/// the proxy's.
 pub(crate) fn gateway_down(status: reqwest::StatusCode, body: &[u8]) -> Option<StoreUnavailable> {
     if !matches!(status.as_u16(), 502..=504) {
         return None;
@@ -143,6 +145,8 @@ mod tests {
     fn a_refusal_the_dashboard_wrote_is_not() {
         let paused = br#"{"error":"writes_paused"}"#;
         assert!(gateway_down(reqwest::StatusCode::SERVICE_UNAVAILABLE, paused).is_none());
+        let not_taken = br#"{"error":"write_not_taken"}"#;
+        assert!(gateway_down(reqwest::StatusCode::SERVICE_UNAVAILABLE, not_taken).is_none());
         assert!(gateway_down(reqwest::StatusCode::UNPROCESSABLE_ENTITY, b"").is_none());
         assert!(gateway_down(reqwest::StatusCode::INTERNAL_SERVER_ERROR, b"").is_none());
     }

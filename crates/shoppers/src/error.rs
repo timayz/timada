@@ -84,4 +84,5 @@ pub const SHOPPER_CODES: &[&str] = &[
     "invalid_country",
     "invalid_phone",
     timada_core::WRITES_PAUSED,
+    timada_core::WRITE_NOT_TAKEN,
 ];
