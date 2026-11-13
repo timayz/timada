@@ -23,7 +23,7 @@ use super::EmailChallengeState;
 
 /// Reload-and-retry budget for a write on a challenge that raced another
 /// (a guess landing while the mail is claimed, or the mail's outcome while a
-/// code is checked, say).
+/// code is checked or a new one issued, say).
 const WRITE_ATTEMPTS: usize = 3;
 
 /// A code issued. The plaintext exists only in this value and in the mail.
@@ -68,7 +68,10 @@ impl<E: Executor> super::Command<E> {
     /// signing in or resetting a password needs a registered address; one for
     /// registering needs a free one. Another code within
     /// [`CODE_RESEND_AFTER_SECS`] of a live one is refused, unless that one
-    /// could not be delivered: then the person may try again at once.
+    /// could not be delivered: then the person may try again at once. The
+    /// mail's subscription writes on the same stream, so a write landing
+    /// between the read and this one's own is no verdict: the request is
+    /// decided again on the fresh state.
     pub async fn issue_email_code(
         &self,
         email: &str,
@@ -89,15 +92,6 @@ impl<E: Executor> super::Command<E> {
         }
 
         let challenge_id = email_challenge_id(&email);
-        let existing = self.load_email_challenge(&email).await?;
-        if let Some(existing) = &existing
-            && !existing.consumed
-            && now < existing.issued_at + CODE_RESEND_AFTER_SECS
-            && !existing.mail.is_undeliverable()
-        {
-            return Err(IdentityError::CodeRecentlySent);
-        }
-
         let nonce = new_nonce();
         let code = self.codes.derive_code("", &challenge_id, &nonce);
         let issued = CodeIssued {
@@ -107,34 +101,44 @@ impl<E: Executor> super::Command<E> {
             issued_at: now,
             expires_at: now + CODE_TTL_SECS,
         };
-        match existing {
-            Some(existing) => {
-                existing
-                    .write()?
-                    .routing_key_opt(routing_key)
-                    .event(&issued)
-                    .commit(&self.executor)
-                    .await?;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let existing = self.load_email_challenge(&email).await?;
+            if let Some(existing) = &existing
+                && !existing.consumed
+                && now < existing.issued_at + CODE_RESEND_AFTER_SECS
+                && !existing.mail.is_undeliverable()
+            {
+                return Err(IdentityError::CodeRecentlySent);
             }
-            None => {
-                let created = evento::append(&challenge_id)
-                    .original_version(0)
-                    .routing_key_opt(routing_key)
-                    .event(&issued)
-                    .commit(&self.executor)
-                    .await;
-                match created {
-                    Ok(_) => {}
-                    // Two first requests at once: the other one's code is
-                    // in the mail.
-                    Err(WriteError::InvalidOriginalVersion) => {
-                        return Err(IdentityError::CodeRecentlySent);
-                    }
-                    Err(err) => return Err(err.into()),
+            let written = match existing {
+                Some(existing) => {
+                    existing
+                        .write()?
+                        .routing_key_opt(routing_key.clone())
+                        .event(&issued)
+                        .commit(&self.executor)
+                        .await
                 }
+                None => {
+                    evento::append(&challenge_id)
+                        .original_version(0)
+                        .routing_key_opt(routing_key.clone())
+                        .event(&issued)
+                        .commit(&self.executor)
+                        .await
+                }
+            };
+            match written {
+                Ok(_) => return Ok(IssuedCode { email, code }),
+                // The previous code's mail recorded, or another request
+                // landed: decide again on the fresh state, where a code
+                // issued meanwhile is in the mail.
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
             }
         }
-        Ok(IssuedCode { email, code })
     }
 
     /// Takes, for `claimant`, the sending of the code that `CodeIssued`
