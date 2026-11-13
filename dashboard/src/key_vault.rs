@@ -132,6 +132,8 @@ pub struct KeyVault {
     sealer: Option<Sealer>,
     /// The other nodes, when there are any.
     peers: Option<Arc<Peers>>,
+    /// How long each peer has to answer for a key: [`FETCH_TIMEOUT`].
+    fetch_timeout: Duration,
 }
 
 impl KeyVault {
@@ -140,7 +142,15 @@ impl KeyVault {
             dir: config.dir.clone(),
             sealer,
             peers,
+            fetch_timeout: FETCH_TIMEOUT,
         }
+    }
+
+    /// The same vault, giving each peer `fetch_timeout` to answer for a key.
+    #[cfg(test)]
+    fn waiting(mut self, fetch_timeout: Duration) -> Self {
+        self.fetch_timeout = fetch_timeout;
+        self
     }
 
     /// The keys of every tenant, as the subscriptions ask for them.
@@ -396,7 +406,7 @@ impl KeyVault {
                 .client()
                 .get(format!("{url}{PEER_ROUTE}/{tenant_id}/{key_id}"))
                 .header(reqwest::header::AUTHORIZATION, peers.authorization())
-                .timeout(FETCH_TIMEOUT);
+                .timeout(self.fetch_timeout);
             let url = url.clone();
             asks.spawn(async move { (url, ask_for_key(request).await) });
         }
@@ -883,16 +893,26 @@ mod tests {
     async fn a_peer_that_does_not_answer_holds_nothing_up() {
         let key = Key::generate();
         let sealed = sealed_as("t1", "k1", &key);
-        // Asked together: the one that holds it answers for both.
-        let vault = vault(Some(Peers::for_test(
-            vec![silent().await, peer(200, sealed).await],
-            3,
-        )));
+        // Asked together: the one that holds it answers for both, long
+        // before the silent one's minute is up. Keeping the key handed over
+        // syncs it to the disk, which may take seconds on a busy one (a
+        // build being written back, say), nowhere near a minute.
+        let patience = Duration::from_secs(60);
+        let peers = Peers::for_test(vec![silent().await, peer(200, sealed).await], 3);
+        let vault = Arc::new(
+            KeyVault::new(
+                &DataKeysConfig { dir: fresh_dir() },
+                Some(sealer()),
+                Some(Arc::new(peers)),
+            )
+            .waiting(patience),
+        );
         let started = Instant::now();
         assert_eq!(vault.for_tenant("t1").get("k1").await.unwrap(), Some(key));
-        assert!(started.elapsed() < FETCH_TIMEOUT, "{:?}", started.elapsed());
+        assert!(started.elapsed() < patience, "{:?}", started.elapsed());
 
-        // Nobody hands it over: given up on within the bound.
+        // Nobody hands it over: given up on within the bound. Nothing is
+        // written, so the disk takes no part in the time.
         let unsure = super::tests::vault(Some(Peers::for_test(
             vec![silent().await, peer(404, b"").await],
             3,
