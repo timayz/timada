@@ -57,7 +57,9 @@ fn now() -> u64 {
 pub struct PendingPayments {
     /// The read models: the orders and carts waiting on the provider.
     db: Db,
-    /// The store, every tenant's.
+    /// The store, every tenant's, read from this node's file: what an order
+    /// or a cart asked of the provider is asked again under the same keys,
+    /// and its answer recorded at the version read.
     store: Executor,
     payments: Arc<Payments>,
     /// The orders, and the payments carts give back, the provider did not

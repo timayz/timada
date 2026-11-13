@@ -279,10 +279,19 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // The operator's alert for a node that stays away: this node nearing the
     // writes it may keep for it, or a node given up on.
     let cluster_watch = cluster.watch(std::time::Duration::from_secs(60));
+    // The timers below read from this node's file as well (#533). Each acts
+    // off the rows of the read models, which this node derived from that
+    // file, so what it loads is never older than the row that sent it there.
+    // What it loads may still be a moment behind a write another node took:
+    // every write a timer makes is checked against the version it loaded, or
+    // claims a stream of its own, so a write made on such a load is refused,
+    // and the write it missed is applied here before the refusal, for the
+    // retry or the next look to see.
+
     // A few days after an order left, its buyer is asked for a review.
     let review_requests = crate::review_requests::ReviewRequests::new(
         db.clone(),
-        executor.clone(),
+        local.0.clone(),
         background_mail.clone(),
     )
     .start(std::time::Duration::from_secs(
@@ -301,20 +310,20 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             .max(1),
     );
     let lapsed_checkouts =
-        crate::payments::LapsedCheckouts::new(db.clone(), executor.clone(), payments.clone())
+        crate::payments::LapsedCheckouts::new(db.clone(), local.0.clone(), payments.clone())
             .start(payments_every);
     let pending_payments =
-        crate::payments::PendingPayments::new(db.clone(), executor.clone(), payments.clone())
+        crate::payments::PendingPayments::new(db.clone(), local.0.clone(), payments.clone())
             .start(payments_every);
     let unanswered_checkouts =
-        crate::payments::UnansweredCheckouts::new(db.clone(), executor.clone())
+        crate::payments::UnansweredCheckouts::new(db.clone(), local.0.clone())
             .start(payments_every);
     // Two days before the hold on a shopper's card lapses on an order
     // AliExpress may have, the members who manage orders are reminded to
     // take the payment.
     let hold_reminders = crate::hold_reminders::HoldReminders::new(
         db.clone(),
-        executor.clone(),
+        local.0.clone(),
         crate::hold_reminders::PlatformMail(background_mail.clone()),
         url.clone(),
     )
@@ -325,7 +334,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let live = cluster.clone();
     let idle_carts = crate::idle_carts::IdleCarts::new(
         db.clone(),
-        executor.clone(),
+        local.0.clone(),
         Arc::new(move || {
             let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, cluster::Among::All);
             timada_core::Share { index, of }
@@ -341,7 +350,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let live = cluster.clone();
     let newsletter_sends = crate::newsletter_sends::NewsletterSends::new(
         db.clone(),
-        executor.clone(),
+        local.0.clone(),
         background_mail.clone(),
         keys.ring(),
         Arc::new(move || {
@@ -357,7 +366,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // node moving its own part of them.
     let automation_runs = crate::automations::runner::Runner::new(
         db.clone(),
-        executor.clone(),
+        local.0.clone(),
         background_mail.clone(),
         url.clone(),
         keys.ring(),
@@ -376,7 +385,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // allow, and the accounts and open orders on a timer.
     let aliexpress_sync = crate::aliexpress::sync::AliexpressSync::new(
         db.clone(),
-        executor.clone(),
+        local.0.clone(),
         aliexpress.clone(),
         std::time::Duration::from_secs(config.aliexpress.sync_check_secs.max(1)),
     )

@@ -63,7 +63,9 @@ pub const PARCEL_STILL_PERIODS: u64 = 8;
 pub struct AliexpressSync {
     /// The read models: the imports, the forwards, the companies' access.
     db: Db,
-    /// The store, every tenant's.
+    /// The store, every tenant's, read from this node's file: what a read of
+    /// an item, an order or a parcel brings is recorded at the version it
+    /// started from, and a token is renewed by the node that claims it.
     store: Executor,
     aliexpress: Arc<Aliexpress>,
     /// How often the timer runs, and how soon an order with every parcel

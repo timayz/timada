@@ -29,7 +29,9 @@
 //! hands out the same store read from this node's file as it stands,
 //! [`LocalReads`], for the reads that need no such round (#466): the
 //! subscriptions, whose handlers read what is already behind the event they
-//! handle; the storefronts' reads over the store API; and what every request
+//! handle; the timers, which act off read-model rows derived from this file
+//! and write only at the version they loaded (#533); the storefronts' reads
+//! over the store API; and what every request
 //! asks first (who it is, its tenant, its key), read locally and asked of the
 //! cluster only before it turns the request away ([`LocalReads::first`]).
 

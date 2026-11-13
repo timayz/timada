@@ -84,7 +84,9 @@ impl Remind for PlatformMail {
 pub struct HoldReminders<R: Remind = PlatformMail> {
     /// The read models: the orders due a reminder, the members' addresses.
     db: Db,
-    /// The store, every tenant's and the platform's.
+    /// The store, every tenant's and the platform's, read from this node's
+    /// file: the claim on the order is written at the version read, so a
+    /// node a moment behind another's claim finds it taken.
     store: Executor,
     remind: R,
     /// The dashboard's public address, for the link.

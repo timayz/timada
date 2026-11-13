@@ -57,7 +57,9 @@ fn now() -> u64 {
 pub struct LapsedCheckouts {
     /// The read models: the carts with a payment open.
     db: Db,
-    /// The store, every tenant's.
+    /// The store, every tenant's, read from this node's file: the provider
+    /// cancels a payment only while nobody confirmed it, and the cancellation
+    /// is recorded at the version read.
     store: Executor,
     payments: Arc<Payments>,
     /// Where the last sweep stopped in each tenant's carts, for the tenants
