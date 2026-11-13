@@ -3,8 +3,9 @@ mod common;
 use common::*;
 use evento::ProjectionAggregate;
 use timada_core::Claimant;
+use timada_newsletter::aggregator::Subscriber;
 use timada_newsletter::{
-    CONFIRM_TTL_SECS, ConfirmOutcome, NewsletterError, RESEND_AFTER_SECS, RequestOutcome,
+    CONFIRM_TTL_SECS, Command, ConfirmOutcome, NewsletterError, RESEND_AFTER_SECS, RequestOutcome,
     RequestSubscription, SubscriberStatus, subscriber_id,
 };
 
@@ -275,6 +276,73 @@ async fn a_signed_in_shopper_is_confirmed_at_once() {
         newsletter.unsubscribe(VISITOR, "unknown").await,
         Err(NewsletterError::NotFound)
     ));
+}
+
+#[tokio::test]
+async fn a_signed_in_shopper_subscribes_while_the_pending_links_mail_is_recorded() {
+    let store = executor_with_pool().await.0;
+    let newsletter = Command::new(store.clone(), TENANT);
+    let keys = MemoryKeys::default();
+    let (id, _) = request(&newsletter, &keys, EMAIL).await;
+    let state = newsletter.load_subscriber(&id).await.unwrap().unwrap();
+    let version = state.requested_version;
+    let node_a = Claimant {
+        node: "node-a",
+        now: now(),
+    };
+    newsletter
+        .claim_confirmation_mail(&keys, &id, version, node_a)
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+    // Ada signs in and turns the newsletter on before node-a records the
+    // send: her switch is held at the subscriber while the record lands.
+    let rigged = Rigged::new(store.clone()).hold_first::<Subscriber>();
+    let (held, node_a) = (
+        Command::new(rigged.clone(), TENANT),
+        Command::new(rigged.clone(), TENANT),
+    );
+    let (subscribed, recorded) = tokio::join!(
+        held.subscribe_verified(&keys, VISITOR, EMAIL, None, None),
+        async {
+            rigged.parked().await;
+            node_a.record_confirmation_mail_sent(&id, version).await
+        },
+    );
+    recorded.unwrap();
+    subscribed.unwrap();
+    let state = newsletter.subscriber_of(EMAIL).await.unwrap().unwrap();
+    assert!(state.is_confirmed());
+    assert_eq!(state.source, "account");
+    assert_eq!(keys.len(), 1, "the address keeps its key");
+}
+
+#[tokio::test]
+async fn two_signed_in_subscriptions_at_once_keep_one_key() {
+    let store = executor_with_pool().await.0;
+    let newsletter = Command::new(store.clone(), TENANT);
+    let keys = MemoryKeys::default();
+    let rigged = Rigged::new(store.clone()).hold_first::<Subscriber>();
+    let (held, other) = (
+        Command::new(rigged.clone(), TENANT),
+        Command::new(rigged.clone(), TENANT),
+    );
+    let (first, second) = tokio::join!(
+        held.subscribe_verified(&keys, VISITOR, EMAIL, None, None),
+        async {
+            rigged.parked().await;
+            other
+                .subscribe_verified(&keys, VISITOR, EMAIL, None, None)
+                .await
+        },
+    );
+    second.unwrap();
+    // The held one finds Ada on the list: a no-op, its key dropped.
+    first.unwrap();
+    let state = newsletter.subscriber_of(EMAIL).await.unwrap().unwrap();
+    assert!(state.is_confirmed());
+    assert_eq!(keys.len(), 1);
+    assert!(state.open_with(&keys).await.unwrap().is_some());
 }
 
 #[tokio::test]

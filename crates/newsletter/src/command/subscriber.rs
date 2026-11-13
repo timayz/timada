@@ -15,8 +15,9 @@ use crate::value_object::{
 use super::{SubscriberState, email_aad};
 
 /// Reload-and-retry budget for a write on a subscriber that raced another
-/// (a time zone landing while the mail is claimed, say).
-const MAIL_WRITE_ATTEMPTS: usize = 3;
+/// (a time zone landing while the mail is claimed, or the mail's outcome
+/// while a signed-in shopper subscribes, say).
+const WRITE_ATTEMPTS: usize = 3;
 
 /// What a shopper asks for: the shop's news at `email`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -148,7 +149,9 @@ impl<E: Executor> super::Command<E> {
                 _ => {}
             }
         }
-        let (writer, key_id, key, fresh) = self.writer(keys, &id, current).await?;
+        let mut drawn = None;
+        let (writer, key_id, key) = self.writer(keys, &id, current, &mut drawn).await?;
+        let fresh = drawn.is_some();
         let event = Requested {
             email: keys::seal(&key, &email_aad(&id, &key_id), email.as_bytes())?,
             key_id: key_id.clone(),
@@ -191,7 +194,9 @@ impl<E: Executor> super::Command<E> {
 
     /// Puts a shopper whose address is proved already (signed in with a
     /// mailed code) on the list at once: no link to follow. On the list
-    /// already is a no-op.
+    /// already is a no-op. The confirmation mail's subscription writes on a
+    /// pending subscriber's stream, so a write landing between the read and
+    /// this one's own is no verdict: it is decided again on the fresh state.
     pub async fn subscribe_verified(
         &self,
         keys: &dyn Keys,
@@ -205,42 +210,56 @@ impl<E: Executor> super::Command<E> {
         let language = language.as_deref().and_then(timada_core::primary_language);
         let time_zone = time_zone.as_deref().and_then(timada_core::time_zone);
         let id = subscriber_id(&email);
-        let current = self.load_subscriber_any(&id).await?;
-        if current.as_ref().is_some_and(SubscriberState::is_confirmed) {
-            if let Some(time_zone) = time_zone {
-                self.set_time_zone(actor, &id, &time_zone, routing_key)
-                    .await?;
+        // A key drawn by a try that lost the race serves the next one.
+        let mut drawn = None;
+        let written = async {
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                let current = self.load_subscriber_any(&id).await?;
+                if current.as_ref().is_some_and(SubscriberState::is_confirmed) {
+                    if let Some(time_zone) = &time_zone {
+                        self.set_time_zone(actor, &id, time_zone, routing_key.clone())
+                            .await?;
+                    }
+                    return Ok(None);
+                }
+                let (mut writer, key_id, key) = self.writer(keys, &id, current, &mut drawn).await?;
+                writer
+                    .routing_key_opt(routing_key.clone())
+                    .event(&Requested {
+                        email: keys::seal(&key, &email_aad(&id, &key_id), email.as_bytes())?,
+                        key_id: key_id.clone(),
+                        language: language.clone(),
+                        source: SOURCE_ACCOUNT.to_owned(),
+                        requested_by: actor.to_owned(),
+                    })
+                    .event(&Confirmed {
+                        confirmed_by: actor.to_owned(),
+                    });
+                if let Some(time_zone) = &time_zone {
+                    writer.event(&TimeZoneSet {
+                        time_zone: time_zone.clone(),
+                        set_by: actor.to_owned(),
+                    });
+                }
+                match writer.tenant(&self.tenant).commit(&self.executor).await {
+                    Ok(_) => return Ok(Some(key_id)),
+                    // The pending request's mail recorded, or the shopper
+                    // subscribed elsewhere: decide again on the fresh state.
+                    Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
+                    Err(err) => return Err(err.into()),
+                }
             }
-            return Ok(());
         }
-        let (writer, key_id, key, fresh) = self.writer(keys, &id, current).await?;
-        let mut writer = writer;
-        writer
-            .routing_key_opt(routing_key)
-            .event(&Requested {
-                email: keys::seal(&key, &email_aad(&id, &key_id), email.as_bytes())?,
-                key_id: key_id.clone(),
-                language,
-                source: SOURCE_ACCOUNT.to_owned(),
-                requested_by: actor.to_owned(),
-            })
-            .event(&Confirmed {
-                confirmed_by: actor.to_owned(),
-            });
-        if let Some(time_zone) = time_zone {
-            writer.event(&TimeZoneSet {
-                time_zone,
-                set_by: actor.to_owned(),
-            });
+        .await;
+        if let Some((drawn_id, _)) = &drawn
+            && !matches!(&written, Ok(Some(key_id)) if key_id == drawn_id)
+        {
+            // Nothing names the key: drop it rather than keep it unused.
+            let _ = keys.delete(drawn_id).await;
         }
-        let committed = writer.tenant(&self.tenant).commit(&self.executor).await;
-        if let Err(err) = committed {
-            if fresh {
-                let _ = keys.delete(&key_id).await;
-            }
-            return Err(err.into());
-        }
-        Ok(())
+        written.map(|_| ())
     }
 
     /// Takes, for `claimant`, the sending of the confirmation link of
@@ -296,7 +315,7 @@ impl<E: Executor> super::Command<E> {
                 Ok(_) => return Ok(Some(mail)),
                 // Another node claimed it, or the subscriber changed: decide
                 // again on the fresh state.
-                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
                 Err(err) => return Err(err.into()),
             }
         }
@@ -517,7 +536,7 @@ impl<E: Executor> super::Command<E> {
             match writer.tenant(&self.tenant).commit(&self.executor).await {
                 Ok(_) => return Ok(()),
                 // The subscriber changed meanwhile: write past it.
-                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
                 Err(err) => return Err(err.into()),
             }
         }
@@ -588,14 +607,15 @@ impl<E: Executor> super::Command<E> {
     }
 
     /// Where a `Requested` for `id` is written, and under which key: the
-    /// subscriber's own while they are not erased, else a fresh one, held in
-    /// `keys` first (`true` when fresh).
+    /// subscriber's own while they are not erased, else a fresh one, the one
+    /// `drawn` holds or one drawn now and held in `keys` first.
     async fn writer(
         &self,
         keys: &dyn Keys,
         id: &str,
         current: Option<SubscriberState>,
-    ) -> Result<(WriteBuilder, String, Key, bool), NewsletterError> {
+        drawn: &mut Option<(String, Key)>,
+    ) -> Result<(WriteBuilder, String, Key), NewsletterError> {
         match current {
             Some(state) if !state.forgotten => {
                 let key = keys
@@ -603,18 +623,22 @@ impl<E: Executor> super::Command<E> {
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("the key of subscriber {id} is not readable"))?;
                 let key_id = state.key_id.clone();
-                Ok((state.write()?, key_id, key, false))
+                Ok((state.write()?, key_id, key))
             }
             current => {
-                let key_id = new_key_id();
-                let key = Key::generate();
-                keys.put(&key_id, &key).await?;
+                if drawn.is_none() {
+                    let key_id = new_key_id();
+                    let key = Key::generate();
+                    keys.put(&key_id, &key).await?;
+                    *drawn = Some((key_id, key));
+                }
+                let (key_id, key) = drawn.clone().expect("drawn above");
                 let writer = match current {
                     // The address was erased: it subscribes again, afresh.
                     Some(forgotten) => forgotten.write()?,
                     None => evento::append(id).original_version(0).to_owned(),
                 };
-                Ok((writer, key_id, key, true))
+                Ok((writer, key_id, key))
             }
         }
     }

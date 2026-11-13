@@ -26,7 +26,7 @@ use super::{ChallengeState, challenge_email_aad};
 
 /// Reload-and-retry budget for a write on a challenge that raced another
 /// (a guess landing while the mail is claimed, or the mail's outcome while a
-/// code is checked, say).
+/// code is checked or a new one issued, say).
 const WRITE_ATTEMPTS: usize = 3;
 
 /// A code issued. The plaintext exists only in this value and in the mail.
@@ -82,7 +82,9 @@ impl<E: Executor> super::Command<E> {
     /// could not be delivered: then the shopper may try again at once. The
     /// first code of an address draws its key, which `keys` holds before the
     /// event names it; later ones reseal the address under the same key
-    /// while it is readable.
+    /// while it is readable. The mail's subscription writes on the same
+    /// stream, so a write landing between the read and this one's own is no
+    /// verdict: the request is decided again on the fresh state.
     pub async fn issue_code(
         &self,
         keys: &dyn ShopperKeys,
@@ -94,72 +96,84 @@ impl<E: Executor> super::Command<E> {
     ) -> Result<IssuedCode, ShopperError> {
         let email = normalize_email(email)?;
         let challenge_id = challenge_id(&email);
-        let existing = self.load_challenge(&email).await?;
-        if let Some(existing) = &existing
-            && !existing.consumed
-            && now < existing.issued_at + CODE_RESEND_AFTER_SECS
-            && !existing.mail.is_undeliverable()
-        {
-            return Err(ShopperError::CodeRecentlySent);
-        }
-
-        let (key_id, key, fresh) = match &existing {
-            Some(existing) if !existing.key_id.is_empty() => {
-                match keys.get(&existing.key_id).await? {
-                    Some(key) => (existing.key_id.clone(), key, false),
-                    // The account was deleted: the address starts afresh,
-                    // under a new key.
-                    None => draw_key(keys).await?,
-                }
-            }
-            _ => draw_key(keys).await?,
-        };
         let nonce = new_nonce();
         let code = codes.derive_code(&self.tenant, &challenge_id, &nonce);
-        let issued = CodeIssued {
-            key_id: key_id.clone(),
-            email: key::seal(
-                &key,
-                &challenge_email_aad(&challenge_id, &key_id),
-                email.as_bytes(),
-            )?,
-            nonce,
-            language: language.and_then(timada_core::primary_language),
-            issued_at: now,
-            expires_at: now + CODE_TTL_SECS,
-        };
-        let committed = match existing {
-            Some(existing) => {
-                existing
-                    .write()?
-                    .routing_key_opt(routing_key)
-                    .event(&issued)
-                    .tenant(&self.tenant)
-                    .commit(&self.executor)
-                    .await
+        let language = language.and_then(timada_core::primary_language);
+        // A key drawn by a try that lost the race serves the next one.
+        let mut drawn = None;
+        let written = async {
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                let existing = self.load_challenge(&email).await?;
+                if let Some(existing) = &existing
+                    && !existing.consumed
+                    && now < existing.issued_at + CODE_RESEND_AFTER_SECS
+                    && !existing.mail.is_undeliverable()
+                {
+                    return Err(ShopperError::CodeRecentlySent);
+                }
+                let (key_id, key) = match &existing {
+                    Some(existing) if !existing.key_id.is_empty() => {
+                        match keys.get(&existing.key_id).await? {
+                            Some(key) => (existing.key_id.clone(), key),
+                            // The account was deleted: the address starts
+                            // afresh, under a new key.
+                            None => draw_key(keys, &mut drawn).await?,
+                        }
+                    }
+                    _ => draw_key(keys, &mut drawn).await?,
+                };
+                let issued = CodeIssued {
+                    key_id: key_id.clone(),
+                    email: key::seal(
+                        &key,
+                        &challenge_email_aad(&challenge_id, &key_id),
+                        email.as_bytes(),
+                    )?,
+                    nonce: nonce.clone(),
+                    language: language.clone(),
+                    issued_at: now,
+                    expires_at: now + CODE_TTL_SECS,
+                };
+                let committed = match existing {
+                    Some(existing) => {
+                        existing
+                            .write()?
+                            .routing_key_opt(routing_key.clone())
+                            .event(&issued)
+                            .tenant(&self.tenant)
+                            .commit(&self.executor)
+                            .await
+                    }
+                    None => {
+                        evento::append(&challenge_id)
+                            .original_version(0)
+                            .routing_key_opt(routing_key.clone())
+                            .event(&issued)
+                            .tenant(&self.tenant)
+                            .commit(&self.executor)
+                            .await
+                    }
+                };
+                match committed {
+                    Ok(_) => return Ok(key_id),
+                    // The previous code's mail recorded, or another request
+                    // landed: decide again on the fresh state, where a code
+                    // issued meanwhile is in the mail.
+                    Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
+                    Err(err) => return Err(err.into()),
+                }
             }
-            None => {
-                evento::append(&challenge_id)
-                    .original_version(0)
-                    .routing_key_opt(routing_key)
-                    .event(&issued)
-                    .tenant(&self.tenant)
-                    .commit(&self.executor)
-                    .await
-            }
-        };
-        if let Err(err) = committed {
-            if fresh {
-                // Nothing names the key: drop it rather than keep it unused.
-                let _ = keys.delete(&key_id).await;
-            }
-            return Err(match err {
-                // Two requests at once: the other one's code is in the mail.
-                WriteError::InvalidOriginalVersion => ShopperError::CodeRecentlySent,
-                err => err.into(),
-            });
         }
-        Ok(IssuedCode { email, code })
+        .await;
+        if let Some((drawn_id, _)) = &drawn
+            && written.as_ref().ok() != Some(drawn_id)
+        {
+            // Nothing names the key: drop it rather than keep it unused.
+            let _ = keys.delete(drawn_id).await;
+        }
+        written.map(|_| IssuedCode { email, code })
     }
 
     /// Takes, for `claimant`, the sending of the code that `CodeIssued`
@@ -276,12 +290,19 @@ impl<E: Executor> super::Command<E> {
     }
 }
 
-/// A fresh key for an address, held in `keys` before anything names it.
-async fn draw_key(keys: &dyn ShopperKeys) -> Result<(String, ShopperKey, bool), ShopperError> {
-    let key_id = new_key_id();
-    let key = ShopperKey::generate();
-    keys.put(&key_id, &key).await?;
-    Ok((key_id, key, true))
+/// The fresh key of an address that has none readable: the one `drawn`
+/// holds, or one drawn now, which `keys` holds before an event names it.
+async fn draw_key(
+    keys: &dyn ShopperKeys,
+    drawn: &mut Option<(String, ShopperKey)>,
+) -> Result<(String, ShopperKey), ShopperError> {
+    if drawn.is_none() {
+        let key_id = new_key_id();
+        let key = ShopperKey::generate();
+        keys.put(&key_id, &key).await?;
+        *drawn = Some((key_id, key));
+    }
+    Ok(drawn.clone().expect("drawn above"))
 }
 
 impl<E: Executor> super::Command<E> {

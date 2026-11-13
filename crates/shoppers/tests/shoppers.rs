@@ -800,6 +800,107 @@ async fn a_code_typed_while_its_mail_is_recorded_is_checked_on_the_fresh_stream(
 }
 
 #[tokio::test]
+async fn a_code_asked_while_the_last_ones_mail_is_recorded_is_issued() {
+    let shoppers = shoppers().await;
+    let issued = shoppers
+        .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW)
+        .await
+        .unwrap();
+    let challenge = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    let node_a = Claimant {
+        node: "node-a",
+        now: NOW,
+    };
+    shoppers
+        .claim_code_mail(
+            &shoppers.keys,
+            &codes(),
+            &challenge.id,
+            challenge.issued_version,
+            node_a,
+        )
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+    // Ada signs in before node-a records the send, then asks for a new code
+    // at once: her request is held at the challenge while the record lands.
+    shoppers
+        .sign_in(&shoppers.keys, &codes(), EMAIL, &issued.code, NOW + 1)
+        .await
+        .unwrap();
+    let rigged = Rigged::new(shoppers.store.clone()).hold_first::<ShopperChallenge>();
+    let (held, node_a) = (
+        Command::new(rigged.clone(), TENANT),
+        Command::new(rigged.clone(), TENANT),
+    );
+    let verifier = codes();
+    let (asked, recorded) = tokio::join!(
+        held.issue_code(&shoppers.keys, &verifier, EMAIL, None, NOW + 2),
+        async {
+            rigged.parked().await;
+            node_a
+                .record_code_mail_sent(&challenge.id, challenge.issued_version)
+                .await
+        },
+    );
+    recorded.unwrap();
+    let issued = asked.unwrap();
+    let state = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!state.consumed);
+    assert_eq!(state.issued_at, NOW + 2);
+    assert_eq!(state.mail, timada_core::Sending::Pending);
+    assert_eq!(state.key_id, challenge.key_id, "the address keeps its key");
+    assert_eq!(shoppers.keys.len(), 1);
+    shoppers
+        .sign_in(&shoppers.keys, &codes(), EMAIL, &issued.code, NOW + 3)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn two_first_codes_at_once_mail_one_and_keep_one_key() {
+    let shoppers = shoppers().await;
+    let rigged = Rigged::new(shoppers.store.clone()).hold_first::<ShopperChallenge>();
+    let (held, other) = (
+        Command::new(rigged.clone(), TENANT),
+        Command::new(rigged.clone(), TENANT),
+    );
+    let verifier = codes();
+    let (first, second) = tokio::join!(
+        held.issue_code(&shoppers.keys, &verifier, EMAIL, None, NOW),
+        async {
+            rigged.parked().await;
+            other
+                .issue_code(&shoppers.keys, &verifier, EMAIL, None, NOW)
+                .await
+        },
+    );
+    let issued = second.unwrap();
+    let err = first.unwrap_err();
+    assert!(matches!(err, ShopperError::CodeRecentlySent), "{err:?}");
+    // The held request's key was dropped: only the written one is kept.
+    let challenge = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(shoppers.keys.len(), 1);
+    assert!(shoppers.keys.has(&challenge.key_id));
+    shoppers
+        .sign_in(&shoppers.keys, &codes(), EMAIL, &issued.code, NOW + 1)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn an_undeliverable_code_frees_the_resend_window_and_a_deleted_key_mails_nothing() {
     let shoppers = shoppers().await;
     shoppers
