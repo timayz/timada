@@ -991,6 +991,98 @@ async fn a_code_typed_while_its_mail_is_recorded_is_checked_on_the_fresh_stream(
 }
 
 #[tokio::test]
+async fn a_code_asked_while_the_last_ones_mail_is_recorded_is_issued() {
+    let store = executor().await;
+    let cmd = timada_identity::Command::new(store.clone(), codes());
+    let hash = hash_password(PASSWORD).await.unwrap();
+    let issued = cmd
+        .issue_email_code("alice@example.com", ChallengePurpose::Register, NOW)
+        .await
+        .unwrap();
+    let challenge = cmd
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    let node_a = Claimant {
+        node: "node-a",
+        now: NOW,
+    };
+    cmd.claim_code_mail(&challenge.id, challenge.issued_version, node_a)
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+    // Alice registers before node-a records the send, then asks for a code
+    // to sign in at once: her request is held at the challenge while the
+    // record lands.
+    let alice = cmd
+        .register_with_password(
+            registration("alice@example.com", &issued.code, &hash),
+            NOW + 1,
+        )
+        .await
+        .unwrap()
+        .user_id;
+    let staged = Refusing::new(store.clone()).hold_first_write::<EmailChallenge>();
+    let asking = {
+        let cmd = refusing_command(staged.clone());
+        tokio::spawn(async move {
+            cmd.issue_email_code("alice@example.com", ChallengePurpose::SignIn, NOW + 2)
+                .await
+        })
+    };
+    staged.parked().await;
+    refusing_command(staged)
+        .record_code_mail_sent(&challenge.id, challenge.issued_version)
+        .await
+        .unwrap();
+    let issued = asking.await.unwrap().unwrap();
+    let state = cmd
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!state.consumed);
+    assert_eq!(state.purpose, ChallengePurpose::SignIn);
+    assert_eq!(state.issued_at, NOW + 2);
+    assert_eq!(state.mail, timada_core::Sending::Pending);
+    cmd.sign_in_with_password(
+        sign_in("alice@example.com", &alice, &issued.code, None),
+        NOW + 3,
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn two_first_codes_at_once_mail_one() {
+    let store = executor().await;
+    let cmd = timada_identity::Command::new(store.clone(), codes());
+    let hash = hash_password(PASSWORD).await.unwrap();
+    let staged = Refusing::new(store.clone()).hold_first_write::<EmailChallenge>();
+    let held = {
+        let cmd = refusing_command(staged.clone());
+        tokio::spawn(async move {
+            cmd.issue_email_code("alice@example.com", ChallengePurpose::Register, NOW)
+                .await
+        })
+    };
+    staged.parked().await;
+    let issued = refusing_command(staged)
+        .issue_email_code("alice@example.com", ChallengePurpose::Register, NOW)
+        .await
+        .unwrap();
+    let err = held.await.unwrap().unwrap_err();
+    assert!(matches!(err, IdentityError::CodeRecentlySent), "{err}");
+    cmd.register_with_password(
+        registration("alice@example.com", &issued.code, &hash),
+        NOW + 1,
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn an_undeliverable_code_frees_the_resend_window_and_a_stale_event_mails_nothing() {
     let cmd = command().await;
     cmd.issue_email_code("alice@example.com", ChallengePurpose::Register, NOW)
