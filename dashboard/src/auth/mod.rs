@@ -9,7 +9,9 @@ pub mod webauthn;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use timada_identity::{Command, LoginContext, SessionState, UserState, users_by_ids};
+use timada_identity::{
+    Command, LoginContext, ResolvedSession, SessionState, UserState, users_by_ids,
+};
 use topcoat::{
     Result,
     context::{Cx, app_context, memoize},
@@ -59,7 +61,7 @@ pub async fn current_user(cx: &Cx) -> Option<UserState> {
             return None;
         }
     };
-    let resolved = match identity(cx).resolve_session(&hash, now()).await {
+    let resolved = match resolve_session(cx, &hash).await {
         Ok(Some(resolved)) => resolved,
         Ok(None) => return None,
         Err(err) => {
@@ -69,6 +71,25 @@ pub async fn current_user(cx: &Cx) -> Option<UserState> {
     };
     slide_expiry(cx, &hash, &resolved.session).await;
     Some(resolved.user)
+}
+
+/// The session the token opens and its user, read as every request reads
+/// what it asks first ([`crate::reads::first`]): from this node's file, and
+/// from the cluster before the browser is taken for signed out (a session
+/// started a moment ago on another node, whose redirect landed here).
+async fn resolve_session(cx: &Cx, hash: &TokenHash) -> anyhow::Result<Option<ResolvedSession>> {
+    let codes = &app_context::<crate::seal::EmailCodes>(cx).0;
+    let now = now();
+    crate::reads::first(
+        cx,
+        |store| async move {
+            Command::new(store, codes.clone())
+                .resolve_session(hash, now)
+                .await
+        },
+        |resolved| matches!(resolved, Ok(Some(_))),
+    )
+    .await
 }
 
 /// Sliding expiration: once half the lifetime has elapsed, re-issue the

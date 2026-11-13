@@ -35,6 +35,7 @@ mod peers;
 mod rate_limit;
 mod read_only_store;
 mod readiness;
+mod reads;
 mod review_requests;
 mod saga_fault;
 mod seal;

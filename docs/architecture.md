@@ -180,10 +180,27 @@ by construction.
    its recovery sweep, over TCP with the `[cluster]` peers (a majority must agree on
    every write) or an in-memory transport alone. Reads, snapshots and
    subscriptions are served from this node's own file. With several nodes a
-   single-aggregate read waits for the writes a quorum already committed
-   (`linearizable_reads`), so a page that reads what it just wrote sees it whichever
-   node answers. Every finished write is kept on the other nodes until the node that
-   missed it has it, so a node that stays down makes the others keep everything, up
+   single-aggregate read through the store waits for the writes a quorum already
+   committed (`linearizable_reads`, a consensus round per read), so a page that reads
+   what it just wrote sees it whichever node answers. `cluster::open` also hands out
+   the same store read from the node's file as it stands (`LocalReads`, evento's
+   `ClusterExecutor::local_reads`; its writes still go through the cluster, and a node
+   reads its own writes either way) for the reads that need no such round: every
+   subscription, and the mailroom and the checkout lanes they feed, whose handlers
+   read what the node applied before handing them the event (a write on a stale read
+   is refused for its version, and the write it missed is applied here before the
+   refusal, so the retry sees it); the store API's connections; the shop's offers,
+   codes and ways to ship on `GET /store/carts/{cart_id}` (the cart itself is the
+   shopper's own stream, read through the cluster) and the wait for the answer to a
+   request to pay; and what every request asks first, the session and its user, the
+   tenant, a storefront's key, which is asked of the cluster only before it turns the
+   request away (`LocalReads::first`: a sign-in, a tenant, an invitation accepted, a
+   key issued or a suspension lifted a moment ago on another node). A browser that may
+   have written a moment ago reads those through the cluster (`reads.rs`: the answer
+   to any post, and any redirect, which is how the sign-in and connection callbacks
+   end, sets the `timada_wrote` cookie for ten seconds), so the page a form sends it
+   back to shows the change. Every finished write is kept on the other nodes until
+   the node that missed it has it, so a node that stays down makes the others keep everything, up
    to `cluster.write_backlog` writes, past which this node refuses writes: a page then
    shows that changes are temporarily not accepted (the `writes_paused` code of
    `timada_core::write_refusal`, which the `is_user_facing`/`code` of every context a
@@ -247,8 +264,9 @@ by construction.
    A handler takes the tenant from `event.tenant` and builds the gateway it writes
    back with from it. Adding a tenant-scoped context means adding one entry there.
 3. **Store API** (`store_api.rs`). An evento-remote listener. Each connection opens
-   with an API key token; the resolver loads the key by the token's hash and serves
-   the connection in the key's tenant (`Session::tenant`): every request acts in that
+   with an API key token; the resolver loads the key by the token's hash (from the
+   node's file, asked of the cluster before a refusal) and serves the connection,
+   reading from the node's file, in the key's tenant (`Session::tenant`): every request acts in that
    tenant whatever it names, the events it reads come back as from a store of its own,
    and the subscriber calls are refused (a storefront keeps its cursors locally). A
    key without the `store:write` scope gets the store wrapped by `read_only_store.rs`:
