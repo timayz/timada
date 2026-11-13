@@ -25,8 +25,9 @@ use super::{InvitationState, Seat, TenantState};
 const SEAT_ATTEMPTS: usize = 3;
 
 /// Reload-and-retry budget for a write on an invitation that raced another
-/// (a revocation landing while the mail is claimed, say).
-const MAIL_WRITE_ATTEMPTS: usize = 3;
+/// (a revocation landing while the mail is claimed, or the mail's outcome
+/// while the link is used, say).
+const WRITE_ATTEMPTS: usize = 3;
 
 /// The code a seat is refused with when the invitation's role was removed
 /// before the grant: [`TenancyError::UnknownRole`]'s.
@@ -192,7 +193,7 @@ impl<E: Executor> super::Command<E> {
                 Ok(_) => return Ok(Some(invitation_mail(tokens, invitation))),
                 // Another node claimed it, or it was withdrawn: decide again
                 // on the fresh state.
-                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
                 Err(err) => return Err(err.into()),
             }
         }
@@ -251,42 +252,49 @@ impl<E: Executor> super::Command<E> {
     /// Joins the tenant the link belongs to. Marking the invitation accepted,
     /// at the version read, is the link's one use: a second person with a
     /// forwarded link, or a revocation, racing it loses there and is granted
-    /// nothing. The seat is settled next ([`Self::settle_seat`]); should that
-    /// fail, the acceptance stands and the invitation-grants subscription
-    /// settles it ([`Joined::seat_pending`]). A role removed between the two
-    /// refuses the seat: `UnknownRole`.
+    /// nothing; the mail's outcome landing in between is read past, and the
+    /// link checked again. The seat is settled next ([`Self::settle_seat`]);
+    /// should that fail, the acceptance stands and the invitation-grants
+    /// subscription settles it ([`Joined::seat_pending`]). A role removed
+    /// between the two refuses the seat: `UnknownRole`.
     pub async fn accept_invitation(
         &self,
         cmd: AcceptInvitation,
         now: u64,
         routing_key: Option<String>,
     ) -> Result<Joined, TenancyError> {
-        let invitation = self
-            .load_invitation_by_token(&cmd.token)
-            .await?
-            .filter(|invitation| invitation.is_open_at(now))
-            .ok_or(TenancyError::InvitationInvalid)?;
+        let mut attempt = 0;
+        let (invitation, tenant) = loop {
+            attempt += 1;
+            let invitation = self
+                .load_invitation_by_token(&cmd.token)
+                .await?
+                .filter(|invitation| invitation.is_open_at(now))
+                .ok_or(TenancyError::InvitationInvalid)?;
+            let tenant = self.require_active(&invitation.tenant_id).await?;
+            // Refused before the link is used, so it stays open.
+            if !tenant.members.contains_key(&cmd.user_id) && !tenant.has_role(&invitation.role) {
+                return Err(TenancyError::UnknownRole);
+            }
+            let accepted = invitation
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .requested_by(cmd.user_id.clone())
+                .event(&Accepted {
+                    user_id: cmd.user_id.clone(),
+                    accepted_at: now,
+                })
+                .commit(&self.0)
+                .await;
+            match accepted {
+                Ok(_) => break (invitation, tenant),
+                // The mail's outcome landed since the read, or the link was
+                // used or revoked: decide again on the fresh state.
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
+        };
         let tenant_id = invitation.tenant_id.clone();
-        let tenant = self.require_active(&tenant_id).await?;
-        // Refused before the link is used, so it stays open.
-        if !tenant.members.contains_key(&cmd.user_id) && !tenant.has_role(&invitation.role) {
-            return Err(TenancyError::UnknownRole);
-        }
-        invitation
-            .write()?
-            .routing_key_opt(routing_key.clone())
-            .requested_by(cmd.user_id.clone())
-            .event(&Accepted {
-                user_id: cmd.user_id,
-                accepted_at: now,
-            })
-            .commit(&self.0)
-            .await
-            .map_err(|err| match err {
-                // Used or revoked since it was read.
-                WriteError::InvalidOriginalVersion => TenancyError::InvitationInvalid,
-                err => err.into(),
-            })?;
         match self.settle_seat(&invitation.id, routing_key).await {
             Ok(Some(Seat::Granted)) => Ok(Joined {
                 tenant: self.require_tenant(&tenant_id).await?,
@@ -315,32 +323,37 @@ impl<E: Executor> super::Command<E> {
         now: u64,
         routing_key: Option<String>,
     ) -> Result<(), TenancyError> {
-        let invitation = self
-            .load_invitation(invitation_id)
-            .await?
-            .ok_or(TenancyError::InvitationInvalid)?;
-        let tenant = self.require_active(&invitation.tenant_id).await?;
-        if !tenant.can(actor_user_id, PERMISSION_MEMBERS_MANAGE) {
-            return Err(TenancyError::Forbidden);
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let invitation = self
+                .load_invitation(invitation_id)
+                .await?
+                .ok_or(TenancyError::InvitationInvalid)?;
+            let tenant = self.require_active(&invitation.tenant_id).await?;
+            if !tenant.can(actor_user_id, PERMISSION_MEMBERS_MANAGE) {
+                return Err(TenancyError::Forbidden);
+            }
+            if !invitation.is_open_at(now) {
+                return Err(TenancyError::InvitationInvalid);
+            }
+            let revoked = invitation
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .requested_by(actor_user_id)
+                .event(&Revoked {
+                    revoked_by: actor_user_id.to_owned(),
+                })
+                .commit(&self.0)
+                .await;
+            match revoked {
+                Ok(_) => return Ok(()),
+                // The mail's outcome landed since the read, or the link was
+                // used: decide again on the fresh state.
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
         }
-        if !invitation.is_open_at(now) {
-            return Err(TenancyError::InvitationInvalid);
-        }
-        invitation
-            .write()?
-            .routing_key_opt(routing_key)
-            .requested_by(actor_user_id)
-            .event(&Revoked {
-                revoked_by: actor_user_id.to_owned(),
-            })
-            .commit(&self.0)
-            .await
-            .map_err(|err| match err {
-                // Accepted since it was read.
-                WriteError::InvalidOriginalVersion => TenancyError::InvitationInvalid,
-                err => err.into(),
-            })?;
-        Ok(())
     }
 }
 
@@ -389,7 +402,7 @@ impl<E: Executor> super::Command<E> {
             match writer.commit(&self.0).await {
                 Ok(_) => return Ok(()),
                 // Accepted or withdrawn meanwhile: write past it.
-                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
                 Err(err) => return Err(err.into()),
             }
         }

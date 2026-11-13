@@ -5,9 +5,10 @@ use std::ops::Deref;
 use evento::ProjectionAggregate;
 use timada_core::Claimant;
 
-use common::{MemoryKeys, TENANT, codes};
+use common::{MemoryKeys, Rigged, TENANT, codes};
 use timada_orders::ShippingAddress;
 use timada_shoppers::CodeVerifier;
+use timada_shoppers::aggregator::ShopperChallenge;
 use timada_shoppers::{
     CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, Command, MAX_ADDRESSES,
     SESSION_TTL_SECS, Shopper, ShopperError, ShopperKeys, ShopperState,
@@ -680,6 +681,122 @@ async fn a_codes_mail_is_taken_by_one_node_with_the_address_opened() {
         .unwrap();
     assert_eq!(shopper.key_id, challenge.key_id, "one key per address");
     assert_eq!(shoppers.keys.len(), 1);
+}
+
+#[tokio::test]
+async fn a_code_typed_while_its_mail_is_recorded_is_checked_on_the_fresh_stream() {
+    let shoppers = shoppers().await;
+    let issued = shoppers
+        .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW)
+        .await
+        .unwrap();
+    let challenge = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    let node_a = Claimant {
+        node: "node-a",
+        now: NOW,
+    };
+    shoppers
+        .claim_code_mail(
+            &shoppers.keys,
+            &codes(),
+            &challenge.id,
+            challenge.issued_version,
+            node_a,
+        )
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+
+    // The mail reached Ada, who typed the code before node-a recorded the
+    // send: her sign-in is held at the challenge while the record lands.
+    let rigged = Rigged::new(shoppers.store.clone()).hold_first::<ShopperChallenge>();
+    let (held, node_a) = (
+        Command::new(rigged.clone(), TENANT),
+        Command::new(rigged.clone(), TENANT),
+    );
+    let verifier = codes();
+    let (signed_in, recorded) = tokio::join!(
+        held.sign_in(&shoppers.keys, &verifier, EMAIL, &issued.code, NOW + 1),
+        async {
+            rigged.parked().await;
+            node_a
+                .record_code_mail_sent(&challenge.id, challenge.issued_version)
+                .await
+        },
+    );
+    recorded.unwrap();
+    signed_in.unwrap();
+    let state = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(state.consumed);
+    assert_eq!(state.failed_attempts, 0);
+    assert_eq!(state.mail, timada_core::Sending::Sent);
+
+    // A wrong guess typed the same way counts, once.
+    let issued = shoppers
+        .issue_code(&shoppers.keys, &codes(), EMAIL, None, NOW + 2)
+        .await
+        .unwrap();
+    let challenge = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    let node_a = Claimant {
+        node: "node-a",
+        now: NOW + 2,
+    };
+    shoppers
+        .claim_code_mail(
+            &shoppers.keys,
+            &codes(),
+            &challenge.id,
+            challenge.issued_version,
+            node_a,
+        )
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+    let wrong = if issued.code == "000000" {
+        "000001"
+    } else {
+        "000000"
+    };
+    let rigged = Rigged::new(shoppers.store.clone()).hold_first::<ShopperChallenge>();
+    let (held, node_a) = (
+        Command::new(rigged.clone(), TENANT),
+        Command::new(rigged.clone(), TENANT),
+    );
+    let (guessed, recorded) = tokio::join!(
+        held.sign_in(&shoppers.keys, &verifier, EMAIL, wrong, NOW + 3),
+        async {
+            rigged.parked().await;
+            node_a
+                .record_code_mail_sent(&challenge.id, challenge.issued_version)
+                .await
+        },
+    );
+    recorded.unwrap();
+    let err = guessed.unwrap_err();
+    assert!(matches!(err, ShopperError::WrongCode), "{err:?}");
+    let state = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.failed_attempts, 1);
+    assert_eq!(state.mail, timada_core::Sending::Sent);
+    shoppers
+        .sign_in(&shoppers.keys, &codes(), EMAIL, &issued.code, NOW + 4)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
