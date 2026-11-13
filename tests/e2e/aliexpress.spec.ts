@@ -420,13 +420,9 @@ async function fillCheckout(page: Page, quantity: number) {
   await page.getByLabel("Quantité").fill(String(quantity));
   await page.getByRole("button", { name: "Ajouter au panier" }).click();
   await expect(page.locator("[data-cart-drawer].open .drawer-panel")).toBeVisible();
-  // The cart is priced by whichever node answers, from its own list of what
-  // is on sale: one a moment behind the product's publication calls the line
-  // off sale and offers no checkout (#558).
-  await expect(async () => {
-    await page.goto(`${app.url}/cart`);
-    await expect(page.getByRole("link", { name: "Commander" })).toBeVisible({ timeout: 1000 });
-  }).toPass({ timeout: 15_000 });
+  // Whichever node prices the cart, a moment after the product was
+  // published, offers the checkout at once (#558).
+  await page.goto(`${app.url}/cart`);
   await page.getByRole("link", { name: "Commander" }).click();
   await page.getByLabel("E-mail", { exact: true }).fill("ada@example.org");
   await page.getByLabel("Nom complet").fill("Ada Lovelace");

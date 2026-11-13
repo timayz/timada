@@ -191,7 +191,9 @@ by construction.
    is refused for its version, and the write it missed is applied here before the
    refusal, so the retry sees it); the store API's connections; the shop's offers,
    codes and ways to ship on `GET /store/carts/{cart_id}` (the cart itself is the
-   shopper's own stream, read through the cluster) and the wait for the answer to a
+   shopper's own stream, read through the cluster, and so is a line the node's catalog
+   read model cannot sell, which the cart took after reading the store: a product put
+   on sale or stock put back a moment ago) and the wait for the answer to a
    request to pay; and what every request asks first, the session and its user, the
    tenant, a storefront's key, which is asked of the cluster only before it turns the
    request away (`LocalReads::first`: a sign-in, a tenant, an invitation accepted, a
