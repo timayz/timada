@@ -26,7 +26,9 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use timada_invoicing::IssuedDocument;
 use timada_orders::wire::{CartAnswer, Refusal, RequestAnswer, Started};
-use timada_orders::{CartItem, CatalogReadModel, Checkout, Command, OrderError, STOREFRONT_ACTOR};
+use timada_orders::{
+    CartItem, CatalogReadModel, Checkout, Command, OrderError, STOREFRONT_ACTOR, StoreCatalog,
+};
 use topcoat::router::StatusCode;
 
 use crate::cluster::{Executor, LocalReads};
@@ -92,7 +94,10 @@ pub fn refused(err: OrderError) -> anyhow::Result<Answer> {
 /// payment's exact pricing guards: a price that moved in between is refused
 /// as `price_changed`, never charged unseen. So the shop's offers, its codes
 /// and its ways to ship, which no shopper writes, are read from this node's
-/// file (`local`).
+/// file (`local`). A line the read model cannot sell is read again through
+/// the cluster before the shopper is told (#558): the cart took it after
+/// reading the store there, and a product put on sale a second ago may not
+/// be in this node's read model yet.
 pub async fn cart(
     orders: &Command<Executor>,
     local: &LocalReads,
@@ -104,7 +109,10 @@ pub async fn cart(
     };
     let shop = Command::new(local.0.clone(), orders.tenant());
     let catalog = CatalogReadModel::new(db, orders.tenant());
-    let quote = match shop.quote_from(&cart, &catalog).await {
+    let quote = match shop
+        .quote_from(&cart, &catalog, &StoreCatalog(orders))
+        .await
+    {
         Ok(quote) => quote,
         Err(err) => return refused(err),
     };
@@ -300,4 +308,79 @@ pub async fn documents(orders: &Command<Executor>, order_id: &str) -> anyhow::Re
         documents.extend(invoicing.load_credit_note_of_refund(refund_id).await?);
     }
     ok(&documents)
+}
+
+#[cfg(test)]
+mod tests {
+    use evento::Evento;
+    use timada_catalog::CreateProduct;
+
+    use super::*;
+
+    const SHOP: &str = "acme";
+
+    async fn answer(
+        orders: &Command<Executor>,
+        local: &LocalReads,
+        db: &Db,
+        cart_id: &str,
+    ) -> CartAnswer {
+        let (status, body) = cart(orders, local, db, cart_id).await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{body}");
+        serde_json::from_value(body).unwrap()
+    }
+
+    /// A mug put on sale a moment ago through another node: neither this
+    /// node's read model nor its file has it yet, and the cart that took it
+    /// prices it all the same, read through the cluster. Off sale again, the
+    /// cluster says so too.
+    #[tokio::test]
+    async fn a_line_this_node_has_not_caught_up_on_is_read_through_the_cluster() {
+        let turso = evento::Turso::in_memory_concurrent().await.unwrap();
+        crate::db::migrate_store_read_models(&turso).await.unwrap();
+        // No subscription runs: the read models stay empty.
+        let db = Db::from(turso.clone());
+        let store = Evento::new(turso);
+        let catalog = timada_catalog::Command::new(store.clone(), SHOP);
+        let mug = catalog
+            .create_product(
+                "alice",
+                CreateProduct {
+                    name: "Mug".into(),
+                    slug: None,
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+        catalog
+            .price_product("alice", &mug, 1250, "EUR")
+            .await
+            .unwrap();
+        catalog.publish_product("alice", &mug).await.unwrap();
+        let orders = gateway(store, SHOP);
+        let cart_id = orders
+            .start_cart(
+                STOREFRONT_ACTOR,
+                CartItem {
+                    product_id: mug.clone(),
+                    variant_id: None,
+                    quantity: 2,
+                },
+            )
+            .await
+            .unwrap();
+        let local = LocalReads(Evento::new(
+            evento::Turso::in_memory_concurrent().await.unwrap(),
+        ));
+
+        let shown = answer(&orders, &local, &db, &cart_id).await.quote;
+        assert!(shown.unavailable.is_empty());
+        assert_eq!(shown.total_cents, 2 * 1250);
+
+        catalog.unpublish_product("alice", &mug).await.unwrap();
+        let shown = answer(&orders, &local, &db, &cart_id).await.quote;
+        assert!(shown.lines.is_empty());
+        assert_eq!(shown.unavailable.len(), 1);
+    }
 }

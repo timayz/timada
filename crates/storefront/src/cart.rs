@@ -8,7 +8,8 @@
 //! for the one cart or order whose id the storefront holds and write what
 //! the shopper does to it. A page still shows a change to the cart at once;
 //! its lines are priced there from the catalog's read model, a moment
-//! behind the store ([`timada_orders::Command::quote_from`]), and a payment
+//! behind the store, a line it cannot sell being read again from the store
+//! ([`timada_orders::Command::quote_from`]), and a payment
 //! is priced again from the products' own streams, so a price that moved in
 //! between is refused as `price_changed` rather than charged unseen. The
 //! local copy only adds what a page needs to link and illustrate a line (its
