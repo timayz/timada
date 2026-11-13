@@ -74,7 +74,7 @@ pub async fn take_payment(
         Err(OrderError::OrderCancelled | OrderError::CancellationPending) => return Ok(()),
         Err(err) => return Err(err.into()),
     }
-    let account = match payments.active_tenant(tenant_id).await? {
+    let account = match payments.active_tenant(store, tenant_id).await? {
         Some(tenant) => payments.account_of(&tenant)?,
         None => None,
     };
@@ -173,7 +173,7 @@ async fn on_cancellation_requested<E: Executor>(
     let payments: Arc<Payments> = context.extract();
     let store: Store = context.extract();
     let settled = async {
-        let Some(tenant) = payments.active_tenant(&event.tenant).await? else {
+        let Some(tenant) = payments.active_tenant(&store.0, &event.tenant).await? else {
             return Ok(());
         };
         let orders = timada_orders::Command::new(store.0.clone(), &event.tenant);

@@ -32,6 +32,7 @@ use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::aliexpress::Aliexpress;
 use crate::app::auth::Flash;
 use crate::app::companies::company_id::company_url;
+use crate::cluster::Executor;
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::checkbox::checkbox;
@@ -372,7 +373,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map_err(topcoat::Error::from_anyhow)?;
     let aliexpress = app_context::<Arc<Aliexpress>>(cx);
     let company = aliexpress
-        .company_of(&access.tenant)
+        .company_of(app_context::<Executor>(cx), &access.tenant)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let TenantAccess {

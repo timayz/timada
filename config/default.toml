@@ -317,8 +317,9 @@ dir = "data/shopper-keys"
 # and before a sign-in, a shop or a store key is refused. So what a user sees
 # after an action is always current whichever node answers. Read from this
 # node's own copy instead: who is signed in, the shop a page belongs to, the
-# storefronts' catalog, and what the node does after each change (its lists,
-# mails and payments).
+# storefronts' catalog, a shopper's order once this node has it, what the
+# node does after each change (its lists, mails and payments), and what it
+# does on a timer.
 # [cluster]
 # node_id = 0
 # peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]

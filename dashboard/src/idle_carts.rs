@@ -55,7 +55,9 @@ const BREATH: Duration = Duration::from_secs(10);
 pub struct IdleCarts {
     /// The read models: the carts that lay idle.
     db: Db,
-    /// The store, every tenant's.
+    /// The store, every tenant's, read from this node's file: a cart the
+    /// shopper touched a moment ago on another node is kept, its drop
+    /// refused at the version read.
     store: Executor,
     /// This node's place among the nodes up, as of now: which carts it drops.
     place: Arc<dyn Fn() -> Share + Send + Sync>,

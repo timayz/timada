@@ -191,7 +191,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let connected = app_context::<Arc<crate::aliexpress::Aliexpress>>(cx)
-        .connected(&access.tenant)
+        .connected(app_context::<crate::cluster::Executor>(cx), &access.tenant)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     // Whether any line is an AliExpress item, for a shop connected to it:

@@ -57,7 +57,9 @@ fn now() -> u64 {
 pub struct PendingPayments {
     /// The read models: the orders and carts waiting on the provider.
     db: Db,
-    /// The store, every tenant's.
+    /// The store, every tenant's, read from this node's file: what an order
+    /// or a cart asked of the provider is asked again under the same keys,
+    /// and its answer recorded at the version read.
     store: Executor,
     payments: Arc<Payments>,
     /// The orders, and the payments carts give back, the provider did not
@@ -123,7 +125,8 @@ impl PendingPayments {
 
     /// The tenant's provider account, unless it is suspended or took it away.
     async fn account(&self, tenant_id: &str) -> anyhow::Result<Option<Account>> {
-        Ok(match self.payments.active_tenant(tenant_id).await? {
+        let tenant = self.payments.active_tenant(&self.store, tenant_id).await?;
+        Ok(match tenant {
             Some(tenant) => self.payments.account_of(&tenant)?,
             None => None,
         })
@@ -135,7 +138,7 @@ impl PendingPayments {
     }
 
     async fn sweep_tenant(&self, tenant_id: &str, ids: &[&str], now: u64) -> anyhow::Result<usize> {
-        let Some(tenant) = self.payments.active_tenant(tenant_id).await? else {
+        let Some(tenant) = self.payments.active_tenant(&self.store, tenant_id).await? else {
             return Ok(0);
         };
         // A shop without its provider account still settles what asks the

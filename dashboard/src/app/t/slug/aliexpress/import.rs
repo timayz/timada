@@ -14,6 +14,7 @@ use topcoat::{
 use super::aliexpress_url;
 use crate::aliexpress::Aliexpress;
 use crate::app::t::slug::require_tenant;
+use crate::cluster::Executor;
 
 #[derive(serde::Deserialize)]
 pub struct ImportForm {
@@ -35,7 +36,7 @@ pub async fn import(cx: &Cx, Form(form): Form<ImportForm>) -> Result<SeeOther> {
     }
     let aliexpress = app_context::<Arc<Aliexpress>>(cx);
     let company = aliexpress
-        .company_of(&access.tenant)
+        .company_of(app_context::<Executor>(cx), &access.tenant)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     match company {

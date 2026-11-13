@@ -41,7 +41,9 @@ pub fn is_due(fulfilled_at: u64, days: u8, now: u64) -> bool {
 pub struct ReviewRequests {
     /// The read models: the requests due.
     db: Db,
-    /// The store, every tenant's.
+    /// The store, every tenant's, read from this node's file: a request
+    /// claimed a moment ago on another node, which this node has not read
+    /// yet, finds its claim taken.
     store: Executor,
     mail: Arc<AppContext>,
     /// How many due requests one statement reads.

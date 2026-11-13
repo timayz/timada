@@ -39,7 +39,7 @@ pub async fn sync(cx: &Cx, Form(form): Form<Back>) -> Result<SeeOther> {
         )
     };
     let connected = app_context::<Arc<Aliexpress>>(cx)
-        .connected(&access.tenant)
+        .connected(app_context::<Executor>(cx), &access.tenant)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     if !connected {

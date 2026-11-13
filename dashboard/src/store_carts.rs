@@ -238,13 +238,30 @@ pub async fn checkout(
 }
 
 /// `GET /store/carts/{cart_id}/requests/{request_id}`: a request to pay and
-/// its answer so far, or 404 for a cart or request the tenant has not.
+/// its answer so far, or 404 for a cart or request the tenant has not. The
+/// storefront asks while the shopper waits to pay: read from this node's file
+/// once it holds the answer, through the cluster until then, so the request
+/// it made a moment ago and the answer another node gave both show.
 pub async fn request(
     orders: &Command<Executor>,
+    local: &LocalReads,
     cart_id: &str,
     request_id: &str,
 ) -> anyhow::Result<Answer> {
-    let Some(cart) = orders.load_cart(cart_id).await? else {
+    let cart = read_first(
+        orders,
+        local,
+        |reads| async move { reads.load_cart(cart_id).await },
+        |cart| {
+            cart.as_ref().is_ok_and(|cart| {
+                cart.as_ref()
+                    .and_then(|cart| cart.request(request_id))
+                    .is_some_and(|request| request.answer.is_some())
+            })
+        },
+    )
+    .await?;
+    let Some(cart) = cart else {
         return Ok(not_found("cart_not_found"));
     };
     let Some(request) = cart.request(request_id) else {
@@ -257,15 +274,31 @@ pub async fn request(
 }
 
 /// `GET /store/carts/{cart_id}/order`: the order the cart became, or 404
-/// while it is none.
-pub async fn order_of_cart(orders: &Command<Executor>, cart_id: &str) -> anyhow::Result<Answer> {
-    match orders.load_order_of_cart(cart_id).await? {
+/// while it is none. The storefront asks until there is one, which a
+/// payment's confirmation places on any node: read from this node's file
+/// once it holds the order, through the cluster before saying there is none.
+pub async fn order_of_cart(
+    orders: &Command<Executor>,
+    local: &LocalReads,
+    cart_id: &str,
+) -> anyhow::Result<Answer> {
+    let order = read_first(
+        orders,
+        local,
+        |reads| async move { reads.load_order_of_cart(cart_id).await },
+        |order| matches!(order, Ok(Some(_))),
+    )
+    .await?;
+    match order {
         Some(order) => ok(&order),
         None => Ok(not_found("order_not_found")),
     }
 }
 
-/// `GET /store/orders/{order_id}`: the order, or 404.
+/// `GET /store/orders/{order_id}`: the order, or 404. Read through the
+/// cluster: the storefront sends the shopper back to their order once they
+/// cancelled it, whichever node took the cancellation, and the order must
+/// show it.
 pub async fn order(orders: &Command<Executor>, order_id: &str) -> anyhow::Result<Answer> {
     match orders.load_order(order_id).await? {
         Some(order) => ok(&order),
@@ -275,17 +308,35 @@ pub async fn order(orders: &Command<Executor>, order_id: &str) -> anyhow::Result
 
 /// `GET /store/orders/{order_id}/parcels`: where the order's parcels are, as
 /// their carrier last said (a `Vec<ParcelState>`, empty until the first
-/// news); 404 for an order the tenant has not.
-pub async fn parcels(orders: &Command<Executor>, order_id: &str) -> anyhow::Result<Answer> {
-    if orders.load_order(order_id).await?.is_none() {
-        return Ok(not_found("order_not_found"));
+/// news); 404 for an order the tenant has not. Read from this node's file
+/// once it holds the order, through the cluster before saying there is none:
+/// news another node recorded a moment ago shows at the next look.
+pub async fn parcels(
+    orders: &Command<Executor>,
+    local: &LocalReads,
+    order_id: &str,
+) -> anyhow::Result<Answer> {
+    let parcels = read_first(
+        orders,
+        local,
+        |reads| async move {
+            if reads.load_order(order_id).await?.is_none() {
+                return anyhow::Ok(None);
+            }
+            let parcels = reads
+                .load_shipment(order_id)
+                .await?
+                .map(|shipment| shipment.parcels)
+                .unwrap_or_default();
+            Ok(Some(parcels))
+        },
+        |parcels| matches!(parcels, Ok(Some(_))),
+    )
+    .await?;
+    match parcels {
+        Some(parcels) => ok(&parcels),
+        None => Ok(not_found("order_not_found")),
     }
-    let parcels = orders
-        .load_shipment(order_id)
-        .await?
-        .map(|shipment| shipment.parcels)
-        .unwrap_or_default();
-    ok(&parcels)
 }
 
 /// `GET /store/orders/{order_id}/documents`: the invoice of the order, then
@@ -296,18 +347,59 @@ pub async fn parcels(orders: &Command<Executor>, order_id: &str) -> anyhow::Resu
 /// invoicing read model keeps a summary row only). The documents live in
 /// the invoicing streams, every buyer's name and address in them, which is
 /// why a storefront's key reads none of those and is answered one order's
-/// here.
-pub async fn documents(orders: &Command<Executor>, order_id: &str) -> anyhow::Result<Answer> {
-    let Some(order) = orders.load_order(order_id).await? else {
-        return Ok(not_found("order_not_found"));
-    };
-    let invoicing = timada_invoicing::Command::new(orders.executor().clone(), orders.tenant());
-    let mut documents: Vec<IssuedDocument> = Vec::new();
-    documents.extend(invoicing.load_invoice_of_order(order_id).await?);
-    for refund_id in &order.refund_ids {
-        documents.extend(invoicing.load_credit_note_of_refund(refund_id).await?);
+/// here. Read from this node's file once it holds the order, through the
+/// cluster before saying there is none: a document issued a moment ago on
+/// another node shows at the next look.
+pub async fn documents(
+    orders: &Command<Executor>,
+    local: &LocalReads,
+    order_id: &str,
+) -> anyhow::Result<Answer> {
+    let documents = read_first(
+        orders,
+        local,
+        |reads| async move {
+            let Some(order) = reads.load_order(order_id).await? else {
+                return anyhow::Ok(None);
+            };
+            let invoicing =
+                timada_invoicing::Command::new(reads.executor().clone(), reads.tenant());
+            let mut documents: Vec<IssuedDocument> = Vec::new();
+            documents.extend(invoicing.load_invoice_of_order(order_id).await?);
+            for refund_id in &order.refund_ids {
+                documents.extend(invoicing.load_credit_note_of_refund(refund_id).await?);
+            }
+            Ok(Some(documents))
+        },
+        |documents| matches!(documents, Ok(Some(_))),
+    )
+    .await?;
+    match documents {
+        Some(documents) => ok(&documents),
+        None => Ok(not_found("order_not_found")),
     }
-    ok(&documents)
+}
+
+/// Reads with `read`, handed the orders gateway in `orders`' tenant over
+/// this node's file (`local`), and again over the cluster (`orders`' store)
+/// unless `settled` lets the first answer stand ([`LocalReads::first`]).
+async fn read_first<T, F, Fut>(
+    orders: &Command<Executor>,
+    local: &LocalReads,
+    read: F,
+    settled: impl FnOnce(&T) -> bool,
+) -> T
+where
+    F: Fn(Command<Executor>) -> Fut,
+    Fut: Future<Output = T>,
+{
+    local
+        .first(
+            orders.executor(),
+            |store| read(Command::new(store, orders.tenant())),
+            settled,
+        )
+        .await
 }
 
 #[cfg(test)]
@@ -316,6 +408,7 @@ mod tests {
     use timada_catalog::CreateProduct;
 
     use super::*;
+    use crate::cluster::lagging::{behind, events};
 
     const SHOP: &str = "acme";
 
@@ -382,5 +475,238 @@ mod tests {
         let shown = answer(&orders, &local, &db, &cart_id).await.quote;
         assert!(shown.lines.is_empty());
         assert_eq!(shown.unavailable.len(), 1);
+    }
+
+    /// A store with the read models' tables, nothing in it yet.
+    async fn store() -> evento::Turso {
+        let turso = evento::Turso::in_memory_concurrent().await.unwrap();
+        crate::db::migrate_store_read_models(&turso).await.unwrap();
+        turso
+    }
+
+    /// A mug on sale in `store`: its id.
+    async fn mug_on_sale(store: &Evento) -> String {
+        let catalog = timada_catalog::Command::new(store.clone(), SHOP);
+        let mug = catalog
+            .create_product(
+                "alice",
+                CreateProduct {
+                    name: "Mug".into(),
+                    slug: None,
+                },
+            )
+            .await
+            .unwrap()
+            .id;
+        catalog
+            .price_product("alice", &mug, 1250, "EUR")
+            .await
+            .unwrap();
+        catalog.publish_product("alice", &mug).await.unwrap();
+        mug
+    }
+
+    /// A cart of two of `mug` in `store`: its id.
+    async fn cart_of(store: &Evento, mug: &str) -> String {
+        gateway(store.clone(), SHOP)
+            .start_cart(
+                STOREFRONT_ACTOR,
+                CartItem {
+                    product_id: mug.to_owned(),
+                    variant_id: None,
+                    quantity: 2,
+                },
+            )
+            .await
+            .unwrap()
+    }
+
+    /// The cart asked to be paid for: the request's id.
+    async fn ask_to_pay(store: &Evento, cart_id: &str) -> String {
+        let checkout = Checkout {
+            email: "ada@example.org".into(),
+            shipping: timada_orders::ShippingAddress {
+                name: "Ada Lovelace".into(),
+                line1: "1 rue de la Paix".into(),
+                postal_code: "75002".into(),
+                city: "Paris".into(),
+                country: "FR".into(),
+                phone: Some("06 12 34 56 78".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        gateway(store.clone(), SHOP)
+            .request_checkout(STOREFRONT_ACTOR, cart_id, checkout)
+            .await
+            .unwrap()
+    }
+
+    /// The answer to the request: refused, as a node that cannot pay
+    /// answers it.
+    async fn refuse(store: &Evento, cart_id: &str, request_id: &str) {
+        assert!(
+            gateway(store.clone(), SHOP)
+                .refuse_payment_request(
+                    "timada-dashboard",
+                    cart_id,
+                    request_id,
+                    "payments_unavailable"
+                )
+                .await
+                .unwrap()
+        );
+    }
+
+    /// The order `cart_id` became, as a payment's confirmation places it.
+    async fn place(store: &Evento, cart_id: &str) {
+        evento::append(timada_orders::order_id(cart_id))
+            .tenant(SHOP)
+            .original_version(0)
+            .event(&timada_orders::aggregator::Placed {
+                reference: "K7Q4-MZP2".into(),
+                cart_id: cart_id.to_owned(),
+                email: "ada@example.org".into(),
+                shipping: Default::default(),
+                note: None,
+                lines: Vec::new(),
+                currency: "EUR".into(),
+                total_cents: 2500,
+                payment: Default::default(),
+                supplier: None,
+                placed_by: STOREFRONT_ACTOR.into(),
+            })
+            .commit(store)
+            .await
+            .unwrap();
+    }
+
+    /// What `answer` says of the request: its code once refused, `None`
+    /// while it waits; the status when it is no request's.
+    fn refusal(answer: Answer) -> Result<Option<String>, StatusCode> {
+        let (status, body) = answer;
+        if status != StatusCode::OK {
+            return Err(status);
+        }
+        let request: RequestAnswer = serde_json::from_value(body).unwrap();
+        Ok(request.answer.map(|answer| match answer {
+            timada_orders::PaymentAnswer::Refused(code) => code,
+            other => panic!("not a refusal: {other:?}"),
+        }))
+    }
+
+    /// A request this node holds the answer of is read from its file: the
+    /// cluster, asked, would know of no such cart.
+    #[tokio::test]
+    async fn an_answered_request_this_node_holds_is_read_from_its_file() {
+        let store = Evento::new(store().await);
+        let mug = mug_on_sale(&store).await;
+        let cart_id = cart_of(&store, &mug).await;
+        let request_id = ask_to_pay(&store, &cart_id).await;
+        refuse(&store, &cart_id, &request_id).await;
+        let nothing = gateway(
+            Evento::new(evento::Turso::in_memory_concurrent().await.unwrap()),
+            SHOP,
+        );
+
+        let answer = request(&nothing, &LocalReads(store), &cart_id, &request_id).await;
+        assert_eq!(
+            refusal(answer.unwrap()),
+            Ok(Some("payments_unavailable".to_owned()))
+        );
+    }
+
+    /// The request a storefront made a moment ago, and the answer another
+    /// node gave it, are read through the cluster while this node has not
+    /// got them: the cart, the request or the answer.
+    #[tokio::test]
+    async fn a_request_this_node_has_no_answer_to_is_read_through_the_cluster() {
+        let turso = store().await;
+        let store = Evento::new(turso.clone());
+        let mug = mug_on_sale(&store).await;
+        let before_the_cart = events(&turso).await.len();
+        let cart_id = cart_of(&store, &mug).await;
+        let before_the_request = events(&turso).await.len();
+        let request_id = ask_to_pay(&store, &cart_id).await;
+        let before_the_answer = events(&turso).await.len();
+        refuse(&store, &cart_id, &request_id).await;
+        let orders = gateway(store.clone(), SHOP);
+
+        for held in [before_the_cart, before_the_request, before_the_answer] {
+            let local = behind(&turso, held).await;
+            let answer = request(&orders, &local, &cart_id, &request_id).await;
+            assert_eq!(
+                refusal(answer.unwrap()),
+                Ok(Some("payments_unavailable".to_owned())),
+                "with the first {held} events here"
+            );
+        }
+        // Waiting on the cluster too: it waits, and says so; a request the
+        // cart never made is none.
+        let waiting_cart = cart_of(&store, &mug).await;
+        let waiting = ask_to_pay(&store, &waiting_cart).await;
+        let local = behind(&turso, before_the_answer).await;
+        let answer = request(&orders, &local, &waiting_cart, &waiting).await;
+        assert_eq!(refusal(answer.unwrap()), Ok(None));
+        let answer = request(&orders, &local, &waiting_cart, "no-such-request").await;
+        assert_eq!(refusal(answer.unwrap()), Err(StatusCode::NOT_FOUND));
+    }
+
+    /// The order a cart became, and its parcels and documents, are read from
+    /// this node's file once it holds the order, and through the cluster
+    /// while it does not: placed a moment ago on another node, or not at all.
+    #[tokio::test]
+    async fn an_order_this_node_lacks_is_read_through_the_cluster() {
+        let turso = store().await;
+        let store = Evento::new(turso.clone());
+        let mug = mug_on_sale(&store).await;
+        let cart_id = cart_of(&store, &mug).await;
+        ask_to_pay(&store, &cart_id).await;
+        let before_the_order = events(&turso).await.len();
+        place(&store, &cart_id).await;
+        let order_id = timada_orders::order_id(&cart_id);
+        let orders = gateway(store.clone(), SHOP);
+        let nothing = gateway(
+            Evento::new(evento::Turso::in_memory_concurrent().await.unwrap()),
+            SHOP,
+        );
+        let status = |answer: anyhow::Result<Answer>| answer.unwrap().0;
+
+        let here = LocalReads(store);
+        let (found, order) = order_of_cart(&nothing, &here, &cart_id).await.unwrap();
+        assert_eq!(found, StatusCode::OK);
+        assert_eq!(order["reference"], json!("K7Q4-MZP2"));
+        let (found, parcels_here) = parcels(&nothing, &here, &order_id).await.unwrap();
+        assert_eq!((found, parcels_here), (StatusCode::OK, json!([])));
+        let (found, documents_here) = documents(&nothing, &here, &order_id).await.unwrap();
+        assert_eq!((found, documents_here), (StatusCode::OK, json!([])));
+
+        let behind = behind(&turso, before_the_order).await;
+        let (found, order) = order_of_cart(&orders, &behind, &cart_id).await.unwrap();
+        assert_eq!(found, StatusCode::OK);
+        assert_eq!(order["reference"], json!("K7Q4-MZP2"));
+        assert_eq!(
+            status(parcels(&orders, &behind, &order_id).await),
+            StatusCode::OK
+        );
+        assert_eq!(
+            status(documents(&orders, &behind, &order_id).await),
+            StatusCode::OK
+        );
+
+        // Nowhere: there is none.
+        let unpaid = cart_of(&orders.executor().clone(), &mug).await;
+        assert_eq!(
+            status(order_of_cart(&orders, &behind, &unpaid).await),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            status(parcels(&orders, &behind, "order-none").await),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            status(documents(&orders, &behind, "order-none").await),
+            StatusCode::NOT_FOUND
+        );
     }
 }

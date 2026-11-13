@@ -79,14 +79,16 @@ async fn on_tenant_resumed<E: evento::Executor>(
 }
 
 /// Writes what the tenant's settings say now, whichever event led here, so a
-/// replay lands on the latest state.
+/// replay lands on the latest state. They are read from this node's file,
+/// which holds the event handled and everything before it: a later change
+/// another node took a moment ago is written when this node handles it.
 async fn sync<E: evento::Executor>(
     context: &Context<'_, E>,
     tenant_id: &str,
 ) -> anyhow::Result<()> {
     let payments: Arc<Payments> = context.extract();
     let store: Store = context.extract();
-    let Some(tenant) = payments.active_tenant(tenant_id).await? else {
+    let Some(tenant) = payments.active_tenant(&store.0, tenant_id).await? else {
         return Ok(());
     };
     publish_setup(&payments, &tenant, store.0).await

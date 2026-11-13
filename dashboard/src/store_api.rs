@@ -434,6 +434,7 @@ mod tests {
     use timada_tenancy::{CreateApiKey, CreateTenant};
 
     use super::*;
+    use crate::cluster::lagging::{behind, events};
 
     /// Tenant acme and a key that may read its catalog, in `store`.
     struct Acme {
@@ -473,36 +474,6 @@ mod tests {
             token: key.token,
             before_the_key,
         }
-    }
-
-    /// Every event of `store`, in the order they were written.
-    async fn events(store: &evento::Turso) -> Vec<evento::Event> {
-        use evento::Executor as _;
-        store
-            .read(
-                None,
-                None,
-                evento::TenantFilter::All,
-                evento::cursor::Args::forward(1000, None),
-                None,
-            )
-            .await
-            .unwrap()
-            .edges
-            .into_iter()
-            .map(|edge| edge.node)
-            .collect()
-    }
-
-    /// A node `n` events behind `store`: its first `n` events, in a file of
-    /// its own.
-    async fn behind(store: &evento::Turso, n: usize) -> LocalReads {
-        use evento::Executor as _;
-        let node = evento::Turso::in_memory_concurrent().await.unwrap();
-        for event in events(store).await.into_iter().take(n) {
-            node.write(vec![event]).await.unwrap();
-        }
-        LocalReads(Evento::new(node))
     }
 
     /// A key issued on another node a moment ago, which this node has not
