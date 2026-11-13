@@ -67,7 +67,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let payments = Arc::new(crate::payments::Payments::new(
         crate::seal::payments_sealer(&config),
         gateway,
-        executor.clone(),
     ));
     // The shops' own mail servers, shared by the pages and the mails sent
     // in the background so their connections are too.
@@ -81,7 +80,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         crate::seal::aliexpress_sealer(&config),
         &config.aliexpress,
         config.mail.allow_private_hosts,
-        executor.clone(),
         quota.clone(),
         place.clone(),
     )?;

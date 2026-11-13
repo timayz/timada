@@ -22,7 +22,7 @@ use timada_core::Share;
 use timada_tenancy::{AliexpressSettings, CompanyState, TenantState};
 
 use self::budget::CallBudget;
-use crate::cluster::{Among, Executor, ShareOf};
+use crate::cluster::{Among, ShareOf};
 use crate::config::AliexpressConfig;
 use crate::db::Db;
 use crate::media::Media;
@@ -35,6 +35,10 @@ pub const ALIEXPRESS_ACTOR: &str = timada_aliexpress::ALIEXPRESS_ACTOR;
 /// How many times a read's record is tried when a request came in between.
 const RECORD_ATTEMPTS: usize = 3;
 
+/// The platform's AliExpress app, one per node: what it may spend is this
+/// node's to count. It holds no store: a shop and its company are read from
+/// the store its caller reads, a page's through the cluster, the
+/// background's from this node's file (#533).
 pub struct Aliexpress {
     sealer: Option<Sealer>,
     /// The platform's app: its key and secret, once the operator gave one.
@@ -49,7 +53,6 @@ pub struct Aliexpress {
     /// Whether pictures may come from this machine or a private network
     /// (`mail.allow_private_hosts`, for tests and local setups).
     allow_private_hosts: bool,
-    platform: Executor,
     /// How long a product goes before it is read again, in seconds.
     sync_every_secs: u64,
     /// How recent a read must be for a payment to go by it, in seconds.
@@ -82,7 +85,6 @@ impl Aliexpress {
         sealer: Option<Sealer>,
         config: &AliexpressConfig,
         allow_private_hosts: bool,
-        platform: Executor,
         quota: Arc<crate::media::Quota>,
         share: ShareOf,
     ) -> anyhow::Result<Arc<Self>> {
@@ -117,7 +119,6 @@ impl Aliexpress {
                 .timeout(Duration::from_secs(30))
                 .build()?,
             allow_private_hosts,
-            platform,
             sync_every_secs: config.sync_every_secs.max(1),
             read_fresh_secs: config.read_fresh_secs,
             order_read_every_secs: config.order_read_every_secs.max(1),
@@ -240,40 +241,49 @@ impl Aliexpress {
         Ok(Some(self.app_client()?.with_session(token)))
     }
 
-    /// The company a shop sells as, read from the platform store; `None`
-    /// until the shop is linked to one.
-    pub async fn company_of(&self, tenant: &TenantState) -> anyhow::Result<Option<CompanyState>> {
+    /// The company a shop sells as, read from the platform's streams in
+    /// `store`; `None` until the shop is linked to one.
+    pub async fn company_of<E: evento::Executor + Clone>(
+        &self,
+        store: &E,
+        tenant: &TenantState,
+    ) -> anyhow::Result<Option<CompanyState>> {
         let Some(link) = &tenant.company else {
             return Ok(None);
         };
-        timada_tenancy::Command(self.platform.clone())
+        timada_tenancy::Command(store.clone())
             .load_company(&link.company_id)
             .await
     }
 
     /// Whether the shop can call AliExpress: it is set up, and the company
-    /// it sells as has an account connected.
-    pub async fn connected(&self, tenant: &TenantState) -> anyhow::Result<bool> {
+    /// it sells as, read from `store`, has an account connected.
+    pub async fn connected<E: evento::Executor + Clone>(
+        &self,
+        store: &E,
+        tenant: &TenantState,
+    ) -> anyhow::Result<bool> {
         if tenant.aliexpress.is_none() {
             return Ok(false);
         }
         Ok(self
-            .company_of(tenant)
+            .company_of(store, tenant)
             .await?
             .is_some_and(|company| company.aliexpress.is_some()))
     }
 
     /// Renews the company's tokens when the access token lapses within a
     /// day, on one node per token (the one that claims the renewal in the
-    /// platform store); the company as it then is. The tokens AliExpress
-    /// answers are recorded on the claim before the company hears of them,
-    /// so a node that stops in between, or a store not taking writes for a
-    /// while, leaves them for the next sweep to apply rather than losing
-    /// them. A renewal AliExpress refuses is logged and tried again once the
-    /// claim goes stale; one refused for good waits for an owner to connect
-    /// again.
-    pub async fn refresh_if_due(
+    /// platform's streams of `store`); the company as it then is, read back
+    /// from `store`. The tokens AliExpress answers are recorded on the claim
+    /// before the company hears of them, so a node that stops in between, or
+    /// a store not taking writes for a while, leaves them for the next sweep
+    /// to apply rather than losing them. A renewal AliExpress refuses is
+    /// logged and tried again once the claim goes stale; one refused for good
+    /// waits for an owner to connect again.
+    pub async fn refresh_if_due<E: evento::Executor + Clone>(
         &self,
+        store: &E,
         company: CompanyState,
         now: u64,
     ) -> anyhow::Result<CompanyState> {
@@ -289,7 +299,7 @@ impl Aliexpress {
         }
         let renewing = authorization.expires_at;
         let renewal = timada_aliexpress::claim_token_refresh(
-            &self.platform,
+            store,
             ALIEXPRESS_ACTOR,
             &company.id,
             renewing,
@@ -331,7 +341,7 @@ impl Aliexpress {
                 // the next sweep finds them on the claim.
                 if let Err(err) = with_write_retries(|| {
                     timada_aliexpress::record_token_renewal(
-                        &self.platform,
+                        store,
                         ALIEXPRESS_ACTOR,
                         &company.id,
                         renewing,
@@ -345,7 +355,7 @@ impl Aliexpress {
                 renewed
             }
         };
-        let tenancy = timada_tenancy::Command(self.platform.clone());
+        let tenancy = timada_tenancy::Command(store.clone());
         with_write_retries(|| async {
             tenancy
                 .refresh_aliexpress(
@@ -399,31 +409,38 @@ impl Aliexpress {
         )
     }
 
-    /// The tenant read from the platform store, unless it is suspended.
-    pub async fn active_tenant(&self, tenant_id: &str) -> anyhow::Result<Option<TenantState>> {
-        let tenant = timada_tenancy::Command(self.platform.clone())
+    /// The tenant read from the platform's streams in `store`, unless it is
+    /// suspended.
+    pub async fn active_tenant<E: evento::Executor + Clone>(
+        &self,
+        store: &E,
+        tenant_id: &str,
+    ) -> anyhow::Result<Option<TenantState>> {
+        let tenant = timada_tenancy::Command(store.clone())
             .load_tenant(tenant_id)
             .await?;
         Ok(tenant.filter(|tenant| !tenant.is_suspended()))
     }
 
-    /// A shop able to call AliExpress: active, set up, and selling as a
-    /// company with an account, its access renewed first if due.
-    pub async fn connected_shop(
+    /// A shop able to call AliExpress, read from `store`: active, set up,
+    /// and selling as a company with an account, its access renewed first
+    /// if due.
+    pub async fn connected_shop<E: evento::Executor + Clone>(
         &self,
+        store: &E,
         tenant_id: &str,
         now: u64,
     ) -> anyhow::Result<Option<(TenantState, CompanyState)>> {
-        let Some(tenant) = self.active_tenant(tenant_id).await? else {
+        let Some(tenant) = self.active_tenant(store, tenant_id).await? else {
             return Ok(None);
         };
         if tenant.aliexpress.is_none() {
             return Ok(None);
         }
-        let Some(company) = self.company_of(&tenant).await? else {
+        let Some(company) = self.company_of(store, &tenant).await? else {
             return Ok(None);
         };
-        let company = self.refresh_if_due(company, now).await?;
+        let company = self.refresh_if_due(store, company, now).await?;
         if company.aliexpress.is_none() {
             return Ok(None);
         }

@@ -155,7 +155,7 @@ impl AliexpressSync {
                 None => {
                     let can_read = self
                         .aliexpress
-                        .connected_shop(tenant_id, now)
+                        .connected_shop(&self.store, tenant_id, now)
                         .await?
                         .is_some();
                     connected.insert(tenant_id, can_read);
@@ -214,7 +214,10 @@ impl AliexpressSync {
             let tenant_id = &shop[0].tenant_id;
             // A shop that cannot read is passed over until the next period,
             // like one read.
-            let Some((tenant, company)) = self.aliexpress.connected_shop(tenant_id, now).await?
+            let Some((tenant, company)) = self
+                .aliexpress
+                .connected_shop(&self.store, tenant_id, now)
+                .await?
             else {
                 for forward in shop {
                     note_parcels_followed(&self.db, tenant_id, &forward.id, now, false).await?;
@@ -390,7 +393,11 @@ impl AliexpressSync {
     ) -> anyhow::Result<()> {
         // A shop that cannot read is passed over until the next period, like one
         // read, or its orders would take every turn it gets.
-        let Some((tenant, company)) = self.aliexpress.connected_shop(tenant_id, now).await? else {
+        let Some((tenant, company)) = self
+            .aliexpress
+            .connected_shop(&self.store, tenant_id, now)
+            .await?
+        else {
             for forward in forwards {
                 note_forward_read(&self.db, tenant_id, &forward.id, now).await?;
             }
@@ -451,7 +458,9 @@ impl AliexpressSync {
         else {
             return Ok(());
         };
-        self.aliexpress.refresh_if_due(company, now).await?;
+        self.aliexpress
+            .refresh_if_due(&self.store, company, now)
+            .await?;
         Ok(())
     }
 }

@@ -294,7 +294,6 @@ impl Shop {
                 read_fresh_secs: 60,
             },
             false,
-            store.clone(),
             quota,
             Arc::new(move |among| match among {
                 Among::All => *all.lock().unwrap(),
@@ -336,7 +335,6 @@ impl Shop {
         let payments = Arc::new(Payments::new(
             Some(Sealer::new("payments", "secret")),
             provider.clone(),
-            store.clone(),
         ));
         tenancy
             .configure_payments(
@@ -454,7 +452,7 @@ impl Shop {
     async fn sync(&self, mode: SyncMode<'_>) -> SyncResult {
         let company = self
             .aliexpress
-            .company_of(&self.tenant)
+            .company_of(&self.store, &self.tenant)
             .await
             .unwrap()
             .unwrap();
@@ -1705,7 +1703,11 @@ async fn recorded_tokens_reach_the_company_without_asking_again() {
         .unwrap();
 
     let company = tenancy.load_company(&company_id).await.unwrap().unwrap();
-    let company = shop.aliexpress.refresh_if_due(company, now).await.unwrap();
+    let company = shop
+        .aliexpress
+        .refresh_if_due(&shop.store, company, now)
+        .await
+        .unwrap();
     let authorization = company.aliexpress.unwrap();
     assert_eq!(authorization.expires_at, renewed.expires_at);
     assert_eq!(
@@ -1714,7 +1716,11 @@ async fn recorded_tokens_reach_the_company_without_asking_again() {
     );
     // Told again, the access is no longer due: nothing changes.
     let again = tenancy.load_company(&company_id).await.unwrap().unwrap();
-    let again = shop.aliexpress.refresh_if_due(again, now).await.unwrap();
+    let again = shop
+        .aliexpress
+        .refresh_if_due(&shop.store, again, now)
+        .await
+        .unwrap();
     assert_eq!(again.aliexpress.unwrap().expires_at, renewed.expires_at);
 }
 

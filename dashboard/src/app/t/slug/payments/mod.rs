@@ -21,6 +21,7 @@ use topcoat::{
 
 use super::{Slug, TenantAccess, TenantNav, require_tenant};
 use crate::app::auth::Flash;
+use crate::cluster::Executor;
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::field::{field, field_label};
@@ -51,7 +52,10 @@ pub fn payments_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&s
 pub async fn publish_setup(cx: &Cx, access: &TenantAccess) {
     let payments = app_context::<Arc<Payments>>(cx);
     let published = async {
-        let Some(tenant) = payments.active_tenant(&access.tenant.id).await? else {
+        let Some(tenant) = payments
+            .active_tenant(app_context::<Executor>(cx), &access.tenant.id)
+            .await?
+        else {
             return Ok(());
         };
         let executor = access.executor().map_err(|err| anyhow::anyhow!("{err}"))?;

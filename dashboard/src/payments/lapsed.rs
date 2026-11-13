@@ -130,7 +130,7 @@ impl LapsedCheckouts {
     /// were last touched before the hold ran out; the write model says which
     /// payments are still open and when each was opened.
     async fn sweep_tenant(&self, tenant_id: &str, before: i64, now: u64) -> anyhow::Result<usize> {
-        let account = match self.payments.active_tenant(tenant_id).await? {
+        let account = match self.payments.active_tenant(&self.store, tenant_id).await? {
             Some(tenant) => self.payments.account_of(&tenant)?,
             None => None,
         };

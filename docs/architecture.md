@@ -193,7 +193,10 @@ by construction.
    reminders, the idle carts, the review requests, the newsletter sends, the
    automation runs, the AliExpress sync), which acts off read-model rows the node
    derived from that file and writes only at the version it loaded, or a claim of its
-   own, so the same refusal holds; the store API's connections; the shop's offers,
+   own, so the same refusal holds (the payments and AliExpress services hold no store
+   of their own: a shop and its company are read from the store their caller reads,
+   the node's file for these and through the cluster for a page); the store API's
+   connections; the shop's offers,
    codes and ways to ship on `GET /store/carts/{cart_id}` (the cart itself is the
    shopper's own stream, read through the cluster, and so is a line the node's catalog
    read model cannot sell, which the cart took after reading the store: a product put

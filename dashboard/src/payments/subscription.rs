@@ -412,13 +412,13 @@ impl Checkouts {
         // Goods a supplier buys once the order is placed keep the money held
         // until they are bought; otherwise it is taken as soon as the order is.
         pending.supplier = self.goods.supplier_of(tenant_id, &pending.lines).await?;
-        let Some(merchant) = payments.active_tenant(tenant_id).await? else {
+        let Some(merchant) = payments.active_tenant(&self.store, tenant_id).await? else {
             refuse(PAYMENTS_UNAVAILABLE).await?;
             return Ok(());
         };
         // No sale without an invoice that can name the merchant.
         let Some(legal) = payments
-            .company_of(&merchant)
+            .company_of(&self.store, &merchant)
             .await?
             .and_then(|company| company.identity)
         else {

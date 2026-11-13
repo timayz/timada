@@ -644,7 +644,6 @@ pub(crate) mod tests {
             Arc::new(Payments::new(
                 Some(Sealer::new("payments", "secret")),
                 gateway,
-                evento,
             )),
             BASE_URL.to_owned(),
             node.to_owned(),
