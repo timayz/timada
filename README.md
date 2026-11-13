@@ -22,6 +22,7 @@ make cert        # once: local certificates for *.localhost
 make dev         # the dashboard at https://timada.localhost, rebuilt on change
 make check       # tests, clippy, formatting, unused dependencies
 make e2e         # the browser suite on a fresh database (needs `make up`)
+make e2e.cluster # the same suite on three nodes behind the balancer
 ```
 
 The dashboard reads `config/dev.local.toml` (gitignored; start from

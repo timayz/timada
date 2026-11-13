@@ -101,6 +101,8 @@ test("the storefront shows the catalogue in French", async ({
   request,
   browser,
 }) => {
+  // Close to a minute on three nodes (`make e2e.cluster`).
+  test.setTimeout(120_000);
   const owner = uniqueEmail("storefront");
   await registerWithEmail(page, owner);
   const { name, slug } = uniqueTenant("Storefront Shop");

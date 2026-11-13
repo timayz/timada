@@ -505,6 +505,8 @@ test("a sale abroad is invoiced at the VAT of where the goods go", async ({
   page,
   request,
 }) => {
+  // Close to a minute on three nodes (`make e2e.cluster`).
+  test.setTimeout(120_000);
   const stripe = new FakeStripe();
   const vies = new FakeVies();
   await stripe.start();
@@ -815,6 +817,8 @@ test("a returning shopper signs in with a mailed code and finds their orders and
   request,
   browser,
 }) => {
+  // Close to a minute on three nodes (`make e2e.cluster`).
+  test.setTimeout(120_000);
   const stripe = new FakeStripe();
   await stripe.start();
   try {

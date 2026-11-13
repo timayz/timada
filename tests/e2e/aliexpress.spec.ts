@@ -420,7 +420,13 @@ async function fillCheckout(page: Page, quantity: number) {
   await page.getByLabel("Quantité").fill(String(quantity));
   await page.getByRole("button", { name: "Ajouter au panier" }).click();
   await expect(page.locator("[data-cart-drawer].open .drawer-panel")).toBeVisible();
-  await page.goto(`${app.url}/cart`);
+  // The cart is priced by whichever node answers, from its own list of what
+  // is on sale: one a moment behind the product's publication calls the line
+  // off sale and offers no checkout (#558).
+  await expect(async () => {
+    await page.goto(`${app.url}/cart`);
+    await expect(page.getByRole("link", { name: "Commander" })).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
   await page.getByRole("link", { name: "Commander" }).click();
   await page.getByLabel("E-mail", { exact: true }).fill("ada@example.org");
   await page.getByLabel("Nom complet").fill("Ada Lovelace");
@@ -918,11 +924,18 @@ test("a shop places its paid orders on AliExpress and fulfils them with the trac
     // (Valid JSON: Playwright re-encodes any other string before sending.)
     const malformed = await aliexpress.push(request, pushUrl, auto.id, "", { body: JSON.stringify({ hello: "world" }) });
     expect(malformed.status()).toBe(400);
-    await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "fulfilled");
+    // The order is fulfilled before its forward is closed, but the page reads
+    // each from its own read model, and either may be the one behind.
+    await expect(async () => {
+      await page.goto(second);
+      await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "fulfilled", {
+        timeout: 1000,
+      });
+      await expect(page.locator("[data-order-aliexpress-tracking]")).toHaveText("LP00123456FR", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
     await expect(page.locator("[data-order-tracking]")).toHaveText("LP00123456FR");
     // No carrier page: Cainiao's would name the supplier.
     await expect(page.locator("[data-order-tracking] a")).toHaveCount(0);
-    await expect(page.locator("[data-order-aliexpress-tracking]")).toHaveText("LP00123456FR");
     // The shopper is mailed the shipment (the page reads the read model, a moment behind).
     await expect(async () => {
       await page.reload();
