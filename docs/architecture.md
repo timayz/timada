@@ -189,15 +189,27 @@ by construction.
    subscription, and the mailroom and the checkout lanes they feed, whose handlers
    read what the node applied before handing them the event (a write on a stale read
    is refused for its version, and the write it missed is applied here before the
-   refusal, so the retry sees it); the store API's connections; the shop's offers,
+   refusal, so the retry sees it); every timer (the payments sweeps, the hold
+   reminders, the idle carts, the review requests, the newsletter sends, the
+   automation runs, the AliExpress sync), which acts off read-model rows the node
+   derived from that file and writes only at the version it loaded, or a claim of its
+   own, so the same refusal holds (the payments and AliExpress services hold no store
+   of their own: a shop and its company are read from the store their caller reads,
+   the node's file for these and through the cluster for a page); the store API's
+   connections; the shop's offers,
    codes and ways to ship on `GET /store/carts/{cart_id}` (the cart itself is the
    shopper's own stream, read through the cluster, and so is a line the node's catalog
    read model cannot sell, which the cart took after reading the store: a product put
    on sale or stock put back a moment ago) and the wait for the answer to a
-   request to pay; and what every request asks first, the session and its user, the
+   request to pay; and, read locally and asked of the cluster while the node does not
+   hold what they ask for (`LocalReads::first`), a shopper's request to pay and its
+   answer, the order their cart became, that order's parcels and documents (the order
+   itself, `GET /store/orders/{order_id}`, is read through the cluster: the storefront
+   sends the shopper back to it after their cancellation, whichever node took it), and
+   what every request asks first, the session and its user, the
    tenant, a storefront's key, which is asked of the cluster only before it turns the
-   request away (`LocalReads::first`: a sign-in, a tenant, an invitation accepted, a
-   key issued or a suspension lifted a moment ago on another node). A browser that may
+   request away (a sign-in, a tenant, an invitation accepted, a key issued or a
+   suspension lifted a moment ago on another node). A browser that may
    have written a moment ago reads those through the cluster (`reads.rs`: the answer
    to any post, and any redirect, which is how the sign-in and connection callbacks
    end, sets the `timada_wrote` cookie for ten seconds), so the page a form sends it

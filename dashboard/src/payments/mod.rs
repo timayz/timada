@@ -47,7 +47,6 @@ pub use unanswered::*;
 use timada_orders::{OrderState, PROVIDER_STRIPE};
 use timada_tenancy::{CompanyState, TenantState};
 
-use crate::cluster::Executor;
 use crate::seal::Sealer;
 
 /// Who the dashboard's own payment events say did them.
@@ -92,25 +91,19 @@ impl std::fmt::Debug for Account {
 }
 
 /// The payments service: the provider, and the key to the tenants' secrets.
+/// It holds no store: a tenant and its company are read from the store its
+/// caller reads, a page's through the cluster, the background's from this
+/// node's file (#533).
 pub struct Payments {
     sealer: Option<Sealer>,
     pub gateway: Arc<dyn PaymentGateway>,
-    platform: Executor,
 }
 
 impl Payments {
     /// `sealer`: `None` turns payments off for every tenant (see
     /// [`payments_sealer`](crate::seal::payments_sealer)).
-    pub fn new(
-        sealer: Option<Sealer>,
-        gateway: Arc<dyn PaymentGateway>,
-        platform: Executor,
-    ) -> Self {
-        Self {
-            sealer,
-            gateway,
-            platform,
-        }
+    pub fn new(sealer: Option<Sealer>, gateway: Arc<dyn PaymentGateway>) -> Self {
+        Self { sealer, gateway }
     }
 
     /// Whether the operator enabled payments on this node.
@@ -208,16 +201,26 @@ impl Payments {
         }))
     }
 
-    /// The company a tenant sells as, once it has an identity.
-    pub async fn company_of(&self, tenant: &TenantState) -> anyhow::Result<Option<CompanyState>> {
-        timada_tenancy::Command(self.platform.clone())
+    /// The company a tenant sells as, once it has an identity, read from
+    /// `store`.
+    pub async fn company_of<E: evento::Executor + Clone>(
+        &self,
+        store: &E,
+        tenant: &TenantState,
+    ) -> anyhow::Result<Option<CompanyState>> {
+        timada_tenancy::Command(store.clone())
             .load_company_of(tenant)
             .await
     }
 
-    /// The tenant read from the platform store, unless it is suspended.
-    pub async fn active_tenant(&self, tenant_id: &str) -> anyhow::Result<Option<TenantState>> {
-        let tenant = timada_tenancy::Command(self.platform.clone())
+    /// The tenant read from the platform's streams in `store`, unless it is
+    /// suspended.
+    pub async fn active_tenant<E: evento::Executor + Clone>(
+        &self,
+        store: &E,
+        tenant_id: &str,
+    ) -> anyhow::Result<Option<TenantState>> {
+        let tenant = timada_tenancy::Command(store.clone())
             .load_tenant(tenant_id)
             .await?;
         Ok(tenant.filter(|tenant| !tenant.is_suspended()))
@@ -246,11 +249,7 @@ mod tests {
         async fn new() -> Self {
             let store = Evento::new(evento::Turso::in_memory_concurrent().await.unwrap());
             let provider = FakeGateway::new();
-            let payments = Payments::new(
-                Some(Sealer::new("payments", "secret")),
-                provider.clone(),
-                store.clone(),
-            );
+            let payments = Payments::new(Some(Sealer::new("payments", "secret")), provider.clone());
             let tenancy = timada_tenancy::Command(store.clone());
             let tenant = tenancy
                 .create_tenant(CreateTenant {
@@ -398,7 +397,7 @@ mod tests {
                 .unwrap(),
             OrderPayment::Unknown
         );
-        let off = Payments::new(None, checked.provider.clone(), checked.store.clone());
+        let off = Payments::new(None, checked.provider.clone());
         assert_eq!(
             off.order_payment(&checked.tenant, &real).await.unwrap(),
             OrderPayment::Unknown

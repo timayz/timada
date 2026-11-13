@@ -34,7 +34,9 @@ fn now() -> u64 {
 pub struct UnansweredCheckouts {
     /// The read models: the carts with a request unanswered.
     db: Db,
-    /// The store, every tenant's.
+    /// The store, every tenant's, read from this node's file: a refusal is
+    /// written at the version read, so one written over an answer given a
+    /// moment ago on another node is refused, and reads that answer back.
     store: Executor,
 }
 

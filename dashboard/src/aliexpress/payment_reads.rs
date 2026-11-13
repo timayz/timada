@@ -85,7 +85,11 @@ impl AliexpressGoods {
         if stale.is_empty() {
             return Ok(());
         }
-        let Some((tenant, company)) = self.aliexpress.connected_shop(tenant_id, now).await? else {
+        let Some((tenant, company)) = self
+            .aliexpress
+            .connected_shop(&self.store, tenant_id, now)
+            .await?
+        else {
             return Ok(());
         };
         let mut reads = JoinSet::new();

@@ -551,7 +551,6 @@ async fn harness_on<G: PaymentGateway + 'static>(
     let payments = Arc::new(Payments::new(
         Some(seal::Sealer::new("payments", SEAL_KEY)),
         stripe.clone(),
-        platform.clone(),
     ));
     let subscribed = payments.clone();
     let invoicing_platform = platform.clone();
@@ -2769,10 +2768,9 @@ async fn the_stripe_secrets_are_kept_sealed() {
             "another-secret-of-thirty-two-chars!",
         )),
         h.stripe.clone(),
-        h.platform.0.clone(),
     );
     assert!(other_node.account_of(&acme).is_err());
-    let disabled = Payments::new(None, h.stripe.clone(), h.platform.0.clone());
+    let disabled = Payments::new(None, h.stripe.clone());
     assert!(disabled.account_of(&acme).unwrap().is_none());
     h.finish().await;
 }

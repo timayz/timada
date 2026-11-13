@@ -151,7 +151,9 @@ pub struct Runner<E = Executor> {
     /// The read models: the runs, the listeners, the checkouts, the members
     /// to tell.
     db: Db,
-    /// The store, every tenant's.
+    /// The store, every tenant's, read from this node's file: a move is
+    /// written at the version the run was loaded at, so a node a moment
+    /// behind another's move writes nothing and leaves the run to it.
     store: E,
     mail: Arc<AppContext>,
     /// The dashboard's public address, for the links the notices carry.

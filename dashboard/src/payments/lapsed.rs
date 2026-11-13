@@ -57,7 +57,9 @@ fn now() -> u64 {
 pub struct LapsedCheckouts {
     /// The read models: the carts with a payment open.
     db: Db,
-    /// The store, every tenant's.
+    /// The store, every tenant's, read from this node's file: the provider
+    /// cancels a payment only while nobody confirmed it, and the cancellation
+    /// is recorded at the version read.
     store: Executor,
     payments: Arc<Payments>,
     /// Where the last sweep stopped in each tenant's carts, for the tenants
@@ -128,7 +130,7 @@ impl LapsedCheckouts {
     /// were last touched before the hold ran out; the write model says which
     /// payments are still open and when each was opened.
     async fn sweep_tenant(&self, tenant_id: &str, before: i64, now: u64) -> anyhow::Result<usize> {
-        let account = match self.payments.active_tenant(tenant_id).await? {
+        let account = match self.payments.active_tenant(&self.store, tenant_id).await? {
             Some(tenant) => self.payments.account_of(&tenant)?,
             None => None,
         };

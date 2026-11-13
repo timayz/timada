@@ -228,7 +228,7 @@ impl Aliexpress {
             tracing::error!(%tenant_id, %order_id, error = %err, "AliExpress forward failed");
             Refusal("Placing the order failed on our side; try again.".to_owned())
         };
-        let Some(tenant) = self.active_tenant(tenant_id).await.map_err(failed)? else {
+        let Some(tenant) = self.active_tenant(store, tenant_id).await.map_err(failed)? else {
             return Err(Refusal("The shop is suspended.".into()));
         };
         let Some(settings) = tenant.aliexpress.as_ref() else {
@@ -236,7 +236,7 @@ impl Aliexpress {
                 "Set what the shop buys on AliExpress first.".into(),
             ));
         };
-        let Some(company) = self.company_of(&tenant).await.map_err(failed)? else {
+        let Some(company) = self.company_of(store, &tenant).await.map_err(failed)? else {
             return Err(Refusal("Link the shop to its company first.".into()));
         };
         let Some(client) = self.client_of(&company).map_err(failed)? else {
@@ -1016,14 +1016,14 @@ async fn on_order_placed<E: Executor>(
     }
     let aliexpress: Arc<Aliexpress> = context.extract();
     let store: Store = context.extract();
-    let Some(merchant) = aliexpress.active_tenant(&event.tenant).await? else {
+    let Some(merchant) = aliexpress.active_tenant(&store.0, &event.tenant).await? else {
         return Ok(());
     };
     let wanted = merchant
         .aliexpress
         .as_ref()
         .is_some_and(|settings| settings.auto_forward)
-        && aliexpress.connected(&merchant).await?;
+        && aliexpress.connected(&store.0, &merchant).await?;
     if !wanted {
         return Ok(());
     }
@@ -1407,7 +1407,6 @@ mod tests {
                 Some(Sealer::new("aliexpress-test", "secret")),
                 &config,
                 false,
-                Evento::new(store.clone()),
                 Arc::new(crate::media::Quota::new(
                     crate::db::Db::from(store.clone()),
                     None,

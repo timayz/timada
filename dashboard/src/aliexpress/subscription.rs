@@ -158,7 +158,10 @@ async fn on_sync_requested<E: Executor>(
     // A store that fails here fails this read alone, or it would stop the
     // requests behind it: the merchant asks again, the sweep comes back.
     let read = async {
-        let Some((tenant, company)) = aliexpress.connected_shop(&event.tenant, now).await? else {
+        let Some((tenant, company)) = aliexpress
+            .connected_shop(&store.0, &event.tenant, now)
+            .await?
+        else {
             return Ok(());
         };
         aliexpress
@@ -214,7 +217,7 @@ async fn on_item_added<E: Executor>(
 
 /// Fetches, maps and imports one item: the draft's id and the links of its
 /// variants, or what the merchant reads about why there is none.
-async fn import<E: Executor>(
+async fn import<E: Executor + Clone>(
     aliexpress: &Aliexpress,
     media: Arc<Media>,
     tenant_id: &str,
@@ -226,13 +229,21 @@ async fn import<E: Executor>(
         tracing::error!(%tenant_id, %ae_product_id, error = %err, "AliExpress import failed");
         "The import failed on our side; try again.".to_owned()
     };
-    let Some(merchant) = aliexpress.active_tenant(tenant_id).await.map_err(failed)? else {
+    let Some(merchant) = aliexpress
+        .active_tenant(catalog.executor(), tenant_id)
+        .await
+        .map_err(failed)?
+    else {
         return Err("The shop is suspended.".into());
     };
     let Some(settings) = merchant.aliexpress.as_ref() else {
         return Err("Set what the shop buys on AliExpress first.".into());
     };
-    let Some(company) = aliexpress.company_of(&merchant).await.map_err(failed)? else {
+    let Some(company) = aliexpress
+        .company_of(catalog.executor(), &merchant)
+        .await
+        .map_err(failed)?
+    else {
         return Err("Link the shop to its company first.".into());
     };
     let Some(client) = aliexpress.client_of(&company).map_err(failed)? else {

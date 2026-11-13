@@ -29,9 +29,13 @@
 //! hands out the same store read from this node's file as it stands,
 //! [`LocalReads`], for the reads that need no such round (#466): the
 //! subscriptions, whose handlers read what is already behind the event they
-//! handle; the storefronts' reads over the store API; and what every request
-//! asks first (who it is, its tenant, its key), read locally and asked of the
-//! cluster only before it turns the request away ([`LocalReads::first`]).
+//! handle; the timers, which act off read-model rows derived from this file
+//! and write only at the version they loaded (#533); the storefronts' reads
+//! over the store API; and, read locally and asked of the cluster only when
+//! that answer cannot stand ([`LocalReads::first`]), what every request asks
+//! first (who it is, its tenant, its key), asked before it turns the request
+//! away, and a shopper's request to pay and their order, asked while this
+//! node does not hold them.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -283,6 +287,44 @@ pub fn share_of(cluster: &Arc<Cluster>) -> ShareOf {
         let (index, of) = live_place(&cluster, LIVE_WITHIN, among);
         timada_core::Share { index, of }
     })
+}
+
+/// A node behind its peers, for the tests of what is read from its file.
+#[cfg(test)]
+pub mod lagging {
+    use evento::Evento;
+
+    use super::LocalReads;
+
+    /// Every event of `store`, in the order they were written.
+    pub async fn events(store: &evento::Turso) -> Vec<evento::Event> {
+        use evento::Executor as _;
+        store
+            .read(
+                None,
+                None,
+                evento::TenantFilter::All,
+                evento::cursor::Args::forward(1000, None),
+                None,
+            )
+            .await
+            .unwrap()
+            .edges
+            .into_iter()
+            .map(|edge| edge.node)
+            .collect()
+    }
+
+    /// A node that holds the first `n` events of `store` alone, in a file of
+    /// its own: behind it by the others.
+    pub async fn behind(store: &evento::Turso, n: usize) -> LocalReads {
+        use evento::Executor as _;
+        let node = evento::Turso::in_memory_concurrent().await.unwrap();
+        for event in events(store).await.into_iter().take(n) {
+            node.write(vec![event]).await.unwrap();
+        }
+        LocalReads(Evento::new(node))
+    }
 }
 
 #[cfg(test)]

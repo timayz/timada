@@ -4,7 +4,8 @@
 //! told so and copies the store back at its next start, a node at its write
 //! backlog refuses writes, the nodes up know who they are, a key cut off
 //! through one node loses its store connections on another, and a node
-//! alone still serves the reads that need no quorum.
+//! alone still serves the reads that need no quorum: a storefront's key and
+//! catalog, a shopper's answered request to pay and their order.
 //!
 //! The dashboard is a binary crate, so the runtime is reached through the
 //! binary's own test harness (`#[path]` includes of the modules under test),
@@ -25,6 +26,8 @@ mod media;
 mod read_only_store;
 #[path = "../src/store_api.rs"]
 mod store_api;
+#[path = "../src/store_carts.rs"]
+mod store_carts;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -667,10 +670,88 @@ async fn reads_product(client: &Client, product_id: &str) -> Result<usize, Strin
         .map_err(|err| format!("{err:#}"))
 }
 
+/// A cart of a mug through node 0, asked to be paid for and refused, and
+/// the order a cart of it became: the cart's id, the request's, and the
+/// order's.
+async fn a_shoppers_cart(
+    node: &Node,
+    tenant: &timada_tenancy::TenantState,
+) -> (String, String, String) {
+    use timada_orders::{CartItem, Checkout, STOREFRONT_ACTOR, ShippingAddress};
+    let mug = create_product(node, tenant, "Mug").await;
+    let catalog = node.catalog(tenant);
+    catalog
+        .price_product("alice", &mug.id, 1250, "EUR")
+        .await
+        .unwrap();
+    catalog.publish_product("alice", &mug.id).await.unwrap();
+    let orders = store_carts::gateway(node.store.clone(), &tenant.id);
+    let item = CartItem {
+        product_id: mug.id.clone(),
+        variant_id: None,
+        quantity: 1,
+    };
+    let cart_id = orders
+        .start_cart(STOREFRONT_ACTOR, item.clone())
+        .await
+        .unwrap();
+    let checkout = Checkout {
+        email: "ada@example.org".into(),
+        shipping: ShippingAddress {
+            name: "Ada Lovelace".into(),
+            line1: "1 rue de la Paix".into(),
+            postal_code: "75002".into(),
+            city: "Paris".into(),
+            country: "FR".into(),
+            phone: Some("06 12 34 56 78".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let request_id = orders
+        .request_checkout(STOREFRONT_ACTOR, &cart_id, checkout)
+        .await
+        .unwrap();
+    assert!(
+        orders
+            .refuse_payment_request(
+                "timada-dashboard",
+                &cart_id,
+                &request_id,
+                "payments_unavailable"
+            )
+            .await
+            .unwrap()
+    );
+    let order_id = timada_orders::order_id(&cart_id);
+    evento::append(&order_id)
+        .tenant(&tenant.id)
+        .original_version(0)
+        .event(&timada_orders::aggregator::Placed {
+            reference: "K7Q4-MZP2".into(),
+            cart_id: cart_id.clone(),
+            email: "ada@example.org".into(),
+            shipping: Default::default(),
+            note: None,
+            lines: Vec::new(),
+            currency: "EUR".into(),
+            total_cents: 1250,
+            payment: Default::default(),
+            supplier: None,
+            placed_by: STOREFRONT_ACTOR.into(),
+        })
+        .commit(&node.store)
+        .await
+        .unwrap();
+    (cart_id, request_id, order_id)
+}
+
 /// A node whose peers are away still checks a storefront's key and serves
-/// its reads, from its own file (#466). A read of one aggregate through the
-/// store waits for a quorum instead, and fails without one; so does a key
-/// the node does not know, which is asked of the cluster before it is
+/// its reads, from its own file (#466), and answers the shopper's request to
+/// pay once it holds the answer, and the order their cart became (#533). A
+/// read of one aggregate through the store waits for a quorum instead, and
+/// fails without one; so does a key the node does not know, or a request or
+/// an order it does not hold, which are asked of the cluster before they are
 /// refused.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_node_alone_checks_keys_and_serves_storefronts_from_its_own_file() {
@@ -691,10 +772,22 @@ async fn a_node_alone_checks_keys_and_serves_storefronts_from_its_own_file() {
         .await
         .unwrap();
     let mug = create_product(&nodes[0], &acme, "Mug").await;
+    let (cart_id, request_id, order_id) = a_shoppers_cart(&nodes[0], &acme).await;
     let api = StoreApi::start(&nodes[1]).await;
     let client = api.connect(&key.token).await;
     eventually("node 1 holds the mug", async || {
         reads_product(&client, &mug.id).await == Ok(1)
+    })
+    .await;
+    let here = timada_orders::Command::new(nodes[1].local.0.clone(), &acme.id);
+    eventually("node 1 holds the answer and the order", async || {
+        let answered = here
+            .load_cart(&cart_id)
+            .await
+            .unwrap()
+            .and_then(|cart| cart.request(&request_id).cloned())
+            .is_some_and(|request| request.answer.is_some());
+        answered && here.load_order(&order_id).await.unwrap().is_some()
     })
     .await;
 
@@ -710,11 +803,36 @@ async fn a_node_alone_checks_keys_and_serves_storefronts_from_its_own_file() {
     let alone = api.connect(&key.token).await;
     assert_eq!(reads_product(&alone, &mug.id).await, Ok(1));
     assert_eq!(reads_product(&client, &mug.id).await, Ok(1));
+    let orders = store_carts::gateway(n1.store.clone(), &acme.id);
+    let (status, answer) = store_carts::request(&orders, &n1.local, &cart_id, &request_id)
+        .await
+        .unwrap();
+    assert_eq!(status, topcoat::router::StatusCode::OK, "{answer}");
+    let answer: timada_orders::wire::RequestAnswer = serde_json::from_value(answer).unwrap();
+    assert_eq!(
+        answer.answer,
+        Some(timada_orders::PaymentAnswer::Refused(
+            "payments_unavailable".into()
+        ))
+    );
+    let (status, order) = store_carts::order_of_cart(&orders, &n1.local, &cart_id)
+        .await
+        .unwrap();
+    assert_eq!(status, topcoat::router::StatusCode::OK, "{order}");
+    assert_eq!(order["id"], order_id.as_str());
+    for read in [
+        store_carts::parcels(&orders, &n1.local, &order_id).await,
+        store_carts::documents(&orders, &n1.local, &order_id).await,
+    ] {
+        assert_eq!(read.unwrap().0, topcoat::router::StatusCode::OK);
+    }
 
     let platform = Command(n1.store.clone());
-    let (through_store, unknown) = tokio::join!(
+    let (through_store, unknown, no_request, no_order) = tokio::join!(
         platform.load_tenant(&acme.id),
         store_api::authenticate(&n1.local, &n1.store, "tk_nobody"),
+        store_carts::request(&orders, &n1.local, &cart_id, "no-such-request"),
+        store_carts::order_of_cart(&orders, &n1.local, "01J00000000000000000000000"),
     );
     assert!(
         through_store.is_err(),
@@ -724,6 +842,16 @@ async fn a_node_alone_checks_keys_and_serves_storefronts_from_its_own_file() {
         matches!(&unknown, Err(err) if !matches!(err, TenancyError::ApiKeyInvalid)),
         "an unknown key is asked of the cluster before it is refused: {:?}",
         unknown.map(|access| access.key.id)
+    );
+    assert!(
+        no_request.is_err(),
+        "a request the node does not hold is asked of the cluster: {:?}",
+        no_request.map(|(status, _)| status)
+    );
+    assert!(
+        no_order.is_err(),
+        "an order the node does not hold is asked of the cluster: {:?}",
+        no_order.map(|(status, _)| status)
     );
 
     drop((client, alone));

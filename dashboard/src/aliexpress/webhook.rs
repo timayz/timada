@@ -124,7 +124,7 @@ pub(super) async fn check<E: evento::Executor + Clone>(
     said: Said,
     now: u64,
 ) -> anyhow::Result<()> {
-    let Some((tenant, company)) = aliexpress.connected_shop(tenant_id, now).await? else {
+    let Some((tenant, company)) = aliexpress.connected_shop(&store, tenant_id, now).await? else {
         return Ok(());
     };
     let closed = match &said {
@@ -334,7 +334,6 @@ mod tests {
             Some(Sealer::new("aliexpress-test", "secret")),
             &config,
             true,
-            Evento::new(store.clone()),
             Arc::new(crate::media::Quota::new(
                 crate::db::Db::from(store.clone()),
                 None,

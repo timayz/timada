@@ -2369,11 +2369,15 @@ async fn dispatch(
             None => store_carts::bad_request(),
         },
         ("GET", ["store", "carts", id, "requests", request_id]) => {
-            store_carts::request(orders, id, request_id).await?
+            store_carts::request(orders, local, id, request_id).await?
         }
-        ("GET", ["store", "carts", id, "order"]) => store_carts::order_of_cart(orders, id).await?,
+        ("GET", ["store", "carts", id, "order"]) => {
+            store_carts::order_of_cart(orders, local, id).await?
+        }
         ("GET", ["store", "orders", id]) => store_carts::order(orders, id).await?,
-        ("GET", ["store", "orders", id, "documents"]) => store_carts::documents(orders, id).await?,
+        ("GET", ["store", "orders", id, "documents"]) => {
+            store_carts::documents(orders, local, id).await?
+        }
         _ => (StatusCode::NOT_FOUND, json!({ "error": "no_such_route" })),
     })
 }
@@ -2435,7 +2439,7 @@ async fn the_dashboard_answers_for_one_cart_or_order_of_the_key_tenant() {
         store_carts::add_item(&globex_orders, &cart_id, item.clone())
             .await
             .unwrap(),
-        store_carts::request(&globex_orders, &cart_id, "req")
+        store_carts::request(&globex_orders, &h.local, &cart_id, "req")
             .await
             .unwrap(),
     ] {
@@ -2445,7 +2449,7 @@ async fn the_dashboard_answers_for_one_cart_or_order_of_the_key_tenant() {
         );
     }
     // The request to pay is Acme's cart's too: its request is not Globex's.
-    let (status, _) = store_carts::request(&acme_orders, &cart_id, "req")
+    let (status, _) = store_carts::request(&acme_orders, &h.local, &cart_id, "req")
         .await
         .unwrap();
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -2472,10 +2476,10 @@ async fn the_dashboard_answers_for_one_cart_or_order_of_the_key_tenant() {
     for (status, answer) in [
         store_carts::order(&globex_orders, "order-1").await.unwrap(),
         store_carts::order(&acme_orders, "order-2").await.unwrap(),
-        store_carts::order_of_cart(&acme_orders, &cart_id)
+        store_carts::order_of_cart(&acme_orders, &h.local, &cart_id)
             .await
             .unwrap(),
-        store_carts::order_of_cart(&globex_orders, "cart-order-1")
+        store_carts::order_of_cart(&globex_orders, &h.local, "cart-order-1")
             .await
             .unwrap(),
     ] {

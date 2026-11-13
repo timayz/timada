@@ -115,7 +115,9 @@ pub struct NewsletterSends {
     /// The read models: the campaigns, the editions, the subscribers, the
     /// catalog a campaign shows.
     db: Db,
-    /// The store, every tenant's.
+    /// The store, every tenant's, read from this node's file: a mail goes
+    /// out only once its delivery is claimed, a stream of its own, and a
+    /// campaign or an edition is finished at the version read.
     store: Executor,
     mail: Arc<AppContext>,
     /// Every tenant's keys, which open the subscribers' addresses.
