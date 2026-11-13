@@ -442,6 +442,80 @@ async fn a_revocation_racing_an_acceptance_lets_one_of_them_win() {
 }
 
 #[tokio::test]
+async fn a_link_used_while_its_mail_is_recorded_is_decided_on_the_fresh_stream() {
+    let (store, _) = executor_with_pool().await;
+    let cmd = Command(store.clone());
+    let alice = new_id();
+    let (tenant, sent) = acme_with_invitation(&cmd, &alice).await;
+    let bob = new_id();
+    let node_a = Claimant {
+        node: "node-a",
+        now: NOW,
+    };
+    cmd.claim_invitation_mail(&tokens(), &sent.invitation.id, node_a)
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+
+    // The mail reached Bob, who followed the link before node-a recorded the
+    // send: his acceptance is held at the invitation while the record lands.
+    let rigged = Rigged::new(store.clone()).hold_first::<Invitation>();
+    let held = Command(rigged.clone());
+    let (token, user) = (sent.token.clone(), bob.clone());
+    let accepting =
+        tokio::spawn(async move { held.accept_invitation(accept(&token, &user), NOW + 1).await });
+    rigged.parked().await;
+    Command(rigged)
+        .record_invitation_mail_sent(&sent.invitation.id)
+        .await
+        .unwrap();
+    let joined = accepting.await.unwrap().unwrap();
+    assert!(!joined.seat_pending);
+    assert_eq!(joined.tenant.role_of(&bob), Some("support"));
+    let invitation = cmd
+        .load_invitation(&sent.invitation.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(invitation.accepted_by, Some(bob));
+    assert_eq!(invitation.mail, timada_core::Sending::Sent);
+
+    // Withdrawn while node-a takes the send of the next one: the revocation
+    // stands.
+    let sent = cmd
+        .invite_member(
+            &tokens(),
+            &alice,
+            invite(&tenant.id, "carol@example.com", "support"),
+            NOW,
+        )
+        .await
+        .unwrap();
+    let rigged = Rigged::new(store.clone()).hold_first::<Invitation>();
+    let held = Command(rigged.clone());
+    let (actor, invitation) = (alice.clone(), sent.invitation.id.clone());
+    let revoking =
+        tokio::spawn(async move { held.revoke_invitation(&actor, &invitation, NOW + 1).await });
+    rigged.parked().await;
+    let node_a = Claimant {
+        node: "node-a",
+        now: NOW + 1,
+    };
+    Command(rigged)
+        .claim_invitation_mail(&tokens(), &sent.invitation.id, node_a)
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+    revoking.await.unwrap().unwrap();
+    let invitation = cmd
+        .load_invitation(&sent.invitation.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(invitation.revoked);
+}
+
+#[tokio::test]
 async fn the_subscription_grants_the_seat_a_crash_left_owed() {
     let (store, _) = executor_with_pool().await;
     let cmd = Command(store.clone());
