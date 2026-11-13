@@ -21,13 +21,14 @@ use topcoat::{
     router::{StatusCode, header::AUTHORIZATION, request::headers},
 };
 
-use crate::app::tenants::tenancy;
-use crate::cluster::Executor;
+use crate::cluster::{Executor, LocalReads};
 
 /// The storefront behind a request: its key (`Authorization: Bearer tk_…`)
 /// names the tenant and must allow `store:checkout`. `Err` is the status to
 /// answer: 401 for a missing, unknown or revoked key, 403 for a key that may
-/// not sell, 503 for a suspended tenant.
+/// not sell, 503 for a suspended tenant. Every call asks, so the key is read
+/// from this node's file and asked of the cluster only before it is refused
+/// ([`crate::store_api::authenticate`]).
 pub async fn storefront(cx: &Cx) -> Result<std::result::Result<ApiKeyAccess, StatusCode>> {
     let token = headers(cx)
         .get(AUTHORIZATION)
@@ -37,7 +38,13 @@ pub async fn storefront(cx: &Cx) -> Result<std::result::Result<ApiKeyAccess, Sta
     let Some(token) = token else {
         return Ok(Err(StatusCode::UNAUTHORIZED));
     };
-    let access = match tenancy(cx).authenticate_api_key(token).await {
+    let access = match crate::store_api::authenticate(
+        app_context::<LocalReads>(cx),
+        app_context::<Executor>(cx),
+        token,
+    )
+    .await
+    {
         Ok(access) => access,
         Err(TenancyError::ApiKeyInvalid) => return Ok(Err(StatusCode::UNAUTHORIZED)),
         Err(TenancyError::Suspended) => return Ok(Err(StatusCode::SERVICE_UNAVAILABLE)),

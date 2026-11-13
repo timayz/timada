@@ -37,7 +37,7 @@ use webauthn_rs::prelude::Webauthn;
 use crate::auth::oidc::Providers;
 use crate::authz::Authorizer;
 use crate::cluster::Cluster;
-use crate::cluster::Executor;
+use crate::cluster::{Executor, LocalReads};
 use crate::components::avatar::{AvatarSize, avatar, avatar_fallback};
 use crate::components::badge::{BadgeVariant, badge};
 use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
@@ -66,6 +66,9 @@ pub struct WebhookSealing(pub Option<crate::seal::WebhookKeys>, pub bool);
 /// Everything the pages reach through the app context.
 pub struct Services {
     pub executor: Executor,
+    /// The same store read from this node's file, for what every request
+    /// asks first (`crate::reads`).
+    pub local: LocalReads,
     /// The read models in the store's database.
     pub db: Db,
     pub providers: Providers,
@@ -109,6 +112,7 @@ pub struct Services {
 pub fn router(services: Services) -> Router {
     let Services {
         executor,
+        local,
         db,
         providers,
         webauthn,
@@ -167,6 +171,10 @@ pub fn router(services: Services) -> Router {
         .base_url(config.server.url.as_str())
         // Validated by `Config::load`; `networks` panics on a bad entry.
         .trusted_proxies(TrustedProxies::new().networks(config.server.trusted_proxies.iter()))
+        // Which browsers wrote a moment ago (`crate::reads`). Registered
+        // before the cookie layer, so it runs inside it and what it adds is
+        // written on the response.
+        .layer(crate::reads::MarkWrites)
         .cookies()
         .sessions(
             SessionConfig::builder()
@@ -176,6 +184,7 @@ pub fn router(services: Services) -> Router {
         // Encrypts the in-flight sign-in cookies (`private_cookies`).
         .app_context(Key::derive_from(config.auth.secret_key.as_bytes()))
         .app_context(executor)
+        .app_context(local)
         .app_context(db)
         .app_context(providers)
         .app_context(webauthn)

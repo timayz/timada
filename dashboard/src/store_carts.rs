@@ -29,7 +29,7 @@ use timada_orders::wire::{CartAnswer, Refusal, RequestAnswer, Started};
 use timada_orders::{CartItem, CatalogReadModel, Checkout, Command, OrderError, STOREFRONT_ACTOR};
 use topcoat::router::StatusCode;
 
-use crate::cluster::Executor;
+use crate::cluster::{Executor, LocalReads};
 use crate::db::Db;
 
 /// How long a request to pay waits for the payments subscription's answer
@@ -86,20 +86,29 @@ pub fn refused(err: OrderError) -> anyhow::Result<Answer> {
 
 /// `GET /store/carts/{cart_id}`: the cart priced as it stands, with the
 /// shop's shipping methods ([`CartAnswer`]), or 404. The cart is the
-/// shopper's own stream (what they just put in it shows at once); its lines
-/// are priced from the catalog's read model (`db`), a moment behind the
-/// store, which the payment's exact pricing guards: a price that moved in
-/// between is refused as `price_changed`, never charged unseen.
-pub async fn cart(orders: &Command<Executor>, db: &Db, cart_id: &str) -> anyhow::Result<Answer> {
+/// shopper's own stream, read through the cluster (what they just put in it
+/// shows at once, whichever node took it); its lines are priced from the
+/// catalog's read model (`db`), a moment behind the store, which the
+/// payment's exact pricing guards: a price that moved in between is refused
+/// as `price_changed`, never charged unseen. So the shop's offers, its codes
+/// and its ways to ship, which no shopper writes, are read from this node's
+/// file (`local`).
+pub async fn cart(
+    orders: &Command<Executor>,
+    local: &LocalReads,
+    db: &Db,
+    cart_id: &str,
+) -> anyhow::Result<Answer> {
     let Some(cart) = orders.load_cart(cart_id).await? else {
         return Ok(not_found("cart_not_found"));
     };
+    let shop = Command::new(local.0.clone(), orders.tenant());
     let catalog = CatalogReadModel::new(db, orders.tenant());
-    let quote = match orders.quote_from(&cart, &catalog).await {
+    let quote = match shop.quote_from(&cart, &catalog).await {
         Ok(quote) => quote,
         Err(err) => return refused(err),
     };
-    let shipping_methods = orders.shipping_methods().await?;
+    let shipping_methods = shop.shipping_methods().await?;
     ok(&CartAnswer {
         cart,
         quote,
@@ -174,8 +183,14 @@ pub async fn remove_discount(orders: &Command<Executor>, cart_id: &str) -> anyho
 /// and waits up to [`PAYMENT_ANSWER_TIMEOUT`] for the payments subscription
 /// to open a payment or refuse; answers the request and what it got
 /// ([`RequestAnswer`], its `answer` `None` when nobody answered in time).
+///
+/// The answer is written on whichever node takes the request and wakes this
+/// node's write watch once applied here, so the cart is looked at in this
+/// node's file (`local`) while waiting, every write in the store waking the
+/// loop, and through the cluster once more before nobody answered.
 pub async fn checkout(
     orders: &Command<Executor>,
+    local: &LocalReads,
     cart_id: &str,
     checkout: Checkout,
 ) -> anyhow::Result<Answer> {
@@ -186,15 +201,19 @@ pub async fn checkout(
         Ok(id) => id,
         Err(err) => return refused(err),
     };
+    let waiting = Command::new(local.0.clone(), orders.tenant());
     let mut watch = evento::Executor::write_watch(orders.executor());
     let deadline = tokio::time::Instant::now() + PAYMENT_ANSWER_TIMEOUT;
     loop {
-        let cart = orders.load_cart(cart_id).await?;
+        let last = tokio::time::Instant::now() >= deadline;
+        let cart = if last { orders } else { &waiting }
+            .load_cart(cart_id)
+            .await?;
         let answer = cart
             .as_ref()
             .and_then(|cart| cart.request(&request_id))
             .and_then(|request| request.answer.clone());
-        if answer.is_some() || tokio::time::Instant::now() >= deadline {
+        if answer.is_some() || last {
             if answer.is_none() {
                 tracing::warn!(cart_id, request_id, "no answer to a request to pay");
             }

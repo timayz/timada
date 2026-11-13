@@ -13,6 +13,12 @@
 //! refused. Each node holds its own connections: the page that took the
 //! request ends its node's at once, and [`closing_subscription`], started
 //! before the listener, the other nodes'.
+//!
+//! The key and its tenant are read from this node's file, and asked of the
+//! cluster only before they turn the connection away ([`authenticate`]);
+//! what a connection reads is read from this node's file too
+//! ([`LocalReads`]): the catalog a storefront copies is behind the store
+//! anyway, and what the connection wrote itself this node has applied.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -28,7 +34,7 @@ use evento::subscription::{Context, SubscriptionBuilder};
 use timada_tenancy::aggregator::Suspended;
 use timada_tenancy::aggregator::api_key::{Revoked, Scoped};
 use timada_tenancy::{
-    Command, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenancyError,
+    ApiKeyAccess, Command, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenancyError,
 };
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -37,7 +43,7 @@ use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::{self, ServerConfig};
 
-use crate::cluster::Executor;
+use crate::cluster::{Executor, LocalReads};
 use crate::config::StoreApiConfig;
 
 /// One live connection: its key, its tenant, and how to end it.
@@ -154,10 +160,31 @@ impl Drop for ConnectionGuard {
     }
 }
 
+/// The key and tenant a presented token opens. Every store connection and
+/// every call of a storefront asks, so they are read from this node's file
+/// ([`LocalReads::first`]); a refusal (a key unknown or revoked, the tenant
+/// suspended) is asked of the cluster before it stands: a key created, or a
+/// suspension lifted, a moment ago on another node.
+pub async fn authenticate(
+    local: &LocalReads,
+    store: &Executor,
+    token: &str,
+) -> Result<ApiKeyAccess, TenancyError> {
+    local
+        .first(
+            store,
+            |store| async move { Command(store).authenticate_api_key(token).await },
+            std::result::Result::is_ok,
+        )
+        .await
+}
+
 /// Turns a key's token into a session in the key's tenant, for one
 /// connection.
 struct StoreResolver {
     store: Executor,
+    /// What the key is checked against and the connection reads.
+    local: LocalReads,
     connections: Arc<StoreConnections>,
 }
 
@@ -170,10 +197,7 @@ impl Resolver for StoreResolver {
             tracing::warn!(peer = %hello.peer, "store connection refused: no key");
             return Err(Rejection::Unauthorized);
         };
-        let access = match Command(self.store.clone())
-            .authenticate_api_key(token)
-            .await
-        {
+        let access = match authenticate(&self.local, &self.store, token).await {
             Ok(access) => access,
             Err(TenancyError::ApiKeyInvalid) => {
                 tracing::warn!(peer = %hello.peer, "store connection refused: unknown or revoked key");
@@ -196,12 +220,13 @@ impl Resolver for StoreResolver {
         }
         let can_write = access.key.allows(SCOPE_STORE_WRITE);
         let can_sell = access.key.allows(SCOPE_STORE_CHECKOUT);
+        let store = self.local.0.clone();
         let executor = if can_write {
-            self.store.clone()
+            store
         } else if can_sell {
-            crate::read_only_store::checkout_only(self.store.clone())
+            crate::read_only_store::checkout_only(store)
         } else {
-            crate::read_only_store::read_only(self.store.clone())
+            crate::read_only_store::read_only(store)
         };
         let session = Session::new(executor)
             .tenant(&access.tenant.id)
@@ -353,9 +378,11 @@ async fn on_tenant_suspended<E: evento::Executor>(
 }
 
 /// Binds the store API and serves it; `None` when the section is absent.
+/// `local` is the same store as `store`, read from this node's file.
 pub async fn serve(
     config: Option<&StoreApiConfig>,
     store: Executor,
+    local: LocalReads,
     connections: Arc<StoreConnections>,
 ) -> Result<Option<ServerHandle>> {
     let Some(config) = config else {
@@ -365,7 +392,11 @@ pub async fn serve(
         .await
         .with_context(|| format!("cannot bind the store API on {}", config.listen))?;
     let addr = listener.local_addr()?;
-    let resolver = StoreResolver { store, connections };
+    let resolver = StoreResolver {
+        store,
+        local,
+        connections,
+    };
     let handle = match config.tls() {
         Some((cert, key)) => {
             let acceptor = tls_acceptor(cert, key)?;
@@ -399,7 +430,154 @@ fn tls_acceptor(cert: &Path, key: &Path) -> Result<TlsAcceptor> {
 
 #[cfg(test)]
 mod tests {
+    use evento::Evento;
+    use timada_tenancy::{CreateApiKey, CreateTenant};
+
     use super::*;
+
+    /// Tenant acme and a key that may read its catalog, in `store`.
+    struct Acme {
+        store: evento::Turso,
+        tenant_id: String,
+        token: String,
+        /// How many events the store held before the key was issued.
+        before_the_key: usize,
+    }
+
+    async fn acme() -> Acme {
+        let store = evento::Turso::in_memory_concurrent().await.unwrap();
+        let platform = Command(Evento::new(store.clone()));
+        let tenant = platform
+            .create_tenant(CreateTenant {
+                name: "Acme".into(),
+                owner_user_id: "alice".into(),
+            })
+            .await
+            .unwrap();
+        let before_the_key = events(&store).await.len();
+        let key = platform
+            .create_api_key(
+                "alice",
+                CreateApiKey {
+                    tenant_id: tenant.id.clone(),
+                    label: "Shop".into(),
+                    scopes: vec![SCOPE_STORE_READ.to_owned()],
+                },
+                1_800_000_000,
+            )
+            .await
+            .unwrap();
+        Acme {
+            store,
+            tenant_id: tenant.id,
+            token: key.token,
+            before_the_key,
+        }
+    }
+
+    /// Every event of `store`, in the order they were written.
+    async fn events(store: &evento::Turso) -> Vec<evento::Event> {
+        use evento::Executor as _;
+        store
+            .read(
+                None,
+                None,
+                evento::TenantFilter::All,
+                evento::cursor::Args::forward(1000, None),
+                None,
+            )
+            .await
+            .unwrap()
+            .edges
+            .into_iter()
+            .map(|edge| edge.node)
+            .collect()
+    }
+
+    /// A node `n` events behind `store`: its first `n` events, in a file of
+    /// its own.
+    async fn behind(store: &evento::Turso, n: usize) -> LocalReads {
+        use evento::Executor as _;
+        let node = evento::Turso::in_memory_concurrent().await.unwrap();
+        for event in events(store).await.into_iter().take(n) {
+            node.write(vec![event]).await.unwrap();
+        }
+        LocalReads(Evento::new(node))
+    }
+
+    /// A key issued on another node a moment ago, which this node has not
+    /// applied yet, is asked of the cluster before it is refused.
+    #[tokio::test]
+    async fn a_key_this_node_has_not_got_yet_is_asked_of_the_cluster() {
+        let acme = acme().await;
+        let local = behind(&acme.store, acme.before_the_key).await;
+        assert!(matches!(
+            Command(local.0.clone())
+                .authenticate_api_key(&acme.token)
+                .await,
+            Err(TenancyError::ApiKeyInvalid)
+        ));
+
+        let access = authenticate(&local, &Evento::new(acme.store.clone()), &acme.token)
+            .await
+            .unwrap();
+        assert_eq!(access.tenant.id, acme.tenant_id);
+    }
+
+    /// A key this node holds is answered from its file, the cluster not
+    /// asked: here it knows nothing, and would refuse the key.
+    #[tokio::test]
+    async fn a_key_this_node_holds_is_answered_from_its_file() {
+        let acme = acme().await;
+        let nothing = Evento::new(evento::Turso::in_memory_concurrent().await.unwrap());
+
+        let access = authenticate(
+            &LocalReads(Evento::new(acme.store.clone())),
+            &nothing,
+            &acme.token,
+        )
+        .await
+        .unwrap();
+        assert_eq!(access.tenant.id, acme.tenant_id);
+    }
+
+    /// A tenant suspended on this node, its suspension lifted on another a
+    /// moment ago, is asked of the cluster before the key is refused.
+    #[tokio::test]
+    async fn a_suspension_lifted_on_another_node_is_asked_of_the_cluster() {
+        let acme = acme().await;
+        let platform = Command(Evento::new(acme.store.clone()));
+        platform
+            .suspend_tenant(&acme.tenant_id, "unpaid")
+            .await
+            .unwrap();
+        let suspended = events(&acme.store).await.len();
+        platform.resume_tenant(&acme.tenant_id).await.unwrap();
+        let local = behind(&acme.store, suspended).await;
+        assert!(matches!(
+            Command(local.0.clone())
+                .authenticate_api_key(&acme.token)
+                .await,
+            Err(TenancyError::Suspended)
+        ));
+
+        let access = authenticate(&local, &Evento::new(acme.store.clone()), &acme.token)
+            .await
+            .unwrap();
+        assert_eq!(access.tenant.id, acme.tenant_id);
+    }
+
+    /// A key nobody issued stays refused once the cluster says so too.
+    #[tokio::test]
+    async fn a_key_nobody_issued_is_refused() {
+        let acme = acme().await;
+        let store = Evento::new(acme.store.clone());
+
+        assert!(matches!(
+            authenticate(&LocalReads(store.clone()), &store, "tk_nobody").await,
+            Err(TenancyError::ApiKeyInvalid)
+        ));
+    }
 
     /// A store holding one scope change of key `k1`, written now.
     async fn store_with_a_scope_change() -> evento::Turso {

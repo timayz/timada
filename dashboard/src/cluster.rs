@@ -22,7 +22,18 @@
 //! found to be an older copy of itself is marked the same way, journal
 //! included. The `rejoin` command sets the mark by hand, for a store that
 //! was lost.
+//!
+//! With peers, a read of one aggregate through the store waits behind a read
+//! barrier, a consensus round with a quorum, so it reflects every write that
+//! committed before it began, whichever node took the write. [`open`] also
+//! hands out the same store read from this node's file as it stands,
+//! [`LocalReads`], for the reads that need no such round (#466): the
+//! subscriptions, whose handlers read what is already behind the event they
+//! handle; the storefronts' reads over the store API; and what every request
+//! asks first (who it is, its tenant, its key), read locally and asked of the
+//! cluster only before it turns the request away ([`LocalReads::first`]).
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,6 +51,48 @@ use crate::db::Store;
 /// The store: the cluster over this node's file (see [`Store`]). Type-erased
 /// by [`Evento`], which also carries the node's default routing key.
 pub type Executor = Evento;
+
+/// The store read from this node's own file as it stands: a read of one
+/// aggregate waits for no consensus round, so it may miss a write another
+/// node committed a moment ago (evento's `ClusterExecutor::local_reads`).
+/// Writes go through the cluster as they do through [`Executor`]. A node
+/// reads its own writes either way: a write returns once this node applied
+/// it.
+#[derive(Clone)]
+pub struct LocalReads(pub Executor);
+
+impl std::ops::Deref for LocalReads {
+    type Target = Executor;
+
+    fn deref(&self) -> &Executor {
+        &self.0
+    }
+}
+
+impl LocalReads {
+    /// Reads with this node's file first, and keeps that answer when
+    /// `settled` says it may stand; otherwise reads again through `store`,
+    /// the cluster. For what turns a request away when missing (a session, a
+    /// key, a tenant that lists the member): what another node wrote a
+    /// moment ago, a sign-in whose redirect landed here, is waited for
+    /// before the request is refused.
+    pub async fn first<T, F, Fut>(
+        &self,
+        store: &Executor,
+        read: F,
+        settled: impl FnOnce(&T) -> bool,
+    ) -> T
+    where
+        F: Fn(Executor) -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let answer = read(self.0.clone()).await;
+        if settled(&answer) {
+            return answer;
+        }
+        read(store.clone()).await
+    }
+}
 
 /// Where the host keeps what it knows about the store at `store`: the
 /// directory the store's file is in.
@@ -106,13 +159,16 @@ pub fn clear_catch_up_mark(store: &Path) -> Result<()> {
 /// models are dropped and recreated, and the node opens by joining: a
 /// peer's store is installed page by page before anything is served. The
 /// mark stays when the copy fails, so the next start tries again.
+///
+/// The store comes back twice over the same node: as the node reads it
+/// (behind a read barrier with peers) and as [`LocalReads`].
 pub async fn open(
     cluster: Option<&ClusterConfig>,
     region: Option<&str>,
     also_serves: &[String],
     store_path: &Path,
     store: Store,
-) -> Result<(Arc<Cluster>, Executor)> {
+) -> Result<(Arc<Cluster>, Executor, LocalReads)> {
     // The read models are derived data in the same file: dropped with the
     // store's rows, filled again by the subscriptions from the copied events.
     let read_models = store.clone();
@@ -127,12 +183,14 @@ pub async fn open(
         })
         .open()
         .await?;
+    let mut local = Evento::new(executor.local_reads());
     let mut executor = Evento::new(executor);
     if let Some(region) = region {
         tracing::info!(region, "default routing key");
         executor = executor.default_routing_key(region);
+        local = local.default_routing_key(region);
     }
-    Ok((cluster, executor))
+    Ok((cluster, executor, LocalReads(local)))
 }
 
 /// How long a node may go unheard before the others share out its part of

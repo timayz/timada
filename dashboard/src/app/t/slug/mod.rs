@@ -37,7 +37,7 @@ use timada_shoppers::count_shoppers;
 use timada_support::{MessageFilter, MessageStatus, count_messages};
 use timada_tenancy::count_open_invitations_of_tenant;
 use timada_tenancy::{
-    PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_API_KEYS_MANAGE, PERMISSION_AUTOMATIONS_READ,
+    Command, PERMISSION_ALIEXPRESS_MANAGE, PERMISSION_API_KEYS_MANAGE, PERMISSION_AUTOMATIONS_READ,
     PERMISSION_CUSTOMERS_READ, PERMISSION_DISCOUNTS_READ, PERMISSION_MAIL_MANAGE,
     PERMISSION_MEMBERS_READ, PERMISSION_NEWSLETTER_READ, PERMISSION_ORDERS_READ,
     PERMISSION_PAGES_READ, PERMISSION_PAYMENTS_MANAGE, PERMISSION_PRODUCTS_READ,
@@ -56,7 +56,6 @@ use topcoat::{
 };
 
 use crate::app::auth::Flash;
-use crate::app::tenants::tenancy;
 use crate::auth::{now, require_user};
 use crate::authz::Authorizer;
 use crate::cluster::Executor;
@@ -123,14 +122,26 @@ impl TenantAccess {
 
 /// The tenant named in the URL, for a signed-in member: 404 for an unknown
 /// slug, 403 for everyone else.
+///
+/// Every tenant page asks, so the tenant is read as the session is
+/// ([`crate::reads::first`]): from this node's file, and from the cluster
+/// before the member is turned away or kept from writing (a tenant created
+/// or renamed, an invitation accepted, a suspension lifted, a moment ago on
+/// another node).
 pub async fn require_tenant(cx: &Cx) -> Result<TenantAccess> {
     let user = require_user(cx).await?;
     let slug = path_param::<Slug>(cx);
-    let Some(tenant) = tenancy(cx)
-        .load_tenant_by_slug(slug)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?
-    else {
+    let tenant = crate::reads::first(
+        cx,
+        |store| async move { Command(store).load_tenant_by_slug(slug).await },
+        |tenant| {
+            matches!(tenant, Ok(Some(tenant))
+                if tenant.role_of(&user.id).is_some() && !tenant.is_suspended())
+        },
+    )
+    .await
+    .map_err(topcoat::Error::from_anyhow)?;
+    let Some(tenant) = tenant else {
         return Err(not_found().into());
     };
     let Some(role) = tenant.role_of(&user.id) else {

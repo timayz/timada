@@ -2,8 +2,9 @@
 //! on every node in that tenant's streams only, a node that missed writes
 //! catches up on its own, a node away longer than its peers wait for it is
 //! told so and copies the store back at its next start, a node at its write
-//! backlog refuses writes, the nodes up know who they are, and a key cut off
-//! through one node loses its store connections on another.
+//! backlog refuses writes, the nodes up know who they are, a key cut off
+//! through one node loses its store connections on another, and a node
+//! alone still serves the reads that need no quorum.
 //!
 //! The dashboard is a binary crate, so the runtime is reached through the
 //! binary's own test harness (`#[path]` includes of the modules under test),
@@ -36,7 +37,7 @@ use evento::subscription::{Context, SubscriptionBuilder};
 use timada_catalog::{CreateProduct, ProductState};
 use timada_tenancy::aggregator::Created;
 use timada_tenancy::{
-    Command, CreateApiKey, CreateTenant, SCOPE_STORE_READ, SCOPE_STORE_WRITE,
+    Command, CreateApiKey, CreateTenant, SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenancyError,
     read_model_subscription,
 };
 
@@ -47,6 +48,8 @@ use store_api::StoreConnections;
 struct Node {
     cluster: Arc<Cluster>,
     store: Executor,
+    /// The same store, read from this node's file.
+    local: cluster::LocalReads,
     /// The read models in the store's database.
     db: db::Db,
     dir: PathBuf,
@@ -97,7 +100,7 @@ impl Node {
         let path = Self::store_path(root, id);
         let store = db::open_store(&path).await.unwrap();
         let store_db = db::Db::from(store.clone());
-        let (cluster, store) = cluster::open(
+        let (cluster, store, local) = cluster::open(
             Some(&ClusterConfig {
                 node_id: id,
                 peers: peers.to_vec(),
@@ -125,6 +128,7 @@ impl Node {
         Self {
             cluster,
             store,
+            local,
             db: store_db,
             dir,
             catalog,
@@ -481,10 +485,15 @@ impl StoreApi {
             tls_cert: None,
             tls_key: None,
         };
-        let server = store_api::serve(Some(&config), node.store.clone(), connections.clone())
-            .await
-            .unwrap()
-            .unwrap();
+        let server = store_api::serve(
+            Some(&config),
+            node.store.clone(),
+            node.local.clone(),
+            connections.clone(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         Self {
             connections,
             addr,
@@ -636,6 +645,92 @@ async fn a_key_cut_off_through_one_node_ends_its_connections_on_another() {
     }
 }
 
+/// How many events of the product `product_id` reading it by its id
+/// through `client` gives, as a storefront's load of it asks.
+async fn reads_product(client: &Client, product_id: &str) -> Result<usize, String> {
+    use evento::{Aggregate as _, Executor as _};
+    let product = timada_catalog::aggregator::Product::aggregate_type();
+    client
+        .read(
+            Some(Arc::from(vec![evento::EventFilter {
+                aggregate_type: product.to_owned(),
+                aggregate_id: Some(product_id.to_owned()),
+                name: None,
+            }])),
+            None,
+            evento::TenantFilter::All,
+            evento::cursor::Args::forward(10, None),
+            None,
+        )
+        .await
+        .map(|page| page.edges.len())
+        .map_err(|err| format!("{err:#}"))
+}
+
+/// A node whose peers are away still checks a storefront's key and serves
+/// its reads, from its own file (#466). A read of one aggregate through the
+/// store waits for a quorum instead, and fails without one; so does a key
+/// the node does not know, which is asked of the cluster before it is
+/// refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_alone_checks_keys_and_serves_storefronts_from_its_own_file() {
+    let root = temp_root("local-reads");
+    let addrs = free_addrs().await;
+    let nodes = start_all(&root, &addrs, Tuning::default()).await;
+    let acme = create_everywhere(&nodes, "acme").await;
+    let key = Command(nodes[0].store.clone())
+        .create_api_key(
+            "alice",
+            CreateApiKey {
+                tenant_id: acme.id.clone(),
+                label: "Shop".into(),
+                scopes: vec![SCOPE_STORE_READ.to_owned()],
+            },
+            1_800_000_000,
+        )
+        .await
+        .unwrap();
+    let mug = create_product(&nodes[0], &acme, "Mug").await;
+    let api = StoreApi::start(&nodes[1]).await;
+    let client = api.connect(&key.token).await;
+    eventually("node 1 holds the mug", async || {
+        reads_product(&client, &mug.id).await == Ok(1)
+    })
+    .await;
+
+    // The peers go away: no quorum can be reached any more.
+    let [n0, n1, n2] = nodes;
+    n0.stop().await;
+    n2.stop().await;
+
+    let access = store_api::authenticate(&n1.local, &n1.store, &key.token)
+        .await
+        .unwrap();
+    assert_eq!(access.tenant.id, acme.id);
+    let alone = api.connect(&key.token).await;
+    assert_eq!(reads_product(&alone, &mug.id).await, Ok(1));
+    assert_eq!(reads_product(&client, &mug.id).await, Ok(1));
+
+    let platform = Command(n1.store.clone());
+    let (through_store, unknown) = tokio::join!(
+        platform.load_tenant(&acme.id),
+        store_api::authenticate(&n1.local, &n1.store, "tk_nobody"),
+    );
+    assert!(
+        through_store.is_err(),
+        "a read through the store waits for a quorum"
+    );
+    assert!(
+        matches!(&unknown, Err(err) if !matches!(err, TenancyError::ApiKeyInvalid)),
+        "an unknown key is asked of the cluster before it is refused: {:?}",
+        unknown.map(|access| access.key.id)
+    );
+
+    drop((client, alone));
+    api.stop().await;
+    n1.stop().await;
+}
+
 /// How long a node may go unheard in the tests of who is up.
 const LIVE_WITHIN: Duration = Duration::from_secs(5);
 
@@ -744,7 +839,7 @@ async fn concurrent_writers_never_see_stale_versions() {
     let root = temp_root("stress");
     let path = root.join("timada.db");
     let store = db::open_store(&path).await.unwrap();
-    let (cluster, store) = cluster::open(None, None, &[], &path, store).await.unwrap();
+    let (cluster, store, _) = cluster::open(None, None, &[], &path, store).await.unwrap();
     let mut tasks = tokio::task::JoinSet::new();
     for t in 0..64 {
         let store = store.clone();

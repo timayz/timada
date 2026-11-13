@@ -135,7 +135,7 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     super::migrate(config.clone()).await?;
 
     let store = db::open_store(&config.database.path).await?;
-    let (cluster, platform) = cluster::open(
+    let (cluster, platform, _) = cluster::open(
         config.cluster.as_ref(),
         config.server.region.as_deref(),
         &config.server.also_serves,
