@@ -263,7 +263,7 @@ pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::
 mod tests {
     use evento::{Evento, Turso};
     use timada_core::Sending;
-    use timada_newsletter::{RequestOutcome, RequestSubscription, SOURCE_FORM};
+    use timada_newsletter::{RequestOutcome, RequestSubscription, SOURCE_FORM, SubscriberState};
     use topcoat::mail::{Mailbox, MemoryTransport};
 
     use super::*;
@@ -320,13 +320,16 @@ mod tests {
         room.sweep(now.max(crate::auth::now())).await.unwrap()
     }
 
-    async fn sending(store: &Turso, email: &str) -> Sending {
+    async fn subscriber(store: &Turso, email: &str) -> SubscriberState {
         timada_newsletter::Command::new(Evento::new(store.clone()), TENANT)
             .subscriber_of(email)
             .await
             .unwrap()
             .unwrap()
-            .mail
+    }
+
+    async fn sending(store: &Turso, email: &str) -> Sending {
+        subscriber(store, email).await.mail
     }
 
     #[tokio::test]
@@ -423,8 +426,8 @@ mod tests {
         assert_eq!(sending(&store, "ada@example.com").await, Sending::Sent);
     }
 
-    /// A request whose link would be expired is not mailed: the claim says
-    /// so, and the table forgets it.
+    /// A request whose link would be expired is not mailed: the table
+    /// forgets it unclaimed.
     #[tokio::test]
     async fn an_expired_request_is_not_mailed() {
         let store = store().await;
@@ -437,7 +440,16 @@ mod tests {
         let node = room_with(&store, mail_context(transport.clone()), vault, "node-a");
         pass(&store, &node).await;
         assert_eq!(rows(&store).await.len(), 1);
-        assert_eq!(node.sweep(now + CONFIRM_TTL_SECS + 1).await.unwrap(), 0);
+        // The link lapses with the time of the `Requested` event, which may
+        // come a second or more after the test's `now`: read it off the
+        // stream rather than reckon it from `now`.
+        let requested_at = subscriber(&store, "ada@example.com").await.requested_at;
+        assert_eq!(
+            node.sweep(requested_at + CONFIRM_TTL_SECS + 1)
+                .await
+                .unwrap(),
+            0
+        );
         assert!(transport.sent().is_empty());
         assert_eq!(sending(&store, "ada@example.com").await, Sending::Pending);
         assert!(rows(&store).await.is_empty());
