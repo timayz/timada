@@ -201,10 +201,15 @@ by construction.
    shopper's own stream, read through the cluster, and so is a line the node's catalog
    read model cannot sell, which the cart took after reading the store: a product put
    on sale or stock put back a moment ago) and the wait for the answer to a
-   request to pay; and what every request asks first, the session and its user, the
+   request to pay; and, read locally and asked of the cluster while the node does not
+   hold what they ask for (`LocalReads::first`), a shopper's request to pay and its
+   answer, the order their cart became, that order's parcels and documents (the order
+   itself, `GET /store/orders/{order_id}`, is read through the cluster: the storefront
+   sends the shopper back to it after their cancellation, whichever node took it), and
+   what every request asks first, the session and its user, the
    tenant, a storefront's key, which is asked of the cluster only before it turns the
-   request away (`LocalReads::first`: a sign-in, a tenant, an invitation accepted, a
-   key issued or a suspension lifted a moment ago on another node). A browser that may
+   request away (a sign-in, a tenant, an invitation accepted, a key issued or a
+   suspension lifted a moment ago on another node). A browser that may
    have written a moment ago reads those through the cluster (`reads.rs`: the answer
    to any post, and any redirect, which is how the sign-in and connection callbacks
    end, sets the `timada_wrote` cookie for ten seconds), so the page a form sends it
