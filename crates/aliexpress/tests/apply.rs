@@ -206,8 +206,15 @@ async fn one_node_renews_a_token() {
     );
 
     // Node a went quiet before recording anything: b takes over once the
-    // claim is stale, and a, answered late, records nothing over b's.
-    let stale = now + TOKEN_CLAIM_STALE_SECS + 1;
+    // claim is stale, and a, answered late, records nothing over b's. The
+    // claim dates from its event, which may come a second or more after
+    // `now`: read that time off the stream rather than reckon it from `now`.
+    let claimed_at = timada_aliexpress::load_token_refresh(&executor, "company-1", 1_700_000_000)
+        .await
+        .unwrap()
+        .unwrap()
+        .claimed_at;
+    let stale = claimed_at + TOKEN_CLAIM_STALE_SECS + 1;
     assert_eq!(
         claim("node-b", "company-1", 1_700_000_000, stale).await,
         TokenRenewal::Claimed
