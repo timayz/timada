@@ -482,8 +482,9 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
 
     // Stripe sends the browser back before it tells the dashboard: the page
     // waits, then waits for the money to be taken, as the shop holds the
-    // mugs. A webhook that is not Stripe's is refused.
-    await page.goto(`${SHOP}/checkout/complete?redirect_status=succeeded`);
+    // mugs. A webhook that is not Stripe's is refused. (The page reloads
+    // itself every two seconds: sent there again, the browser could drop the
+    // test's navigation for the page's own.)
     await expect(page.locator("[data-payment-confirming]")).toBeVisible();
     stripe.pay(intent.id);
     expect(

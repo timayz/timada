@@ -1,4 +1,4 @@
-.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate stripe.listen aliexpress.tunnel e2e loadtest lint fmt-check fmt test machete check
+.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate stripe.listen aliexpress.tunnel e2e e2e.cluster loadtest lint fmt-check fmt test machete check
 
 # What `make seed` writes and `make storefront` reads: the key and the addresses
 # of the seeded shop. Git ignores it.
@@ -119,6 +119,12 @@ aliexpress.tunnel:
 # dex container as the OIDC provider (`make up` first).
 e2e:
 	scripts/e2e.sh
+
+# The same tests on a cluster of three nodes. Traefik sends each request to the
+# next node, so the page after a change is answered by a node that did not make
+# it. It takes about half again as long; each node logs to data/e2e/node<N>.log.
+e2e.cluster:
+	E2E_NODES=3 scripts/e2e.sh
 
 # Random shoppers on the three-node cluster through the storefront,
 # on a platform made afresh under data/load (`make up` first); the arguments
