@@ -7,6 +7,10 @@ import { createTenant, uniqueTenant } from "./tenants";
 // Tenants: self-service creation, the tenant's own page, and the platform
 // administration (status, suspend, resume).
 
+/// How many nodes the suite runs against: three behind the balancer with
+/// `make e2e.cluster`, one otherwise.
+const NODES = Number(process.env.E2E_NODES ?? 1);
+
 test("a user creates a tenant, owns it and renames it", async ({ page }) => {
   await registerWithEmail(page, uniqueEmail("owner"));
   await expect(page.getByText("You do not belong to any tenant yet.")).toBeVisible();
@@ -126,14 +130,21 @@ test("the administrator sees a tenant active, suspends and resumes it", async ({
   await owner.goto(`/t/${slug}`);
   await expect(owner.locator("[data-tenant-status]")).toHaveAttribute("data-tenant-status", "active");
 
-  // The node's own page: a single node, serving.
+  // The node's own page: serving, on its own or in touch with the other
+  // nodes. Its facts are the `dd`s: on a cluster the other nodes' rows carry
+  // the same attributes.
   await admin.getByRole("link", { name: "This node" }).click();
   await expect(admin).toHaveURL(/\/admin\/cluster$/);
-  await expect(admin.locator("[data-node]")).toHaveText("single node");
+  if (NODES === 1) {
+    await expect(admin.locator("dd[data-node]")).toHaveText("single node");
+  } else {
+    await expect(admin.locator("dd[data-node]")).toHaveText(new RegExp(`^node [0-${NODES - 1}] of ${NODES}$`));
+    await expect(admin.locator("tr[data-node]").filter({ hasText: "in touch" })).toHaveCount(NODES - 1);
+  }
   await expect(admin.locator("[data-node-state]")).toHaveText("Serving");
   await expect(admin.locator("[data-workers]")).toHaveAttribute("data-workers-troubled", "0");
   await expect(admin.locator("[data-workers]")).toContainText("running");
-  await expect(admin.locator("[data-given-up]")).toHaveAttribute("data-given-up", "0");
+  await expect(admin.locator("dd[data-given-up]")).toHaveAttribute("data-given-up", "0");
   await expect(admin.locator("[data-checkouts-queued]")).toHaveAttribute("data-checkouts-queued", "0");
 
   await ownerContext.close();

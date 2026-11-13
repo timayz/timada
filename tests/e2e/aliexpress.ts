@@ -47,8 +47,11 @@ export class FakeAliexpress {
   /// Calls whose signature did not match.
   badSignatures = 0;
   offline = false;
-  /// How long the tokens handed out last, in seconds.
-  tokenLifetime = 86_400;
+  /// How long the tokens handed out last, in seconds: a month by default,
+  /// past the day before lapsing at which the dashboard renews a token. One
+  /// within that day is renewed by every sweep of every node, for every shop
+  /// the suite connected, which keeps the store busy for the rest of the run.
+  tokenLifetime = 30 * 86_400;
   /// The refresh tokens handed out, in order (each one unique, so a spec can
   /// tell its shop's renewal from another's).
   readonly refreshTokens: string[] = [];

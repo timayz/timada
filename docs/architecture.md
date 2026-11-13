@@ -993,4 +993,15 @@ Everything but `serve` runs with the server stopped.
   the database, starts the server on `config/e2e.toml` and runs Playwright through the
   compose stack (`make up`: Traefik for HTTPS, dex as an OIDC provider, MailDev as the
   mailbox the tests read codes from). Pass a spec path or a title filter to run part of it.
+- `make e2e.cluster` (`E2E_NODES=3 scripts/e2e.sh`, which takes the same filters): the
+  same suite on three nodes, each on `config/e2e.toml` with a `[cluster]` section added
+  and its own ports and files (`data/e2e/node<N>`, its output in
+  `data/e2e/node<N>.log`). Traefik sends each request to the next node, so a form's post
+  and the page after it are answered by different nodes: the one setup where a read from
+  a node's own file and a read through the cluster differ. The storefronts the specs
+  start connect to node 0's store API, and their `/store/*` calls go through Traefik.
+  The run fails when a node dies or is not ready at the end, as the other two would
+  otherwise carry the suite without it. To pass on both setups, a spec reloads the page
+  while it waits for something, and asserts on one load what belongs together: the next
+  load may come from a node further behind.
 - `make check` runs tests, clippy with warnings denied, rustfmt and cargo-machete.
