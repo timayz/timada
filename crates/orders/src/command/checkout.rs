@@ -165,7 +165,9 @@ pub struct QuotedOffer {
 /// moment behind the store) prices the cart a shopper is shown, at no cost
 /// to the store; a price that moved in between is caught by the payment,
 /// which refuses what the shopper did not see (`price_changed`), and stock
-/// that ran out by its exact check against the stock's stream.
+/// that ran out by its exact check against the stock's stream. What the read
+/// model cannot sell is asked of the store before the shopper is told
+/// ([`Command::quote_from`](super::Command::quote_from)).
 pub trait QuoteSource: Sync {
     /// The product, or `None` for one the shop has not.
     fn sellable(
@@ -259,6 +261,28 @@ pub fn require_in_stock(
     }
 }
 
+/// What `catalog` says of a line of the cart `cart_id`: the product to price
+/// it from, or why the shopper cannot buy it as it stands (`Unavailable`,
+/// `VariantRequired`, `VariantNotFound` or `OutOfStock`). The outer error is
+/// a failure to read.
+async fn line_terms(
+    catalog: &impl QuoteSource,
+    cart_id: &str,
+    item: &CartItem,
+) -> Result<Result<Sellable, OrderError>, OrderError> {
+    let product = catalog.sellable(&item.product_id).await?;
+    if let Err(refusal) = require_sellable(product.as_ref(), item) {
+        return Ok(Err(refusal));
+    }
+    let available = catalog
+        .available(cart_id, &item.product_id, item.variant_id.as_deref())
+        .await?;
+    if let Err(refusal) = require_in_stock(&item.product_id, available, item.quantity) {
+        return Ok(Err(refusal));
+    }
+    Ok(Ok(product.expect("a sellable product is some")))
+}
+
 impl<E: Executor> super::Command<E> {
     /// Prices a cart from the catalog as it stands now, reading every product
     /// from the store (never from a replica), so what it says is what a
@@ -270,21 +294,43 @@ impl<E: Executor> super::Command<E> {
 
     /// The exact quote: the catalog as the store has it now.
     pub(crate) async fn quote(&self, cart: &CartState) -> Result<Quote, OrderError> {
-        self.quote_from(cart, &StoreCatalog(self)).await
+        self.price(cart, &StoreCatalog(self), None::<&StoreCatalog<'_, E>>)
+            .await
+    }
+
+    /// The quote a shopper is shown: priced from `catalog`, the catalog's
+    /// read model, a moment behind the store and at no cost to it. A line it
+    /// cannot sell is looked at again in `store`, the product's and the
+    /// stock's own streams, before the quote says so: the cart took the line
+    /// after reading those, and the read model may not have the product put
+    /// on sale, or the stock put back, a moment before. Only such a line is
+    /// read from the store; one the read model sells is priced as it has it,
+    /// a price that moved in between being the payment's to refuse.
+    pub async fn quote_from(
+        &self,
+        cart: &CartState,
+        catalog: &impl QuoteSource,
+        store: &impl QuoteSource,
+    ) -> Result<Quote, OrderError> {
+        self.price(cart, catalog, Some(store)).await
     }
 
     /// Prices the cart's lines at full price, then lets each live offer
     /// price one unit of its item, when the rest of the cart meets its
     /// conditions: that unit becomes a line of its own, so the order, its
     /// invoice and its mail say what it cost. The discount code comes off
-    /// what that adds up to. The products come from `catalog`; the offers
-    /// and the code's discount come from their own streams whatever the
-    /// source, one small aggregate per shop and per code, which the discount
-    /// read model (a listing) holds no window or cap of.
-    pub async fn quote_from(
+    /// what that adds up to. The products come from `catalog`, a line it
+    /// cannot sell from `store` when one is given; an offer's product from
+    /// `catalog` alone, since one missing there hides the offer for a moment
+    /// and stops no checkout. The offers and the code's discount come from
+    /// their own streams whatever the source, one small aggregate per shop
+    /// and per code, which the discount read model (a listing) holds no
+    /// window or cap of.
+    async fn price(
         &self,
         cart: &CartState,
         catalog: &impl QuoteSource,
+        store: Option<&impl QuoteSource>,
     ) -> Result<Quote, OrderError> {
         let mut quote = Quote::default();
         let mut priced: Vec<OrderLine> = Vec::new();
@@ -296,9 +342,14 @@ impl<E: Executor> super::Command<E> {
                 variant_id: line.variant_id.clone(),
                 quantity: line.quantity,
             };
-            let product = catalog.sellable(&line.product_id).await?;
-            let product = match require_sellable(product.as_ref(), &item) {
-                Ok(()) => product.expect("a sellable product is some"),
+            let mut terms = line_terms(catalog, &cart.id, &item).await?;
+            if terms.is_err()
+                && let Some(store) = store
+            {
+                terms = line_terms(store, &cart.id, &item).await?;
+            }
+            let product = match terms {
+                Ok(product) => product,
                 Err(
                     OrderError::Unavailable { .. }
                     | OrderError::VariantRequired
@@ -307,20 +358,13 @@ impl<E: Executor> super::Command<E> {
                     quote.unavailable.push(line.clone());
                     continue;
                 }
-                Err(err) => return Err(err),
-            };
-            let available = catalog
-                .available(&cart.id, &line.product_id, line.variant_id.as_deref())
-                .await?;
-            match require_in_stock(&line.product_id, available, line.quantity) {
-                Ok(()) => {}
                 Err(OrderError::OutOfStock { .. }) => {
                     quote.unavailable.push(line.clone());
                     quote.out_of_stock.push(line.clone());
                     continue;
                 }
                 Err(err) => return Err(err),
-            }
+            };
             let variant = line
                 .variant_id
                 .as_deref()
