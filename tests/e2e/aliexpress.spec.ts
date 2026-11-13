@@ -432,7 +432,11 @@ async function fillCheckout(page: Page, quantity: number) {
   await page.getByLabel("Code postal", { exact: true }).blur();
   // The city is picked from AliExpress's list, as in every shop.
   await expect(page.getByLabel("Département")).toHaveValue("Paris");
-  await page.getByLabel("Ville", { exact: true }).selectOption("PARIS 2E ARRONDISSEMENT");
+  // A form filled from the last order keeps the département while the
+  // country's lists are on their way again, and "Ville" labels the typed
+  // city until they are back: asked for by its role, the list is waited for
+  // rather than the text box picked from (#503).
+  await page.getByRole("combobox", { name: "Ville", exact: true }).selectOption("PARIS 2E ARRONDISSEMENT");
   await page.getByLabel("Téléphone").fill("06 12 34 56 78");
 }
 
