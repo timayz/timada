@@ -153,12 +153,14 @@ pub fn sign_in_passkey(
 
 /// The store of a node whose writes of some events fail, as if it stopped
 /// right there: a write holding one of them never lands, every other does.
-/// It can also hold a read back until a write lands, to stage a race.
+/// It can also hold a read, or a write, back until another write lands, to
+/// stage a race.
 #[derive(Clone)]
 pub struct Refusing {
     pub store: evento::Turso,
     refused: Vec<(&'static str, &'static str, Refusal)>,
-    held_read: Option<Arc<HeldRead>>,
+    held_read: Option<Arc<Held>>,
+    held_write: Option<Arc<Held>>,
 }
 
 /// How a refused write fails.
@@ -170,13 +172,30 @@ enum Refusal {
     LostRace,
 }
 
-/// The first read of one aggregate type waits until a write to that type
-/// has landed.
-struct HeldRead {
+/// The first read, or write, of one aggregate type waits until another write
+/// to that type has landed.
+struct Held {
     aggregate_type: &'static str,
     came: AtomicBool,
     parked: Notify,
     written: Notify,
+}
+
+impl Held {
+    fn of<A: Aggregate>() -> Arc<Self> {
+        Arc::new(Self {
+            aggregate_type: A::aggregate_type(),
+            came: AtomicBool::new(false),
+            parked: Notify::new(),
+            written: Notify::new(),
+        })
+    }
+
+    fn written_by(&self, events: &[evento::Event]) -> bool {
+        events
+            .iter()
+            .any(|event| event.aggregate_type == self.aggregate_type)
+    }
 }
 
 impl Refusing {
@@ -185,6 +204,7 @@ impl Refusing {
             store,
             refused: Vec::new(),
             held_read: None,
+            held_write: None,
         }
     }
 
@@ -204,18 +224,21 @@ impl Refusing {
 
     /// Holds the first read of an `A` stream until a write to one lands.
     pub fn hold_first_read<A: Aggregate>(mut self) -> Self {
-        self.held_read = Some(Arc::new(HeldRead {
-            aggregate_type: A::aggregate_type(),
-            came: AtomicBool::new(false),
-            parked: Notify::new(),
-            written: Notify::new(),
-        }));
+        self.held_read = Some(Held::of::<A>());
         self
     }
 
-    /// Resolves once the read [`Self::hold_first_read`] names is held.
+    /// Holds the first write to an `A` stream until another write to one
+    /// lands: the two race, and the held one comes second.
+    pub fn hold_first_write<A: Aggregate>(mut self) -> Self {
+        self.held_write = Some(Held::of::<A>());
+        self
+    }
+
+    /// Resolves once the read [`Self::hold_first_read`] names, or the write
+    /// [`Self::hold_first_write`] names, is held.
     pub async fn parked(&self) {
-        if let Some(held) = &self.held_read {
+        if let Some(held) = self.held_read.as_ref().or(self.held_write.as_ref()) {
             held.parked.notified().await;
         }
     }
@@ -241,17 +264,28 @@ impl Executor for Refusing {
                 None => {}
             }
         }
-        let held = self.held_read.as_ref().filter(|held| {
-            held.came.load(Ordering::SeqCst)
-                && events
-                    .iter()
-                    .any(|event| event.aggregate_type == held.aggregate_type)
-        });
-        let written = self.store.write(events).await;
-        if let Some(held) = held
-            && written.is_ok()
+        if let Some(held) = self
+            .held_write
+            .as_ref()
+            .filter(|held| held.written_by(&events))
+            && !held.came.swap(true, Ordering::SeqCst)
         {
-            held.written.notify_one();
+            held.parked.notify_one();
+            held.written.notified().await;
+            return self.store.write(events).await;
+        }
+        // What is held, once it came, waits for this write.
+        let waiting: Vec<Arc<Held>> = [&self.held_read, &self.held_write]
+            .into_iter()
+            .flatten()
+            .filter(|held| held.came.load(Ordering::SeqCst) && held.written_by(&events))
+            .cloned()
+            .collect();
+        let written = self.store.write(events).await;
+        if written.is_ok() {
+            for held in waiting {
+                held.written.notify_one();
+            }
         }
         written
     }

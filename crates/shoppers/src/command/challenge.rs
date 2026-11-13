@@ -25,8 +25,9 @@ use crate::value_object::{CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SE
 use super::{ChallengeState, challenge_email_aad};
 
 /// Reload-and-retry budget for a write on a challenge that raced another
-/// (a guess landing while the mail is claimed, say).
-const MAIL_WRITE_ATTEMPTS: usize = 3;
+/// (a guess landing while the mail is claimed, or the mail's outcome while a
+/// code is checked, say).
+const WRITE_ATTEMPTS: usize = 3;
 
 /// A code issued. The plaintext exists only in this value and in the mail.
 #[derive(Clone, PartialEq, Eq)]
@@ -213,7 +214,7 @@ impl<E: Executor> super::Command<E> {
                 Ok(_) => return Ok(Some(mail)),
                 // Another node claimed it, or a guess landed: decide again
                 // on the fresh state.
-                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
                 Err(err) => return Err(err.into()),
             }
         }
@@ -344,7 +345,7 @@ impl<E: Executor> super::Command<E> {
             match writer.tenant(&self.tenant).commit(&self.executor).await {
                 Ok(_) => return Ok(()),
                 // A guess landed meanwhile: write past it.
-                Err(WriteError::InvalidOriginalVersion) if attempt < MAIL_WRITE_ATTEMPTS => {}
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
                 Err(err) => return Err(err.into()),
             }
         }
@@ -352,7 +353,11 @@ impl<E: Executor> super::Command<E> {
 
     /// Checks `code` against the live code of a normalized address and burns
     /// it. A wrong guess is recorded; the fifth kills the code. Callers act
-    /// *after* this returns, so a code is never reusable.
+    /// *after* this returns, so a code is never reusable. The mail's
+    /// subscription writes on the same stream, so a write landing between
+    /// the read and the check's own write is no verdict: the code is checked
+    /// again on the fresh state, where a submission that burnt it first
+    /// makes this one wrong.
     pub(crate) async fn consume_code(
         &self,
         codes: &dyn CodeVerifier,
@@ -361,48 +366,53 @@ impl<E: Executor> super::Command<E> {
         now: u64,
         routing_key: Option<String>,
     ) -> Result<(), ShopperError> {
-        let Some(challenge) = self.load_challenge(email).await? else {
-            return Err(ShopperError::WrongCode);
-        };
-        if challenge.consumed {
-            return Err(ShopperError::WrongCode);
-        }
-        if challenge.failed_attempts >= CODE_MAX_ATTEMPTS {
-            return Err(ShopperError::TooManyAttempts);
-        }
-        if now >= challenge.expires_at {
-            return Err(ShopperError::CodeExpired);
-        }
-        let matches = codes.verify(&self.tenant, &challenge.id, &challenge.nonce, code);
-        let outcome = if matches {
-            challenge
-                .write()?
-                .routing_key_opt(routing_key)
-                .event(&CodeConsumed)
-                .tenant(&self.tenant)
-                .commit(&self.executor)
-                .await
-        } else {
-            challenge
-                .write()?
-                .routing_key_opt(routing_key)
-                .event(&AttemptFailed)
-                .tenant(&self.tenant)
-                .commit(&self.executor)
-                .await
-        };
-        match outcome {
-            Ok(_) => {}
-            // Two submissions raced: whichever won decided; this one did not.
-            Err(WriteError::InvalidOriginalVersion) => return Err(ShopperError::WrongCode),
-            Err(err) => return Err(err.into()),
-        }
-        if matches {
-            Ok(())
-        } else if challenge.failed_attempts + 1 >= CODE_MAX_ATTEMPTS {
-            Err(ShopperError::TooManyAttempts)
-        } else {
-            Err(ShopperError::WrongCode)
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let Some(challenge) = self.load_challenge(email).await? else {
+                return Err(ShopperError::WrongCode);
+            };
+            if challenge.consumed {
+                return Err(ShopperError::WrongCode);
+            }
+            if challenge.failed_attempts >= CODE_MAX_ATTEMPTS {
+                return Err(ShopperError::TooManyAttempts);
+            }
+            if now >= challenge.expires_at {
+                return Err(ShopperError::CodeExpired);
+            }
+            let matches = codes.verify(&self.tenant, &challenge.id, &challenge.nonce, code);
+            let outcome = if matches {
+                challenge
+                    .write()?
+                    .routing_key_opt(routing_key.clone())
+                    .event(&CodeConsumed)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
+                    .await
+            } else {
+                challenge
+                    .write()?
+                    .routing_key_opt(routing_key.clone())
+                    .event(&AttemptFailed)
+                    .tenant(&self.tenant)
+                    .commit(&self.executor)
+                    .await
+            };
+            match outcome {
+                Ok(_) => {}
+                // The mail's outcome, another submission or a new code landed
+                // since the read: decide again on the fresh state.
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => continue,
+                Err(err) => return Err(err.into()),
+            }
+            return if matches {
+                Ok(())
+            } else if challenge.failed_attempts + 1 >= CODE_MAX_ATTEMPTS {
+                Err(ShopperError::TooManyAttempts)
+            } else {
+                Err(ShopperError::WrongCode)
+            };
         }
     }
 }

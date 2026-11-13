@@ -3,6 +3,7 @@ mod common;
 use common::*;
 use evento::ProjectionAggregate;
 use timada_core::Claimant;
+use timada_identity::aggregator::EmailChallenge;
 use timada_identity::{
     AddEmail, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, ChallengePurpose, ChangePassword,
     IdentityError, RegisterWithPassword, ResetPassword, SignInKind, SignInWithPassword,
@@ -890,6 +891,103 @@ async fn a_codes_mail_is_taken_by_one_node_and_recorded_once() {
         .register_with_password(registration("alice@example.com", &issued.code, &hash), NOW)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn a_code_typed_while_its_mail_is_recorded_is_checked_on_the_fresh_stream() {
+    let store = executor().await;
+    let cmd = timada_identity::Command::new(store.clone(), codes());
+    let hash = hash_password(PASSWORD).await.unwrap();
+    let issued = cmd
+        .issue_email_code("alice@example.com", ChallengePurpose::Register, NOW)
+        .await
+        .unwrap();
+    let challenge = cmd
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    let node_a = Claimant {
+        node: "node-a",
+        now: NOW,
+    };
+    cmd.claim_code_mail(&challenge.id, challenge.issued_version, node_a)
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+
+    // The mail reached Alice, who typed the code before node-a recorded the
+    // send: her check is held at the challenge while the record lands.
+    let staged = Refusing::new(store.clone()).hold_first_write::<EmailChallenge>();
+    let registering = {
+        let cmd = refusing_command(staged.clone());
+        let form = registration("alice@example.com", &issued.code, &hash);
+        tokio::spawn(async move { cmd.register_with_password(form, NOW + 1).await })
+    };
+    staged.parked().await;
+    refusing_command(staged)
+        .record_code_mail_sent(&challenge.id, challenge.issued_version)
+        .await
+        .unwrap();
+    let alice = registering.await.unwrap().unwrap().user_id;
+    let state = cmd
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(state.consumed);
+    assert_eq!(state.failed_attempts, 0);
+    assert_eq!(state.mail, timada_core::Sending::Sent);
+
+    // A wrong guess typed the same way counts, once.
+    let issued = cmd
+        .issue_email_code("alice@example.com", ChallengePurpose::SignIn, NOW + 2)
+        .await
+        .unwrap();
+    let challenge = cmd
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    let node_a = Claimant {
+        node: "node-a",
+        now: NOW + 2,
+    };
+    cmd.claim_code_mail(&challenge.id, challenge.issued_version, node_a)
+        .await
+        .unwrap()
+        .expect("node-a takes the send");
+    let wrong = if issued.code == "000000" {
+        "000001"
+    } else {
+        "000000"
+    };
+    let staged = Refusing::new(store.clone()).hold_first_write::<EmailChallenge>();
+    let guessing = {
+        let cmd = refusing_command(staged.clone());
+        let form = sign_in("alice@example.com", &alice, wrong, None);
+        tokio::spawn(async move { cmd.sign_in_with_password(form, NOW + 3).await })
+    };
+    staged.parked().await;
+    refusing_command(staged)
+        .record_code_mail_sent(&challenge.id, challenge.issued_version)
+        .await
+        .unwrap();
+    let err = guessing.await.unwrap().unwrap_err();
+    assert!(matches!(err, IdentityError::InvalidCode), "{err}");
+    let state = cmd
+        .load_email_challenge("alice@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.failed_attempts, 1);
+    assert_eq!(state.mail, timada_core::Sending::Sent);
+    cmd.sign_in_with_password(
+        sign_in("alice@example.com", &alice, &issued.code, None),
+        NOW + 4,
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]

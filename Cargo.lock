@@ -7945,6 +7945,7 @@ dependencies = [
  "timada-core",
  "timada-orders",
  "tokio",
+ "ulid",
 ]
 
 [[package]]
