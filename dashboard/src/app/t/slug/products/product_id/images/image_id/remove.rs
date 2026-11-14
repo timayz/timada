@@ -1,31 +1,25 @@
-use std::sync::Arc;
-
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::Cx,
     router::{error::SeeOther, path_param, route},
 };
 
 use super::ImageId;
 use crate::app::t::slug::products::product_id::{Tab, act};
-use crate::app::t::slug::require_tenant;
-use crate::media::Media;
 
-/// Takes a picture off the product, then deletes the file. A storefront a
-/// moment behind may ask for it once more and get a 404; the next refresh
-/// has it gone.
+/// Takes a picture off the product. Its files are deleted on every node as
+/// each follows the stream ([`crate::media::subscription`]), this one too:
+/// deleted here at once, the file was missing while the store still knew the
+/// picture, which the fetcher takes for a picture lost everywhere (#528).
 #[route(POST)]
 pub async fn remove(cx: &Cx) -> Result<SeeOther> {
-    let tenant_id = require_tenant(cx).await?.tenant.id;
     let image_id = path_param::<ImageId>(cx).to_owned();
-    let media = app_context::<Arc<Media>>(cx).clone();
     act(
         cx,
         Tab::Pictures,
         "Picture removed.",
         async |catalog, actor, id| {
             catalog.remove_image(actor, id, &image_id).await?;
-            media.remove_image(&tenant_id, &image_id).await;
             Ok(())
         },
     )
