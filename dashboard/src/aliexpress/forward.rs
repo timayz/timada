@@ -71,6 +71,11 @@ pub enum ForwardResult {
     Unrecorded(Vec<String>),
     /// Another node took it on, or it is no longer to place.
     Skipped,
+    /// Its company's account placed as many orders as it may for now
+    /// ([`AliexpressConfig::orders_per_hour`](crate::config::AliexpressConfig::orders_per_hour)):
+    /// it stays asked for, and the sweep places it from then on (unix
+    /// seconds).
+    Paced(u64),
     /// Nothing was placed; recorded on the forward.
     Failed(String),
 }
@@ -98,17 +103,41 @@ pub struct Followed {
     pub over: bool,
 }
 
-/// Why placing an order failed, for the merchant.
-struct Refusal(String);
+/// Why placing an order failed, for the merchant, and whether it is placed
+/// again on its own: only a failure before AliExpress was asked to place it
+/// (AliExpress or the payment provider not answering, the store failing),
+/// when nothing can have been bought (#470).
+struct Refusal {
+    reason: String,
+    retry: bool,
+}
+
+impl Refusal {
+    /// For the merchant to decide.
+    fn refused(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            retry: false,
+        }
+    }
+
+    /// Nothing was bought, and trying again later may well work.
+    fn for_now(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            retry: true,
+        }
+    }
+}
 
 impl From<AeError> for Refusal {
     fn from(err: AeError) -> Self {
-        Refusal(if err.retryable {
+        if err.retryable {
             tracing::warn!(reason = %describe(&err), "AliExpress call to retry");
-            "AliExpress did not answer; try again in a moment.".to_owned()
+            Refusal::for_now("AliExpress did not answer; it is placed again in a while.")
         } else {
-            format!("AliExpress refused: {}", describe(&err))
-        })
+            Refusal::refused(format!("AliExpress refused: {}", describe(&err)))
+        }
     }
 }
 
@@ -134,6 +163,21 @@ impl Aliexpress {
         forward_id: &str,
     ) -> anyhow::Result<ForwardResult> {
         let forwards = timada_aliexpress::Command::new(store.clone(), tenant_id);
+        // Its account's pace first: an order it may not place yet stays asked
+        // for, untouched, and the sweep tries it again (#470).
+        if self.orders_per_hour > 0
+            && let Some(company_id) = self
+                .active_tenant(store, tenant_id)
+                .await?
+                .and_then(|tenant| tenant.company)
+                .map(|link| link.company_id)
+            && let Some(until) = self
+                .paced_until(db, &company_id, crate::auth::now())
+                .await?
+        {
+            tracing::info!(tenant = %tenant_id, forward = %forward_id, company = %company_id, until, "order waits for its AliExpress account's pace");
+            return Ok(ForwardResult::Paced(until));
+        }
         if !forwards.start_forward(ALIEXPRESS_ACTOR, forward_id).await? {
             return Ok(ForwardResult::Skipped);
         }
@@ -149,7 +193,7 @@ impl Aliexpress {
                 // on at: one overtaken meanwhile (asked for again, given up
                 // as stalled) asks AliExpress nothing.
                 if !forwards
-                    .begin_asking(ALIEXPRESS_ACTOR, forward_id, version)
+                    .begin_asking(ALIEXPRESS_ACTOR, forward_id, version, &prepared.company_id)
                     .await?
                 {
                     tracing::warn!(tenant = %tenant_id, order = %forward.order_id, forward = %forward_id, "placing an order on AliExpress was overtaken: this attempt asks nothing");
@@ -205,10 +249,10 @@ impl Aliexpress {
                     }
                 }
             }
-            Err(Refusal(reason)) => {
-                tracing::warn!(tenant = %tenant_id, order = %forward.order_id, %reason, "order not placed on AliExpress");
+            Err(Refusal { reason, retry }) => {
+                tracing::warn!(tenant = %tenant_id, order = %forward.order_id, %reason, retry, "order not placed on AliExpress");
                 forwards
-                    .record_forward_failure(ALIEXPRESS_ACTOR, forward_id, &reason)
+                    .record_forward_failure(ALIEXPRESS_ACTOR, forward_id, &reason, retry)
                     .await?;
                 Ok(ForwardResult::Failed(reason))
             }
@@ -226,27 +270,27 @@ impl Aliexpress {
     ) -> Result<Prepared, Refusal> {
         let failed = |err: anyhow::Error| {
             tracing::error!(%tenant_id, %order_id, error = %err, "AliExpress forward failed");
-            Refusal("Placing the order failed on our side; try again.".to_owned())
+            Refusal::for_now("Placing the order failed on our side; it is placed again in a while.")
         };
         let Some(tenant) = self.active_tenant(store, tenant_id).await.map_err(failed)? else {
-            return Err(Refusal("The shop is suspended.".into()));
+            return Err(Refusal::refused("The shop is suspended."));
         };
         let Some(settings) = tenant.aliexpress.as_ref() else {
-            return Err(Refusal(
-                "Set what the shop buys on AliExpress first.".into(),
+            return Err(Refusal::refused(
+                "Set what the shop buys on AliExpress first.",
             ));
         };
         let Some(company) = self.company_of(store, &tenant).await.map_err(failed)? else {
-            return Err(Refusal("Link the shop to its company first.".into()));
+            return Err(Refusal::refused("Link the shop to its company first."));
         };
         let Some(client) = self.client_of(&company).map_err(failed)? else {
-            return Err(Refusal(
-                "Connect the company's AliExpress account first.".into(),
+            return Err(Refusal::refused(
+                "Connect the company's AliExpress account first.",
             ));
         };
         let orders = timada_orders::Command::new(store.clone(), tenant_id);
         let Some(order) = orders.load_order(order_id).await.map_err(failed)? else {
-            return Err(Refusal("The order does not exist.".into()));
+            return Err(Refusal::refused("The order does not exist."));
         };
         // Checked here to say why early; the order's fence checks again, at
         // the very moment AliExpress is asked.
@@ -257,19 +301,21 @@ impl Aliexpress {
         // the company is about to buy.
         let held = payments.order_payment(&tenant, &order).await.map_err(|err| {
             tracing::warn!(%tenant_id, %order_id, error = %err, "the payment provider did not answer about an order to place on AliExpress");
-            Refusal("The payment provider did not answer; try again in a moment.".to_owned())
+            Refusal::for_now(
+                "The payment provider did not answer; it is placed again in a while.",
+            )
         })?;
         match held {
             OrderPayment::Held => {}
             OrderPayment::Gone => {
-                return Err(Refusal(
-                    "The provider no longer holds the order's payment.".into(),
+                return Err(Refusal::refused(
+                    "The provider no longer holds the order's payment.",
                 ));
             }
             OrderPayment::Unknown => {
                 tracing::warn!(%tenant_id, %order_id, payment = %order.payment.payment_id, "an order to place on AliExpress names a payment the provider does not know as this shop's");
-                return Err(Refusal(
-                    "The provider holds no payment for this order: it was not placed through the shop's checkout.".into(),
+                return Err(Refusal::refused(
+                    "The provider holds no payment for this order: it was not placed through the shop's checkout.",
                 ));
             }
         }
@@ -278,8 +324,8 @@ impl Aliexpress {
             .map_err(failed)?;
         let plan = forward_items(&order.lines, &links);
         if plan.items.is_empty() {
-            return Err(Refusal(
-                "No item of this order comes from AliExpress.".into(),
+            return Err(Refusal::refused(
+                "No item of this order comes from AliExpress.",
             ));
         }
         let country = delivery_country(&order.shipping.country, &order.shipping.postal_code);
@@ -308,7 +354,7 @@ impl Aliexpress {
                         .await
                         .map_err(|err| {
                             if err.gone {
-                                Refusal(format!(
+                                Refusal::refused(format!(
                                     "AliExpress no longer sells product {}.",
                                     item.ae_product_id
                                 ))
@@ -320,13 +366,13 @@ impl Aliexpress {
             }
             let product = &products[&item.ae_product_id];
             if !product.on_sale() {
-                return Err(Refusal(format!(
+                return Err(Refusal::refused(format!(
                     "AliExpress no longer sells “{}”.",
                     product.subject
                 )));
             }
             let Some(sku) = product.sku(&item.sku_id) else {
-                return Err(Refusal(format!(
+                return Err(Refusal::refused(format!(
                     "AliExpress no longer sells this combination of “{}”.",
                     product.subject
                 )));
@@ -335,14 +381,14 @@ impl Aliexpress {
                 Some(attr) => attr.clone(),
                 None if product.skus.len() == 1 => String::new(),
                 None => {
-                    return Err(Refusal(format!(
+                    return Err(Refusal::refused(format!(
                         "AliExpress did not say how to order this combination of “{}”.",
                         product.subject
                     )));
                 }
             };
             if sku.available < item.quantity {
-                return Err(Refusal(format!(
+                return Err(Refusal::refused(format!(
                     "AliExpress has {} of this combination of “{}” left, the order needs {}.",
                     sku.available, product.subject, item.quantity
                 )));
@@ -358,7 +404,7 @@ impl Aliexpress {
                 )
                 .await?;
             let Some(service) = choose_service(&options) else {
-                return Err(Refusal(if options.is_empty() {
+                return Err(Refusal::refused(if options.is_empty() {
                     format!(
                         "AliExpress offers no delivery to {country} for “{}”.",
                         product.subject
@@ -394,13 +440,14 @@ impl Aliexpress {
             });
         }
         if address.mobile_no.is_empty() {
-            return Err(Refusal(
+            return Err(Refusal::refused(
                 "AliExpress needs a phone number: the shopper gave none and the shop has none set for its orders on the AliExpress page."
                     .to_owned(),
             ));
         }
         Ok(Prepared {
             client,
+            company_id: company.id.clone(),
             request: PlaceOrder {
                 address,
                 items,
@@ -437,7 +484,9 @@ impl Aliexpress {
         {
             return Ok(Err(not_placeable(err).unwrap_or_else(|err| {
                 tracing::error!(%tenant_id, %order_id, error = %err, "AliExpress forward failed");
-                Refusal("Placing the order failed on our side; try again.".to_owned())
+                Refusal::for_now(
+                    "Placing the order failed on our side; it is placed again in a while.",
+                )
             })));
         }
         let ae_order_ids = match prepared.client.place_order(&prepared.request).await {
@@ -459,7 +508,7 @@ impl Aliexpress {
                     )
                 })
                 .await?;
-                return Ok(Err(Refusal(MAY_HAVE_PLACED.to_owned())));
+                return Ok(Err(Refusal::refused(MAY_HAVE_PLACED)));
             }
             Err(err) => {
                 let reason = format!("AliExpress refused the order: {}", describe(&err));
@@ -474,7 +523,7 @@ impl Aliexpress {
                     )
                 })
                 .await?;
-                return Ok(Err(Refusal(reason)));
+                return Ok(Err(Refusal::refused(reason)));
             }
         };
         Ok(Ok(Placement {
@@ -843,7 +892,7 @@ pub const CLOSED_BY_ALIEXPRESS: &str = "AliExpress closed the order without ship
 /// Why an order is not placed on AliExpress, for the merchant; the error
 /// back when it is no refusal of the order (the store failing).
 fn not_placeable(err: OrderError) -> Result<Refusal, OrderError> {
-    Ok(Refusal(
+    Ok(Refusal::refused(
         match err {
             OrderError::OrderCancelled => "The order is cancelled.",
             OrderError::OrderFulfilled => "The order is already fulfilled.",
@@ -887,6 +936,8 @@ where
 /// What placing asks AliExpress for, once all it needs was read.
 struct Prepared {
     client: Client,
+    /// The company whose account places it.
+    company_id: String,
     request: PlaceOrder,
     bought: Vec<ForwardItem>,
     /// Every line of the shop's order is bought there.
@@ -1404,6 +1455,7 @@ mod tests {
                 read_fresh_secs: 60,
                 import_duty_cents: 0,
                 import_fee_cents: 0,
+                orders_per_hour: 0,
             };
             let aliexpress = Aliexpress::new(
                 Some(Sealer::new("aliexpress-test", "secret")),

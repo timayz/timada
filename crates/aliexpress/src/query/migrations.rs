@@ -49,10 +49,15 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 updated_at INTEGER NOT NULL,
                 shard INTEGER NOT NULL,
                 settling INTEGER NOT NULL,
+                retry_at INTEGER,
+                company_id TEXT,
+                asked_at INTEGER,
                 state TEXT NOT NULL,
                 PRIMARY KEY (tenant_id, id)
             );
         CREATE INDEX aliexpress_forwards_due ON aliexpress_forwards (status, updated_at);
+        CREATE INDEX aliexpress_forwards_retry ON aliexpress_forwards (retry_at);
+        CREATE INDEX aliexpress_forwards_account ON aliexpress_forwards (company_id, asked_at);
         CREATE UNIQUE INDEX aliexpress_forwards_order ON aliexpress_forwards (tenant_id, order_id);",
     )],
 );

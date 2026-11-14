@@ -697,6 +697,14 @@ pub struct AliexpressConfig {
     pub import_duty_cents: u64,
     #[serde(default = "default_aliexpress_import_fee_cents")]
     pub import_fee_cents: u64,
+    /// How many orders a company's AliExpress account places an hour at
+    /// most, over every shop it sells for, spread across the hour; the others
+    /// wait their turn. AliExpress says nothing of how many orders a buyer
+    /// account may place before its risk control looks at it: many retail
+    /// orders an hour to many addresses from one account is the pattern it
+    /// may flag. 0: as they come.
+    #[serde(default)]
+    pub orders_per_hour: u32,
 }
 
 fn default_aliexpress_check_secs() -> u64 {
@@ -748,6 +756,7 @@ impl Default for AliexpressConfig {
             read_fresh_secs: default_aliexpress_read_fresh_secs(),
             import_duty_cents: default_aliexpress_import_duty_cents(),
             import_fee_cents: default_aliexpress_import_fee_cents(),
+            orders_per_hour: 0,
         }
     }
 }

@@ -388,6 +388,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         db.clone(),
         local.0.clone(),
         aliexpress.clone(),
+        payments.clone(),
         std::time::Duration::from_secs(config.aliexpress.sync_check_secs.max(1)),
     )
     .start();

@@ -8,7 +8,9 @@ use crate::aggregator::forward::{
     AlsoPlaced, Asking, Checked, Done, Failed, Forward, ForwardItem, Placed, Requested, Started,
 };
 use crate::error::AliexpressError;
-use crate::value_object::{FORWARD_STALL_SECS, forward_id};
+use crate::value_object::{
+    ALIEXPRESS_ACTOR, FORWARD_RETRY_DELAYS_SECS, FORWARD_STALL_SECS, forward_id,
+};
 
 /// Where placing an order on AliExpress stands.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -73,6 +75,18 @@ pub struct ForwardState {
     pub placed_at: Option<u64>,
     /// Why the last attempt placed nothing.
     pub last_error: Option<String>,
+    /// The last attempt bought nothing and is to be tried again on its own
+    /// ([`Self::retry_at`]).
+    pub retry: bool,
+    /// The attempts in a row that bought nothing and were to be tried again,
+    /// since a member last asked for it.
+    pub failures: u32,
+    /// Unix seconds of the last failure.
+    pub failed_at: Option<u64>,
+    /// The company whose account the last attempt asked AliExpress on, and
+    /// when (unix seconds): what paces that account's orders.
+    pub company_id: Option<String>,
+    pub asked_at: Option<u64>,
     /// The tracking the shop's order was fulfilled with, if it was.
     pub fulfilled_tracking: Option<String>,
     /// AliExpress orders of an attempt that overlapped the one recorded: the
@@ -107,6 +121,18 @@ impl ForwardState {
     pub fn all_closed(&self) -> bool {
         !self.ae_orders.is_empty() && self.ae_orders.iter().all(|order| order.closed)
     }
+
+    /// When the sweep places it again on its own (unix seconds): after an
+    /// attempt that bought nothing, a while after the failure
+    /// ([`FORWARD_RETRY_DELAYS_SECS`]), until the tries run out. `None` for
+    /// one placed, being placed, or failed for the merchant to decide.
+    pub fn retry_at(&self) -> Option<u64> {
+        if self.status != ForwardStatus::Failed || !self.retry {
+            return None;
+        }
+        let delay = FORWARD_RETRY_DELAYS_SECS.get(self.failures.checked_sub(1)? as usize)?;
+        Some(self.failed_at?.saturating_add(*delay))
+    }
 }
 
 pub fn forward_projection<E: Executor>() -> Projection<E, ForwardState> {
@@ -124,6 +150,8 @@ pub fn forward_projection<E: Executor>() -> Projection<E, ForwardState> {
 
 #[evento::handler]
 async fn on_asking(event: Event<Asking>, forward: &mut ForwardState) -> anyhow::Result<()> {
+    forward.company_id = Some(event.data.company_id.to_owned());
+    forward.asked_at = Some(event.timestamp);
     forward.updated_at = event.timestamp;
     Ok(())
 }
@@ -150,6 +178,12 @@ async fn on_requested(event: Event<Requested>, forward: &mut ForwardState) -> an
     forward.requested_by = event.data.requested_by.to_owned();
     forward.requested_at = event.timestamp;
     forward.last_error = None;
+    forward.retry = false;
+    // A member asking starts the tries over; the dashboard's own request
+    // (the order coming in, or the sweep trying again) counts on.
+    if event.data.requested_by != ALIEXPRESS_ACTOR {
+        forward.failures = 0;
+    }
     forward.updated_at = event.timestamp;
     Ok(())
 }
@@ -186,6 +220,11 @@ async fn on_placed(event: Event<Placed>, forward: &mut ForwardState) -> anyhow::
 async fn on_failed(event: Event<Failed>, forward: &mut ForwardState) -> anyhow::Result<()> {
     forward.status = ForwardStatus::Failed;
     forward.last_error = Some(event.data.reason.to_owned());
+    forward.retry = event.data.retry;
+    if event.data.retry {
+        forward.failures += 1;
+    }
+    forward.failed_at = Some(event.timestamp);
     forward.updated_at = event.timestamp;
     Ok(())
 }
@@ -333,6 +372,7 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         forward_id: &str,
         version: u16,
+        company_id: &str,
         routing_key: Option<String>,
     ) -> Result<bool, AliexpressError> {
         let written = evento::append(forward_id)
@@ -340,6 +380,7 @@ impl<E: Executor> super::Command<E> {
             .routing_key_opt(routing_key)
             .event(&Asking {
                 asked_by: actor.to_owned(),
+                company_id: company_id.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
@@ -455,6 +496,7 @@ impl<E: Executor> super::Command<E> {
             .event(&Failed {
                 reason: reason.chars().take(500).collect(),
                 failed_by: actor.to_owned(),
+                retry: false,
             })
             .tenant(&self.tenant)
             .commit(&self.executor)
@@ -466,12 +508,14 @@ impl<E: Executor> super::Command<E> {
         }
     }
 
-    /// Records why nothing was placed.
+    /// Records why nothing was placed; `retry` when nothing could have been
+    /// bought, so the sweep places it again ([`ForwardState::retry_at`]).
     pub async fn record_forward_failure(
         &self,
         actor: &str,
         forward_id: &str,
         reason: &str,
+        retry: bool,
         routing_key: Option<String>,
     ) -> Result<(), AliexpressError> {
         let forward = self.require_forward(forward_id).await?;
@@ -481,6 +525,7 @@ impl<E: Executor> super::Command<E> {
             .event(&Failed {
                 reason: reason.chars().take(500).collect(),
                 failed_by: actor.to_owned(),
+                retry,
             })
             .tenant(&self.tenant)
             .commit(&self.executor)

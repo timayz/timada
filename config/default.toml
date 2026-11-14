@@ -297,6 +297,12 @@ dir = "data/shopper-keys"
 # # none.
 # import_duty_cents = 300
 # import_fee_cents = 200
+# # How many orders a company's AliExpress account places an hour at most,
+# # over every shop it sells for, spread across the hour; the others wait their
+# # turn. AliExpress publishes no limit, but many retail orders an hour to many
+# # addresses from one buyer account is what risk control flags, and a flagged
+# # account places no more orders. 0: as they come.
+# orders_per_hour = 0
 # # AliExpress's own addresses, changed only for tests.
 # api_url = "https://api-sg.aliexpress.com"
 # authorize_url = "https://api-sg.aliexpress.com/oauth/authorize"

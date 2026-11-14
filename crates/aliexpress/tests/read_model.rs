@@ -2,10 +2,11 @@ use timada_aliexpress::aggregator::SkuLink;
 use timada_aliexpress::{
     AeOrderState, Delivery, DeliveryRead, ForwardRow, ForwardState, ForwardStatus, LinkRow,
     LinkState, LinkStatus, LinkedProduct, MIGRATIONS, NODE_MIGRATIONS, Placement, PlannedItem,
-    TABLES, delivery_read, forget_unrecorded, forward_of_order, forward_plan_shown, forwards_due,
-    forwards_stalled, keep_unrecorded, link_of_product, linked_products, links_due, note_delivery,
-    note_forward_read, note_parcels_followed, note_published, note_read, note_tried,
-    note_unrecorded_try, note_wanted, unrecorded, upsert_forward, upsert_link,
+    TABLES, delivery_read, forget_parcels_followed_before, forget_unrecorded, forward_of_order,
+    forward_plan_shown, forwards_due, forwards_stalled, keep_unrecorded, link_of_product,
+    linked_products, links_due, note_delivery, note_forward_read, note_parcels_followed,
+    note_published, note_read, note_tried, note_unrecorded_try, note_wanted, unrecorded,
+    upsert_forward, upsert_link,
 };
 use timada_catalog::DeliveryDays;
 use timada_core::Share;
@@ -987,4 +988,27 @@ async fn only_placed_orders_are_due() {
         .unwrap();
 
     assert_eq!(due.len(), 2);
+}
+
+/// The parcels' rows go once their order's watch is over, and nothing else
+/// does (#472): an item's row stays however long ago it was tried.
+#[tokio::test]
+async fn the_parcels_followed_past_their_watch_are_forgotten() {
+    let db = database().await;
+    note_parcels_followed(&db, "acme", "old", 100, true)
+        .await
+        .unwrap();
+    note_parcels_followed(&db, "acme", "recent", 900, false)
+        .await
+        .unwrap();
+    note_tried(&db, "acme", "an-item", 100).await.unwrap();
+
+    assert_eq!(forget_parcels_followed_before(&db, 500).await.unwrap(), 1);
+
+    let rows: Vec<(String,)> = db
+        .fetch_all("SELECT id FROM aliexpress_read_times ORDER BY id", ())
+        .await
+        .unwrap();
+    let ids: Vec<&str> = rows.iter().map(|(id,)| id.as_str()).collect();
+    assert_eq!(ids, ["an-item", "parcels:recent"]);
 }

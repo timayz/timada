@@ -5,10 +5,10 @@
 event timada-aliexpress/AeOrder::Claimed { ae_order_id: String, tenant_id: String, forward_id: String }
 event timada-aliexpress/AeOrder::Pushed { ae_order_id: String, status: String }
 event timada-aliexpress/Forward::AlsoPlaced { ae_order_ids: Vec<String>, placed_by: String }
-event timada-aliexpress/Forward::Asking { asked_by: String }
+event timada-aliexpress/Forward::Asking { asked_by: String, company_id: String }
 event timada-aliexpress/Forward::Checked { ae_order_id: String, status: String, logistics_status: String, tracking: Vec<String>, closed: bool }
 event timada-aliexpress/Forward::Done { tracking: Option<String>, fulfilled: bool }
-event timada-aliexpress/Forward::Failed { reason: String, failed_by: String }
+event timada-aliexpress/Forward::Failed { reason: String, failed_by: String, retry: bool }
 event timada-aliexpress/Forward::Placed { ae_order_ids: Vec<String>, items: Vec<ForwardItem>, pay_requested: bool, complete: bool, placed_by: String }
 event timada-aliexpress/Forward::Requested { order_id: String, requested_by: String }
 event timada-aliexpress/Forward::Started { started_by: String }

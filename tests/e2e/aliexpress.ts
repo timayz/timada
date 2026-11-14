@@ -49,14 +49,21 @@ export class FakeAliexpress {
   /// Calls whose signature did not match.
   badSignatures = 0;
   offline = false;
-  /// How long the tokens handed out last, in seconds: a month by default,
-  /// past the day before lapsing at which the dashboard renews a token. One
-  /// within that day is renewed by every sweep of every node, for every shop
-  /// the suite connected, which keeps the store busy for the rest of the run.
+  /// How long the tokens handed out last, in seconds: a month by default.
+  /// The dashboard renews a token a quarter of its life before it lapses, a
+  /// day at most, so a month-long one is never renewed during a run, and a
+  /// short one is renewed again and again, for every shop the suite
+  /// connected, which keeps the store busy for the rest of the run.
   tokenLifetime = 30 * 86_400;
+  /// How long the token a connection gets lasts, when it is not
+  /// `tokenLifetime`: a renewal spec connects with a short one, renewed
+  /// within seconds with a month-long one.
+  connectionTokenLifetime: number | undefined = undefined;
   /// The refresh tokens handed out, in order (each one unique, so a spec can
   /// tell its shop's renewal from another's).
   readonly refreshTokens: string[] = [];
+  /// The refresh tokens connections got, in order.
+  readonly connections: string[] = [];
   /// The refresh tokens renewals were asked with, in order.
   readonly renewedWith: string[] = [];
   readonly skus: Sku[] = [
@@ -171,16 +178,20 @@ export class FakeAliexpress {
       return;
     }
     if (method === "/auth/token/create" || method === "/auth/token/refresh") {
-      if (method === "/auth/token/refresh") {
+      const connecting = method === "/auth/token/create";
+      if (!connecting) {
         this.renewedWith.push(url.searchParams.get("refresh_token") ?? "");
       }
       const refreshToken = `e2e-refresh-${crypto.randomUUID()}`;
       this.refreshTokens.push(refreshToken);
+      if (connecting) {
+        this.connections.push(refreshToken);
+      }
       json({
         code: "0",
         access_token: "e2e-access",
         refresh_token: refreshToken,
-        expires_in: this.tokenLifetime,
+        expires_in: connecting ? (this.connectionTokenLifetime ?? this.tokenLifetime) : this.tokenLifetime,
         refresh_expires_in: 172_800,
         account: "shop@example.org",
         request_id: "e2e",
