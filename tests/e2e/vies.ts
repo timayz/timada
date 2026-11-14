@@ -1,10 +1,12 @@
 import http from "node:http";
+import { standInPort } from "./shard";
 
 // A stand-in for VIES, the European Commission's VAT number service, for the
 // browser suite: numbers whose digits start with 1 exist. config/e2e.toml
-// points the dashboard at it.
+// points the dashboard at it, and scripts/e2e.sh each next server 100 ports
+// further on.
 
-export const VIES_PORT = Number(process.env.E2E_VIES_PORT ?? 12113);
+export const VIES_PORT = Number(process.env.E2E_VIES_PORT ?? standInPort(12113));
 
 export class FakeVies {
   readonly checked: string[] = [];

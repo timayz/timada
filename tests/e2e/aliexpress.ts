@@ -1,6 +1,7 @@
 import type { APIRequestContext } from "@playwright/test";
 import crypto from "node:crypto";
 import http from "node:http";
+import { standInPort } from "./shard";
 import { PNG } from "./storefront";
 
 // A stand-in for AliExpress's open platform, for the browser suite: the
@@ -13,9 +14,10 @@ import { PNG } from "./storefront";
 // dashboard's webhook as AliExpress would. Every call is checked against
 // the platform app's secret the way AliExpress signs (HMAC-SHA256 over the
 // path, then the sorted name+value pairs, upper-case hex). config/e2e.toml
-// gives the dashboard the same key and secret and points it at the stand-in.
+// gives the dashboard the same key and secret and points it at the stand-in,
+// and scripts/e2e.sh each next server 100 ports further on.
 
-export const ALIEXPRESS_PORT = Number(process.env.E2E_ALIEXPRESS_PORT ?? 12114);
+export const ALIEXPRESS_PORT = Number(process.env.E2E_ALIEXPRESS_PORT ?? standInPort(12114));
 export const ALIEXPRESS_URL = `http://127.0.0.1:${ALIEXPRESS_PORT}`;
 
 export const APP_KEY = "34567";

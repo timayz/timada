@@ -1007,14 +1007,22 @@ Everything but `serve` runs with the server stopped.
   `storefront` (the library against a live store), `payments` (the webhook, the late
   payments and the refunds against a fake Stripe), `styles` (the stylesheet build),
   `events_lock`. The review endpoint is covered over HTTP by the browser suite.
-- `make e2e`: `scripts/e2e.sh` builds the dashboard and the storefront, resets
-  the database, starts the server on `config/e2e.toml` and runs Playwright through the
-  compose stack (`make up`: Traefik for HTTPS, dex as an OIDC provider, MailDev as the
-  mailbox the tests read codes from). Pass a spec path or a title filter to run part of it.
+- `make e2e`: `scripts/e2e.sh` builds the dashboard and the storefront, starts three
+  servers on fresh databases and runs Playwright through the compose stack (`make up`:
+  Traefik for HTTPS, dex as an OIDC provider, MailDev as the mailbox the tests read
+  codes from), one worker per server. Each server runs on `config/e2e.toml` with its
+  own ports, files and address from `TIMADA__*` variables: worker N drives server N at
+  `https://s<N>.timada.localhost` (`tests/e2e/shard.ts`), and the fake Stripe, VIES
+  and AliExpress its specs start listen 100 ports further on for each next server. A
+  spec file runs whole on one server, so specs never share a fake's port or the first
+  registered user. They do share the mailbox, so a spec reads mail only for addresses
+  of its own. Each server logs to `data/e2e/shard<N>.log`; `E2E_SHARDS=1` runs the
+  suite on one server at `https://timada.localhost`, its output in the terminal. Pass
+  a spec path or a title filter to run part of it.
 - `make e2e.cluster` (`E2E_NODES=3 scripts/e2e.sh`, which takes the same filters): the
-  same suite on three nodes, each on `config/e2e.toml` with a `[cluster]` section added
-  and its own ports and files (`data/e2e/node<N>`, its output in
-  `data/e2e/node<N>.log`). Traefik sends each request to the next node, so a form's post
+  same suite, one spec file at a time, on three nodes, each on `config/e2e.toml` with a
+  `[cluster]` section added and its own ports and files (`data/e2e/node<N>`, its output
+  in `data/e2e/node<N>.log`). Traefik sends each request to the next node, so a form's post
   and the page after it are answered by different nodes: the one setup where a read from
   a node's own file and a read through the cluster differ. The storefronts the specs
   start connect to node 0's store API, and their `/store/*` calls go through Traefik.
