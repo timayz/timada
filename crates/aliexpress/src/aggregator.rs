@@ -152,8 +152,13 @@ pub mod forward {
         Started { started_by: String },
         /// AliExpress is about to be asked for it, written at the version
         /// the attempt took it on at: an attempt overtaken in between (asked
-        /// for again, given up as stalled) asks nothing.
-        Asking { asked_by: String },
+        /// for again, given up as stalled) asks nothing. `company_id` is the
+        /// company whose AliExpress account it is placed on, which paces its
+        /// orders (the dashboard's `[aliexpress] orders_per_hour`).
+        Asking {
+            asked_by: String,
+            company_id: String,
+        },
         /// AliExpress took it: its order numbers (one per seller), what was
         /// bought, whether it was asked to charge the account, and whether
         /// every line of the shop's order was bought there.
@@ -170,8 +175,17 @@ pub mod forward {
             ae_order_ids: Vec<String>,
             placed_by: String,
         },
-        /// Nothing was placed; `reason` says why, for the merchant.
-        Failed { reason: String, failed_by: String },
+        /// Nothing was placed; `reason` says why, for the merchant. `retry`:
+        /// nothing could have been bought yet (AliExpress or the payment
+        /// provider did not answer before AliExpress was asked to place it,
+        /// or the store failed), so it is placed again on its own, a few
+        /// times over a day ([`FORWARD_RETRY_DELAYS_SECS`](crate::FORWARD_RETRY_DELAYS_SECS));
+        /// otherwise the merchant decides.
+        Failed {
+            reason: String,
+            failed_by: String,
+            retry: bool,
+        },
         /// One AliExpress order as read again, when that changed. `closed`:
         /// AliExpress closed it without shipping it (its push said so, or it
         /// finished with no parcel ever known).

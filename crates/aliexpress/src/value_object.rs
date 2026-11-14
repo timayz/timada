@@ -58,6 +58,13 @@ pub fn product_link_id(product_id: &str) -> String {
 /// How long an order placed on AliExpress is read again for tracking.
 pub const FORWARD_WATCH_SECS: u64 = 60 * 24 * 60 * 60;
 
+/// How long after an attempt that bought nothing a forward is placed again
+/// on its own, try after try (#470): five tries over about a day, so an
+/// outage of AliExpress or of the payment provider asks no merchant to place
+/// each order again by hand. Past the last, the merchant decides.
+pub const FORWARD_RETRY_DELAYS_SECS: [u64; 5] =
+    [15 * 60, 60 * 60, 3 * 60 * 60, 6 * 60 * 60, 12 * 60 * 60];
+
 /// How long a forward may stay taken on with no word of how placing it went:
 /// past it, the node placing it stopped, or could not record what AliExpress
 /// answered, and AliExpress may have the order. Well above what placing takes,

@@ -752,12 +752,17 @@ impl AliexpressCard {
         match forward.status {
             ForwardStatus::Requested | ForwardStatus::Started => {
                 shown.summary = "Being placed on AliExpress…";
+                let waited = now.saturating_sub(forward.updated_at);
+                // Asked for and taken on by no node a minute on: its account's
+                // pace holds it back, and the sweep places it in turn. Nothing
+                // was asked of AliExpress yet.
+                if forward.status == ForwardStatus::Requested
+                    && waited > crate::aliexpress::sync::WAITING_SECS
+                {
+                    shown.notes.push("Waiting its turn: it is placed on its own, in step with the account's other orders.");
                 // As long as the sweep gives an attempt before saying it
                 // stalled: one this old is surely over, or overtaken.
-                if can_forward
-                    && now.saturating_sub(forward.updated_at)
-                        > timada_aliexpress::FORWARD_STALL_SECS
-                {
+                } else if can_forward && waited > timada_aliexpress::FORWARD_STALL_SECS {
                     shown.notes.push("This is taking long: look at the account's orders on AliExpress before placing it again.");
                     shown.action = Some(("Place again", true));
                 }
@@ -765,6 +770,9 @@ impl AliexpressCard {
             ForwardStatus::Failed => {
                 shown.summary = "Not placed on AliExpress.";
                 shown.error = forward.last_error.clone();
+                if forward.retry_at().is_some() {
+                    shown.notes.push("Nothing was bought: it is placed again on its own, up to five times over a day.");
+                }
                 shown.action = can_forward.then_some(("Place again", false));
             }
             ForwardStatus::Placed | ForwardStatus::Done => {

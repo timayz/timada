@@ -223,9 +223,11 @@ products the open orders':
 
 What sales and members spend comes out of every lane by its part. A lane goes
 through what is due a batch at a time (five minutes of its calls, 100 rows at most),
-and sleeps a minute when nothing is. The renewals of the companies' access, the
-records a node could not write and the stalled forwards run on the hourly timer
-(`sync_check_secs`) and wait for no lane.
+and sleeps a minute when nothing is. The renewals of the companies' access run on the
+hourly timer (`sync_check_secs`), and the records a node could not write and the
+stalled forwards on another of the same period, so a slow AliExpress answering
+renewals holds neither up; the orders placed again on their own (below) are looked for
+every minute. None of them waits for a lane.
 
 The products lane spends its calls by priority:
 
@@ -374,7 +376,28 @@ means than the checkout (a `store:write` key's) is refused with *it was not plac
 through the shop's checkout*, a hold that went back meanwhile is refused too, and
 Stripe not answering fails the forward to try again.
 
-A failure is shown on the card with *Place again*. One node takes each order on
+A failure is shown on the card with *Place again*. One before AliExpress was asked to
+place the order, when nothing can have been bought (AliExpress not answering a product
+or delivery read, Stripe not answering, the store failing), is placed again on its own
+(`Failed { retry }`, #470): the sweep of the node it belongs to asks for it again 15
+minutes after the first failure, then one, three, six and twelve hours after the
+following ones, about a day in all, and the card says so. An outage of AliExpress or
+Stripe then asks no merchant to place each order again by hand. Past the fifth try, and
+for any refusal (an item no longer sold, no phone, a lapsing hold), the merchant
+decides; their *Place again* starts the tries over. An attempt that may have bought the
+order is never tried again on its own (below).
+
+`[aliexpress] orders_per_hour` (0, off, by default) paces each company's buyer account,
+over every shop it sells for: an order its account may not place yet stays asked for,
+untouched, and the sweep places it when its turn comes, one at most every hour /
+`orders_per_hour`, and no more than that many in an hour. AliExpress publishes no limit,
+but one buyer account placing many retail orders an hour to many addresses, from nodes
+racing each other, is the pattern a marketplace's risk control flags, and a flagged
+account can no longer place orders at all. The pace goes by what the node's read model
+knows the account was asked to place (`Asking` carries the company), so two nodes
+placing at the same moment may each let one through: a pace, not a lock. The sweep
+also places an order asked for that no node took on within a minute, up to a day after
+it was asked for. One node takes each order on
 (`Started`, like an import), and right before asking AliExpress writes `Asking` on the
 forward at the version it took it on at: an attempt overtaken in between (asked for
 again, given up as stalled) asks nothing. What AliExpress took is recorded at once,
