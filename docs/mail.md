@@ -99,6 +99,12 @@ How a send went is recorded on the stream (`timada_core::Sending`):
   stays open for days. A node whose lease lapsed while it was still trying records no
   failure over the claim another node took since.
 
+A shop's sign-in code still on its way when the shopper's account is deleted is not
+mailed: the deletion destroys the key the code's address is sealed under, so no node
+can open it, and the mailroom drops it. The shopper may ask for a new code at once. A
+code asked for while the deletion lands is issued again under a key of its own, and
+mailed.
+
 `/admin/cluster` counts the mails this node still owes and lists the ones given up on
 for a week, with how many tries were made (as the mail's stream counts them: each
 `MailDeferred` and `MailFailed` carries the count) and the last failure's reason. The
