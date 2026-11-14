@@ -199,6 +199,15 @@ fn territory(country: &str, postal_code: &str) -> Territory {
     }
 }
 
+/// Whether `country` (ISO 3166 alpha-2) is a member of the EU: goods
+/// shipped there from anywhere else are imports, and pay the EU's charges
+/// on imports.
+pub fn in_eu(country: &str) -> bool {
+    eu_members()
+        .iter()
+        .any(|member| member.eq_ignore_ascii_case(country))
+}
+
 fn database() -> &'static TaxDatabase {
     static DATABASE: OnceLock<TaxDatabase> = OnceLock::new();
     DATABASE.get_or_init(|| TaxDatabase::new().expect("world-tax ships a valid database"))
@@ -505,6 +514,16 @@ mod tests {
             country: country.into(),
             postal_code: postal_code.into(),
             vat_number: None,
+        }
+    }
+
+    #[test]
+    fn the_eu_is_its_members_whatever_the_case() {
+        for member in ["FR", "it", "DE", "PL", "IE"] {
+            assert!(in_eu(member), "{member}");
+        }
+        for outside in ["CN", "US", "GB", "CH", "NO", ""] {
+            assert!(!in_eu(outside), "{outside}");
         }
     }
 

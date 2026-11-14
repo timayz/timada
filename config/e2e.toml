@@ -78,6 +78,10 @@ sync_every_secs = 3
 parcel_read_every_secs = 1
 calls_per_day = 8640000
 read_fresh_secs = 0
+# The specs price from the stand-in's costs alone; the EU's charges on imports
+# have tests of their own (dashboard/src/aliexpress/tests.rs).
+import_duty_cents = 0
+import_fee_cents = 0
 
 # Every spec invites from a handful of accounts, so the limits on invitations
 # are far above what the suite sends.

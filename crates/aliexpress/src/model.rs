@@ -76,8 +76,8 @@ pub struct AeProduct {
     /// Its facts, in AliExpress's order.
     pub properties: Vec<(String, String)>,
     /// How long the service an order would ship with takes to the market's
-    /// country, once [`Client::product_delivered`](crate::Client::product_delivered)
-    /// asked; `None` before, or when AliExpress gives no days.
+    /// country, once its delivery was added ([`AeProduct::add_delivery`]);
+    /// `None` before, or when AliExpress gives no days.
     pub delivery_days: Option<DeliveryDays>,
 }
 
@@ -96,6 +96,41 @@ pub struct Delivery {
     pub fee_cents: u64,
     /// How long it takes, when AliExpress says.
     pub days: Option<DeliveryDays>,
+    /// The country it ships from (ISO 3166 alpha-2), when AliExpress says:
+    /// what decides whether the goods are imports where they go.
+    pub ships_from: Option<String>,
+}
+
+/// What AliExpress adds to an order for each kind of goods it ships into the
+/// EU from outside, on top of their price and delivery: the flat customs
+/// duty of a parcel worth 150 EUR or less, with the destination's VAT on it,
+/// and the processing fee, whatever the parcel is worth (#557). Each is
+/// counted once per kind of goods in a parcel: a product is priced as one
+/// kind, with what bringing one of it in costs. Amounts are in the minor
+/// units of the market's currency.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ImportCharge {
+    /// The duty, VAT included.
+    pub duty_cents: u64,
+    pub fee_cents: u64,
+    /// The most a kind of goods may be worth, VAT aside, for the flat duty:
+    /// beyond it, the goods pay their own duties, which no price here knows.
+    pub low_value_cents: u64,
+    /// The destination's VAT, in basis points, which the goods' price
+    /// includes.
+    pub vat_bps: u32,
+}
+
+impl ImportCharge {
+    /// What bringing in one combination priced `cost_cents` costs (its own
+    /// price, VAT included, delivery aside).
+    pub fn on(&self, cost_cents: u64) -> u64 {
+        // Worth, VAT aside, no more than the line: cost / (1 + VAT) <= line.
+        let low_value = u128::from(cost_cents) * 10_000
+            <= u128::from(self.low_value_cents) * (10_000 + u128::from(self.vat_bps));
+        let duty = if low_value { self.duty_cents } else { 0 };
+        duty.saturating_add(self.fee_cents)
+    }
 }
 
 /// One combination AliExpress sells.
@@ -146,14 +181,24 @@ impl AeProduct {
     }
 
     /// Adds the delivery's fee to the cost of every combination priced in
-    /// `currency` (what the shop pays to have one delivered) and takes the
-    /// days it says.
-    pub fn add_delivery(&mut self, delivery: &Delivery, currency: &str) {
+    /// `currency` (what the shop pays to have one delivered), with what
+    /// bringing it in costs when the goods are imports where they go
+    /// (`import`, worked out from the combination's own price), and takes
+    /// the days it says.
+    pub fn add_delivery(
+        &mut self,
+        delivery: &Delivery,
+        currency: &str,
+        import: Option<&ImportCharge>,
+    ) {
         for sku in &mut self.skus {
             if sku.quoted_in(currency)
                 && let Some(cost) = &mut sku.cost_cents
             {
-                *cost = cost.saturating_add(delivery.fee_cents);
+                let charge = import.map_or(0, |import| import.on(*cost));
+                *cost = cost
+                    .saturating_add(delivery.fee_cents)
+                    .saturating_add(charge);
             }
         }
         self.delivery_days = delivery.days;
@@ -299,6 +344,9 @@ pub struct FreightOption {
     /// AliExpress says (`min_delivery_days`, `max_delivery_days`).
     pub min_days: Option<u16>,
     pub max_days: Option<u16>,
+    /// The country it ships from (`ship_from_country`, `CN`), when
+    /// AliExpress says.
+    pub ships_from: Option<String>,
 }
 
 impl FreightOption {
@@ -360,6 +408,11 @@ impl FreightOption {
                     tracking,
                     min_days: days("min_delivery_days"),
                     max_days: days("max_delivery_days"),
+                    ships_from: option
+                        .get("ship_from_country")
+                        .map(text)
+                        .map(|country| country.trim().to_ascii_uppercase())
+                        .filter(|country| !country.is_empty()),
                 })
             })
             .collect()
@@ -549,10 +602,61 @@ mod tests {
                 sku_cost_cents: 0,
                 fee_cents: 2_805,
                 days: None,
+                ships_from: None,
             },
             "EUR",
+            None,
         );
         let costs: Vec<_> = product.skus.iter().map(|sku| sku.cost_cents).collect();
         assert_eq!(costs, [Some(2_819), Some(2_825), None, Some(100)]);
+    }
+
+    /// France: 3 EUR of duty and its 20 % VAT, 2 EUR of fee, the duty for
+    /// goods worth up to 150 EUR before VAT.
+    const FRANCE: ImportCharge = ImportCharge {
+        duty_cents: 360,
+        fee_cents: 200,
+        low_value_cents: 15_000,
+        vat_bps: 2_000,
+    };
+
+    #[test]
+    fn the_duty_goes_up_to_the_low_value_line_and_the_fee_beyond() {
+        assert_eq!(FRANCE.on(379), 560);
+        // 180.00 VAT included is 150.00 before it: still low value.
+        assert_eq!(FRANCE.on(18_000), 560);
+        assert_eq!(FRANCE.on(18_001), 200);
+        assert_eq!(ImportCharge::default().on(379), 0);
+    }
+
+    #[test]
+    fn what_bringing_it_in_costs_goes_on_its_own_price_before_delivery() {
+        let mut product = product(vec![
+            sku("cheap", Some(379), Some("EUR"), 3),
+            sku("dear", Some(20_000), Some("EUR"), 3),
+            sku("in-usd", Some(379), Some("USD"), 3),
+        ]);
+        product.add_delivery(
+            &Delivery {
+                sku_id: "cheap".into(),
+                sku_cost_cents: 379,
+                // Delivery would take the dear one over the line, were it
+                // counted: it is not.
+                fee_cents: 1_097,
+                days: None,
+                ships_from: Some("CN".into()),
+            },
+            "EUR",
+            Some(&FRANCE),
+        );
+        let costs: Vec<_> = product.skus.iter().map(|sku| sku.cost_cents).collect();
+        assert_eq!(
+            costs,
+            [
+                Some(379 + 1_097 + 560),
+                Some(20_000 + 1_097 + 200),
+                Some(379)
+            ]
+        );
     }
 }

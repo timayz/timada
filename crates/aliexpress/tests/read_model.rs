@@ -574,6 +574,7 @@ async fn what_delivering_an_item_cost_is_kept_until_it_is_unlinked() {
         sku_cost_cents: 431,
         fee_cents: 250,
         days: DeliveryDays::new(7, 12).ok(),
+        ships_from: Some("CN".to_owned()),
     };
     note_delivery(&db, "acme", "acme-0000", &delivery, 500)
         .await
@@ -587,10 +588,11 @@ async fn what_delivering_an_item_cost_is_kept_until_it_is_unlinked() {
     );
     assert_eq!(delivery_read(&db, "acme", "other").await.unwrap(), None);
 
-    // Read again: the later answer stands.
+    // Read again: the later answer stands, where it ships from too.
     let free = Delivery {
         fee_cents: 0,
         days: None,
+        ships_from: None,
         ..delivery
     };
     note_delivery(&db, "acme", "acme-0000", &free, 600)
@@ -600,8 +602,13 @@ async fn what_delivering_an_item_cost_is_kept_until_it_is_unlinked() {
         delivery_read(&db, "acme", "acme-0000")
             .await
             .unwrap()
-            .map(|read| (read.delivery.fee_cents, read.delivery.days, read.read_at)),
-        Some((0, None, 600))
+            .map(|read| (
+                read.delivery.fee_cents,
+                read.delivery.days,
+                read.delivery.ships_from,
+                read.read_at
+            )),
+        Some((0, None, None, 600))
     );
 
     let unlinked = LinkState {

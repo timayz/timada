@@ -15,16 +15,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use timada_aliexpress::{
-    AliexpressError, Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL, LinkState, Market,
-    RenewedTokens, SyncRead, TokenRenewal,
+    AeError, AeProduct, AliexpressError, Client, DEFAULT_API_URL, DEFAULT_AUTHORIZE_URL,
+    IMPORT_LOW_VALUE_EURO_CENTS, ImportCharge, LinkState, Market, RenewedTokens, SyncRead,
+    TokenRenewal,
 };
 use timada_core::Share;
+use timada_invoicing::rates::EURO;
 use timada_tenancy::{AliexpressSettings, CompanyState, TenantState};
 
 use self::budget::CallBudget;
 use crate::cluster::{Among, ShareOf};
 use crate::config::AliexpressConfig;
 use crate::db::Db;
+use crate::ecb::{EuroRates, RateAnswer};
 use crate::media::Media;
 use crate::media_images::MediaImages;
 use crate::seal::Sealer;
@@ -74,6 +77,12 @@ pub struct Aliexpress {
     push_reads_running: std::sync::atomic::AtomicUsize,
     /// Told when the last of them ends.
     push_reads_idle: tokio::sync::Notify,
+    /// What AliExpress adds for each kind of goods it ships into the EU from
+    /// outside, in euro cents ([`Self::import_charge`]).
+    import_duty_cents: u64,
+    import_fee_cents: u64,
+    /// The euro's rates, for a shop buying in another currency.
+    euro_rates: Arc<dyn EuroRates>,
 }
 
 /// How many reads after pushes run at once on a node: a burst of pushes
@@ -87,6 +96,7 @@ impl Aliexpress {
         allow_private_hosts: bool,
         quota: Arc<crate::media::Quota>,
         share: ShareOf,
+        euro_rates: Arc<dyn EuroRates>,
     ) -> anyhow::Result<Arc<Self>> {
         // reqwest's rustls needs the process-wide crypto provider named.
         let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -129,6 +139,9 @@ impl Aliexpress {
             push_reads: tokio::sync::Semaphore::new(PUSH_READS),
             push_reads_running: std::sync::atomic::AtomicUsize::new(0),
             push_reads_idle: tokio::sync::Notify::new(),
+            import_duty_cents: config.import_duty_cents,
+            import_fee_cents: config.import_fee_cents,
+            euro_rates,
         }))
     }
 
@@ -421,6 +434,78 @@ impl Aliexpress {
         }
     }
 
+    /// What AliExpress adds for each kind of goods it ships to the market's
+    /// country from `ships_from` (#557): the EU's charges on imports, when
+    /// the market is in the EU and the goods come from outside it, or from
+    /// where AliExpress does not say (most of what it sells ships from
+    /// China). The duty carries the destination's standard VAT, as AliExpress
+    /// charges it. In the market's currency, at the day's euro rate when that
+    /// is not the euro; none when the rate cannot be had, which the log says.
+    pub async fn import_charge(
+        &self,
+        market: &Market,
+        ships_from: Option<&str>,
+        now: u64,
+    ) -> Option<ImportCharge> {
+        let country = market.ship_to_country.as_str();
+        if (self.import_duty_cents == 0 && self.import_fee_cents == 0)
+            || !timada_invoicing::tax::in_eu(country)
+            || ships_from.is_some_and(timada_invoicing::tax::in_eu)
+        {
+            return None;
+        }
+        let vat_bps = timada_invoicing::tax::rate_bps(country, "standard");
+        let vat = (u128::from(self.import_duty_cents) * u128::from(vat_bps) + 5_000) / 10_000;
+        let in_euros = ImportCharge {
+            duty_cents: self.import_duty_cents + u64::try_from(vat).unwrap_or(u64::MAX),
+            fee_cents: self.import_fee_cents,
+            low_value_cents: IMPORT_LOW_VALUE_EURO_CENTS,
+            vat_bps,
+        };
+        if market.currency.eq_ignore_ascii_case(EURO) {
+            return Some(in_euros);
+        }
+        let day = timada_core::civil::format_date(now);
+        let rate = match self.euro_rates.rate_on(&market.currency, &day).await {
+            RateAnswer::Rate(rate) => rate,
+            RateAnswer::NoSuchCurrency => {
+                tracing::warn!(currency = %market.currency, country, "no euro rate for this currency: imports priced without the EU's charges");
+                return None;
+            }
+            RateAnswer::Unavailable(reason) => {
+                tracing::warn!(currency = %market.currency, country, %reason, "the euro rates could not be read: imports priced without the EU's charges for now");
+                return None;
+            }
+        };
+        Some(ImportCharge {
+            duty_cents: rate.from_euro_cents(in_euros.duty_cents)?,
+            fee_cents: rate.from_euro_cents(in_euros.fee_cents)?,
+            low_value_cents: rate.from_euro_cents(in_euros.low_value_cents)?,
+            vat_bps,
+        })
+    }
+
+    /// One item as an import fills a draft from it: its combinations, each
+    /// costing what delivering one to the market's country costs on top
+    /// ([`Client::delivery`]), and what bringing it in costs
+    /// ([`Self::import_charge`]), with the days delivery takes. An item no
+    /// longer sold is left as read.
+    pub async fn read_delivered(
+        &self,
+        client: &Client,
+        ae_product_id: &str,
+        market: &Market,
+    ) -> Result<AeProduct, AeError> {
+        let mut product = client.product(ae_product_id, market).await?;
+        if let Some(delivery) = client.delivery(&product, market).await? {
+            let charge = self
+                .import_charge(market, delivery.ships_from.as_deref(), crate::auth::now())
+                .await;
+            product.add_delivery(&delivery, &market.currency, charge.as_ref());
+        }
+        Ok(product)
+    }
+
     /// Keeps a tenant's imported pictures, within its quota.
     pub fn images(&self, media: Arc<Media>, tenant: &TenantState) -> MediaImages {
         MediaImages::new(
@@ -636,11 +721,13 @@ impl Aliexpress {
 
 impl Aliexpress {
     /// Reads the item as `mode` wants it: its combinations, then what
-    /// delivering one costs and takes ([`Client::delivery`]), which a routine
-    /// read takes from this node's last answer instead
+    /// delivering one costs and takes, and where from ([`Client::delivery`]),
+    /// which a routine read takes from this node's last answer instead
     /// ([`timada_aliexpress::delivery_read`]) while the combination it was
     /// asked for costs the same, the item is on sale and the answer is
-    /// fresh. What is asked is kept for the next routine read.
+    /// fresh. What is asked is kept for the next routine read. Each
+    /// combination then costs what delivering it and bringing it in cost on
+    /// top ([`Self::import_charge`]).
     async fn read_item(
         &self,
         db: &Db,
@@ -649,7 +736,7 @@ impl Aliexpress {
         link: &LinkState,
         settings: &AliexpressSettings,
         mode: SyncMode<'_>,
-    ) -> Result<timada_aliexpress::AeProduct, timada_aliexpress::AeError> {
+    ) -> Result<AeProduct, AeError> {
         let market = Self::market_of(settings);
         let mut product = client.product(&link.ae_product_id, &market).await?;
         let now = crate::auth::now();
@@ -684,7 +771,10 @@ impl Aliexpress {
             }
         };
         if let Some(delivery) = delivery {
-            product.add_delivery(&delivery, &market.currency);
+            let charge = self
+                .import_charge(&market, delivery.ships_from.as_deref(), now)
+                .await;
+            product.add_delivery(&delivery, &market.currency, charge.as_ref());
         }
         Ok(product)
     }

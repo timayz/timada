@@ -79,6 +79,15 @@ impl ExchangeRate {
         u64::try_from((exact + micros / 2) / micros).ok()
     }
 
+    /// `cents` of euros in the currency's minor units, rounded to the
+    /// nearest, halves up; `None` when the rate does not parse.
+    pub fn from_euro_cents(&self, cents: u64) -> Option<u64> {
+        let micros = u128::from(self.per_euro_micros()?);
+        let exact = u128::from(cents) * micros;
+        let unit = 10u128.pow(MICROS);
+        u64::try_from((exact + unit / 2) / unit).ok()
+    }
+
     /// Whether this is the rate of `currency` and it parses.
     pub fn converts(&self, currency: &str) -> bool {
         self.currency.eq_ignore_ascii_case(currency) && self.per_euro_micros().is_some()
@@ -351,6 +360,23 @@ mod tests {
         let broken = ExchangeRate::ecb("USD", "n/a", "2026-10-14");
         assert!(!broken.converts("USD"));
         assert_eq!(broken.to_euro_cents(100), None);
+    }
+
+    #[test]
+    fn euro_cents_convert_to_the_currency_rounding_halves_up() {
+        let pln = ExchangeRate::ecb("PLN", "4.3285", "2026-10-14");
+        // 3.00 € at 4.3285: 12.9855 zł → 12.99 zł.
+        assert_eq!(pln.from_euro_cents(300), Some(1_299));
+        assert_eq!(pln.from_euro_cents(0), Some(0));
+        // 0.5 of a grosz is half, up to one.
+        assert_eq!(
+            ExchangeRate::ecb("PLN", "0.5", "2026-10-14").from_euro_cents(1),
+            Some(1)
+        );
+        assert_eq!(
+            ExchangeRate::ecb("PLN", "n/a", "2026-10-14").from_euro_cents(300),
+            None
+        );
     }
 
     #[test]

@@ -496,29 +496,13 @@ impl Client {
         AeProduct::from_response(product_id, &body)
     }
 
-    /// [`product`](Self::product), each combination's cost with what delivery
-    /// to the market's country costs added, and the days it takes
-    /// ([`AeProduct::delivery_days`]): the service an order would ship
-    /// with ([`choose_service`]), asked once for one combination. Some sellers
-    /// list an item at a few cents and charge its price as delivery; a cost
-    /// without it would sell such an item at a loss. An item no longer sold
-    /// is left as read.
-    pub async fn product_delivered(
-        &self,
-        product_id: &str,
-        market: &Market,
-    ) -> Result<AeProduct, AeError> {
-        let mut product = self.product(product_id, market).await?;
-        if let Some(delivery) = self.delivery(&product, market).await? {
-            product.add_delivery(&delivery, &market.currency);
-        }
-        Ok(product)
-    }
-
     /// What delivering `product` to the market's country costs and takes,
-    /// asked for one combination ([`AeProduct::delivery_sku`]) with the
-    /// service an order would ship with ([`choose_service`]); `None` for an
-    /// item no longer sold, or with no combination to ask about. One call.
+    /// and where from, asked for one combination
+    /// ([`AeProduct::delivery_sku`]) with the service an order would ship
+    /// with ([`choose_service`]); `None` for an item no longer sold, or with
+    /// no combination to ask about. One call. Some sellers list an item at a
+    /// few cents and charge its price as delivery: a cost without delivery
+    /// would sell such an item at a loss ([`AeProduct::add_delivery`]).
     pub async fn delivery(
         &self,
         product: &AeProduct,
@@ -550,6 +534,7 @@ impl Client {
             sku_cost_cents: sku.cost_cents.unwrap_or_default(),
             fee_cents: service.cents,
             days: service.delivery_days(),
+            ships_from: service.ships_from.clone(),
         }))
     }
 

@@ -64,6 +64,11 @@ pub const FORWARD_WATCH_SECS: u64 = 60 * 24 * 60 * 60;
 /// a couple of calls per item each given twenty seconds.
 pub const FORWARD_STALL_SECS: u64 = 30 * 60;
 
+/// The most a parcel shipped into the EU from outside may be worth, VAT
+/// aside, in euro cents, for its goods to pay the flat customs duty rather
+/// than their own ([`ImportCharge`](crate::ImportCharge)).
+pub const IMPORT_LOW_VALUE_EURO_CENTS: u64 = 15_000;
+
 /// How long before an access token lapses it is renewed.
 pub const REFRESH_MARGIN_SECS: u64 = 24 * 60 * 60;
 

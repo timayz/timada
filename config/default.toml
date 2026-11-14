@@ -289,6 +289,14 @@ dir = "data/shopper-keys"
 # # it instead of reading the product again. Longer spends fewer calls on what
 # # sells a lot; a shopper may then pay a price AliExpress changed that long ago.
 # read_fresh_secs = 60
+# # What AliExpress adds to an order for each kind of goods it ships into the EU
+# # from outside, in euro cents, which imports are priced with: the flat customs
+# # duty of a parcel worth 150 EUR or less (3 EUR from 2026-07-01 until
+# # 2028-07-01; the destination's VAT goes on top) and the processing fee of any
+# # parcel (2 EUR from 2026-11-01). Follow the law here when it changes; 0 for
+# # none.
+# import_duty_cents = 300
+# import_fee_cents = 200
 # # AliExpress's own addresses, changed only for tests.
 # api_url = "https://api-sg.aliexpress.com"
 # authorize_url = "https://api-sg.aliexpress.com/oauth/authorize"

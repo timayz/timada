@@ -94,6 +94,7 @@ pub const NODE_MIGRATIONS: Migrations<'static> = Migrations::new(
                 fee_cents INTEGER NOT NULL,
                 min_days INTEGER,
                 max_days INTEGER,
+                ships_from TEXT,
                 read_at INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, id)
             );
