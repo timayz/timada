@@ -19,6 +19,13 @@
 //! twelve hours), and once they run out the file is given up on, which
 //! `/admin/cluster` shows for a week.
 //!
+//! A picture can be removed while its row is being worked (#528): the read
+//! model trails the commands by a second or so, so a picture added and
+//! removed in quick succession has its row taken by a beat just before
+//! [`Fetcher::forget`] deletes it. No peer having the file is then no loss,
+//! and a copy a slower peer still handed over is deleted again; the store no
+//! longer knowing the file tells the two apart.
+//!
 //! The table is this node's own: a copy of the store from a peer leaves it
 //! alone, and the subscription catching up afterwards fills it again with
 //! every file the store knows, most of which the disk already holds (one
@@ -138,6 +145,20 @@ pub(super) async fn want(
     Ok(())
 }
 
+/// What became of one wanted file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Taken {
+    /// This node had it already.
+    Held,
+    Fetched,
+    /// No node holds it any more.
+    Lost,
+    /// The picture was removed while its row was worked.
+    Forgotten,
+    /// To be tried again later, or given up on.
+    PutOff,
+}
+
 /// Works this node's wanted list.
 pub struct Fetcher {
     pub(crate) media: Arc<Media>,
@@ -230,7 +251,7 @@ impl Fetcher {
         }
         let mut fetched = 0;
         while let Some(joined) = lanes.join_next().await {
-            fetched += usize::from(joined.unwrap_or(false));
+            fetched += usize::from(matches!(joined, Ok(Taken::Fetched)));
         }
         self.db
             .execute(
@@ -241,13 +262,12 @@ impl Fetcher {
         Ok(fetched)
     }
 
-    /// One file: asks the peers and records the outcome on its row; whether
-    /// the file was fetched.
-    async fn take(&self, wanted: Wanted, now: u64) -> bool {
+    /// One file: asks the peers and records the outcome on its row.
+    async fn take(&self, wanted: Wanted, now: u64) -> Taken {
         let Some((rendition, recorded)) = wanted.recorded() else {
             tracing::warn!(tenant = %wanted.tenant_id, image = %wanted.image_id, rendition = %wanted.rendition, "a wanted picture's row is not one of ours: dropped");
             self.done(&wanted).await;
-            return false;
+            return Taken::Lost;
         };
         let outcome = self
             .media
@@ -256,13 +276,27 @@ impl Fetcher {
         match outcome {
             Ok(Fetch::Held) => {
                 self.done(&wanted).await;
-                false
+                Taken::Held
             }
             Ok(Fetch::Fetched) => {
+                if self.forgotten(&wanted, rendition).await {
+                    // A peer that had not handled the removal yet handed its
+                    // copy over, and `forget` may have deleted this node's
+                    // files before it landed. Looked up after the copy is
+                    // stored, so one of the two deletes it: this, or a
+                    // `forget` that commits later.
+                    self.media
+                        .remove_image(&wanted.tenant_id, &wanted.image_id)
+                        .await;
+                    return Taken::Forgotten;
+                }
                 self.done(&wanted).await;
-                true
+                Taken::Fetched
             }
             Ok(Fetch::Gone) => {
+                if self.forgotten(&wanted, rendition).await {
+                    return Taken::Forgotten;
+                }
                 tracing::warn!(
                     tenant = %wanted.tenant_id,
                     image = %wanted.image_id,
@@ -270,11 +304,11 @@ impl Fetcher {
                     "no node holds this picture any more: not fetched"
                 );
                 self.done(&wanted).await;
-                false
+                Taken::Lost
             }
             Ok(Fetch::Unreachable(reason)) => {
                 self.retry_later(&wanted, &reason, now).await;
-                false
+                Taken::PutOff
             }
             Err(err) => {
                 tracing::error!(
@@ -291,6 +325,38 @@ impl Fetcher {
                     now,
                 )
                 .await;
+                Taken::PutOff
+            }
+        }
+    }
+
+    /// Whether the picture was removed while its row was worked: the store
+    /// no longer knows the file, and `forget` took the row with it. A store
+    /// that cannot be read is no answer, and the file is taken as still
+    /// recorded.
+    async fn forgotten(&self, wanted: &Wanted, rendition: Rendition) -> bool {
+        let known =
+            super::read_model::recorded(&self.db, &wanted.tenant_id, &wanted.image_id, rendition)
+                .await;
+        match known {
+            Ok(Some(_)) => false,
+            Ok(None) => {
+                tracing::debug!(
+                    tenant = %wanted.tenant_id,
+                    image = %wanted.image_id,
+                    rendition = %wanted.rendition,
+                    "a wanted picture was removed meanwhile: left alone"
+                );
+                true
+            }
+            Err(err) => {
+                tracing::warn!(
+                    tenant = %wanted.tenant_id,
+                    image = %wanted.image_id,
+                    rendition = %wanted.rendition,
+                    error = %format!("{err:#}"),
+                    "cannot tell whether a wanted picture is still recorded"
+                );
                 false
             }
         }
@@ -375,6 +441,7 @@ impl Fetcher {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::super::read_model::Source;
     use super::super::test_support::{png, rendered};
     use super::*;
     use crate::disk::Durability;
@@ -417,20 +484,11 @@ pub(crate) mod tests {
         .unwrap()
     }
 
+    /// Records a picture as the read model does: known to the store, and
+    /// wanted by this node.
     async fn want_picture(fetcher: &Fetcher, image_id: &str, picture: &Picture, now: u64) {
         fetcher
-            .db
-            .write(
-                &(image_id, picture, now as i64),
-                |tx, (image_id, picture, now)| {
-                    Box::pin(async move {
-                        for (rendition, file) in picture.files() {
-                            want(tx, "acme", image_id, rendition, file, *now).await?;
-                        }
-                        Ok(())
-                    })
-                },
-            )
+            .record("acme", image_id, picture, Source::Product, "p1", now)
             .await
             .unwrap();
     }
@@ -550,5 +608,43 @@ pub(crate) mod tests {
                 .unwrap()
                 .exists()
         );
+    }
+
+    /// A picture removed while its row is worked (#528) is no loss when no
+    /// peer has it, and is not brought back from a peer that still does.
+    #[tokio::test]
+    async fn a_picture_removed_while_its_row_is_worked_is_left_alone() {
+        let upload = rendered(&png(900, 600, [10, 10, 200, 255]));
+
+        // The beat read the rows, then the removal was handled.
+        let (_store, fetcher) = fetcher_with(vec![peer(404, b"").await], 2).await;
+        want_picture(&fetcher, "i1", &upload.picture, 1_000).await;
+        let due = wanted(&fetcher.db).await;
+        assert_eq!(due.len(), 2);
+        fetcher.forget("acme", "i1").await.unwrap();
+        for row in due {
+            assert_eq!(fetcher.take(row, 1_000).await, Taken::Forgotten);
+        }
+
+        // Still recorded, the same answer from the peers is a loss.
+        want_picture(&fetcher, "i2", &upload.picture, 1_000).await;
+        for row in wanted(&fetcher.db).await {
+            assert_eq!(fetcher.take(row, 1_000).await, Taken::Lost);
+        }
+        assert!(wanted(&fetcher.db).await.is_empty());
+
+        // A peer that has not handled the removal yet still serves the file.
+        let (_store, fetcher) = fetcher_with(vec![serving(&upload).await], 2).await;
+        want_picture(&fetcher, "i1", &upload.picture, 1_000).await;
+        let due = wanted(&fetcher.db).await;
+        fetcher.forget("acme", "i1").await.unwrap();
+        for row in due {
+            assert_eq!(fetcher.take(row, 1_000).await, Taken::Forgotten);
+        }
+        for rendition in Rendition::ALL {
+            let path = fetcher.media.path_of("acme", rendition, "i1").unwrap();
+            assert!(!path.exists(), "{} was brought back", path.display());
+        }
+        assert!(wanted(&fetcher.db).await.is_empty());
     }
 }
