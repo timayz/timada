@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use evento::Executor;
 use timada_catalog::{
     AddImage, CatalogError, DefineVariant, MAX_OPTION_VALUES, MAX_VARIANTS, OptionSelection,
-    ProductState,
+    ProductState, VariantPrice,
 };
 use timada_catalog_import::Images;
 use timada_catalog_import::woocommerce::fit_sku;
@@ -157,6 +157,8 @@ pub async fn apply_sync<E: Executor>(
     }
     let currency = state.currency().map(str::to_owned);
     let mut skus = Vec::with_capacity(link.skus.len());
+    // The combinations' new prices, written in one event after the loop.
+    let mut reprices: Vec<VariantPrice> = Vec::new();
     for linked in &link.skus {
         let read = product.and_then(|product| product.sku(&linked.sku_id));
         let available = if outcome.offline {
@@ -224,24 +226,21 @@ pub async fn apply_sync<E: Executor>(
                 None => state.price.as_ref().map(|price| price.amount_cents),
             };
             if !current.is_some_and(|current| within(current, price, tolerance_bps)) {
-                let priced = match linked.variant_id.as_deref() {
-                    Some(variant_id) => {
-                        catalog
-                            .price_variant(actor, product_id, variant_id, price, currency)
-                            .await
-                    }
-                    None => {
-                        catalog
-                            .price_product(actor, product_id, price, currency)
-                            .await
-                    }
-                };
-                match priced {
-                    Ok(()) => outcome.repriced += 1,
-                    Err(err) if err.is_user_facing() => outcome
-                        .warnings
-                        .push(format!("combination {}: {err}", linked.sku_id)),
-                    Err(err) => return Err(err),
+                match linked.variant_id.as_deref() {
+                    Some(variant_id) => reprices.push(VariantPrice {
+                        variant_id: variant_id.to_owned(),
+                        amount_cents: price,
+                    }),
+                    None => match catalog
+                        .price_product(actor, product_id, price, currency)
+                        .await
+                    {
+                        Ok(()) => outcome.repriced += 1,
+                        Err(err) if err.is_user_facing() => outcome
+                            .warnings
+                            .push(format!("combination {}: {err}", linked.sku_id)),
+                        Err(err) => return Err(err),
+                    },
                 }
             }
         }
@@ -249,6 +248,23 @@ pub async fn apply_sync<E: Executor>(
             cost_cents,
             ..linked.clone()
         });
+    }
+    // One event for every combination the read repriced, not one each: a
+    // product of a hundred combinations whose supplier moves a quarter of
+    // its prices daily would fill its stream in seven years (#472).
+    if let Some(currency) = currency.as_deref()
+        && !reprices.is_empty()
+    {
+        match catalog
+            .price_variants(actor, product_id, &reprices, currency)
+            .await
+        {
+            Ok(_) => outcome.repriced += reprices.len(),
+            Err(err) if err.is_user_facing() => {
+                outcome.warnings.push(format!("prices: {err}"));
+            }
+            Err(err) => return Err(err),
+        }
     }
     // The days the delivery service takes: AliExpress's word, always; none
     // given falls back to the shop's default.

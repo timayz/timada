@@ -173,7 +173,11 @@ can say what the read found. Past that, the page says the read is on its way, an
 carries on. A read does four things:
 
 - each variant's stock becomes what AliExpress has;
-- with a rule (the product's own, else the shop's), each price follows the cost;
+- with a rule (the product's own, else the shop's), each price follows the cost. The
+  combinations a read reprices are written in one event (`VariantsRepriced`), not one
+  each: a product's stream holds 65,535 changes, and one of a hundred combinations whose
+  supplier moved a quarter of its prices daily would otherwise fill it in seven years.
+  The product page says how many it holds (*Changes*);
 - the product's delivery time becomes the days the service an order would ship with
   takes to the shop's country (`min_delivery_days` and `max_delivery_days` of
   `aliexpress.ds.freight.query`, the call that already prices the delivery, so it

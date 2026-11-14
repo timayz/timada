@@ -1,9 +1,10 @@
 mod common;
 
 use common::*;
+use evento::ProjectionAggregate;
 use timada_catalog::{
-    AddImage, CatalogError, DefineVariant, MAX_OPTION_VALUES, MAX_OPTIONS, OptionLabels,
-    OptionSelection, StockSummary,
+    AddImage, CatalogError, DefineVariant, MAX_AMOUNT_CENTS, MAX_OPTION_VALUES, MAX_OPTIONS,
+    OptionLabels, OptionSelection, StockSummary, VariantPrice,
 };
 
 fn pick(option_id: &str, value: &str) -> OptionSelection {
@@ -237,6 +238,67 @@ async fn every_price_of_a_product_is_in_one_currency() {
     cmd.price_product(ALICE, &product_id, 1000, "EUR")
         .await
         .expect("the same currency is fine");
+}
+
+/// What one read of a supplier repriced goes in one event, those already
+/// at their price left out (#472).
+#[tokio::test]
+async fn several_combinations_are_priced_in_one_event() {
+    let cmd = command().await;
+    let (product_id, colour) = with_colours(&cmd).await;
+    let beige = cmd
+        .define_variant(ALICE, &product_id, sell(vec![pick(&colour, "Beige")], 2290))
+        .await
+        .unwrap();
+    let blue = cmd
+        .define_variant(ALICE, &product_id, sell(vec![pick(&colour, "Blue")], 2290))
+        .await
+        .unwrap();
+    let version = async || {
+        cmd.load_product(&product_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .aggregate_version()
+            .unwrap()
+    };
+    let price = |variant_id: &str, amount_cents| VariantPrice {
+        variant_id: variant_id.to_owned(),
+        amount_cents,
+    };
+    let before = version().await;
+
+    let prices = [price(&beige, 2490), price(&blue, 1990)];
+    assert!(
+        cmd.price_variants(ALICE, &product_id, &prices, "EUR")
+            .await
+            .unwrap()
+    );
+    assert_eq!(version().await, before + 1);
+    let product = cmd.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(product.variant(&beige).unwrap().price.amount_cents, 2490);
+    assert_eq!(product.variant(&blue).unwrap().price.amount_cents, 1990);
+
+    // The same prices again: nothing to write.
+    assert!(
+        !cmd.price_variants(ALICE, &product_id, &prices, "EUR")
+            .await
+            .unwrap()
+    );
+    assert_eq!(version().await, before + 1);
+
+    // One that cannot be priced stops them all.
+    for (prices, currency) in [
+        (vec![price(&beige, 100), price("gone", 100)], "EUR"),
+        (vec![price(&beige, MAX_AMOUNT_CENTS + 1)], "EUR"),
+        (vec![price(&beige, 100)], "USD"),
+    ] {
+        let priced = cmd
+            .price_variants(ALICE, &product_id, &prices, currency)
+            .await;
+        assert!(priced.is_err(), "{prices:?} {currency}: {priced:?}");
+    }
+    assert_eq!(version().await, before + 1);
 }
 
 #[tokio::test]
