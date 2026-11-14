@@ -331,6 +331,7 @@ mod tests {
             read_fresh_secs: 60,
             import_duty_cents: 0,
             import_fee_cents: 0,
+            orders_per_hour: 0,
         };
         let aliexpress = Aliexpress::new(
             Some(Sealer::new("aliexpress-test", "secret")),

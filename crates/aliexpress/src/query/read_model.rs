@@ -171,27 +171,33 @@ pub async fn upsert_forward(
     let state = serde_json::to_string(forward)?;
     db.execute(
         "INSERT INTO aliexpress_forwards (tenant_id, id, order_id, status, ae_order_ids,
-            tracking, last_error, placed_at, updated_at, shard, settling, state)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            tracking, last_error, placed_at, updated_at, shard, settling, retry_at,
+            company_id, asked_at, state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             status = excluded.status, ae_order_ids = excluded.ae_order_ids,
             tracking = excluded.tracking, last_error = excluded.last_error,
             placed_at = excluded.placed_at, updated_at = excluded.updated_at,
-            settling = excluded.settling, state = excluded.state",
-        (
-            tenant_id,
-            forward.id.as_str(),
-            forward.order_id.as_str(),
-            forward.status.as_str(),
-            ae_order_ids,
-            forward.tracking().join(" "),
-            forward.last_error.as_deref(),
-            forward.placed_at.map(|at| at as i64),
-            forward.updated_at as i64,
-            i64::from(shard_of(&forward.id)),
-            forward.complete && forward.all_shipped(),
-            state.as_str(),
-        ),
+            settling = excluded.settling, retry_at = excluded.retry_at,
+            company_id = excluded.company_id, asked_at = excluded.asked_at,
+            state = excluded.state",
+        params_from_iter([
+            Value::from(tenant_id),
+            Value::from(forward.id.as_str()),
+            Value::from(forward.order_id.as_str()),
+            Value::from(forward.status.as_str()),
+            Value::from(ae_order_ids),
+            Value::from(forward.tracking().join(" ")),
+            Value::from(forward.last_error.as_deref()),
+            Value::from(forward.placed_at.map(|at| at as i64)),
+            Value::from(forward.updated_at as i64),
+            Value::from(i64::from(shard_of(&forward.id))),
+            Value::from(forward.complete && forward.all_shipped()),
+            Value::from(forward.retry_at().map(|at| at as i64)),
+            Value::from(forward.company_id.as_deref()),
+            Value::from(forward.asked_at.map(|at| at as i64)),
+            Value::from(state.as_str()),
+        ]),
     )
     .await?;
     if matches!(forward.status, ForwardStatus::Done | ForwardStatus::Failed) {
@@ -355,6 +361,68 @@ pub async fn parcels_due(
         ),
     )
     .await
+}
+
+/// The forwards of every shop that `share` holds whose attempt bought
+/// nothing and that are due to be placed again on their own at `now` (unix
+/// seconds, [`ForwardState::retry_at`]): the sweep asks for them again
+/// (#470). The longest waiting first; the write model decides.
+pub async fn forwards_to_retry(
+    db: &Db,
+    now: i64,
+    share: Share,
+    limit: i64,
+) -> anyhow::Result<Vec<ForwardRow>> {
+    db.fetch_all(
+        "SELECT tenant_id, id, order_id, status, ae_order_ids, tracking, last_error,
+            placed_at, updated_at
+         FROM aliexpress_forwards
+         WHERE status = 'failed' AND retry_at <= ?1 AND shard % ?3 = ?4
+         ORDER BY retry_at, tenant_id, id LIMIT ?2",
+        (now, limit, share.of as i64, share.index as i64),
+    )
+    .await
+}
+
+/// The forwards of every shop that `share` holds asked for between `since`
+/// and `before` (unix seconds) and not taken on yet: held back by their
+/// account's pace, or asked for while no node took them on. The sweep tries
+/// each again, its account's pace first (#470). The longest waiting first.
+pub async fn forwards_waiting(
+    db: &Db,
+    before: i64,
+    since: i64,
+    share: Share,
+    limit: i64,
+) -> anyhow::Result<Vec<ForwardRow>> {
+    db.fetch_all(
+        "SELECT tenant_id, id, order_id, status, ae_order_ids, tracking, last_error,
+            placed_at, updated_at
+         FROM aliexpress_forwards
+         WHERE status = 'requested' AND updated_at < ?1 AND updated_at >= ?2
+            AND shard % ?4 = ?5
+         ORDER BY updated_at, tenant_id, id LIMIT ?3",
+        (before, since, limit, share.of as i64, share.index as i64),
+    )
+    .await
+}
+
+/// What a company's AliExpress account was asked to place since `since`
+/// (unix seconds), over every shop it sells for, as far as this node knows:
+/// how many, the earliest and the latest. What paces its orders.
+pub async fn asked_on_account(
+    db: &Db,
+    company_id: &str,
+    since: i64,
+) -> anyhow::Result<(u32, Option<i64>, Option<i64>)> {
+    let row: (i64, Option<i64>, Option<i64>) = db
+        .fetch_one(
+            "SELECT COUNT(*), MIN(asked_at), MAX(asked_at) FROM aliexpress_forwards
+             WHERE company_id = ?1 AND asked_at >= ?2",
+            (company_id, since),
+        )
+        .await?;
+    Ok((u32::try_from(row.0).unwrap_or(u32::MAX), row.1, row.2))
 }
 
 /// The forwards of every shop that `share` holds, taken on before `before`
