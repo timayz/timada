@@ -2,7 +2,7 @@
 //! a change of shape is a new variant, never a changed field. Each event
 //! carries who did it, so the stream is its own audit trail.
 
-use crate::value_object::{DeliveryDays, OptionSelection};
+use crate::value_object::{DeliveryDays, OptionSelection, VariantPrice};
 
 /// A product of the tenant's catalog. Its id is a ULID.
 #[evento::aggregate(name = "timada-catalog/Product")]
@@ -161,6 +161,15 @@ pub enum Product {
         variant_id: String,
         sku: Option<String>,
         changed_by: String,
+    },
+    /// Several combinations priced at once, in `currency`: what one read of
+    /// a supplier changed, in one event rather than one per combination, so
+    /// a product whose supplier moves its prices daily stays far from the
+    /// 65,535 versions its stream holds (#472).
+    VariantsRepriced {
+        prices: Vec<VariantPrice>,
+        currency: String,
+        repriced_by: String,
     },
     VariantImaged {
         variant_id: String,

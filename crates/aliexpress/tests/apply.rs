@@ -537,6 +537,45 @@ async fn a_price_stays_while_the_rule_is_within_the_tolerance() {
     assert_eq!(price().await, 900);
 }
 
+/// A read that reprices several combinations writes one event on the
+/// product, not one each (#472).
+#[tokio::test]
+async fn a_read_reprices_every_combination_in_one_event() {
+    let executor = executor().await;
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let (link_id, product_id) = imported(&executor).await;
+    let version = async || {
+        catalog
+            .load_product(&product_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .aggregate_version()
+            .unwrap()
+    };
+    let before = version().await;
+
+    let mut read = fixture();
+    for sku in &mut read.skus {
+        sku.cost_cents = sku.cost_cents.map(|cost| cost + 100);
+    }
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    let outcome = apply_sync(&catalog, "sync", &link, Some(&read), Some(&PRICING), 0)
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.repriced, 2);
+    assert_eq!(version().await, before + 1);
+    let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+    let prices: Vec<u64> = product
+        .variants
+        .iter()
+        .map(|variant| variant.price.amount_cents)
+        .collect();
+    assert_eq!(prices, [1062, 1300]);
+}
+
 /// A read is recorded against the version of the link it started from: one
 /// recorded in between wins, and nothing but reads and the merchant's own
 /// changes ever goes on the stream (#472).

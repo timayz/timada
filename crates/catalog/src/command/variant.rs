@@ -6,10 +6,12 @@ use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{
     VariantDefined, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged,
+    VariantsRepriced,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
-    MAX_AMOUNT_CENTS, MAX_VARIANTS, OptionSelection, new_part_id, normalize_currency, normalize_sku,
+    MAX_AMOUNT_CENTS, MAX_VARIANTS, OptionSelection, VariantPrice, new_part_id, normalize_currency,
+    normalize_sku,
 };
 
 use super::ProductState;
@@ -126,6 +128,60 @@ impl<E: Executor> super::Command<E> {
             .commit(&self.executor)
             .await?;
         Ok(())
+    }
+
+    /// Prices several combinations at once, in `currency`, in one event:
+    /// what one read of a supplier changed. Those already at their price are
+    /// left out, and none left is a no-op; whether any were priced. Every one
+    /// must be a combination of the product, at a valid amount, in its
+    /// currency, or nothing is priced.
+    pub async fn price_variants(
+        &self,
+        actor: &str,
+        product_id: &str,
+        prices: &[VariantPrice],
+        currency: &str,
+        routing_key: Option<String>,
+    ) -> Result<bool, CatalogError> {
+        let currency = normalize_currency(currency)?;
+        if prices
+            .iter()
+            .any(|price| price.amount_cents > MAX_AMOUNT_CENTS)
+        {
+            return Err(CatalogError::InvalidAmount);
+        }
+        let product = self.require_editable(product_id).await?;
+        let mut changed: Vec<VariantPrice> = Vec::with_capacity(prices.len());
+        for price in prices {
+            let variant = product
+                .variant(&price.variant_id)
+                .ok_or(CatalogError::VariantNotFound)?;
+            let same = variant.price.amount_cents == price.amount_cents
+                && variant.price.currency == currency;
+            if !same
+                && !changed
+                    .iter()
+                    .any(|known| known.variant_id == price.variant_id)
+            {
+                changed.push(price.clone());
+            }
+        }
+        if changed.is_empty() {
+            return Ok(false);
+        }
+        require_same_currency(&product, &currency)?;
+        product
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&VariantsRepriced {
+                prices: changed,
+                currency,
+                repriced_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await?;
+        Ok(true)
     }
 
     /// Sets or clears the merchant's code for one combination. The new code
