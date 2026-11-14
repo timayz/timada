@@ -135,7 +135,8 @@ test("a merchant imports an AliExpress product and keeps it in step", async ({ p
     await productTab(page, "Options & variants");
     const rose = page.locator("[data-variant]", { hasText: "Colour: Rose" });
     const blue = page.locator("[data-variant]", { hasText: "Colour: Blue" });
-    await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "120");
+    // 120 left is plenty, counted as 20.
+    await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "20");
     await expect(blue.locator("[data-stock]")).toHaveAttribute("data-stock", "0");
     await expect(rose.getByLabel("Price of Colour: Rose")).toHaveValue("12.93");
     await expect(blue.getByLabel("Price of Colour: Blue")).toHaveValue("15.99");
@@ -368,7 +369,7 @@ test("the dashboard reads imported products again on its own, and renews the acc
     const productUrl = await importedShop(page, aliexpress);
     await productTab(page, "Options & variants");
     const rose = page.locator("[data-variant]", { hasText: "Colour: Rose" });
-    await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "120");
+    await expect(rose.locator("[data-stock]")).toHaveAttribute("data-stock", "20");
 
     // Nobody presses anything: the sweep follows AliExpress.
     aliexpress.sku("12000037001").stock = 3;
