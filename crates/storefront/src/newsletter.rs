@@ -35,7 +35,8 @@ const SHOPPER_IP: &str = "x-shopper-ip";
 /// Why the dashboard did not do as asked: a code to word in the shop's
 /// language (`newsletter_invalid_email`, `newsletter_invalid_link`,
 /// `newsletter_link_expired`, `newsletter_unavailable`, `too_many_requests`,
-/// `writes_paused`, and `signed_out` for a shopper's own switch).
+/// `writes_paused`, `write_not_taken`, and `signed_out` for a shopper's own
+/// switch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NewsletterRefusal(&'static str);
 

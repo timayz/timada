@@ -3112,6 +3112,25 @@ async fn a_dashboard_that_is_away_is_told_as_unavailable_not_as_a_failure() {
         .unwrap_err();
     assert_eq!(refused.code(), Some(timada_core::WRITES_PAUSED));
 
+    // And so is one write the dashboard did not take, with a code of its own.
+    let not_taken = gateway_endpoint(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({ "error": timada_core::WRITE_NOT_TAKEN }),
+    )
+    .await;
+    let not_taken_shop = Store::connect(
+        h.config(&token).api_url(&not_taken),
+        h.local_db("not-taken").await,
+    )
+    .await
+    .unwrap();
+    let refused = not_taken_shop
+        .add_to_cart(None, "p1", None, 1, None)
+        .await
+        .expect("a refusal is not a failure")
+        .unwrap_err();
+    assert_eq!(refused.code(), Some(timada_core::WRITE_NOT_TAKEN));
+
     // The store API going away is told the same way, once the request has
     // waited its time.
     let away = free_addr().await;

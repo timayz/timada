@@ -491,10 +491,12 @@ impl Checkouts {
                     refuse(DISCOUNT_ALREADY_USED).await?;
                     return Ok(());
                 }
-                // A store not taking writes for the moment is not a refusal of
-                // the code: the error retries the payment request later.
+                // A store not taking writes for the moment, or not this one,
+                // is not a refusal of the code: the error retries the payment
+                // request later.
                 Err(err)
-                    if err.is_user_facing() && err.code() != Some(timada_core::WRITES_PAUSED) =>
+                    if err.is_user_facing()
+                        && !err.code().is_some_and(timada_core::is_write_refusal) =>
                 {
                     refuse(DISCOUNT_UNKNOWN).await?;
                     return Ok(());

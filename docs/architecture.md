@@ -220,7 +220,11 @@ by construction.
    `timada_core::write_refusal`, which the `is_user_facing`/`code` of every context a
    page talks to recognise), the store HTTP endpoints answer 503 with that code, and
    the store API
-   carries it as a refusal a storefront shows the same way. A node not heard from for
+   carries it as a refusal a storefront shows the same way. One write too few nodes
+   held in time, with every node up, is not that: evento writes it again, a fresh
+   transaction each time, and one still not taken after its attempts is
+   `write_not_taken`, worded as "try again" (503 on the store HTTP endpoints too).
+   A node not heard from for
    `cluster.absent_after_secs` (a day by default: the backlog holds days of writes,
    and copying a large store back costs far more than catching up) is therefore
    given up: the others

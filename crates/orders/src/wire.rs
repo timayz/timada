@@ -4,7 +4,6 @@
 //! read the catalog and how the shop sells, and the dashboard answers for
 //! the one cart or order whose id it names, in the key's tenant.
 
-use evento::WriteError;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{CartState, OrderError, PaymentAnswer, Quote, ShippingMethod};
@@ -143,10 +142,10 @@ impl Refusal {
             crate::PAYMENTS_UNAVAILABLE
             | crate::INVOICING_NOT_CONFIGURED
             | crate::OSS_REQUIRED_FOR_CURRENCY => OrderError::PaymentRefused { code: error },
-            code if code == timada_core::WRITES_PAUSED => OrderError::Write(
-                WriteError::Unavailable(anyhow::anyhow!("the shop is not taking writes right now")),
-            ),
-            _ => OrderError::Other(anyhow::anyhow!("the dashboard refused: {error}")),
+            code => match timada_core::refused_write(code) {
+                Some(err) => OrderError::Write(err),
+                None => OrderError::Other(anyhow::anyhow!("the dashboard refused: {error}")),
+            },
         }
     }
 }
@@ -235,5 +234,24 @@ mod tests {
         }
         .into_error();
         assert!(!unknown.is_user_facing());
+    }
+
+    /// A write the store refused travels as its code, and comes back as a
+    /// write error with that code: a paused store and a write too few nodes
+    /// held in time stay apart.
+    #[test]
+    fn a_refused_write_comes_back_with_its_own_code() {
+        for code in [timada_core::WRITES_PAUSED, timada_core::WRITE_NOT_TAKEN] {
+            let back = Refusal {
+                error: code.into(),
+                ..Refusal::default()
+            }
+            .into_error();
+            assert!(matches!(back, OrderError::Write(_)), "{code}: {back}");
+            assert_eq!(back.code(), Some(code));
+            assert!(back.is_user_facing(), "{code}");
+            assert!(back.is_store_fault(), "{code}");
+            assert_eq!(Refusal::of(&back).unwrap().error, code);
+        }
     }
 }

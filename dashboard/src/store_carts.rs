@@ -15,7 +15,8 @@
 //! not there. So is a cart dropped after lying idle (`Cart::Expired`, see
 //! [`crate::idle_carts`]). A refusal to show the shopper is 422 with
 //! [`timada_orders::wire::Refusal`]; the shop not taking writes for the
-//! moment is 503 with `writes_paused`. Bodies and answers are JSON, the
+//! moment is 503 with `writes_paused`, and a write it did not take 503 with
+//! `write_not_taken`. Bodies and answers are JSON, the
 //! shapes those of [`timada_orders::wire`]. The routes under
 //! `crate::app::store::carts` and `crate::app::store::orders` do the HTTP;
 //! the storefront library's `cart` module calls them.
@@ -73,7 +74,7 @@ pub fn refused(err: OrderError) -> anyhow::Result<Answer> {
         OrderError::CartNotFound => Ok(not_found("cart_not_found")),
         OrderError::OrderNotFound => Ok(not_found("order_not_found")),
         err => match Refusal::of(&err) {
-            Some(refusal) if refusal.error == timada_core::WRITES_PAUSED => Ok((
+            Some(refusal) if timada_core::is_write_refusal(&refusal.error) => Ok((
                 StatusCode::SERVICE_UNAVAILABLE,
                 serde_json::to_value(refusal)?,
             )),

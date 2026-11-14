@@ -568,8 +568,9 @@ impl Store {
             404 => Ok(Fetched::NotFound),
             // 422: refused; 429: as many carts started as the dashboard lets
             // this visitor or this storefront (`too_many_carts`); 503: the
-            // shop is not taking writes for the moment (`writes_paused`). All
-            // carry what to show the shopper.
+            // shop is not taking writes for the moment (`writes_paused`), or
+            // did not take this one (`write_not_taken`). All carry what to
+            // show the shopper.
             422 | 429 | 503 => {
                 let refusal: Refusal =
                     serde_json::from_slice(&body).context("the dashboard's answer is not one")?;

@@ -103,9 +103,10 @@ pub async fn contact(cx: &Cx, Form(form): Form<ContactForm>) -> Result<Answer> {
 /// failure.
 fn answer_error(err: SupportError) -> Result<Answer> {
     match err.code() {
-        // The shop is not taking writes for the moment: not the visitor's
-        // doing, so a 503 the storefront can word as "try again later".
-        Some(code) if code == timada_core::WRITES_PAUSED => {
+        // The shop is not taking writes for the moment, or did not take
+        // this one: not the visitor's doing, so a 503 the storefront can word
+        // as "try again".
+        Some(code) if timada_core::is_write_refusal(code) => {
             refused(StatusCode::SERVICE_UNAVAILABLE, code)
         }
         Some(code) if err.is_user_facing() => refused(StatusCode::UNPROCESSABLE_ENTITY, code),
@@ -117,9 +118,9 @@ fn answer_error(err: SupportError) -> Result<Answer> {
 mod tests {
     use super::*;
 
-    /// A shop not taking writes for the moment answers 503 with the code a
-    /// storefront words as "try again later"; a refusal of the message itself
-    /// stays 422, and a real failure is not an answer at all.
+    /// A shop not taking writes for the moment, or not this one, answers 503
+    /// with the code a storefront words as "try again"; a refusal of the
+    /// message itself stays 422, and a real failure is not an answer at all.
     #[test]
     fn a_paused_store_answers_service_unavailable() {
         let paused = SupportError::Write(evento::WriteError::Unavailable(anyhow::anyhow!(
@@ -128,6 +129,13 @@ mod tests {
         let (status, body) = answer_error(paused).expect("an answer");
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body.0["error"], timada_core::WRITES_PAUSED);
+
+        let not_taken = SupportError::Write(
+            timada_core::refused_write(timada_core::WRITE_NOT_TAKEN).expect("a write error"),
+        );
+        let (status, body) = answer_error(not_taken).expect("an answer");
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.0["error"], timada_core::WRITE_NOT_TAKEN);
 
         let (status, body) = answer_error(SupportError::InvalidBody).expect("an answer");
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);

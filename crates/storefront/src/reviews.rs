@@ -351,7 +351,8 @@ impl Store {
             return Err(away.into());
         }
         // 422: the review was refused; 503: the shop is not taking writes
-        // for the moment (`writes_paused`). Both carry a code to show.
+        // for the moment (`writes_paused`), or did not take this one
+        // (`write_not_taken`). Both carry a code to show.
         if status.is_success() || matches!(status.as_u16(), 422 | 503) {
             let answer: Answer =
                 serde_json::from_slice(&body).context("the dashboard's answer is not one")?;

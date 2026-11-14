@@ -93,8 +93,9 @@ codes, for a page wording it.
 What counts as the dashboard being away: the HTTP connection failing, timing out or
 breaking; a proxy in front of it answering 502, 503 or 504 with a page of its own (a load
 balancer's "no available server"); the store API not connected yet, or a read on it
-failing. A 503 the dashboard itself wrote (`{"error":"writes_paused"}`) is a refusal to
-show the shopper, not this.
+failing. A 503 the dashboard itself wrote (`{"error":"writes_paused"}`, or
+`{"error":"write_not_taken"}` for one write it did not take) is a refusal to show the
+shopper, not this.
 
 A shop started while the store API is away opens all the same: `Store::connect` logs a
 warning, `GET {prefix}/status` answers 503 with `"connected": false` and
@@ -563,7 +564,7 @@ if takes_messages(cx) {                          // the host gave the dashboard'
   `message_invalid_name` (a first and a last name, 80 characters at most each),
   `message_invalid_email`, `message_invalid_body` (10 to 4000 characters),
   `too_many_requests` (the dashboard counts messages per visitor and per key within
-  `[store]`'s window) or `writes_paused`. The limits are exported
+  `[store]`'s window), `writes_paused` or `write_not_taken`. The limits are exported
   (`MIN_MESSAGE_LEN`, `MAX_MESSAGE_LEN`, `MAX_MESSAGE_NAME_LEN`).
 
 ## Automated mails

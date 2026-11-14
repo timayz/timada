@@ -34,7 +34,7 @@ pub async fn opt_out(cx: &Cx, Form(form): Form<TokenForm>) -> Result<Answer> {
     {
         Ok(()) => status(StatusCode::NO_CONTENT),
         Err(err) => match err.code() {
-            Some(code) if code == timada_core::WRITES_PAUSED => {
+            Some(code) if timada_core::is_write_refusal(code) => {
                 refused(StatusCode::SERVICE_UNAVAILABLE, code)
             }
             Some(code) if err.is_user_facing() => refused(StatusCode::UNPROCESSABLE_ENTITY, code),
