@@ -112,11 +112,9 @@ pub fn check_temp_dir(dir: &Path) -> Result<()> {
             });
         }
     }
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_nanos())
-        .unwrap_or(0);
-    let probe = dir.join(format!(".timada-{}-{nanos}", std::process::id()));
+    // A random name (a ULID), as two probes of one process can read the same
+    // time: the cluster tests open many stores at once (#574).
+    let probe = dir.join(format!(".timada-probe-{}", ulid::Ulid::generate()));
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -640,6 +638,29 @@ mod tests {
         let err = check_temp_dir(&file).unwrap_err().to_string();
         assert!(err.contains("is not a directory"), "{err}");
         assert!(err.contains("TMPDIR"), "{err}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Checks run at once in one process all pass and leave nothing behind:
+    /// the cluster tests open many stores at once, and two probes that read
+    /// the same time must not take the same name (#574).
+    #[test]
+    fn temp_dir_checks_pass_when_run_at_once() {
+        let dir = scratch("at-once");
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    for _ in 0..2_000 {
+                        check_temp_dir(&dir).unwrap();
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            0,
+            "every probe file is removed"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
