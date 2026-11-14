@@ -299,17 +299,28 @@ async fn a_read_that_changed_nothing_is_kept_when_the_link_writes_its_row_again(
     assert_eq!(row.last_synced_at, Some(500));
     assert_eq!(row.last_tried_at, Some(500));
 
-    // An older record does not take the time back; a request moves the try.
-    let later = LinkState {
-        last_requested_at: Some(700),
+    // An older record does not take the time back; a later one moves both.
+    let unchanged = LinkState {
+        offline: true,
         ..link
+    };
+    upsert_link(&db, "acme", &unchanged).await.unwrap();
+    let row = link_of_product(&db, "acme", "product")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.last_synced_at, Some(500));
+    assert_eq!(row.last_tried_at, Some(500));
+    let later = LinkState {
+        last_synced_at: Some(700),
+        ..unchanged
     };
     upsert_link(&db, "acme", &later).await.unwrap();
     let row = link_of_product(&db, "acme", "product")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(row.last_synced_at, Some(500));
+    assert_eq!(row.last_synced_at, Some(700));
     assert_eq!(row.last_tried_at, Some(700));
 }
 

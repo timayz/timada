@@ -537,70 +537,37 @@ async fn a_price_stays_while_the_rule_is_within_the_tolerance() {
     assert_eq!(price().await, 900);
 }
 
+/// A read is recorded against the version of the link it started from: one
+/// recorded in between wins, and nothing but reads and the merchant's own
+/// changes ever goes on the stream (#472).
 #[tokio::test]
-async fn asking_for_a_read_takes_a_version_of_a_linked_item() {
+async fn a_read_records_against_the_version_it_started_from() {
     let executor = executor().await;
     let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
-
-    // Nothing to read: unknown, or still importing.
-    assert!(matches!(
-        links.request_sync(ALICE, "no-such-link").await,
-        Err(timada_aliexpress::AliexpressError::NotFound)
-    ));
-    let importing = links
-        .request_import(ALICE, "1005000000000009")
-        .await
-        .unwrap();
-    assert!(matches!(
-        links.request_sync(ALICE, &importing).await,
-        Err(timada_aliexpress::AliexpressError::NotFound)
-    ));
-
     let (link_id, _) = imported(&executor).await;
-    let (_, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
-    let asked = links.request_sync(ALICE, &link_id).await.unwrap();
-    assert_eq!(asked, version + 1);
-    let (link, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
-    assert_eq!(version, asked);
-    assert!(link.last_requested_at.is_some());
-    // A read that started before the request lost its record to it.
-    assert!(
-        links
-            .record_sync("sync", &link_id, asked - 1, SyncRead::default())
-            .await
-            .is_err()
-    );
 
-    // What a member waits for is told apart from what the dashboard reads.
-    links
-        .record_sync(
-            timada_aliexpress::ALIEXPRESS_ACTOR,
-            &link_id,
-            asked,
-            SyncRead::default(),
-        )
-        .await
-        .unwrap();
-    let (link, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
-    assert_eq!(link.answered_version, 0);
+    let (_, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
     links
         .record_sync(ALICE, &link_id, version, SyncRead::default())
         .await
         .unwrap();
-    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
-    assert_eq!(link.answered_version, version + 1);
+    assert!(matches!(
+        links
+            .record_sync("sync", &link_id, version, SyncRead::default())
+            .await,
+        Err(timada_aliexpress::AliexpressError::Write(
+            evento::WriteError::InvalidOriginalVersion
+        ))
+    ));
+    let (link, after) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
+    assert_eq!(after, version + 1);
+    assert!(link.last_synced_at.is_some());
     links
         .record_sync_failure(ALICE, &link_id, "no")
         .await
         .unwrap();
     let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
-    assert_eq!(link.answered_version, version + 2);
-
-    links.unlink(ALICE, &link_id).await.unwrap();
-    assert!(matches!(
-        links.request_sync(ALICE, &link_id).await,
-        Err(timada_aliexpress::AliexpressError::NotFound)
-    ));
+    assert_eq!(link.last_error.as_deref(), Some("no"));
 }
 
 #[tokio::test]

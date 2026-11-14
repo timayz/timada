@@ -781,9 +781,10 @@ impl Aliexpress {
 }
 
 /// Records a read against the version it started from; whether it was. A
-/// request that came in between changes nothing the read knew of, so the record
-/// goes on top of it. Anything else wins: another read's record, a combination
-/// added (the read does not know it), the link being over.
+/// write that came in between and changes nothing the read knew of (the
+/// merchant's own rule, a combination ignored) leaves the record to go on top
+/// of it. Anything else wins: another read's record, a combination added (the
+/// read does not know it), the link being over.
 async fn record_read<E: evento::Executor>(
     links: &timada_aliexpress::Command<E>,
     actor: &str,
