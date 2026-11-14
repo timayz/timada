@@ -63,6 +63,10 @@ struct StandIn {
     /// How the next orders placed are answered, in turn; taken once none is
     /// left.
     place_answers: Mutex<std::collections::VecDeque<PlaceAnswer>>,
+    /// How long the access a renewal gives lasts, in seconds.
+    token_lifetime: AtomicU64,
+    /// The refresh token each renewal was asked with, in turn.
+    renewals: Mutex<Vec<String>>,
 }
 
 /// How the stand-in answers an order placed.
@@ -95,7 +99,14 @@ impl StandIn {
             delivery_cents: AtomicU64::new(0),
             placed: AtomicUsize::new(0),
             place_answers: Mutex::default(),
+            token_lifetime: AtomicU64::new(30 * 86_400),
+            renewals: Mutex::default(),
         })
+    }
+
+    /// The refresh token each renewal was asked with, in turn.
+    fn renewals(&self) -> Vec<String> {
+        self.renewals.lock().unwrap().clone()
     }
 
     fn reads(&self) -> usize {
@@ -125,6 +136,30 @@ impl StandIn {
                         .split(|byte| *byte == b'\n')
                         .next()
                         .unwrap_or_default();
+                    // Nor is a renewal of the account's access: tokens named
+                    // after their turn, lasting what the test says.
+                    if String::from_utf8_lossy(line).contains("/rest/auth/token/refresh") {
+                        let turn = {
+                            let mut renewals = stand_in.renewals.lock().unwrap();
+                            renewals.push(query_value(line, "refresh_token"));
+                            renewals.len()
+                        };
+                        let body = serde_json::json!({
+                            "code": "0",
+                            "access_token": format!("access-{turn}"),
+                            "refresh_token": format!("refresh-{turn}"),
+                            "expires_in": stand_in.token_lifetime.load(Ordering::SeqCst),
+                            "refresh_expires_in": 0,
+                            "account": "shop@example.org",
+                        })
+                        .to_string();
+                        let answer = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        socket.write_all(answer.as_bytes()).await.unwrap();
+                        return;
+                    }
                     if String::from_utf8_lossy(line).contains("method=aliexpress.ds.freight.query")
                     {
                         stand_in.freights.fetch_add(1, Ordering::SeqCst);
@@ -247,6 +282,22 @@ impl StandIn {
             },
         } })
     }
+}
+
+/// The value of `name` in the query of a request's first line, as sent.
+fn query_value(line: &[u8], name: &str) -> String {
+    let line = String::from_utf8_lossy(line);
+    let prefix = format!("{name}=");
+    line.split_whitespace()
+        .nth(1)
+        .and_then(|target| target.split_once('?'))
+        .and_then(|(_, query)| {
+            query
+                .split('&')
+                .find_map(|pair| pair.strip_prefix(prefix.as_str()))
+        })
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// A shop selling as a company whose account is connected, one item imported.
@@ -1696,7 +1747,7 @@ async fn recorded_tokens_reach_the_company_without_asking_again() {
         timada_aliexpress::claim_token_refresh(&shop.store, "node-gone", &company_id, due, now)
             .await
             .unwrap(),
-        timada_aliexpress::TokenRenewal::Claimed
+        timada_aliexpress::TokenRenewal::Claimed { standing: None }
     );
     timada_aliexpress::record_token_renewal(&shop.store, "node-gone", &company_id, due, &renewed)
         .await
@@ -1722,6 +1773,94 @@ async fn recorded_tokens_reach_the_company_without_asking_again() {
         .await
         .unwrap();
     assert_eq!(again.aliexpress.unwrap().expires_at, renewed.expires_at);
+}
+
+/// AliExpress answers a renewal with an access lapsing when the one renewed
+/// did (#560): the company gets those tokens once, and no look after that
+/// writes them again, calls them a renewal or asks AliExpress, until the
+/// claim goes stale. AliExpress is then asked again, with the refresh token
+/// it gave last.
+#[tokio::test]
+async fn a_renewal_that_moves_no_expiry_is_written_once_and_asked_again_later() {
+    use evento::ProjectionAggregate;
+
+    let shop = Shop::new().await;
+    let now = crate::auth::now();
+    let company_id = shop.tenant.company.as_ref().unwrap().company_id.clone();
+    let tenancy = timada_tenancy::Command(shop.store.clone());
+    let due = now + 3_600;
+    tenancy
+        .authorize_aliexpress(
+            ALICE,
+            &company_id,
+            AuthorizeAliexpress {
+                access_token_sealed: shop.aliexpress.seal(&company_id, "token").unwrap(),
+                refresh_token_sealed: shop.aliexpress.seal(&company_id, "refresh").unwrap(),
+                expires_at: due,
+                refresh_expires_at: 0,
+                account: "shop@example.org".into(),
+            },
+        )
+        .await
+        .unwrap();
+    // The answer lapses when the access it renews does.
+    shop.stand_in
+        .token_lifetime
+        .store(due - now, Ordering::SeqCst);
+
+    let company = tenancy.load_company(&company_id).await.unwrap().unwrap();
+    let company = shop
+        .aliexpress
+        .refresh_if_due(&shop.store, company, now)
+        .await
+        .unwrap();
+    assert_eq!(shop.stand_in.renewals(), ["refresh"]);
+    let applied = company.aliexpress.clone().unwrap();
+    assert_eq!(applied.expires_at, due);
+    assert_eq!(
+        shop.aliexpress
+            .sealer()
+            .unwrap()
+            .open_for(&company_id, &applied.access_token_sealed)
+            .unwrap(),
+        "access-1"
+    );
+    let version = company.aggregate_version().unwrap();
+
+    // Every look now, the sweep's or a read's through a shop, on any node:
+    // nothing asked, nothing written.
+    for at in [now, now + 1, now + 60] {
+        let again = tenancy.load_company(&company_id).await.unwrap().unwrap();
+        let again = shop
+            .aliexpress
+            .refresh_if_due(&shop.store, again, at)
+            .await
+            .unwrap();
+        assert_eq!(again.aliexpress.as_ref(), Some(&applied));
+        assert_eq!(again.aggregate_version().unwrap(), version);
+    }
+    assert_eq!(shop.stand_in.renewals().len(), 1);
+    let claim = timada_aliexpress::load_token_refresh(&shop.store, &company_id, due)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.aggregate_version().unwrap(), 2);
+
+    // Stale, the claim is taken over and AliExpress asked again, with the
+    // refresh token it gave; this time the access is renewed. The claim
+    // dates from its event: its time is read off the stream.
+    shop.stand_in
+        .token_lifetime
+        .store(30 * 86_400, Ordering::SeqCst);
+    let later = claim.claimed_at + timada_aliexpress::TOKEN_CLAIM_STALE_SECS;
+    let company = tenancy.load_company(&company_id).await.unwrap().unwrap();
+    let company = shop
+        .aliexpress
+        .refresh_if_due(&shop.store, company, later)
+        .await
+        .unwrap();
+    assert_eq!(shop.stand_in.renewals(), ["refresh", "refresh-1"]);
+    assert_eq!(company.aliexpress.unwrap().expires_at, later + 30 * 86_400);
 }
 
 /// The store of a node whose next `fails` writes of the event `name` of the

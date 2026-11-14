@@ -3,8 +3,6 @@ pub fn aliexpress_product_id(ae_product_id: &str) -> String {
     evento::hash_ids(vec!["aliexpress-product", ae_product_id])
 }
 
-/// The stream that says which node renews the token of `company_id` lapsing
-/// at `expires_at` (unix seconds).
 /// How long a node's claim on a token renewal holds without the tokens
 /// AliExpress answered being recorded: past it, the node is taken to have
 /// stopped, and another takes the renewal over. Far beyond a call's timeout.
@@ -21,6 +19,17 @@ pub struct RenewedTokens {
     pub account: String,
 }
 
+impl RenewedTokens {
+    /// Whether they renew the access lapsing at `expires_at`: theirs lapses
+    /// later. AliExpress may answer with the lifetime it gave last time,
+    /// counted from the same second, and then nothing is renewed.
+    pub fn renews(&self, expires_at: u64) -> bool {
+        self.expires_at > expires_at
+    }
+}
+
+/// The stream that says which node renews the token of `company_id` lapsing
+/// at `expires_at` (unix seconds).
 pub fn token_refresh_id(company_id: &str, expires_at: u64) -> String {
     evento::hash_ids(vec![
         "aliexpress-token-refresh",
