@@ -50,7 +50,7 @@ use crate::aggregator::{
     OptionDefined, OptionHidden, OptionLabelled, OptionRemoved, OptionRenamed, OptionShown,
     OptionValueLabelled, OptionValuesChanged, Priced, Published, Released, Renamed, TaxCategorySet,
     Uncategorized, Unpublished, VariantDefined, VariantImaged, VariantPriced, VariantRemoved,
-    VariantSkuChanged,
+    VariantSkuChanged, VariantsRepriced,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
@@ -478,6 +478,7 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_option_shown())
         .handler(on_variant_defined())
         .handler(on_variant_priced())
+        .handler(on_variants_repriced())
         .handler(on_variant_sku_changed())
         .handler(on_variant_imaged())
         .handler(on_variant_removed())
@@ -863,6 +864,27 @@ async fn on_variant_priced(
             amount_cents: event.data.amount_cents,
             currency: event.data.currency.to_owned(),
         };
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_variants_repriced(
+    event: Event<VariantsRepriced>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    for price in event.data.prices.iter() {
+        if let Some(variant) = product
+            .variants
+            .iter_mut()
+            .find(|variant| variant.id == price.variant_id)
+        {
+            variant.price = Price {
+                amount_cents: price.amount_cents,
+                currency: event.data.currency.to_owned(),
+            };
+        }
     }
     product.updated_at = event.timestamp;
     Ok(())

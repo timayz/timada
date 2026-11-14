@@ -90,6 +90,7 @@ event timada-catalog/Product::VariantImaged { variant_id: String, image_id: Opti
 event timada-catalog/Product::VariantPriced { variant_id: String, amount_cents: u64, currency: String, priced_by: String }
 event timada-catalog/Product::VariantRemoved { variant_id: String, removed_by: String }
 event timada-catalog/Product::VariantSkuChanged { variant_id: String, sku: Option<String>, changed_by: String }
+event timada-catalog/Product::VariantsRepriced { prices: Vec<VariantPrice>, currency: String, repriced_by: String }
 event timada-catalog/ProductOrdered::Ordered { order_id: String, ordered_by: String }
 event timada-catalog/ProductSku::Claimed { product_id: String, variant_id: String, product_version: u16 }
 event timada-catalog/ProductSku::Released unit
@@ -388,6 +389,7 @@ type timada_catalog::value_object::CarriedTake { order_id: String, cart_id: Opti
 type timada_catalog::value_object::DeliveryDays { min: u16, max: u16 }
 type timada_catalog::value_object::OptionSelection { option_id: String, value: String }
 type timada_catalog::value_object::TakenLine { product_id: String, variant_id: Option<String>, quantity: u32 }
+type timada_catalog::value_object::VariantPrice { variant_id: String, amount_cents: u64 }
 type timada_core::picture::Picture { width: u32, height: u32, listing: RenditionFile, page: RenditionFile }
 type timada_core::picture::RenditionFile { width: u32, height: u32, size: u64, sha256: [u8;32] }
 type timada_discounts::value_object::CarriedReservation { cart_id: String, expires_at: u64 }

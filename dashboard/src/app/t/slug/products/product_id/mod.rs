@@ -411,6 +411,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<ProductQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let product = require_product(cx, &access).await?;
+    // A product's stream holds 65,535 changes: past that it can change no
+    // more, so how far it is shows here (#472).
+    let changes = evento::ProjectionAggregate::aggregate_version(&product)
+        .map_err(topcoat::Error::from_anyhow)?;
+    let changes_label = format!("{changes} of the {} a product holds", u16::MAX);
     let labels = user_labels(cx, std::slice::from_ref(&product.created_by)).await?;
     let created_by = labels
         .get(&product.created_by)
@@ -710,6 +715,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                         fact(term: "Created", (&created_by) ", " <time datetime=(product.created_at)>(format_time(product.created_at))</time>)
                         fact(term: "Changed", <time datetime=(product.updated_at)>(format_time(product.updated_at))</time>)
+                        fact(term: "Changes", attrs: attributes! { data-product-changes=(changes) }, (&changes_label))
                     )
                 )
 

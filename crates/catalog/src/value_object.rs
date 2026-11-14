@@ -86,6 +86,14 @@ pub struct OptionSelection {
     pub value: String,
 }
 
+/// A combination's new price, among those a supplier's read changed at once
+/// ([`Product::VariantsRepriced`](crate::aggregator::Product)).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct VariantPrice {
+    pub variant_id: String,
+    pub amount_cents: u64,
+}
+
 /// The index stream of a stock code.
 pub fn product_sku_id(sku: &str) -> String {
     evento::hash_ids(vec!["product-sku", &sku_key(sku)])
