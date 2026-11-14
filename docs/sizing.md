@@ -12,9 +12,12 @@ SIZING_SUBSCRIPTIONS=47 cargo test ...                             # with idle s
 
 Each command writes two small events (a product's and its slug's claim), about
 60 bytes of data and metadata each. The runs below are from 2026-11-14 on a
-12-core machine, evento alpha `a8fc4c6`, Turso 0.8.3, the dev profile (the
-dependencies optimised), 20 writers, one node without peers. A cluster adds the
-replicas' journaling and the network to every write; these are the floor.
+12-core machine, Turso 0.8.3, the dev profile (the dependencies optimised),
+20 writers, one node without peers. The disk figures are from evento alpha
+`a8fc4c6`; the writes and the subscriptions were measured again on `b03d06d`,
+which changed both (200,000 events on the memory filesystem, 40,000 on the
+disk). A cluster adds the replicas' journaling and the network to every write;
+these are the floor.
 
 ## Disk
 
@@ -41,48 +44,50 @@ replicas' journaling and the network to every write; these are the floor.
 
 | Where the store is | Commands/s | p50 | p99 | Longest |
 |---|---|---|---|---|
-| Memory filesystem (a sync is free) | 579 | 27 ms | 345 ms | 450 ms |
-| NVMe, ext4 | 36 | 483 ms | 2.2 s | 4.6 s |
+| Memory filesystem (a sync is free) | 947 | 13 ms | 361 ms | 560 ms |
+| NVMe, ext4 | 159 | 61 ms | 1.1 s | 2.4 s |
 
-- **The disk's sync time is the ceiling.** A write syncs the commit log about
-  four times, one after the other, and concurrent writes do not share the
-  syncs: 7,476 syncs for 1,804 events with one writer, 5,592 with twenty
-  (`strace -f -y -e trace=fsync`). At 3.5 ms a sync, that is about 70 events a
-  second per node whatever the number of writers (timayz/evento#530). Measure
-  the volume's sync time before anything else, and prefer a disk with
-  power-loss protection, whose syncs are short.
+- **The disk's sync time is still the ceiling**, four times higher than it
+  was: 36 commands a second on the same disk before evento `b03d06d`, when a
+  write synced the commit log about four times, one after the other, and
+  concurrent writes did not share the syncs (timayz/evento#530). They now
+  share them, so the throughput follows the number of writers. Measure the
+  volume's sync time before anything else, and prefer a disk with power-loss
+  protection, whose syncs are short.
 - **1,000 orders a day is far below it** on average (an order is some tens of
-  events), but a burst queues: with 20 writers at once a command waits half a
-  second.
+  events), but a burst queues: with 20 writers at once on the disk, a third of
+  the commands waited over 100 ms and 1 % over a second.
 - **A checkpoint stops the writes** for a moment. On the memory filesystem
-  2 % of the commands took over 100 ms and none over half a second, at 360,000
-  events as at 1.8 million: the pause does not grow with the store. On the
-  disk, behind the queue of syncs, 4 % took over a second.
+  2 % of the commands took over 100 ms and none over a second. The pause does
+  not grow with the store: the same share at 360,000 events as at 1.8 million
+  (on `a8fc4c6`).
 - **The throughput does not fall as the store grows**: 587 commands/s at
-  360,000 events, 579 at 1.8 million.
+  360,000 events, 579 at 1.8 million (on `a8fc4c6`).
 
-## Subscriptions woken by every write
+## Subscriptions that follow none of the writes
 
 | Idle subscriptions | Commands/s | Cores busy | Processor per command |
 |---|---|---|---|
-| 0 | 587 | 1.9 | 3.2 ms |
-| 47 | 197 | 7.3 of 8 | 37.0 ms |
+| 0 | 947 | 3.2 | 3.4 ms |
+| 47 | 651 | 3.2 | 5.0 ms |
 
-Every write wakes every subscription of the node for a pass, whether or not
-it follows the event. A node runs 47 workers (more with `server.also_serves`
-and `server.also_serves_no_region`, one more copy of each saga per region
-served): doing nothing, they cost eleven times the processor of the writes
-and cut the throughput to a third, about 0.36 ms per empty pass
-(timayz/evento#531). On a real disk the syncs hide it at first: at 70 events a
-second the passes take about 1.2 cores. Count that per node, and again per
-extra region served.
+A node runs 47 workers (more with `server.also_serves` and
+`server.also_serves_no_region`, one more copy of each saga per region served).
+A write now wakes only the subscriptions that follow one of its events
+(timayz/evento#531, in `b03d06d`); before, every write woke them all, and 47
+of them doing nothing cost 37 ms of processor per command and cut the
+throughput to a third. What is left costs a third of the throughput and 1.6 ms
+of processor per command, and a longer tail: 260 of 100,000 commands took
+over a second (none without the subscriptions), the longest 2.7 s. One run
+each; the cause of what is left is not looked into.
 
 ## Not measured
 
 - The same on three nodes, and under the mix of a real shop (the load test,
   `docs/loadtest.md`, has the shoppers; its figures predate these).
 - The storefront connections: the store API tells every connection of every
-  write, whatever its shop (in timayz/evento#531).
+  write, whatever its shop, before `b03d06d`; a connection that serves one
+  shop is now told of that shop's writes alone.
 - The sign-in and contact limits ask every other node at each check
   (`rate_limit.rs`): three requests per check on three nodes.
 - A backup while serving: `snapshot save` wants the node stopped (#593).
