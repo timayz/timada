@@ -17,14 +17,14 @@ use timada_automations::{
 use timada_tenancy::{PERMISSION_AUTOMATIONS_MANAGE, PERMISSION_AUTOMATIONS_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
 use self::labels::{status_label, status_tone, trigger_label};
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
@@ -63,7 +63,7 @@ struct AutomationsLink<'a> {
 
 /// The automations page, with a flash error code or message.
 pub fn automations_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -85,7 +85,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let can_manage = access.can(cx, PERMISSION_AUTOMATIONS_MANAGE).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let filter = ScenarioFilter { status };
     let total = count_scenarios(pool, &tenant.id, &filter)
         .await
@@ -105,7 +105,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_link = {
         let slug = slug.clone();
         move |page: u32| {
-            href!(index, Slug(slug.clone()))
+            href!(index, slug: slug.clone())
                 .query(AutomationsLink {
                     status: status_value,
                     page: Some(page),
@@ -114,9 +114,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         }
     };
     let title = format!("Automations · {}", tenant.name);
-    let new_url = href!(new::new, Slug(slug.clone())).resolve(cx);
-    let opt_out_url = href!(opt_out::opt_out, Slug(slug.clone())).resolve(cx);
-    let opt_in_url = href!(opt_in::opt_in, Slug(slug.clone())).resolve(cx);
+    let new_url = href!(new::new, slug: slug.clone()).resolve(cx);
+    let opt_out_url = href!(opt_out::opt_out, slug: slug.clone()).resolve(cx);
+    let opt_in_url = href!(opt_in::opt_in, slug: slug.clone()).resolve(cx);
 
     Ok(view! {
         document(
@@ -164,7 +164,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             table_row(
                                 attrs: attributes! { data-scenario=(&row.name) data-scenario-status=(&row.status) },
                                 table_cell(
-                                    <a class=(LINK) href=(href!(scenario_id::index, Slug(slug.clone()), scenario_id::ScenarioId(row.id.clone())).resolve(cx))>(&row.name)</a>
+                                    <a class=(LINK) href=(href!(scenario_id::index, slug: slug.clone(), scenario_id::scenario_id: row.id.clone()).resolve(cx))>(&row.name)</a>
                                 )
                                 table_cell(
                                     if let Some(trigger) = &row.trigger {

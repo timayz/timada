@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         StatusCode,
         content::Json,
         header::CACHE_CONTROL,
-        module_param, path_param, query_params,
+        module_param, query_params,
         response::{IntoResponse, Response},
         route,
     },
@@ -34,12 +34,12 @@ struct PageQuery {
 /// the cluster's secret, 400 for a name that is not an id.
 #[route(GET)]
 pub async fn get(cx: &Cx) -> Result<Response> {
-    let vault = app_context::<Arc<KeyVault>>(cx);
+    let vault = context::<Arc<KeyVault>>(cx);
     if !super::authorized(cx, vault) {
         return StatusCode::UNAUTHORIZED.into_response(cx);
     }
     let after = query_params::<PageQuery>(cx)?.after.as_deref();
-    let tenant_id = path_param::<TenantId>(cx);
+    let tenant_id = tenant_id(cx);
     if !is_id(tenant_id) || after.is_some_and(|after| !is_id(after)) {
         return StatusCode::BAD_REQUEST.into_response(cx);
     }

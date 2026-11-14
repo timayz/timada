@@ -11,13 +11,13 @@ pub mod unlink;
 use timada_tenancy::{PERMISSION_TENANT_MANAGE, companies_of_user};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
     router::{href, page, query_params},
     view::{View, attributes, class, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::app::companies::{company_id, new::new_company_url};
 use crate::app::tenants::tenancy;
@@ -39,7 +39,7 @@ struct InvoicingQuery {
 }
 
 pub fn invoicing_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -72,7 +72,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map(|link| link.series_code.clone())
         .unwrap_or_default();
     let owns = company.as_ref().is_some_and(|c| c.is_owner(&user_id));
-    let mine = companies_of_user(app_context::<Db>(cx), &user_id)
+    let mine = companies_of_user(context::<Db>(cx), &user_id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let create = new_company_url(cx, None, Some(&slug));
@@ -100,7 +100,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             term: "Company",
                             attrs: attributes! { data-linked-company=(&company.siren) },
                             if owns {
-                                <a class=(LINK) href=(href!(company_id::index, company_id::CompanyId(company.id.clone())))>(company.name())</a>
+                                <a class=(LINK) href=(href!(company_id::index, company_id::company_id: company.id.clone()))>(company.name())</a>
                             } else {
                                 (company.name())
                             }
@@ -108,7 +108,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         fact(term: "SIREN", attrs: attributes! { class="font-mono" }, (&company.siren))
                         fact(term: "Invoice numbers", attrs: attributes! { class="font-mono" data-series=(&code) }, (&first_number))
                     )
-                    <form method="post" action=(href!(unlink::unlink, Slug(slug.clone()))) class="mt-4">
+                    <form method="post" action=(href!(unlink::unlink, slug: slug.clone())) class="mt-4">
                         button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop selling as this company")
                     </form>
                 )
@@ -126,7 +126,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 if mine.is_empty() {
                     <p class="mb-4 text-sm text-muted-foreground">"You own no company yet."</p>
                 } else {
-                    <form method="post" action=(href!(link::link, Slug(slug.clone()))) class="mb-4 flex max-w-xl flex-col gap-4">
+                    <form method="post" action=(href!(link::link, slug: slug.clone())) class="mb-4 flex max-w-xl flex-col gap-4">
                         field(
                             field_label(attrs: attributes! { for="link-company" }, "Company")
                             select(
@@ -164,7 +164,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <p class="text-muted-foreground">"The shop sells to consumers only: checkout asks for no VAT number and every invoice carries VAT."</p>
                     }
                 </div>
-                <form method="post" action=(href!(business_buyers::business_buyers, Slug(slug.clone())))>
+                <form method="post" action=(href!(business_buyers::business_buyers, slug: slug.clone()))>
                     if business {
                         <input type="hidden" name="accept" value="off">
                         button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop accepting business buyers")

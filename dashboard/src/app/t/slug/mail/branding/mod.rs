@@ -13,7 +13,7 @@ use timada_catalog::new_image_id;
 use timada_tenancy::{MailLogo, PERMISSION_MAIL_MANAGE, SetMailBranding};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::multipart::Multipart,
         error::{SeeOther, see_other},
@@ -60,7 +60,7 @@ pub async fn save(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
     if remove_logo {
         logo = None;
     }
-    let media = app_context::<Arc<Media>>(cx).clone();
+    let media = context::<Arc<Media>>(cx).clone();
     let mut stored = None;
     if !bytes.is_empty() {
         // What the bytes are, not what the file was called.
@@ -72,7 +72,7 @@ pub async fn save(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
             Ok(rendered) => rendered,
             Err(refusal) => return refuse(refusal.code()),
         };
-        let room = app_context::<Arc<Quota>>(cx)
+        let room = context::<Arc<Quota>>(cx)
             .room_for(tenant, rendered.picture.bytes())
             .await
             .map_err(topcoat::Error::from_anyhow)?;

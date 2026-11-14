@@ -17,13 +17,13 @@ use timada_tenancy::{
 };
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant, role_label};
+use super::{TenantAccess, TenantNav, require_tenant, role_label, slug};
 use crate::app::auth::Flash;
 use crate::auth::{now, user_labels};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
@@ -45,7 +45,7 @@ struct MembersQuery {
 }
 
 pub fn members_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -76,7 +76,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         user_id: me,
         ..
     } = access;
-    let invitations = open_invitations_of_tenant(app_context::<Db>(cx), &tenant.id, now())
+    let invitations = open_invitations_of_tenant(context::<Db>(cx), &tenant.id, now())
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let mut ids: Vec<String> = tenant.members.keys().cloned().collect();
@@ -105,7 +105,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             page_header(
                 title: "Members",
                 subtitle: Some("Who belongs to the tenant, and the invitations still waiting."),
-                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(history::history, Slug(slug.clone())))>
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(history::history, slug: slug.clone()))>
                     icon(data: icons::CLOCK)
                     "History"
                 </a>
@@ -132,7 +132,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_cell(
                                     // Owners alone move members between roles.
                                     if is_owner {
-                                        <form method="post" action=(href!(change::change, Slug(slug.clone()))) class="flex items-center gap-2">
+                                        <form method="post" action=(href!(change::change, slug: slug.clone())) class="flex items-center gap-2">
                                             <input type="hidden" name="user_id" value=(user_id)>
                                             select(
                                                 attrs: attributes! { name="role" class="w-44" aria-label=(format!("Role of {}", labels[user_id])) },
@@ -149,12 +149,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_cell(
                                     attrs: attributes! { class="text-right" },
                                     if user_id == &me {
-                                        <form method="post" action=(href!(revoke::revoke, Slug(slug.clone())))>
+                                        <form method="post" action=(href!(revoke::revoke, slug: slug.clone()))>
                                             <input type="hidden" name="user_id" value=(user_id)>
                                             button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Leave tenant")
                                         </form>
                                     } else if can_manage && (is_owner || role != ROLE_OWNER) {
-                                        <form method="post" action=(href!(revoke::revoke, Slug(slug.clone())))>
+                                        <form method="post" action=(href!(revoke::revoke, slug: slug.clone()))>
                                             <input type="hidden" name="user_id" value=(user_id)>
                                             button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Remove")
                                         </form>
@@ -170,7 +170,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 section_card(
                     title: Some("Invite a member"),
                     description: Some("The link in the e-mail is valid for 7 days. Whoever opens it signed in joins with that role."),
-                    <form method="post" action=(href!(invite::invite, Slug(slug.clone()))) class="flex flex-wrap items-end gap-3">
+                    <form method="post" action=(href!(invite::invite, slug: slug.clone())) class="flex flex-wrap items-end gap-3">
                         field(
                             attrs: attributes! { class="grow" },
                             field_label(attrs: attributes! { for="invite-email" }, "E-mail address")
@@ -211,7 +211,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     </span>
                                 </span>
                                 if can_manage {
-                                    <form method="post" action=(href!(revoke_invitation::revoke_invitation, Slug(slug.clone())))>
+                                    <form method="post" action=(href!(revoke_invitation::revoke_invitation, slug: slug.clone()))>
                                         <input type="hidden" name="invitation_id" value=(&invitation.id)>
                                         button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Withdraw")
                                     </form>

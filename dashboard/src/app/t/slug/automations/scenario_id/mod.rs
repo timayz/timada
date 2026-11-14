@@ -23,7 +23,7 @@ use topcoat::{
     router::{
         content::Form,
         error::{not_found, see_other},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{View, attributes, component, view},
 };
@@ -33,7 +33,7 @@ use self::editor::{Commit, Editor, EditorForm};
 use super::labels::status_label;
 use super::{automations, automations_url};
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::dropdown_menu::{
     dropdown_menu, dropdown_menu_content, dropdown_menu_trigger,
@@ -58,8 +58,8 @@ pub fn scenario_url(
 ) -> String {
     href!(
         index,
-        Slug(slug.to_owned()),
-        ScenarioId(scenario_id.to_owned())
+        slug: slug.to_owned(),
+        scenario_id: scenario_id.to_owned()
     )
     .query(Flash { error, message })
     .resolve(cx)
@@ -67,7 +67,7 @@ pub fn scenario_url(
 
 /// The scenario the URL names, or 404.
 pub(crate) async fn require_scenario(access: &TenantAccess, cx: &Cx) -> Result<ScenarioState> {
-    let id = path_param::<ScenarioId>(cx);
+    let id = scenario_id(cx);
     automations(access)?
         .load_scenario(id)
         .await
@@ -222,7 +222,7 @@ fn seal_webhook_url(
         .remove("url")
         .map(|url| url.trim().to_owned())
         .filter(|url| !url.is_empty());
-    let sealing = topcoat::context::app_context::<crate::app::WebhookSealing>(cx);
+    let sealing = topcoat::context::context::<crate::app::WebhookSealing>(cx);
     let mut refused = None;
     if let Some(url) = typed {
         match reqwest::Url::parse(&url) {
@@ -294,7 +294,7 @@ async fn publish_blocked(
         {
             return Ok(Some("automation_webhook_permission"));
         }
-        if topcoat::context::app_context::<crate::app::WebhookSealing>(cx)
+        if topcoat::context::context::<crate::app::WebhookSealing>(cx)
             .0
             .is_none()
         {
@@ -313,7 +313,7 @@ async fn publish_blocked(
     {
         return Ok(Some("automation_mail_permission"));
     }
-    if topcoat::context::app_context::<crate::app::OptOutLinks>(cx)
+    if topcoat::context::context::<crate::app::OptOutLinks>(cx)
         .0
         .is_none()
     {
@@ -351,13 +351,14 @@ struct Pages {
 impl Pages {
     fn of(cx: &Cx, access: &TenantAccess, scenario: &ScenarioState) -> Self {
         let slug = &access.tenant.slug;
-        let id = || ScenarioId(scenario.id.clone());
         Self {
-            edit: href!(edit, Slug(slug.clone()), id()).resolve(cx),
-            archive: href!(archive::archive, Slug(slug.clone()), id()).resolve(cx),
-            pause: href!(pause::pause, Slug(slug.clone()), id()).resolve(cx),
-            resume: href!(resume::resume, Slug(slug.clone()), id()).resolve(cx),
-            runs: href!(runs::index, Slug(slug.clone()), id()).resolve(cx),
+            edit: href!(edit, slug: slug.clone(), scenario_id: &scenario.id).resolve(cx),
+            archive: href!(archive::archive, slug: slug.clone(), scenario_id: &scenario.id)
+                .resolve(cx),
+            pause: href!(pause::pause, slug: slug.clone(), scenario_id: &scenario.id).resolve(cx),
+            resume: href!(resume::resume, slug: slug.clone(), scenario_id: &scenario.id)
+                .resolve(cx),
+            runs: href!(runs::index, slug: slug.clone(), scenario_id: &scenario.id).resolve(cx),
             back: automations_url(cx, slug, None, None),
         }
     }
@@ -400,7 +401,7 @@ async fn scenario_page(
         .and_then(|id| editor.definition.find(id))
         .filter(|step| step.kind == timada_automations::catalog::WEBHOOK)
         .and_then(|step| {
-            let keys = topcoat::context::app_context::<crate::app::WebhookSealing>(cx)
+            let keys = topcoat::context::context::<crate::app::WebhookSealing>(cx)
                 .0
                 .as_ref()?;
             Some(crate::automations::webhook::signing_secret(

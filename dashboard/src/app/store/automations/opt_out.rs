@@ -10,7 +10,7 @@
 use timada_orders::STOREFRONT_ACTOR;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{StatusCode, content::Form, route},
 };
 
@@ -24,7 +24,7 @@ pub async fn opt_out(cx: &Cx, Form(form): Form<TokenForm>) -> Result<Answer> {
         Ok(access) => access,
         Err(code) => return status(code),
     };
-    let Some(key) = app_context::<OptOutLinks>(cx).0 else {
+    let Some(key) = context::<OptOutLinks>(cx).0 else {
         return status(StatusCode::SERVICE_UNAVAILABLE);
     };
     let store = crate::app::store::store(cx, &access);

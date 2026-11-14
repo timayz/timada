@@ -1,17 +1,17 @@
 use topcoat::{
     Result,
     context::Cx,
-    router::{content::Form, error::SeeOther, path_param, route},
+    router::{content::Form, error::SeeOther, route},
 };
 
-use super::{ImageForm, VariantId};
+use super::{ImageForm, variant_id};
 use crate::app::t::slug::products::product_id::{Tab, act};
 
 /// Picks which picture a variant shows, or none when the menu comes back
 /// empty.
 #[route(POST)]
 pub async fn image(cx: &Cx, Form(form): Form<ImageForm>) -> Result<SeeOther> {
-    let variant_id = path_param::<VariantId>(cx).to_owned();
+    let variant_id = variant_id(cx).to_owned();
     act(
         cx,
         Tab::Variants,

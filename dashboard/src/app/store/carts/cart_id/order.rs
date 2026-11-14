@@ -3,12 +3,12 @@
 
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    router::{path_param, route},
+    context::{Cx, context},
+    router::route,
 };
 
 use super::super::{Answer, deliver, gateway};
-use super::CartId;
+use super::cart_id;
 use crate::cluster::LocalReads;
 use crate::store_carts;
 
@@ -18,12 +18,5 @@ pub async fn order(cx: &Cx) -> Result<Answer> {
         Ok(orders) => orders,
         Err(answer) => return Ok(answer),
     };
-    deliver(
-        store_carts::order_of_cart(
-            &orders,
-            app_context::<LocalReads>(cx),
-            path_param::<CartId>(cx),
-        )
-        .await,
-    )
+    deliver(store_carts::order_of_cart(&orders, context::<LocalReads>(cx), cart_id(cx)).await)
 }

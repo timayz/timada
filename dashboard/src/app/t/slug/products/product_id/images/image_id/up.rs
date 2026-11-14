@@ -1,16 +1,16 @@
 use topcoat::{
     Result,
     context::Cx,
-    router::{error::SeeOther, path_param, route},
+    router::{error::SeeOther, route},
 };
 
-use super::{ImageId, moved};
+use super::{image_id, moved};
 use crate::app::t::slug::products::product_id::{Tab, act};
 
 /// Moves the picture one place earlier in the gallery.
 #[route(POST)]
 pub async fn up(cx: &Cx) -> Result<SeeOther> {
-    let image_id = path_param::<ImageId>(cx).to_owned();
+    let image_id = image_id(cx).to_owned();
     act(
         cx,
         Tab::Pictures,

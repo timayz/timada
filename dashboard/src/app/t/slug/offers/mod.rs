@@ -15,13 +15,13 @@ use timada_discounts::{MAX_OFFER_TITLE_LEN, Offer, unix_now};
 use timada_tenancy::{PERMISSION_DISCOUNTS_MANAGE, PERMISSION_DISCOUNTS_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
 use super::discounts::{describe_window, discounts};
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::field::{field, field_description, field_label};
@@ -45,7 +45,7 @@ struct OffersQuery {
 }
 
 pub fn offers_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -70,7 +70,7 @@ async fn catalog_items(
     cx: &Cx,
     access: &TenantAccess,
 ) -> Result<(Vec<Item>, Vec<(String, String)>, HashMap<String, String>)> {
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let rows = products_of_tenant(
         pool,
         &access.tenant.id,
@@ -240,15 +240,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     table_cell(
                                         <div class="flex justify-end gap-2">
                                             if offer.active {
-                                                <form method="post" action=(href!(offer_id::deactivate::deactivate, Slug(slug.clone()), offer_id::OfferId(offer.id.clone())))>
+                                                <form method="post" action=(href!(offer_id::deactivate::deactivate, slug: slug.clone(), offer_id::offer_id: offer.id.clone()))>
                                                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" aria-label=(format!("Deactivate the offer on {item}")) }, "Deactivate")
                                                 </form>
                                             } else {
-                                                <form method="post" action=(href!(offer_id::reactivate::reactivate, Slug(slug.clone()), offer_id::OfferId(offer.id.clone())))>
+                                                <form method="post" action=(href!(offer_id::reactivate::reactivate, slug: slug.clone(), offer_id::offer_id: offer.id.clone()))>
                                                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" aria-label=(format!("Reactivate the offer on {item}")) }, "Reactivate")
                                                 </form>
                                             }
-                                            <form method="post" action=(href!(offer_id::archive::archive, Slug(slug.clone()), offer_id::OfferId(offer.id.clone())))>
+                                            <form method="post" action=(href!(offer_id::archive::archive, slug: slug.clone(), offer_id::offer_id: offer.id.clone()))>
                                                 button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" aria-label=(format!("Archive the offer on {item}")) }, "Archive")
                                             </form>
                                         </div>
@@ -266,7 +266,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     if items.is_empty() {
                         <p class="text-sm text-muted-foreground">"Add a product first: an offer is for one of them."</p>
                     } else {
-                        <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                        <form method="post" action=(href!(create::create, slug: slug.clone())) class="flex max-w-xl flex-col gap-4">
                             field(
                                 field_label(attrs: attributes! { for="new-offer-item" }, "Item")
                                 select(

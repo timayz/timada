@@ -3,11 +3,11 @@ use std::sync::Arc;
 use timada_tenancy::PERMISSION_ALIEXPRESS_MANAGE;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    router::{content::Form, error::SeeOther, path_param, route},
+    context::{Cx, context},
+    router::{content::Form, error::SeeOther, route},
 };
 
-use super::{CombinationForm, LinkId, back_to};
+use super::{CombinationForm, back_to, link_id};
 use crate::aliexpress::{AddResult, Aliexpress};
 use crate::app::t::slug::require_tenant;
 use crate::media::Media;
@@ -19,9 +19,9 @@ pub async fn combinations(cx: &Cx, Form(form): Form<CombinationForm>) -> Result<
     access
         .require_permission(cx, PERMISSION_ALIEXPRESS_MANAGE)
         .await?;
-    let link_id = path_param::<LinkId>(cx).to_owned();
-    let aliexpress = app_context::<Arc<Aliexpress>>(cx);
-    let media = app_context::<Arc<Media>>(cx).clone();
+    let link_id = link_id(cx).to_owned();
+    let aliexpress = context::<Arc<Aliexpress>>(cx);
+    let media = context::<Arc<Media>>(cx).clone();
     let store = access.executor()?.clone();
     let sku_ids: Vec<String> = Some(form.sku_id.trim().to_owned())
         .filter(|sku_id| !sku_id.is_empty())

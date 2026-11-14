@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::page,
     view::{View, attributes, view},
 };
@@ -121,8 +121,8 @@ fn state(health: &NodeHealth) -> (&'static str, Tone) {
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     require_admin(cx).await?;
-    let health = app_context::<Arc<Cluster>>(cx).health();
-    let connections = app_context::<Arc<StoreConnections>>(cx).by_tenant();
+    let health = context::<Arc<Cluster>>(cx).health();
+    let connections = context::<Arc<StoreConnections>>(cx).by_tenant();
     let storefronts: usize = connections.values().sum();
     let (label, tone) = state(&health);
     let (kept, limit) = health.backlog;
@@ -132,7 +132,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         format!("node {} of {}", health.id.0, health.nodes)
     };
     // The workers not running are the ones worth a row.
-    let workers = app_context::<Workers>(cx).states();
+    let workers = context::<Workers>(cx).states();
     let running = workers
         .iter()
         .filter(|(_, state)| state.is_running())
@@ -151,9 +151,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         format!("{running} of {} running", workers.len())
     };
     // The requests to pay this node is answering or has waiting for a lane.
-    let checkouts_queued = app_context::<Arc<crate::payments::Checkouts>>(cx).queued();
+    let checkouts_queued = context::<Arc<crate::payments::Checkouts>>(cx).queued();
     // The mails the sagas owe on this node, and the ones given up on.
-    let db = app_context::<crate::db::Db>(cx);
+    let db = context::<crate::db::Db>(cx);
     let mails = mailroom::summary(db)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -185,7 +185,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // or cart's own, recorded on it rather than holding every tenant behind
     // it, and kept by evento as a dead letter beside the saga's cursor.
     let (given_up_count, given_up) =
-        saga_fault::dead_letters(app_context::<Executor>(cx), db, GIVEN_UP_SHOWN)
+        saga_fault::dead_letters(context::<Executor>(cx), db, GIVEN_UP_SHOWN)
             .await
             .map_err(topcoat::Error::from_anyhow)?;
     let given_up_label = match given_up_count {

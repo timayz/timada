@@ -9,12 +9,12 @@ use timada_invoicing::{count_documents, documents_of_tenant};
 use timada_tenancy::PERMISSION_ORDERS_READ;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, class, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::cluster::Executor;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
@@ -63,8 +63,8 @@ pub fn regime_label(regime: &str, country: &str) -> String {
 pub fn pdf_href(cx: &Cx, slug: &str, document_id: &str) -> String {
     href!(
         document_id::pdf::pdf,
-        Slug(slug.to_owned()),
-        document_id::DocumentId(document_id.to_owned())
+        slug: slug.to_owned(),
+        document_id::document_id: document_id.to_owned()
     )
     .resolve(cx)
 }
@@ -79,7 +79,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_number = query.page.unwrap_or(1).max(1);
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let total = count_documents(pool, &tenant.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -91,7 +91,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_link = {
         let slug = slug.clone();
         move |page: i64| {
-            href!(index, Slug(slug.clone()))
+            href!(index, slug: slug.clone())
                 .query(InvoicesLink { page })
                 .resolve(cx)
         }
@@ -136,7 +136,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 )
                                 table_cell(<time datetime=(row.issued_at)>(format_time(row.issued_at as u64))</time>)
                                 table_cell(
-                                    <a class=(class!(LINK, "font-mono")) href=(href!(super::orders::order_id::index, Slug(slug.clone()), super::orders::order_id::OrderId(row.order_id.clone())))>(&row.order_reference)</a>
+                                    <a class=(class!(LINK, "font-mono")) href=(href!(super::orders::order_id::index, slug: slug.clone(), super::orders::order_id::order_id: row.order_id.clone()))>(&row.order_reference)</a>
                                 )
                                 table_cell((&row.buyer_name))
                                 table_cell(attrs: attributes! { data-document-regime=(&row.regime) }, (regime_label(&row.regime, &row.tax_country)))

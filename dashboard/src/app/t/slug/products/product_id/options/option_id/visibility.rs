@@ -1,10 +1,10 @@
 use topcoat::{
     Result,
     context::Cx,
-    router::{content::Form, error::SeeOther, path_param, route},
+    router::{content::Form, error::SeeOther, route},
 };
 
-use super::OptionId;
+use super::option_id;
 use crate::app::t::slug::products::product_id::{Tab, act};
 
 #[derive(serde::Deserialize)]
@@ -17,7 +17,7 @@ pub struct VisibilityForm {
 /// again.
 #[route(POST)]
 pub async fn visibility(cx: &Cx, Form(form): Form<VisibilityForm>) -> Result<SeeOther> {
-    let option_id = path_param::<OptionId>(cx).to_owned();
+    let option_id = option_id(cx).to_owned();
     let message = if form.value.is_empty() {
         "Shoppers choose this option again."
     } else {

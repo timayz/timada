@@ -9,7 +9,7 @@ use serde::Deserialize;
 use timada_tenancy::{LegalIdentity, companies_of_user};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
     router::{href, page, query_params},
     view::{Child, View, attributes, class, component, view},
@@ -42,7 +42,7 @@ pub fn companies_url(cx: &Cx, error: Option<&str>, message: Option<&str>) -> Str
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let user = require_user(cx).await?;
     let query = query_params::<CompaniesQuery>(cx)?;
-    let mine = companies_of_user(app_context::<Db>(cx), &user.id)
+    let mine = companies_of_user(context::<Db>(cx), &user.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     Ok(view! {
@@ -79,7 +79,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_row(
                                     attrs: attributes! { data-company=(&row.siren) },
                                     table_cell(
-                                        <a class=(LINK) href=(href!(company_id::index, company_id::CompanyId(row.id.clone())))>(&row.legal_name)</a>
+                                        <a class=(LINK) href=(href!(company_id::index, company_id::company_id: row.id.clone()))>(&row.legal_name)</a>
                                     )
                                     table_cell(<code class="text-xs">(&row.siren)</code>)
                                 )
@@ -152,6 +152,7 @@ fn format_capital(cents: u64) -> String {
 /// out as the card's heading rather than on its border.
 #[component]
 async fn identity_group(
+    cx: &Cx,
     legend: &str,
     #[default] description: Option<&str>,
     #[default] child: Child<'_>,
@@ -169,7 +170,7 @@ async fn identity_group(
 
 /// The fields of the identity form, filled with `legal`.
 #[component]
-pub async fn identity_fields(legal: &LegalIdentity) -> Result<impl View> {
+pub async fn identity_fields(cx: &Cx, legal: &LegalIdentity) -> Result<impl View> {
     let capital = legal
         .share_capital_cents
         .map(format_capital)

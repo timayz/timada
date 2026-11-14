@@ -38,6 +38,7 @@ pub async fn price(
 /// caller: `product_image(image: &photo, attrs: attributes! { class="photo" })`.
 #[component]
 pub async fn product_image(
+    cx: &Cx,
     image: &Image,
     #[default] large: bool,
     #[default] mut attrs: Attributes,

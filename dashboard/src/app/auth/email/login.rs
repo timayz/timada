@@ -4,7 +4,7 @@ use serde::Deserialize;
 use timada_identity::normalize_email;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Form,
         error::{SeeOther, see_other},
@@ -37,8 +37,8 @@ struct LoginForm {
 #[route(POST)]
 pub async fn login(cx: &Cx, Form(form): Form<LoginForm>) -> Result<SeeOther> {
     let allowed = allow_password_login(
-        app_context::<Arc<RateLimiter>>(cx),
-        &app_context::<Config>(cx).auth,
+        context::<Arc<RateLimiter>>(cx),
+        &context::<Config>(cx).auth,
         &form.email,
         client_ip(cx),
     )

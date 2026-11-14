@@ -10,7 +10,7 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, not_found, see_other},
-        module_param, path_param, route,
+        module_param, route,
     },
 };
 
@@ -20,7 +20,7 @@ module_param!(pub kind);
 
 /// The mail named in the URL, or 404.
 pub fn require_kind(cx: &Cx) -> Result<ShopMailKind> {
-    ShopMailKind::from_key(path_param::<Kind>(cx)).ok_or_else(|| not_found().into())
+    ShopMailKind::from_key(kind(cx)).ok_or_else(|| not_found().into())
 }
 
 /// Opens the mail's editor in the shop's default language.

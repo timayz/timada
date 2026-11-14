@@ -53,7 +53,7 @@ use timada_tenancy::{
     PERMISSION_REVIEWS_READ, PERMISSION_SUPPORT_READ, TenantState,
 };
 use tokio::task::JoinHandle;
-use topcoat::context::{AppContext, Cx};
+use topcoat::context::{ContextMap, Cx};
 
 use super::definitions::Definitions;
 use super::facts::facts_of;
@@ -155,7 +155,7 @@ pub struct Runner<E = Executor> {
     /// written at the version the run was loaded at, so a node a moment
     /// behind another's move writes nothing and leaves the run to it.
     store: E,
-    mail: Arc<AppContext>,
+    mail: Arc<ContextMap>,
     /// The dashboard's public address, for the links the notices carry.
     base_url: String,
     keys: Arc<dyn KeyRing>,
@@ -189,7 +189,7 @@ impl<E: Store> Runner<E> {
     pub fn new(
         db: Db,
         store: E,
-        mail: Arc<AppContext>,
+        mail: Arc<ContextMap>,
         base_url: String,
         keys: Arc<dyn KeyRing>,
         opt_out_key: Option<OptOutKey>,
@@ -580,7 +580,7 @@ impl<E: Store> Runner<E> {
             .await?
             .unwrap_or_else(|| "A scenario".into());
         let link = subject_link(&self.base_url, &tenant.slug, subject, &run.subject_id);
-        let cx = Cx::new(self.mail.clone());
+        let cx = Cx::new().with_shared(self.mail.clone());
         let mut mailed = 0;
         let mut refused = None;
         for to in &recipients {
@@ -623,7 +623,7 @@ impl<E: Store> Runner<E> {
         if storefront.is_none() {
             return Ok(Some("The shop has not said where its storefront lives."));
         }
-        let cx = Cx::new(self.mail.clone());
+        let cx = Cx::new().with_shared(self.mail.clone());
         if marketing_sender(&cx, tenant).await?.is_none() {
             return Ok(Some("The shop picked no mail server for its marketing."));
         }
@@ -780,7 +780,7 @@ impl<E: Store> Runner<E> {
             "{storefront}/emails/opt-out/{}",
             opt_out_token(&key.0, &tenant.id, &address)
         );
-        let cx = Cx::new(self.mail.clone());
+        let cx = Cx::new().with_shared(self.mail.clone());
         let Some(sender) = marketing_sender(&cx, tenant).await? else {
             return Ok(Acted::Failed(
                 "The shop picked no mail server for its marketing.".into(),
@@ -1287,7 +1287,7 @@ mod tests {
         Runner::new(
             db.clone(),
             store.clone(),
-            Arc::new(AppContext::new()),
+            Arc::new(ContextMap::new()),
             "https://dashboard.example".into(),
             Arc::new(MemoryRing(keys.clone())),
             None,

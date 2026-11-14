@@ -22,7 +22,7 @@ use timada_tenancy::{
 };
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
     router::{href, page, query_params},
     view::{View, attributes, component, view},
@@ -30,7 +30,7 @@ use topcoat::{
 
 use crate::app::auth::Flash;
 use crate::app::t::slug::mail::own_address;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::auth::require_user;
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
@@ -66,7 +66,7 @@ struct PageLink {
 
 /// The campaigns page, with a flash error code or message.
 pub fn campaigns_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -115,7 +115,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let can_manage = access.can(cx, PERMISSION_NEWSLETTER_MANAGE).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let total = count_campaigns(pool, &tenant.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -127,7 +127,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_link = {
         let slug = slug.clone();
         move |page: u32| {
-            href!(index, Slug(slug.clone()))
+            href!(index, slug: slug.clone())
                 .query(PageLink { page })
                 .resolve(cx)
         }
@@ -141,9 +141,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             page_header(
                 title: "Campaigns",
                 subtitle: Some("The mails of news sent to the newsletter's subscribers."),
-                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(super::index, Slug(slug.clone())))>"Subscribers"</a>
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(super::index, slug: slug.clone()))>"Subscribers"</a>
                 if can_manage {
-                    <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Sm)) href=(href!(new::new, Slug(slug.clone())))>"New campaign"</a>
+                    <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Sm)) href=(href!(new::new, slug: slug.clone()))>"New campaign"</a>
                 }
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
@@ -167,7 +167,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         for row in &rows {
                             table_row(
                                 attrs: attributes! { data-campaign=(&row.subject) data-campaign-status=(&row.status) },
-                                table_cell(<a class=(LINK) href=(href!(campaign_id::index, Slug(slug.clone()), campaign_id::CampaignId(row.id.clone())))>(&row.subject)</a>)
+                                table_cell(<a class=(LINK) href=(href!(campaign_id::index, slug: slug.clone(), campaign_id::campaign_id: row.id.clone()))>(&row.subject)</a>)
                                 table_cell((audience_label(row.language.as_deref())))
                                 table_cell(<time datetime=(row.created_at)>(format_time(row.created_at as u64))</time>)
                                 table_cell(
@@ -281,6 +281,7 @@ pub async fn send_test(
 /// The form a draft is written in, beside its preview.
 #[component]
 pub async fn campaign_editor(
+    cx: &Cx,
     tenant: &TenantState,
     action: String,
     draft: &CampaignDraft,
@@ -360,6 +361,7 @@ pub async fn campaign_editor(
 /// A rendered campaign, or the word that it can't be.
 #[component]
 pub async fn campaign_preview(
+    cx: &Cx,
     checked: &std::result::Result<RenderedMail, MailTemplateError>,
 ) -> Result<impl View> {
     Ok(view! {

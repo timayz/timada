@@ -10,8 +10,8 @@ pub mod requests;
 
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    router::{module_param, path_param, route},
+    context::{Cx, context},
+    router::{module_param, route},
 };
 
 use super::{Answer, deliver, gateway};
@@ -30,9 +30,9 @@ pub async fn index(cx: &Cx) -> Result<Answer> {
     deliver(
         store_carts::cart(
             &orders,
-            app_context::<LocalReads>(cx),
-            app_context::<Db>(cx),
-            path_param::<CartId>(cx),
+            context::<LocalReads>(cx),
+            context::<Db>(cx),
+            cart_id(cx),
         )
         .await,
     )

@@ -7,7 +7,7 @@ use timada_storefront::{menu, stop_automated_mails};
 use topcoat::{
     Result,
     context::Cx,
-    router::{href, module_param, page, path_param},
+    router::{href, module_param, page},
     view::{View, view},
 };
 
@@ -17,7 +17,7 @@ module_param!(pub token);
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    let token = path_param::<Token>(cx).to_owned();
+    let token = token(cx).to_owned();
     let nav = menu(cx).await?;
     Ok(view! {
         document(
@@ -27,7 +27,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <h1>"Ne plus recevoir nos e-mails automatiques"</h1>
                 <div class="card panel">
                     <p>"Vous ne recevrez plus les e-mails que la boutique envoie d'elle-même (après une commande, un avis…). Vos commandes, elles, continuent de vous être confirmées."</p>
-                    <form method="post" action=(href!(submit, Token(token))) data-automation-opt-out="">
+                    <form method="post" action=(href!(submit, token: token)) data-automation-opt-out="">
                         <button class="btn">"Ne plus les recevoir"</button>
                     </form>
                 </div>
@@ -38,7 +38,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
 #[page(POST)]
 pub async fn submit(cx: &Cx) -> Result<impl View> {
-    let token = path_param::<Token>(cx).to_owned();
+    let token = token(cx).to_owned();
     let stopped = stop_automated_mails(cx, &token).await?;
     let nav = menu(cx).await?;
     Ok(view! {

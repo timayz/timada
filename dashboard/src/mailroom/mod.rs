@@ -38,7 +38,7 @@ use timada_core::db::FromRow;
 use timada_tenancy::ShopMailKind;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use topcoat::context::AppContext;
+use topcoat::context::ContextMap;
 
 use crate::cluster::Executor as Store;
 use crate::db::Db;
@@ -234,7 +234,7 @@ pub struct Mailroom {
     pub(crate) store: Store,
     /// The platform's transport and sender, the shops' own servers, and the
     /// keys the codes and links derive under.
-    pub(crate) mail: Arc<AppContext>,
+    pub(crate) mail: Arc<ContextMap>,
     /// The tenants' keys, to open the shoppers' addresses and the messages.
     pub(crate) keys: Arc<KeyVault>,
     /// The payment provider: the platform's server mails about the orders
@@ -260,7 +260,7 @@ impl Mailroom {
     pub fn new(
         db: Db,
         store: Store,
-        mail: Arc<AppContext>,
+        mail: Arc<ContextMap>,
         keys: Arc<KeyVault>,
         payments: Arc<Payments>,
         base_url: String,
@@ -629,7 +629,7 @@ pub(crate) mod tests {
 
     pub(crate) fn room_with(
         store: &Turso,
-        mail: Arc<AppContext>,
+        mail: Arc<ContextMap>,
         keys: Arc<KeyVault>,
         node: &str,
     ) -> Arc<Mailroom> {
@@ -640,7 +640,7 @@ pub(crate) mod tests {
     /// the platform's server would send are checked against.
     pub(crate) fn room_paid_through(
         store: &Turso,
-        mail: Arc<AppContext>,
+        mail: Arc<ContextMap>,
         keys: Arc<KeyVault>,
         gateway: Arc<FakeGateway>,
         node: &str,

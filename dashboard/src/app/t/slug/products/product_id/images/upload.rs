@@ -5,15 +5,15 @@ use timada_catalog::{AddImage, new_image_id};
 use timada_tenancy::PERMISSION_PRODUCTS_MANAGE;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::multipart::Multipart,
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::super::{ProductId, Tab, act, product_tab_url};
+use super::super::{Tab, act, product_id, product_tab_url};
 use crate::app::t::slug::require_tenant;
 use crate::media::{Media, Quota, Room, STORAGE_FULL};
 
@@ -28,7 +28,7 @@ pub async fn upload(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
         .await?;
     let tenant_id = access.tenant.id.clone();
     let tenant_slug = access.tenant.slug.clone();
-    let product_id = path_param::<ProductId>(cx).to_owned();
+    let product_id = product_id(cx).to_owned();
     let refuse = |code: &str| {
         Ok(see_other(product_tab_url(
             cx,
@@ -55,7 +55,7 @@ pub async fn upload(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
     }
     // What the bytes are, not what the file was called: a renamed executable
     // is still not a picture.
-    let media = app_context::<Arc<Media>>(cx).clone();
+    let media = context::<Arc<Media>>(cx).clone();
     let rendered = match media
         .render(bytes)
         .await
@@ -65,7 +65,7 @@ pub async fn upload(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
         Err(refusal) => return refuse(refusal.code()),
     };
     // Within what the shop's pictures may take.
-    let room = app_context::<Arc<Quota>>(cx)
+    let room = context::<Arc<Quota>>(cx)
         .room_for(&access.tenant, rendered.picture.bytes())
         .await
         .map_err(topcoat::Error::from_anyhow)?;

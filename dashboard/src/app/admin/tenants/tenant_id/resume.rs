@@ -3,11 +3,11 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{TenantId, admin_tenant_url};
+use super::{admin_tenant_url, tenant_id};
 use crate::app::admin::require_admin;
 use crate::app::tenants::{error_code, tenancy};
 
@@ -15,7 +15,7 @@ use crate::app::tenants::{error_code, tenancy};
 #[route(POST)]
 pub async fn resume(cx: &Cx) -> Result<SeeOther> {
     require_admin(cx).await?;
-    let id = path_param::<TenantId>(cx);
+    let id = tenant_id(cx);
     match tenancy(cx).resume_tenant(id).await {
         Ok(()) => Ok(see_other(admin_tenant_url(
             cx,

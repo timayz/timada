@@ -22,13 +22,13 @@ use timada_tenancy::{
 };
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::aliexpress::Aliexpress;
 use crate::app::auth::Flash;
 use crate::app::companies::company_id::company_url;
@@ -58,7 +58,7 @@ struct AliexpressQuery {
 }
 
 pub fn aliexpress_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -367,13 +367,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await?;
     let query = query_params::<AliexpressQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let links = links_of_tenant(pool, &access.tenant.id, LISTED)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    let aliexpress = app_context::<Arc<Aliexpress>>(cx);
+    let aliexpress = context::<Arc<Aliexpress>>(cx);
     let company = aliexpress
-        .company_of(app_context::<Executor>(cx), &access.tenant)
+        .company_of(context::<Executor>(cx), &access.tenant)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let TenantAccess {
@@ -390,7 +390,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .filter(|_| owns_company)
         .map(|company| company_url(cx, &company.id, None, None));
-    let invoicing = href!(crate::app::t::slug::invoicing::index, Slug(slug.clone())).resolve(cx);
+    let invoicing = href!(crate::app::t::slug::invoicing::index, slug: slug.clone()).resolve(cx);
     let currency = settings
         .as_ref()
         .map(|settings| settings.currency.clone())
@@ -470,7 +470,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                 </div>
                 if settings.is_some() {
-                    <form method="post" action=(href!(remove::remove, Slug(slug.clone())))>
+                    <form method="post" action=(href!(remove::remove, slug: slug.clone()))>
                         button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop importing")
                     </form>
                 }
@@ -480,7 +480,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 section_card(
                     title: Some("Import a product"),
                     description: Some("It becomes a draft, priced by the rule, with AliExpress's pictures, options and stock. Check it, then publish it."),
-                    <form method="post" action=(href!(import::import, Slug(slug.clone()))) class="flex max-w-xl flex-wrap items-end gap-2">
+                    <form method="post" action=(href!(import::import, slug: slug.clone())) class="flex max-w-xl flex-wrap items-end gap-2">
                         field(
                             attrs: attributes! { class="min-w-0 flex-1" },
                             field_label(attrs: attributes! { for="aliexpress-product" }, "AliExpress product")
@@ -497,7 +497,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 section_card(
                     title: Some("Orders"),
                     description: Some("A paid order's AliExpress items are bought there for the shopper, delivered by AliExpress itself; its tracking fulfils the order once every item ships."),
-                    <form method="post" action=(href!(forwarding::forwarding, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-3" data-aliexpress-forwarding=(if settings.auto_forward { "auto" } else { "manual" })>
+                    <form method="post" action=(href!(forwarding::forwarding, slug: slug.clone())) class="flex max-w-xl flex-col gap-3" data-aliexpress-forwarding=(if settings.auto_forward { "auto" } else { "manual" })>
                         <label class="flex items-center gap-2 text-sm">
                             checkbox(attrs: attributes! { id="aliexpress-auto-forward" name="auto_forward" value="on" checked=(settings.auto_forward) })
                             " Place paid orders on AliExpress automatically"
@@ -570,7 +570,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_cell(
                                     attrs: attributes! { class="text-right" },
                                     if row.status == "linked" {
-                                        <form method="post" action=(href!(products::link_id::sync::sync, Slug(slug.clone()), products::link_id::LinkId(row.id.clone())))>
+                                        <form method="post" action=(href!(products::link_id::sync::sync, slug: slug.clone(), products::link_id::link_id: row.id.clone()))>
                                             button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" aria-label=(format!("Read {} again", row.ae_product_id)) }, "Sync now")
                                         </form>
                                     }
@@ -588,7 +588,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <li>"An owner of the company connects its AliExpress buyer account on the company's page. Every shop of the company buys through it."</li>
                     <li>"Choose here what this shop buys in, and how it prices what it imports."</li>
                 </ol>
-                <form method="post" action=(href!(configure::configure, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                <form method="post" action=(href!(configure::configure, slug: slug.clone())) class="flex max-w-xl flex-col gap-4">
                     <div class="flex flex-wrap gap-4">
                         field(
                             field_label(attrs: attributes! { for="aliexpress-country" }, "Ships to (country)")

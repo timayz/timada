@@ -5,13 +5,12 @@ use topcoat::{
     router::{
         error::not_found,
         header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE},
-        path_param,
         response::IntoResponse,
         route,
     },
 };
 
-use super::DocumentId;
+use super::document_id;
 use crate::app::t::slug::invoices::invoicing;
 use crate::app::t::slug::require_tenant;
 
@@ -22,7 +21,7 @@ pub async fn pdf(cx: &Cx) -> Result<impl IntoResponse> {
     access
         .require_permission(cx, PERMISSION_ORDERS_READ)
         .await?;
-    let document_id = path_param::<DocumentId>(cx);
+    let document_id = document_id(cx);
     let document = invoicing(&access)?
         .load_document(document_id)
         .await

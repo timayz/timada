@@ -172,7 +172,7 @@ pub async fn cart_drawer(
                         <ul>
                             for product in &offered {
                                 <li data-offer=(&product.slug)>
-                                    <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::Slug(product.slug.clone())))>
+                                    <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::slug: product.slug.clone()))>
                                         if let Some(image) = product.image() {
                                             product_image(image: image, attrs: attributes! { class="offer-pic" })
                                         }
@@ -187,7 +187,7 @@ pub async fn cart_drawer(
                                             <button aria-label=(format!("Ajouter {}", product.name))>"Ajouter"</button>
                                         </form>
                                     } else {
-                                        <a class="offer-options" href=(href!(crate::app::p::slug::index, crate::app::p::slug::Slug(product.slug.clone())))
+                                        <a class="offer-options" href=(href!(crate::app::p::slug::index, crate::app::p::slug::slug: product.slug.clone()))
                                             aria-label=(format!("Choisir les options de {}", product.name))>"Choisir les options"</a>
                                     }
                                 </li>

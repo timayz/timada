@@ -17,7 +17,7 @@ pub mod shoppers;
 use timada_tenancy::{ApiKeyAccess, SCOPE_STORE_CHECKOUT, TenancyError};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{StatusCode, header::AUTHORIZATION, request::headers},
 };
 
@@ -39,8 +39,8 @@ pub async fn storefront(cx: &Cx) -> Result<std::result::Result<ApiKeyAccess, Sta
         return Ok(Err(StatusCode::UNAUTHORIZED));
     };
     let access = match crate::store_api::authenticate(
-        app_context::<LocalReads>(cx),
-        app_context::<Executor>(cx),
+        context::<LocalReads>(cx),
+        context::<Executor>(cx),
         token,
     )
     .await
@@ -76,7 +76,7 @@ impl TenantStore {
 /// The key's tenant's store.
 pub fn store(cx: &Cx, access: &ApiKeyAccess) -> TenantStore {
     TenantStore {
-        executor: app_context::<Executor>(cx).clone(),
+        executor: context::<Executor>(cx).clone(),
         tenant_id: access.tenant.id.clone(),
     }
 }

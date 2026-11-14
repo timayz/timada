@@ -6,14 +6,10 @@ pub mod remove;
 
 use bytes::Bytes;
 use timada_orders::wire::DiscountCode;
-use topcoat::{
-    Result,
-    context::Cx,
-    router::{path_param, route},
-};
+use topcoat::{Result, context::Cx, router::route};
 
 use super::super::{Answer, deliver, gateway, parse_body};
-use super::CartId;
+use super::cart_id;
 use crate::store_carts;
 
 #[route(POST)]
@@ -26,5 +22,5 @@ pub async fn apply(cx: &Cx, bytes: Bytes) -> Result<Answer> {
         Ok(code) => code,
         Err(answer) => return Ok(answer),
     };
-    deliver(store_carts::apply_discount(&orders, path_param::<CartId>(cx), &code.code).await)
+    deliver(store_carts::apply_discount(&orders, cart_id(cx), &code.code).await)
 }

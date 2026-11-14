@@ -1,7 +1,7 @@
 use timada_identity::SignInPasskey;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Json,
         error::{bad_request, unauthorized},
@@ -20,7 +20,7 @@ use crate::auth::{
 
 #[route(POST)]
 pub async fn finish(cx: &Cx, Json(credential): Json<PublicKeyCredential>) -> Result<Json<Done>> {
-    let webauthn = app_context::<Webauthn>(cx);
+    let webauthn = context::<Webauthn>(cx);
     let store = passkey_login_flow(cx);
     let flow = match store.parse() {
         Ok(Some(store)) => {

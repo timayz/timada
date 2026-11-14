@@ -5,7 +5,7 @@ pub mod tenant_id;
 use timada_tenancy::{count_tenants, list_tenants};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
@@ -64,7 +64,7 @@ pub async fn tenants(cx: &Cx) -> Result<impl View> {
     let query = query_params::<TenantsQuery>(cx)?;
     let q = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let page_number = query.page.unwrap_or(1).max(1);
-    let db = app_context::<Db>(cx);
+    let db = context::<Db>(cx);
     let total = count_tenants(db, q)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -118,7 +118,7 @@ pub async fn tenants(cx: &Cx) -> Result<impl View> {
                             table_row(
                                 attrs: attributes! { class=(if row.suspended { "text-muted-foreground" } else { "" }) },
                                 table_cell(
-                                    <a class=(LINK) href=(href!(tenant_id::index, tenant_id::TenantId(row.id.clone())))>(&row.name)</a>
+                                    <a class=(LINK) href=(href!(tenant_id::index, tenant_id::tenant_id: row.id.clone()))>(&row.name)</a>
                                 )
                                 table_cell(<code class="text-xs">(&row.slug)</code>)
                                 table_cell(attrs: attributes! { class="text-right tabular-nums" }, (row.member_count))

@@ -9,6 +9,7 @@
 use timada_storefront::{FacetValue, ProductQuery, facet_key};
 use topcoat::{
     Result,
+    context::Cx,
     view::{View, view},
 };
 
@@ -180,7 +181,7 @@ impl Panel {
 
 /// The panel under a listing's heading.
 #[topcoat::view::component]
-pub async fn filter_panel(panel: &Panel) -> Result<impl View> {
+pub async fn filter_panel(cx: &Cx, panel: &Panel) -> Result<impl View> {
     Ok(view! {
         <details class="filters" data-filters="" open=(panel.active)>
             <summary>"Afficher les filtres"</summary>
@@ -221,7 +222,7 @@ pub async fn filter_panel(panel: &Panel) -> Result<impl View> {
 
 /// The filters a `GET` form must carry on, so sorting keeps them.
 #[topcoat::view::component]
-pub async fn filter_fields(filters: &Filters) -> Result<impl View> {
+pub async fn filter_fields(cx: &Cx, filters: &Filters) -> Result<impl View> {
     Ok(view! {
         if let Some(min) = filters.min_price {
             <input type="hidden" name="min_price" value=(min)>

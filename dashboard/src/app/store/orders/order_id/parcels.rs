@@ -4,12 +4,12 @@
 
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    router::{path_param, route},
+    context::{Cx, context},
+    router::route,
 };
 
 use super::super::super::carts::{Answer, deliver, gateway};
-use super::OrderId;
+use super::order_id;
 use crate::cluster::LocalReads;
 use crate::store_carts;
 
@@ -19,12 +19,5 @@ pub async fn parcels(cx: &Cx) -> Result<Answer> {
         Ok(orders) => orders,
         Err(answer) => return Ok(answer),
     };
-    deliver(
-        store_carts::parcels(
-            &orders,
-            app_context::<LocalReads>(cx),
-            path_param::<OrderId>(cx),
-        )
-        .await,
-    )
+    deliver(store_carts::parcels(&orders, context::<LocalReads>(cx), order_id(cx)).await)
 }

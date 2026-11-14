@@ -22,8 +22,8 @@ impl RouterBuilderStoreExt for RouterBuilder {
     fn store(mut self, store: Store) -> Self {
         self = self.route(StatusRoute::new(&store));
         // A second registration of the same type would panic.
-        if self.get_app_context::<Store>().is_none() {
-            self = self.app_context(store);
+        if self.try_context::<Store>().is_none() {
+            self = self.with(store);
         }
         self
     }

@@ -17,7 +17,7 @@
 use std::future::Future;
 
 use topcoat::{
-    context::{Cx, app_context},
+    context::{Cx, context},
     cookie::{Cookie, Cookies, SameSite, cookies, time},
     router::{
         Body, Layer, LayerFuture, Method, Next, Path,
@@ -93,13 +93,11 @@ where
     F: Fn(Executor) -> Fut,
     Fut: Future<Output = T>,
 {
-    let store = app_context::<Executor>(cx);
+    let store = context::<Executor>(cx);
     if wrote_lately(cx) {
         return read(store.clone()).await;
     }
-    app_context::<LocalReads>(cx)
-        .first(store, read, settled)
-        .await
+    context::<LocalReads>(cx).first(store, read, settled).await
 }
 
 #[cfg(test)]

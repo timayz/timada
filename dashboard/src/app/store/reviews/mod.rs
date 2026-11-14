@@ -32,7 +32,7 @@ use timada_reviews::{
 use timada_tenancy::ApiKeyAccess;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         StatusCode,
         content::{Json, multipart::Multipart},
@@ -118,7 +118,7 @@ async fn read_upload(multipart: &mut Multipart) -> Result<Upload> {
 /// what the shop keeps under fresh ids; `None` when one is not a picture
 /// taken, or too large.
 async fn render_photos(cx: &Cx, files: Vec<Bytes>) -> Result<Option<Vec<(ReviewPhoto, Rendered)>>> {
-    let media = app_context::<Arc<Media>>(cx);
+    let media = context::<Arc<Media>>(cx);
     let mut photos = Vec::with_capacity(files.len());
     for bytes in files {
         let Ok(rendered) = media
@@ -147,7 +147,7 @@ async fn room_for_photos(
     if wanted == 0 {
         return Ok(None);
     }
-    let room = app_context::<Arc<Quota>>(cx)
+    let room = context::<Arc<Quota>>(cx)
         .room_for(&access.tenant, wanted)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -170,7 +170,7 @@ where
     Fut: Future<Output = std::result::Result<String, ReviewError>>,
 {
     let tenant_id = access.tenant.id.as_str();
-    let media = app_context::<Arc<Media>>(cx).clone();
+    let media = context::<Arc<Media>>(cx).clone();
     let mut stored: Vec<String> = Vec::new();
     let mut kept = Ok(());
     for (photo, rendered) in photos {

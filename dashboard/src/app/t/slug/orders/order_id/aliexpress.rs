@@ -6,11 +6,11 @@ use topcoat::{
     router::{
         content::Form,
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{OrderId, order_url};
+use super::{order_id, order_url};
 use crate::app::t::slug::require_tenant;
 
 #[derive(Deserialize)]
@@ -28,7 +28,7 @@ pub async fn forward(cx: &Cx, Form(form): Form<ForwardForm>) -> Result<SeeOther>
     access
         .require_permission(cx, PERMISSION_ALIEXPRESS_MANAGE)
         .await?;
-    let order_id = path_param::<OrderId>(cx).to_owned();
+    let order_id = order_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let forwards = timada_aliexpress::Command::new(access.executor()?.clone(), access.tenant_id());
     match forwards

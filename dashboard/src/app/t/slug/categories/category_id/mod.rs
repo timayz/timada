@@ -15,10 +15,10 @@ use timada_catalog::{
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, not_found, see_other},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{View, attributes, class, view},
 };
@@ -26,7 +26,7 @@ use topcoat::{
 use super::{Choice, error_code, rows_of};
 use crate::app::auth::Flash;
 use crate::app::t::slug::products::catalog;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::auth::user_labels;
 use crate::components::badge::{BadgeVariant, badge};
 use crate::components::breadcrumb::{
@@ -63,8 +63,8 @@ pub fn category_url(
 ) -> String {
     href!(
         index,
-        Slug(slug.to_owned()),
-        CategoryId(category_id.to_owned())
+        slug: slug.to_owned(),
+        category_id: category_id.to_owned()
     )
     .query(Flash { error, message })
     .resolve(cx)
@@ -72,7 +72,7 @@ pub fn category_url(
 
 /// The category named in the URL, or 404.
 async fn require_category(cx: &Cx, access: &TenantAccess) -> Result<CategoryState> {
-    let id = path_param::<CategoryId>(cx);
+    let id = category_id(cx);
     catalog(access)?
         .load_category(id)
         .await
@@ -94,7 +94,7 @@ where
     access
         .require_permission(cx, PERMISSION_PRODUCTS_MANAGE)
         .await?;
-    let category_id = path_param::<CategoryId>(cx).to_owned();
+    let category_id = category_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let gateway = catalog(&access)?;
     match run(&gateway, &access.user_id, &category_id).await {
@@ -132,7 +132,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .cloned()
         .unwrap_or_else(|| category.created_by.clone());
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     // The whole tree: it carries the counts, and it says where this category
     // may move to (anything live that is not itself or one of its
     // descendants, with room for it below).
@@ -198,10 +198,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             breadcrumb(
                 attrs: attributes! { class="mb-4" data-breadcrumb="" },
                 breadcrumb_list(
-                    breadcrumb_item(breadcrumb_link(attrs: attributes! { href=(href!(super::index, Slug(slug.clone()))) }, "All categories"))
+                    breadcrumb_item(breadcrumb_link(attrs: attributes! { href=(href!(super::index, slug: slug.clone())) }, "All categories"))
                     for ancestor in &ancestors {
                         breadcrumb_separator()
-                        breadcrumb_item(breadcrumb_link(attrs: attributes! { href=(href!(index, Slug(slug.clone()), CategoryId(ancestor.id.clone()))) }, (&ancestor.name)))
+                        breadcrumb_item(breadcrumb_link(attrs: attributes! { href=(href!(index, slug: slug.clone(), category_id: ancestor.id.clone())) }, (&ancestor.name)))
                     }
                     breadcrumb_separator()
                     breadcrumb_item(breadcrumb_page((&category.name)))
@@ -246,7 +246,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                     fact(
                         term: "Filed here",
-                        <a class=(LINK) data-category-direct=(filed_here) href=(href!(crate::app::t::slug::products::index, Slug(slug.clone())).query(ProductsOfCategory { category: &category.id }).resolve(cx))>
+                        <a class=(LINK) data-category-direct=(filed_here) href=(href!(crate::app::t::slug::products::index, slug: slug.clone()).query(ProductsOfCategory { category: &category.id }).resolve(cx))>
                             (filed_here) " product" (if filed_here == 1 { "" } else { "s" })
                         </a>
                     )
@@ -274,7 +274,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             if editable {
                 <section class="mb-6 grid gap-4 md:grid-cols-2">
-                    <form method="post" action=(href!(rename::rename, Slug(slug.clone()), CategoryId(category.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                    <form method="post" action=(href!(rename::rename, slug: slug.clone(), category_id: category.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                         field(
                             field_label(attrs: attributes! { for="category-name" }, "Name")
                             input(attrs: attributes! {
@@ -284,7 +284,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                         <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Rename")</div>
                     </form>
-                    <form method="post" action=(href!(move_to::move_to, Slug(slug.clone()), CategoryId(category.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                    <form method="post" action=(href!(move_to::move_to, slug: slug.clone(), category_id: category.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                         field(
                             field_label(attrs: attributes! { for="category-parent" }, "Parent")
                             select(
@@ -299,7 +299,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                         <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Move")</div>
                     </form>
-                    <form method="post" action=(href!(position::position, Slug(slug.clone()), CategoryId(category.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                    <form method="post" action=(href!(position::position, slug: slug.clone(), category_id: category.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                         field(
                             field_label(attrs: attributes! { for="category-position" }, "Position among its siblings")
                             input(attrs: attributes! {
@@ -309,7 +309,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                         <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Set position")</div>
                     </form>
-                    <form method="post" action=(href!(describe::describe, Slug(slug.clone()), CategoryId(category.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                    <form method="post" action=(href!(describe::describe, slug: slug.clone(), category_id: category.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                         field(
                             field_label(attrs: attributes! { for="category-description" }, "Description")
                             textarea(
@@ -326,7 +326,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                         <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save description")</div>
                     </form>
-                    <form method="post" action=(href!(menu::menu, Slug(slug.clone()), CategoryId(category.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                    <form method="post" action=(href!(menu::menu, slug: slug.clone(), category_id: category.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                         label(
                             checkbox(attrs: attributes! { name="in_menu" value="on" checked=(!category.hidden_from_menu) })
                             "Show in the shop menu"
@@ -340,7 +340,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     if children > 0 {
                         <p class="text-sm text-muted-foreground">"Archive or move its sub-categories before archiving it."</p>
                     } else {
-                        <form method="post" action=(href!(archive::archive, Slug(slug.clone()), CategoryId(category.id.clone())))>
+                        <form method="post" action=(href!(archive::archive, slug: slug.clone(), category_id: category.id.clone()))>
                             button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Archive")
                         </form>
                     }

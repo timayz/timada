@@ -5,11 +5,11 @@ use topcoat::{
     router::{
         content::Form,
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{TenantId, admin_tenant_url};
+use super::{admin_tenant_url, tenant_id};
 use crate::app::admin::require_admin;
 use crate::app::tenants::{error_code, tenancy};
 
@@ -23,7 +23,7 @@ pub struct QuotaForm {
 #[route(POST)]
 pub async fn quota(cx: &Cx, Form(form): Form<QuotaForm>) -> Result<SeeOther> {
     require_admin(cx).await?;
-    let id = path_param::<TenantId>(cx);
+    let id = tenant_id(cx);
     let mib = form.quota_mib.trim();
     let bytes = if mib.is_empty() {
         None

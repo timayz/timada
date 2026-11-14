@@ -22,7 +22,7 @@ use topcoat::{
     view::{Unescaped, View, attributes, component, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
@@ -48,7 +48,7 @@ pub fn announcements_url(
     error: Option<&str>,
     message: Option<&str>,
 ) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -158,6 +158,7 @@ pub fn status_of(announcement: &Announcement) -> (&'static str, Tone) {
 /// The text and window fields, shared by the add and edit forms.
 #[component]
 pub async fn announcement_fields(
+    cx: &Cx,
     text: &str,
     starts_at: &str,
     ends_at: &str,
@@ -256,13 +257,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     )
                                     table_cell(
                                         <div class="flex justify-end gap-1">
-                                            <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(announcement_id::index, Slug(slug.clone()), announcement_id::AnnouncementId(announcement.id.clone())))>"Edit"</a>
-                                            <form method="post" action=(href!(announcement_id::show::show, Slug(slug.clone()), announcement_id::AnnouncementId(announcement.id.clone())))>
+                                            <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(announcement_id::index, slug: slug.clone(), announcement_id::announcement_id: announcement.id.clone()))>"Edit"</a>
+                                            <form method="post" action=(href!(announcement_id::show::show, slug: slug.clone(), announcement_id::announcement_id: announcement.id.clone()))>
                                                 <input type="hidden" name="shown" value=(if announcement.shown { "false" } else { "true" })>
                                                 button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" },
                                                     if announcement.shown { "Hide" } else { "Show" })
                                             </form>
-                                            <form method="post" action=(href!(announcement_id::remove::remove, Slug(slug.clone()), announcement_id::AnnouncementId(announcement.id.clone())))>
+                                            <form method="post" action=(href!(announcement_id::remove::remove, slug: slug.clone(), announcement_id::announcement_id: announcement.id.clone()))>
                                                 button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Delete")
                                             </form>
                                         </div>
@@ -280,7 +281,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     if full {
                         <p class="text-sm text-muted-foreground">"The bar holds " (MAX_ANNOUNCEMENTS) " messages. Delete one to add another."</p>
                     } else {
-                        <form method="post" action=(href!(add::add, Slug(slug.clone()))) class="flex max-w-2xl flex-col gap-4" data-announcement-form="">
+                        <form method="post" action=(href!(add::add, slug: slug.clone())) class="flex max-w-2xl flex-col gap-4" data-announcement-form="">
                             announcement_fields(text: "", starts_at: "", ends_at: "", shop_zone: &shop_zone)
                             <div>button(attrs: attributes! { type="submit" }, "Add announcement")</div>
                         </form>
@@ -293,9 +294,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
 /// A button that moves a message to `position`.
 #[component]
-async fn order_button(slug: &str, id: &str, position: usize, label: &str) -> Result<impl View> {
+async fn order_button(
+    cx: &Cx,
+    slug: &str,
+    id: &str,
+    position: usize,
+    label: &str,
+) -> Result<impl View> {
     Ok(view! {
-        <form method="post" action=(href!(announcement_id::move_to::move_to, Slug(slug.to_owned()), announcement_id::AnnouncementId(id.to_owned())))>
+        <form method="post" action=(href!(announcement_id::move_to::move_to, slug: slug.to_owned(), announcement_id::announcement_id: id.to_owned()))>
             <input type="hidden" name="position" value=(position)>
             button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, (label))
         </form>

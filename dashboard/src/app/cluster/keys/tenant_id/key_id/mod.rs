@@ -7,17 +7,17 @@ use std::sync::Arc;
 use bytes::Bytes;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         StatusCode,
         header::{CACHE_CONTROL, CONTENT_TYPE},
-        module_param, path_param,
+        module_param,
         response::{IntoResponse, Response},
         route,
     },
 };
 
-use super::TenantId;
+use super::tenant_id;
 use crate::app::cluster::keys::authorized;
 use crate::key_vault::KeyVault;
 
@@ -27,12 +27,12 @@ module_param!(pub key_id);
 /// bytes that are not a key, or a key this node destroyed.
 #[route(PUT)]
 pub async fn put(cx: &Cx, bytes: Bytes) -> Result<StatusCode> {
-    let vault = app_context::<Arc<KeyVault>>(cx);
+    let vault = context::<Arc<KeyVault>>(cx);
     if !authorized(cx, vault) {
         return Ok(StatusCode::UNAUTHORIZED);
     }
     let stored = vault
-        .accept(path_param::<TenantId>(cx), path_param::<KeyId>(cx), &bytes)
+        .accept(tenant_id(cx), key_id(cx), &bytes)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     Ok(if stored {
@@ -46,12 +46,12 @@ pub async fn put(cx: &Cx, bytes: Bytes) -> Result<StatusCode> {
 /// does not hold it.
 #[route(GET)]
 pub async fn get(cx: &Cx) -> Result<Response> {
-    let vault = app_context::<Arc<KeyVault>>(cx);
+    let vault = context::<Arc<KeyVault>>(cx);
     if !authorized(cx, vault) {
         return StatusCode::UNAUTHORIZED.into_response(cx);
     }
     let sealed = vault
-        .sealed(path_param::<TenantId>(cx), path_param::<KeyId>(cx))
+        .sealed(tenant_id(cx), key_id(cx))
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     match sealed {

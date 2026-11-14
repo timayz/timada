@@ -20,13 +20,13 @@ use timada_tenancy::{
 };
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::auth::{require_user, user_labels};
 use crate::components::alert::{AlertVariant, alert, alert_description};
@@ -53,7 +53,7 @@ struct MailQuery {
 }
 
 pub fn mail_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -83,7 +83,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let user = require_user(cx).await?;
     let test_to = own_address(user);
     let TenantAccess { tenant, .. } = access;
-    let enabled = app_context::<ShopMail>(cx).enabled();
+    let enabled = context::<ShopMail>(cx).enabled();
     let slug = tenant.slug.clone();
     let title = format!("Mail · {}", tenant.name);
     // What goes out through which server here: with shop servers off, the
@@ -109,7 +109,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let full = servers.len() >= MAX_MAIL_SERVERS;
     // The form below, while one more server can be added.
     let add_link = (enabled && !full).then(|| ("Add a server", "#mail-add-server".to_owned()));
-    let add_action = href!(servers::add::add, Slug(slug.clone())).resolve(cx);
+    let add_action = href!(servers::add::add, slug: slug.clone()).resolve(cx);
     let blank = MailServerSettings {
         port: 587,
         security: MAIL_SECURITY_STARTTLS.to_owned(),
@@ -135,7 +135,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let logo_url = branding
         .logo
         .as_ref()
-        .map(|logo| app_context::<Arc<Media>>(cx).url(&tenant.id, &logo.id, Rendition::Listing));
+        .map(|logo| context::<Arc<Media>>(cx).url(&tenant.id, &logo.id, Rendition::Listing));
     let max_footer = MAX_MAIL_FOOTER_LEN.to_string();
     // Each mail, and for each language the shop mails in, who worded it.
     type Wording = (String, &'static str, Option<(String, u64)>);
@@ -226,7 +226,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_row(
                                     attrs: attributes! { data-mail-server-row=(&server.id) },
                                     table_cell(
-                                        <a class=(LINK) href=(href!(servers::server_id::index, Slug(slug.clone()), servers::server_id::ServerId(server.id.clone())))>(server.label())</a>
+                                        <a class=(LINK) href=(href!(servers::server_id::index, slug: slug.clone(), servers::server_id::server_id: server.id.clone()))>(server.label())</a>
                                     )
                                     table_cell((&server.from_address))
                                     table_cell(<code>(&server.host) ":" (server.port)</code>)
@@ -252,7 +252,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     title: Some("Which server sends what"),
                     description: Some("The mails to your shoppers can go through any of your servers, or the platform's. Marketing only ever goes through one of yours."),
                     attrs: attributes! { data-mail-picks="" },
-                    <form method="post" action=(href!(servers::pick::pick, Slug(slug.clone()))) class="grid max-w-3xl gap-4 md:grid-cols-2">
+                    <form method="post" action=(href!(servers::pick::pick, slug: slug.clone())) class="grid max-w-3xl gap-4 md:grid-cols-2">
                         field(
                             field_label(attrs: attributes! { for="mail-shop-mails" }, "Shop mails go through")
                             select(
@@ -304,7 +304,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 title: Some("Languages"),
                 description: Some("Your shop mails each shopper in the language they browse in, when you have worded the mail in it; otherwise in the default language. The built-in wording is English."),
                 attrs: attributes! { data-mail-languages="" },
-                <form method="post" action=(href!(languages::save, Slug(slug.clone()))) class="flex flex-col gap-4">
+                <form method="post" action=(href!(languages::save, slug: slug.clone())) class="flex flex-col gap-4">
                     field(
                         attrs: attributes! { class="max-w-xs" },
                         field_label(attrs: attributes! { for="mail-default-language" }, "Default language")
@@ -343,7 +343,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     for (kind, wordings) in &mails {
                         <li class="py-3" data-mail-template=(kind.key())>
                             <a class=(LINK)
-                                href=(href!(templates::kind::index, Slug(slug.clone()), templates::kind::Kind(kind.key().to_owned())))>
+                                href=(href!(templates::kind::index, slug: slug.clone(), templates::kind::kind: kind.key().to_owned()))>
                                 (kind.label())
                             </a>
                             <p class="text-sm text-muted-foreground">(kind.description())</p>
@@ -351,7 +351,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 for (code, name, edited) in wordings {
                                     <li class="flex items-center justify-between gap-4 text-sm" data-language=(code)>
                                         <a class=(LINK)
-                                            href=(href!(templates::kind::language::index, Slug(slug.clone()), templates::kind::Kind(kind.key().to_owned()), templates::kind::language::Language(code.clone())))>
+                                            href=(href!(templates::kind::language::index, slug: slug.clone(), templates::kind::kind: kind.key().to_owned(), templates::kind::language::language: code.clone()))>
                                             (name)
                                         </a>
                                         <span class="text-muted-foreground">
@@ -376,7 +376,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     "A logo, an accent colour and a footer, shared by all the mails above. In your own wording, use "
                     <code>"{{ shop.logo_url }}"</code> ", " <code>"{{ shop.accent }}"</code> " and " <code>"{{ shop.footer }}"</code> "."
                 </p>
-                <form method="post" enctype="multipart/form-data" action=(href!(branding::save, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                <form method="post" enctype="multipart/form-data" action=(href!(branding::save, slug: slug.clone())) class="flex max-w-xl flex-col gap-4">
                     if let Some(logo_url) = &logo_url {
                         <img src=(logo_url) alt="Your logo" data-mail-logo="" class="max-h-16 self-start rounded-lg border border-border bg-card p-1">
                         <label class="flex items-center gap-2 text-sm">
@@ -413,7 +413,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </div>
                 </form>
                 if tenant.mail_branding.is_some() {
-                    <form method="post" class="mt-4" action=(href!(branding::clear::clear, Slug(slug.clone())))>
+                    <form method="post" class="mt-4" action=(href!(branding::clear::clear, slug: slug.clone()))>
                         button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Back to the plain look")
                     </form>
                 }

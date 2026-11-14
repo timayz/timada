@@ -21,7 +21,7 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::app::orders::order_id::{OrderId, index as order_page};
+use crate::app::orders::order_id::{index as order_page, order_id};
 use crate::app::{document, say};
 use crate::shopper::{forget_shopper, session, shopper_token};
 
@@ -117,7 +117,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <tbody>
                                 for order in &orders {
                                     <tr data-account-order=(&order.reference)>
-                                        <td><a href=(href!(order_page, OrderId(order.id.clone())))>(&order.reference)</a></td>
+                                        <td><a href=(href!(order_page, order_id: order.id.clone()))>(&order.reference)</a></td>
                                         <td>(order.item_count)</td>
                                         <td>(order.total_label())</td>
                                         <td>(status_label(order.status()))</td>

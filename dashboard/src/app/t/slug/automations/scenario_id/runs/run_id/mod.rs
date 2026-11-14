@@ -9,8 +9,8 @@ use timada_automations::{Definition, RunStatus, catalog, published_definition};
 use timada_tenancy::{PERMISSION_AUTOMATIONS_MANAGE, PERMISSION_AUTOMATIONS_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    router::{error::not_found, href, module_param, page, path_param, query_params},
+    context::{Cx, context},
+    router::{error::not_found, href, module_param, page, query_params},
     view::{View, attributes, view},
 };
 
@@ -18,9 +18,9 @@ use super::super::super::automations;
 use super::super::super::labels::{
     outcome_label, run_status_label, run_status_tone, step_label, subject_kind, trigger_label,
 };
-use super::super::{ScenarioId, require_scenario};
+use super::super::{require_scenario, scenario_id};
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantNav, require_tenant, slug};
 use crate::automations::runner::subject_link;
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::db::Db;
@@ -47,9 +47,9 @@ pub fn run_url(
 ) -> String {
     href!(
         index,
-        Slug(slug.to_owned()),
-        ScenarioId(scenario_id.to_owned()),
-        RunId(run_id.to_owned())
+        slug: slug.to_owned(),
+        scenario_id: scenario_id.to_owned(),
+        run_id: run_id.to_owned()
     )
     .query(Flash { error, message })
     .resolve(cx)
@@ -70,7 +70,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await?;
     let query = query_params::<RunQuery>(cx)?;
     let scenario = require_scenario(&access, cx).await?;
-    let id = path_param::<RunId>(cx).to_owned();
+    let id = run_id(cx).to_owned();
     let run = automations(&access)?
         .load_run(&id)
         .await
@@ -81,7 +81,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let tenant = access.tenant;
     let definition = published_definition(
-        app_context::<Db>(cx),
+        context::<Db>(cx),
         &tenant.id,
         &scenario.id,
         run.scenario_version,
@@ -114,15 +114,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let title = format!("Run · {} · Automations · {}", scenario.name, tenant.name);
     let back = href!(
         super::index,
-        Slug(tenant.slug.clone()),
-        ScenarioId(scenario.id.clone())
+        slug: tenant.slug.clone(),
+        scenario_id: scenario.id.clone()
     )
     .resolve(cx);
     let cancel = href!(
         cancel::cancel,
-        Slug(tenant.slug.clone()),
-        ScenarioId(scenario.id.clone()),
-        RunId(run.id.clone())
+        slug: tenant.slug.clone(),
+        scenario_id: scenario.id.clone(),
+        run_id: run.id.clone()
     )
     .resolve(cx);
     let under_way = !run.status.is_done();

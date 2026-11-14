@@ -14,7 +14,7 @@ use topcoat::{
 
 use super::page_id::{markdown_hint, page_url};
 use super::{error_code, pages, pages_url};
-use crate::app::t::slug::{Slug, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantNav, require_tenant, slug};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
@@ -106,10 +106,10 @@ pub async fn create(cx: &Cx, Form(form): Form<NewPageForm>) -> Result<impl View>
 }
 
 #[component]
-async fn new_page_form(slug: &str, form: &NewPageForm) -> Result<impl View> {
+async fn new_page_form(cx: &Cx, slug: &str, form: &NewPageForm) -> Result<impl View> {
     Ok(view! {
         section_card(
-            <form method="post" action=(href!(create, Slug(slug.to_owned()))) class="flex max-w-3xl flex-col gap-4" data-page-form="">
+            <form method="post" action=(href!(create, slug: slug.to_owned())) class="flex max-w-3xl flex-col gap-4" data-page-form="">
                 field(
                     field_label(attrs: attributes! { for="page-title" }, "Title")
                     input(attrs: attributes! { id="page-title" name="title" required="" maxlength=(MAX_TITLE_LEN) value=(&form.title) })

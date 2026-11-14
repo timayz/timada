@@ -4,13 +4,13 @@
 pub mod new;
 
 use timada_tenancy::{Command, TenancyError};
-use topcoat::context::{Cx, app_context};
+use topcoat::context::{Cx, context};
 
 use crate::cluster::Executor;
 
 /// The tenancy command gateway over this node's platform store.
 pub fn tenancy(cx: &Cx) -> Command<Executor> {
-    Command(app_context::<Executor>(cx).clone())
+    Command(context::<Executor>(cx).clone())
 }
 
 /// The query-string code the pages show for a domain error.

@@ -8,7 +8,7 @@ use serde_json::json;
 use timada_orders::orders_of_email;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{StatusCode, route},
 };
 
@@ -32,7 +32,7 @@ pub async fn orders(cx: &Cx) -> Result<Answer> {
         return refused(StatusCode::UNAUTHORIZED, SIGNED_OUT);
     };
     let rows = orders_of_email(
-        app_context::<Db>(cx),
+        context::<Db>(cx),
         &access.tenant.id,
         &shopper.email,
         HISTORY_LEN,

@@ -15,13 +15,13 @@ use timada_reviews::{
 use timada_tenancy::{PERMISSION_REVIEWS_MANAGE, PERMISSION_REVIEWS_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::components::alert::{AlertVariant, alert, alert_description};
@@ -67,14 +67,14 @@ struct ReviewsLink<'a> {
 }
 
 pub fn reviews_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
 
 /// The list of a product's reviews, every status.
 pub fn product_reviews_url(cx: &Cx, slug: &str, product_id: &str) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(ReviewsLink {
             status: ALL,
             rating: None,
@@ -138,7 +138,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map_err(topcoat::Error::from_anyhow)?
         .is_some();
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let filter = ReviewFilter {
         status,
         rating,
@@ -168,7 +168,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_link = {
         let slug = slug.clone();
         move |page: u32| {
-            href!(index, Slug(slug.clone()))
+            href!(index, slug: slug.clone())
                 .query(ReviewsLink {
                     status: status_value,
                     rating,
@@ -198,12 +198,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         icon(data: icons::INFO)
                         alert_description(
                             "No mail goes out until the storefront address is set on the "
-                            <a class=(LINK) href=(href!(crate::app::t::slug::api_keys::index, Slug(slug.clone())))>"API keys page"</a> "."
+                            <a class=(LINK) href=(href!(crate::app::t::slug::api_keys::index, slug: slug.clone()))>"API keys page"</a> "."
                         )
                     )
                 }
                 if can_manage {
-                    <form method="post" action=(href!(requests::requests, Slug(slug.clone()))) class="flex flex-wrap items-end gap-3">
+                    <form method="post" action=(href!(requests::requests, slug: slug.clone())) class="flex flex-wrap items-end gap-3">
                         <label class="flex flex-col gap-2 text-sm font-medium">
                             <span>"Ask buyers"</span>
                             select(
@@ -290,7 +290,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_cell(attrs: attributes! { aria-label=(format!("{} out of 5", row.rating)) }, (stars(row.rating as u8)))
                                 table_cell(
                                     attrs: attributes! { class="whitespace-normal" },
-                                    <a class=(LINK) href=(href!(review_id::index, Slug(slug.clone()), review_id::ReviewId(row.id.clone())))>
+                                    <a class=(LINK) href=(href!(review_id::index, slug: slug.clone(), review_id::review_id: row.id.clone()))>
                                         (row.title.clone().unwrap_or_else(|| excerpt(&row.body)))
                                     </a>
                                     if row.photo_count > 0 {

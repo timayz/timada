@@ -1,7 +1,7 @@
 use timada_tenancy::PERMISSION_PAYMENTS_MANAGE;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, see_other},
         route,
@@ -30,7 +30,7 @@ pub async fn forget(cx: &Cx) -> Result<SeeOther> {
         .require_permission(cx, PERMISSION_PAYMENTS_MANAGE)
         .await?;
     let slug = access.tenant.slug.as_str();
-    let owed = timada_orders::money_owed(app_context::<Db>(cx), &access.tenant.id)
+    let owed = timada_orders::money_owed(context::<Db>(cx), &access.tenant.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     if owed > 0 {

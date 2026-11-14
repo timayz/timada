@@ -13,7 +13,7 @@ use topcoat::{
 
 use super::campaign_id::campaign_url;
 use super::{CampaignForm, KIND, campaign_editor, campaigns_url, preview, send_test};
-use crate::app::t::slug::{Slug, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantNav, require_tenant, slug};
 use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
 use crate::ui::{Shell, document, notice, page_header};
 
@@ -33,7 +33,7 @@ pub async fn new(cx: &Cx) -> Result<impl View> {
     let checked = preview(cx, &access.tenant, &draft);
     let tenant = access.tenant;
     let title = format!("New campaign · Newsletter · {}", tenant.name);
-    let action = href!(create, Slug(tenant.slug.clone())).resolve(cx);
+    let action = href!(create, slug: tenant.slug.clone()).resolve(cx);
     let back = campaigns_url(cx, &tenant.slug, None, None);
     Ok(view! {
         document(
@@ -96,7 +96,7 @@ pub async fn create(cx: &Cx, Form(form): Form<CampaignForm>) -> Result<impl View
     let nav = TenantNav::of(cx, &access).await?;
     let tenant = access.tenant;
     let title = format!("New campaign · Newsletter · {}", tenant.name);
-    let action = href!(create, Slug(tenant.slug.clone())).resolve(cx);
+    let action = href!(create, slug: tenant.slug.clone()).resolve(cx);
     let back = campaigns_url(cx, &tenant.slug, None, None);
     Ok(view! {
         document(
