@@ -69,6 +69,20 @@ impl std::fmt::Debug for CodeMail {
     }
 }
 
+/// What a node asking to send a code's mail gets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodeMailClaim {
+    /// The send is this node's: what to mail.
+    Taken(CodeMail),
+    /// Nothing for this node to mail: the outcome is recorded, another node
+    /// is sending or the next try is not due, or the code was replaced or
+    /// expired.
+    Left,
+    /// No node will ever mail it: the key the address is sealed under is
+    /// destroyed, as the account's deletion does.
+    Unreadable,
+}
+
 /// The canonical form of an address, as the orders context keeps it, so an
 /// account finds the orders placed with it.
 pub fn normalize_email(email: &str) -> Result<String, ShopperError> {
@@ -82,15 +96,20 @@ impl<E: Executor> super::Command<E> {
     /// `Accept-Language` value) for the mail. Any address gets one: the
     /// first sign-in creates the account. Another code within
     /// [`CODE_RESEND_AFTER_SECS`] of a live one is refused, unless that one
-    /// could not be delivered: then the shopper may try again at once. The
-    /// first code of an address draws its key, which `keys` holds before the
-    /// event names it; later ones reseal the address under its account's
-    /// key, or the one the earlier codes drew, unless a deletion of the
-    /// account destroyed it. The account's stream tells, as the executor
-    /// reads it: `keys` may still hold a deleted account's key on a node
-    /// behind. The mail's subscription writes on the same stream, so a
-    /// write landing between the read and this one's own is no verdict: the
-    /// request is decided again on the fresh state.
+    /// could not be delivered, or a deletion of the account destroyed its
+    /// key: then the shopper may try again at once. The first code of an
+    /// address draws its key, which `keys` holds before the event names it;
+    /// later ones reseal the address under its account's key, or the one
+    /// the earlier codes drew, unless a deletion of the account destroyed
+    /// it. The account's stream tells, as the executor reads it: `keys` may
+    /// still hold a deleted account's key on a node behind. The write is
+    /// checked against the challenge alone, so once a code is written under
+    /// a key it reused, the account is read again: if a deletion landed
+    /// meanwhile, it destroyed that key and no node could mail the code, so
+    /// the same code is issued again under a fresh key (#576). The mail's
+    /// subscription writes on the challenge too, so a write landing between
+    /// the read and this one's own is no verdict: the request is decided
+    /// again on the fresh state.
     pub async fn issue_code(
         &self,
         keys: &dyn ShopperKeys,
@@ -102,6 +121,7 @@ impl<E: Executor> super::Command<E> {
     ) -> Result<IssuedCode, ShopperError> {
         let email = normalize_email(email)?;
         let challenge_id = challenge_id(&email);
+        let shopper_id = shopper_id(&email);
         let nonce = new_nonce();
         let code = codes.derive_code(&self.tenant, &challenge_id, &nonce);
         let language = language.and_then(timada_core::primary_language);
@@ -112,26 +132,32 @@ impl<E: Executor> super::Command<E> {
             loop {
                 attempt += 1;
                 let existing = self.load_challenge(&email).await?;
+                // No code yet, no account: a sign-in consumes one.
+                let shopper = match &existing {
+                    Some(_) => self.load_shopper_any(&shopper_id).await?,
+                    None => None,
+                };
                 if let Some(existing) = &existing
                     && !existing.consumed
                     && now < existing.issued_at + CODE_RESEND_AFTER_SECS
                     && !existing.mail.is_undeliverable()
+                    // Sealed under a key a deletion destroyed: not a mail
+                    // to wait for.
+                    && !shopper
+                        .as_ref()
+                        .is_some_and(|shopper| shopper.destroyed(&existing.key_id))
                 {
                     return Err(ShopperError::CodeRecentlySent);
                 }
-                // No code yet, no account: a sign-in consumes one. Read
-                // after the challenge, so only a deletion landing between
-                // this read and the write can slip by.
-                let shopper = match &existing {
-                    Some(_) => self.load_shopper_any(&shopper_id(&email)).await?,
+                let reused = match reusable_key(shopper.as_ref(), existing.as_ref()) {
+                    Some(key_id) => keys.get(key_id).await?.map(|key| (key_id.to_owned(), key)),
                     None => None,
                 };
-                let (key_id, key) = match reusable_key(shopper.as_ref(), existing.as_ref()) {
-                    Some(key_id) => match keys.get(key_id).await? {
-                        Some(key) => (key_id.to_owned(), key),
-                        // Read nowhere: the address starts afresh.
-                        None => draw_key(keys, &mut drawn).await?,
-                    },
+                let fresh = reused.is_none();
+                let (key_id, key) = match reused {
+                    Some(reused) => reused,
+                    // None to reuse, or read nowhere: the address starts
+                    // afresh.
                     None => draw_key(keys, &mut drawn).await?,
                 };
                 let issued = CodeIssued {
@@ -167,12 +193,29 @@ impl<E: Executor> super::Command<E> {
                     }
                 };
                 match committed {
-                    Ok(_) => return Ok(key_id),
+                    Ok(_) => {}
                     // The previous code's mail recorded, or another request
                     // landed: decide again on the fresh state, where a code
                     // issued meanwhile is in the mail.
-                    Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
+                    Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => continue,
                     Err(err) => return Err(err.into()),
+                }
+                // The version check covers the challenge alone, so a key
+                // reused may be one a deletion of the account destroyed
+                // since the read: no node could open the address to mail
+                // the code, and deciding again draws a fresh key. No
+                // deletion can name a key drawn fresh.
+                let destroyed = !fresh
+                    && self
+                        .load_shopper_any(&shopper_id)
+                        .await?
+                        .is_some_and(|shopper| shopper.destroyed(&key_id));
+                if !destroyed {
+                    return Ok(key_id);
+                }
+                // Past the budget, as for a conflict: the store's doing.
+                if attempt == WRITE_ATTEMPTS {
+                    return Err(WriteError::InvalidOriginalVersion.into());
                 }
             }
         }
@@ -188,11 +231,9 @@ impl<E: Executor> super::Command<E> {
 
     /// Takes, for `claimant`, the sending of the code that `CodeIssued`
     /// at `issued_version` of the challenge `challenge_id` recorded: what to
-    /// mail, with the address opened by its key from `keys`, or `None` when
-    /// this node mails nothing (the outcome is recorded, another node is
-    /// sending, the code was replaced or expired, or the key is destroyed).
-    /// A node that holds the claim gets the mail again, to send it again
-    /// after a failure worth a retry.
+    /// mail, with the address opened by its key from `keys`. A node that
+    /// holds the claim gets the mail again, to send it again after a
+    /// failure worth a retry.
     pub async fn claim_code_mail(
         &self,
         keys: &dyn ShopperKeys,
@@ -201,28 +242,29 @@ impl<E: Executor> super::Command<E> {
         issued_version: u16,
         claimant: Claimant<'_>,
         routing_key: Option<String>,
-    ) -> Result<Option<CodeMail>, ShopperError> {
+    ) -> Result<CodeMailClaim, ShopperError> {
         let Claimant { node, now } = claimant;
         let mut attempt = 0;
         loop {
             attempt += 1;
             let Some(challenge) = self.load_challenge_by_id(challenge_id).await? else {
-                return Ok(None);
+                return Ok(CodeMailClaim::Left);
             };
             if challenge.issued_version != issued_version
                 || challenge.consumed
                 || now >= challenge.expires_at
             {
-                return Ok(None);
+                return Ok(CodeMailClaim::Left);
             }
             match challenge.mail.claim(node, now) {
-                Claim::Leave => return Ok(None),
+                Claim::Leave => return Ok(CodeMailClaim::Left),
                 Claim::Held => return self.code_mail(keys, codes, &challenge).await,
                 Claim::Take => {}
             }
             // Opened before the claim: a key gone leaves nothing to claim.
-            let Some(mail) = self.code_mail(keys, codes, &challenge).await? else {
-                return Ok(None);
+            let mail = match self.code_mail(keys, codes, &challenge).await? {
+                CodeMailClaim::Taken(mail) => mail,
+                unsent => return Ok(unsent),
             };
             let claimed = challenge
                 .write()?
@@ -235,7 +277,7 @@ impl<E: Executor> super::Command<E> {
                 .commit(&self.executor)
                 .await;
             match claimed {
-                Ok(_) => return Ok(Some(mail)),
+                Ok(_) => return Ok(CodeMailClaim::Taken(mail)),
                 // Another node claimed it, or a guess landed: decide again
                 // on the fresh state.
                 Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
@@ -316,18 +358,18 @@ async fn draw_key(
 }
 
 impl<E: Executor> super::Command<E> {
-    /// The mail of a challenge's current code: `None` when its key is
+    /// The mail of a challenge's current code: `Unreadable` when its key is
     /// destroyed; an error when the key cannot be read yet.
     async fn code_mail(
         &self,
         keys: &dyn ShopperKeys,
         codes: &dyn CodeVerifier,
         challenge: &ChallengeState,
-    ) -> Result<Option<CodeMail>, ShopperError> {
+    ) -> Result<CodeMailClaim, ShopperError> {
         let Some(key) = keys.get(&challenge.key_id).await? else {
-            return Ok(None);
+            return Ok(CodeMailClaim::Unreadable);
         };
-        Ok(Some(CodeMail {
+        Ok(CodeMailClaim::Taken(CodeMail {
             email: challenge.open_email(&key)?,
             language: challenge.language.clone(),
             code: codes.derive_code(&self.tenant, &challenge.id, &challenge.nonce),

@@ -11,7 +11,9 @@
 //! server that refuses the address for good leaves `MailUndeliverable`, and
 //! the person may ask again at once; a server that does not answer leaves
 //! `MailDeferred`, and whichever node looks once the retry is due sends
-//! again. A pass never fails for a mail server (#464).
+//! again. A shop's code whose address the account's deletion left
+//! unreadable is dropped, and the shopper may ask again at once (#576). A
+//! pass never fails for a mail server (#464).
 
 use std::sync::Arc;
 
@@ -21,6 +23,7 @@ use evento::{
     subscription::{Context, SubscriptionBuilder},
 };
 use timada_core::Claimant;
+use timada_shoppers::CodeMailClaim;
 use topcoat::context::{Cx, app_context};
 
 use crate::mail::{send_code, send_shopper_code};
@@ -348,7 +351,7 @@ pub(crate) async fn send_shopper(
     let shoppers = timada_shoppers::Command::new(room.store.clone(), tenant);
     let challenge = owed.stream_id.as_str();
     let version = u16::try_from(owed.version).unwrap_or(u16::MAX);
-    let Some(code) = shoppers
+    let code = match shoppers
         .claim_code_mail(
             &*room.keys.for_tenant(tenant),
             &*codes,
@@ -357,8 +360,20 @@ pub(crate) async fn send_shopper(
             claimant(room, now),
         )
         .await?
-    else {
-        return Ok(Outcome::Left);
+    {
+        CodeMailClaim::Taken(code) => code,
+        CodeMailClaim::Left => return Ok(Outcome::Left),
+        // The key is destroyed, as the account's deletion does: no node can
+        // open the address, and the shopper may ask for a new code at once
+        // (#576).
+        CodeMailClaim::Unreadable => {
+            tracing::info!(
+                tenant,
+                challenge,
+                "shopper sign-in code not mailed: its address can no longer be opened"
+            );
+            return Ok(Outcome::Dropped);
+        }
     };
     let sent = attempt(send_shopper_code(
         &cx,
@@ -813,5 +828,63 @@ pub(crate) mod tests {
         let owed = rows(&store).await;
         assert_eq!(owed.len(), 1);
         assert_eq!(owed[0].attempts, 1);
+    }
+
+    /// A code still on its way when the account is deleted can be opened
+    /// by no node: the lane drops it rather than look again each minute
+    /// until it lapses (#576).
+    #[tokio::test]
+    async fn a_shopper_code_the_accounts_deletion_left_unreadable_is_dropped() {
+        let store = store().await;
+        let vault = vault();
+        shop(&store).await;
+        let now = crate::auth::now();
+        let keys = vault.for_tenant(TENANT);
+        let shoppers = timada_shoppers::Command::new(Evento::new(store.clone()), TENANT);
+        let issued = shoppers
+            .issue_code(&*keys, &*shopper_codes(), "ada@example.com", None, now)
+            .await
+            .unwrap();
+        let ada = shoppers
+            .sign_in(
+                &*keys,
+                &*shopper_codes(),
+                "ada@example.com",
+                &issued.code,
+                now,
+            )
+            .await
+            .unwrap();
+        shoppers
+            .issue_code(
+                &*keys,
+                &*shopper_codes(),
+                "ada@example.com",
+                None,
+                now + timada_shoppers::CODE_RESEND_AFTER_SECS,
+            )
+            .await
+            .unwrap();
+        shoppers
+            .forget(&*keys, &ada.shopper_id, None)
+            .await
+            .unwrap();
+
+        let transport = MemoryTransport::new();
+        let node = room_with(&store, mail_context(transport.clone()), vault, "node-a");
+        let later = now + timada_shoppers::CODE_RESEND_AFTER_SECS;
+        assert_eq!(shopper_run(&store, &node, later).await, 0);
+        assert!(transport.sent().is_empty());
+        assert!(rows(&store).await.is_empty(), "nothing owed");
+        assert_eq!(
+            shoppers
+                .load_challenge("ada@example.com")
+                .await
+                .unwrap()
+                .unwrap()
+                .mail,
+            Sending::Pending,
+            "nothing to record"
+        );
     }
 }
