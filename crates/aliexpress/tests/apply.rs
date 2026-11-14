@@ -101,7 +101,7 @@ async fn an_import_makes_a_counted_draft_that_a_read_brings_in_step() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(stock.on_hand, 120);
+    assert_eq!(stock.on_hand, 20, "120 is plenty, counted as 20");
     catalog.publish_product(ALICE, &product.id).await.unwrap();
 
     // AliExpress sells fewer, dearer.

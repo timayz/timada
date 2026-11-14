@@ -113,17 +113,44 @@ async fn on_stock_event<E: Executor>(
     if superseded(&event, stock.aggregate_version) {
         return Ok(());
     }
-    let product = product_projection()
-        .load(&stock.product_id)
-        .tenant(&event.tenant)
-        .execute(context.executor)
+    // A checkout's hold, or its release, leaves the shelf as the row has it;
+    // a count that moves leaves the product's summary as it was unless the
+    // thing starts or stops being counted, or runs out or comes back. Only
+    // then is the product loaded (#472): a supplier's stock moving, or a
+    // checkout, costs no product replay.
+    let was: Option<(bool, i64)> = db
+        .fetch_optional(
+            "SELECT tracked, on_hand FROM catalog_stock
+             WHERE tenant_id = ?1 AND product_id = ?2 AND variant_id = ?3",
+            (
+                event.tenant.as_str(),
+                stock.product_id.as_str(),
+                stock.variant_id.as_deref().unwrap_or(""),
+            ),
+        )
         .await?;
+    if was == Some((stock.tracked, i64::from(stock.on_hand))) {
+        return Ok(());
+    }
+    let summary_may_move = was.is_none_or(|(tracked, on_hand)| {
+        tracked != stock.tracked || (on_hand > 0) != (stock.on_hand > 0)
+    });
+    let product = if summary_may_move {
+        product_projection()
+            .load(&stock.product_id)
+            .tenant(&event.tenant)
+            .execute(context.executor)
+            .await?
+    } else {
+        None
+    };
     upsert_stock(&db, &event.tenant, &stock, product.as_ref()).await
 }
 
 /// Writes the row of one thing's stock, and the summary of its product when
-/// the product is known. Public for the integration tests, which seed rows
-/// under tenants of their own; only the subscription writes one otherwise.
+/// the product is given (the summary may have moved). Public for the
+/// integration tests, which seed rows under tenants of their own; only the
+/// subscription writes one otherwise.
 pub async fn upsert_stock(
     db: &Db,
     tenant_id: &str,

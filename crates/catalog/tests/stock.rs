@@ -239,3 +239,56 @@ async fn the_read_model_sums_a_product_up() {
     upsert(&large).await;
     assert_eq!(state(pool.clone()).await, StockSummary::SoldOut.as_str());
 }
+
+/// The subscription sums a product up as its shelf moves; a checkout's hold,
+/// which leaves the shelf as it is, changes nothing in the rows (#472).
+#[tokio::test]
+async fn the_read_model_follows_the_shelf_and_not_the_holds() {
+    let (executor, pool) = executor_with_pool().await;
+    let cmd = timada_catalog::Command::new(executor.clone(), TENANT);
+    let product = create_product(&cmd, "Cat Bed").await;
+    let catch_up = async || {
+        timada_catalog::read_model_subscription::<evento::Turso>(pool.clone())
+            .run_once(&executor)
+            .await
+            .unwrap();
+    };
+    let shelf = async || -> (String, i64) {
+        let summary = timada_catalog::product_by_id(&pool, TENANT, &product.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .stock_state;
+        let (on_hand,): (i64,) = pool
+            .fetch_one(
+                "SELECT on_hand FROM catalog_stock
+                 WHERE tenant_id = ?1 AND product_id = ?2 AND variant_id = ''",
+                (TENANT, product.id.as_str()),
+            )
+            .await
+            .unwrap();
+        (summary, on_hand)
+    };
+    let in_stock = StockSummary::InStock.as_str().to_owned();
+
+    cmd.set_stock(ALICE, &product.id, None, 5).await.unwrap();
+    catch_up().await;
+    assert_eq!(shelf().await, (in_stock.clone(), 5));
+    cmd.reserve_stock(ALICE, "cart-1", &[line(&product.id, None, 2)], HOUR)
+        .await
+        .unwrap();
+    catch_up().await;
+    assert_eq!(shelf().await, (in_stock.clone(), 5), "a hold is no count");
+    cmd.set_stock(ALICE, &product.id, None, 3).await.unwrap();
+    catch_up().await;
+    assert_eq!(shelf().await, (in_stock.clone(), 3));
+    cmd.set_stock(ALICE, &product.id, None, 0).await.unwrap();
+    catch_up().await;
+    assert_eq!(
+        shelf().await,
+        (StockSummary::SoldOut.as_str().to_owned(), 0)
+    );
+    cmd.set_stock(ALICE, &product.id, None, 2).await.unwrap();
+    catch_up().await;
+    assert_eq!(shelf().await, (in_stock, 2));
+}

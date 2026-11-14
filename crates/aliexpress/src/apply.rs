@@ -1,6 +1,7 @@
 //! What a read of AliExpress changes in the catalog: each combination's
-//! stock, its price when a rule prices it, the days delivery takes, and the
-//! product taken off sale once AliExpress no longer sells it. A read also finds the combinations
+//! stock (counted up to [`PLENTY`]), its price when a rule prices it, the
+//! days delivery takes, and the product taken off sale once AliExpress no
+//! longer sells it. A read also finds the combinations
 //! AliExpress sells and the shop does not; the merchant adds those as
 //! variants ([`add_combinations`]) or ignores them. No HTTP here but the
 //! pictures of what is added: the caller fetched the product.
@@ -9,8 +10,8 @@ use std::collections::HashMap;
 
 use evento::Executor;
 use timada_catalog::{
-    AddImage, CatalogError, DefineVariant, MAX_OPTION_VALUES, MAX_STOCK, MAX_VARIANTS,
-    OptionSelection, ProductState,
+    AddImage, CatalogError, DefineVariant, MAX_OPTION_VALUES, MAX_VARIANTS, OptionSelection,
+    ProductState,
 };
 use timada_catalog_import::Images;
 use timada_catalog_import::woocommerce::fit_sku;
@@ -20,6 +21,20 @@ use crate::aggregator::{NewSku, SkuLink};
 use crate::command::LinkState;
 use crate::map::{MappedSku, picture_url, selections_of, shop_price};
 use crate::model::{AeProduct, AeSku};
+
+/// How many of a combination AliExpress has before it is plenty: the shop's
+/// stock stays at this many however many more there are.
+pub const PLENTY: u32 = 20;
+
+/// What AliExpress has of a combination, as the shop's stock counts it: the
+/// count itself while it is few, [`PLENTY`] past that. Shoppers are told
+/// how many are left under six, and a checkout may want every one left, so
+/// few is counted exactly; a well-stocked item's daily sales elsewhere would
+/// otherwise write its stock at every read, replicated to every storefront,
+/// for nothing a shopper sees (#472). A checkout takes at most this many.
+pub fn shelf_count(available: u32) -> u32 {
+    available.min(PLENTY)
+}
 
 /// What [`apply_sync`] did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -78,7 +93,7 @@ pub async fn track_imported<E: Executor>(
     if variant_ids.is_empty() {
         if let Some(sku) = skus.first() {
             catalog
-                .set_stock(actor, product_id, None, sku.available.min(MAX_STOCK))
+                .set_stock(actor, product_id, None, shelf_count(sku.available))
                 .await?;
             links.push(link_of(sku, None));
         }
@@ -93,7 +108,7 @@ pub async fn track_imported<E: Executor>(
                 actor,
                 product_id,
                 Some(variant_id),
-                sku.available.min(MAX_STOCK),
+                shelf_count(sku.available),
             )
             .await?;
         links.push(link_of(sku, Some(variant_id.clone())));
@@ -178,7 +193,7 @@ pub async fn apply_sync<E: Executor>(
                 actor,
                 product_id,
                 linked.variant_id.as_deref(),
-                available.min(MAX_STOCK),
+                shelf_count(available),
             )
             .await
         {
@@ -523,7 +538,7 @@ pub async fn add_combinations<E: Executor>(
                 actor,
                 product_id,
                 Some(&variant_id),
-                found.available.min(MAX_STOCK),
+                shelf_count(found.available),
             )
             .await?;
         outcome.skus.push(SkuLink {
