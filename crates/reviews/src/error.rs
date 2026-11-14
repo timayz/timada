@@ -129,4 +129,5 @@ pub const SHOPPER_CODES: &[&str] = &[
     REVIEW_INVALID_PHOTO,
     REVIEW_STORAGE_FULL,
     timada_core::WRITES_PAUSED,
+    timada_core::WRITE_NOT_TAKEN,
 ];

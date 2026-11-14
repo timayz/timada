@@ -627,6 +627,9 @@ pub fn say(code: &str) -> &'static str {
         "writes_paused" => {
             "Cette boutique n'accepte temporairement aucune modification. Réessayez dans quelques minutes."
         }
+        "write_not_taken" => {
+            "Votre demande n'a pas abouti et rien n'a été enregistré. Veuillez réessayer."
+        }
         _ => "Une erreur s'est produite. Veuillez réessayer.",
     }
 }

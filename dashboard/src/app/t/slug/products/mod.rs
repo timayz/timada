@@ -299,7 +299,8 @@ mod tests {
     use super::*;
 
     /// A store not taking writes for the moment is told to the person as
-    /// `writes_paused`; any other write failure stays the generic code.
+    /// `writes_paused`, a write it did not take as `write_not_taken`; any
+    /// other write failure stays the generic code.
     #[test]
     fn a_paused_store_has_its_own_code() {
         let paused = CatalogError::Write(evento::WriteError::Unavailable(anyhow::anyhow!(
@@ -307,6 +308,11 @@ mod tests {
         )));
         assert!(paused.is_user_facing());
         assert_eq!(error_code(&paused), timada_core::WRITES_PAUSED);
+        let not_taken = CatalogError::Write(
+            timada_core::refused_write(timada_core::WRITE_NOT_TAKEN).expect("a write error"),
+        );
+        assert!(not_taken.is_user_facing());
+        assert_eq!(error_code(&not_taken), timada_core::WRITE_NOT_TAKEN);
         let broken = CatalogError::Write(evento::WriteError::Unknown(anyhow::anyhow!("disk gone")));
         assert!(!broken.is_user_facing());
         assert_eq!(error_code(&broken), "failed");
