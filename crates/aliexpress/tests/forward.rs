@@ -57,6 +57,7 @@ fn delivery_options_read_wrapped_or_refused() {
                 tracking: true,
                 min_days: Some(8),
                 max_days: Some(15),
+                ships_from: Some("DE".into()),
             },
             FreightOption {
                 service_name: "YANWEN_JYT".into(),
@@ -64,6 +65,7 @@ fn delivery_options_read_wrapped_or_refused() {
                 tracking: false,
                 min_days: None,
                 max_days: None,
+                ships_from: None,
             },
             FreightOption {
                 service_name: "CAINIAO_PREMIUM".into(),
@@ -71,6 +73,7 @@ fn delivery_options_read_wrapped_or_refused() {
                 tracking: true,
                 min_days: None,
                 max_days: None,
+                ships_from: None,
             },
         ]
     );
@@ -184,6 +187,7 @@ fn delivery_by_aliexpress_itself_is_chosen_free_first_then_cheapest() {
         tracking,
         min_days: None,
         max_days: None,
+        ships_from: None,
     };
     let options = vec![
         option("YANWEN_JYT", 0, true),
@@ -1223,6 +1227,7 @@ fn a_delivery_service_says_how_many_days_it_takes() {
         tracking: true,
         min_days,
         max_days,
+        ships_from: None,
     };
     let days = |min, max| timada_catalog::DeliveryDays::new(min, max).unwrap();
     assert_eq!(option(Some(8), Some(15)).delivery_days(), Some(days(8, 15)));

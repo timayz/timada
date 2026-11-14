@@ -76,12 +76,18 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     );
     // This node's place among the nodes up, for the work they share out.
     let place = cluster::share_of(&cluster);
+    // The euro's rates, read from the European Central Bank: for the sales,
+    // invoices and imports in other currencies.
+    let euro_rates: Arc<dyn crate::ecb::EuroRates> = Arc::new(crate::ecb::EcbClient::new(
+        config.invoicing.euro_rates_url.clone(),
+    ));
     let aliexpress = crate::aliexpress::Aliexpress::new(
         crate::seal::aliexpress_sealer(&config),
         &config.aliexpress,
         config.mail.allow_private_hosts,
         quota.clone(),
         place.clone(),
+        euro_rates.clone(),
     )?;
     // The order confirmations and the notices of contact messages are
     // mailed from the subscriptions, outside any request: they get their
@@ -147,9 +153,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // The mails the sagas owe go out from here, off the subscriptions'
     // cursors, a lane per shop: one shop's mail server never holds up the
     // others' codes, invitations and confirmations.
-    let euro_rates: Arc<dyn crate::ecb::EuroRates> = Arc::new(crate::ecb::EcbClient::new(
-        config.invoicing.euro_rates_url.clone(),
-    ));
     let mailroom = crate::mailroom::Mailroom::new(
         db.clone(),
         local.0.clone(),

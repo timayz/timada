@@ -688,6 +688,15 @@ pub struct AliexpressConfig {
     /// payment to go by it instead of reading the product again.
     #[serde(default = "default_aliexpress_read_fresh_secs")]
     pub read_fresh_secs: u64,
+    /// What AliExpress adds to an order for each kind of goods it ships into
+    /// the EU from outside, in euro cents: the flat customs duty of a parcel
+    /// worth 150 EUR or less (the destination's VAT goes on top), and the
+    /// processing fee of any parcel. Imports are priced with them; both are
+    /// dated in law, so the operator follows the law here. 0: none.
+    #[serde(default = "default_aliexpress_import_duty_cents")]
+    pub import_duty_cents: u64,
+    #[serde(default = "default_aliexpress_import_fee_cents")]
+    pub import_fee_cents: u64,
 }
 
 fn default_aliexpress_check_secs() -> u64 {
@@ -714,6 +723,16 @@ fn default_aliexpress_read_fresh_secs() -> u64 {
     60
 }
 
+/// 3 EUR per kind of goods, from 2026-07-01 until 2028-07-01.
+fn default_aliexpress_import_duty_cents() -> u64 {
+    300
+}
+
+/// 2 EUR per kind of goods, from 2026-11-01.
+fn default_aliexpress_import_fee_cents() -> u64 {
+    200
+}
+
 impl Default for AliexpressConfig {
     fn default() -> Self {
         Self {
@@ -727,6 +746,8 @@ impl Default for AliexpressConfig {
             parcel_read_every_secs: default_aliexpress_parcel_read_every_secs(),
             calls_per_day: default_aliexpress_calls_per_day(),
             read_fresh_secs: default_aliexpress_read_fresh_secs(),
+            import_duty_cents: default_aliexpress_import_duty_cents(),
+            import_fee_cents: default_aliexpress_import_fee_cents(),
         }
     }
 }

@@ -329,6 +329,8 @@ mod tests {
             parcel_read_every_secs: 1,
             calls_per_day: 86_400,
             read_fresh_secs: 60,
+            import_duty_cents: 0,
+            import_fee_cents: 0,
         };
         let aliexpress = Aliexpress::new(
             Some(Sealer::new("aliexpress-test", "secret")),
@@ -339,6 +341,7 @@ mod tests {
                 None,
             )),
             Arc::new(|_| Share::ALONE),
+            Arc::new(timada_invoicing::rates::RateTable::default()),
         )
         .unwrap();
         // The victim's forward placed the AliExpress order 8001.

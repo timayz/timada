@@ -250,8 +250,8 @@ async fn import<E: Executor + Clone>(
         return Err("Connect the company's AliExpress account first.".into());
     };
     let market = Aliexpress::market_of(settings);
-    let product = client
-        .product_delivered(ae_product_id, &market)
+    let product = aliexpress
+        .read_delivered(&client, ae_product_id, &market)
         .await
         .map_err(|err| {
             if err.gone {
