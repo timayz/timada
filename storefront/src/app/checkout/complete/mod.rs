@@ -60,7 +60,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         save_checkout_draft(cx, draft)?;
         let to = href!(
             crate::app::orders::order_id::index,
-            crate::app::orders::order_id::OrderId(order.id)
+            crate::app::orders::order_id::order_id: order.id
         )
         .resolve(cx);
         return Err(redirect(to).into());

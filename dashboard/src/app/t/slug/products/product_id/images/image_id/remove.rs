@@ -1,10 +1,10 @@
 use topcoat::{
     Result,
     context::Cx,
-    router::{error::SeeOther, path_param, route},
+    router::{error::SeeOther, route},
 };
 
-use super::ImageId;
+use super::image_id;
 use crate::app::t::slug::products::product_id::{Tab, act};
 
 /// Takes a picture off the product. Its files are deleted on every node as
@@ -13,7 +13,7 @@ use crate::app::t::slug::products::product_id::{Tab, act};
 /// picture, which the fetcher takes for a picture lost everywhere (#528).
 #[route(POST)]
 pub async fn remove(cx: &Cx) -> Result<SeeOther> {
-    let image_id = path_param::<ImageId>(cx).to_owned();
+    let image_id = image_id(cx).to_owned();
     act(
         cx,
         Tab::Pictures,

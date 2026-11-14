@@ -38,7 +38,7 @@ use timada_tenancy::{
     MAIL_SECURITY_NONE, MAIL_SECURITY_STARTTLS, MAIL_SECURITY_TLS, MailServerSettings, TenantState,
 };
 use topcoat::{
-    context::{Cx, app_context},
+    context::{Cx, context},
     mail::{Mail, Mailbox, Receipt, SendError, Transport, TransportFuture, send},
 };
 
@@ -207,14 +207,14 @@ fn is_unreachable(err: &SmtpError) -> bool {
 }
 
 impl Transport for TimedTransport {
-    fn send<'a>(&'a self, cx: &'a Cx, mail: Mail) -> TransportFuture<'a> {
+    fn send<'a>(&'a self, _cx: &'a Cx, mail: Mail) -> TransportFuture<'a> {
         Box::pin(async move {
             let envelope = envelope_of(&mail).map_err(topcoat::Error::from_anyhow)?;
-            let message = mail.formatted(cx)?;
+            let message = mail.formatted();
             let receipt = Receipt::new(message_id_of(&message));
             match tokio::time::timeout(self.limit, self.send_raw(&envelope, &message)).await {
                 Ok(Ok(())) => Ok(receipt),
-                Ok(Err(err)) => Err(SendError::delivery(err).into()),
+                Ok(Err(err)) => Err(SendError::new(err).into()),
                 Err(_) => Err(NoAnswer.into()),
             }
         })
@@ -224,7 +224,7 @@ impl Transport for TimedTransport {
 /// The envelope of `mail`: its sender and every recipient, `Bcc` included.
 fn envelope_of(mail: &Mail) -> anyhow::Result<Envelope> {
     let address = |mailbox: &Mailbox| mailbox.address().parse::<Address>();
-    let from = mail.from().map(address).transpose()?;
+    let from = Some(address(mail.from())?);
     let to = mail
         .to()
         .iter()
@@ -568,8 +568,8 @@ fn same_addresses(kept: &[SocketAddr], found: &[SocketAddr]) -> bool {
 
 /// `tenant`'s sender, from the context's [`ShopMail`] and [`MailSender`].
 pub async fn shop_sender(cx: &Cx, tenant: &TenantState) -> topcoat::Result<ShopSender> {
-    let platform = &app_context::<MailSender>(cx).0;
-    let sender = app_context::<ShopMail>(cx)
+    let platform = &context::<MailSender>(cx).0;
+    let sender = context::<ShopMail>(cx)
         .sender_of(tenant, platform)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -580,10 +580,7 @@ pub async fn shop_sender(cx: &Cx, tenant: &TenantState) -> topcoat::Result<ShopS
 mod tests {
     use super::*;
     use crate::net::is_public;
-    use topcoat::{
-        context::CxTestBuilder,
-        mail::{MemoryTransport, mail},
-    };
+    use topcoat::{context::Cx, mail::MemoryTransport, view::view};
 
     const KEY: &str = "a-secrets-key-of-thirty-two-chars!!";
 
@@ -622,13 +619,15 @@ mod tests {
     }
 
     async fn hello(cx: &Cx) -> Mail {
-        mail! {
-            from: "Shop <shop@acme.test>".parse::<Mailbox>().unwrap(),
-            to: Mailbox::new("buyer@acme.test").unwrap(),
-            subject: "Hello",
-            html: { cx => <p>"Hello"</p> },
-        }
-        .unwrap()
+        Mail::builder()
+            .from("Shop <shop@acme.test>".parse::<Mailbox>().unwrap())
+            .to([Mailbox::new("buyer@acme.test").unwrap()])
+            .subject("Hello")
+            .html(cx, view! { <p>"Hello"</p> })
+            .await
+            .unwrap()
+            .build()
+            .unwrap()
     }
 
     fn transport_of(sender: ShopSender) -> Arc<dyn Transport> {
@@ -861,7 +860,7 @@ mod tests {
             password: None,
             addresses: dialled,
         };
-        let cx = CxTestBuilder::new().build();
+        let cx = Cx::new();
         let receipt = server(vec![address])
             .transport()
             .unwrap()
@@ -899,7 +898,7 @@ mod tests {
             password: None,
             addresses: dialled,
         };
-        let cx = CxTestBuilder::new().build();
+        let cx = Cx::new();
         // The name answered the dead address first, as a host with an AAAA
         // record this node has no route for, or a server down, does.
         server(vec![dead, alive])
@@ -958,7 +957,7 @@ mod tests {
             password: None,
             addresses: vec![address],
         };
-        let cx = CxTestBuilder::new().build();
+        let cx = Cx::new();
         // A fake that says nothing back: the send fails, the hello was sent.
         let err = server
             .transport()
@@ -1106,7 +1105,7 @@ mod tests {
             fallbacks: Vec::new(),
             limit: Duration::from_millis(300),
         };
-        let cx = CxTestBuilder::new().build();
+        let cx = Cx::new();
         let err = tokio::time::timeout(
             Duration::from_secs(5),
             transport.send(&cx, hello(&cx).await),

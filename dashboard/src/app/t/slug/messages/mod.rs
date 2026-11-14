@@ -15,7 +15,7 @@ use timada_support::{
 use timada_tenancy::{PERMISSION_SUPPORT_MANAGE, PERMISSION_SUPPORT_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, see_other},
         href, page, query_params,
@@ -23,7 +23,7 @@ use topcoat::{
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::components::button::{ButtonSize, ButtonVariant, button};
@@ -60,7 +60,7 @@ struct MessagesLink<'a> {
 
 /// The messages page, with a flash error code or message.
 pub fn messages_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -129,7 +129,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let can_manage = access.can(cx, PERMISSION_SUPPORT_MANAGE).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let filter = MessageFilter { status };
     let total = count_messages(pool, &tenant.id, &filter)
         .await
@@ -149,7 +149,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_link = {
         let slug = slug.clone();
         move |page: u32| {
-            href!(index, Slug(slug.clone()))
+            href!(index, slug: slug.clone())
                 .query(MessagesLink {
                     status: status_value,
                     page: Some(page),
@@ -220,17 +220,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         attrs: attributes! { class="align-top" },
                                         <div class="flex justify-end gap-2">
                                             if row.status == MessageStatus::Handled.as_str() {
-                                                <form method="post" action=(href!(reopen::reopen, Slug(slug.clone())))>
+                                                <form method="post" action=(href!(reopen::reopen, slug: slug.clone()))>
                                                     <input type="hidden" name="message_id" value=(&row.id)>
                                                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Reopen")
                                                 </form>
                                             } else {
-                                                <form method="post" action=(href!(handle::handle, Slug(slug.clone())))>
+                                                <form method="post" action=(href!(handle::handle, slug: slug.clone()))>
                                                     <input type="hidden" name="message_id" value=(&row.id)>
                                                     button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Mark handled")
                                                 </form>
                                             }
-                                            <form method="post" action=(href!(forget::forget, Slug(slug.clone())))>
+                                            <form method="post" action=(href!(forget::forget, slug: slug.clone()))>
                                                 <input type="hidden" name="message_id" value=(&row.id)>
                                                 button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Erase")
                                             </form>

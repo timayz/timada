@@ -116,7 +116,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     </td>
                                     <td>
                                         if let Some(slug) = &line.slug {
-                                            <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::Slug(slug.clone())))>(&line.name)</a>
+                                            <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::slug: slug.clone()))>(&line.name)</a>
                                         } else {
                                             (if line.name.is_empty() { "Un produit qui n'est plus vendu" } else { line.name.as_str() })
                                         }
@@ -230,6 +230,7 @@ impl LineForm {
 /// `from` say where it comes back to.
 #[topcoat::view::component]
 pub async fn summary_line(
+    cx: &Cx,
     line: &CartLineView,
     currency: &str,
     back: &str,
@@ -251,7 +252,7 @@ pub async fn summary_line(
             </span>
             <span class="what">
                 if let Some(slug) = &line.slug {
-                    <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::Slug(slug.clone())))>(&name)</a>
+                    <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::slug: slug.clone()))>(&name)</a>
                 } else {
                     (&name)
                 }

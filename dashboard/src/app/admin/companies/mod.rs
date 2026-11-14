@@ -6,7 +6,7 @@ pub mod release;
 use timada_tenancy::all_companies;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
@@ -34,7 +34,7 @@ pub fn admin_companies_url(cx: &Cx, error: Option<&str>, message: Option<&str>) 
 pub async fn index(cx: &Cx) -> Result<impl View> {
     require_admin(cx).await?;
     let query = query_params::<CompaniesQuery>(cx)?;
-    let rows = all_companies(app_context::<Db>(cx), 0, 200)
+    let rows = all_companies(context::<Db>(cx), 0, 200)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     Ok(view! {

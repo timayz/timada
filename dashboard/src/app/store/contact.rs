@@ -22,7 +22,7 @@ use timada_orders::STOREFRONT_ACTOR;
 use timada_support::{ReceiveMessage, SUPPORT_TOO_MANY_REQUESTS, SupportError};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         StatusCode,
         content::Form,
@@ -59,8 +59,8 @@ pub async fn contact(cx: &Cx, Form(form): Form<ContactForm>) -> Result<Answer> {
         Err(code) => return status(code),
     };
     let allowed = allow_contact_message(
-        app_context::<Arc<RateLimiter>>(cx),
-        &app_context::<Config>(cx).store,
+        context::<Arc<RateLimiter>>(cx),
+        &context::<Config>(cx).store,
         &access.key.id,
         &access.tenant.id,
         headers(cx)

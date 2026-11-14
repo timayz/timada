@@ -14,7 +14,7 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, not_found, see_other},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{Unescaped, View, attributes, view},
 };
@@ -24,7 +24,7 @@ use super::{
     status_of,
 };
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::ui::{Shell, document, notice, page_header, section_card, status_badge};
 
@@ -45,8 +45,8 @@ pub fn announcement_url(
 ) -> String {
     href!(
         index,
-        Slug(slug.to_owned()),
-        AnnouncementId(announcement_id.to_owned())
+        slug: slug.to_owned(),
+        announcement_id: announcement_id.to_owned()
     )
     .query(Flash { error, message })
     .resolve(cx)
@@ -54,7 +54,7 @@ pub fn announcement_url(
 
 /// The message the URL names, or 404.
 async fn require_announcement(cx: &Cx, access: &TenantAccess) -> Result<Announcement> {
-    let id = path_param::<AnnouncementId>(cx);
+    let id = announcement_id(cx);
     pages(access)?
         .announcements()
         .await
@@ -78,7 +78,7 @@ where
     access
         .require_permission(cx, PERMISSION_PAGES_MANAGE)
         .await?;
-    let announcement_id = path_param::<AnnouncementId>(cx).to_owned();
+    let announcement_id = announcement_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let gateway = pages(&access)?;
     match run(&gateway, &access.user_id, &announcement_id).await {
@@ -133,7 +133,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             section_card(
                 title: Some("Message"),
-                <form method="post" action=(href!(change::change, Slug(slug.clone()), AnnouncementId(announcement.id.clone()))) class="flex max-w-2xl flex-col gap-4" data-announcement-form="">
+                <form method="post" action=(href!(change::change, slug: slug.clone(), announcement_id: announcement.id.clone())) class="flex max-w-2xl flex-col gap-4" data-announcement-form="">
                     announcement_fields(
                         text: &announcement.text,
                         starts_at: &starts_at,

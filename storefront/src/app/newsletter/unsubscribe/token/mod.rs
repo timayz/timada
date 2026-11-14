@@ -10,7 +10,7 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, see_other},
-        href, module_param, page, path_param, route,
+        href, module_param, page, route,
     },
     view::{View, view},
 };
@@ -22,7 +22,7 @@ module_param!(pub token);
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    let token = path_param::<Token>(cx).to_owned();
+    let token = token(cx).to_owned();
     let nav = menu(cx).await?;
     Ok(view! {
         document(
@@ -32,7 +32,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <h1>"Se désinscrire de la newsletter"</h1>
                 <div class="card panel">
                     <p>"Vous ne recevrez plus nos nouveautés ni nos offres par e-mail. Vos commandes, elles, continuent de vous être confirmées."</p>
-                    <form method="post" action=(href!(submit, Token(token))) data-newsletter-unsubscribe="">
+                    <form method="post" action=(href!(submit, token: token)) data-newsletter-unsubscribe="">
                         <button class="btn">"Me désinscrire"</button>
                     </form>
                 </div>
@@ -43,7 +43,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
 #[route(POST)]
 pub async fn submit(cx: &Cx) -> Result<SeeOther> {
-    let token = path_param::<Token>(cx);
+    let token = token(cx);
     let to = match unsubscribe(cx, token).await? {
         Ok(()) => newsletter_url(cx, None, Some("unsubscribed")),
         Err(refusal) => newsletter_url(cx, Some(refusal.code()), None),

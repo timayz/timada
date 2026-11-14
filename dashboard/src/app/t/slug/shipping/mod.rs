@@ -22,7 +22,7 @@ use topcoat::{
     view::{Unescaped, View, attributes, component, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::components::button::button;
@@ -42,7 +42,7 @@ struct ShippingQuery {
 }
 
 pub fn shipping_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -119,7 +119,7 @@ for (const filter of document.querySelectorAll("[data-country-filter]")) {
 /// The countries a method ships to, as checkboxes: those `selected` first,
 /// then every ISO 3166 country by name. None ticked ships everywhere.
 #[component]
-pub async fn countries_field(id: &str, selected: &[String]) -> Result<impl View> {
+pub async fn countries_field(cx: &Cx, id: &str, selected: &[String]) -> Result<impl View> {
     let mut rows: Vec<(String, String, bool)> = selected
         .iter()
         .map(|code| {
@@ -226,7 +226,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             table_row(
                                 attrs: attributes! { data-shipping-method=(&method.name) },
                                 table_cell(
-                                    <a class=(LINK) href=(href!(method_id::index, Slug(slug.clone()), method_id::MethodId(method.id.clone())))>(&method.name)</a>
+                                    <a class=(LINK) href=(href!(method_id::index, slug: slug.clone(), method_id::method_id: method.id.clone()))>(&method.name)</a>
                                 )
                                 table_cell(attrs: attributes! { class="tabular-nums" data-shipping-price="" }, (format_money(method.price_cents, &method.currency)))
                                 table_cell(attrs: attributes! { data-shipping-free="" }, (describe_free_above(method)))
@@ -240,7 +240,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             section_card(
                 title: Some("Default delivery time"),
                 description: Some("How long delivery takes for a product that gives no time of its own. Shoppers see it on the product page, in the cart, at checkout and with their order. Products imported from AliExpress take theirs from there."),
-                <form method="post" action=(href!(delivery_days::delivery_days, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4" data-default-delivery=(default_days.map(crate::ui::delivery_days_label).unwrap_or_default())>
+                <form method="post" action=(href!(delivery_days::delivery_days, slug: slug.clone())) class="flex max-w-xl flex-col gap-4" data-default-delivery=(default_days.map(crate::ui::delivery_days_label).unwrap_or_default())>
                     <fieldset class="grid gap-2">
                         <legend class="text-sm font-medium">"Delivery time, in days"</legend>
                         <div class="flex items-center gap-2">
@@ -260,7 +260,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             section_card(
                 title: Some("Add a shipping method"),
-                <form method="post" action=(href!(add::add, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                <form method="post" action=(href!(add::add, slug: slug.clone())) class="flex max-w-xl flex-col gap-4">
                     field(
                         field_label(attrs: attributes! { for="new-shipping-name" }, "Name")
                         input(attrs: attributes! {

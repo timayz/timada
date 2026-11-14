@@ -22,7 +22,7 @@ use evento::{
 use timada_tenancy::aggregator::{
     Accepted, MailClaimed, MailDeferred, MailFailed, MailSent, MailUndeliverable, Revoked, Sent,
 };
-use topcoat::context::{Cx, app_context};
+use topcoat::context::{Cx, context};
 
 use crate::app::t::slug::role_label;
 use crate::code_mails::claimant;
@@ -166,7 +166,7 @@ async fn on_mail_failed<E: Executor>(
 /// Sends the invitation `owed` names at `now` (unix seconds), from the
 /// mailroom: claims it, mails it, records how it went.
 pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::Result<Outcome> {
-    let cx = Cx::new(room.mail.clone());
+    let cx = Cx::new().with_shared(room.mail.clone());
     let tenancy = timada_tenancy::Command(room.store.clone());
     let invitation = owed.stream_id.as_str();
     // The tenant and the inviter first, before anything is claimed: gone,
@@ -178,13 +178,13 @@ pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::
         return Ok(Outcome::Left);
     };
     let inviter =
-        timada_identity::Command::new(room.store.clone(), app_context::<EmailCodes>(&cx).0.clone())
+        timada_identity::Command::new(room.store.clone(), context::<EmailCodes>(&cx).0.clone())
             .load_user(&open.invited_by)
             .await?
             .map_or_else(|| "A member".to_owned(), |user| user.label);
     let Some(mail) = tenancy
         .claim_invitation_mail(
-            &*app_context::<InvitationTokens>(&cx).0,
+            &*context::<InvitationTokens>(&cx).0,
             invitation,
             claimant(room, now),
         )
@@ -234,7 +234,7 @@ mod tests {
     use topcoat::mail::{Mailbox, MemoryTransport};
 
     use super::*;
-    use crate::code_mails::tests::{TENANT, mail_context, shop};
+    use crate::code_mails::tests::{TENANT, shop};
     use crate::mail_fault::fake_smtp;
     use crate::mailroom::tests::{BASE_URL, room, rows, store};
 
@@ -330,9 +330,8 @@ mod tests {
             mails[0].subject(),
             "You are invited to join Acme Tea on Timada"
         );
-        let cx = Cx::new(mail_context(MemoryTransport::new()));
         // The wire folds long lines.
-        let wire = String::from_utf8(mails[0].clone().formatted(&cx).unwrap())
+        let wire = String::from_utf8(mails[0].formatted())
             .unwrap()
             .replace("=\r\n", "");
         assert!(

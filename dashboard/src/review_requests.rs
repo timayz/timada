@@ -17,7 +17,7 @@ use crate::db::Db;
 use timada_orders::{OrderState, OrderStatus};
 use timada_reviews::{DueReviewRequest, REQUEST_WINDOW_SECS, review_id, review_requests_due};
 use tokio::task::JoinHandle;
-use topcoat::context::{AppContext, Cx};
+use topcoat::context::{ContextMap, Cx};
 
 use crate::cluster::Executor;
 use crate::mail::send_review_request;
@@ -45,13 +45,13 @@ pub struct ReviewRequests {
     /// claimed a moment ago on another node, which this node has not read
     /// yet, finds its claim taken.
     store: Executor,
-    mail: Arc<AppContext>,
+    mail: Arc<ContextMap>,
     /// How many due requests one statement reads.
     page_len: u32,
 }
 
 impl ReviewRequests {
-    pub fn new(db: Db, store: Executor, mail: Arc<AppContext>) -> Arc<Self> {
+    pub fn new(db: Db, store: Executor, mail: Arc<ContextMap>) -> Arc<Self> {
         Arc::new(Self {
             db,
             store,
@@ -119,7 +119,7 @@ impl ReviewRequests {
         if tenant.is_suspended() {
             return Ok(0);
         }
-        let cx = Cx::new(self.mail.clone());
+        let cx = Cx::new().with_shared(self.mail.clone());
         ask_buyers(&self.store, &cx, &tenant, due, now).await
     }
 }
@@ -221,8 +221,8 @@ mod tests {
     use timada_orders::aggregator::{Fulfilled, Paid, Placed};
     use timada_orders::{OrderLine, Payment, ShippingAddress};
     use timada_reviews::SubmitReview;
-    use topcoat::context::CxTestBuilder;
-    use topcoat::mail::{MailConfig, MemoryTransport};
+    use topcoat::context::Cx;
+    use topcoat::mail::{Mailer, MemoryTransport};
 
     use super::*;
     use crate::mail::MailSender;
@@ -243,11 +243,10 @@ mod tests {
 
     fn mail() -> (Cx, MemoryTransport) {
         let transport = MemoryTransport::new();
-        let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport.clone()).build())
-            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(crate::shop_mail::ShopMail::new(None, false))
-            .build();
+        let cx = Cx::new()
+            .with(Mailer::new(transport.clone()))
+            .with(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .with(crate::shop_mail::ShopMail::new(None, false));
         (cx, transport)
     }
 
@@ -290,8 +289,8 @@ mod tests {
     /// what it mails.
     fn sweeper(store: &evento::Turso, db: &Db, page_len: u32) -> (ReviewRequests, MemoryTransport) {
         let transport = MemoryTransport::new();
-        let mut mail = AppContext::new();
-        mail.insert(MailConfig::builder().transport(transport.clone()).build());
+        let mut mail = ContextMap::new();
+        mail.insert(Mailer::new(transport.clone()));
         mail.insert(MailSender("Timada <no-reply@example.com>".parse().unwrap()));
         mail.insert(crate::shop_mail::ShopMail::new(None, false));
         let sweep = ReviewRequests {
@@ -427,7 +426,7 @@ mod tests {
 
         let sent = transport.sent();
         assert_eq!(sent.len(), 1);
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        let wire = String::from_utf8(sent[0].formatted()).unwrap();
         // Unfold the quoted-printable soft line breaks.
         let wire = wire.replace("=\r\n", "").replace("=\n", "");
         let start = wire.find("https://shop.example/reviews/").unwrap();
@@ -559,7 +558,7 @@ mod tests {
                 .unwrap(),
             1
         );
-        let wire = String::from_utf8(transport.sent()[0].clone().formatted(&cx).unwrap()).unwrap();
+        let wire = String::from_utf8(transport.sent()[0].formatted()).unwrap();
         assert!(wire.contains("Tea"), "{wire}");
         assert!(!wire.contains("Mug"), "{wire}");
 

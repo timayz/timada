@@ -34,7 +34,7 @@ use timada_newsletter::{
 use timada_orders::STOREFRONT_ACTOR;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         StatusCode,
         content::Form,
@@ -78,8 +78,8 @@ pub async fn subscribe(cx: &Cx, Form(form): Form<SignupForm>) -> Result<Answer> 
         return answer_error(err);
     }
     let allowed = allow_newsletter_signup(
-        app_context::<Arc<RateLimiter>>(cx),
-        &app_context::<Config>(cx).store,
+        context::<Arc<RateLimiter>>(cx),
+        &context::<Config>(cx).store,
         &access.key.id,
         &access.tenant.id,
         headers(cx)

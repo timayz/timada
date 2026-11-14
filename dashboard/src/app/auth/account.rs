@@ -5,7 +5,7 @@
 use timada_identity::{SignInKind, active_sessions, session_id};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
     router::{href, page, query_params},
     session,
@@ -42,10 +42,10 @@ const SECTIONS: &[(&str, &str)] = &[
 pub async fn account(cx: &Cx) -> Result<impl View> {
     let user = require_user(cx).await?;
     let query = query_params::<AccountQuery>(cx)?;
-    let providers = app_context::<Providers>(cx);
+    let providers = context::<Providers>(cx);
     let user_id = user.id.as_str();
     let current_session = session::token_hash(cx).await?.map(|hash| session_id(&hash));
-    let sessions = active_sessions(app_context::<Db>(cx), user_id, now() as i64)
+    let sessions = active_sessions(context::<Db>(cx), user_id, now() as i64)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
 
@@ -158,7 +158,7 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
                     if providers.iter().next().is_some() {
                         <div class="mt-4 flex flex-wrap gap-2">
                             for provider in providers.iter() {
-                                <form method="post" action=(href!(super::oauth2::provider::start, super::oauth2::provider::Provider(provider.name.clone())))>
+                                <form method="post" action=(href!(super::oauth2::provider::start, super::oauth2::provider::provider: provider.name.clone()))>
                                     <input type="hidden" name="mode" value="add_to_user">
                                     <input type="hidden" name="user_id" value=(user_id)>
                                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" },

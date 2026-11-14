@@ -4,13 +4,13 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
 use super::super::super::super::automations;
-use super::super::super::ScenarioId;
-use super::{RunId, run_url};
+use super::super::super::scenario_id;
+use super::{run_id, run_url};
 use crate::app::t::slug::require_tenant;
 
 /// Stops a run under way: its next steps never happen.
@@ -20,8 +20,8 @@ pub async fn cancel(cx: &Cx) -> Result<SeeOther> {
     access
         .require_permission(cx, PERMISSION_AUTOMATIONS_MANAGE)
         .await?;
-    let scenario_id = path_param::<ScenarioId>(cx).to_owned();
-    let run_id = path_param::<RunId>(cx).to_owned();
+    let scenario_id = scenario_id(cx).to_owned();
+    let run_id = run_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let reason = "Cancelled by a member.";
     match automations(&access)?

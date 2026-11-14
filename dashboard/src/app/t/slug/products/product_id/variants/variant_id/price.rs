@@ -2,15 +2,15 @@ use timada_catalog::parse_amount;
 use topcoat::{
     Result,
     context::Cx,
-    router::{content::Form, error::SeeOther, path_param, route},
+    router::{content::Form, error::SeeOther, route},
 };
 
-use super::{PriceForm, VariantId};
+use super::{PriceForm, variant_id};
 use crate::app::t::slug::products::product_id::{Tab, act};
 
 #[route(POST)]
 pub async fn price(cx: &Cx, Form(form): Form<PriceForm>) -> Result<SeeOther> {
-    let variant_id = path_param::<VariantId>(cx).to_owned();
+    let variant_id = variant_id(cx).to_owned();
     act(
         cx,
         Tab::Variants,

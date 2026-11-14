@@ -234,7 +234,7 @@ mod tests {
         let err = transport
             .send(&hello())
             .expect_err("the server refused the recipient");
-        SendError::delivery(err).into()
+        SendError::new(err).into()
     }
 
     fn hello() -> Message {
@@ -286,7 +286,7 @@ mod tests {
             .timeout(Some(Duration::from_secs(5)))
             .build();
         let err = transport.send(&hello()).expect_err("nobody listens");
-        let err: topcoat::Error = SendError::delivery(err).into();
+        let err: topcoat::Error = SendError::new(err).into();
         assert!(!is_customer_address_fault(&err));
     }
 
@@ -306,7 +306,7 @@ mod tests {
             std::io::ErrorKind::PermissionDenied,
             "the mail spool is read-only",
         );
-        let err: topcoat::Error = SendError::delivery(spool).into();
+        let err: topcoat::Error = SendError::new(spool).into();
         assert!(!is_customer_address_fault(&err));
         assert!(!is_customer_address_fault(&topcoat::Error::msg(
             "no mailer configured"

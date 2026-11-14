@@ -36,7 +36,7 @@ use timada_invoicing::aggregator::book::InvoiceIssued;
 use timada_orders::ORDER_MAIL_WINDOW_SECS;
 use timada_orders::aggregator::{Cancelled, Fulfilled, OrderMail, Placed};
 use timada_tenancy::ShopMailKind;
-use topcoat::context::{Cx, app_context};
+use topcoat::context::{Cx, context};
 
 use crate::code_mails::claimant;
 use crate::mail::{
@@ -243,12 +243,12 @@ pub(crate) async fn send(
     else {
         return Ok(Outcome::Left);
     };
-    let cx = Cx::new(room.mail.clone());
+    let cx = Cx::new().with_shared(room.mail.clone());
     // The platform's server speaks for the orders the checkout placed alone.
     // A provider that does not answer is asked again at the next look; one
     // that knows no such payment settles it: the shopper has the order's
     // page.
-    if !app_context::<ShopMail>(&cx).has_shop_mails_server(&shop) {
+    if !context::<ShopMail>(&cx).has_shop_mails_server(&shop) {
         match room.payments.order_payment(&shop, &order).await {
             Ok(OrderPayment::Held | OrderPayment::Gone) => {}
             Ok(OrderPayment::Unknown) => {

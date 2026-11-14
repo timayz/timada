@@ -9,6 +9,7 @@ use timada_automations::{
 };
 use topcoat::{
     Result,
+    context::Cx,
     view::{View, attributes, component, view},
 };
 
@@ -28,7 +29,7 @@ use crate::components::textarea::textarea;
 const CHOICE: &str = "flex w-full flex-col gap-0.5 rounded-lg border border-border bg-card p-3 text-left text-sm hover:border-primary/60 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring data-[current]:border-primary data-[current]:ring-2 data-[current]:ring-primary/30";
 
 #[component]
-pub async fn inspector(canvas: &Canvas<'_>) -> Result<impl View> {
+pub async fn inspector(cx: &Cx, canvas: &Canvas<'_>) -> Result<impl View> {
     let selected = canvas.editor.selected.as_deref();
     let step = selected
         .filter(|id| *id != TRIGGER)
@@ -63,7 +64,7 @@ pub async fn inspector(canvas: &Canvas<'_>) -> Result<impl View> {
 
 /// The triggers, by group; the one chosen is marked.
 #[component]
-async fn trigger_picker(canvas: &Canvas<'_>) -> Result<impl View> {
+async fn trigger_picker(cx: &Cx, canvas: &Canvas<'_>) -> Result<impl View> {
     let current = canvas
         .editor
         .definition
@@ -116,7 +117,7 @@ fn issues_of(canvas: &Canvas<'_>, id: &str, key: &str) -> Vec<&'static str> {
 
 /// The problems of one setting, under its field.
 #[component]
-async fn issue_list(texts: Vec<&'static str>) -> Result<impl View> {
+async fn issue_list(cx: &Cx, texts: Vec<&'static str>) -> Result<impl View> {
     Ok(view! {
         for text in &texts {
             <p class="text-sm text-destructive" data-issue="">(text)</p>
@@ -125,7 +126,7 @@ async fn issue_list(texts: Vec<&'static str>) -> Result<impl View> {
 }
 
 #[component]
-async fn step_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+async fn step_settings(cx: &Cx, canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
     let known = catalog::step_kind(&step.kind).is_some();
     Ok(view! {
         if known {
@@ -158,7 +159,7 @@ async fn step_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
 }
 
 #[component]
-async fn wait_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+async fn wait_settings(cx: &Cx, canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
     let amount = step.settings.get("amount").cloned().unwrap_or_default();
     let unit = step.settings.get("unit").cloned().unwrap_or_default();
     let mut texts = issues_of(canvas, &step.id, "amount");
@@ -205,7 +206,7 @@ struct RuleRow {
 }
 
 #[component]
-async fn condition_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+async fn condition_settings(cx: &Cx, canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
     let subject = canvas.editor.definition.subject();
     let setting = |key: &str| step.settings.get(key).cloned().unwrap_or_default();
     let all = setting("match") != "any";
@@ -314,7 +315,7 @@ async fn condition_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl Vie
 }
 
 #[component]
-async fn notify_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+async fn notify_settings(cx: &Cx, canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
     let subject = step.settings.get("subject").cloned().unwrap_or_default();
     let note = step.settings.get("note").cloned().unwrap_or_default();
     let about = canvas
@@ -340,7 +341,7 @@ async fn notify_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> 
 }
 
 #[component]
-async fn email_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+async fn email_settings(cx: &Cx, canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
     let setting = |key: &str| step.settings.get(key).cloned().unwrap_or_default();
     let subject = setting("subject");
     let html = setting("html");
@@ -394,7 +395,7 @@ async fn email_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
 }
 
 #[component]
-async fn discount_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+async fn discount_settings(cx: &Cx, canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
     let setting = |key: &str| step.settings.get(key).cloned().unwrap_or_default();
     let kind = setting("kind");
     let value = setting("value");
@@ -444,7 +445,7 @@ async fn discount_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View
 }
 
 #[component]
-async fn webhook_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+async fn webhook_settings(cx: &Cx, canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
     let sealed = step.settings.get("url_sealed").cloned().unwrap_or_default();
     let host = step.settings.get("host").cloned().unwrap_or_default();
     let placeholder = if sealed.is_empty() {
@@ -477,7 +478,7 @@ async fn webhook_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View>
 }
 
 #[component]
-async fn discord_settings(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+async fn discord_settings(cx: &Cx, canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
     let sealed = step.settings.get("url_sealed").cloned().unwrap_or_default();
     let message = step.settings.get("message").cloned().unwrap_or_default();
     let placeholder = if sealed.is_empty() {

@@ -6,11 +6,11 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{OrderId, order_url};
+use super::{order_id, order_url};
 use crate::app::t::slug::orders::orders;
 use crate::app::t::slug::require_tenant;
 
@@ -59,7 +59,7 @@ pub async fn not_on_aliexpress(cx: &Cx) -> Result<SeeOther> {
     access
         .require_permission(cx, PERMISSION_ALIEXPRESS_MANAGE)
         .await?;
-    let order_id = path_param::<OrderId>(cx).to_owned();
+    let order_id = order_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let back = |error: Option<&str>, message: Option<&str>| {
         see_other(order_url(cx, &slug, &order_id, error, message))

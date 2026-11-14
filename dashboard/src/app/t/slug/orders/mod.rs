@@ -10,12 +10,12 @@ use timada_orders::{Command, OrderFilter, OrderStatus, count_orders, orders_of_t
 use timada_tenancy::PERMISSION_ORDERS_READ;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, class, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::cluster::Executor;
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::input::input;
@@ -59,7 +59,7 @@ struct OrdersLink<'a> {
 
 /// The list of the orders matching an e-mail address.
 pub fn orders_of_email_url(cx: &Cx, slug: &str, email: &str) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(OrdersLink {
             status: None,
             q: Some(email),
@@ -88,7 +88,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let from = PageFrom::of(after.as_ref(), before.as_ref());
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let filter = OrderFilter::default().status(status).search(q);
     let total = count_orders(pool, &tenant.id, &filter)
         .await
@@ -101,7 +101,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_link = {
         let slug = slug.clone();
         move |after: Option<&str>, before: Option<&str>| {
-            href!(index, Slug(slug.clone()))
+            href!(index, slug: slug.clone())
                 .query(OrdersLink {
                     status: status.map(OrderStatus::as_str),
                     q,
@@ -166,7 +166,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             table_row(
                                 attrs: attributes! { data-order=(&row.reference) data-order-status=(&row.status) },
                                 table_cell(
-                                    <a class=(class!(LINK, "font-mono")) href=(href!(order_id::index, Slug(slug.clone()), order_id::OrderId(row.id.clone())))>(&row.reference)</a>
+                                    <a class=(class!(LINK, "font-mono")) href=(href!(order_id::index, slug: slug.clone(), order_id::order_id: row.id.clone()))>(&row.reference)</a>
                                 )
                                 table_cell(<time datetime=(row.placed_at)>(format_time(row.placed_at as u64))</time>)
                                 table_cell(

@@ -27,7 +27,7 @@ use timada_core::{CodeVerifier, Keys};
 use timada_shoppers::{NewsletterSubscription, Shopper, ShopperError, ShopperState};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{StatusCode, content::Json, request::headers},
 };
 
@@ -105,13 +105,13 @@ pub async fn signed_in(cx: &Cx, store: &super::TenantStore) -> Result<Option<Sho
 
 /// The keys of the tenant's personal data (its shoppers', its messages').
 pub fn keys(cx: &Cx, tenant_id: &str) -> Arc<dyn Keys> {
-    app_context::<Arc<KeyVault>>(cx).for_tenant(tenant_id)
+    context::<Arc<KeyVault>>(cx).for_tenant(tenant_id)
 }
 
 /// What checks the shoppers' sign-in codes; `Err` is the answer to give when
 /// this node holds no `secrets.key`.
 pub fn codes(cx: &Cx) -> std::result::Result<Arc<dyn CodeVerifier>, Result<Answer>> {
-    match &app_context::<crate::seal::ShopperCodes>(cx).0 {
+    match &context::<crate::seal::ShopperCodes>(cx).0 {
         Some(codes) => Ok(codes.clone()),
         None => Err(refused(
             StatusCode::SERVICE_UNAVAILABLE,

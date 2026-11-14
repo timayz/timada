@@ -4,10 +4,10 @@ use timada_catalog::OptionLabels;
 use topcoat::{
     Result,
     context::Cx,
-    router::{content::Form, error::SeeOther, path_param, route},
+    router::{content::Form, error::SeeOther, route},
 };
 
-use super::OptionId;
+use super::option_id;
 use crate::app::t::slug::products::product_id::{Tab, act};
 
 /// The prefix of the fields labelling one value. The form cannot know the
@@ -25,7 +25,7 @@ type LabelsForm = BTreeMap<String, String>;
 /// themselves do not move, so an import that gave them still finds them.
 #[route(POST)]
 pub async fn labels(cx: &Cx, Form(form): Form<LabelsForm>) -> Result<SeeOther> {
-    let option_id = path_param::<OptionId>(cx).to_owned();
+    let option_id = option_id(cx).to_owned();
     let empty_is_none = |text: &str| {
         let text = text.trim();
         (!text.is_empty()).then(|| text.to_owned())

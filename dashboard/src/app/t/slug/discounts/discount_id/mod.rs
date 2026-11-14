@@ -12,14 +12,14 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, not_found, see_other},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{View, attributes, view},
 };
 
 use super::{describe_limits, describe_window, discounts, discounts_url, error_code};
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::auth::user_labels;
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::ui::{
@@ -44,8 +44,8 @@ pub fn discount_url(
 ) -> String {
     href!(
         index,
-        Slug(slug.to_owned()),
-        DiscountId(discount_id.to_owned())
+        slug: slug.to_owned(),
+        discount_id: discount_id.to_owned()
     )
     .query(Flash { error, message })
     .resolve(cx)
@@ -53,7 +53,7 @@ pub fn discount_url(
 
 /// The discount named in the URL, or 404.
 async fn require_discount(cx: &Cx, access: &TenantAccess) -> Result<DiscountState> {
-    let id = path_param::<DiscountId>(cx);
+    let id = discount_id(cx);
     discounts(access)?
         .load_discount(id)
         .await
@@ -76,7 +76,7 @@ where
     access
         .require_permission(cx, PERMISSION_DISCOUNTS_MANAGE)
         .await?;
-    let discount_id = path_param::<DiscountId>(cx).to_owned();
+    let discount_id = discount_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let gateway = discounts(&access)?;
     match run(&gateway, &access.user_id, &discount_id).await {
@@ -193,15 +193,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     description: Some("Archiving frees the code for a new discount. A checkout already being paid keeps the discount it was shown."),
                     <div class="flex flex-wrap gap-3">
                         if discount.status == DiscountStatus::Active {
-                            <form method="post" action=(href!(deactivate::deactivate, Slug(slug.clone()), DiscountId(id.clone())))>
+                            <form method="post" action=(href!(deactivate::deactivate, slug: slug.clone(), discount_id: id.clone()))>
                                 button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, "Deactivate")
                             </form>
                         } else {
-                            <form method="post" action=(href!(reactivate::reactivate, Slug(slug.clone()), DiscountId(id.clone())))>
+                            <form method="post" action=(href!(reactivate::reactivate, slug: slug.clone(), discount_id: id.clone()))>
                                 button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, "Reactivate")
                             </form>
                         }
-                        <form method="post" action=(href!(archive::archive, Slug(slug.clone()), DiscountId(id.clone())))>
+                        <form method="post" action=(href!(archive::archive, slug: slug.clone(), discount_id: id.clone()))>
                             button(variant: ButtonVariant::Destructive, attrs: attributes! { type="submit" }, "Archive")
                         </form>
                     </div>

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         StatusCode,
         content::Json,
@@ -31,7 +31,7 @@ pub fn authorized(cx: &Cx, vault: &KeyVault) -> bool {
 /// The tenants this node keeps keys for. 401 without the cluster's secret.
 #[route(GET)]
 pub async fn get(cx: &Cx) -> Result<Response> {
-    let vault = app_context::<Arc<KeyVault>>(cx);
+    let vault = context::<Arc<KeyVault>>(cx);
     if !authorized(cx, vault) {
         return StatusCode::UNAUTHORIZED.into_response(cx);
     }

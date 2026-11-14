@@ -8,12 +8,12 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
 use super::super::{error_code, pages, pages_url};
-use super::{PageId, page_url};
+use super::{page_id, page_url};
 use crate::app::t::slug::require_tenant;
 
 #[route(POST)]
@@ -22,7 +22,7 @@ pub async fn delete(cx: &Cx) -> Result<SeeOther> {
     access
         .require_permission(cx, PERMISSION_PAGES_MANAGE)
         .await?;
-    let page_id = path_param::<PageId>(cx).to_owned();
+    let page_id = page_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     match pages(&access)?.delete_page(&access.user_id, &page_id).await {
         Ok(_) => Ok(see_other(pages_url(

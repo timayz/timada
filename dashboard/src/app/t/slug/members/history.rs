@@ -8,12 +8,12 @@ use timada_tenancy::{
 };
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
-use super::super::{Slug, TenantNav, require_tenant, role_label};
+use super::super::{TenantNav, require_tenant, role_label, slug};
 use crate::auth::user_labels;
 use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
 use crate::components::table::{
@@ -45,17 +45,13 @@ pub async fn history(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let tenant = access.tenant;
     // One more than shown tells whether an older page exists.
-    let mut rows = member_audit_of_tenant(
-        app_context::<Db>(cx),
-        &tenant.id,
-        query.before,
-        PAGE_SIZE + 1,
-    )
-    .await
-    .map_err(topcoat::Error::from_anyhow)?;
+    let mut rows =
+        member_audit_of_tenant(context::<Db>(cx), &tenant.id, query.before, PAGE_SIZE + 1)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
     let older = (rows.len() as i64 > PAGE_SIZE).then(|| {
         rows.truncate(PAGE_SIZE as usize);
-        href!(history, Slug(tenant.slug.clone()))
+        href!(history, slug: tenant.slug.clone())
             .query(HistoryLink {
                 before: rows[rows.len() - 1].seq,
             })
@@ -77,9 +73,9 @@ pub async fn history(cx: &Cx) -> Result<impl View> {
             )
         })
         .collect();
-    let members_link = href!(super::index, Slug(tenant.slug.clone())).resolve(cx);
+    let members_link = href!(super::index, slug: tenant.slug.clone()).resolve(cx);
     let paged = query.before.is_some();
-    let newest_link = href!(history, Slug(tenant.slug.clone())).resolve(cx);
+    let newest_link = href!(history, slug: tenant.slug.clone()).resolve(cx);
     let title = format!("Members history · {}", tenant.name);
 
     Ok(view! {

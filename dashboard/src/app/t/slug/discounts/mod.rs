@@ -13,12 +13,12 @@ use timada_discounts::{
 use timada_tenancy::{PERMISSION_DISCOUNTS_MANAGE, PERMISSION_DISCOUNTS_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, class, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::components::button::button;
@@ -42,7 +42,7 @@ struct DiscountsQuery {
 }
 
 pub fn discounts_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -107,8 +107,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<DiscountsQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<Db>(cx);
-    let rows = discounts_of_tenant(app_context::<Db>(cx), &tenant.id, false)
+    let pool = context::<Db>(cx);
+    let rows = discounts_of_tenant(context::<Db>(cx), &tenant.id, false)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     // How many paid orders used each code, from the orders' read model.
@@ -146,7 +146,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             table_row(
                                 attrs: attributes! { data-discount=(&row.code) },
                                 table_cell(
-                                    <a class=(class!(LINK, "font-mono")) href=(href!(discount_id::index, Slug(slug.clone()), discount_id::DiscountId(row.id.clone())))><code>(&row.code)</code></a>
+                                    <a class=(class!(LINK, "font-mono")) href=(href!(discount_id::index, slug: slug.clone(), discount_id::discount_id: row.id.clone()))><code>(&row.code)</code></a>
                                 )
                                 table_cell(attrs: attributes! { data-discount-value="" }, (row.value().to_string()))
                                 table_cell((window_of(row)))
@@ -165,7 +165,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             if can_manage {
                 section_card(
                     title: Some("Create a discount"),
-                    <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                    <form method="post" action=(href!(create::create, slug: slug.clone())) class="flex max-w-xl flex-col gap-4">
                         field(
                             field_label(attrs: attributes! { for="new-discount-code" }, "Code")
                             input(attrs: attributes! {

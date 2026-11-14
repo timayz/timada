@@ -11,7 +11,7 @@ pub mod parcels;
 use topcoat::{
     Result,
     context::Cx,
-    router::{module_param, path_param, route},
+    router::{module_param, route},
 };
 
 use super::super::carts::{Answer, deliver, gateway};
@@ -25,5 +25,5 @@ pub async fn index(cx: &Cx) -> Result<Answer> {
         Ok(orders) => orders,
         Err(answer) => return Ok(answer),
     };
-    deliver(store_carts::order(&orders, path_param::<OrderId>(cx)).await)
+    deliver(store_carts::order(&orders, order_id(cx)).await)
 }

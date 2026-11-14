@@ -8,15 +8,15 @@ pub mod delete;
 use timada_tenancy::{MailServerSettings, PERMISSION_MAIL_MANAGE};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    router::{error::not_found, href, module_param, page, path_param, query_params},
+    context::{Cx, context},
+    router::{error::not_found, href, module_param, page, query_params},
     view::{View, attributes, view},
 };
 
 use super::{picked_for, security_label, server_form};
 use crate::app::auth::Flash;
 use crate::app::t::slug::mail::{mail_url, own_address};
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::auth::require_user;
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::shop_mail::ShopMail;
@@ -37,14 +37,14 @@ pub fn server_url(
     error: Option<&str>,
     message: Option<&str>,
 ) -> String {
-    href!(index, Slug(slug.to_owned()), ServerId(server_id.to_owned()))
+    href!(index, slug: slug.to_owned(), server_id: server_id.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
 
 /// The server named in the URL, or 404.
 fn require_server(cx: &Cx, access: &TenantAccess) -> Result<MailServerSettings> {
-    let id = path_param::<ServerId>(cx);
+    let id = server_id(cx);
     access
         .tenant
         .mail_server(id)
@@ -63,7 +63,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let server = require_server(cx, &access)?;
     let user = require_user(cx).await?;
     let test_to = own_address(user);
-    let enabled = app_context::<ShopMail>(cx).enabled();
+    let enabled = context::<ShopMail>(cx).enabled();
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let label = server.label().to_owned();
@@ -71,8 +71,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let back = mail_url(cx, &slug, None, None);
     let change_action = href!(
         change::change,
-        Slug(slug.clone()),
-        ServerId(server.id.clone())
+        slug: slug.clone(),
+        server_id: server.id.clone()
     )
     .resolve(cx);
     let (shop_mails, marketing) = picked_for(&tenant, &server.id);
@@ -133,7 +133,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             section_card(
                 title: Some("Delete this server"),
                 description: Some(after_delete),
-                <form method="post" action=(href!(delete::delete, Slug(slug.clone()), ServerId(server.id.clone())))>
+                <form method="post" action=(href!(delete::delete, slug: slug.clone(), server_id: server.id.clone()))>
                     button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Delete this server")
                 </form>
             )

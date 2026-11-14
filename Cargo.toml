@@ -12,13 +12,13 @@ authors = ["timada team"]
 
 [workspace.dependencies]
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "signal", "fs"] }
-topcoat = { version = "=0.11.0", features = ["tailwind", "anyhow", "mail", "mail-smtp", "fs", "multipart"] }
+topcoat = { version = "=0.12.1", features = ["tailwind", "anyhow", "mail", "mail-smtp", "fs", "multipart"] }
 # The standalone crates, for a library crate (a library names them directly;
 # only an application depends on the facade).
-topcoat-core = { version = "=0.11.0", features = ["anyhow"] }
-topcoat-router = "=0.11.0"
-topcoat-view = "=0.11.0"
-topcoat-view-macro = "=0.11.0"
+topcoat-core = { version = "=0.12.1", features = ["anyhow"] }
+topcoat-router = "=0.12.1"
+topcoat-view = "=0.12.1"
+topcoat-view-macro = "=0.12.1"
 # `sqlite` stays while the read models move crate by crate to the store's file
 # (dropped by the last PR of the series); `turso` + `turso-fts` are the store.
 evento = { git = "https://github.com/timayz/evento", branch = "alpha", features = ["turso", "turso-fts", "remote", "cluster"] }

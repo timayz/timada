@@ -2,14 +2,14 @@ use timada_catalog::live_child_count;
 use timada_tenancy::PERMISSION_PRODUCTS_MANAGE;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{CategoryId, act, category_url};
+use super::{act, category_id, category_url};
 use crate::app::t::slug::require_tenant;
 use crate::db::Db;
 
@@ -22,8 +22,8 @@ pub async fn archive(cx: &Cx) -> Result<SeeOther> {
     access
         .require_permission(cx, PERMISSION_PRODUCTS_MANAGE)
         .await?;
-    let category_id = path_param::<CategoryId>(cx);
-    let children = live_child_count(app_context::<Db>(cx), &access.tenant.id, category_id)
+    let category_id = category_id(cx);
+    let children = live_child_count(context::<Db>(cx), &access.tenant.id, category_id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     if children > 0 {

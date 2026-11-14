@@ -3,15 +3,15 @@ use std::sync::Arc;
 use serde::Deserialize;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Form,
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{TenantId, admin_tenant_url};
+use super::{admin_tenant_url, tenant_id};
 use crate::app::admin::require_admin;
 use crate::app::tenants::{error_code, tenancy};
 use crate::store_api::StoreConnections;
@@ -28,10 +28,10 @@ struct SuspendForm {
 #[route(POST)]
 pub async fn suspend(cx: &Cx, Form(form): Form<SuspendForm>) -> Result<SeeOther> {
     require_admin(cx).await?;
-    let id = path_param::<TenantId>(cx);
+    let id = tenant_id(cx);
     match tenancy(cx).suspend_tenant(id, &form.reason).await {
         Ok(()) => {
-            app_context::<Arc<StoreConnections>>(cx).close_tenant(id);
+            context::<Arc<StoreConnections>>(cx).close_tenant(id);
             Ok(see_other(admin_tenant_url(
                 cx,
                 id,

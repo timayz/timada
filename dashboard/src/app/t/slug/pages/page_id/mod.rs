@@ -27,18 +27,18 @@ use timada_pages::{
 use timada_tenancy::{PERMISSION_PAGES_MANAGE, PERMISSION_PAGES_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Form,
         error::{SeeOther, not_found, see_other},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{View, attributes, class, component, view},
 };
 
 use super::{error_code, pages, pages_url, status_of};
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::card::CARD;
 use crate::components::field::{field, field_description, field_label};
@@ -62,14 +62,14 @@ pub fn page_url(
     error: Option<&str>,
     message: Option<&str>,
 ) -> String {
-    href!(index, Slug(slug.to_owned()), PageId(page_id.to_owned()))
+    href!(index, slug: slug.to_owned(), page_id: page_id.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
 
 /// The page the URL names, or 404.
 pub async fn require_page(access: &TenantAccess, cx: &Cx) -> Result<PageState> {
-    let id = path_param::<PageId>(cx);
+    let id = page_id(cx);
     pages(access)?
         .load_page(id)
         .await
@@ -92,7 +92,7 @@ where
     access
         .require_permission(cx, PERMISSION_PAGES_MANAGE)
         .await?;
-    let page_id = path_param::<PageId>(cx).to_owned();
+    let page_id = page_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let gateway = pages(&access)?;
     match run(&gateway, &access.user_id, &page_id).await {
@@ -122,7 +122,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page = require_page(&access, cx).await?;
     let can_manage = access.can(cx, PERMISSION_PAGES_MANAGE).await?;
     let nav = TenantNav::of(cx, &access).await?;
-    let media_url = app_context::<Arc<Media>>(cx).tenant_url(&access.tenant.id);
+    let media_url = context::<Arc<Media>>(cx).tenant_url(&access.tenant.id);
     let preview = preview_document(&page.title, &render_markdown(&page.body, &media_url));
     let tenant = access.tenant;
     let slug = tenant.slug.clone();
@@ -194,7 +194,7 @@ pub async fn submit(cx: &Cx, Form(form): Form<EditForm>) -> Result<impl View> {
         }
     }
     let nav = TenantNav::of(cx, &access).await?;
-    let media_url = app_context::<Arc<Media>>(cx).tenant_url(&access.tenant.id);
+    let media_url = context::<Arc<Media>>(cx).tenant_url(&access.tenant.id);
     let preview = preview_document(&form.title, &render_markdown(&body, &media_url));
     let tenant = access.tenant;
     let slug = tenant.slug.clone();
@@ -244,7 +244,7 @@ fn preview_document(title: &str, html: &str) -> String {
 
 /// The short guide under the content field.
 #[component]
-pub async fn markdown_hint() -> Result<impl View> {
+pub async fn markdown_hint(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         field_description(
             attrs: attributes! { id="page-body-hint" },
@@ -259,6 +259,7 @@ pub async fn markdown_hint() -> Result<impl View> {
 /// page.
 #[component]
 async fn page_screen(
+    cx: &Cx,
     slug: &str,
     page: &PageState,
     title: &str,
@@ -275,7 +276,7 @@ async fn page_screen(
                 title: Some("Content"),
                 attrs: attributes! { class="mb-0" },
                 if can_manage {
-                    <form method="post" action=(href!(submit, Slug(slug.to_owned()), PageId(id.to_owned()))) class="flex flex-col gap-4" data-page-form="">
+                    <form method="post" action=(href!(submit, slug: slug.to_owned(), page_id: id.to_owned())) class="flex flex-col gap-4" data-page-form="">
                         field(
                             field_label(attrs: attributes! { for="page-title" }, "Title")
                             input(attrs: attributes! { id="page-title" name="title" required="" maxlength=(MAX_TITLE_LEN) value=(title) })
@@ -314,19 +315,19 @@ async fn page_screen(
                     <h2 class="text-base font-semibold">"Publication"</h2>
                     if page.published {
                         <p class="text-sm text-muted-foreground">"Shown wherever the storefront links to " <code>(&page.slug)</code> "."</p>
-                        <form method="post" action=(href!(unpublish::unpublish, Slug(slug.to_owned()), PageId(id.to_owned())))>
+                        <form method="post" action=(href!(unpublish::unpublish, slug: slug.to_owned(), page_id: id.to_owned()))>
                             button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Unpublish")
                         </form>
                     } else {
                         <p class="text-sm text-muted-foreground">"A draft: only the back office sees it."</p>
-                        <form method="post" action=(href!(publish::publish, Slug(slug.to_owned()), PageId(id.to_owned())))>
+                        <form method="post" action=(href!(publish::publish, slug: slug.to_owned(), page_id: id.to_owned()))>
                             button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Publish")
                         </form>
                     }
                     <p class="text-xs text-muted-foreground">"Created " (format_time(page.created_at)) ", updated " (format_time(page.updated_at)) "."</p>
                 </div>
 
-                <form method="post" action=(href!(seo::seo, Slug(slug.to_owned()), PageId(id.to_owned()))) class=(class!(CARD, "gap-4 px-6"))>
+                <form method="post" action=(href!(seo::seo, slug: slug.to_owned(), page_id: id.to_owned())) class=(class!(CARD, "gap-4 px-6"))>
                     <h2 class="text-base font-semibold">"Search engines"</h2>
                     field(
                         field_label(attrs: attributes! { for="page-meta-title" }, "Title")
@@ -350,7 +351,7 @@ async fn page_screen(
                     <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save for search engines")</div>
                 </form>
 
-                <form method="post" action=(href!(rename::rename, Slug(slug.to_owned()), PageId(id.to_owned()))) class=(class!(CARD, "gap-4 px-6"))>
+                <form method="post" action=(href!(rename::rename, slug: slug.to_owned(), page_id: id.to_owned())) class=(class!(CARD, "gap-4 px-6"))>
                     <h2 class="text-base font-semibold">"Address"</h2>
                     field(
                         field_label(attrs: attributes! { for="page-slug" }, "Address")
@@ -375,7 +376,7 @@ async fn page_screen(
                         <li class="flex items-center gap-3 py-2" data-page-image=(image.file())>
                             <img src=(Picture::url(media_url, &image.id, Rendition::Listing)) alt="" class="size-12 shrink-0 rounded border border-border object-cover">
                             <code class="min-w-0 flex-1 truncate text-xs" data-page-image-snippet="">"![](" (image.file()) ")"</code>
-                            <form method="post" action=(href!(remove_image::remove_image, Slug(slug.to_owned()), PageId(id.to_owned())))>
+                            <form method="post" action=(href!(remove_image::remove_image, slug: slug.to_owned(), page_id: id.to_owned()))>
                                 <input type="hidden" name="image_id" value=(&image.id)>
                                 button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Remove")
                             </form>
@@ -386,7 +387,7 @@ async fn page_screen(
                     <p class="mt-4 text-sm text-muted-foreground">"This page carries as many pictures as it can. Remove one to add another."</p>
                 } else {
                     <form method="post" enctype="multipart/form-data" class="mt-4 flex max-w-xl flex-col gap-4"
-                        action=(href!(upload::upload, Slug(slug.to_owned()), PageId(id.to_owned())))>
+                        action=(href!(upload::upload, slug: slug.to_owned(), page_id: id.to_owned()))>
                         field(
                             field_label(attrs: attributes! { for="page-image" }, "Add a picture")
                             input(attrs: attributes! {
@@ -399,7 +400,7 @@ async fn page_screen(
                 }
             )
 
-            <form method="post" action=(href!(delete::delete, Slug(slug.to_owned()), PageId(id.to_owned()))) class="flex flex-wrap items-center gap-3">
+            <form method="post" action=(href!(delete::delete, slug: slug.to_owned(), page_id: id.to_owned())) class="flex flex-wrap items-center gap-3">
                 button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Delete page")
                 <p class="text-sm text-muted-foreground">"For good: its address is free again and its pictures are deleted."</p>
             </form>

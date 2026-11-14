@@ -14,8 +14,8 @@ use timada_tenancy::{
 };
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    mail::{Mailbox, Transport, mail},
+    context::{Cx, context},
+    mail::{Mail, Mailbox, Transport},
     view::{View, attributes, component, view},
 };
 
@@ -90,7 +90,7 @@ pub async fn tested(
     form: ServerForm,
     saved: Option<&MailServerSettings>,
 ) -> Result<std::result::Result<SaveMailServer, &'static str>> {
-    let shop_mail = app_context::<ShopMail>(cx);
+    let shop_mail = context::<ShopMail>(cx);
     if !shop_mail.enabled() {
         return Ok(Err("mail_servers_disabled"));
     }
@@ -151,16 +151,19 @@ pub async fn tested(
     let transport = server.transport().map_err(topcoat::Error::from_anyhow)?;
     // The body owns what it shows.
     let shown_host = host.clone();
-    let test = mail! {
-        from: from,
-        to: test_to,
-        subject: "Your shop's mail server works",
-        html: {
-            cx =>
-            <p>"This test mail went out through " <strong>(&shown_host)</strong> "."</p>
-            <p>"Pick what it sends on your shop's Mail page."</p>
-        },
-    }?;
+    let test = Mail::builder()
+        .from(from)
+        .to([test_to])
+        .subject("Your shop's mail server works")
+        .html(
+            cx,
+            view! {
+                <p>"This test mail went out through " <strong>(&shown_host)</strong> "."</p>
+                <p>"Pick what it sends on your shop's Mail page."</p>
+            },
+        )
+        .await?
+        .build()?;
     if let Err(err) = transport.send(cx, test).await {
         tracing::info!(tenant = %tenant.slug, %err, "a test mail did not go out");
         return Ok(Err(if err.is::<NoAnswer>() {
@@ -217,6 +220,7 @@ pub fn picked_for(tenant: &TenantState, server_id: &str) -> (bool, bool) {
 /// `test_to` first.
 #[component]
 pub async fn server_form(
+    cx: &Cx,
     action: String,
     current: &MailServerSettings,
     shop_name: &str,

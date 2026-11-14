@@ -18,13 +18,13 @@ use timada_tenancy::{
 };
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::auth::cookies::{ApiKeyReveal, api_key_reveal, is_fresh};
 use crate::auth::{now, user_labels};
@@ -62,7 +62,7 @@ struct ApiKeysQuery {
 }
 
 pub fn api_keys_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -85,13 +85,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<ApiKeysQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let reveal = take_reveal(cx);
-    let store_api = app_context::<Config>(cx).store_api.clone();
-    let keys = api_keys_of_tenant(app_context::<Db>(cx), &access.tenant.id)
+    let store_api = context::<Config>(cx).store_api.clone();
+    let keys = api_keys_of_tenant(context::<Db>(cx), &access.tenant.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    let media_url = app_context::<std::sync::Arc<Media>>(cx).tenant_url(&access.tenant.id);
+    let media_url = context::<std::sync::Arc<Media>>(cx).tenant_url(&access.tenant.id);
     // What the shop's pictures take, against what they may.
-    let usage = app_context::<std::sync::Arc<crate::media::Quota>>(cx)
+    let usage = context::<std::sync::Arc<crate::media::Quota>>(cx)
         .usage_of(&access.tenant)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -103,7 +103,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         ),
         None => crate::media::quota::format_bytes(usage.used),
     };
-    let api_url = app_context::<Config>(cx)
+    let api_url = context::<Config>(cx)
         .server
         .url
         .as_str()
@@ -171,7 +171,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             section_card(
                 title: Some("Storefront address"),
                 description: Some("The confirmation mailed to a shopper after payment links to the order at this address followed by /orders/ and the order's id. Leave it blank to mail confirmations without a link."),
-                <form method="post" action=(href!(storefront::storefront, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                <form method="post" action=(href!(storefront::storefront, slug: slug.clone())) class="flex max-w-xl flex-col gap-4">
                     field(
                         field_label(attrs: attributes! { for="storefront-url" }, "Where shoppers find the shop")
                         input(attrs: attributes! {
@@ -211,7 +211,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_cell(
                                     attrs: attributes! { class="whitespace-normal" data-api-key-scopes=(&key.scope_list) },
                                     if key.is_active() {
-                                        <form method="post" action=(href!(scopes::scopes, Slug(slug.clone()))) class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                        <form method="post" action=(href!(scopes::scopes, slug: slug.clone())) class="flex flex-wrap items-center gap-x-3 gap-y-1">
                                             <input type="hidden" name="key_id" value=(&key.id)>
                                             for scope in API_KEY_SCOPES {
                                                 <label class="flex items-center gap-1.5" title=(describe_api_key_scope(scope))>
@@ -240,7 +240,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_cell(
                                     attrs: attributes! { class="text-right" },
                                     if key.is_active() {
-                                        <form method="post" action=(href!(revoke::revoke, Slug(slug.clone())))>
+                                        <form method="post" action=(href!(revoke::revoke, slug: slug.clone()))>
                                             <input type="hidden" name="key_id" value=(&key.id)>
                                             button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Revoke")
                                         </form>
@@ -254,7 +254,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             section_card(
                 title: Some("Create a key"),
-                <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                <form method="post" action=(href!(create::create, slug: slug.clone())) class="flex max-w-xl flex-col gap-4">
                     field(
                         field_label(attrs: attributes! { for="new-key-label" }, "Label")
                         input(attrs: attributes! {

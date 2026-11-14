@@ -18,7 +18,7 @@ use topcoat::{
     context::Cx,
     router::{
         error::{not_found, redirect},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{View, view},
 };
@@ -49,7 +49,7 @@ pub fn cancelled_url(cx: &Cx, order_id: &str, error: Option<&str>) -> String {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<&'a str>,
     }
-    href!(index, OrderId(order_id.to_owned()))
+    href!(index, order_id: order_id.to_owned())
         .query(Link {
             cancelled: "1",
             error,
@@ -95,7 +95,7 @@ fn review_url(
     };
     format!(
         "{}#review-{product}",
-        href!(index, OrderId(order_id.to_owned()))
+        href!(index, order_id: order_id.to_owned())
             .query(link)
             .resolve(cx)
     )
@@ -115,12 +115,12 @@ struct LineReview {
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    let order_id = path_param::<OrderId>(cx);
+    let order_id = order_id(cx);
     let Some(order) = order(cx, order_id).await? else {
         return Err(not_found().into());
     };
     if !holds_order(cx, order_id).await? {
-        let here = href!(index, OrderId(order_id.to_owned())).resolve(cx);
+        let here = href!(index, order_id: order_id.to_owned()).resolve(cx);
         return Err(redirect(sign_in_url(cx, Some(&here), None)).into());
     }
     let query = query_params::<OrderQuery>(cx)?;
@@ -206,7 +206,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <details class="order-cancel" data-order-cancel="">
                         <summary>"Annuler ma commande"</summary>
                         <p>"Tant que la boutique ne l'a pas commandée à son fournisseur, votre commande s'annule ici, et rien n'est débité."</p>
-                        <form method="post" action=(href!(cancel::cancel, OrderId(order_key.clone())))>
+                        <form method="post" action=(href!(cancel::cancel, order_id: order_key.clone()))>
                             <button>"Confirmer l'annulation"</button>
                         </form>
                     </details>
@@ -316,7 +316,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 if review.status == ReviewStatus::Pending {
                                     <details class="review-edit" data-review-edit=(&line.product_id) open=(query.product.as_deref() == Some(line.product_id.as_str()) && query.error.is_some())>
                                         <summary>"Modifier mon avis"</summary>
-                                        <form method="post" enctype="multipart/form-data" action=(href!(revise::revise, OrderId(order_key.clone())))>
+                                        <form method="post" enctype="multipart/form-data" action=(href!(revise::revise, order_id: order_key.clone()))>
                                             <input type="hidden" name="product_id" value=(&line.product_id)>
                                             <fieldset>
                                                 <legend>"Votre note"</legend>
@@ -356,7 +356,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     </details>
                                 }
                             } else {
-                                <form method="post" enctype="multipart/form-data" action=(href!(review::review, OrderId(order_key.clone())))>
+                                <form method="post" enctype="multipart/form-data" action=(href!(review::review, order_id: order_key.clone()))>
                                     <input type="hidden" name="product_id" value=(&line.product_id)>
                                     <fieldset>
                                         <legend>"Votre note"</legend>
@@ -394,7 +394,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <ul data-documents="">
                     for doc in &documents {
                         <li>
-                            <a data-document=(&doc.label) href=(href!(documents::document_id::pdf, OrderId(order_key.clone()), documents::document_id::DocumentId(doc.document_id.clone())))>
+                            <a data-document=(&doc.label) href=(href!(documents::document_id::pdf, order_id: order_key.clone(), documents::document_id::document_id: doc.document_id.clone()))>
                                 (if doc.kind == DocumentKind::CreditNote { "Avoir " } else { "Facture " })
                                 (&doc.label)
                             </a>

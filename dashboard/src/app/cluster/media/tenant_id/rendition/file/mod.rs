@@ -6,14 +6,12 @@ use std::sync::Arc;
 use bytes::Bytes;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    router::{
-        StatusCode, header::AUTHORIZATION, module_param, path_param, request::headers, route,
-    },
+    context::{Cx, context},
+    router::{StatusCode, header::AUTHORIZATION, module_param, request::headers, route},
 };
 
-use super::super::TenantId;
-use super::Rendition;
+use super::super::tenant_id;
+use super::rendition;
 use crate::media::Media;
 
 module_param!(pub file);
@@ -22,13 +20,13 @@ module_param!(pub file);
 /// bytes that are not a rendition of a picture.
 #[route(PUT)]
 pub async fn put(cx: &Cx, bytes: Bytes) -> Result<StatusCode> {
-    let media = app_context::<Arc<Media>>(cx);
+    let media = context::<Arc<Media>>(cx);
     if !media.authorizes(headers(cx).get(AUTHORIZATION).map(|value| value.as_bytes())) {
         return Ok(StatusCode::UNAUTHORIZED);
     }
-    let tenant_id = path_param::<TenantId>(cx);
-    let rendition = path_param::<Rendition>(cx);
-    let file = path_param::<File>(cx);
+    let tenant_id = tenant_id(cx);
+    let rendition = rendition(cx);
+    let file = file(cx);
     let stored = media
         .accept(tenant_id, rendition, file, &bytes)
         .await

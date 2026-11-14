@@ -1,6 +1,6 @@
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{error::redirect, href, page, query_params},
     view::{View, attributes, class, view},
 };
@@ -24,7 +24,7 @@ pub async fn login(cx: &Cx) -> Result<impl View> {
         return Err(redirect(super::home_url(cx)).into());
     }
     let query = query_params::<LoginQuery>(cx)?;
-    let providers = app_context::<Providers>(cx);
+    let providers = context::<Providers>(cx);
 
     Ok(view! {
         auth_document(
@@ -61,7 +61,7 @@ pub async fn login(cx: &Cx) -> Result<impl View> {
                     <p class="flex items-center gap-3 text-xs text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">"Or"</p>
                     <div class="flex flex-col gap-2">
                         for provider in providers.iter() {
-                            <form method="post" action=(href!(super::oauth2::provider::start, super::oauth2::provider::Provider(provider.name.clone())))>
+                            <form method="post" action=(href!(super::oauth2::provider::start, super::oauth2::provider::provider: provider.name.clone()))>
                                 <input type="hidden" name="mode" value="create_user_or_login">
                                 button(variant: ButtonVariant::Secondary, attrs: attributes! { class="w-full" },
                                     "Continue with " (&provider.label)

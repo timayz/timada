@@ -2,7 +2,7 @@ use serde::Deserialize;
 use timada_identity::{AddPasskey, VerifiedPasskey};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{content::Json, error::bad_request, route},
 };
 use webauthn_rs::prelude::{RegisterPublicKeyCredential, Webauthn};
@@ -25,7 +25,7 @@ struct FinishRequest {
 
 #[route(POST)]
 pub async fn finish(cx: &Cx, Json(req): Json<FinishRequest>) -> Result<Json<Done>> {
-    let webauthn = app_context::<Webauthn>(cx);
+    let webauthn = context::<Webauthn>(cx);
     let store = passkey_registration_flow(cx);
     let flow = match store.parse() {
         Ok(Some(store)) => {

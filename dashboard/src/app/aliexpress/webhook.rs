@@ -13,7 +13,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{StatusCode, request::headers, route},
 };
 
@@ -23,18 +23,13 @@ use crate::cluster::Executor;
 
 #[route(POST)]
 pub async fn receive(cx: &Cx, body: Bytes) -> Result<StatusCode> {
-    let aliexpress = app_context::<Arc<Aliexpress>>(cx);
+    let aliexpress = context::<Arc<Aliexpress>>(cx);
     let authorization = headers(cx)
         .get("authorization")
         .and_then(|value| value.to_str().ok());
-    let outcome = handle(
-        aliexpress,
-        app_context::<Executor>(cx),
-        &body,
-        authorization,
-    )
-    .await
-    .map_err(topcoat::Error::from_anyhow)?;
+    let outcome = handle(aliexpress, context::<Executor>(cx), &body, authorization)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     Ok(match outcome {
         Outcome::Accepted { .. } | Outcome::Ignored => StatusCode::OK,
         Outcome::Malformed => StatusCode::BAD_REQUEST,

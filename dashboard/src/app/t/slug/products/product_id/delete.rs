@@ -7,14 +7,14 @@ use std::sync::Arc;
 use timada_tenancy::PERMISSION_PRODUCTS_MANAGE;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{ProductId, product_url};
+use super::{product_id, product_url};
 use crate::app::t::slug::products::{catalog, error_code, products_url};
 use crate::app::t::slug::require_tenant;
 use crate::db::Db;
@@ -26,7 +26,7 @@ pub async fn delete(cx: &Cx) -> Result<SeeOther> {
     access
         .require_permission(cx, PERMISSION_PRODUCTS_MANAGE)
         .await?;
-    let product_id = path_param::<ProductId>(cx).to_owned();
+    let product_id = product_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let gateway = catalog(&access)?;
     let product = match gateway.delete_product(&access.user_id, &product_id).await {
@@ -44,14 +44,14 @@ pub async fn delete(cx: &Cx) -> Result<SeeOther> {
     };
     // This node's copies of its pictures go now; the other nodes' go when
     // the event reaches them.
-    let media = app_context::<Arc<Media>>(cx);
+    let media = context::<Arc<Media>>(cx);
     for image in &product.images {
         media.remove_image(&access.tenant.id, &image.id).await;
     }
     // Like an archived product, a deleted one is no longer kept in step
     // with the AliExpress item it came from, so the item can be imported
     // again.
-    let db = app_context::<Db>(cx);
+    let db = context::<Db>(cx);
     let link = timada_aliexpress::link_of_product(db, &access.tenant.id, &product_id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;

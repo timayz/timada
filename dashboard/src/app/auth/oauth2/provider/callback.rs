@@ -1,14 +1,14 @@
 use timada_identity::{CompleteOAuth2, OAuth2Mode};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, bad_request, see_other},
-        path_param, query_params, route,
+        query_params, route,
     },
 };
 
-use super::Provider;
+use super::provider;
 use crate::app::auth::{account_url, error_code, login_url, signed_in_url};
 use crate::auth::{
     cookies::{is_fresh, oidc_flow},
@@ -29,9 +29,9 @@ struct CallbackQuery {
 /// `state` matches the one sealed in the flow cookie.
 #[route(GET)]
 pub async fn callback(cx: &Cx) -> Result<SeeOther> {
-    let name = path_param::<Provider>(cx);
+    let name = provider(cx);
     let query = query_params::<CallbackQuery>(cx)?;
-    let providers = app_context::<Providers>(cx);
+    let providers = context::<Providers>(cx);
 
     // One shot: whatever happens next, the flow cannot be replayed.
     let store = oidc_flow(cx);

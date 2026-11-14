@@ -7,7 +7,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         StatusCode,
         content::Json,
@@ -24,7 +24,7 @@ use crate::rate_limit::RateLimiter;
 /// secret, 400 for a body that is not a question.
 #[route(POST)]
 pub async fn post(cx: &Cx, bytes: Bytes) -> Result<Response> {
-    let limiter = app_context::<Arc<RateLimiter>>(cx);
+    let limiter = context::<Arc<RateLimiter>>(cx);
     if !limiter.authorizes(headers(cx).get(AUTHORIZATION).map(|value| value.as_bytes())) {
         return StatusCode::UNAUTHORIZED.into_response(cx);
     }

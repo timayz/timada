@@ -4,11 +4,11 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{Token, invitation_url};
+use super::{invitation_url, token};
 use crate::app::auth::home_url_with_message;
 use crate::app::t::slug::tenant_url;
 use crate::app::tenants::{error_code, tenancy};
@@ -18,7 +18,7 @@ use crate::auth::{cookies::invite_flow, now, require_user};
 #[route(POST)]
 pub async fn accept(cx: &Cx) -> Result<SeeOther> {
     let user = require_user(cx).await?;
-    let token = path_param::<Token>(cx);
+    let token = token(cx);
     match tenancy(cx)
         .accept_invitation(
             AcceptInvitation {

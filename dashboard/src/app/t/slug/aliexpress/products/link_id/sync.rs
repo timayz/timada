@@ -4,11 +4,11 @@ use std::time::Duration;
 use timada_tenancy::PERMISSION_ALIEXPRESS_MANAGE;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    router::{content::Form, error::SeeOther, path_param, route},
+    context::{Cx, context},
+    router::{content::Form, error::SeeOther, route},
 };
 
-use super::{Back, LinkId, back_to};
+use super::{Back, back_to, link_id};
 use crate::aliexpress::{Aliexpress, SyncMode, SyncResult};
 use crate::app::t::slug::require_tenant;
 use crate::db::Db;
@@ -27,7 +27,7 @@ pub async fn sync(cx: &Cx, Form(form): Form<Back>) -> Result<SeeOther> {
     access
         .require_permission(cx, PERMISSION_ALIEXPRESS_MANAGE)
         .await?;
-    let link_id = path_param::<LinkId>(cx).to_owned();
+    let link_id = link_id(cx).to_owned();
     let not_connected = |cx: &Cx| {
         back_to(
             cx,
@@ -37,9 +37,9 @@ pub async fn sync(cx: &Cx, Form(form): Form<Back>) -> Result<SeeOther> {
             None,
         )
     };
-    let aliexpress = app_context::<Arc<Aliexpress>>(cx).clone();
+    let aliexpress = context::<Arc<Aliexpress>>(cx).clone();
     let store = access.executor()?.clone();
-    let db = app_context::<Db>(cx).clone();
+    let db = context::<Db>(cx).clone();
     let Some((tenant, company)) = aliexpress
         .connected_shop(&store, &access.tenant.id, crate::auth::now())
         .await

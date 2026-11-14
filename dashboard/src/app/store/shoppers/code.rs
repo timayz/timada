@@ -17,7 +17,7 @@ use serde::Deserialize;
 use timada_shoppers::SHOPPER_TOO_MANY_REQUESTS;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         StatusCode,
         content::Form,
@@ -48,8 +48,8 @@ pub async fn code(cx: &Cx, Form(form): Form<CodeForm>) -> Result<Answer> {
         Err(code) => return status(code),
     };
     let allowed = allow_shopper_code(
-        app_context::<Arc<RateLimiter>>(cx),
-        &app_context::<Config>(cx).store,
+        context::<Arc<RateLimiter>>(cx),
+        &context::<Config>(cx).store,
         &access.key.id,
         &access.tenant.id,
         headers(cx)

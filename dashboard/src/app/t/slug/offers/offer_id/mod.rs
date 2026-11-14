@@ -11,7 +11,7 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, see_other},
-        module_param, path_param,
+        module_param,
     },
 };
 
@@ -35,7 +35,7 @@ where
     access
         .require_permission(cx, PERMISSION_DISCOUNTS_MANAGE)
         .await?;
-    let offer_id = path_param::<OfferId>(cx).to_owned();
+    let offer_id = offer_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let gateway = discounts(&access)?;
     match run(&gateway, &access.user_id, &offer_id).await {

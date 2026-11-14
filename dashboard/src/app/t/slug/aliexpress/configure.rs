@@ -4,7 +4,7 @@ use std::sync::Arc;
 use timada_tenancy::{ConfigureAliexpress, PERMISSION_ALIEXPRESS_MANAGE};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Form,
         error::{SeeOther, see_other},
@@ -28,7 +28,7 @@ pub async fn configure(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Re
         .await?;
     let slug = access.tenant.slug.as_str();
     let refused = |code: &str| Ok(see_other(aliexpress_url(cx, slug, Some(code), None)));
-    if !app_context::<Arc<Aliexpress>>(cx).enabled() {
+    if !context::<Arc<Aliexpress>>(cx).enabled() {
         return refused("aliexpress_disabled");
     }
     let pricing = match pricing_of_form(&form) {

@@ -1,10 +1,10 @@
 use topcoat::{
     Result,
     context::Cx,
-    router::{content::Form, error::SeeOther, path_param, route},
+    router::{content::Form, error::SeeOther, route},
 };
 
-use super::OptionId;
+use super::option_id;
 use crate::app::t::slug::products::product_id::options::define::{DefineForm, lines};
 use crate::app::t::slug::products::product_id::{Tab, act};
 
@@ -12,7 +12,7 @@ use crate::app::t::slug::products::product_id::{Tab, act};
 /// form, so a merchant edits both at once.
 #[route(POST)]
 pub async fn values(cx: &Cx, Form(form): Form<DefineForm>) -> Result<SeeOther> {
-    let option_id = path_param::<OptionId>(cx).to_owned();
+    let option_id = option_id(cx).to_owned();
     act(
         cx,
         Tab::Variants,

@@ -17,7 +17,7 @@
 use timada_storefront::{STORE_UNAVAILABLE, is_store_unavailable, menu};
 use topcoat::{
     Result,
-    context::{Cx, try_request_context},
+    context::{Cx, try_context},
     router::{
         Body, HeaderValue, Layer, LayerFuture, Method, Next, Path, StatusCode,
         error::{rewrite, see_other},
@@ -57,7 +57,7 @@ impl Layer for UnavailablePage {
     fn handle<'a>(&'a self, cx: &'a Cx, body: Body, next: Next<'a>) -> LayerFuture<'a> {
         Box::pin(async move {
             let result = next.run(cx, body).await;
-            if try_request_context::<StoreAway>(cx).is_some() {
+            if try_context::<StoreAway>(cx).is_some() {
                 // The rewritten dispatch: an answer about an outage, which
                 // nothing should keep or index.
                 let mut response = result?;
@@ -99,7 +99,7 @@ impl Layer for UnavailablePage {
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    let Some(away) = try_request_context::<StoreAway>(cx) else {
+    let Some(away) = try_context::<StoreAway>(cx) else {
         return Err(see_other(href!(crate::app::index).resolve(cx)).into());
     };
     let nav = menu(cx).await?;

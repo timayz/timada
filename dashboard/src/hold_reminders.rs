@@ -23,7 +23,7 @@ use timada_identity::users_by_ids;
 use timada_orders::{HoldReminderDue, OrderState, hold_reminders_due};
 use timada_tenancy::{PERMISSION_ORDERS_MANAGE, TenantState};
 use tokio::task::JoinHandle;
-use topcoat::context::{AppContext, Cx};
+use topcoat::context::{ContextMap, Cx};
 
 use crate::cluster::Executor;
 use crate::db::Db;
@@ -56,12 +56,12 @@ pub trait Remind: Send + Sync {
 }
 
 /// The platform's transport and sender.
-pub struct PlatformMail(pub Arc<AppContext>);
+pub struct PlatformMail(pub Arc<ContextMap>);
 
 #[async_trait::async_trait]
 impl Remind for PlatformMail {
     async fn remind(&self, reminder: Reminder<'_>) -> anyhow::Result<()> {
-        let cx = Cx::new(self.0.clone());
+        let cx = Cx::new().with_shared(self.0.clone());
         for to in reminder.recipients {
             if let Err(err) = send_hold_lapse_reminder(
                 &cx,

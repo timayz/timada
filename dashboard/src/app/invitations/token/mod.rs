@@ -10,12 +10,12 @@ use topcoat::{
     Result,
     context::Cx,
     icon::icon,
-    router::{href, module_param, page, path_param, query_params},
+    router::{href, module_param, page, query_params},
     view::{View, attributes, class, view},
 };
 
 use crate::app::auth::{Flash, login_url, register_url};
-use crate::app::t::slug::{Slug, role_label};
+use crate::app::t::slug::{role_label, slug};
 use crate::app::tenants::tenancy;
 use crate::auth::{
     cookies::{InviteFlow, invite_flow},
@@ -33,7 +33,7 @@ struct InvitationQuery {
 }
 
 pub fn invitation_url(cx: &Cx, token: &str, error: Option<&str>) -> String {
-    href!(index, Token(token.to_owned()))
+    href!(index, token: token.to_owned())
         .query(Flash {
             error,
             message: None,
@@ -67,7 +67,7 @@ pub async fn load_invitation(
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    let token = path_param::<Token>(cx);
+    let token = token(cx);
     let query = query_params::<InvitationQuery>(cx)?;
     let user = current_user(cx).await;
     let loaded = load_invitation(cx, token).await?;
@@ -152,10 +152,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Md)) href=(href!(crate::app::home))>"Go to the dashboard"</a>
                     }
                     Offer::Member { slug } => {
-                        <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Md)) href=(href!(crate::app::t::slug::index, Slug(slug)))>"Open " (&tenant_name)</a>
+                        <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Md)) href=(href!(crate::app::t::slug::index, slug: slug))>"Open " (&tenant_name)</a>
                     }
                     Offer::Join => {
-                        <form method="post" action=(href!(accept::accept, Token(token.to_owned()))) class="flex flex-col gap-2">
+                        <form method="post" action=(href!(accept::accept, token: token.to_owned())) class="flex flex-col gap-2">
                             button(attrs: attributes! { type="submit" class="w-full" }, icon(data: icons::CHECK) "Accept the invitation")
                             <a class=(button_variants(ButtonVariant::Ghost, ButtonSize::Md)) href=(href!(crate::app::home))>"Not now"</a>
                         </form>

@@ -12,6 +12,7 @@ pub use page::*;
 
 use topcoat::{
     Result,
+    context::Cx,
     icon::icon,
     view::{View, attributes, component, view},
 };
@@ -22,6 +23,7 @@ use crate::components::alert::{AlertVariant, alert, alert_description};
 /// confirmation message.
 #[component]
 pub async fn notice(
+    cx: &Cx,
     #[default] error: Option<&str>,
     #[default] message: Option<&str>,
 ) -> Result<impl View> {
@@ -490,6 +492,7 @@ pub use timada_core::civil::{format_date, format_time, parse_date};
 /// A row of a sessions list: when it started, from where, on what.
 #[component]
 pub async fn session_row(
+    cx: &Cx,
     started_at: u64,
     ip: Option<&str>,
     user_agent: Option<&str>,
@@ -508,6 +511,7 @@ pub async fn session_row(
 /// A row of a sign-ins list: when, how, from where, on what.
 #[component]
 pub async fn sign_in_row(
+    cx: &Cx,
     at: u64,
     method: String,
     ip: Option<&str>,

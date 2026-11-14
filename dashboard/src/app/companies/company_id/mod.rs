@@ -16,16 +16,16 @@ use timada_invoicing::{Ledger, civil_date, format_amount_fr};
 use timada_tenancy::{CompanyState, tenants_of_company};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
-    router::{error::not_found, href, module_param, page, path_param, query_params},
+    router::{error::not_found, href, module_param, page, query_params},
     view::{View, attributes, view},
 };
 
 use super::identity_fields;
 use crate::aliexpress::Aliexpress;
 use crate::app::auth::Flash;
-use crate::app::t::slug::Slug;
+use crate::app::t::slug::slug;
 use crate::app::tenants::tenancy;
 use crate::auth::{require_user, user_labels};
 use crate::components::alert::{AlertVariant, alert, alert_description};
@@ -51,7 +51,7 @@ pub fn company_url(
     error: Option<&str>,
     message: Option<&str>,
 ) -> String {
-    href!(index, CompanyId(company_id.to_owned()))
+    href!(index, company_id: company_id.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -60,7 +60,7 @@ pub fn company_url(
 /// 404: a company is nobody else's business).
 pub(crate) async fn require_owned(cx: &Cx) -> Result<(CompanyState, String)> {
     let user = require_user(cx).await?;
-    let id = path_param::<CompanyId>(cx);
+    let id = company_id(cx);
     let company = tenancy(cx)
         .load_company(id)
         .await
@@ -81,7 +81,7 @@ pub(crate) fn now() -> u64 {
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let (company, _) = require_owned(cx).await?;
     let query = query_params::<CompanyQuery>(cx)?;
-    let tenants = tenants_of_company(app_context::<Db>(cx), &company.id)
+    let tenants = tenants_of_company(context::<Db>(cx), &company.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let owners: Vec<String> = company.owners.iter().cloned().collect();
@@ -95,7 +95,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let threshold = format_amount_fr(EU_DISTANCE_THRESHOLD_CENTS, "EUR");
     let legal = company.identity.clone().unwrap_or_default();
     let exempt_past_threshold = distance.passed && !legal.is_vat_registered();
-    let aliexpress_enabled = app_context::<Arc<Aliexpress>>(cx).enabled();
+    let aliexpress_enabled = context::<Arc<Aliexpress>>(cx).enabled();
     let aliexpress_state = if company.aliexpress.is_some() {
         "connected"
     } else {
@@ -114,7 +114,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 title: &company.name(),
                 subtitle: Some(&siren),
                 h1_attrs: attributes! { data-company-siren=(&company.siren) },
-                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(oss::oss, CompanyId(id.clone())))>
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(oss::oss, company_id: id.clone()))>
                     icon(data: icons::INVOICING)
                     "One-Stop Shop return"
                 </a>
@@ -149,7 +149,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <ul class="divide-y divide-border text-sm">
                         for tenant in &tenants {
                             <li class="flex flex-wrap items-center justify-between gap-2 py-2.5" data-company-tenant=(&tenant.slug)>
-                                <a class=(LINK) href=(href!(crate::app::t::slug::index, Slug(tenant.slug.clone())))>(&tenant.name)</a>
+                                <a class=(LINK) href=(href!(crate::app::t::slug::index, slug: tenant.slug.clone()))>(&tenant.name)</a>
                                 <code class="text-xs" data-series-code=(&tenant.series_code)>
                                     if tenant.series_code.is_empty() { "F/A…" } else { (&tenant.series_code) "-F/A…" }
                                 </code>
@@ -174,12 +174,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 </div>
                 if aliexpress_enabled {
                     <div class="flex flex-wrap gap-2">
-                        <form method="post" action=(href!(aliexpress::connect::connect, CompanyId(id.clone())))>
+                        <form method="post" action=(href!(aliexpress::connect::connect, company_id: id.clone()))>
                             button(size: ButtonSize::Sm, attrs: attributes! { type="submit" },
                                 (if company.aliexpress.is_some() { "Connect again" } else { "Connect the AliExpress account" }))
                         </form>
                         if company.aliexpress.is_some() {
-                            <form method="post" action=(href!(aliexpress::disconnect::disconnect, CompanyId(id.clone())))>
+                            <form method="post" action=(href!(aliexpress::disconnect::disconnect, company_id: id.clone()))>
                                 button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Disconnect")
                             </form>
                         }
@@ -202,7 +202,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <li class="flex flex-wrap items-center justify-between gap-2 py-2.5" data-company-owner=(labels.get(owner).map_or(owner.as_str(), String::as_str))>
                             <span class="font-medium">(labels.get(owner).map_or(owner.as_str(), String::as_str))</span>
                             if owners.len() > 1 {
-                                <form method="post" action=(href!(remove_owner::remove_owner, CompanyId(id.clone())))>
+                                <form method="post" action=(href!(remove_owner::remove_owner, company_id: id.clone()))>
                                     <input type="hidden" name="user_id" value=(owner)>
                                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="text-destructive-text" }, "Remove")
                                 </form>
@@ -210,7 +210,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </li>
                     }
                 </ul>
-                <form method="post" action=(href!(owners::add_owner, CompanyId(id.clone()))) class="mt-4 flex flex-wrap gap-2">
+                <form method="post" action=(href!(owners::add_owner, company_id: id.clone())) class="mt-4 flex flex-wrap gap-2">
                     <label class="sr-only" for="owner-email">"E-mail of the new owner"</label>
                     input(attrs: attributes! {
                         id="owner-email" name="email" type="email" required=""
@@ -220,7 +220,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 </form>
             )
 
-            <form method="post" action=(href!(save::save, CompanyId(id.clone())))>
+            <form method="post" action=(href!(save::save, company_id: id.clone()))>
                 identity_fields(legal: &legal)
                 button(attrs: attributes! { type="submit" }, "Save")
             </form>

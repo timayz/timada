@@ -2,7 +2,7 @@ use serde::Deserialize;
 use timada_tenancy::{InviteMember, invitations_sent_since};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Form,
         error::{SeeOther, see_other},
@@ -33,9 +33,9 @@ pub async fn invite(cx: &Cx, Form(form): Form<InviteForm>) -> Result<SeeOther> {
     require_user(cx).await?;
     let access = require_tenant(cx).await?;
     let slug = access.tenant.slug.as_str();
-    let limits = &app_context::<Config>(cx).invitations;
+    let limits = &context::<Config>(cx).invitations;
     let sent_recently = invitations_sent_since(
-        app_context::<Db>(cx),
+        context::<Db>(cx),
         &access.tenant.id,
         &access.user_id,
         now().saturating_sub(limits.window_secs),
@@ -60,7 +60,7 @@ pub async fn invite(cx: &Cx, Form(form): Form<InviteForm>) -> Result<SeeOther> {
 
     let sent = match tenancy(cx)
         .invite_member(
-            &*app_context::<InvitationTokens>(cx).0,
+            &*context::<InvitationTokens>(cx).0,
             &access.user_id,
             InviteMember {
                 tenant_id: access.tenant.id.clone(),

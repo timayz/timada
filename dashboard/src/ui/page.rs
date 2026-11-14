@@ -4,6 +4,7 @@
 
 use topcoat::{
     Result,
+    context::Cx,
     icon::{IconData, icon},
     view::{Attributes, Child, StaticClass, View, attributes, class, component, view},
 };
@@ -73,6 +74,7 @@ impl Tone {
 /// `<header>`. `h1_attrs` carries the data attributes a test reads.
 #[component]
 pub async fn page_header(
+    cx: &Cx,
     title: &str,
     #[default] subtitle: Option<&str>,
     #[default] h1_attrs: Attributes,
@@ -96,6 +98,7 @@ pub async fn page_header(
 /// label and address).
 #[component]
 pub async fn section_card(
+    cx: &Cx,
     #[default] title: Option<&str>,
     #[default] description: Option<&str>,
     #[default] action: Option<(&str, String)>,
@@ -131,6 +134,7 @@ pub async fn section_card(
 /// A figure with its label, linking to the section it counts.
 #[component]
 pub async fn stat_tile(
+    cx: &Cx,
     label: &str,
     value: String,
     symbol: IconData,
@@ -166,6 +170,7 @@ pub async fn stat_tile(
 /// a test reads.
 #[component]
 pub async fn status_badge(
+    cx: &Cx,
     #[default] tone: Tone,
     #[default] attrs: Attributes,
     #[default] child: Child<'_>,
@@ -183,6 +188,7 @@ pub async fn status_badge(
 /// What a list shows when there is nothing in it yet.
 #[component]
 pub async fn empty_state(
+    cx: &Cx,
     title: &str,
     #[default] hint: Option<&str>,
     #[default] symbol: Option<IconData>,
@@ -206,7 +212,7 @@ pub async fn empty_state(
 
 /// The one row of a table with nothing in it.
 #[component]
-pub async fn empty_row(colspan: u32, text: &str) -> Result<impl View> {
+pub async fn empty_row(cx: &Cx, colspan: u32, text: &str) -> Result<impl View> {
     Ok(view! {
         <tr><td class="p-3 text-muted-foreground" colspan=(colspan)>(text)</td></tr>
     })
@@ -215,6 +221,7 @@ pub async fn empty_row(colspan: u32, text: &str) -> Result<impl View> {
 /// Previous / "Page X of Y" / Next. Nothing when there is one page.
 #[component]
 pub async fn pager(
+    cx: &Cx,
     page: i64,
     pages: i64,
     #[default] previous: Option<String>,
@@ -245,6 +252,7 @@ pub async fn pager(
 /// links are absent.
 #[component]
 pub async fn cursor_pager(
+    cx: &Cx,
     summary: &str,
     #[default] newer: Option<String>,
     #[default] older: Option<String>,
@@ -272,6 +280,7 @@ pub async fn cursor_pager(
 /// A `GET` form of filters above a list.
 #[component]
 pub async fn filter_bar(
+    cx: &Cx,
     #[default] mut attrs: Attributes,
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
@@ -289,7 +298,7 @@ pub async fn filter_bar(
 
 /// A list of facts: terms on the left, values on the right.
 #[component]
-pub async fn facts(#[default] child: Child<'_>) -> Result<impl View> {
+pub async fn facts(cx: &Cx, #[default] child: Child<'_>) -> Result<impl View> {
     Ok(view! {
         <dl class="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[10rem_minmax(0,1fr)]">(child)</dl>
     })
@@ -298,6 +307,7 @@ pub async fn facts(#[default] child: Child<'_>) -> Result<impl View> {
 /// One fact. `attrs` go on the `<dd>`, for the data attribute a test reads.
 #[component]
 pub async fn fact(
+    cx: &Cx,
     term: &str,
     #[default] mut attrs: Attributes,
     #[default] child: Child<'_>,
@@ -319,7 +329,7 @@ pub struct PageTab {
 /// A row of tabs over one page's parts. Each is a link the server answers, so
 /// a tab has its own address and needs no script.
 #[component]
-pub async fn page_tabs(label: &str, tabs: &[PageTab]) -> Result<impl View> {
+pub async fn page_tabs(cx: &Cx, label: &str, tabs: &[PageTab]) -> Result<impl View> {
     Ok(view! {
         <nav aria-label=(label) class="mb-6 border-b border-border" data-page-tabs="">
             <ul class="flex flex-wrap gap-1">
@@ -351,6 +361,7 @@ pub async fn page_tabs(label: &str, tabs: &[PageTab]) -> Result<impl View> {
 /// so a test that reads a `<section>` by its text never sees the links.
 #[component]
 pub async fn settings_layout(
+    cx: &Cx,
     label: &str,
     sections: &[(&str, &str)],
     #[default] child: Child<'_>,

@@ -4,12 +4,12 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
 use super::super::automations;
-use super::{ScenarioId, scenario_url};
+use super::{scenario_id, scenario_url};
 use crate::app::t::slug::require_tenant;
 
 /// Holds the scenario: nothing new starts, and the runs under way wait.
@@ -19,7 +19,7 @@ pub async fn pause(cx: &Cx) -> Result<SeeOther> {
     access
         .require_permission(cx, PERMISSION_AUTOMATIONS_MANAGE)
         .await?;
-    let id = path_param::<ScenarioId>(cx).to_owned();
+    let id = scenario_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     match automations(&access)?
         .pause_scenario(&access.user_id, &id)

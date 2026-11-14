@@ -34,18 +34,18 @@ use timada_tenancy::{
 };
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
     router::{
         error::{SeeOther, not_found, see_other},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{View, attributes, class, view},
 };
 
 use super::{order_tone, orders};
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::card::{card, card_content, card_header};
@@ -75,7 +75,7 @@ pub fn order_url(
     error: Option<&str>,
     message: Option<&str>,
 ) -> String {
-    href!(index, Slug(slug.to_owned()), OrderId(order_id.to_owned()))
+    href!(index, slug: slug.to_owned(), order_id: order_id.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -84,8 +84,8 @@ pub fn order_url(
 /// page shows. What an action decides from is the order's own stream, which
 /// the command loads ([`act`]).
 async fn shown_order(cx: &Cx, access: &TenantAccess) -> Result<OrderState> {
-    let id = path_param::<OrderId>(cx);
-    order_state(app_context::<Db>(cx), access.tenant_id(), id)
+    let id = order_id(cx);
+    order_state(context::<Db>(cx), access.tenant_id(), id)
         .await
         .map_err(topcoat::Error::from_anyhow)?
         .ok_or_else(|| not_found().into())
@@ -105,7 +105,7 @@ where
     access
         .require_permission(cx, PERMISSION_ORDERS_MANAGE)
         .await?;
-    let order_id = path_param::<OrderId>(cx).to_owned();
+    let order_id = order_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let gateway = orders(&access)?;
     match run(&gateway, &access.user_id, &order_id).await {
@@ -142,7 +142,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let can_manage = access.can(cx, PERMISSION_ORDERS_MANAGE).await?;
     let query = query_params::<OrderQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
-    let db = app_context::<Db>(cx);
+    let db = context::<Db>(cx);
     let order = shown_order(cx, &access).await?;
     // Another payment of its cart that Stripe would not give back, for
     // good: the merchant settles it in Stripe.
@@ -190,8 +190,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let forward = forward_of_order(db, access.tenant_id(), &order.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    let connected = app_context::<Arc<crate::aliexpress::Aliexpress>>(cx)
-        .connected(app_context::<crate::cluster::Executor>(cx), &access.tenant)
+    let connected = context::<Arc<crate::aliexpress::Aliexpress>>(cx)
+        .connected(context::<crate::cluster::Executor>(cx), &access.tenant)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     // Whether any line is an AliExpress item, for a shop connected to it:
@@ -354,7 +354,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 title: &heading,
                 subtitle: Some(&placed),
                 h1_attrs: attributes! { class="font-mono" },
-                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(super::index, Slug(slug.clone())))>"All orders"</a>
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(super::index, slug: slug.clone()))>"All orders"</a>
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
             if let Some(lapses_at) = hold_at_risk {
@@ -460,7 +460,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                     )
                     if can_manage {
-                        <form method="post" action=(href!(invoice::invoice, Slug(slug.clone()), OrderId(order_id.clone()))) class="mb-4" data-order-invoice-again="">
+                        <form method="post" action=(href!(invoice::invoice, slug: slug.clone(), order_id: order_id.clone())) class="mb-4" data-order-invoice-again="">
                             button(size: ButtonSize::Sm, variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, "Issue the documents again")
                         </form>
                     }
@@ -616,7 +616,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         </p>
                     }
                     if let Some((label, again)) = ae.action {
-                        <form method="post" action=(href!(aliexpress::forward, Slug(slug.clone()), OrderId(order_id.clone())))>
+                        <form method="post" action=(href!(aliexpress::forward, slug: slug.clone(), order_id: order_id.clone()))>
                             if again {
                                 <input type="hidden" name="again" value="on">
                             }
@@ -627,7 +627,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <p class="mt-3 text-sm text-muted-foreground" data-order-aliexpress-rule-out-soon="">"An attempt never said how it went, so the shopper cannot cancel this order. AliExpress's list of orders may take a while to show it: in half an hour, look there and say so here if it is not there."</p>
                     }
                     if ae.rule_out == Some(true) {
-                        <form method="post" class="mt-3" data-order-aliexpress-rule-out="" action=(href!(not_on_aliexpress::not_on_aliexpress, Slug(slug.clone()), OrderId(order_id.clone())))>
+                        <form method="post" class="mt-3" data-order-aliexpress-rule-out="" action=(href!(not_on_aliexpress::not_on_aliexpress, slug: slug.clone(), order_id: order_id.clone()))>
                             <p class="mb-3 text-sm text-muted-foreground">"An attempt never said how it went, so the shopper cannot cancel this order: look at the account's orders on AliExpress, and say so if it is not there."</p>
                             button(size: ButtonSize::Sm, variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, "Not on AliExpress")
                         </form>
@@ -640,7 +640,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     title: Some("Next step"),
                     <div class="grid gap-6 md:grid-cols-2">
                         if can_settle_outside {
-                            <form method="post" action=(href!(settle_outside::settle_outside, Slug(slug.clone()), OrderId(order_id.clone()))) class="flex flex-col gap-4" data-order-settle-outside="">
+                            <form method="post" action=(href!(settle_outside::settle_outside, slug: slug.clone(), order_id: order_id.clone())) class="flex flex-col gap-4" data-order-settle-outside="">
                                 <p class="text-sm text-muted-foreground">"The hold on the shopper's card lapsed while AliExpress may have this order: nothing can be taken through Stripe any more. Once the shopper paid you another way, say so here: the order counts as paid, its invoice is issued, and AliExpress's tracking fulfils it."</p>
                                 field(
                                     field_label(attrs: attributes! { for="order-settle-note" }, "How it was paid (optional)")
@@ -652,7 +652,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             </form>
                         }
                         if can_capture {
-                            <form method="post" action=(href!(capture::capture, Slug(slug.clone()), OrderId(order_id.clone()))) class="flex flex-col gap-4">
+                            <form method="post" action=(href!(capture::capture, slug: slug.clone(), order_id: order_id.clone())) class="flex flex-col gap-4">
                                 <p class="text-sm text-muted-foreground">(if awaits_supplier {
                                     "Taken on its own once the goods are bought on AliExpress. Take it now when you buy them by hand."
                                 } else {
@@ -664,7 +664,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             </form>
                         }
                         if can_fulfil {
-                            <form method="post" action=(href!(fulfil::fulfil, Slug(slug.clone()), OrderId(order_id.clone()))) class="flex flex-col gap-4">
+                            <form method="post" action=(href!(fulfil::fulfil, slug: slug.clone(), order_id: order_id.clone())) class="flex flex-col gap-4">
                                 field(
                                     field_label(attrs: attributes! { for="order-tracking" }, "Tracking number (optional)")
                                     input(attrs: attributes! { id="order-tracking" name="tracking" type="text" maxlength=(MAX_TRACKING_LEN) })
@@ -680,7 +680,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             </form>
                         }
                         if can_cancel {
-                            <form method="post" action=(href!(cancel::cancel, Slug(slug.clone()), OrderId(order_id.clone()))) class="flex flex-col gap-4">
+                            <form method="post" action=(href!(cancel::cancel, slug: slug.clone(), order_id: order_id.clone())) class="flex flex-col gap-4">
                                 field(
                                     field_label(attrs: attributes! { for="order-cancel-reason" }, "Reason for cancelling")
                                     input(attrs: attributes! { id="order-cancel-reason" name="reason" type="text" required="" maxlength=(MAX_REASON_LEN) })

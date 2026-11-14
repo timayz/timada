@@ -16,18 +16,18 @@ use timada_reviews::{MAX_REPLY_LEN, ReviewError, ReviewState, ReviewStatus, star
 use timada_tenancy::{PERMISSION_REVIEWS_MANAGE, PERMISSION_REVIEWS_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, not_found, see_other},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{View, attributes, class, view},
 };
 
 use super::{reviews, reviews_url, status_label};
 use crate::app::auth::Flash;
-use crate::app::t::slug::orders::order_id::{self, OrderId};
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::orders::order_id;
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
@@ -70,14 +70,14 @@ pub fn review_url(
     error: Option<&str>,
     message: Option<&str>,
 ) -> String {
-    href!(index, Slug(slug.to_owned()), ReviewId(review_id.to_owned()))
+    href!(index, slug: slug.to_owned(), review_id: review_id.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
 
 /// The review named in the URL, or 404.
 async fn require_review(cx: &Cx, access: &TenantAccess) -> Result<ReviewState> {
-    let id = path_param::<ReviewId>(cx);
+    let id = review_id(cx);
     reviews(access)?
         .load_review(id)
         .await
@@ -99,7 +99,7 @@ where
     access
         .require_permission(cx, PERMISSION_REVIEWS_MANAGE)
         .await?;
-    let review_id = path_param::<ReviewId>(cx).to_owned();
+    let review_id = review_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let gateway = reviews(&access)?;
     match run(&gateway, &access.user_id, &review_id).await {
@@ -134,7 +134,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // What the review says of its order: copied when it was submitted.
     let reference = review.order_reference.clone();
     let product_name = review.product_name.clone();
-    let media = app_context::<Arc<Media>>(cx);
+    let media = context::<Arc<Media>>(cx);
     // Each photo's small rendition, and the one to look at.
     let photos: Vec<(String, String, String)> = review
         .photos
@@ -154,8 +154,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let back = reviews_url(cx, &slug, None, None);
     let order_link = href!(
         order_id::index,
-        Slug(slug.clone()),
-        OrderId(review.order_id.clone())
+        slug: slug.clone(),
+        order_id: review.order_id.clone()
     );
     let open = can_manage && !review.is_rejected();
     let heading = format!("Review of {product_name}");
@@ -213,7 +213,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <li class="flex flex-col gap-2" data-review-photo=(photo_id)>
                                 <a href=(url)><img class="h-40 w-40 rounded-lg border border-border object-cover" src=(thumb_url) alt="A photo the shopper attached"></a>
                                 if open {
-                                    <form method="post" action=(href!(remove_photo::remove_photo, Slug(slug.clone()), ReviewId(id.clone())))>
+                                    <form method="post" action=(href!(remove_photo::remove_photo, slug: slug.clone(), review_id: id.clone()))>
                                         <input type="hidden" name="image_id" value=(photo_id)>
                                         button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="text-destructive-text" }, "Remove this photo")
                                     </form>
@@ -237,7 +237,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             }
                         }
                         if open {
-                            <form method="post" action=(href!(reply::reply, Slug(slug.clone()), ReviewId(id.clone()))) class="flex max-w-xl flex-col gap-4">
+                            <form method="post" action=(href!(reply::reply, slug: slug.clone(), review_id: id.clone())) class="flex max-w-xl flex-col gap-4">
                                 field(
                                     field_label(attrs: attributes! { for="review-reply" }, "Reply")
                                     textarea(attrs: attributes! { id="review-reply" name="body" rows="4" maxlength=(MAX_REPLY_LEN) required="" }, (review.reply.as_deref().unwrap_or_default()))
@@ -251,7 +251,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             </form>
                         }
                         if can_manage && review.reply.is_some() {
-                            <form method="post" action=(href!(remove_reply::remove_reply, Slug(slug.clone()), ReviewId(id.clone())))>
+                            <form method="post" action=(href!(remove_reply::remove_reply, slug: slug.clone(), review_id: id.clone()))>
                                 button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="text-destructive-text" }, "Delete the reply")
                             </form>
                         }
@@ -265,11 +265,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     description: Some("Rejecting is final: the review and its photos are gone from the shop for good."),
                     <div class="flex flex-col gap-4">
                         if review.status == ReviewStatus::Pending {
-                            <form method="post" action=(href!(publish::publish, Slug(slug.clone()), ReviewId(id.clone())))>
+                            <form method="post" action=(href!(publish::publish, slug: slug.clone(), review_id: id.clone()))>
                                 button(attrs: attributes! { type="submit" }, "Publish")
                             </form>
                         }
-                        <form method="post" action=(href!(reject::reject, Slug(slug.clone()), ReviewId(id.clone()))) class="flex max-w-xl flex-col gap-4">
+                        <form method="post" action=(href!(reject::reject, slug: slug.clone(), review_id: id.clone())) class="flex max-w-xl flex-col gap-4">
                             field(
                                 field_label(attrs: attributes! { for="review-reason" }, "Why it is rejected (shown to the shopper, optional)")
                                 input(attrs: attributes! { id="review-reason" name="reason" type="text" maxlength="300" })

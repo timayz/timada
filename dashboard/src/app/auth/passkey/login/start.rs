@@ -1,6 +1,6 @@
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{content::Json, route},
 };
 use webauthn_rs::prelude::{RequestChallengeResponse, Webauthn};
@@ -14,7 +14,7 @@ use crate::auth::{
 /// while signed in: finishing with another user's passkey switches accounts.
 #[route(POST)]
 pub async fn start(cx: &Cx) -> Result<Json<RequestChallengeResponse>> {
-    let webauthn = app_context::<Webauthn>(cx);
+    let webauthn = context::<Webauthn>(cx);
     let (challenge, state) = webauthn.start_discoverable_authentication()?;
     passkey_login_flow(cx)
         .set(PasskeyLoginFlow {

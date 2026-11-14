@@ -14,7 +14,7 @@ use timada_identity::{
 };
 use topcoat::{
     Result,
-    context::{Cx, app_context, memoize},
+    context::{Cx, context, memoize},
     router::{
         error::RouterErrorExt,
         href,
@@ -30,8 +30,8 @@ use crate::db::Db;
 /// The command gateway over this node's executor.
 pub fn identity(cx: &Cx) -> Command<Executor> {
     Command::new(
-        app_context::<Executor>(cx).clone(),
-        app_context::<crate::seal::EmailCodes>(cx).0.clone(),
+        context::<Executor>(cx).clone(),
+        context::<crate::seal::EmailCodes>(cx).0.clone(),
     )
 }
 
@@ -78,7 +78,7 @@ pub async fn current_user(cx: &Cx) -> Option<UserState> {
 /// from the cluster before the browser is taken for signed out (a session
 /// started a moment ago on another node, whose redirect landed here).
 async fn resolve_session(cx: &Cx, hash: &TokenHash) -> anyhow::Result<Option<ResolvedSession>> {
-    let codes = &app_context::<crate::seal::EmailCodes>(cx).0;
+    let codes = &context::<crate::seal::EmailCodes>(cx).0;
     let now = now();
     crate::reads::first(
         cx,
@@ -96,7 +96,7 @@ async fn resolve_session(cx: &Cx, hash: &TokenHash) -> anyhow::Result<Option<Res
 /// cookie for a full lifetime and extend the record. Best effort: the
 /// request proceeds on the current session whatever happens here.
 async fn slide_expiry(cx: &Cx, hash: &TokenHash, session: &SessionState) {
-    let lifetime = app_context::<Config>(cx).auth.session_lifetime_secs;
+    let lifetime = context::<Config>(cx).auth.session_lifetime_secs;
     if session.expires_at.saturating_sub(now()) >= lifetime / 2 {
         return;
     }
@@ -119,7 +119,7 @@ async fn slide_expiry(cx: &Cx, hash: &TokenHash, session: &SessionState) {
 /// Display labels of users, by id, from the read model; an id it does not
 /// know (yet) is shown as is.
 pub async fn user_labels(cx: &Cx, ids: &[String]) -> Result<HashMap<String, String>> {
-    let rows = users_by_ids(app_context::<Db>(cx), ids)
+    let rows = users_by_ids(context::<Db>(cx), ids)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let mut labels: HashMap<String, String> = rows.into_iter().map(|u| (u.id, u.label)).collect();

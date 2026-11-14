@@ -11,9 +11,9 @@ use timada_core::Rendition;
 use anyhow::Context as _;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    mail::{Mail, MailConfig, Mailbox, SmtpTransport, TextBody, mail, send},
-    view::Unescaped,
+    context::{Cx, context},
+    mail::{Mail, Mailbox, SmtpTransport, TextBody, send},
+    view::{Unescaped, view},
 };
 
 use timada_catalog::format_money;
@@ -41,19 +41,19 @@ pub struct MailSender(pub Mailbox);
 
 /// What the router needs to send mail: the transport behind [`send`] and
 /// the sender.
-pub struct Mailer {
-    pub transport: MailConfig,
+pub struct PlatformMailer {
+    pub transport: topcoat::mail::Mailer,
     pub sender: MailSender,
 }
 
 /// From the configuration (already validated by `Config::load`).
-pub fn build(config: &config::MailConfig) -> anyhow::Result<Mailer> {
+pub fn build(config: &config::MailConfig) -> anyhow::Result<PlatformMailer> {
     let transport = SmtpTransport::from_url(&config.smtp_url)
         .context("mail.smtp_url")?
         .build();
     let from: Mailbox = config.from.parse().context("mail.from")?;
-    Ok(Mailer {
-        transport: MailConfig::builder().transport(transport).build(),
+    Ok(PlatformMailer {
+        transport: topcoat::mail::Mailer::new(transport),
         sender: MailSender(from),
     })
 }
@@ -76,20 +76,23 @@ pub async fn send_invitation(
     role_label: &str,
     link: &str,
 ) -> Result<()> {
-    let from = app_context::<MailSender>(cx).0.clone();
+    let from = context::<MailSender>(cx).0.clone();
     let subject = format!("You are invited to join {tenant_name} on Timada");
-    let mail = mail! {
-        from: from,
-        to: Mailbox::new(to)?,
-        subject: &subject,
-        html: {
-            cx =>
-            <p><strong>(inviter)</strong> " invites you to join " <strong>(tenant_name)</strong> " as " <strong>(role_label)</strong> "."</p>
-            <p><a href=(link)>"Accept the invitation"</a></p>
-            <p>"Or open this address: " (link)</p>
-            <p>"The link is valid for 7 days. If you do not know this tenant, you can ignore this message."</p>
-        },
-    }?;
+    let mail = Mail::builder()
+        .from(from)
+        .to([Mailbox::new(to)?])
+        .subject(&subject)
+        .html(
+            cx,
+            view! {
+                <p><strong>(inviter)</strong> " invites you to join " <strong>(tenant_name)</strong> " as " <strong>(role_label)</strong> "."</p>
+                <p><a href=(link)>"Accept the invitation"</a></p>
+                <p>"Or open this address: " (link)</p>
+                <p>"The link is valid for 7 days. If you do not know this tenant, you can ignore this message."</p>
+            },
+        )
+        .await?
+        .build()?;
     send(cx, mail).await?;
     Ok(())
 }
@@ -104,19 +107,22 @@ pub async fn send_message_notification(
     first_name: &str,
     link: &str,
 ) -> Result<()> {
-    let from = app_context::<MailSender>(cx).0.clone();
+    let from = context::<MailSender>(cx).0.clone();
     let subject = format!("A message is waiting for {tenant_name}");
-    let mail = mail! {
-        from: from,
-        to: Mailbox::new(to)?,
-        subject: &subject,
-        html: {
-            cx =>
-            <p><strong>(first_name)</strong> " wrote to " <strong>(tenant_name)</strong> " through its contact form."</p>
-            <p><a href=(link)>"Read the messages"</a></p>
-            <p>"Or open this address: " (link)</p>
-        },
-    }?;
+    let mail = Mail::builder()
+        .from(from)
+        .to([Mailbox::new(to)?])
+        .subject(&subject)
+        .html(
+            cx,
+            view! {
+                <p><strong>(first_name)</strong> " wrote to " <strong>(tenant_name)</strong> " through its contact form."</p>
+                <p><a href=(link)>"Read the messages"</a></p>
+                <p>"Or open this address: " (link)</p>
+            },
+        )
+        .await?
+        .build()?;
     send(cx, mail).await?;
     Ok(())
 }
@@ -133,22 +139,25 @@ pub async fn send_hold_lapse_reminder(
     lapses_at: u64,
     link: &str,
 ) -> Result<()> {
-    let from = app_context::<MailSender>(cx).0.clone();
+    let from = context::<MailSender>(cx).0.clone();
     let until = timada_core::civil::format_time(lapses_at);
     let subject = format!("Order {reference}: take the payment before {until}");
-    let mail = mail! {
-        from: from,
-        to: Mailbox::new(to)?,
-        subject: &subject,
-        html: {
-            cx =>
-            <p>"The shopper's card holds the money of order " <strong>(reference)</strong> " for " <strong>(tenant_name)</strong> " until " <strong>(&until)</strong> ", and AliExpress may have the order."</p>
-            <p>"Check AliExpress and take the payment before then. Once the hold lapses, the money can no longer be taken, while AliExpress ships goods the shop paid for."</p>
-            <p>"If the order is not on AliExpress, say so on the order's page: the shopper may then cancel it, and the hold lapses harmlessly."</p>
-            <p><a href=(link)>"Open the order"</a></p>
-            <p>"Or open this address: " (link)</p>
-        },
-    }?;
+    let mail = Mail::builder()
+        .from(from)
+        .to([Mailbox::new(to)?])
+        .subject(&subject)
+        .html(
+            cx,
+            view! {
+                <p>"The shopper's card holds the money of order " <strong>(reference)</strong> " for " <strong>(tenant_name)</strong> " until " <strong>(&until)</strong> ", and AliExpress may have the order."</p>
+                <p>"Check AliExpress and take the payment before then. Once the hold lapses, the money can no longer be taken, while AliExpress ships goods the shop paid for."</p>
+                <p>"If the order is not on AliExpress, say so on the order's page: the shopper may then cancel it, and the hold lapses harmlessly."</p>
+                <p><a href=(link)>"Open the order"</a></p>
+                <p>"Or open this address: " (link)</p>
+            },
+        )
+        .await?
+        .build()?;
     send(cx, mail).await?;
     Ok(())
 }
@@ -165,27 +174,30 @@ pub async fn send_automation_notice(
     note: &str,
     link: &str,
 ) -> Result<()> {
-    let from = app_context::<MailSender>(cx).0.clone();
+    let from = context::<MailSender>(cx).0.clone();
     let subject = format!("{tenant_name}: {subject}");
     let paragraphs: Vec<&str> = note
         .split("\n\n")
         .map(str::trim)
         .filter(|paragraph| !paragraph.is_empty())
         .collect();
-    let mail = mail! {
-        from: from,
-        to: Mailbox::new(to)?,
-        subject: &subject,
-        html: {
-            cx =>
-            for paragraph in &paragraphs {
-                <p>(paragraph)</p>
-            }
-            <p><a href=(link)>"Open it in the dashboard"</a></p>
-            <p>"Or open this address: " (link)</p>
-            <p>"Sent by the automation “" (scenario) "” of " <strong>(tenant_name)</strong> "."</p>
-        },
-    }?;
+    let mail = Mail::builder()
+        .from(from)
+        .to([Mailbox::new(to)?])
+        .subject(&subject)
+        .html(
+            cx,
+            view! {
+                for paragraph in &paragraphs {
+                    <p>(paragraph)</p>
+                }
+                <p><a href=(link)>"Open it in the dashboard"</a></p>
+                <p>"Or open this address: " (link)</p>
+                <p>"Sent by the automation “" (scenario) "” of " <strong>(tenant_name)</strong> "."</p>
+            },
+        )
+        .await?
+        .build()?;
     send(cx, mail).await?;
     Ok(())
 }
@@ -284,17 +296,15 @@ pub async fn send_rendered_via(
     let html = Unescaped::new_unchecked(rendered.html);
     // The merchant's own plain text, or the one derived from the HTML.
     let text = rendered.text.map_or(TextBody::FromHtml, TextBody::Text);
-    let mail = mail! {
-        from: from,
-        to: Mailbox::new(to)?,
-        subject: &rendered.subject,
-        html: {
-            cx =>
-            (html)
-        },
-        text: text,
-        headers: headers,
-    }?;
+    let mail = Mail::builder()
+        .from(from)
+        .to([Mailbox::new(to)?])
+        .subject(&rendered.subject)
+        .html(cx, view! { (html) })
+        .await?
+        .text(text)
+        .headers(headers)
+        .build()?;
     sender.send(cx, mail).await?;
     Ok(())
 }
@@ -307,7 +317,7 @@ pub fn shop_vars(cx: &Cx, shop: &TenantState) -> ShopVars {
         name: shop.name.clone(),
         logo_url: branding
             .and_then(|branding| branding.logo.as_ref())
-            .map(|logo| app_context::<Arc<Media>>(cx).url(&shop.id, &logo.id, Rendition::Listing)),
+            .map(|logo| context::<Arc<Media>>(cx).url(&shop.id, &logo.id, Rendition::Listing)),
         accent: branding.and_then(|branding| branding.accent.clone()),
         footer: branding.and_then(|branding| branding.footer.clone()),
     }
@@ -583,7 +593,7 @@ pub fn render_campaign(
 /// The shop's sender for its marketing: the server it picked for it, never
 /// the platform's. `None` when it picked none, and nothing may go out.
 pub async fn marketing_sender(cx: &Cx, shop: &TenantState) -> anyhow::Result<Option<ShopSender>> {
-    match app_context::<ShopMail>(cx).marketing_sender_of(shop).await {
+    match context::<ShopMail>(cx).marketing_sender_of(shop).await {
         Ok(sender) => Ok(Some(sender)),
         Err(err) if err.is::<NoMarketingServer>() => Ok(None),
         Err(err) => Err(err),
@@ -627,7 +637,7 @@ fn subject(purpose: ChallengePurpose) -> &'static str {
 }
 
 async fn code_mail(cx: &Cx, to: &str, purpose: ChallengePurpose, code: &str) -> Result<Mail> {
-    let from = app_context::<MailSender>(cx).0.clone();
+    let from = context::<MailSender>(cx).0.clone();
     // A `Register` code proves an address for a new account, or one added
     // to an account: the wording covers both.
     let intro = match purpose {
@@ -635,18 +645,21 @@ async fn code_mail(cx: &Cx, to: &str, purpose: ChallengePurpose, code: &str) -> 
         ChallengePurpose::SignIn => "Enter this code to finish signing in:",
         ChallengePurpose::ResetPassword => "Enter this code to choose a new password:",
     };
-    Ok(mail! {
-        from: from,
-        to: Mailbox::new(to)?,
-        subject: subject(purpose),
-        html: {
-            cx =>
-            <p>(intro)</p>
-            <p style="font-size: 1.5rem; letter-spacing: 0.25rem;"><strong>(code)</strong></p>
-            <p>"It is valid for 10 minutes."</p>
-            <p>"If you did not ask for it, you can ignore this message."</p>
-        },
-    }?)
+    Ok(Mail::builder()
+        .from(from)
+        .to([Mailbox::new(to)?])
+        .subject(subject(purpose))
+        .html(
+            cx,
+            view! {
+                <p>(intro)</p>
+                <p style="font-size: 1.5rem; letter-spacing: 0.25rem;"><strong>(code)</strong></p>
+                <p>"It is valid for 10 minutes."</p>
+                <p>"If you did not ask for it, you can ignore this message."</p>
+            },
+        )
+        .await?
+        .build()?)
 }
 
 /// The variables of an automated mail: about `order` (with its page on the
@@ -725,8 +738,8 @@ pub async fn send_automated(
 
 #[cfg(test)]
 mod tests {
-    use topcoat::context::CxTestBuilder;
-    use topcoat::mail::MemoryTransport;
+    use topcoat::context::Cx;
+    use topcoat::mail::{Mailer, MemoryTransport};
 
     use super::*;
     use crate::shop_mail::ShopMail;
@@ -742,11 +755,10 @@ mod tests {
     #[tokio::test]
     async fn the_code_reaches_the_address() {
         let transport = MemoryTransport::new();
-        let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport.clone()).build())
-            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(ShopMail::new(None, false))
-            .build();
+        let cx = Cx::new()
+            .with(Mailer::new(transport.clone()))
+            .with(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .with(ShopMail::new(None, false));
 
         send_code(&cx, "alice@example.com", ChallengePurpose::SignIn, "123456")
             .await
@@ -756,7 +768,7 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].to(), [Mailbox::new("alice@example.com").unwrap()]);
         assert_eq!(sent[0].subject(), "Your Timada sign-in code");
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        let wire = String::from_utf8(sent[0].formatted()).unwrap();
         assert!(wire.contains("123456"), "{wire}");
         assert!(wire.contains("valid for 10 minutes"), "{wire}");
     }
@@ -764,11 +776,10 @@ mod tests {
     #[tokio::test]
     async fn the_shopper_code_comes_from_the_shop() {
         let transport = MemoryTransport::new();
-        let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport.clone()).build())
-            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(ShopMail::new(None, false))
-            .build();
+        let cx = Cx::new()
+            .with(Mailer::new(transport.clone()))
+            .with(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .with(ShopMail::new(None, false));
 
         send_shopper_code(&cx, "ada@example.com", &acme(), "654321", None)
             .await
@@ -777,9 +788,9 @@ mod tests {
         let sent = transport.sent();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].subject(), "Your sign-in code for Acme Tea");
-        assert_eq!(sent[0].from().unwrap().name(), Some("Acme Tea"));
-        assert_eq!(sent[0].from().unwrap().address(), "no-reply@example.com");
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        assert_eq!(sent[0].from().name(), Some("Acme Tea"));
+        assert_eq!(sent[0].from().address(), "no-reply@example.com");
+        let wire = String::from_utf8(sent[0].formatted()).unwrap();
         assert!(wire.contains("654321"), "{wire}");
         assert!(!wire.contains("Timada"), "{wire}");
     }
@@ -822,11 +833,10 @@ mod tests {
     #[tokio::test]
     async fn the_shipping_mail_carries_the_number_and_where_to_follow_it() {
         let transport = MemoryTransport::new();
-        let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport.clone()).build())
-            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(ShopMail::new(None, false))
-            .build();
+        let cx = Cx::new()
+            .with(Mailer::new(transport.clone()))
+            .with(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .with(ShopMail::new(None, false));
 
         let mut order = paid_order();
         order.tracking = Some("LP1, LP2".to_owned());
@@ -845,7 +855,7 @@ mod tests {
         let sent = transport.sent();
         assert_eq!(sent.len(), 3);
         assert_eq!(sent[0].subject(), "Shipped: your Acme Tea order K7Q4-MZP2");
-        let number_only = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        let number_only = String::from_utf8(sent[0].formatted()).unwrap();
         for part in ["LP1, LP2", "shop.example/orders/o1"] {
             assert!(
                 number_only.contains(part),
@@ -854,10 +864,10 @@ mod tests {
         }
         // No tracking site of the shop's choosing: the order's page it is.
         assert!(!number_only.contains("Follow your parcel"), "{number_only}");
-        let carrier = String::from_utf8(sent[1].clone().formatted(&cx).unwrap()).unwrap();
+        let carrier = String::from_utf8(sent[1].formatted()).unwrap();
         assert!(carrier.contains("carrier.example/LP1"), "{carrier}");
         assert!(carrier.contains("Follow your parcel"), "{carrier}");
-        let no_number = String::from_utf8(sent[2].clone().formatted(&cx).unwrap()).unwrap();
+        let no_number = String::from_utf8(sent[2].formatted()).unwrap();
         assert!(no_number.contains("is on its way"), "{no_number}");
         assert!(!no_number.contains("Parcel number"), "{no_number}");
     }
@@ -865,11 +875,10 @@ mod tests {
     #[tokio::test]
     async fn the_order_confirmation_comes_from_the_shop() {
         let transport = MemoryTransport::new();
-        let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport.clone()).build())
-            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(ShopMail::new(None, false))
-            .build();
+        let cx = Cx::new()
+            .with(Mailer::new(transport.clone()))
+            .with(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .with(ShopMail::new(None, false));
 
         let order = paid_order();
         send_order_confirmation(&cx, &acme(), &order, Some("https://shop.example/orders/o1"))
@@ -883,8 +892,8 @@ mod tests {
         assert_eq!(sent.len(), 2);
         assert_eq!(sent[0].subject(), "Your Acme Tea order K7Q4-MZP2");
         assert_eq!(sent[0].to(), [Mailbox::new("ada@example.com").unwrap()]);
-        assert_eq!(sent[0].from().unwrap().name(), Some("Acme Tea"));
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        assert_eq!(sent[0].from().name(), Some("Acme Tea"));
+        let wire = String::from_utf8(sent[0].formatted()).unwrap();
         for part in [
             "K7Q4-MZP2",
             "Mug",
@@ -897,18 +906,17 @@ mod tests {
         }
         assert!(wire.contains("https://shop.example/orders/o1"), "{wire}");
         assert!(!wire.contains("Timada"), "{wire}");
-        let wire = String::from_utf8(sent[1].clone().formatted(&cx).unwrap()).unwrap();
+        let wire = String::from_utf8(sent[1].formatted()).unwrap();
         assert!(!wire.contains("View your order"), "{wire}");
     }
 
     #[tokio::test]
     async fn the_review_request_links_to_the_order() {
         let transport = MemoryTransport::new();
-        let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport.clone()).build())
-            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(ShopMail::new(None, false))
-            .build();
+        let cx = Cx::new()
+            .with(Mailer::new(transport.clone()))
+            .with(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .with(ShopMail::new(None, false));
 
         send_review_request(
             &cx,
@@ -924,8 +932,8 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].subject(), "How was your Acme Tea order K7Q4-MZP2?");
         assert_eq!(sent[0].to(), [Mailbox::new("ada@example.com").unwrap()]);
-        assert_eq!(sent[0].from().unwrap().name(), Some("Acme Tea"));
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        assert_eq!(sent[0].from().name(), Some("Acme Tea"));
+        let wire = String::from_utf8(sent[0].formatted()).unwrap();
         for part in ["Mug", "Teapot", "https://shop.example/reviews/t0k3n"] {
             assert!(wire.contains(part), "{part}: {wire}");
         }
@@ -935,11 +943,10 @@ mod tests {
     #[tokio::test]
     async fn a_shop_writes_its_own_plain_text() {
         let transport = MemoryTransport::new();
-        let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport.clone()).build())
-            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(ShopMail::new(None, false))
-            .build();
+        let cx = Cx::new()
+            .with(Mailer::new(transport.clone()))
+            .with(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .with(ShopMail::new(None, false));
         let mut shop = acme();
         let mut template = worded("Order {{ order.reference }}", "<p>Thanks!</p>");
         template.text = Some("Plain thanks for {{ order.reference }} & {{ order.note }}".into());
@@ -969,14 +976,18 @@ mod tests {
         let sent = transport.sent();
         assert_eq!(
             sent[0].text(),
-            &TextBody::Text("Plain thanks for K7Q4-MZP2 & <b>fragile</b>".into())
+            Some("Plain thanks for K7Q4-MZP2 & <b>fragile</b>")
         );
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        let wire = String::from_utf8(sent[0].formatted()).unwrap();
         let text = &wire[wire.find("text/plain").unwrap()..wire.find("text/html").unwrap()];
         assert!(text.contains("Plain thanks for K7Q4-MZP2"), "{wire}");
         // A plain-text part that fails sends the text derived from the HTML.
-        assert_eq!(sent[1].text(), &TextBody::FromHtml);
-        let wire = String::from_utf8(sent[1].clone().formatted(&cx).unwrap()).unwrap();
+        assert!(
+            sent[1]
+                .text()
+                .is_some_and(|text| text.contains("Your code: 654321"))
+        );
+        let wire = String::from_utf8(sent[1].formatted()).unwrap();
         let text = &wire[wire.find("text/plain").unwrap()..wire.find("text/html").unwrap()];
         assert!(text.contains("Your code: 654321"), "{wire}");
     }
@@ -992,11 +1003,10 @@ mod tests {
     #[tokio::test]
     async fn a_shop_words_its_mails_its_own_way() {
         let transport = MemoryTransport::new();
-        let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport.clone()).build())
-            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(ShopMail::new(None, false))
-            .build();
+        let cx = Cx::new()
+            .with(Mailer::new(transport.clone()))
+            .with(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .with(ShopMail::new(None, false));
         let mut shop = acme();
         shop.mail_templates.insert(
             (ShopMailKind::OrderConfirmation.key().into(), "en".into()),
@@ -1016,7 +1026,7 @@ mod tests {
 
         let sent = transport.sent();
         assert_eq!(sent[0].subject(), "Merci ! Commande K7Q4-MZP2");
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        let wire = String::from_utf8(sent[0].formatted()).unwrap();
         assert!(wire.contains("Bonjour"), "{wire}");
         assert!(wire.contains("Mug (2)"), "{wire}");
         let html = &wire[wire.find("text/html").unwrap()..];
@@ -1027,11 +1037,10 @@ mod tests {
     #[tokio::test]
     async fn a_template_that_fails_sends_the_built_in_mail() {
         let transport = MemoryTransport::new();
-        let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport.clone()).build())
-            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(ShopMail::new(None, false))
-            .build();
+        let cx = Cx::new()
+            .with(Mailer::new(transport.clone()))
+            .with(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .with(ShopMail::new(None, false));
         let mut shop = acme();
         let mut template = worded("Order", "<p>{{ order.billing_address.city }}</p>");
         template.text = Some("Plain order {{ order.reference }}".into());
@@ -1048,17 +1057,20 @@ mod tests {
         assert_eq!(sent.len(), 1, "the mail is not lost");
         assert_eq!(sent[0].subject(), "Your Acme Tea order K7Q4-MZP2");
         // The merchant's plain text does not go with the built-in HTML.
-        assert_eq!(sent[0].text(), &TextBody::FromHtml);
+        assert!(
+            sent[0]
+                .text()
+                .is_some_and(|text| !text.contains("Plain order"))
+        );
     }
 
     #[tokio::test]
     async fn a_shopper_gets_the_mail_in_their_language() {
         let transport = MemoryTransport::new();
-        let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport.clone()).build())
-            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(ShopMail::new(None, false))
-            .build();
+        let cx = Cx::new()
+            .with(Mailer::new(transport.clone()))
+            .with(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .with(ShopMail::new(None, false));
         let mut shop = acme();
         shop.mail_languages = Some(timada_tenancy::MailLanguages {
             default: "en".into(),
@@ -1121,11 +1133,10 @@ mod tests {
     #[tokio::test]
     async fn the_invitation_carries_the_link() {
         let transport = MemoryTransport::new();
-        let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(transport.clone()).build())
-            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(ShopMail::new(None, false))
-            .build();
+        let cx = Cx::new()
+            .with(Mailer::new(transport.clone()))
+            .with(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .with(ShopMail::new(None, false));
 
         send_invitation(
             &cx,
@@ -1141,7 +1152,7 @@ mod tests {
         let sent = transport.sent();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].subject(), "You are invited to join Acme on Timada");
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        let wire = String::from_utf8(sent[0].formatted()).unwrap();
         assert!(wire.contains("/invitations/t0k3n"), "{wire}");
         assert!(wire.contains("Ada"), "{wire}");
         assert!(wire.contains("Support"), "{wire}");

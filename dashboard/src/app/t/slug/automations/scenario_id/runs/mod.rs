@@ -14,14 +14,14 @@ use timada_core::page::{Cursor, PageFrom};
 use timada_tenancy::PERMISSION_AUTOMATIONS_READ;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
 use super::super::labels::{run_status_label, run_status_tone, step_label, subject_kind};
-use super::{ScenarioId, require_scenario, scenario_url};
-use crate::app::t::slug::{Slug, TenantNav, require_tenant};
+use super::{require_scenario, scenario_id, scenario_url};
+use crate::app::t::slug::{TenantNav, require_tenant, slug};
 use crate::automations::runner::subject_link;
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::select::select;
@@ -82,7 +82,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let from = PageFrom::of(after.as_ref(), before.as_ref());
     let nav = TenantNav::of(cx, &access).await?;
     let tenant = access.tenant;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let filter = RunFilter { status };
     let total = count_runs(pool, &tenant.id, &scenario.id, &filter)
         .await
@@ -121,9 +121,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             Row {
                 href: href!(
                     run_id::index,
-                    Slug(slug.clone()),
-                    ScenarioId(scenario.id.clone()),
-                    run_id::RunId(row.id.clone())
+                    slug: slug.clone(),
+                    scenario_id: scenario.id.clone(),
+                    run_id::run_id: row.id.clone()
                 )
                 .resolve(cx),
                 started_at: row.started_at,
@@ -142,7 +142,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         let slug = slug.clone();
         let id = scenario.id.clone();
         move |after: Option<&str>, before: Option<&str>| {
-            href!(index, Slug(slug.clone()), ScenarioId(id.clone()))
+            href!(index, slug: slug.clone(), scenario_id: id.clone())
                 .query(RunsLink {
                     status: status_value,
                     after,

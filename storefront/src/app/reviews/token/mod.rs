@@ -8,25 +8,25 @@ use timada_storefront::{menu, review_link};
 use topcoat::{
     Result,
     context::Cx,
-    router::{error::redirect, href, module_param, page, path_param},
+    router::{error::redirect, href, module_param, page},
     view::{View, view},
 };
 
 use crate::app::account::sign_in::sign_in_url;
 use crate::app::document;
-use crate::app::orders::order_id::{OrderId, index as order_page};
+use crate::app::orders::order_id::{index as order_page, order_id};
 use crate::shopper::remember_order;
 
 module_param!(pub token);
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    let token = path_param::<Token>(cx);
+    let token = token(cx);
     if let Some(order_id) = review_link(cx, token).await? {
         remember_order(cx, &order_id)?;
         let to = format!(
             "{}#reviews",
-            href!(order_page, OrderId(order_id)).resolve(cx)
+            href!(order_page, order_id: order_id).resolve(cx)
         );
         return Err(redirect(to).into());
     }

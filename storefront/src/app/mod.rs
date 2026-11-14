@@ -35,11 +35,11 @@ use timada_storefront::{
 };
 use topcoat::{
     Result,
-    context::{Cx, try_request_context},
-    cookie::{Key, RouterBuilderCookieExt},
+    context::{Cx, try_context},
+    cookie::{CookieLayer, Key},
     router::{
-        BodyLimit, IpNet, Router, RouterBuilderDiscoverExt, TrustedProxies, href, module_router,
-        page, request::original_uri,
+        Body, BodyLimit, IpNet, LayerFn, LayerFuture, Next, Router, RouterBuilderDiscoverExt,
+        TrustedProxies, href, module_router, page, request::original_uri,
     },
     view::{Child, Unescaped, View, attributes, view},
 };
@@ -71,12 +71,17 @@ pub fn router(store: Store, cookie_key: Key, trusted_proxies: Vec<IpNet>) -> Rou
     module_router!()
         .discover()
         .layer(UnavailablePage)
-        .layer(BodyLimit::max(REVIEW_LIMIT).at("/orders"))
+        .layer(LayerFn::new(Some("/orders"), pass).with(BodyLimit::max(REVIEW_LIMIT)))
         .trusted_proxies(TrustedProxies::new().networks(trusted_proxies))
-        .cookies()
-        .app_context(cookie_key)
+        .layer(CookieLayer::new())
+        .with(cookie_key)
         .store(store)
         .build()
+}
+
+/// Lets a request through, for a layer that only carries route context.
+fn pass<'a>(cx: &'a Cx, body: Body, next: Next<'a>) -> LayerFuture<'a> {
+    next.run(cx, body)
 }
 
 /// `19,90€`, as the shop writes its prices (`12,50 USD` for another
@@ -137,7 +142,7 @@ pub async fn document(
     // The page answering an outage asks the dashboard nothing more; any
     // other page shows its cart, or says the cart is away when the
     // dashboard is, and goes on: the catalogue is the shop's own copy.
-    let away = try_request_context::<StoreAway>(cx).is_some();
+    let away = try_context::<StoreAway>(cx).is_some();
     let (cart, cart_unavailable) = if away {
         (None, true)
     } else {
@@ -237,7 +242,7 @@ pub async fn document(
 /// reach it. The pages are the shop's own routes; their text comes from the
 /// back office.
 #[topcoat::view::component]
-pub async fn site_footer() -> Result<impl View> {
+pub async fn site_footer(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         <footer class="sitefooter">
             <div class="wrap">
@@ -284,7 +289,7 @@ pub async fn site_footer() -> Result<impl View> {
 /// is goes straight into the cart, one with options sends to its page.
 #[topcoat::view::component]
 pub async fn product_card(cx: &Cx, product: &Product) -> Result<impl View> {
-    let link = href!(p::slug::index, p::slug::Slug(product.slug.clone())).resolve(cx);
+    let link = href!(p::slug::index, p::slug::slug: product.slug.clone()).resolve(cx);
     let varies = product.price_range().is_some_and(|range| range.varies());
     let simple = product.options.is_empty();
     // Where the cart drawer opens after the add: this very page.
@@ -330,7 +335,7 @@ pub async fn product_card(cx: &Cx, product: &Product) -> Result<impl View> {
 
 /// A grid of product cards: the catalogue, a category and a search share it.
 #[topcoat::view::component]
-pub async fn catalog_grid(products: &[Product]) -> Result<impl View> {
+pub async fn catalog_grid(cx: &Cx, products: &[Product]) -> Result<impl View> {
     Ok(view! {
         <ul class="catalog">
             for product in products {
@@ -394,7 +399,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let quotes = recent_reviews(cx, QUOTES).await?;
     let discover = nav
         .first()
-        .map(|node| href!(c::slug::index, c::slug::Slug(node.category.slug.clone())).resolve(cx))
+        .map(|node| href!(c::slug::index, c::slug::slug: node.category.slug.clone()).resolve(cx))
         .unwrap_or_else(|| href!(boutique::index).resolve(cx));
 
     Ok(view! {
@@ -436,7 +441,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             for tile in &tiles {
                                 <li>
                                     <a class="tile" data-tile=(&tile.node.category.slug)
-                                        href=(href!(c::slug::index, c::slug::Slug(tile.node.category.slug.clone())))>
+                                        href=(href!(c::slug::index, c::slug::slug: tile.node.category.slug.clone()))>
                                         if let Some(image) = &tile.image {
                                             product_image(image: image, attrs: attributes! {})
                                         }
@@ -495,7 +500,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
 /// The four promises every shop page repeats.
 #[topcoat::view::component]
-pub async fn reassurance() -> Result<impl View> {
+pub async fn reassurance(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         <ul class="reassure" data-reassure="">
             <li>

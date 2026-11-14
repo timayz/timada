@@ -18,7 +18,7 @@ use timada_newsletter::{CampaignState, CampaignStatus, count_audience};
 use timada_tenancy::PERMISSION_NEWSLETTER_MANAGE;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Form,
         error::{SeeOther, see_other},
@@ -27,8 +27,8 @@ use topcoat::{
     view::{View, attributes, view},
 };
 
-use super::{CampaignId, campaign_url, require_campaign};
-use crate::app::t::slug::{Slug, TenantNav, require_tenant};
+use super::{campaign_id, campaign_url, require_campaign};
+use crate::app::t::slug::{TenantNav, require_tenant, slug};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::checkbox::checkbox;
 use crate::components::field::{field, field_description, field_label};
@@ -191,7 +191,7 @@ pub async fn schedule(cx: &Cx) -> Result<impl View> {
         return Err(see_other(campaign_url(cx, &slug, &campaign.id, None, None)).into());
     }
     let audience = count_audience(
-        app_context::<Db>(cx),
+        context::<Db>(cx),
         &access.tenant.id,
         campaign.language.as_deref(),
     )
@@ -210,7 +210,7 @@ pub async fn schedule(cx: &Cx) -> Result<impl View> {
         campaign.subject, tenant.name
     );
     let back = campaign_url(cx, &slug, &campaign.id, None, None);
-    let save_url = href!(save, Slug(slug.clone()), CampaignId(campaign.id.clone())).resolve(cx);
+    let save_url = href!(save, slug: slug.clone(), campaign_id: campaign.id.clone()).resolve(cx);
     let paces = PACES;
     Ok(view! {
         document(

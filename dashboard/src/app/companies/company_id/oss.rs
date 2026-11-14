@@ -6,12 +6,12 @@
 use timada_invoicing::{format_amount_fr, format_rate_fr, oss_return, quarter_bounds, quarter_of};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
-use super::{CompanyId, require_owned};
+use super::{company_id, require_owned};
 use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
@@ -50,12 +50,12 @@ pub async fn oss(cx: &Cx) -> Result<impl View> {
         .filter(|quarter| quarter_bounds(quarter).is_some())
         .unwrap_or_else(|| quarter_of(now));
     let (from, to) = quarter_bounds(&quarter).unwrap_or_default();
-    let rows = oss_return(app_context::<Db>(cx), &company.id, from, to)
+    let rows = oss_return(context::<Db>(cx), &company.id, from, to)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let id = company.id.clone();
     let link = |quarter: String| {
-        href!(oss, CompanyId(id.clone()))
+        href!(oss, company_id: id.clone())
             .query(OssLink { quarter })
             .resolve(cx)
     };
@@ -71,7 +71,7 @@ pub async fn oss(cx: &Cx) -> Result<impl View> {
             page_header(
                 title: "One-Stop Shop return",
                 subtitle: Some(&name),
-                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(super::index, CompanyId(company.id.clone())))>"Back to " (&name)</a>
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(super::index, company_id: company.id.clone()))>"Back to " (&name)</a>
             )
             section_card(
                 description: Some("Sales of every tenant of the company to consumers in other EU countries, taxed at their rates, as invoiced in the quarter (UTC), credit notes deducted. Declare them on the OSS return of impots.gouv.fr."),
