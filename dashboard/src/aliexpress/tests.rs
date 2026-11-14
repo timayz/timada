@@ -63,6 +63,8 @@ struct StandIn {
     /// How the next orders placed are answered, in turn; taken once none is
     /// left.
     place_answers: Mutex<std::collections::VecDeque<PlaceAnswer>>,
+    /// Where delivery ships from, when the stand-in says.
+    ships_from: Mutex<Option<String>>,
     /// How long the access a renewal gives lasts, in seconds.
     token_lifetime: AtomicU64,
     /// The refresh token each renewal was asked with, in turn.
@@ -99,6 +101,7 @@ impl StandIn {
             delivery_cents: AtomicU64::new(0),
             placed: AtomicUsize::new(0),
             place_answers: Mutex::default(),
+            ships_from: Mutex::default(),
             token_lifetime: AtomicU64::new(30 * 86_400),
             renewals: Mutex::default(),
         })
@@ -231,17 +234,21 @@ impl StandIn {
     /// The answer to `aliexpress.ds.freight.query`: AliExpress ships it.
     fn freight(&self) -> serde_json::Value {
         let cents = self.delivery_cents.load(Ordering::SeqCst);
+        let mut option = serde_json::json!({
+            "code": "CAINIAO_STANDARD",
+            "free_shipping": cents == 0,
+            "shipping_fee_cent": cents.to_string(),
+            "shipping_fee_currency": "EUR",
+            "tracking": true,
+            "min_delivery_days": 7,
+            "max_delivery_days": 12,
+        });
+        if let Some(country) = self.ships_from.lock().unwrap().clone() {
+            option["ship_from_country"] = serde_json::Value::from(country);
+        }
         serde_json::json!({ "aliexpress_ds_freight_query_response": { "result": {
             "success": true,
-            "delivery_options": { "delivery_option_d_t_o": [{
-                "code": "CAINIAO_STANDARD",
-                "free_shipping": cents == 0,
-                "shipping_fee_cent": cents.to_string(),
-                "shipping_fee_currency": "EUR",
-                "tracking": true,
-                "min_delivery_days": 7,
-                "max_delivery_days": 12,
-            }] },
+            "delivery_options": { "delivery_option_d_t_o": [option] },
         } } })
     }
 
@@ -320,7 +327,16 @@ struct Shop {
 }
 
 impl Shop {
+    /// The shop, buying for FR in EUR, its imports priced without the EU's
+    /// charges on imports.
     async fn new() -> Self {
+        Self::charging(0, 0).await
+    }
+
+    /// The shop, its imports charged `duty_cents` and `fee_cents` (euro
+    /// cents) when they ship into the EU from outside; the euro buys 4.25
+    /// zlotys today.
+    async fn charging(duty_cents: u64, fee_cents: u64) -> Self {
         let turso = evento::Turso::in_memory_concurrent().await.unwrap();
         crate::db::migrate_store_read_models(&turso).await.unwrap();
         let db = Db::from(turso.clone());
@@ -343,12 +359,23 @@ impl Shop {
                 parcel_read_every_secs: 1,
                 calls_per_day: 86_400_000,
                 read_fresh_secs: 60,
+                import_duty_cents: duty_cents,
+                import_fee_cents: fee_cents,
             },
             false,
             quota,
             Arc::new(move |among| match among {
                 Among::All => *all.lock().unwrap(),
                 Among::Region(_) => *region.lock().unwrap(),
+            }),
+            Arc::new({
+                let mut rates = timada_invoicing::rates::RateTable::default();
+                rates.insert(
+                    &timada_core::civil::format_date(crate::auth::now()),
+                    "PLN",
+                    "4.2500",
+                );
+                rates
             }),
         )
         .unwrap();
@@ -716,6 +743,92 @@ async fn a_read_prices_the_delivery_aliexpress_charges_in() {
         .unwrap();
     assert_eq!(link.skus[0].cost_cents, 931);
     assert_eq!(shop.stand_in.reads(), 1, "the delivery lookup is no read");
+}
+
+/// Goods AliExpress ships into the EU from outside cost the EU's charges on
+/// imports on top (#557): the duty with France's 20 % VAT, and the fee.
+/// Goods shipped from inside the EU cost none.
+#[tokio::test]
+async fn a_read_prices_what_bringing_goods_into_the_eu_costs() {
+    let shop = Shop::charging(300, 200).await;
+    shop.stand_in.delivery_cents.store(500, Ordering::SeqCst);
+
+    *shop.stand_in.ships_from.lock().unwrap() = Some("CN".to_owned());
+    let result = shop.sync(SyncMode::Asked { by: ALICE }).await;
+    assert!(matches!(result, SyncResult::Synced { .. }), "{result:?}");
+    assert_eq!(
+        shop.rose().await.0,
+        2_982,
+        "(4.31 + 5.00 + 3.00 + 0.60 + 2.00) × 2"
+    );
+    let link = shop
+        .links()
+        .load_link_by_id(&shop.link_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(link.skus[0].cost_cents, 1_491);
+
+    *shop.stand_in.ships_from.lock().unwrap() = Some("FR".to_owned());
+    shop.sync(SyncMode::Asked { by: ALICE }).await;
+    assert_eq!(shop.rose().await.0, 1_862, "(4.31 + 5.00) × 2");
+}
+
+/// What the EU's charges on imports come to, by where the goods go and where
+/// they ship from: in the market's currency, at the day's euro rate.
+#[tokio::test]
+async fn the_charges_on_imports_follow_the_market_and_where_goods_ship_from() {
+    let shop = Shop::charging(300, 200).await;
+    let now = crate::auth::now();
+    let market = |country: &str, currency: &str| timada_aliexpress::Market {
+        ship_to_country: country.to_owned(),
+        currency: currency.to_owned(),
+        language: "fr".to_owned(),
+    };
+    let charge = |market: timada_aliexpress::Market, ships_from: Option<&'static str>| {
+        let aliexpress = shop.aliexpress.clone();
+        async move { aliexpress.import_charge(&market, ships_from, now).await }
+    };
+    let france = timada_aliexpress::ImportCharge {
+        duty_cents: 360,
+        fee_cents: 200,
+        low_value_cents: 15_000,
+        vat_bps: 2_000,
+    };
+    assert_eq!(charge(market("FR", "EUR"), Some("CN")).await, Some(france));
+    // Most of what AliExpress sells ships from China: no word is China's.
+    assert_eq!(charge(market("FR", "EUR"), None).await, Some(france));
+    // Italy's VAT on the duty is 22 %.
+    assert_eq!(
+        charge(market("IT", "EUR"), Some("CN"))
+            .await
+            .map(|charge| charge.duty_cents),
+        Some(366)
+    );
+    // From a warehouse inside the EU, or to a market outside it: nothing.
+    assert_eq!(charge(market("FR", "EUR"), Some("ES")).await, None);
+    assert_eq!(charge(market("US", "USD"), Some("CN")).await, None);
+    // Another currency, at the day's rate: 3.69 € of duty (Poland's VAT is
+    // 23 %) at 4.25 is 15.68 zł.
+    assert_eq!(
+        charge(market("PL", "PLN"), Some("CN")).await,
+        Some(timada_aliexpress::ImportCharge {
+            duty_cents: 1_568,
+            fee_cents: 850,
+            low_value_cents: 63_750,
+            vat_bps: 2_300,
+        })
+    );
+    // No euro rate for the currency: priced without, said in the log.
+    assert_eq!(charge(market("SE", "SEK"), Some("CN")).await, None);
+    // The operator charges nothing.
+    let free = Shop::new().await;
+    assert_eq!(
+        free.aliexpress
+            .import_charge(&market("FR", "EUR"), Some("CN"), now)
+            .await,
+        None
+    );
 }
 
 #[tokio::test]

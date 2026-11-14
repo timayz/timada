@@ -113,6 +113,28 @@ products: delivery seldom moves on its own, so the node keeps what it last read 
 asked about costs something else, or a week went by. A read before a payment, or for a
 member, asks both every time.
 
+What a combination **costs** the shop, which its price rule prices from, is three
+things:
+
+- what AliExpress asks for it, VAT included (`price_include_tax`);
+- what delivering one to the shop's country costs;
+- for goods AliExpress ships into the EU from outside, what it adds to the order for
+  them. That is the flat customs duty of a parcel worth 150 EUR or less, with the
+  destination's VAT on it, and the processing fee of any parcel, each counted per
+  kind of goods in the parcel. The amounts are operator settings, as the law dates
+  them: `[aliexpress] import_duty_cents` (3 EUR from 2026-07-01 until 2028-07-01) and
+  `import_fee_cents` (2 EUR from 2026-11-01).
+
+Each product is priced as one kind of goods. The delivery answer says where goods ship
+from (`ship_from_country`); an answer that does not say is taken for China, where most
+of them ship from. A shop buying in another currency converts the euro amounts at the
+day's rate of the European Central Bank, and prices without them when it has none. A
+product worth more than 150 EUR before VAT carries the fee alone: the duties it pays
+instead hang on its customs heading, which no read tells. The product read carries no
+import charge, and AliExpress bills these charges with the order (#557: an order shipped
+from China to Italy on 2026-11-04 paid 5.66 of tax on 6.28 of goods and delivery, an
+order from a German warehouse its 19 % VAT alone).
+
 Each node goes through the imported products due, its own share, and asks for each to
 be read again: a `SyncRequested` on the item's stream, which says who asked. A product
 is due when it was last tried longer ago than `[aliexpress] sync_every_secs` (a day).

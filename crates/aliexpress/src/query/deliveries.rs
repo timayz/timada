@@ -29,12 +29,13 @@ pub async fn note_delivery(
 ) -> anyhow::Result<()> {
     db.execute(
         "INSERT INTO aliexpress_deliveries (tenant_id, id, sku_id, sku_cost_cents, fee_cents,
-            min_days, max_days, read_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            min_days, max_days, ships_from, read_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             sku_id = excluded.sku_id, sku_cost_cents = excluded.sku_cost_cents,
             fee_cents = excluded.fee_cents, min_days = excluded.min_days,
-            max_days = excluded.max_days, read_at = excluded.read_at",
+            max_days = excluded.max_days, ships_from = excluded.ships_from,
+            read_at = excluded.read_at",
         (
             tenant_id,
             link_id,
@@ -43,6 +44,7 @@ pub async fn note_delivery(
             delivery.fee_cents as i64,
             delivery.days.map(|days| i64::from(days.min)),
             delivery.days.map(|days| i64::from(days.max)),
+            delivery.ships_from.as_deref(),
             at as i64,
         ),
     )
@@ -59,34 +61,46 @@ pub async fn delivery_read(
 ) -> anyhow::Result<Option<DeliveryRead>> {
     let row: Option<DeliveryRow> = db
         .fetch_optional(
-            "SELECT sku_id, sku_cost_cents, fee_cents, min_days, max_days, read_at
+            "SELECT sku_id, sku_cost_cents, fee_cents, min_days, max_days, ships_from, read_at
              FROM aliexpress_deliveries WHERE tenant_id = ?1 AND id = ?2",
             (tenant_id, link_id),
         )
         .await?;
     Ok(row.map(
-        |(sku_id, sku_cost_cents, fee_cents, min_days, max_days, read_at)| DeliveryRead {
-            delivery: Delivery {
-                sku_id,
-                sku_cost_cents: sku_cost_cents.max(0) as u64,
-                fee_cents: fee_cents.max(0) as u64,
-                days: match (min_days, max_days) {
-                    (Some(min), Some(max)) => DeliveryDays::new(
-                        min.clamp(0, i64::from(u16::MAX)) as u16,
-                        max.clamp(0, i64::from(u16::MAX)) as u16,
-                    )
-                    .ok(),
-                    _ => None,
+        |(sku_id, sku_cost_cents, fee_cents, min_days, max_days, ships_from, read_at)| {
+            DeliveryRead {
+                delivery: Delivery {
+                    sku_id,
+                    sku_cost_cents: sku_cost_cents.max(0) as u64,
+                    fee_cents: fee_cents.max(0) as u64,
+                    days: match (min_days, max_days) {
+                        (Some(min), Some(max)) => DeliveryDays::new(
+                            min.clamp(0, i64::from(u16::MAX)) as u16,
+                            max.clamp(0, i64::from(u16::MAX)) as u16,
+                        )
+                        .ok(),
+                        _ => None,
+                    },
+                    ships_from,
                 },
-            },
-            read_at: read_at.max(0) as u64,
+                read_at: read_at.max(0) as u64,
+            }
         },
     ))
 }
 
 /// A row of `aliexpress_deliveries`: the combination asked about, its cost,
-/// the fee, the days at the soonest and the latest, when it was read.
-type DeliveryRow = (String, i64, i64, Option<i64>, Option<i64>, i64);
+/// the fee, the days at the soonest and the latest, the country it ships
+/// from, when it was read.
+type DeliveryRow = (
+    String,
+    i64,
+    i64,
+    Option<i64>,
+    Option<i64>,
+    Option<String>,
+    i64,
+);
 
 /// The item is no longer read: what delivering it cost goes.
 pub async fn forget_delivery(db: &Db, tenant_id: &str, link_id: &str) -> anyhow::Result<()> {
