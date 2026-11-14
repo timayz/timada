@@ -6,11 +6,13 @@
 //! The figures are this node's: whether it is ready, how far each read model
 //! trails the store, its workers by state, the writes it keeps for nodes
 //! that are away, the nodes it gave up on, its live store connections by
-//! tenant, and the consensus engine's own counters (evento's), every series
+//! tenant, the size of the store's files, and the consensus engine's own
+//! counters (evento's), every series
 //! labelled with the node's id so one scrape of three nodes tells them apart.
 
 use std::fmt::Write as _;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
@@ -39,8 +41,16 @@ impl MetricsServer {
     }
 }
 
-/// Serves `/metrics` and `/ready` on `listen`.
-pub async fn serve(listen: SocketAddr, readiness: Arc<Readiness>) -> Result<MetricsServer> {
+/// Where the store's file is, for the sizes `/metrics` gives.
+#[derive(Clone)]
+struct StorePath(Arc<PathBuf>);
+
+/// Serves `/metrics` and `/ready` on `listen`; `store` is the store's file.
+pub async fn serve(
+    listen: SocketAddr,
+    readiness: Arc<Readiness>,
+    store: &Path,
+) -> Result<MetricsServer> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .with_context(|| format!("cannot bind the metrics listener on {listen}"))?;
@@ -49,6 +59,7 @@ pub async fn serve(listen: SocketAddr, readiness: Arc<Readiness>) -> Result<Metr
         .route(RouteFn::new(Method::GET, "/metrics", metrics_route))
         .route(RouteFn::new(Method::GET, "/ready", ready_route))
         .with(readiness)
+        .with(StorePath(Arc::new(store.to_path_buf())))
         .build();
     let (stop, stopped) = oneshot::channel();
     let task = tokio::spawn(async move {
@@ -70,7 +81,12 @@ fn metrics_route(cx: &Cx, _body: Body) -> RouteFuture<'_> {
             .report()
             .await
             .map_err(topcoat::Error::from_anyhow)?;
-        let body = render(readiness, &report);
+        let store = context::<StorePath>(cx);
+        let mut body = render(readiness, &report);
+        body.push_str(&render_store(
+            &readiness.cluster().health().id.0.to_string(),
+            store_sizes(&store.0),
+        ));
         let mut response = Response::new(Body::from(body));
         response.headers_mut().insert(
             CONTENT_TYPE,
@@ -149,6 +165,30 @@ fn render(readiness: &Readiness, report: &Report) -> String {
     out
 }
 
+/// The sizes of the store's file, its write-ahead log and its commit log
+/// (`db::store_files`), a file that is not there counting for nothing.
+fn store_sizes(store: &Path) -> [u64; 3] {
+    crate::db::store_files(store).map(|file| std::fs::metadata(file).map_or(0, |m| m.len()))
+}
+
+/// The store's files by size. The file itself only grows; the two logs are
+/// emptied at each checkpoint (a few megabytes apart), so one that keeps
+/// growing says the checkpoints fail.
+fn render_store(node: &str, sizes: [u64; 3]) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "# TYPE timada_store_bytes gauge");
+    for (file, bytes) in ["database", "write_ahead_log", "commit_log"]
+        .iter()
+        .zip(sizes)
+    {
+        let _ = writeln!(
+            out,
+            "timada_store_bytes{{node=\"{node}\",file=\"{file}\"}} {bytes}"
+        );
+    }
+    out
+}
+
 /// A label value, as the text format wants it.
 fn escape(value: &str) -> String {
     value
@@ -165,5 +205,24 @@ mod tests {
     fn label_values_are_escaped() {
         assert_eq!(escape("plain"), "plain");
         assert_eq!(escape("a\"b\\c\nd"), "a\\\"b\\\\c\\nd");
+    }
+
+    #[test]
+    fn the_store_s_files_are_sized_one_by_one() {
+        let dir = std::env::temp_dir().join(format!("timada-metrics-{}", ulid::Ulid::generate()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = dir.join("timada.db");
+        std::fs::write(&store, [0u8; 10]).unwrap();
+        std::fs::write(crate::db::with_suffix(&store, "-log"), [0u8; 3]).unwrap();
+        // No write-ahead log yet: it counts for nothing.
+        assert_eq!(store_sizes(&store), [10, 0, 3]);
+        assert_eq!(
+            render_store("2", [10, 0, 3]),
+            "# TYPE timada_store_bytes gauge\n\
+             timada_store_bytes{node=\"2\",file=\"database\"} 10\n\
+             timada_store_bytes{node=\"2\",file=\"write_ahead_log\"} 0\n\
+             timada_store_bytes{node=\"2\",file=\"commit_log\"} 3\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
