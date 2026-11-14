@@ -31,9 +31,8 @@
 //! one), while the tombstone replaces the key in one step (a rename). A
 //! tombstone holds nothing, a key id being random, and takes the name the
 //! key took. It stays for good: a peer that has not destroyed the key yet
-//! would otherwise hand it back to whoever asks, and the shoppers context
-//! asks for the key of a deleted account again when its address signs in
-//! once more.
+//! would otherwise hand it back to whoever asks, the mail of a code asked
+//! for before the account's deletion, say.
 //!
 //! Every key file, a tombstone too, is on the disk before it takes its name
 //! ([`crate::disk`]), so a power cut never leaves an empty one, which would
