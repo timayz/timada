@@ -12,12 +12,17 @@ port = 3000
 # invoices, mails) is done by the nodes of that region alone; the pages and
 # their lists see every region. Omit for a single-region deployment, where
 # every node does all the work. Data keeps the region it was created in: the
-# background work on data created without one is done by the nodes without one
-# alone, and by no node once every node has a region.
+# background work on data created without one is done by the nodes without
+# one, and by those that say `also_serves_no_region`.
 # region = "eu-west-1"
 # Regions whose background work this node also takes on, e.g. while that
 # region's nodes are down. Needs `region`.
 # also_serves = ["us-east-3"]
+# Also take on the background work on the data created without a region. Set
+# it on at least one node when giving regions to a deployment that ran
+# without them, and keep it: otherwise no node does that work once every node
+# has a region. Needs `region`.
+# also_serves_no_region = true
 # Reverse proxies whose X-Forwarded-For header is trusted, as IP addresses or
 # CIDR networks. Without it the sign-in history records the proxy's address.
 # Behind the Docker-hosted Traefik of compose.yml: ["172.16.0.0/12"].

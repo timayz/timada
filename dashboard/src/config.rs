@@ -173,8 +173,8 @@ pub struct ServerConfig {
     /// cluster that never had regions), and the nodes without a region
     /// share that work. A stream keeps the key it was created with: the
     /// work on the streams created before the nodes had a region stays with
-    /// the nodes without one, so no node does it once every node has a
-    /// region (#517).
+    /// the nodes without one, and with the nodes that say
+    /// `also_serves_no_region`.
     #[serde(default)]
     pub region: Option<String>,
     /// Regions whose background work this node also takes on, e.g. while
@@ -186,6 +186,15 @@ pub struct ServerConfig {
     /// `region`.
     #[serde(default)]
     pub also_serves: Vec<String>,
+    /// Whether this node also takes on the background work on the data
+    /// created without a region: what a cluster that ran without regions
+    /// holds from before its nodes got one (#517). It gets a copy of every
+    /// saga subscription, filtered on no key (`.no_routing_key()`) under
+    /// the saga's bare cursor key: the cursor this node had while it was
+    /// without a region, so it goes on from where it stopped then. What
+    /// those sagas create is written in this node's region. Needs `region`.
+    #[serde(default)]
+    pub also_serves_no_region: bool,
     /// Reverse proxies allowed to report the client's address through
     /// `X-Forwarded-For`, as IP addresses or CIDR networks. Empty: the
     /// connection's peer address is the client.
@@ -1015,6 +1024,11 @@ impl ServerConfig {
                 "server.also_serves needs server.region: a node takes on other regions' work besides its own region's".into(),
             ));
         }
+        if self.also_serves_no_region && self.region.is_none() {
+            return Err(ConfigError::Message(
+                "server.also_serves_no_region needs server.region: a node without a region already does the work on the data created without one".into(),
+            ));
+        }
         for (i, served) in self.also_serves.iter().enumerate() {
             if served.is_empty() || served.contains(char::is_whitespace) {
                 return Err(ConfigError::Message(format!(
@@ -1167,6 +1181,7 @@ mod tests {
             port: 3000,
             region: None,
             also_serves: Vec::new(),
+            also_serves_no_region: false,
             trusted_proxies: trusted_proxies.iter().map(|s| s.to_string()).collect(),
         }
     }
@@ -1198,6 +1213,17 @@ mod tests {
         assert!(err.to_string().contains("one word"), "{err}");
         assert!(regions(Some(""), &[]).validate().is_err());
         assert!(regions(Some("eu"), &["us east"]).validate().is_err());
+    }
+
+    #[test]
+    fn serving_the_data_without_a_region_needs_a_region() {
+        let no_region = |region: Option<&str>| ServerConfig {
+            also_serves_no_region: true,
+            ..regions(region, &[])
+        };
+        assert!(no_region(Some("eu")).validate().is_ok());
+        let err = no_region(None).validate().unwrap_err();
+        assert!(err.to_string().contains("server.region"), "{err}");
     }
 
     #[test]

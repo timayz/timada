@@ -155,8 +155,9 @@ pub fn clear_catch_up_mark(store: &Path) -> Result<()> {
 /// Opens the node over the store at `store_path` and starts it. Single node
 /// when `cluster` is `None`. `region`, when set, is the default routing key
 /// stamped on every new aggregate this node writes; with `also_serves`, the
-/// regions whose work this node does. It tells the other nodes which they
-/// are, or that it has none ([`label`]).
+/// regions whose work this node does, and with `also_serves_no_region` it
+/// does the work on what was written without one too. It tells the other
+/// nodes which they are, or that it has none ([`label`]).
 ///
 /// When the store is marked for a copy (see [`mark_for_rejoin`]) and the
 /// node has peers, the store is emptied (the journal is kept), the read
@@ -170,6 +171,7 @@ pub async fn open(
     cluster: Option<&ClusterConfig>,
     region: Option<&str>,
     also_serves: &[String],
+    also_serves_no_region: bool,
     store_path: &Path,
     store: Store,
 ) -> Result<(Arc<Cluster>, Executor, LocalReads)> {
@@ -179,7 +181,7 @@ pub async fn open(
     let (cluster, executor) = Cluster::builder(store)
         .settings(cluster.map(ClusterConfig::settings))
         .state_dir(state_dir(store_path))
-        .label(label(region, also_serves))
+        .label(label(region, also_serves, also_serves_no_region))
         .before_copy(move || async move {
             crate::db::reset_store_read_models(&read_models)
                 .await
@@ -212,13 +214,18 @@ pub fn node_name(cluster: &Cluster) -> String {
 /// regions whose events its sagas follow, its own first (`eu us`, one word
 /// each as `Config::load` makes sure). A node without a region follows the
 /// events written without one, which a label names with the empty word: it
-/// says the empty label. Every node says one, so a node whose label has not
-/// come in yet is never taken for a node without a region.
-pub fn label(region: Option<&str>, also_serves: &[String]) -> String {
+/// says the empty label. A node with a region that follows them too
+/// (`also_serves_no_region`) ends its label with the empty word (`eu us `).
+/// Every node says a label, so a node whose label has not come in yet is
+/// never taken for a node without a region.
+pub fn label(region: Option<&str>, also_serves: &[String], also_serves_no_region: bool) -> String {
     let mut label = region.unwrap_or_default().to_owned();
     for served in also_serves {
         label.push(' ');
         label.push_str(served);
+    }
+    if also_serves_no_region && region.is_some() {
+        label.push(' ');
     }
     label
 }
@@ -237,7 +244,8 @@ pub enum Among<'a> {
     /// every node keeps whole, whatever its region.
     All,
     /// The nodes up that see the events written under this region (`None`:
-    /// without one, which the nodes without a region see): the work a saga
+    /// without one, which the nodes without a region see, and those with
+    /// one that also serve them): the work a saga
     /// is told about, which must fall to a node that sees its event, as the
     /// sagas follow their node's region. A node whose label has not come in
     /// yet counts for no region until it does.
@@ -343,10 +351,10 @@ mod tests {
 
     #[test]
     fn a_label_names_the_regions_a_node_serves() {
-        assert_eq!(label(None, &[]), "");
-        assert_eq!(label(Some("eu"), &[]), "eu");
+        assert_eq!(label(None, &[], false), "");
+        assert_eq!(label(Some("eu"), &[], false), "eu");
         assert_eq!(
-            label(Some("eu"), &["us".to_owned(), "ap".to_owned()]),
+            label(Some("eu"), &["us".to_owned(), "ap".to_owned()], false),
             "eu us ap"
         );
         assert!(serves("eu us ap", Some("eu")));
@@ -358,6 +366,29 @@ mod tests {
         assert!(serves("", None));
         assert!(!serves("", Some("us")));
         assert!(!serves("eu us ap", None));
+    }
+
+    #[test]
+    fn a_node_with_a_region_says_when_it_serves_the_events_without_one() {
+        let keyless = label(Some("eu"), &[], true);
+        assert_eq!(keyless, "eu ");
+        assert!(serves(&keyless, None));
+        assert!(serves(&keyless, Some("eu")));
+        assert!(!serves(&keyless, Some("us")));
+        let more = label(Some("eu"), &["us".to_owned()], true);
+        assert_eq!(more, "eu us ");
+        assert!(serves(&more, None) && serves(&more, Some("us")));
+        // A node without a region says the empty label either way.
+        assert_eq!(label(None, &[], true), "");
+
+        // Every node has a region now, and node 2 took the work on what was
+        // written before: it does all of it, and its part of eu's.
+        let all = live(&[(0, Some("eu")), (1, Some("eu")), (2, Some("eu "))]);
+        assert_eq!(place_among(NodeId(2), &all, Among::Region(None)), (0, 1));
+        assert_eq!(
+            place_among(NodeId(2), &all, Among::Region(Some("eu"))),
+            (2, 3)
+        );
     }
 
     #[test]
