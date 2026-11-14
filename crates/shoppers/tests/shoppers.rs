@@ -10,12 +10,26 @@ use timada_orders::ShippingAddress;
 use timada_shoppers::CodeVerifier;
 use timada_shoppers::aggregator::ShopperChallenge;
 use timada_shoppers::{
-    CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, Command, MAX_ADDRESSES,
-    SESSION_TTL_SECS, Shopper, ShopperError, ShopperKeys, ShopperState,
+    CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, CodeMail, CodeMailClaim, Command,
+    MAX_ADDRESSES, SESSION_TTL_SECS, Shopper, ShopperError, ShopperKeys, ShopperState,
 };
 
 const NOW: u64 = 1_700_000_000;
 const EMAIL: &str = "Ada@Example.com";
+
+/// The mail a claim took, if it took the send.
+trait Taken {
+    fn taken(self) -> Option<CodeMail>;
+}
+
+impl Taken for CodeMailClaim {
+    fn taken(self) -> Option<CodeMail> {
+        match self {
+            CodeMailClaim::Taken(mail) => Some(mail),
+            CodeMailClaim::Left | CodeMailClaim::Unreadable => None,
+        }
+    }
+}
 
 /// The commands over one in-memory store, with the keys they keep.
 struct Shoppers {
@@ -449,6 +463,7 @@ async fn a_node_behind_on_a_deletion_seals_the_next_code_under_a_fresh_key() {
         )
         .await
         .unwrap()
+        .taken()
         .expect("the code is mailed");
     assert_eq!(mail.email, "ada@example.com");
     assert_eq!(mail.code, issued.code);
@@ -521,6 +536,171 @@ async fn a_code_from_before_a_deletion_registers_afresh_on_a_node_behind() {
         .unwrap()
         .unwrap();
     assert_eq!(challenge.key_id, registered.key_id);
+}
+
+#[tokio::test]
+async fn a_code_asked_for_as_the_account_is_deleted_is_mailed_under_a_fresh_key() {
+    let shoppers = shoppers().await;
+    let one = signed_in(&shoppers, EMAIL, NOW).await;
+    let first = shoppers
+        .load_shopper(&one.shopper_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // A signed-out browser asks for a code while another deletes the
+    // account: the request read the account standing, and its code's write
+    // lands only after the deletion.
+    let rigged = Rigged::new(shoppers.store.clone())
+        .hold_first_until::<ShopperChallenge, timada_shoppers::aggregator::Shopper>();
+    let (held, deleting) = (
+        Command::new(rigged.clone(), TENANT),
+        Command::new(rigged.clone(), TENANT),
+    );
+    let verifier = codes();
+    let (asked, deleted) = tokio::join!(
+        held.issue_code(
+            &shoppers.keys,
+            &verifier,
+            EMAIL,
+            None,
+            NOW + CODE_RESEND_AFTER_SECS
+        ),
+        async {
+            rigged.parked().await;
+            deleting.forget(&shoppers.keys, &one.shopper_id, None).await
+        },
+    );
+    deleted.unwrap();
+    let issued = asked.unwrap();
+
+    let challenge = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(challenge.key_id, first.key_id, "never the destroyed key");
+    assert!(shoppers.keys.has(&challenge.key_id));
+    assert_eq!(shoppers.keys.len(), 1, "the destroyed key stays destroyed");
+    let mail = shoppers
+        .claim_code_mail(
+            &shoppers.keys,
+            &codes(),
+            &challenge.id,
+            challenge.issued_version,
+            Claimant {
+                node: "node-a",
+                now: NOW + CODE_RESEND_AFTER_SECS,
+            },
+        )
+        .await
+        .unwrap()
+        .taken()
+        .expect("the code is mailed");
+    assert_eq!(mail.email, "ada@example.com");
+    assert_eq!(mail.code, issued.code);
+    next_millisecond().await;
+    shoppers
+        .sign_in(
+            &shoppers.keys,
+            &codes(),
+            EMAIL,
+            &issued.code,
+            NOW + CODE_RESEND_AFTER_SECS + 1,
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_code_the_accounts_deletion_left_unreadable_holds_back_no_new_one() {
+    let shoppers = shoppers().await;
+    let one = signed_in(&shoppers, EMAIL, NOW).await;
+    // Asked for while the account stands, and deleted before it went out.
+    shoppers
+        .issue_code(
+            &shoppers.keys,
+            &codes(),
+            EMAIL,
+            None,
+            NOW + CODE_RESEND_AFTER_SECS,
+        )
+        .await
+        .unwrap();
+    let unread = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    shoppers
+        .forget(&shoppers.keys, &one.shopper_id, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        shoppers
+            .claim_code_mail(
+                &shoppers.keys,
+                &codes(),
+                &unread.id,
+                unread.issued_version,
+                Claimant {
+                    node: "node-a",
+                    now: NOW + CODE_RESEND_AFTER_SECS,
+                },
+            )
+            .await
+            .unwrap(),
+        CodeMailClaim::Unreadable,
+        "no node can open the address"
+    );
+
+    // Within that code's resend window, the shopper asks again: a new code,
+    // under a key of its own, which is mailed.
+    let issued = shoppers
+        .issue_code(
+            &shoppers.keys,
+            &codes(),
+            EMAIL,
+            None,
+            NOW + CODE_RESEND_AFTER_SECS + 1,
+        )
+        .await
+        .unwrap();
+    let challenge = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(challenge.key_id, unread.key_id);
+    let mail = shoppers
+        .claim_code_mail(
+            &shoppers.keys,
+            &codes(),
+            &challenge.id,
+            challenge.issued_version,
+            Claimant {
+                node: "node-a",
+                now: NOW + CODE_RESEND_AFTER_SECS + 1,
+            },
+        )
+        .await
+        .unwrap()
+        .taken()
+        .expect("the new code is mailed");
+    assert_eq!(mail.code, issued.code);
+    // That one holds the next back, as any code does.
+    assert!(matches!(
+        shoppers
+            .issue_code(
+                &shoppers.keys,
+                &codes(),
+                EMAIL,
+                None,
+                NOW + CODE_RESEND_AFTER_SECS + 2,
+            )
+            .await,
+        Err(ShopperError::CodeRecentlySent)
+    ));
 }
 
 /// Bytes that hold `needle` anywhere.
@@ -713,11 +893,12 @@ async fn a_codes_mail_is_taken_by_one_node_with_the_address_opened() {
         )
         .await
         .unwrap()
+        .taken()
         .expect("node-a takes the send");
     assert_eq!(mail.email, "ada@example.com");
     assert_eq!(mail.language.as_deref(), Some("fr"));
     assert_eq!(mail.code, issued.code);
-    assert!(
+    assert_eq!(
         shoppers
             .claim_code_mail(
                 &shoppers.keys,
@@ -730,8 +911,8 @@ async fn a_codes_mail_is_taken_by_one_node_with_the_address_opened() {
                 },
             )
             .await
-            .unwrap()
-            .is_none(),
+            .unwrap(),
+        CodeMailClaim::Left,
         "node-b leaves it"
     );
     assert!(
@@ -748,6 +929,7 @@ async fn a_codes_mail_is_taken_by_one_node_with_the_address_opened() {
             )
             .await
             .unwrap()
+            .taken()
             .is_some(),
         "the holder retries"
     );
@@ -765,7 +947,7 @@ async fn a_codes_mail_is_taken_by_one_node_with_the_address_opened() {
         timada_core::Sending::Sent
     );
     // Replayed: nothing more.
-    assert!(
+    assert_eq!(
         shoppers
             .claim_code_mail(
                 &shoppers.keys,
@@ -778,8 +960,8 @@ async fn a_codes_mail_is_taken_by_one_node_with_the_address_opened() {
                 },
             )
             .await
-            .unwrap()
-            .is_none()
+            .unwrap(),
+        CodeMailClaim::Left
     );
     shoppers
         .record_code_mail_sent(&challenge.id, version)
@@ -836,6 +1018,7 @@ async fn a_code_typed_while_its_mail_is_recorded_is_checked_on_the_fresh_stream(
         )
         .await
         .unwrap()
+        .taken()
         .expect("node-a takes the send");
 
     // The mail reached Ada, who typed the code before node-a recorded the
@@ -890,6 +1073,7 @@ async fn a_code_typed_while_its_mail_is_recorded_is_checked_on_the_fresh_stream(
         )
         .await
         .unwrap()
+        .taken()
         .expect("node-a takes the send");
     let wrong = if issued.code == "000000" {
         "000001"
@@ -952,6 +1136,7 @@ async fn a_code_asked_while_the_last_ones_mail_is_recorded_is_issued() {
         )
         .await
         .unwrap()
+        .taken()
         .expect("node-a takes the send");
     // Ada signs in before node-a records the send, then asks for a new code
     // at once: her request is held at the challenge while the record lands.
@@ -1052,6 +1237,7 @@ async fn an_undeliverable_code_frees_the_resend_window_and_a_deleted_key_mails_n
         )
         .await
         .unwrap()
+        .taken()
         .expect("taken");
     assert!(matches!(
         shoppers
@@ -1078,7 +1264,7 @@ async fn an_undeliverable_code_frees_the_resend_window_and_a_deleted_key_mails_n
     assert_eq!(state.key_id, first.key_id);
     assert_eq!(shoppers.keys.len(), 1);
     // The first code's event, replayed, mails nothing.
-    assert!(
+    assert_eq!(
         shoppers
             .claim_code_mail(
                 &shoppers.keys,
@@ -1091,8 +1277,8 @@ async fn an_undeliverable_code_frees_the_resend_window_and_a_deleted_key_mails_n
                 },
             )
             .await
-            .unwrap()
-            .is_none()
+            .unwrap(),
+        CodeMailClaim::Left
     );
     let mail = shoppers
         .claim_code_mail(
@@ -1107,12 +1293,14 @@ async fn an_undeliverable_code_frees_the_resend_window_and_a_deleted_key_mails_n
         )
         .await
         .unwrap()
+        .taken()
         .expect("the second code is mailed");
     assert_eq!(mail.code, second.code);
     // The account deleted, its key gone: the address is unreadable, and
-    // nothing is mailed; the next code draws a fresh key.
+    // nothing is mailed, not even by the node retrying its send; the next
+    // code draws a fresh key.
     shoppers.keys.delete(&state.key_id).await.unwrap();
-    assert!(
+    assert_eq!(
         shoppers
             .claim_code_mail(
                 &shoppers.keys,
@@ -1120,13 +1308,13 @@ async fn an_undeliverable_code_frees_the_resend_window_and_a_deleted_key_mails_n
                 &state.id,
                 state.issued_version,
                 Claimant {
-                    node: "node-b",
+                    node: "node-a",
                     now: NOW + 12,
                 },
             )
             .await
-            .unwrap()
-            .is_none()
+            .unwrap(),
+        CodeMailClaim::Unreadable
     );
     shoppers
         .issue_code(

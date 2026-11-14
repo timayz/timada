@@ -469,7 +469,7 @@ impl Mailroom {
                 Ok(Outcome::Sent) => sent += 1,
                 Ok(Outcome::Recorded) => {}
                 Ok(Outcome::Left) => self.put_off(owed, at, at + LOOK_AGAIN_SECS).await,
-                Ok(Outcome::Dropped) => self.forget(owed, at).await,
+                Ok(Outcome::Dropped) => self.forget(owed).await,
                 Ok(Outcome::Deferred) => {
                     tracing::warn!(lane = %lane.0, "a shop's mail server failed a send: its other mails wait for the retry");
                     for rest in mails.by_ref() {
@@ -493,13 +493,14 @@ impl Mailroom {
     }
 
     /// Moves `owed`'s next look to `until`, unless the table moved it past
-    /// `now` meanwhile (the subscription saw a claim or a deferral).
+    /// `now` meanwhile (the subscription saw a claim or a deferral), or its
+    /// stream recorded a newer intent, which is due as recorded.
     async fn put_off(&self, owed: &OwedMail, now: u64, until: u64) {
         if let Err(err) = self
             .db
             .execute(
                 "UPDATE owed_mails SET due_at = ?4
-                 WHERE kind = ?1 AND tenant_id = ?2 AND stream_id = ?3
+                 WHERE kind = ?1 AND tenant_id = ?2 AND stream_id = ?3 AND version = ?6
                    AND failed = 0 AND due_at <= ?5",
                 (
                     owed.kind.as_str(),
@@ -507,6 +508,7 @@ impl Mailroom {
                     owed.stream_id.as_str(),
                     until as i64,
                     now as i64,
+                    owed.version,
                 ),
             )
             .await
@@ -516,13 +518,21 @@ impl Mailroom {
     }
 
     /// Forgets `owed`: nothing is owed after all. Every node that owes it
-    /// reaches the same conclusion from the same streams.
-    async fn forget(&self, owed: &OwedMail, now: u64) {
-        let Some(kind) = owed.kind() else {
-            return;
-        };
+    /// reaches the same conclusion from the same streams. A newer intent
+    /// its stream recorded meanwhile (a code issued again) stays owed.
+    async fn forget(&self, owed: &OwedMail) {
         if let Err(err) = self
-            .record(kind, &owed.tenant_id, &owed.stream_id, Change::Settled, now)
+            .db
+            .execute(
+                "DELETE FROM owed_mails
+                 WHERE kind = ?1 AND tenant_id = ?2 AND stream_id = ?3 AND version = ?4",
+                (
+                    owed.kind.as_str(),
+                    owed.tenant_id.as_str(),
+                    owed.stream_id.as_str(),
+                    owed.version,
+                ),
+            )
             .await
         {
             tracing::warn!(error = %format!("{err:#}"), "an owed mail could not be dropped");
@@ -822,6 +832,42 @@ pub(crate) mod tests {
         room.sweep(now + FAILED_KEPT_SECS - 1).await.unwrap();
         assert_eq!(rows(&store).await.len(), 1);
         room.sweep(now + FAILED_KEPT_SECS).await.unwrap();
+        assert!(rows(&store).await.is_empty());
+    }
+
+    /// A lane puts off or drops the intent it looked at, never the newer
+    /// one its stream recorded meanwhile: a code issued again while a lane
+    /// looked at the one it replaces stays owed, and due at once (#576).
+    #[tokio::test]
+    async fn a_lane_leaves_a_newer_intent_alone() {
+        let store = store().await;
+        let room = room(&store, topcoat::mail::MemoryTransport::new(), "node-a");
+        let now = 1_000;
+        let owe = |version| {
+            room.record(
+                Kind::ShopperCode,
+                "acme",
+                "challenge-1",
+                Change::Owed {
+                    version,
+                    expires_at: now + 600,
+                },
+                now,
+            )
+        };
+        owe(1).await.unwrap();
+        let looked = rows(&store).await.remove(0);
+        owe(2).await.unwrap();
+        room.put_off(&looked, now, now + LOOK_AGAIN_SECS).await;
+        room.forget(&looked).await;
+        let owed = rows(&store).await;
+        assert_eq!(owed.len(), 1, "still owed");
+        assert_eq!((owed[0].version, owed[0].due_at), (2, now as i64));
+
+        // The intent it looked at is put off, and dropped.
+        room.put_off(&owed[0], now, now + LOOK_AGAIN_SECS).await;
+        assert_eq!(rows(&store).await[0].due_at, (now + LOOK_AGAIN_SECS) as i64);
+        room.forget(&owed[0]).await;
         assert!(rows(&store).await.is_empty());
     }
 }

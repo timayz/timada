@@ -88,10 +88,11 @@ pub struct Rigged {
     hold: Option<Arc<Hold>>,
 }
 
-/// The first write to one aggregate type waits until the next write to it
-/// has landed; later writes pass.
+/// The first write to one aggregate type waits until the next write to
+/// another (or the same) has landed; later writes pass.
 struct Hold {
     aggregate_type: &'static str,
+    released_by: &'static str,
     came: AtomicBool,
     parked: Notify,
     passed: Notify,
@@ -104,9 +105,16 @@ impl Rigged {
 
     /// Holds the first write to an `A` stream until another write to one
     /// has landed: the two race, and the second wins.
-    pub fn hold_first<A: Aggregate>(mut self) -> Self {
+    pub fn hold_first<A: Aggregate>(self) -> Self {
+        self.hold_first_until::<A, A>()
+    }
+
+    /// Holds the first write to an `A` stream until a write to a `B` stream
+    /// has landed: what the held command read of `B` is stale by then.
+    pub fn hold_first_until<A: Aggregate, B: Aggregate>(mut self) -> Self {
         self.hold = Some(Arc::new(Hold {
             aggregate_type: A::aggregate_type(),
+            released_by: B::aggregate_type(),
             came: AtomicBool::new(false),
             parked: Notify::new(),
             passed: Notify::new(),
@@ -125,20 +133,24 @@ impl Rigged {
 #[async_trait::async_trait]
 impl Executor for Rigged {
     async fn write(&self, events: Vec<evento::Event>) -> Result<(), WriteError> {
-        let Some(hold) = self.hold.as_ref().filter(|hold| {
-            events
-                .iter()
-                .any(|event| event.aggregate_type == hold.aggregate_type)
-        }) else {
+        let Some(hold) = &self.hold else {
             return self.store.write(events).await;
         };
-        if !hold.came.swap(true, Ordering::SeqCst) {
+        let names = |aggregate_type: &str| {
+            events
+                .iter()
+                .any(|event| event.aggregate_type == aggregate_type)
+        };
+        let (held, releases) = (names(hold.aggregate_type), names(hold.released_by));
+        if held && !hold.came.swap(true, Ordering::SeqCst) {
             hold.parked.notify_one();
             hold.passed.notified().await;
             return self.store.write(events).await;
         }
         let written = self.store.write(events).await;
-        hold.passed.notify_one();
+        if releases {
+            hold.passed.notify_one();
+        }
         written
     }
 
