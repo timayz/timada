@@ -2,9 +2,11 @@
 //! product: nothing in the event store fires later, and a platform with more
 //! products than its app may read in a day has to choose. So each node goes
 //! through the links due of its own share in the read model, the most useful
-//! first, and asks for each with a `SyncRequested` (see [`super::subscription`]
-//! for the read) as fast as the day's budget of calls allows ([`super::budget`]).
-//! What sales spend comes out of it, so the sweep gets what they leave.
+//! first, and reads each as fast as the day's budget of calls allows
+//! ([`super::budget`]). What sales spend comes out of it, so the sweep gets
+//! what they leave. A read asked for is no event: the node an item belongs to
+//! is the one that reads it, and the item's stream hears only of what a read
+//! found (#472).
 //!
 //! The open orders of this node's share placed on AliExpress that no push came
 //! for in a while (see [`super::forward`], [`super::webhook`]), and the parcels
@@ -31,12 +33,13 @@ use timada_aliexpress::{
     note_parcels_delivered, note_parcels_followed, note_tried, note_unrecorded_try, parcels_due,
     unrecorded,
 };
+use timada_tenancy::{CompanyState, TenantState};
 use tokio::task::JoinHandle;
 
 use super::budget::Lane;
 use super::forward::{CheckResult, MAY_HAVE_PLACED};
 
-use super::{ALIEXPRESS_ACTOR, Aliexpress};
+use super::{ALIEXPRESS_ACTOR, Aliexpress, SyncMode};
 use crate::cluster::Executor;
 
 /// The most accounts or orders one pass of the timer goes through, over
@@ -117,7 +120,7 @@ impl AliexpressSync {
         loop {
             let now = crate::auth::now();
             let went_through = match lane {
-                Lane::Products => self.ask_due(now).await,
+                Lane::Products => self.read_due(now).await,
                 Lane::Orders => self.check_forwards(now).await,
                 Lane::Parcels => self.follow_parcels(now).await,
             };
@@ -133,10 +136,10 @@ impl AliexpressSync {
     }
 
     /// Goes through the links of this node's share due at `now`, the budget
-    /// giving the pace, and asks for each to be read; how many it went through.
-    /// A shop that cannot read now is passed over until the next period, like
-    /// one read, or its products would take every turn it gets.
-    pub async fn ask_due(&self, now: u64) -> anyhow::Result<usize> {
+    /// giving the pace, and reads each; how many it went through. A shop that
+    /// cannot read now is passed over until the next period, like one read, or
+    /// its products would take every turn it gets.
+    pub async fn read_due(&self, now: u64) -> anyhow::Result<usize> {
         let share = self.aliexpress.share();
         let budget = self.aliexpress.budget();
         let due = links_due(
@@ -147,32 +150,38 @@ impl AliexpressSync {
             budget.batch(Lane::Products, share),
         )
         .await?;
-        let mut connected: HashMap<&str, bool> = HashMap::new();
+        let mut shops: HashMap<&str, Option<(TenantState, CompanyState)>> = HashMap::new();
         for link in &due {
             let tenant_id = link.tenant_id.as_str();
-            let can_read = match connected.get(tenant_id) {
-                Some(can_read) => *can_read,
-                None => {
-                    let can_read = self
-                        .aliexpress
-                        .connected_shop(&self.store, tenant_id, now)
-                        .await?
-                        .is_some();
-                    connected.insert(tenant_id, can_read);
-                    can_read
-                }
-            };
-            if can_read {
-                budget
-                    .ready(Lane::Products, || self.aliexpress.share())
-                    .await;
-                let links = timada_aliexpress::Command::new(self.store.clone(), tenant_id);
-                if let Err(err) = links.request_sync(ALIEXPRESS_ACTOR, &link.id).await {
-                    tracing::warn!(tenant = %tenant_id, link = %link.id, error = %err, "AliExpress product not asked for");
-                    continue;
-                }
+            if !shops.contains_key(tenant_id) {
+                let shop = self
+                    .aliexpress
+                    .connected_shop(&self.store, tenant_id, now)
+                    .await?;
+                shops.insert(tenant_id, shop);
             }
+            // Tried, whatever comes of it: due again a period later.
             note_tried(&self.db, tenant_id, &link.id, now).await?;
+            let Some((tenant, company)) = &shops[tenant_id] else {
+                continue;
+            };
+            budget
+                .ready(Lane::Products, || self.aliexpress.share())
+                .await;
+            if let Err(err) = self
+                .aliexpress
+                .sync_link(
+                    &self.db,
+                    &self.store,
+                    tenant,
+                    company,
+                    &link.id,
+                    SyncMode::Routine,
+                )
+                .await
+            {
+                tracing::warn!(tenant = %tenant_id, link = %link.id, error = %err, "AliExpress product not read");
+            }
         }
         Ok(due.len())
     }

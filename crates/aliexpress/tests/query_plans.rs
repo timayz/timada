@@ -43,7 +43,7 @@ async fn links_due_on_a_platform_with_more_products_than_it_can_read() {
                     let published = i32::from(seeded % 2 == 0);
                     format!(
                         "('{tenant}', '{id}', '{id}', '{id}', 'linked', 0, 0, {tried}, NULL, 0, 0, 0, \
-                         {tried}, {}, {wanted}, {published}, '[]')",
+                         {}, {wanted}, {published}, '[]')",
                         timada_core::shard_of(&id)
                     )
                 })
@@ -52,8 +52,8 @@ async fn links_due_on_a_platform_with_more_products_than_it_can_read() {
                 &format!(
                     "INSERT INTO aliexpress_products (tenant_id, id, ae_product_id, product_id, \
                      status, offline, own_pricing, last_synced_at, last_error, requested_at, \
-                     updated_at, new_combinations, last_tried_at, shard, wanted_at, published, \
-                     skus) VALUES {}",
+                     updated_at, new_combinations, shard, wanted_at, published, skus) \
+                     VALUES {}",
                     rows.join(", ")
                 ),
                 (),

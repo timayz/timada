@@ -21,11 +21,11 @@ use timada_tenancy::Pricing;
 
 use crate::aggregator::{
     CombinationIgnored, CombinationRestored, CombinationsAdded, CombinationsFound, ImportFailed,
-    ImportRequested, ImportStarted, Imported, NewSku, PricingSet, SkuLink, SyncFailed,
-    SyncRequested, Synced, Unlinked,
+    ImportRequested, ImportStarted, Imported, NewSku, PricingSet, SkuLink, SyncFailed, Synced,
+    Unlinked,
 };
 use crate::error::AliexpressError;
-use crate::value_object::{ALIEXPRESS_ACTOR, IMPORT_STALE_SECS, aliexpress_product_id};
+use crate::value_object::{IMPORT_STALE_SECS, aliexpress_product_id};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor> {
@@ -75,8 +75,8 @@ impl<E: Executor> Deref for Command<E> {
 
 pub(crate) use timada_core::unix_now;
 
-/// How many times a request to read, or a read's failure, is tried when another
-/// write to the link came in between.
+/// How many times a read's failure is recorded again when another write to
+/// the link came in between.
 const WRITE_ATTEMPTS: usize = 3;
 
 /// What a read of a linked item recorded.
@@ -91,7 +91,7 @@ pub struct SyncRead {
 }
 
 /// Where an import stands.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub enum LinkStatus {
     /// Asked for, not done yet.
     #[default]
@@ -115,10 +115,11 @@ impl LinkStatus {
     }
 }
 
-/// One AliExpress item of the shop.
+/// One AliExpress item of the shop. Snapshotted on the node that loads it
+/// (#472): an item read for years is loaded from its last snapshot and the
+/// few events after it, not replayed whole at every read.
 #[evento::projection(id = id, name = "timada-aliexpress/ProductState")]
-#[evento::snapshot(none)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
 pub struct LinkState {
     pub id: String,
     pub ae_product_id: String,
@@ -139,10 +140,6 @@ pub struct LinkState {
     /// Unix seconds of the last read recorded (the import counts). One that
     /// changed nothing is not: the read model has its time.
     pub last_synced_at: Option<u64>,
-    /// Unix seconds of the last `SyncRequested`.
-    pub last_requested_at: Option<u64>,
-    /// The version of the last read recorded for a member, who waits for it.
-    pub answered_version: u16,
     /// Why the last import or read failed; cleared by one that worked.
     pub last_error: Option<String>,
     pub requested_by: String,
@@ -186,7 +183,6 @@ pub fn link_projection<E: Executor>() -> Projection<E, LinkState> {
         .handler(on_combinations_added())
         .handler(on_combination_ignored())
         .handler(on_combination_restored())
-        .handler(on_sync_requested())
         .strict()
 }
 
@@ -247,9 +243,6 @@ async fn on_synced(event: Event<Synced>, link: &mut LinkState) -> anyhow::Result
     link.last_synced_at = Some(event.timestamp);
     link.last_error = None;
     link.updated_at = event.timestamp;
-    if event.data.synced_by != ALIEXPRESS_ACTOR {
-        link.answered_version = event.version;
-    }
     Ok(())
 }
 
@@ -257,9 +250,6 @@ async fn on_synced(event: Event<Synced>, link: &mut LinkState) -> anyhow::Result
 async fn on_sync_failed(event: Event<SyncFailed>, link: &mut LinkState) -> anyhow::Result<()> {
     link.last_error = Some(event.data.reason.to_owned());
     link.updated_at = event.timestamp;
-    if event.data.failed_by != ALIEXPRESS_ACTOR {
-        link.answered_version = event.version;
-    }
     Ok(())
 }
 
@@ -320,16 +310,6 @@ async fn on_combination_restored(
     link: &mut LinkState,
 ) -> anyhow::Result<()> {
     link.ignored.retain(|sku_id| sku_id != &event.data.sku_id);
-    link.updated_at = event.timestamp;
-    Ok(())
-}
-
-#[evento::handler]
-async fn on_sync_requested(
-    event: Event<SyncRequested>,
-    link: &mut LinkState,
-) -> anyhow::Result<()> {
-    link.last_requested_at = Some(event.timestamp);
     link.updated_at = event.timestamp;
     Ok(())
 }
@@ -506,39 +486,6 @@ impl<E: Executor> Command<E> {
             .commit(&self.executor)
             .await?;
         Ok(())
-    }
-
-    /// Asks for a linked item to be read again; the version the request
-    /// took, which what the read records comes after. `NotFound` when the item
-    /// is not linked (any more).
-    pub async fn request_sync(
-        &self,
-        actor: &str,
-        link_id: &str,
-        routing_key: Option<String>,
-    ) -> Result<u16, AliexpressError> {
-        for attempt in 1..=WRITE_ATTEMPTS {
-            let link = self.require_link(link_id).await?;
-            if !link.is_linked() {
-                return Err(AliexpressError::NotFound);
-            }
-            let version = link.aggregate_version()?;
-            let written = link
-                .write()?
-                .routing_key_opt(routing_key.clone())
-                .event(&SyncRequested {
-                    requested_by: actor.to_owned(),
-                })
-                .tenant(&self.tenant)
-                .commit(&self.executor)
-                .await;
-            match written {
-                Ok(_) => return Ok(version + 1),
-                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
-                Err(err) => return Err(err.into()),
-            }
-        }
-        Err(WriteError::InvalidOriginalVersion.into())
     }
 
     /// Records a read of a linked item, written against `version` (the one

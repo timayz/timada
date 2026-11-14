@@ -41,7 +41,10 @@ pub struct NewSku {
 /// An AliExpress item the shop imported: one stream per item, with the
 /// deterministic id [`aliexpress_product_id`](crate::aliexpress_product_id),
 /// so a shop imports an item once. It lives under the tenant, next to
-/// the catalog product it filled.
+/// the catalog product it filled. A read asked for is no event of it: the
+/// node an item belongs to reads it when the sweep, a cart or a member asks,
+/// and the stream hears only of what a read found (#472), so an item read
+/// every day for years stays far from the 65,535 versions a stream holds.
 #[evento::aggregate(name = "timada-aliexpress/Product")]
 pub enum AliexpressProduct {
     /// The merchant asked for it; the dashboard fetches and imports it.
@@ -89,10 +92,6 @@ pub enum AliexpressProduct {
     CombinationIgnored { sku_id: String, ignored_by: String },
     /// Offered again after being ignored.
     CombinationRestored { sku_id: String, restored_by: String },
-    /// A read of AliExpress was asked for: by a member, who waits for its
-    /// outcome, or by the dashboard on its own ([`ALIEXPRESS_ACTOR`](crate::ALIEXPRESS_ACTOR)).
-    /// One node reads it ([`Share`](timada_core::Share)).
-    SyncRequested { requested_by: String },
 }
 
 /// One renewal of an account's tokens: one stream per token, with the

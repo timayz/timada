@@ -387,21 +387,19 @@ pub async fn forwards_stalled(
 /// starts over. The integration tests seed rows through this; nothing else
 /// outside the subscription writes one.
 pub async fn upsert_link(db: &Db, tenant_id: &str, link: &LinkState) -> anyhow::Result<()> {
-    let tried = link.last_requested_at.max(link.last_synced_at);
     let skus = serde_json::to_string(&link.skus)?;
     db.execute(
         "INSERT INTO aliexpress_products (tenant_id, id, ae_product_id, product_id, status,
             offline, own_pricing, last_synced_at, last_error, requested_at, updated_at,
-            new_combinations, last_tried_at, shard, skus)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            new_combinations, shard, skus)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT (tenant_id, id) DO UPDATE SET
             product_id = excluded.product_id, status = excluded.status,
             offline = excluded.offline, own_pricing = excluded.own_pricing,
             last_synced_at = excluded.last_synced_at,
             last_error = excluded.last_error,
             requested_at = excluded.requested_at, updated_at = excluded.updated_at,
-            new_combinations = excluded.new_combinations,
-            last_tried_at = excluded.last_tried_at, skus = excluded.skus,
+            new_combinations = excluded.new_combinations, skus = excluded.skus,
             wanted_at = CASE WHEN product_id IS excluded.product_id THEN wanted_at END,
             published = CASE WHEN product_id IS excluded.product_id THEN published ELSE 0 END",
         (
@@ -417,7 +415,6 @@ pub async fn upsert_link(db: &Db, tenant_id: &str, link: &LinkState) -> anyhow::
             link.requested_at as i64,
             link.updated_at as i64,
             link.offered().count() as i64,
-            tried.map(|at| at as i64),
             i64::from(shard_of(&link.id)),
             skus.as_str(),
         ),
@@ -528,13 +525,14 @@ pub struct LinkRow {
     pub updated_at: i64,
     /// Combinations a read found that the shop could add (ignored aside).
     pub new_combinations: i64,
-    /// Unix seconds of the last read asked for or made, as far as this node
-    /// knows, whether or not it worked.
+    /// Unix seconds of the last read made, as far as this node knows,
+    /// whether or not it worked: the later of the last one recorded and this
+    /// node's own ([`super::read_times::note_tried`]).
     pub last_tried_at: Option<i64>,
 }
 
 /// The columns of a [`LinkRow`], shared by the queries below: the two read
-/// times are the later of the row's (recorded in the item's stream) and this
+/// times are the later of the last read the item's stream recorded and this
 /// node's own (`aliexpress_read_times`, joined as `r`).
 macro_rules! link_columns {
     () => {
@@ -542,7 +540,7 @@ macro_rules! link_columns {
             NULLIF(MAX(COALESCE(p.last_synced_at, 0), COALESCE(r.synced_at, 0)), 0)
                 AS last_synced_at,
             p.last_error, p.requested_at, p.updated_at, p.new_combinations,
-            NULLIF(MAX(COALESCE(p.last_tried_at, 0), COALESCE(r.tried_at, 0)), 0)
+            NULLIF(MAX(COALESCE(p.last_synced_at, 0), COALESCE(r.tried_at, 0)), 0)
                 AS last_tried_at"
     };
 }
@@ -616,7 +614,7 @@ pub async fn links_due(
                         WHEN p.published = 1 THEN 1
                         ELSE 2
                     END AS rank,
-                    MAX(COALESCE(p.last_tried_at, 0), COALESCE(r.tried_at, 0)) AS last_tried_at",
+                    MAX(COALESCE(p.last_synced_at, 0), COALESCE(r.tried_at, 0)) AS last_tried_at",
             link_tables!(),
             "WHERE p.status = 'linked' AND p.shard % ?3 = ?4
                 )
