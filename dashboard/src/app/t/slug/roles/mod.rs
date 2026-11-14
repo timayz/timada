@@ -16,7 +16,7 @@ use topcoat::{
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::checkbox::checkbox;
@@ -34,7 +34,7 @@ struct RolesQuery {
 }
 
 pub fn roles_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -95,7 +95,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             }
                         </ul>
                     } else {
-                    <form method="post" action=(href!(update::update, Slug(slug.clone()))) class="flex flex-col gap-4">
+                    <form method="post" action=(href!(update::update, slug: slug.clone())) class="flex flex-col gap-4">
                         <input type="hidden" name="role" value=(name)>
                         <div class="flex flex-wrap items-center justify-between gap-2">
                             <h2 class="text-base font-semibold">(&def.label) <code class="ml-2 text-sm font-normal text-muted-foreground">(name)</code></h2>
@@ -122,7 +122,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save role")
                         </div>
                     </form>
-                    <form method="post" action=(href!(remove::remove, Slug(slug.clone()))) class="mt-4">
+                    <form method="post" action=(href!(remove::remove, slug: slug.clone())) class="mt-4">
                         <input type="hidden" name="role" value=(name)>
                         button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Remove role")
                     </form>
@@ -133,7 +133,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             if is_owner {
             section_card(
                 title: Some("Define a role"),
-                <form method="post" action=(href!(define::define, Slug(slug.clone()))) class="flex flex-col gap-4">
+                <form method="post" action=(href!(define::define, slug: slug.clone())) class="flex flex-col gap-4">
                     <div class="grid gap-4 md:grid-cols-2">
                         field(
                             field_label(attrs: attributes! { for="new-role" }, "Role name")

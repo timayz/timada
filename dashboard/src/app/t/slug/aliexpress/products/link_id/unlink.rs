@@ -2,10 +2,10 @@ use timada_tenancy::PERMISSION_ALIEXPRESS_MANAGE;
 use topcoat::{
     Result,
     context::Cx,
-    router::{content::Form, error::SeeOther, path_param, route},
+    router::{content::Form, error::SeeOther, route},
 };
 
-use super::{Back, LinkId, back_to};
+use super::{Back, back_to, link_id};
 use crate::app::t::slug::require_tenant;
 
 /// Stops keeping the product in step with AliExpress; it stays as it is.
@@ -15,7 +15,7 @@ pub async fn unlink(cx: &Cx, Form(form): Form<Back>) -> Result<SeeOther> {
     access
         .require_permission(cx, PERMISSION_ALIEXPRESS_MANAGE)
         .await?;
-    let link_id = path_param::<LinkId>(cx).to_owned();
+    let link_id = link_id(cx).to_owned();
     let links = timada_aliexpress::Command::new(access.executor()?.clone(), access.tenant_id());
     match links.unlink(&access.user_id, &link_id).await {
         Ok(()) => Ok(back_to(

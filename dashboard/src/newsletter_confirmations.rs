@@ -225,7 +225,7 @@ pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::
     else {
         return Ok(Outcome::Left);
     };
-    let cx = Cx::new(room.mail.clone());
+    let cx = Cx::new().with_shared(room.mail.clone());
     let sent = attempt(send_newsletter_confirmation(
         &cx,
         &shop,
@@ -352,10 +352,9 @@ mod tests {
         let sent = transport.sent();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].to(), [Mailbox::new("ada@example.com").unwrap()]);
-        assert_eq!(sent[0].from().unwrap().name(), Some("Acme Tea"));
-        let cx = Cx::new(mail);
+        assert_eq!(sent[0].from().name(), Some("Acme Tea"));
         // The HTML escapes "/" in the link and the wire folds long lines.
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap())
+        let wire = String::from_utf8(sent[0].formatted())
             .unwrap()
             .replace("=\r\n", "")
             .replace("&#x2f;", "/");

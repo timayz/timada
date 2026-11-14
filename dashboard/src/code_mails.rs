@@ -24,7 +24,7 @@ use evento::{
 };
 use timada_core::Claimant;
 use timada_shoppers::CodeMailClaim;
-use topcoat::context::{Cx, app_context};
+use topcoat::context::{Cx, context};
 
 use crate::mail::{send_code, send_shopper_code};
 use crate::mail_fault::{Attempt, attempt};
@@ -294,9 +294,9 @@ pub(crate) async fn send_platform(
     owed: &OwedMail,
     now: u64,
 ) -> anyhow::Result<Outcome> {
-    let cx = Cx::new(room.mail.clone());
+    let cx = Cx::new().with_shared(room.mail.clone());
     let identity =
-        timada_identity::Command::new(room.store.clone(), app_context::<EmailCodes>(&cx).0.clone());
+        timada_identity::Command::new(room.store.clone(), context::<EmailCodes>(&cx).0.clone());
     let challenge = owed.stream_id.as_str();
     let version = u16::try_from(owed.version).unwrap_or(u16::MAX);
     let Some(code) = identity
@@ -335,10 +335,10 @@ pub(crate) async fn send_shopper(
     owed: &OwedMail,
     now: u64,
 ) -> anyhow::Result<Outcome> {
-    let cx = Cx::new(room.mail.clone());
+    let cx = Cx::new().with_shared(room.mail.clone());
     // Without `secrets.key` no code could be issued through this node, and
     // none can be derived.
-    let Some(codes) = app_context::<ShopperCodes>(&cx).0.clone() else {
+    let Some(codes) = context::<ShopperCodes>(&cx).0.clone() else {
         return Ok(Outcome::Left);
     };
     let tenant = owed.tenant_id.as_str();
@@ -419,8 +419,8 @@ pub(crate) mod tests {
     use evento::{Evento, Turso};
     use timada_core::{RETRY_DELAYS_SECS, Sending};
     use timada_identity::ChallengePurpose;
-    use topcoat::context::AppContext;
-    use topcoat::mail::{MailConfig, Mailbox, MemoryTransport, Transport};
+    use topcoat::context::ContextMap;
+    use topcoat::mail::{Mailbox, Mailer, MemoryTransport, Transport};
 
     use super::*;
     use crate::key_vault::KeyVault;
@@ -434,9 +434,9 @@ pub(crate) mod tests {
 
     /// What the sagas' mails need, over `transport`: the platform's sender,
     /// no shop server, and the keys the codes and links derive under.
-    pub(crate) fn mail_context(transport: impl Transport + 'static) -> Arc<AppContext> {
-        let mut app = AppContext::new();
-        app.insert(MailConfig::builder().transport(transport).build());
+    pub(crate) fn mail_context(transport: impl Transport + 'static) -> Arc<ContextMap> {
+        let mut app = ContextMap::new();
+        app.insert(Mailer::new(transport));
         app.insert(MailSender("Timada <no-reply@example.com>".parse().unwrap()));
         app.insert(ShopMail::new(None, false));
         app.insert(email_codes());
@@ -549,8 +549,7 @@ pub(crate) mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].to(), [Mailbox::new("alice@example.com").unwrap()]);
         assert_eq!(sent[0].subject(), "Confirm your e-mail address for Timada");
-        let cx = Cx::new(mail_context(MemoryTransport::new()));
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        let wire = String::from_utf8(sent[0].formatted()).unwrap();
         assert!(wire.contains(&issued.code), "{wire}");
         let challenge = identity
             .load_email_challenge("alice@example.com")
@@ -746,9 +745,8 @@ pub(crate) mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].to(), [Mailbox::new("ada@example.com").unwrap()]);
         assert_eq!(sent[0].subject(), "Your sign-in code for Acme Tea");
-        assert_eq!(sent[0].from().unwrap().name(), Some("Acme Tea"));
-        let cx = Cx::new(mail);
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        assert_eq!(sent[0].from().name(), Some("Acme Tea"));
+        let wire = String::from_utf8(sent[0].formatted()).unwrap();
         assert!(wire.contains(&issued.code), "{wire}");
         assert_eq!(
             shoppers

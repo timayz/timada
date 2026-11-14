@@ -2,10 +2,10 @@ use timada_tenancy::PERMISSION_ALIEXPRESS_MANAGE;
 use topcoat::{
     Result,
     context::Cx,
-    router::{content::Form, error::SeeOther, path_param, route},
+    router::{content::Form, error::SeeOther, route},
 };
 
-use super::{LinkId, back_to};
+use super::{back_to, link_id};
 use crate::app::t::slug::aliexpress::PricingForm;
 use crate::app::t::slug::require_tenant;
 
@@ -25,7 +25,7 @@ pub async fn pricing(cx: &Cx, Form(form): Form<ProductPricingForm>) -> Result<Se
     access
         .require_permission(cx, PERMISSION_ALIEXPRESS_MANAGE)
         .await?;
-    let link_id = path_param::<LinkId>(cx).to_owned();
+    let link_id = link_id(cx).to_owned();
     let rule = match form.pricing.pricing() {
         Ok(rule) => rule,
         Err(code) => return Ok(back_to(cx, &access, &form.back, Some(code), None)),

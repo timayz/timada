@@ -24,7 +24,7 @@ use topcoat::{
 
 use super::icons;
 use super::theme::{self, Scheme};
-use crate::app::t::slug::{Slug, TenantNav};
+use crate::app::t::slug::{TenantNav, slug};
 use crate::auth::current_user;
 use crate::components::avatar::{AvatarSize, avatar, avatar_fallback};
 use crate::components::badge::{BadgeVariant, badge};
@@ -273,37 +273,36 @@ fn allowed(nav: &TenantNav, key: &str) -> bool {
 /// The address of a tenant's section.
 pub fn section_url(cx: &Cx, slug: &str, key: &str) -> String {
     use crate::app::t::slug as t;
-    let slug = Slug(slug.to_owned());
     match key {
-        "products" => href!(t::products::index, slug).resolve(cx),
-        "categories" => href!(t::categories::index, slug).resolve(cx),
-        "orders" => href!(t::orders::index, slug).resolve(cx),
-        "carts" => href!(t::carts::index, slug).resolve(cx),
-        "customers" => href!(t::customers::index, slug).resolve(cx),
-        "invoices" => href!(t::invoices::index, slug).resolve(cx),
-        "discounts" => href!(t::discounts::index, slug).resolve(cx),
-        "offers" => href!(t::offers::index, slug).resolve(cx),
-        "reviews" => href!(t::reviews::index, slug).resolve(cx),
-        "messages" => href!(t::messages::index, slug).resolve(cx),
-        "newsletter" => href!(t::newsletter::index, slug).resolve(cx),
-        "automations" => href!(t::automations::index, slug).resolve(cx),
-        "pages" => href!(t::pages::index, slug).resolve(cx),
-        "announcements" => href!(t::announcements::index, slug).resolve(cx),
-        "payments" => href!(t::payments::index, slug).resolve(cx),
-        "aliexpress" => href!(t::aliexpress::index, slug).resolve(cx),
-        "shipping" => href!(t::shipping::index, slug).resolve(cx),
-        "mail" => href!(t::mail::index, slug).resolve(cx),
-        "invoicing" => href!(t::invoicing::index, slug).resolve(cx),
-        "members" => href!(t::members::index, slug).resolve(cx),
-        "roles" => href!(t::roles::index, slug).resolve(cx),
-        "api_keys" => href!(t::api_keys::index, slug).resolve(cx),
-        _ => href!(t::index, slug).resolve(cx),
+        "products" => href!(t::products::index, t::slug: slug).resolve(cx),
+        "categories" => href!(t::categories::index, t::slug: slug).resolve(cx),
+        "orders" => href!(t::orders::index, t::slug: slug).resolve(cx),
+        "carts" => href!(t::carts::index, t::slug: slug).resolve(cx),
+        "customers" => href!(t::customers::index, t::slug: slug).resolve(cx),
+        "invoices" => href!(t::invoices::index, t::slug: slug).resolve(cx),
+        "discounts" => href!(t::discounts::index, t::slug: slug).resolve(cx),
+        "offers" => href!(t::offers::index, t::slug: slug).resolve(cx),
+        "reviews" => href!(t::reviews::index, t::slug: slug).resolve(cx),
+        "messages" => href!(t::messages::index, t::slug: slug).resolve(cx),
+        "newsletter" => href!(t::newsletter::index, t::slug: slug).resolve(cx),
+        "automations" => href!(t::automations::index, t::slug: slug).resolve(cx),
+        "pages" => href!(t::pages::index, t::slug: slug).resolve(cx),
+        "announcements" => href!(t::announcements::index, t::slug: slug).resolve(cx),
+        "payments" => href!(t::payments::index, t::slug: slug).resolve(cx),
+        "aliexpress" => href!(t::aliexpress::index, t::slug: slug).resolve(cx),
+        "shipping" => href!(t::shipping::index, t::slug: slug).resolve(cx),
+        "mail" => href!(t::mail::index, t::slug: slug).resolve(cx),
+        "invoicing" => href!(t::invoicing::index, t::slug: slug).resolve(cx),
+        "members" => href!(t::members::index, t::slug: slug).resolve(cx),
+        "roles" => href!(t::roles::index, t::slug: slug).resolve(cx),
+        "api_keys" => href!(t::api_keys::index, t::slug: slug).resolve(cx),
+        _ => href!(t::index, t::slug: slug).resolve(cx),
     }
 }
 
 /// The `<head>` both documents share.
 #[component]
-async fn head(title: &str) -> Result<impl View> {
+async fn head(cx: &Cx, title: &str) -> Result<impl View> {
     Ok(view! {
         <head>
             <meta charset="utf-8">
@@ -321,6 +320,7 @@ async fn head(title: &str) -> Result<impl View> {
 /// One link of the rail.
 #[component]
 async fn nav_item(
+    cx: &Cx,
     href: String,
     label: &str,
     symbol: IconData,
@@ -350,7 +350,7 @@ async fn rail_groups(cx: &Cx, user: Option<&UserState>, shell: Shell<'_>) -> Res
         if let Some((tenant, nav)) = shell.tenant {
             <div class="px-4 pt-1 md:group-data-[collapsible=icon]/sidebar:hidden">
                 <a
-                    href=(href!(crate::app::t::slug::index, Slug(tenant.slug.clone())))
+                    href=(href!(crate::app::t::slug::index, slug: tenant.slug.clone()))
                     class="block truncate text-sm font-semibold text-sidebar-foreground hover:underline"
                     aria-current=((current == "home").then_some("page"))
                 >
@@ -410,7 +410,7 @@ async fn rail_groups(cx: &Cx, user: Option<&UserState>, shell: Shell<'_>) -> Res
 
 /// Light / Dark / System, a form in the rail's footer.
 #[component]
-async fn theme_switch(scheme: Scheme, here: &str) -> Result<impl View> {
+async fn theme_switch(cx: &Cx, scheme: Scheme, here: &str) -> Result<impl View> {
     Ok(view! {
         <form
             method="post"
@@ -453,7 +453,7 @@ pub fn initials(label: &str) -> String {
 /// which Ctrl+K focuses (`search.js`). Its accessible name avoids the word
 /// "Search" so a page's own search field stays the only one by that label.
 #[component]
-async fn search_box(action: &str) -> Result<impl View> {
+async fn search_box(cx: &Cx, action: &str) -> Result<impl View> {
     Ok(view! {
         <form role="search" method="get" action=(action) class="relative min-w-0 flex-1">
             <span class="pointer-events-none absolute inset-y-0 left-4 flex items-center text-muted-foreground [&>svg]:size-4">

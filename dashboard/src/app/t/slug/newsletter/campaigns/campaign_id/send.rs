@@ -14,7 +14,7 @@ use timada_newsletter::{CampaignStatus, count_audience};
 use timada_tenancy::PERMISSION_NEWSLETTER_MANAGE;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, see_other},
         href, page, route,
@@ -23,9 +23,9 @@ use topcoat::{
 };
 
 use super::schedule::{describe, pacing, shop_today, upcoming};
-use super::{CampaignId, campaign_url, require_campaign};
+use super::{campaign_id, campaign_url, require_campaign};
 use crate::app::t::slug::newsletter::campaigns::audience_label;
-use crate::app::t::slug::{Slug, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantNav, require_tenant, slug};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::db::Db;
 use crate::shop_mail::ShopMail;
@@ -44,7 +44,7 @@ pub async fn send(cx: &Cx) -> Result<impl View> {
         return Err(see_other(back).into());
     }
     let audience = count_audience(
-        app_context::<Db>(cx),
+        context::<Db>(cx),
         &access.tenant.id,
         campaign.language.as_deref(),
     )
@@ -52,7 +52,7 @@ pub async fn send(cx: &Cx) -> Result<impl View> {
     .map_err(topcoat::Error::from_anyhow)?;
     let nav = TenantNav::of(cx, &access).await?;
     let tenant = access.tenant;
-    let shop_mail = app_context::<ShopMail>(cx);
+    let shop_mail = context::<ShopMail>(cx);
     // The server it goes through, as the merchant knows it.
     let through = tenant
         .marketing_server()
@@ -67,7 +67,7 @@ pub async fn send(cx: &Cx) -> Result<impl View> {
     } else {
         "Pick a server for marketing"
     };
-    let mail_settings = href!(crate::app::t::slug::mail::index, Slug(slug.clone())).resolve(cx);
+    let mail_settings = href!(crate::app::t::slug::mail::index, slug: slug.clone()).resolve(cx);
     let title = format!("Send · {} · Newsletter · {}", campaign.subject, tenant.name);
     let to = audience_label(campaign.language.as_deref());
     let shop_zone = tenant.shop_time_zone().to_owned();
@@ -82,12 +82,12 @@ pub async fn send(cx: &Cx) -> Result<impl View> {
         Some(_) => (
             "Start the schedule",
             "Start the schedule".to_owned(),
-            href!(confirm, Slug(slug.clone()), CampaignId(campaign.id.clone())).resolve(cx),
+            href!(confirm, slug: slug.clone(), campaign_id: campaign.id.clone()).resolve(cx),
         ),
         None => (
             "Send the campaign",
             format!("Send to {audience} subscriber(s)"),
-            href!(confirm, Slug(slug.clone()), CampaignId(campaign.id.clone())).resolve(cx),
+            href!(confirm, slug: slug.clone(), campaign_id: campaign.id.clone()).resolve(cx),
         ),
     };
     Ok(view! {
@@ -139,7 +139,7 @@ pub async fn confirm(cx: &Cx) -> Result<SeeOther> {
         .await?;
     let campaign = require_campaign(&access, cx).await?;
     let slug = access.tenant.slug.clone();
-    if !app_context::<ShopMail>(cx).has_marketing_server(&access.tenant) {
+    if !context::<ShopMail>(cx).has_marketing_server(&access.tenant) {
         return Ok(see_other(campaign_url(
             cx,
             &slug,

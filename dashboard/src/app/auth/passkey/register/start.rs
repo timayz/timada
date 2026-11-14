@@ -2,7 +2,7 @@ use serde::Deserialize;
 use timada_identity::MAX_PASSKEYS_PER_USER;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Json,
         error::{bad_request, forbidden, unauthorized},
@@ -30,7 +30,7 @@ pub async fn start(
     cx: &Cx,
     Json(req): Json<StartRequest>,
 ) -> Result<Json<CreationChallengeResponse>> {
-    let webauthn = app_context::<Webauthn>(cx);
+    let webauthn = context::<Webauthn>(cx);
     let Some(user) = current_user(cx).await else {
         return Err(unauthorized().into());
     };

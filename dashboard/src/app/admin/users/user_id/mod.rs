@@ -7,8 +7,8 @@ pub mod sign_out;
 use timada_identity::{SignInKind, user_sessions};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    router::{error::not_found, href, module_param, page, path_param, query_params},
+    context::{Cx, context},
+    router::{error::not_found, href, module_param, page, query_params},
     view::{View, attributes, view},
 };
 
@@ -32,7 +32,7 @@ struct UserQuery {
 }
 
 pub fn user_url(cx: &Cx, user_id: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(user, UserId(user_id.to_owned()))
+    href!(user, user_id: user_id.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -49,7 +49,7 @@ const SECTIONS: &[(&str, &str)] = &[
 #[page]
 pub async fn user(cx: &Cx) -> Result<impl View> {
     let me = require_admin(cx).await?;
-    let id = path_param::<UserId>(cx);
+    let id = user_id(cx);
     let query = query_params::<UserQuery>(cx)?;
     let Some(user) = identity(cx)
         .load_user_any(id)
@@ -59,13 +59,13 @@ pub async fn user(cx: &Cx) -> Result<impl View> {
         return Err(not_found().into());
     };
     let now = now() as i64;
-    let active: Vec<_> = user_sessions(app_context::<Db>(cx), &user.id)
+    let active: Vec<_> = user_sessions(context::<Db>(cx), &user.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?
         .into_iter()
         .filter(|s| s.is_active_at(now))
         .collect();
-    let providers = app_context::<Providers>(cx);
+    let providers = context::<Providers>(cx);
     let is_me = user.id == me.id;
     let title = format!("{} · Users", user.label);
     // The last section is the administration one; a deleted account has
@@ -144,7 +144,7 @@ pub async fn user(cx: &Cx) -> Result<impl View> {
                         </ul>
                     }
                     if !user.deleted {
-                        <form method="post" action=(href!(sign_out::sign_out, UserId(user.id.clone()))) class="mt-4">
+                        <form method="post" action=(href!(sign_out::sign_out, user_id: user.id.clone())) class="mt-4">
                             button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" class="text-destructive-text" }, "Sign out everywhere")
                         </form>
                     }
@@ -183,13 +183,13 @@ pub async fn user(cx: &Cx) -> Result<impl View> {
                         attrs: attributes! { id="administration" class="scroll-mt-20 border-destructive/30" },
                         if !is_me {
                             <div class="flex flex-wrap gap-2">
-                                <form method="post" action=(href!(role::role, UserId(user.id.clone())))>
+                                <form method="post" action=(href!(role::role, user_id: user.id.clone()))>
                                     <input type="hidden" name="admin" value=(if user.is_admin { "false" } else { "true" })>
                                     button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" },
                                         (if user.is_admin { "Revoke administrator" } else { "Make administrator" })
                                     )
                                 </form>
-                                <form method="post" action=(href!(delete::delete, UserId(user.id.clone())))>
+                                <form method="post" action=(href!(delete::delete, user_id: user.id.clone()))>
                                     button(variant: ButtonVariant::Destructive, attrs: attributes! { type="submit" }, "Delete account")
                                 </form>
                             </div>

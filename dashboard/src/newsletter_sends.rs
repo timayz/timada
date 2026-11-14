@@ -51,7 +51,7 @@ use timada_newsletter::{
 };
 use timada_tenancy::NewProductVars;
 use tokio::task::JoinHandle;
-use topcoat::context::{AppContext, Cx};
+use topcoat::context::{ContextMap, Cx};
 
 use crate::cluster::Executor;
 use crate::mail::{CampaignCopy, marketing_sender, send_campaign};
@@ -86,7 +86,7 @@ pub async fn new_products(
     storefront: &str,
     since: i64,
 ) -> anyhow::Result<Vec<NewProductVars>> {
-    let media = topcoat::context::app_context::<Arc<crate::media::Media>>(cx);
+    let media = topcoat::context::context::<Arc<crate::media::Media>>(cx);
     Ok(
         timada_catalog::new_products(db, &tenant.id, since, NEW_PRODUCTS_SHOWN)
             .await?
@@ -119,7 +119,7 @@ pub struct NewsletterSends {
     /// out only once its delivery is claimed, a stream of its own, and a
     /// campaign or an edition is finished at the version read.
     store: Executor,
-    mail: Arc<AppContext>,
+    mail: Arc<ContextMap>,
     /// Every tenant's keys, which open the subscribers' addresses.
     keys: Arc<dyn KeyRing>,
     place: Place,
@@ -176,7 +176,7 @@ impl NewsletterSends {
     pub fn new(
         db: Db,
         store: Executor,
-        mail: Arc<AppContext>,
+        mail: Arc<ContextMap>,
         keys: Arc<dyn KeyRing>,
         place: Place,
         per_look: u32,
@@ -322,7 +322,7 @@ impl NewsletterSends {
                 return 0;
             }
         };
-        let cx = Cx::new(self.mail.clone());
+        let cx = Cx::new().with_shared(self.mail.clone());
         let keys = self.keys.for_tenant(tenant_id);
         let mut sent = 0;
         for (n, item) in items.iter().enumerate() {
@@ -1042,8 +1042,8 @@ mod tests {
     use evento::Evento;
     use timada_core::Key;
     use timada_newsletter::{CampaignDraft, RequestOutcome, RequestSubscription, SOURCE_FORM};
-    use topcoat::context::CxTestBuilder;
-    use topcoat::mail::{MailConfig, MemoryTransport, Transport};
+    use topcoat::context::Cx;
+    use topcoat::mail::{Mailer, MemoryTransport, Transport};
 
     use super::*;
     use crate::mail::MailSender;
@@ -1169,12 +1169,11 @@ mod tests {
         );
         shop_mail.stand_in_for(shop, "orders", Arc::new(orders.clone()));
         shop_mail.stand_in_for(shop, "news", Arc::new(news.clone()));
-        let cx = CxTestBuilder::new()
-            .app_context(MailConfig::builder().transport(platform.clone()).build())
-            .app_context(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
-            .app_context(shop_mail)
-            .app_context(media())
-            .build();
+        let cx = Cx::new()
+            .with(Mailer::new(platform.clone()))
+            .with(MailSender("Timada <no-reply@example.com>".parse().unwrap()))
+            .with(shop_mail)
+            .with(media());
         (cx, platform, orders, news)
     }
 
@@ -1322,7 +1321,7 @@ mod tests {
         );
         let sent = transport.sent();
         assert_eq!(sent.len(), 3);
-        assert_eq!(sent[0].from().unwrap().address(), "news@acme.test");
+        assert_eq!(sent[0].from().address(), "news@acme.test");
         let mut to: Vec<String> = sent
             .iter()
             .flat_map(|mail| mail.to().iter().map(|to| to.address().to_owned()))
@@ -1332,7 +1331,7 @@ mod tests {
             to,
             ["ada@example.com", "alan@example.com", "grace@example.com"]
         );
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        let wire = String::from_utf8(sent[0].formatted()).unwrap();
         assert!(wire.contains("Subject: News from Acme Tea"));
         assert!(wire.contains("List-Unsubscribe: <https://shop.example/newsletter/unsubscribe/"));
         assert!(wire.contains("List-Unsubscribe-Post: List-Unsubscribe=One-Click"));
@@ -1783,7 +1782,7 @@ mod tests {
             1
         );
         let sent = transport.sent();
-        let wire = String::from_utf8(sent[0].clone().formatted(&cx).unwrap()).unwrap();
+        let wire = String::from_utf8(sent[0].formatted()).unwrap();
         let wire = wire.replace("&#x2f;", "/").replace("=\r\n", "");
         assert!(wire.contains("Blue mug"), "{wire}");
         assert!(wire.contains("https://shop.example/p/blue-mug"), "{wire}");
@@ -2107,13 +2106,9 @@ mod tests {
 
     /// The background context the sweep mails from, with the shops'
     /// servers `shop_mail` holds.
-    fn background(shop_mail: ShopMail) -> Arc<AppContext> {
-        let mut app = AppContext::new();
-        app.insert(
-            MailConfig::builder()
-                .transport(MemoryTransport::new())
-                .build(),
-        );
+    fn background(shop_mail: ShopMail) -> Arc<ContextMap> {
+        let mut app = ContextMap::new();
+        app.insert(Mailer::new(MemoryTransport::new()));
         app.insert(MailSender("Timada <no-reply@example.com>".parse().unwrap()));
         app.insert(shop_mail);
         app.insert(media());

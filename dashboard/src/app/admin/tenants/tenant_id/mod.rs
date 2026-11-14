@@ -9,16 +9,16 @@ use std::sync::Arc;
 use timada_tenancy::count_open_invitations_of_tenant;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
-    router::{error::not_found, href, module_param, page, path_param, query_params},
+    router::{error::not_found, href, module_param, page, query_params},
     view::{View, attributes, view},
 };
 
 use super::{status_label, status_tone};
 use crate::app::admin::require_admin;
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, index as tenant_page};
+use crate::app::t::slug::{index as tenant_page, slug};
 use crate::app::tenants::tenancy;
 use crate::auth::{now, user_labels};
 use crate::components::badge::{BadgeVariant, badge};
@@ -50,7 +50,7 @@ pub fn admin_tenant_url(
     error: Option<&str>,
     message: Option<&str>,
 ) -> String {
-    href!(index, TenantId(tenant_id.to_owned()))
+    href!(index, tenant_id: tenant_id.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -58,7 +58,7 @@ pub fn admin_tenant_url(
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     require_admin(cx).await?;
-    let id = path_param::<TenantId>(cx);
+    let id = tenant_id(cx);
     let query = query_params::<TenantQuery>(cx)?;
     let Some(tenant) = tenancy(cx)
         .load_tenant(id)
@@ -67,8 +67,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     else {
         return Err(not_found().into());
     };
-    let connections = app_context::<Arc<StoreConnections>>(cx).count_tenant(&tenant.id);
-    let pending = count_open_invitations_of_tenant(app_context::<Db>(cx), &tenant.id, now())
+    let connections = context::<Arc<StoreConnections>>(cx).count_tenant(&tenant.id);
+    let pending = count_open_invitations_of_tenant(context::<Db>(cx), &tenant.id, now())
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let mut ids: Vec<String> = tenant.members.keys().cloned().collect();
@@ -82,7 +82,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let suspended = tenant.is_suspended();
     // What its pictures take, against what they may.
-    let usage = app_context::<Arc<crate::media::Quota>>(cx)
+    let usage = context::<Arc<crate::media::Quota>>(cx)
         .usage_of(&tenant)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -123,7 +123,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             section_card(
                 title: Some("Overview"),
                 facts(
-                    fact(term: "Address", <a class=(LINK) href=(href!(tenant_page, Slug(tenant.slug.clone())))><code>"/t/" (&tenant.slug)</code></a>)
+                    fact(term: "Address", <a class=(LINK) href=(href!(tenant_page, slug: tenant.slug.clone()))><code>"/t/" (&tenant.slug)</code></a>)
                     fact(term: "Id", <code class="text-xs">(&tenant.id)</code>)
                     fact(term: "Created", <time datetime=(tenant.created_at)>(format_time(tenant.created_at))</time> " by " (label_of(&tenant.created_by)))
                     fact(
@@ -166,7 +166,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         for (user_id, role) in &tenant.members {
                             table_row(
                                 table_cell(
-                                    <a class=(LINK) href=(href!(crate::app::admin::users::user_id::user, crate::app::admin::users::user_id::UserId(user_id.clone())))>(label_of(user_id))</a>
+                                    <a class=(LINK) href=(href!(crate::app::admin::users::user_id::user, crate::app::admin::users::user_id::user_id: user_id.clone()))>(label_of(user_id))</a>
                                 )
                                 table_cell(badge(variant: BadgeVariant::Secondary, (role)))
                             )
@@ -178,7 +178,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             section_card(
                 title: Some("Picture storage"),
                 description: Some("How much disk the tenant's pictures may take, in their two renditions. Blank puts it back on the platform's default."),
-                <form method="post" action=(href!(quota::quota, TenantId(tenant.id.clone()))) class="flex flex-wrap items-end gap-3">
+                <form method="post" action=(href!(quota::quota, tenant_id: tenant.id.clone())) class="flex flex-wrap items-end gap-3">
                     field(
                         attrs: attributes! { class="grow sm:max-w-xs" },
                         field_label(attrs: attributes! { for="media-quota" }, "Quota, in MiB")
@@ -197,11 +197,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 }),
                 attrs: attributes! { class="border-destructive/30" },
                 if suspended {
-                    <form method="post" action=(href!(resume::resume, TenantId(tenant.id.clone())))>
+                    <form method="post" action=(href!(resume::resume, tenant_id: tenant.id.clone()))>
                         button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, icon(data: icons::CHECK) "Resume tenant")
                     </form>
                 } else {
-                    <form method="post" action=(href!(suspend::suspend, TenantId(tenant.id.clone()))) class="flex flex-wrap items-end gap-3">
+                    <form method="post" action=(href!(suspend::suspend, tenant_id: tenant.id.clone())) class="flex flex-wrap items-end gap-3">
                         field(
                             attrs: attributes! { class="grow sm:max-w-md" },
                             field_label(attrs: attributes! { for="suspend-reason" }, "Reason")

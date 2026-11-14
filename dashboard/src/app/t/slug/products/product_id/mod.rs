@@ -33,10 +33,10 @@ use timada_tenancy::{
 
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, not_found, see_other},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{View, attributes, class, view},
 };
@@ -44,7 +44,7 @@ use topcoat::{
 use super::{catalog, error_code, status_label, status_tone};
 use crate::app::auth::Flash;
 use crate::app::t::slug::categories::{Choice, rows_of};
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::auth::user_labels;
 use crate::components::badge::{BadgeVariant, badge};
 use crate::components::button::{ButtonSize, ButtonVariant, button};
@@ -141,8 +141,8 @@ pub fn product_tab_url(
 ) -> String {
     href!(
         index,
-        Slug(slug.to_owned()),
-        ProductId(product_id.to_owned())
+        slug: slug.to_owned(),
+        product_id: product_id.to_owned()
     )
     .query(TabQuery {
         tab: tab.key(),
@@ -153,7 +153,7 @@ pub fn product_tab_url(
 
 /// The product named in the URL, or 404.
 async fn require_product(cx: &Cx, access: &TenantAccess) -> Result<ProductState> {
-    let id = path_param::<ProductId>(cx);
+    let id = product_id(cx);
     catalog(access)?
         .load_product(id)
         .await
@@ -175,7 +175,7 @@ where
     access
         .require_permission(cx, PERMISSION_PRODUCTS_MANAGE)
         .await?;
-    let product_id = path_param::<ProductId>(cx).to_owned();
+    let product_id = product_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let gateway = catalog(&access)?;
     match run(&gateway, &access.user_id, &product_id).await {
@@ -421,13 +421,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .get(&product.created_by)
         .cloned()
         .unwrap_or_else(|| product.created_by.clone());
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     // Which categories it is in comes from the product's own stream, like
     // the rest of this page, so a change shows at once; each one is then
     // read from its own stream too (a product is in a handful at most).
     let memberships = memberships_of(&access, &product).await?;
     // Each picture with the address a browser loads it from.
-    let media = app_context::<Arc<Media>>(cx);
+    let media = context::<Arc<Media>>(cx);
     let gallery: Vec<(timada_catalog::ProductImage, String)> = product
         .images
         .iter()
@@ -441,10 +441,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // The rating counts published reviews only; the link is for those who
     // may read the reviews.
     let can_read_reviews = access.can(cx, PERMISSION_REVIEWS_READ).await?;
-    let rating =
-        timada_reviews::product_rating(app_context::<Db>(cx), &access.tenant.id, &product.id)
-            .await
-            .map_err(topcoat::Error::from_anyhow)?;
+    let rating = timada_reviews::product_rating(context::<Db>(cx), &access.tenant.id, &product.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let rating_label = match rating.average() {
         Some(average) => format!("★ {average:.1} · {} published", rating.review_count),
         None => "No published review".to_owned(),
@@ -598,7 +597,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         })
         .unwrap_or_else(|| "Not priced yet".to_owned());
     // What it may still join is the whole tree, which the read model holds.
-    let joinable: Vec<Choice> = rows_of(app_context::<Db>(cx), &access.tenant.id)
+    let joinable: Vec<Choice> = rows_of(context::<Db>(cx), &access.tenant.id)
         .await?
         .iter()
         .filter(|row| !product.categories.contains(&row.category.id))
@@ -662,15 +661,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 )
                 if editable {
                     if product.is_published() {
-                        <form method="post" action=(href!(unpublish::unpublish, Slug(slug.clone()), ProductId(product.id.clone())))>
+                        <form method="post" action=(href!(unpublish::unpublish, slug: slug.clone(), product_id: product.id.clone()))>
                             button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Unpublish")
                         </form>
                     } else {
-                        <form method="post" action=(href!(publish::publish, Slug(slug.clone()), ProductId(product.id.clone())))>
+                        <form method="post" action=(href!(publish::publish, slug: slug.clone(), product_id: product.id.clone()))>
                             button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Publish")
                         </form>
                     }
-                    <form method="post" action=(href!(archive::archive, Slug(slug.clone()), ProductId(product.id.clone())))>
+                    <form method="post" action=(href!(archive::archive, slug: slug.clone(), product_id: product.id.clone()))>
                         button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Archive")
                     </form>
                 }
@@ -721,7 +720,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
                 if editable {
                     <section class="mb-6 grid gap-4 md:grid-cols-2">
-                        <form method="post" action=(href!(rename::rename, Slug(slug.clone()), ProductId(product.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                        <form method="post" action=(href!(rename::rename, slug: slug.clone(), product_id: product.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                             field(
                                 field_label(attrs: attributes! { for="product-name" }, "Name")
                                 input(attrs: attributes! {
@@ -733,7 +732,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Rename")
                             </div>
                         </form>
-                        <form method="post" action=(href!(price::price, Slug(slug.clone()), ProductId(product.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                        <form method="post" action=(href!(price::price, slug: slug.clone(), product_id: product.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                             field(
                                 field_label(attrs: attributes! { for="product-amount" }, "Price")
                                 <div class="flex gap-2">
@@ -754,7 +753,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             </div>
                         </form>
                         if charges_vat {
-                            <form method="post" action=(href!(tax_category::tax_category, Slug(slug.clone()), ProductId(product.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                            <form method="post" action=(href!(tax_category::tax_category, slug: slug.clone(), product_id: product.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                                 field(
                                     field_label(attrs: attributes! { for="product-tax" }, "Kind of goods, for VAT")
                                     select(
@@ -779,7 +778,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <p class="text-xs text-muted-foreground">"Synced from AliExpress: the delivery service an order ships with, to the shop's country."</p>
                             </div>
                         } else {
-                            <form method="post" action=(href!(delivery_days::delivery_days, Slug(slug.clone()), ProductId(product.id.clone()))) class=(class!(CARD, "gap-4 px-6"))>
+                            <form method="post" action=(href!(delivery_days::delivery_days, slug: slug.clone(), product_id: product.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                                 <fieldset class="grid gap-2">
                                     <legend class="text-sm font-medium">"Delivery time, in days"</legend>
                                     <div class="flex items-center gap-2">
@@ -796,7 +795,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 </div>
                             </form>
                         }
-                        <form method="post" action=(href!(describe::describe, Slug(slug.clone()), ProductId(product.id.clone()))) class=(class!(CARD, "gap-4 px-6 md:col-span-2"))>
+                        <form method="post" action=(href!(describe::describe, slug: slug.clone(), product_id: product.id.clone())) class=(class!(CARD, "gap-4 px-6 md:col-span-2"))>
                             field(
                                 field_label(attrs: attributes! { for="product-description" }, "Description")
                                 textarea(attrs: attributes! { id="product-description" name="description" rows="5" maxlength=(MAX_DESCRIPTION_LEN) }, (&product.description))
@@ -813,7 +812,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         section_card(
                             title: Some("Stock"),
                             description: Some("How many are on the shelf. A product whose stock is not counted sells without limit; one counted at 0 is sold out."),
-                            <form method="post" action=(href!(stock::stock, Slug(slug.clone()), ProductId(product.id.clone()))) class="flex flex-wrap items-end gap-2">
+                            <form method="post" action=(href!(stock::stock, slug: slug.clone(), product_id: product.id.clone())) class="flex flex-wrap items-end gap-2">
                                 field(
                                     field_label(attrs: attributes! { for="product-stock" }, "On the shelf")
                                     input(attrs: attributes! {
@@ -831,7 +830,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 }
 
                 if deletable {
-                    <form method="post" action=(href!(delete::delete, Slug(slug.clone()), ProductId(product.id.clone()))) class="mb-6 flex flex-wrap items-center gap-3">
+                    <form method="post" action=(href!(delete::delete, slug: slug.clone(), product_id: product.id.clone())) class="mb-6 flex flex-wrap items-center gap-3">
                         button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Delete product")
                         <p class="text-sm text-muted-foreground">"For good: nobody has ordered it, so it can go as if it had never been. Its slug is free again and its pictures are deleted."</p>
                     </form>
@@ -854,7 +853,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         <p class="mb-1 text-xs text-muted-foreground" data-image-first="">"Shown in listings"</p>
                                     }
                                     if editable {
-                                        <form method="post" action=(href!(images::image_id::alt::alt, Slug(slug.clone()), ProductId(product.id.clone()), images::image_id::ImageId(image.id.clone())))>
+                                        <form method="post" action=(href!(images::image_id::alt::alt, slug: slug.clone(), product_id: product.id.clone(), images::image_id::image_id: image.id.clone()))>
                                             <label class="sr-only" for=(format!("alt-{}", image.id))>"What it shows"</label>
                                             input(attrs: attributes! {
                                                 id=(format!("alt-{}", image.id)) name="alt" type="text" maxlength=(MAX_ALT_LEN)
@@ -864,16 +863,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         </form>
                                         <div class="mt-2 flex flex-wrap items-center gap-2">
                                             if position > 0 {
-                                                <form method="post" action=(href!(images::image_id::up::up, Slug(slug.clone()), ProductId(product.id.clone()), images::image_id::ImageId(image.id.clone())))>
+                                                <form method="post" action=(href!(images::image_id::up::up, slug: slug.clone(), product_id: product.id.clone(), images::image_id::image_id: image.id.clone()))>
                                                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" aria-label="Move earlier" }, "↑")
                                                 </form>
                                             }
                                             if position < last {
-                                                <form method="post" action=(href!(images::image_id::down::down, Slug(slug.clone()), ProductId(product.id.clone()), images::image_id::ImageId(image.id.clone())))>
+                                                <form method="post" action=(href!(images::image_id::down::down, slug: slug.clone(), product_id: product.id.clone(), images::image_id::image_id: image.id.clone()))>
                                                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" aria-label="Move later" }, "↓")
                                                 </form>
                                             }
-                                            <form method="post" action=(href!(images::image_id::remove::remove, Slug(slug.clone()), ProductId(product.id.clone()), images::image_id::ImageId(image.id.clone())))>
+                                            <form method="post" action=(href!(images::image_id::remove::remove, slug: slug.clone(), product_id: product.id.clone(), images::image_id::image_id: image.id.clone()))>
                                                 button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Remove")
                                             </form>
                                         </div>
@@ -886,7 +885,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </ul>
                     if editable && !gallery_full {
                         <form method="post" enctype="multipart/form-data" class="mt-4 flex max-w-xl flex-col gap-4"
-                            action=(href!(images::upload::upload, Slug(slug.clone()), ProductId(product.id.clone())))>
+                            action=(href!(images::upload::upload, slug: slug.clone(), product_id: product.id.clone()))>
                             field(
                                 field_label(attrs: attributes! { for="product-image" }, "Add a picture")
                                 input(attrs: attributes! {
@@ -924,11 +923,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         (&membership.name)
                                         badge(variant: BadgeVariant::Secondary, "archived")
                                     } else {
-                                        <a class=(LINK) href=(href!(crate::app::t::slug::categories::category_id::index, Slug(slug.clone()), crate::app::t::slug::categories::category_id::CategoryId(membership.id.clone())))>(&membership.name)</a>
+                                        <a class=(LINK) href=(href!(crate::app::t::slug::categories::category_id::index, slug: slug.clone(), crate::app::t::slug::categories::category_id::category_id: membership.id.clone()))>(&membership.name)</a>
                                     }
                                 </span>
                                 if editable {
-                                    <form method="post" action=(href!(uncategorize::uncategorize, Slug(slug.clone()), ProductId(product.id.clone())))>
+                                    <form method="post" action=(href!(uncategorize::uncategorize, slug: slug.clone(), product_id: product.id.clone()))>
                                         <input type="hidden" name="category_id" value=(&membership.id)>
                                         button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Remove")
                                     </form>
@@ -937,7 +936,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     </ul>
                     if editable && !joinable.is_empty() {
-                        <form method="post" action=(href!(categorize::categorize, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-3 flex flex-wrap items-center gap-2">
+                        <form method="post" action=(href!(categorize::categorize, slug: slug.clone(), product_id: product.id.clone())) class="mt-3 flex flex-wrap items-center gap-2">
                             <label class="sr-only" for="product-category">"Category"</label>
                             select(
                                 attrs: attributes! { id="product-category" name="category_id" required="" class="min-w-0 flex-1 sm:max-w-sm" },
@@ -962,7 +961,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         for option in &options {
                             <li class="rounded-lg border border-border p-3" data-option=(&option.id)>
                                 if editable && !options_locked {
-                                    <form method="post" action=(href!(options::option_id::values::values, Slug(slug.clone()), ProductId(product.id.clone()), options::option_id::OptionId(option.id.clone()))) class="flex flex-col gap-3">
+                                    <form method="post" action=(href!(options::option_id::values::values, slug: slug.clone(), product_id: product.id.clone(), options::option_id::option_id: option.id.clone())) class="flex flex-col gap-3">
                                         field(
                                             field_label(attrs: attributes! { for=(format!("option-name-{}", option.id)) }, "Name of " (&option.name))
                                             input(attrs: attributes! {
@@ -978,7 +977,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                             button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save option")
                                         </div>
                                     </form>
-                                    <form method="post" action=(href!(options::option_id::remove::remove, Slug(slug.clone()), ProductId(product.id.clone()), options::option_id::OptionId(option.id.clone()))) class="mt-2">
+                                    <form method="post" action=(href!(options::option_id::remove::remove, slug: slug.clone(), product_id: product.id.clone(), options::option_id::option_id: option.id.clone())) class="mt-2">
                                         button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Remove option")
                                     </form>
                                 } else {
@@ -989,7 +988,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     <p class="mt-2 text-sm text-muted-foreground" data-option-hidden=(&option.fixed_value)>"Hidden from shoppers: only the variants with " (&option.fixed_value) " are on sale."</p>
                                 }
                                 if editable && (has_variants || !option.fixed_value.is_empty()) {
-                                    <form method="post" action=(href!(options::option_id::visibility::visibility, Slug(slug.clone()), ProductId(product.id.clone()), options::option_id::OptionId(option.id.clone()))) class="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3" data-option-visibility="">
+                                    <form method="post" action=(href!(options::option_id::visibility::visibility, slug: slug.clone(), product_id: product.id.clone(), options::option_id::option_id: option.id.clone())) class="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3" data-option-visibility="">
                                         <label class="text-sm" for=(format!("option-visibility-{}", option.id))>"Shoppers see " (&option.name)</label>
                                         select(
                                             attrs: attributes! { id=(format!("option-visibility-{}", option.id)) name="value" class="w-56" },
@@ -1002,7 +1001,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     </form>
                                 }
                                 if editable {
-                                    <form method="post" action=(href!(options::option_id::labels::labels, Slug(slug.clone()), ProductId(product.id.clone()), options::option_id::OptionId(option.id.clone()))) class="mt-3 flex flex-col gap-2 border-t border-border pt-3" data-option-labels="">
+                                    <form method="post" action=(href!(options::option_id::labels::labels, slug: slug.clone(), product_id: product.id.clone(), options::option_id::option_id: option.id.clone())) class="mt-3 flex flex-col gap-2 border-t border-border pt-3" data-option-labels="">
                                         <div class="flex flex-wrap items-center gap-2">
                                             <label class="text-sm" for=(format!("option-label-{}", option.id))>"Label of " (&option.name)</label>
                                             input(attrs: attributes! {
@@ -1031,7 +1030,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <p class="mt-3 text-sm text-muted-foreground">"Remove every variant before changing the options."</p>
                     }
                     if can_add_option {
-                        <form method="post" action=(href!(options::define::define, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-4 flex max-w-xl flex-col gap-4">
+                        <form method="post" action=(href!(options::define::define, slug: slug.clone(), product_id: product.id.clone())) class="mt-4 flex max-w-xl flex-col gap-4">
                             field(
                                 field_label(attrs: attributes! { for="new-option-name" }, "Add an option")
                                 input(attrs: attributes! {
@@ -1081,7 +1080,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         )
                                         table_cell(
                                             if editable {
-                                                <form method="post" action=(href!(variants::variant_id::price::price, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex items-center gap-1">
+                                                <form method="post" action=(href!(variants::variant_id::price::price, slug: slug.clone(), product_id: product.id.clone(), variants::variant_id::variant_id: variant.id.clone())) class="flex items-center gap-1">
                                                     <label class="sr-only" for=(format!("variant-amount-{}", variant.id))>"Price of " (&variant.selections)</label>
                                                     input(attrs: attributes! {
                                                         id=(format!("variant-amount-{}", variant.id)) name="amount" type="text" inputmode="decimal" required=""
@@ -1102,7 +1101,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         )
                                         table_cell(
                                             if editable {
-                                                <form method="post" action=(href!(variants::variant_id::sku::sku, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex items-center gap-1">
+                                                <form method="post" action=(href!(variants::variant_id::sku::sku, slug: slug.clone(), product_id: product.id.clone(), variants::variant_id::variant_id: variant.id.clone())) class="flex items-center gap-1">
                                                     <label class="sr-only" for=(format!("variant-sku-{}", variant.id))>"Code of " (&variant.selections)</label>
                                                     input(attrs: attributes! {
                                                         id=(format!("variant-sku-{}", variant.id)) name="sku" type="text" maxlength=(MAX_SKU_LEN)
@@ -1115,7 +1114,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         table_cell(
                                             attrs: attributes! { data-stock=(variant.stock.data()) data-stock-held=(variant.stock.held) },
                                             if editable {
-                                                <form method="post" action=(href!(stock::stock, Slug(slug.clone()), ProductId(product.id.clone()))) class="flex items-center gap-1">
+                                                <form method="post" action=(href!(stock::stock, slug: slug.clone(), product_id: product.id.clone())) class="flex items-center gap-1">
                                                     <input type="hidden" name="variant_id" value=(&variant.id)>
                                                     <label class="sr-only" for=(format!("variant-stock-{}", variant.id))>"Stock of " (&variant.selections)</label>
                                                     input(attrs: attributes! {
@@ -1136,7 +1135,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         )
                                         table_cell(
                                             if editable && !picture_choices.is_empty() {
-                                                <form method="post" action=(href!(variants::variant_id::image::image, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone()))) class="flex items-center gap-1">
+                                                <form method="post" action=(href!(variants::variant_id::image::image, slug: slug.clone(), product_id: product.id.clone(), variants::variant_id::variant_id: variant.id.clone())) class="flex items-center gap-1">
                                                     <label class="sr-only" for=(format!("variant-image-{}", variant.id))>"Picture of " (&variant.selections)</label>
                                                     select(
                                                         attrs: attributes! { id=(format!("variant-image-{}", variant.id)) name="image_id" class="w-36" },
@@ -1152,7 +1151,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         table_cell(
                                             attrs: attributes! { class="text-right" },
                                             if editable {
-                                                <form method="post" action=(href!(variants::variant_id::remove::remove, Slug(slug.clone()), ProductId(product.id.clone()), variants::variant_id::VariantId(variant.id.clone())))>
+                                                <form method="post" action=(href!(variants::variant_id::remove::remove, slug: slug.clone(), product_id: product.id.clone(), variants::variant_id::variant_id: variant.id.clone()))>
                                                     button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Remove")
                                                 </form>
                                             }
@@ -1162,7 +1161,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             )
                         )
                         if can_add_variant {
-                            <form method="post" action=(href!(variants::define::define, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-4 flex max-w-xl flex-col gap-4">
+                            <form method="post" action=(href!(variants::define::define, slug: slug.clone(), product_id: product.id.clone())) class="mt-4 flex max-w-xl flex-col gap-4">
                                 <h3 class="text-sm font-semibold">"Add a variant"</h3>
                                 for option in &options {
                                     field(
@@ -1238,7 +1237,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     table_cell(
                                         attrs: attributes! { class="text-right" },
                                         if editable {
-                                            <form method="post" action=(href!(attributes::remove::remove, Slug(slug.clone()), ProductId(product.id.clone())))>
+                                            <form method="post" action=(href!(attributes::remove::remove, slug: slug.clone(), product_id: product.id.clone()))>
                                                 <input type="hidden" name="name" value=(&attribute.name)>
                                                 button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Remove")
                                             </form>
@@ -1249,7 +1248,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                     )
                     if editable {
-                        <form method="post" action=(href!(attributes::set::set, Slug(slug.clone()), ProductId(product.id.clone()))) class="mt-4 flex flex-wrap items-end gap-2">
+                        <form method="post" action=(href!(attributes::set::set, slug: slug.clone(), product_id: product.id.clone())) class="mt-4 flex flex-wrap items-end gap-2">
                             field(
                                 attrs: attributes! { class="min-w-0 flex-1" },
                                 field_label(attrs: attributes! { for="attribute-name" }, "Fact name")
@@ -1312,14 +1311,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                                 status_badge(tone: crate::ui::Tone::Warning, "Can't be added")
                                                 <span class="text-xs text-muted-foreground" data-aliexpress-new-reason="">(reason)</span>
                                             } else if can_aliexpress {
-                                                <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::combinations::combinations, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>
+                                                <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::combinations::combinations, slug: slug.clone(), crate::app::t::slug::aliexpress::products::link_id::link_id: link.id.clone()))>
                                                     <input type="hidden" name="back" value=(&product.id)>
                                                     <input type="hidden" name="sku_id" value=(sku_id)>
                                                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" aria-label=(format!("Add {label} as a variant")) }, "Add as variant")
                                                 </form>
                                             }
                                             if can_aliexpress {
-                                                <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::ignore::ignore, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>
+                                                <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::ignore::ignore, slug: slug.clone(), crate::app::t::slug::aliexpress::products::link_id::link_id: link.id.clone()))>
                                                     <input type="hidden" name="back" value=(&product.id)>
                                                     <input type="hidden" name="sku_id" value=(sku_id)>
                                                     button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" aria-label=(format!("Ignore {label}")) }, "Ignore")
@@ -1329,7 +1328,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     }
                                 </ul>
                                 if can_aliexpress && found_fitting > 1 {
-                                    <form class="mt-2" method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::combinations::combinations, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>
+                                    <form class="mt-2" method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::combinations::combinations, slug: slug.clone(), crate::app::t::slug::aliexpress::products::link_id::link_id: link.id.clone()))>
                                         <input type="hidden" name="back" value=(&product.id)>
                                         button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, (format!("Add all {found_fitting}")))
                                     </form>
@@ -1342,7 +1341,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                                 <li class="flex flex-wrap items-center gap-2" data-aliexpress-ignored-sku=(sku_id)>
                                                     <span>(label) " · costs " (cost) " · " (available) " on AliExpress"</span>
                                                     if can_aliexpress {
-                                                        <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::restore::restore, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>
+                                                        <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::restore::restore, slug: slug.clone(), crate::app::t::slug::aliexpress::products::link_id::link_id: link.id.clone()))>
                                                             <input type="hidden" name="back" value=(&product.id)>
                                                             <input type="hidden" name="sku_id" value=(sku_id)>
                                                             button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" aria-label=(format!("Offer {label} again")) }, "Offer again")
@@ -1357,16 +1356,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                         if can_aliexpress {
                             <div class="mt-4 flex flex-wrap gap-2">
-                                <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::sync::sync, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>
+                                <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::sync::sync, slug: slug.clone(), crate::app::t::slug::aliexpress::products::link_id::link_id: link.id.clone()))>
                                     <input type="hidden" name="back" value=(&product.id)>
                                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Sync now")
                                 </form>
-                                <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::unlink::unlink, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone())))>
+                                <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::unlink::unlink, slug: slug.clone(), crate::app::t::slug::aliexpress::products::link_id::link_id: link.id.clone()))>
                                     <input type="hidden" name="back" value=(&product.id)>
                                     button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop keeping in step")
                                 </form>
                             </div>
-                            <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::pricing::pricing, Slug(slug.clone()), crate::app::t::slug::aliexpress::products::link_id::LinkId(link.id.clone()))) class="mt-4 flex flex-wrap items-end gap-2">
+                            <form method="post" action=(href!(crate::app::t::slug::aliexpress::products::link_id::pricing::pricing, slug: slug.clone(), crate::app::t::slug::aliexpress::products::link_id::link_id: link.id.clone())) class="mt-4 flex flex-wrap items-end gap-2">
                                 <input type="hidden" name="back" value=(&product.id)>
                                 field(
                                     field_label(attrs: attributes! { for="link-multiplier" }, "Its own rule: multiply the cost by")

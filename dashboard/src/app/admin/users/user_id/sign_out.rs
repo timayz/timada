@@ -3,11 +3,11 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{UserId, user_url};
+use super::{user_id, user_url};
 use crate::app::admin::{error_code, require_admin};
 use crate::auth::identity;
 
@@ -15,7 +15,7 @@ use crate::auth::identity;
 #[route(POST)]
 pub async fn sign_out(cx: &Cx) -> Result<SeeOther> {
     let me = require_admin(cx).await?;
-    let id = path_param::<UserId>(cx);
+    let id = user_id(cx);
     match identity(cx).revoke_sessions(&me.id, id, None).await {
         Ok(()) => Ok(see_other(user_url(
             cx,

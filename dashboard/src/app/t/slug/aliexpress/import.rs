@@ -3,7 +3,7 @@ use std::sync::Arc;
 use timada_tenancy::PERMISSION_ALIEXPRESS_MANAGE;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Form,
         error::{SeeOther, see_other},
@@ -34,9 +34,9 @@ pub async fn import(cx: &Cx, Form(form): Form<ImportForm>) -> Result<SeeOther> {
     if access.tenant.aliexpress.is_none() {
         return refused("aliexpress_not_configured");
     }
-    let aliexpress = app_context::<Arc<Aliexpress>>(cx);
+    let aliexpress = context::<Arc<Aliexpress>>(cx);
     let company = aliexpress
-        .company_of(app_context::<Executor>(cx), &access.tenant)
+        .company_of(context::<Executor>(cx), &access.tenant)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     match company {

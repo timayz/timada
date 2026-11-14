@@ -25,15 +25,15 @@ use topcoat::{
     router::{
         content::Form,
         error::{not_found, see_other},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{View, attributes, class, component, view},
 };
 
 use super::super::super::own_address;
-use super::{Kind, require_kind};
+use super::{kind, require_kind};
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::tenants::{error_code, tenancy};
 use crate::auth::{require_user, user_labels};
 use crate::components::alert::{AlertVariant, alert, alert_description};
@@ -63,9 +63,9 @@ pub fn editor_url(
 ) -> String {
     href!(
         index,
-        Slug(slug.to_owned()),
-        Kind(kind.key().to_owned()),
-        Language(language.to_owned())
+        slug: slug.to_owned(),
+        kind: kind.key().to_owned(),
+        language: language.to_owned()
     )
     .query(Flash { error, message })
     .resolve(cx)
@@ -74,7 +74,7 @@ pub fn editor_url(
 /// The language named in the URL, lowercased, or 404 when the shop does
 /// not mail in it.
 pub fn require_language(cx: &Cx, tenant: &TenantState) -> Result<String> {
-    let language = path_param::<Language>(cx).trim().to_ascii_lowercase();
+    let language = language(cx).trim().to_ascii_lowercase();
     if tenant.mails_in(&language) {
         Ok(language)
     } else {
@@ -300,6 +300,7 @@ pub async fn submit(cx: &Cx, Form(form): Form<EditorForm>) -> Result<impl View> 
 
 #[component]
 async fn editor(
+    cx: &Cx,
     tenant: &TenantState,
     nav: &TenantNav,
     kind: ShopMailKind,
@@ -339,7 +340,7 @@ async fn editor(
             page_header(
                 title: &heading,
                 subtitle: Some(kind.description()),
-                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(super::super::super::index, Slug(slug.clone())))>"Back to Mail"</a>
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(super::super::super::index, slug: slug.clone()))>"Back to Mail"</a>
             )
             notice(error: error, message: message)
 
@@ -354,7 +355,7 @@ async fn editor(
                             <span aria-current="page" class=(badge_variants(BadgeVariant::Tinted))>(sibling)</span>
                         } else {
                             <a class=(class!(badge_variants(BadgeVariant::Outline), "hover:bg-foreground/5"))
-                                href=(href!(index, Slug(slug.clone()), Kind(kind.key().to_owned()), Language(code.clone())))>(sibling)</a>
+                                href=(href!(index, slug: slug.clone(), kind: kind.key().to_owned(), language: code.clone()))>(sibling)</a>
                         }
                     }
                 </nav>
@@ -364,7 +365,7 @@ async fn editor(
                 section_card(
                     attrs: attributes! { class="mb-0" },
                     <form method="post" data-mail-language=(language)
-                        action=(href!(submit, Slug(slug.clone()), Kind(kind.key().to_owned()), Language(language.to_owned()))) class="flex flex-col gap-4">
+                        action=(href!(submit, slug: slug.clone(), kind: kind.key().to_owned(), language: language.to_owned())) class="flex flex-col gap-4">
                         field(
                             field_label(attrs: attributes! { for="mail-subject" }, "Subject")
                             input(attrs: attributes! {
@@ -406,7 +407,7 @@ async fn editor(
                         </div>
                     </form>
                     if edited {
-                        <form method="post" class="mt-4" action=(href!(reset::reset, Slug(slug.clone()), Kind(kind.key().to_owned()), Language(language.to_owned())))>
+                        <form method="post" class="mt-4" action=(href!(reset::reset, slug: slug.clone(), kind: kind.key().to_owned(), language: language.to_owned()))>
                             button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Back to the built-in wording")
                         </form>
                     }

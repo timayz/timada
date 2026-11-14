@@ -9,7 +9,7 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, see_other},
-        href, module_param, page, path_param, route,
+        href, module_param, page, route,
     },
     view::{View, view},
 };
@@ -21,7 +21,7 @@ module_param!(pub token);
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    let token = path_param::<Token>(cx).to_owned();
+    let token = token(cx).to_owned();
     let nav = menu(cx).await?;
     Ok(view! {
         document(
@@ -31,7 +31,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 <h1>"Confirmer votre inscription"</h1>
                 <div class="card panel">
                     <p>"Un clic encore et vous recevrez notre newsletter."</p>
-                    <form method="post" action=(href!(submit, Token(token))) data-newsletter-confirm="">
+                    <form method="post" action=(href!(submit, token: token)) data-newsletter-confirm="">
                         <button class="btn">"Confirmer mon inscription"</button>
                     </form>
                 </div>
@@ -42,7 +42,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
 #[route(POST)]
 pub async fn submit(cx: &Cx) -> Result<SeeOther> {
-    let token = path_param::<Token>(cx);
+    let token = token(cx);
     let to = match confirm_subscription(cx, token).await? {
         Ok(Confirmation::Confirmed | Confirmation::AlreadyConfirmed) => {
             newsletter_url(cx, None, Some("confirmed"))

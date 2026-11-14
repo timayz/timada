@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, see_other},
         route,
@@ -20,7 +20,7 @@ use crate::auth::cookies::{AliexpressFlow, aliexpress_flow};
 #[route(POST)]
 pub async fn connect(cx: &Cx) -> Result<SeeOther> {
     let (company, user_id) = require_owned(cx).await?;
-    let aliexpress = app_context::<Arc<Aliexpress>>(cx);
+    let aliexpress = context::<Arc<Aliexpress>>(cx);
     if !aliexpress.enabled() {
         return Ok(see_other(company_url(
             cx,

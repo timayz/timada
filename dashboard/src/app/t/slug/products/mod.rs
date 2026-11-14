@@ -14,12 +14,12 @@ use timada_core::page::{Cursor, PageFrom};
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::components::button::{ButtonSize, ButtonVariant, button};
@@ -95,7 +95,7 @@ fn empty_text(filter: &ProductFilter<'_>) -> &'static str {
 }
 
 pub fn products_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -159,7 +159,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page = PageFrom::of(after.as_ref(), before.as_ref());
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let filter = ProductFilter::default()
         .search(q)
         .category(category)
@@ -178,7 +178,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_link = {
         let slug = slug.clone();
         move |after: Option<&str>, before: Option<&str>| {
-            href!(index, Slug(slug.clone()))
+            href!(index, slug: slug.clone())
                 .query(ProductsLink {
                     q,
                     category,
@@ -254,7 +254,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             table_row(
                                 attrs: attributes! { data-product=(&row.slug) data-product-status=(&row.status) },
                                 table_cell(
-                                    <a class=(LINK) href=(href!(product_id::index, Slug(slug.clone()), product_id::ProductId(row.id.clone())))>(&row.name)</a>
+                                    <a class=(LINK) href=(href!(product_id::index, slug: slug.clone(), product_id::product_id: row.id.clone()))>(&row.name)</a>
                                 )
                                 table_cell(<code class="text-xs">(&row.slug)</code>)
                                 table_cell(attrs: attributes! { class="text-right tabular-nums" data-product-price="" }, (row.price_label().unwrap_or_else(|| "—".to_owned())))
@@ -272,7 +272,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 section_card(
                     title: Some("Create a product"),
                     description: Some("A new product is a draft: set its price and publish it from its page. The slug derives from the name unless given."),
-                    <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                    <form method="post" action=(href!(create::create, slug: slug.clone())) class="flex max-w-xl flex-col gap-4">
                         field(
                             field_label(attrs: attributes! { for="new-product-name" }, "Name")
                             input(attrs: attributes! {

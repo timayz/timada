@@ -5,18 +5,18 @@ use topcoat::{
     router::{
         content::multipart::Multipart,
         error::{SeeOther, not_found, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{OrderId, order_url};
+use super::{order_id, order_url};
 use crate::shopper::holds_order;
 
 /// Hands in the shopper's review of one product of the order, with its
 /// photos, then back to the order's page.
 #[route(POST)]
 pub async fn review(cx: &Cx, mut multipart: Multipart) -> Result<SeeOther> {
-    let order_id = path_param::<OrderId>(cx).to_owned();
+    let order_id = order_id(cx).to_owned();
     if !holds_order(cx, &order_id).await? {
         return Err(not_found().into());
     }

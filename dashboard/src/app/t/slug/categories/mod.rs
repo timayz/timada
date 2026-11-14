@@ -12,12 +12,12 @@ use timada_catalog::{
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::components::badge::{BadgeVariant, badge};
 use crate::components::button::button;
@@ -37,7 +37,7 @@ struct CategoriesQuery {
 }
 
 pub fn categories_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -130,7 +130,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<CategoriesQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let rows = rows_of(pool, &tenant.id).await?;
     let slug = tenant.slug.clone();
     let title = format!("Categories · {}", tenant.name);
@@ -172,7 +172,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 attrs: attributes! { data-category=(&row.category.slug) data-category-depth=(row.depth) },
                                 table_cell(
                                     attrs: attributes! { class=(indent(row.depth)) },
-                                    <a class=(LINK) href=(href!(category_id::index, Slug(slug.clone()), category_id::CategoryId(row.category.id.clone())))>(&row.category.name)</a>
+                                    <a class=(LINK) href=(href!(category_id::index, slug: slug.clone(), category_id::category_id: row.category.id.clone()))>(&row.category.name)</a>
                                     if !row.category.in_menu {
                                         " " badge(variant: BadgeVariant::Secondary, attrs: attributes! { data-hidden-from-menu="" }, "Hidden from menu")
                                     }
@@ -196,7 +196,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 section_card(
                     title: Some("Create a category"),
                     description: Some("A top-level category, or one under another. The slug derives from the name unless given."),
-                    <form method="post" action=(href!(create::create, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                    <form method="post" action=(href!(create::create, slug: slug.clone())) class="flex max-w-xl flex-col gap-4">
                         field(
                             field_label(attrs: attributes! { for="new-category-name" }, "Name")
                             input(attrs: attributes! {

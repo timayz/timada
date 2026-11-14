@@ -8,7 +8,7 @@ use timada_storefront::{
 use topcoat::{
     Result,
     context::Cx,
-    router::{href, module_param, page, path_param, query_params},
+    router::{href, module_param, page, query_params},
     view::{View, attributes, view},
 };
 
@@ -36,13 +36,13 @@ const RELATED: u32 = 4;
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<ProductPageQuery>(cx)?;
-    let product = require_product(cx, path_param::<Slug>(cx)).await?;
+    let product = require_product(cx, slug(cx)).await?;
     let reviews = reviews_of(cx, &product, query.reviews.unwrap_or(1)).await?;
     let slug = product.slug.clone();
     let reviews_link = move |page: u32| {
         format!(
             "{}#reviews",
-            href!(index, Slug(slug.clone()))
+            href!(index, slug: slug.clone())
                 .query(ReviewsLink { reviews: page })
                 .resolve(cx)
         )
@@ -84,7 +84,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <a href=(href!(crate::app::index))>"Accueil"</a>
                     for crumb in &crumbs {
                         " / "
-                        <a href=(href!(crate::app::c::slug::index, crate::app::c::slug::Slug(crumb.slug.clone())))>(&crumb.name)</a>
+                        <a href=(href!(crate::app::c::slug::index, crate::app::c::slug::slug: crumb.slug.clone()))>(&crumb.name)</a>
                     }
                     " / " (&product.name)
                 </nav>

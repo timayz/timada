@@ -86,7 +86,7 @@ pub async fn add(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Result<S
                 return Ok(see_other(back_url(cx, back, field("from"), error)));
             }
             let product_page =
-                href!(crate::app::p::slug::index, crate::app::p::slug::Slug(slug)).resolve(cx);
+                href!(crate::app::p::slug::index, crate::app::p::slug::slug: slug).resolve(cx);
             let from = Some(field("from"))
                 .filter(|from| !from.is_empty())
                 .unwrap_or(&product_page);
@@ -100,7 +100,7 @@ pub async fn add(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Result<S
             struct Link<'a> {
                 error: Option<&'a str>,
             }
-            let back = href!(crate::app::p::slug::index, crate::app::p::slug::Slug(slug))
+            let back = href!(crate::app::p::slug::index, crate::app::p::slug::slug: slug)
                 .query(Link { error: err.code() })
                 .resolve(cx);
             Ok(see_other(back))

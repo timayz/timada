@@ -14,11 +14,11 @@ use timada_newsletter::{
 use timada_tenancy::{PERMISSION_NEWSLETTER_MANAGE, PERMISSION_NEWSLETTER_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Form,
         error::{not_found, see_other},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{View, attributes, view},
 };
@@ -28,7 +28,7 @@ use super::{
     send_test, status_label,
 };
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
@@ -56,8 +56,8 @@ pub fn campaign_url(
 ) -> String {
     href!(
         index,
-        Slug(slug.to_owned()),
-        CampaignId(campaign_id.to_owned())
+        slug: slug.to_owned(),
+        campaign_id: campaign_id.to_owned()
     )
     .query(Flash { error, message })
     .resolve(cx)
@@ -65,7 +65,7 @@ pub fn campaign_url(
 
 /// The campaign the URL names, or 404.
 pub async fn require_campaign(access: &TenantAccess, cx: &Cx) -> Result<CampaignState> {
-    let id = path_param::<CampaignId>(cx);
+    let id = campaign_id(cx);
     super::super::newsletter(access)?
         .load_campaign(id)
         .await
@@ -94,7 +94,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let draft = draft_of(&campaign);
     let checked = preview(cx, &access.tenant, &draft);
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let row = campaign_row(pool, &access.tenant.id, &campaign.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -123,22 +123,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     });
     let schedule_link = href!(
         schedule::schedule,
-        Slug(slug.clone()),
-        CampaignId(campaign.id.clone())
+        slug: slug.clone(),
+        campaign_id: campaign.id.clone()
     )
     .resolve(cx);
     let stop = href!(
         schedule::save,
-        Slug(slug.clone()),
-        CampaignId(campaign.id.clone())
+        slug: slug.clone(),
+        campaign_id: campaign.id.clone()
     )
     .resolve(cx);
-    let action = href!(submit, Slug(slug.clone()), CampaignId(campaign.id.clone())).resolve(cx);
+    let action = href!(submit, slug: slug.clone(), campaign_id: campaign.id.clone()).resolve(cx);
     let back = campaigns_url(cx, &slug, None, None);
     let send = href!(
         send::send,
-        Slug(slug.clone()),
-        CampaignId(campaign.id.clone())
+        slug: slug.clone(),
+        campaign_id: campaign.id.clone()
     )
     .resolve(cx);
     Ok(view! {
@@ -289,7 +289,7 @@ pub async fn submit(cx: &Cx, Form(form): Form<CampaignForm>) -> Result<impl View
     let tenant = access.tenant;
     let slug = tenant.slug.clone();
     let title = format!("{} · Newsletter · {}", campaign.subject, tenant.name);
-    let action = href!(submit, Slug(slug.clone()), CampaignId(campaign.id.clone())).resolve(cx);
+    let action = href!(submit, slug: slug.clone(), campaign_id: campaign.id.clone()).resolve(cx);
     let back = campaigns_url(cx, &slug, None, None);
     Ok(view! {
         document(

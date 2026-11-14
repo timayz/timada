@@ -12,14 +12,14 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, not_found, see_other},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{View, attributes, view},
 };
 
 use super::{amount_field, countries_field, error_code, orders, shipping_url};
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantAccess, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
@@ -41,14 +41,14 @@ pub fn method_url(
     error: Option<&str>,
     message: Option<&str>,
 ) -> String {
-    href!(index, Slug(slug.to_owned()), MethodId(method_id.to_owned()))
+    href!(index, slug: slug.to_owned(), method_id: method_id.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
 
 /// The method named in the URL, or 404.
 async fn require_method(cx: &Cx, access: &TenantAccess) -> Result<ShippingMethod> {
-    let id = path_param::<MethodId>(cx);
+    let id = method_id(cx);
     orders(access)?
         .shipping_methods()
         .await
@@ -72,7 +72,7 @@ where
     access
         .require_permission(cx, PERMISSION_SHIPPING_MANAGE)
         .await?;
-    let method_id = path_param::<MethodId>(cx).to_owned();
+    let method_id = method_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let gateway = orders(&access)?;
     match run(&gateway, &access.user_id, &method_id).await {
@@ -128,7 +128,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             section_card(
                 title: Some("Settings"),
-                <form method="post" action=(href!(change::change, Slug(slug.clone()), MethodId(id.clone()))) class="flex max-w-xl flex-col gap-4">
+                <form method="post" action=(href!(change::change, slug: slug.clone(), method_id: id.clone())) class="flex max-w-xl flex-col gap-4">
                     field(
                         field_label(attrs: attributes! { for="shipping-name" }, "Name")
                         input(attrs: attributes! {
@@ -166,7 +166,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             section_card(
                 title: Some("Remove this method"),
                 description: Some("A shopper who picked it and has not paid yet is asked to pick another. Orders already placed keep what they paid."),
-                <form method="post" action=(href!(remove::remove, Slug(slug.clone()), MethodId(id.clone())))>
+                <form method="post" action=(href!(remove::remove, slug: slug.clone(), method_id: id.clone()))>
                     button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Remove")
                 </form>
             )

@@ -5,7 +5,7 @@ use timada_orders::PROVIDER_STRIPE;
 use timada_tenancy::{ConfigurePayments, PERMISSION_PAYMENTS_MANAGE};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Form,
         error::{SeeOther, see_other},
@@ -37,7 +37,7 @@ pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOt
         .require_permission(cx, PERMISSION_PAYMENTS_MANAGE)
         .await?;
     let slug = access.tenant.slug.as_str();
-    let payments = app_context::<Arc<Payments>>(cx);
+    let payments = context::<Arc<Payments>>(cx);
     if !payments.enabled() {
         return Ok(see_other(payments_url(
             cx,
@@ -78,7 +78,7 @@ pub async fn configure(cx: &Cx, Form(form): Form<ConfigureForm>) -> Result<SeeOt
     // same account's keys (a rolled secret key) are fine: the new key must
     // read one of the payments still held, and keep the publishable key.
     if let Some(current) = &access.tenant.payments {
-        let db = app_context::<Db>(cx);
+        let db = context::<Db>(cx);
         let owed = timada_orders::money_owed(db, &access.tenant.id)
             .await
             .map_err(topcoat::Error::from_anyhow)?;

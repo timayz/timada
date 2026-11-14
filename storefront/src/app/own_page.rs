@@ -44,7 +44,7 @@ pub fn url(cx: &Cx, slug: &str) -> Option<String> {
 /// [`require_page`](timada_storefront::require_page), a 404 when the text is
 /// not published.
 #[component]
-pub async fn shop_page(page: &PublicPage, nav: &[CategoryNode]) -> Result<impl View> {
+pub async fn shop_page(cx: &Cx, page: &PublicPage, nav: &[CategoryNode]) -> Result<impl View> {
     Ok(view! {
         document(
             title: &page.meta_title,

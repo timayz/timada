@@ -6,7 +6,7 @@
 pub mod callback;
 pub mod webhook;
 
-use topcoat::context::{Cx, app_context};
+use topcoat::context::{Cx, context};
 
 use crate::config::Config;
 
@@ -14,7 +14,7 @@ use crate::config::Config;
 pub fn callback_url(cx: &Cx) -> String {
     format!(
         "{}{}",
-        app_context::<Config>(cx).server.url.trim_end_matches('/'),
+        context::<Config>(cx).server.url.trim_end_matches('/'),
         topcoat::router::href!(callback::callback).resolve(cx)
     )
 }

@@ -46,11 +46,11 @@ use timada_tenancy::{
 };
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::{IconData, icon},
     router::{
         error::{forbidden, not_found},
-        href, module_param, page, path_param, query_params,
+        href, module_param, page, query_params,
     },
     view::{View, attributes, view},
 };
@@ -92,7 +92,7 @@ impl TenantAccess {
 
     /// Whether the member holds `permission` (`resource:action`).
     pub async fn can(&self, cx: &Cx, permission: &str) -> Result<bool> {
-        app_context::<Arc<Authorizer>>(cx)
+        context::<Arc<Authorizer>>(cx)
             .allows(&self.tenant, &self.user_id, permission)
             .await
             .map_err(topcoat::Error::from_anyhow)
@@ -130,7 +130,7 @@ impl TenantAccess {
 /// another node).
 pub async fn require_tenant(cx: &Cx) -> Result<TenantAccess> {
     let user = require_user(cx).await?;
-    let slug = path_param::<Slug>(cx);
+    let slug = slug(cx);
     let tenant = crate::reads::first(
         cx,
         |store| async move { Command(store).load_tenant_by_slug(slug).await },
@@ -148,7 +148,7 @@ pub async fn require_tenant(cx: &Cx) -> Result<TenantAccess> {
         return Err(forbidden().into());
     };
     let role = role.to_owned();
-    let store = (!tenant.is_suspended()).then(|| app_context::<Executor>(cx).clone());
+    let store = (!tenant.is_suspended()).then(|| context::<Executor>(cx).clone());
     Ok(TenantAccess {
         tenant,
         user_id: user.id.clone(),
@@ -173,7 +173,7 @@ struct TenantQuery {
 }
 
 pub fn tenant_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -255,7 +255,7 @@ struct Tile {
 /// asks for attention (reviews or messages waiting) is drawn in the warning
 /// colour while it is above zero.
 async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Tile>> {
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let id = tenant.id.as_str();
     let link = |key: &str| section_url(cx, &tenant.slug, key);
     let attention = |n: u64| if n > 0 { Tone::Warning } else { Tone::Neutral };
@@ -315,7 +315,7 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
             status: Some(ReviewStatus::Pending),
             ..ReviewFilter::default()
         };
-        let n = count_reviews(app_context::<Db>(cx), id, &filter)
+        let n = count_reviews(context::<Db>(cx), id, &filter)
             .await
             .map_err(topcoat::Error::from_anyhow)?;
         tiles.push(Tile {
@@ -331,7 +331,7 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
         let filter = MessageFilter {
             status: Some(MessageStatus::Open),
         };
-        let n = count_messages(app_context::<Db>(cx), id, &filter)
+        let n = count_messages(context::<Db>(cx), id, &filter)
             .await
             .map_err(topcoat::Error::from_anyhow)?;
         tiles.push(Tile {
@@ -357,7 +357,7 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
         });
     }
     if nav.members {
-        let invitations = count_open_invitations_of_tenant(app_context::<Db>(cx), id, now())
+        let invitations = count_open_invitations_of_tenant(context::<Db>(cx), id, now())
             .await
             .map_err(topcoat::Error::from_anyhow)?;
         tiles.push(Tile {
@@ -384,7 +384,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let can_manage = access.can(cx, PERMISSION_TENANT_MANAGE).await?;
     let TenantAccess { tenant, role, .. } = access;
     let role = role_label(&tenant, &role);
-    let connections = app_context::<Arc<StoreConnections>>(cx).count_tenant(&tenant.id);
+    let connections = context::<Arc<StoreConnections>>(cx).count_tenant(&tenant.id);
     let tiles = tiles(cx, &tenant, &nav).await?;
     let zones = timada_core::time_zones();
     let members = match tenant.members.len() {
@@ -463,7 +463,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 section_card(
                     title: Some("Settings"),
                     description: Some("The name members and the platform see this tenant under, and where the shop lives."),
-                    <form method="post" action=(href!(rename::rename, Slug(tenant.slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                    <form method="post" action=(href!(rename::rename, slug: tenant.slug.clone())) class="flex max-w-xl flex-col gap-4">
                         field(
                             field_label(attrs: attributes! { for="tenant-name" }, "Name")
                             input(attrs: attributes! {
@@ -475,7 +475,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             button(attrs: attributes! { type="submit" }, "Rename")
                         </div>
                     </form>
-                    <form method="post" action=(href!(time_zone::time_zone, Slug(tenant.slug.clone()))) class="mt-8 flex max-w-xl flex-col gap-4" data-shop-time-zone="">
+                    <form method="post" action=(href!(time_zone::time_zone, slug: tenant.slug.clone())) class="mt-8 flex max-w-xl flex-col gap-4" data-shop-time-zone="">
                         field(
                             field_label(attrs: attributes! { for="tenant-time-zone" }, "Time zone")
                             select(

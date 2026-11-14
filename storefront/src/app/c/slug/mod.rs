@@ -8,7 +8,7 @@ use timada_storefront::{
 use topcoat::{
     Result,
     context::Cx,
-    router::{href, module_param, page, path_param, query_params},
+    router::{href, module_param, page, query_params},
     view::{View, view},
 };
 
@@ -55,7 +55,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // even when the merchant left it out of the menu.
     let tree = categories(cx).await?;
     let nav = menu_of(&tree);
-    let node = require_category_in(&tree, path_param::<Slug>(cx))?;
+    let node = require_category_in(&tree, slug(cx))?;
     let category = node.category.clone();
     let children = node.children.clone();
     let crumbs = category_path(&tree, &category);
@@ -87,7 +87,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         let sort = sort.as_str();
         let slug = category.slug.clone();
         move |filters: &Filters, number: u32| {
-            href!(index, Slug(slug.clone()))
+            href!(index, slug: slug.clone())
                 .query(CategoryLink {
                     sort,
                     page: number,
@@ -114,7 +114,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <a href=(href!(crate::app::index))>"Accueil"</a>
                     for crumb in &crumbs {
                         " / "
-                        <a href=(href!(index, Slug(crumb.slug.clone())))>(&crumb.name)</a>
+                        <a href=(href!(index, slug: crumb.slug.clone()))>(&crumb.name)</a>
                     }
                     " / " (&category.name)
                 </nav>
@@ -128,7 +128,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             for child in &children {
                                 <li>
                                     <a data-subcategory=(&child.category.slug)
-                                        href=(href!(index, Slug(child.category.slug.clone())))>
+                                        href=(href!(index, slug: child.category.slug.clone()))>
                                         (&child.category.name) " (" (child.product_count) ")"
                                     </a>
                                 </li>

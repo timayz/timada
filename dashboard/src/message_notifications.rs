@@ -144,7 +144,7 @@ pub(crate) async fn send(room: &Mailroom, owed: &OwedMail, now: u64) -> anyhow::
     {
         return Ok(Outcome::Left);
     }
-    let cx = Cx::new(room.mail.clone());
+    let cx = Cx::new().with_shared(room.mail.clone());
     let link = inbox_link(&room.base_url, &shop.slug);
     // Each member in turn; the first the server fails stops the round, the
     // retry mails everyone again. Addresses refused for good are skipped:
@@ -385,10 +385,7 @@ mod saga_tests {
         assert_eq!(mails.len(), 1);
         assert_eq!(mails[0].to(), [Mailbox::new("alice@example.org").unwrap()]);
         assert_eq!(mails[0].subject(), "A message is waiting for Acme Tea");
-        let cx = Cx::new(crate::code_mails::tests::mail_context(
-            MemoryTransport::new(),
-        ));
-        let wire = String::from_utf8(mails[0].clone().formatted(&cx).unwrap())
+        let wire = String::from_utf8(mails[0].formatted())
             .unwrap()
             .replace("=\r\n", "");
         assert!(wire.contains("Ada"), "{wire}");

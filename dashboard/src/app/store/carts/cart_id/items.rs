@@ -3,14 +3,10 @@
 
 use bytes::Bytes;
 use timada_orders::CartItem;
-use topcoat::{
-    Result,
-    context::Cx,
-    router::{path_param, route},
-};
+use topcoat::{Result, context::Cx, router::route};
 
 use super::super::{Answer, deliver, gateway, parse_body};
-use super::CartId;
+use super::cart_id;
 use crate::store_carts;
 
 #[route(POST)]
@@ -23,5 +19,5 @@ pub async fn items(cx: &Cx, bytes: Bytes) -> Result<Answer> {
         Ok(item) => item,
         Err(answer) => return Ok(answer),
     };
-    deliver(store_carts::add_item(&orders, path_param::<CartId>(cx), item).await)
+    deliver(store_carts::add_item(&orders, cart_id(cx), item).await)
 }

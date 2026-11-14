@@ -11,12 +11,12 @@ use timada_pages::{Command, PageError, pages_of_tenant};
 use timada_tenancy::{PERMISSION_PAGES_MANAGE, PERMISSION_PAGES_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
@@ -37,7 +37,7 @@ struct PagesQuery {
 
 /// The pages list, with a flash error code or message.
 pub fn pages_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -69,7 +69,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let can_manage = access.can(cx, PERMISSION_PAGES_MANAGE).await?;
     let TenantAccess { tenant, .. } = access;
-    let rows = pages_of_tenant(app_context::<Db>(cx), &tenant.id)
+    let rows = pages_of_tenant(context::<Db>(cx), &tenant.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let slug = tenant.slug.clone();
@@ -83,7 +83,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 title: "Pages",
                 subtitle: Some("The shop's own pages: legal notice, terms of sale, privacy, about us. The storefront shows the published ones where it links to them, by their address."),
                 if can_manage {
-                    <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Sm)) href=(href!(new::new, Slug(slug.clone())))>"New page"</a>
+                    <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Sm)) href=(href!(new::new, slug: slug.clone()))>"New page"</a>
                 }
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
@@ -106,7 +106,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         for row in &rows {
                             table_row(
                                 attrs: attributes! { data-page=(&row.slug) data-page-status=(status_of(row.published).0) },
-                                table_cell(<a class=(LINK) href=(href!(page_id::index, Slug(slug.clone()), page_id::PageId(row.id.clone())))>(&row.title)</a>)
+                                table_cell(<a class=(LINK) href=(href!(page_id::index, slug: slug.clone(), page_id::page_id: row.id.clone()))>(&row.title)</a>)
                                 table_cell(<code class="text-xs">"/pages/" (&row.slug)</code>)
                                 table_cell(<time datetime=(row.updated_at)>(format_time(row.updated_at as u64))</time>)
                                 table_cell(status_badge(tone: status_of(row.published).1, (status_of(row.published).0)))

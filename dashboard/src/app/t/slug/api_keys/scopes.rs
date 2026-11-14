@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Form,
         error::{SeeOther, see_other},
@@ -33,7 +33,7 @@ pub async fn scopes(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Resul
         .await
     {
         Ok(()) => {
-            let ended = app_context::<Arc<StoreConnections>>(cx).close_key(&key_id);
+            let ended = context::<Arc<StoreConnections>>(cx).close_key(&key_id);
             if ended > 0 {
                 tracing::info!(
                     tenant = slug,

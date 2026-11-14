@@ -60,7 +60,7 @@ reqwest.workspace = true
 lettre.workspace = true
 
 [build-dependencies]
-topcoat = { version = "=0.11.0", default-features = false, features = ["tailwind", "icon-iconify"] }
+topcoat = { version = "=0.12.1", default-features = false, features = ["tailwind", "icon-iconify"] }
 
 [dev-dependencies]
 evento = { workspace = true, features = ["lock"] }

@@ -5,11 +5,11 @@ use topcoat::{
     router::{
         content::Form,
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{ServerId, server_url};
+use super::{server_id, server_url};
 use crate::app::t::slug::mail::mail_url;
 use crate::app::t::slug::mail::servers::{ServerForm, tested};
 use crate::app::t::slug::require_tenant;
@@ -23,7 +23,7 @@ pub async fn change(cx: &Cx, Form(form): Form<ServerForm>) -> Result<SeeOther> {
         .require_permission(cx, PERMISSION_MAIL_MANAGE)
         .await?;
     let slug = access.tenant.slug.as_str();
-    let server_id = path_param::<ServerId>(cx).to_owned();
+    let server_id = server_id(cx).to_owned();
     let gone = || {
         Ok(see_other(mail_url(
             cx,

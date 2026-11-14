@@ -40,7 +40,7 @@ use timada_orders::{CartItem, Command, TOO_MANY_CARTS};
 use timada_tenancy::ApiKeyAccess;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         StatusCode,
         content::Json,
@@ -102,8 +102,8 @@ pub async fn start(cx: &Cx, bytes: Bytes) -> Result<Answer> {
     // limit costs it nothing, and a start refused for its item counts too
     // (the storefront offers no add for what is sold out).
     let allowed = allow_new_cart(
-        app_context::<Arc<RateLimiter>>(cx),
-        &app_context::<Config>(cx).store,
+        context::<Arc<RateLimiter>>(cx),
+        &context::<Config>(cx).store,
         &access.key.id,
         &access.tenant.id,
         headers(cx)

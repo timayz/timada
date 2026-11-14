@@ -119,7 +119,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <ul class="search-list search-products">
                         for product in &found.items {
                             <li>
-                                <a class="search-row search-product" href=(href!(p::slug::index, p::slug::Slug(product.slug.clone()))) data-search-product=(&product.slug)>
+                                <a class="search-row search-product" href=(href!(p::slug::index, p::slug::slug: product.slug.clone())) data-search-product=(&product.slug)>
                                     if let Some(image) = product.image() {
                                         product_image(image: image, attrs: attributes! { class="search-pic" })
                                     } else {
@@ -138,7 +138,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <ul class="search-list search-categories">
                         for category in &hits {
                             <li>
-                                <a class="search-row" href=(href!(c::slug::index, c::slug::Slug(category.slug.clone()))) data-search-category=(&category.slug)>
+                                <a class="search-row" href=(href!(c::slug::index, c::slug::slug: category.slug.clone())) data-search-category=(&category.slug)>
                                     <span class="search-name">(&category.name)</span>
                                     <small class="search-kind">"Catégorie"</small>
                                 </a>

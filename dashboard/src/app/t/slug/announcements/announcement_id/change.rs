@@ -8,12 +8,12 @@ use topcoat::{
     router::{
         content::Form,
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
 use super::super::{AnnouncementForm, announcements_url, error_code, pages};
-use super::{AnnouncementId, announcement_url};
+use super::{announcement_id, announcement_url};
 use crate::app::t::slug::require_tenant;
 
 #[route(POST)]
@@ -22,7 +22,7 @@ pub async fn change(cx: &Cx, Form(form): Form<AnnouncementForm>) -> Result<SeeOt
     access
         .require_permission(cx, PERMISSION_PAGES_MANAGE)
         .await?;
-    let announcement_id = path_param::<AnnouncementId>(cx).to_owned();
+    let announcement_id = announcement_id(cx).to_owned();
     let slug = access.tenant.slug.as_str();
     let changed = match form.announcement(access.tenant.shop_time_zone()) {
         Ok(announcement) => {

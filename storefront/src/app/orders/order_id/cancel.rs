@@ -4,18 +4,18 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, not_found, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{OrderId, cancelled_url};
+use super::{cancelled_url, order_id};
 use crate::shopper::holds_order;
 
 /// The shopper cancels their order, then back to its page: cancelled,
 /// nothing charged, or why it no longer can be.
 #[route(POST)]
 pub async fn cancel(cx: &Cx) -> Result<SeeOther> {
-    let order_id = path_param::<OrderId>(cx).to_owned();
+    let order_id = order_id(cx).to_owned();
     if !holds_order(cx, &order_id).await? {
         return Err(not_found().into());
     }

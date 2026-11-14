@@ -97,7 +97,7 @@ pub async fn create(cx: &Cx, Form(form): Form<NewForm>) -> Result<SeeOther> {
     };
     let Some(slug) = tenant else {
         return Ok(see_other(
-            href!(company_id::index, company_id::CompanyId(company.id.clone())).resolve(cx),
+            href!(company_id::index, company_id::company_id: company.id.clone()).resolve(cx),
         ));
     };
     let Some(state) = gateway

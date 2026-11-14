@@ -12,8 +12,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bytes::Bytes;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    router::{StatusCode, module_param, path_param, request::headers, route},
+    context::{Cx, context},
+    router::{StatusCode, module_param, request::headers, route},
 };
 
 use crate::app::tenants::tenancy;
@@ -25,9 +25,9 @@ module_param!(pub tenant_id);
 
 #[route(POST)]
 pub async fn receive(cx: &Cx, body: Bytes) -> Result<StatusCode> {
-    let payments = app_context::<Arc<Payments>>(cx);
+    let payments = context::<Arc<Payments>>(cx);
     let tenant = tenancy(cx)
-        .load_tenant(path_param::<TenantId>(cx))
+        .load_tenant(tenant_id(cx))
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let Some(tenant) = tenant.filter(|tenant| !tenant.is_suspended()) else {
@@ -49,7 +49,7 @@ pub async fn receive(cx: &Cx, body: Bytes) -> Result<StatusCode> {
         payments,
         &account,
         &tenant.id,
-        app_context::<Executor>(cx).clone(),
+        context::<Executor>(cx).clone(),
         &body,
         signature,
         now,

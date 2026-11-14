@@ -4,11 +4,11 @@ use topcoat::{
     context::Cx,
     router::{
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::ServerId;
+use super::server_id;
 use crate::app::t::slug::mail::mail_url;
 use crate::app::t::slug::mail::servers::picked_for;
 use crate::app::t::slug::require_tenant;
@@ -22,7 +22,7 @@ pub async fn delete(cx: &Cx) -> Result<SeeOther> {
         .require_permission(cx, PERMISSION_MAIL_MANAGE)
         .await?;
     let slug = access.tenant.slug.as_str();
-    let server_id = path_param::<ServerId>(cx).to_owned();
+    let server_id = server_id(cx).to_owned();
     let (shop_mails, marketing) = picked_for(&access.tenant, &server_id);
     match tenancy(cx)
         .delete_mail_server(&access.user_id, &access.tenant.id, &server_id)

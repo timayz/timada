@@ -7,12 +7,12 @@ use timada_orders::{count_open_carts, open_carts};
 use timada_tenancy::PERMISSION_ORDERS_READ;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
@@ -45,7 +45,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_number = query.page.unwrap_or(1).max(1);
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let total = count_open_carts(pool, &tenant.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -53,7 +53,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let pages = (total + PAGE_SIZE - 1) / PAGE_SIZE;
-    let idle_days = app_context::<Config>(cx).carts.idle_days;
+    let idle_days = context::<Config>(cx).carts.idle_days;
     let description = format!(
         "Carts holding something that were not ordered yet. A cart becomes an order at checkout and leaves this list; one nobody touched for {idle_days} {} is dropped.",
         if idle_days == 1 { "day" } else { "days" }
@@ -61,7 +61,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_link = {
         let slug = tenant.slug.clone();
         move |page: i64| {
-            href!(index, Slug(slug.clone()))
+            href!(index, slug: slug.clone())
                 .query(CartsLink { page })
                 .resolve(cx)
         }

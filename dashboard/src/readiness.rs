@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use serde::Serialize;
-use topcoat::context::{Cx, app_context};
+use topcoat::context::{Cx, context};
 use topcoat::router::{
     Body, HeaderValue, RouteFuture, StatusCode,
     header::{CACHE_CONTROL, CONTENT_TYPE},
@@ -242,7 +242,7 @@ pub fn node_state(health: &NodeHealth) -> &'static str {
 /// cached. On the node's own port for the balancer, and on the metrics port.
 pub fn ready_route(cx: &Cx, _body: Body) -> RouteFuture<'_> {
     Box::pin(async move {
-        let report = app_context::<Arc<Readiness>>(cx)
+        let report = context::<Arc<Readiness>>(cx)
             .report()
             .await
             .map_err(topcoat::Error::from_anyhow)?;

@@ -80,7 +80,7 @@ fn say_done(done: &str) -> Option<&'static str> {
 
 /// The form the footer and this page show.
 #[topcoat::view::component]
-pub async fn newsletter_form() -> Result<impl View> {
+pub async fn newsletter_form(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         <form class="newsletter" method="post" action=(href!(subscribe)) data-newsletter-form="">
             <label for="newsletter-email">"Votre e-mail"</label>

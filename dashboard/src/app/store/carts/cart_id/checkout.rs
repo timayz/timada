@@ -8,12 +8,12 @@ use bytes::Bytes;
 use timada_orders::Checkout;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
-    router::{path_param, route},
+    context::{Cx, context},
+    router::route,
 };
 
 use super::super::{Answer, deliver, gateway, parse_body};
-use super::CartId;
+use super::cart_id;
 use crate::cluster::LocalReads;
 use crate::store_carts;
 
@@ -27,13 +27,5 @@ pub async fn checkout(cx: &Cx, bytes: Bytes) -> Result<Answer> {
         Ok(checkout) => checkout,
         Err(answer) => return Ok(answer),
     };
-    deliver(
-        store_carts::checkout(
-            &orders,
-            app_context::<LocalReads>(cx),
-            path_param::<CartId>(cx),
-            checkout,
-        )
-        .await,
-    )
+    deliver(store_carts::checkout(&orders, context::<LocalReads>(cx), cart_id(cx), checkout).await)
 }

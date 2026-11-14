@@ -1,15 +1,15 @@
 use topcoat::{
     Result,
     context::Cx,
-    router::{error::SeeOther, path_param, route},
+    router::{error::SeeOther, route},
 };
 
-use super::VariantId;
+use super::variant_id;
 use crate::app::t::slug::products::product_id::{Tab, act};
 
 #[route(POST)]
 pub async fn remove(cx: &Cx) -> Result<SeeOther> {
-    let variant_id = path_param::<VariantId>(cx).to_owned();
+    let variant_id = variant_id(cx).to_owned();
     act(
         cx,
         Tab::Variants,

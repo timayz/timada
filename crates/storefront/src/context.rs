@@ -1,7 +1,7 @@
 //! What a page asks for: the store, a product, a page of products. Errors
 //! are topcoat errors, so `?` works in a page.
 
-use topcoat_core::context::{Cx, app_context};
+use topcoat_core::context::{Cx, context};
 use topcoat_core::error::{Error, Result};
 use topcoat_router::error::not_found;
 
@@ -20,7 +20,7 @@ use crate::store::Store;
 ///
 /// Panics when none was registered.
 pub fn store(cx: &Cx) -> &Store {
-    app_context::<Store>(cx)
+    context::<Store>(cx)
 }
 
 /// Where this store's product pictures are loaded from, when the host set

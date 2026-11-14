@@ -94,7 +94,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // own transport.
     let background_mail = {
         let mailer = crate::mail::build(&config.mail)?;
-        let mut app = topcoat::context::AppContext::new();
+        let mut app = topcoat::context::ContextMap::new();
         app.insert(mailer.transport);
         app.insert(mailer.sender);
         app.insert(shop_mail.clone());

@@ -11,6 +11,7 @@ use timada_automations::{
 };
 use topcoat::{
     Result,
+    context::Cx,
     icon::icon,
     view::{View, ViewExt, attributes, class, component, view},
 };
@@ -104,7 +105,7 @@ const CARD_ACTION: &str = "inline-flex size-8 items-center justify-center rounde
 
 /// The whole editor: the form holding the working copy.
 #[component]
-pub async fn editor_view(canvas: &Canvas<'_>, action: &str) -> Result<impl View> {
+pub async fn editor_view(cx: &Cx, canvas: &Canvas<'_>, action: &str) -> Result<impl View> {
     let editor = canvas.editor;
     let json = editor.definition.to_json();
     let dirty = editor.is_dirty();
@@ -231,7 +232,7 @@ pub async fn editor_view(canvas: &Canvas<'_>, action: &str) -> Result<impl View>
 /// The blocks a step can be made of. Each is dragged onto a slot, or
 /// pressed to pick it up and then put down with a slot's "Put here".
 #[component]
-async fn palette(canvas: &Canvas<'_>) -> Result<impl View> {
+async fn palette(cx: &Cx, canvas: &Canvas<'_>) -> Result<impl View> {
     let editable = canvas.editable();
     Ok(view! {
         <aside aria-labelledby="palette-heading" class="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 lg:sticky lg:top-20">
@@ -266,7 +267,7 @@ async fn palette(canvas: &Canvas<'_>) -> Result<impl View> {
 
 /// The trigger's card, then its lane.
 #[component]
-async fn flow(canvas: &Canvas<'_>) -> Result<impl View> {
+async fn flow(cx: &Cx, canvas: &Canvas<'_>) -> Result<impl View> {
     let definition = canvas.definition();
     let kind = definition
         .trigger
@@ -315,7 +316,7 @@ async fn flow(canvas: &Canvas<'_>) -> Result<impl View> {
 /// ends. A condition ends its lane instead: each of its lanes ends on its
 /// own. Recursive through the steps' own lanes.
 #[component]
-async fn flow_lane(canvas: &Canvas<'_>, steps: &[Step], lane: &Lane) -> Result<impl View> {
+async fn flow_lane(cx: &Cx, canvas: &Canvas<'_>, steps: &[Step], lane: &Lane) -> Result<impl View> {
     let slots: Vec<Slot> = (0..=steps.len())
         .map(|index| Slot::new(lane.clone(), index))
         .collect();
@@ -337,7 +338,7 @@ async fn flow_lane(canvas: &Canvas<'_>, steps: &[Step], lane: &Lane) -> Result<i
 
 /// A place between two steps.
 #[component]
-async fn drop_slot(canvas: &Canvas<'_>, at: &Slot) -> Result<impl View> {
+async fn drop_slot(cx: &Cx, canvas: &Canvas<'_>, at: &Slot) -> Result<impl View> {
     let name = at.to_string();
     let menu = format!("add-{name}");
     let picking = canvas.editor.moving.is_some();
@@ -401,7 +402,7 @@ async fn drop_slot(canvas: &Canvas<'_>, at: &Slot) -> Result<impl View> {
 /// A step's card, then, for a condition, its lanes side by side. The whole
 /// block is what a drag of its handle moves.
 #[component]
-async fn step_block(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
+async fn step_block(cx: &Cx, canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
     let subject = canvas.subject();
     let problems = canvas.step_problems(&step.id);
     let label = step_label(&step.kind);
@@ -491,7 +492,7 @@ async fn step_block(canvas: &Canvas<'_>, step: &Step) -> Result<impl View> {
 
 /// The flow as it was last saved, for members who may only read.
 #[component]
-pub async fn read_only_view(canvas: &Canvas<'_>) -> Result<impl View> {
+pub async fn read_only_view(cx: &Cx, canvas: &Canvas<'_>) -> Result<impl View> {
     Ok(view! {
         <section aria-labelledby="flow-heading" class="rounded-xl border border-border bg-muted/40" data-scenario-flow="">
             <h2 id="flow-heading" class="sr-only">"Flow"</h2>

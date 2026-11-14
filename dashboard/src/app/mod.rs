@@ -20,16 +20,16 @@ use timada_tenancy::tenants_of_user;
 use topcoat::{
     Result,
     asset::{AssetBundle, RouterBuilderAssetExt},
-    context::{Cx, app_context},
-    cookie::{Key, RouterBuilderCookieExt},
+    context::{BaseUrl, Cx, context},
+    cookie::{CookieLayer, Key},
     icon::icon,
-    mail::RouterBuilderMailExt,
     router::{
-        BodyLimit, Method, RouteFn, Router, RouterBuilderDirectoryExt, RouterBuilderDiscoverExt,
-        TrustedProxies, href, module_router, page, query_params,
+        Body, BodyLimit, LayerFn, LayerFuture, Method, Next, RouteFn, Router,
+        RouterBuilderDirectoryExt, RouterBuilderDiscoverExt, TrustedProxies, href, module_router,
+        page, query_params,
     },
-    runtime::RouterBuilderRuntimeExt,
-    session::{RouterBuilderSessionExt, SessionConfig},
+    runtime::RuntimeLayer,
+    session::SessionLifetime,
     view::{View, attributes, class, view},
 };
 use webauthn_rs::prelude::Webauthn;
@@ -45,7 +45,7 @@ use crate::components::card::CARD;
 use crate::config::Config;
 use crate::db::Db;
 use crate::key_vault::{self, KeyVault};
-use crate::mail::Mailer;
+use crate::mail::PlatformMailer;
 use crate::media::{MEDIA_ROUTE, Media, MediaCache, PEER_ROUTE};
 use crate::rate_limit::RateLimiter;
 use crate::store_api::StoreConnections;
@@ -73,7 +73,7 @@ pub struct Services {
     pub db: Db,
     pub providers: Providers,
     pub webauthn: Webauthn,
-    pub mailer: Mailer,
+    pub mailer: PlatformMailer,
     /// The consensus node, for the cluster page.
     pub cluster: Arc<Cluster>,
     pub authorizer: Arc<Authorizer>,
@@ -161,67 +161,74 @@ pub fn router(services: Services) -> Router {
         // an unguessable ULID and the file at an address never changes.
         .serve_dir(MEDIA_ROUTE, media.dir().to_path_buf())
         .layer(MediaCache::new(media.clone(), db.clone()))
-        .layer(BodyLimit::max(UPLOAD_LIMIT).at("/t"))
+        .layer(body_limit("/t", UPLOAD_LIMIT))
         // A picture another node copies here: the file alone.
-        .layer(BodyLimit::max(UPLOAD_LIMIT).at(PEER_ROUTE))
+        .layer(body_limit(PEER_ROUTE, UPLOAD_LIMIT))
         // A key another node copies here.
-        .layer(BodyLimit::max(key_vault::MAX_SEALED_LEN).at(key_vault::PEER_ROUTE))
-        .layer(BodyLimit::max(REVIEW_LIMIT).at("/store/reviews"))
+        .layer(body_limit(key_vault::PEER_ROUTE, key_vault::MAX_SEALED_LEN))
+        .layer(body_limit("/store/reviews", REVIEW_LIMIT))
         // Absolute URLs (the OIDC redirect URI) follow the public address.
-        .base_url(config.server.url.as_str())
+        // Validated by `Config::load`.
+        .with(BaseUrl::new(config.server.url.as_str()).expect("server.url"))
         // Validated by `Config::load`; `networks` panics on a bad entry.
         .trusted_proxies(TrustedProxies::new().networks(config.server.trusted_proxies.iter()))
         // Which browsers wrote a moment ago (`crate::reads`). Registered
         // before the cookie layer, so it runs inside it and what it adds is
         // written on the response.
         .layer(crate::reads::MarkWrites)
-        .cookies()
-        .sessions(
-            SessionConfig::builder()
-                .lifetime(Duration::from_secs(config.auth.session_lifetime_secs))
-                .build(),
-        )
+        .layer(CookieLayer::new())
+        .with(SessionLifetime(Duration::from_secs(
+            config.auth.session_lifetime_secs,
+        )))
         // Encrypts the in-flight sign-in cookies (`private_cookies`).
-        .app_context(Key::derive_from(config.auth.secret_key.as_bytes()))
-        .app_context(executor)
-        .app_context(local)
-        .app_context(db)
-        .app_context(providers)
-        .app_context(webauthn)
-        .app_context(cluster)
-        .app_context(authorizer)
-        .app_context(media)
-        .app_context(quota)
-        .app_context(keys)
-        .app_context(email_codes)
-        .app_context(shopper_codes)
-        .app_context(invitation_tokens)
-        .app_context(payments)
-        .app_context(aliexpress)
-        .app_context(store)
-        .app_context(workers)
-        .app_context(checkouts)
-        .app_context(readiness)
-        .app_context(limits)
+        .with(Key::derive_from(config.auth.secret_key.as_bytes()))
+        .with(executor)
+        .with(local)
+        .with(db)
+        .with(providers)
+        .with(webauthn)
+        .with(cluster)
+        .with(authorizer)
+        .with(media)
+        .with(quota)
+        .with(keys)
+        .with(email_codes)
+        .with(shopper_codes)
+        .with(invitation_tokens)
+        .with(payments)
+        .with(aliexpress)
+        .with(store)
+        .with(workers)
+        .with(checkouts)
+        .with(readiness)
+        .with(limits)
         // The transport behind `topcoat::mail::send`, and who the codes come from.
-        .mail(mailer.transport)
-        .app_context(mailer.sender)
-        .app_context(shop_mail)
+        .with(mailer.transport)
+        .with(mailer.sender)
+        .with(shop_mail)
         // Signs and checks the links that stop a shop's automated mails;
         // none without `secrets.key`.
-        .app_context(OptOutLinks(crate::seal::opt_out_key(&config)))
+        .with(OptOutLinks(crate::seal::opt_out_key(&config)))
         // Seals the addresses of the scenarios' webhooks and derives their
         // signing secrets; none without `secrets.key`.
-        .app_context(WebhookSealing(
+        .with(WebhookSealing(
             crate::seal::webhook_keys(&config),
             config.mail.allow_private_hosts,
         ))
-        .app_context(config)
+        .with(config)
         .assets(assets)
-        .runtime()
+        .layer(RuntimeLayer::new())
         // Outside every other layer, so it sees what any of them failed with.
         .layer(server_errors::LogServerErrors)
         .build()
+}
+
+/// Raises the body limit to `max` bytes for the routes under `path`.
+fn body_limit(path: &'static str, max: usize) -> LayerFn {
+    fn pass<'a>(cx: &'a Cx, body: Body, next: Next<'a>) -> LayerFuture<'a> {
+        next.run(cx, body)
+    }
+    LayerFn::new(Some(path), pass).with(BodyLimit::max(max))
 }
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -234,7 +241,7 @@ struct HomeQuery {
 pub async fn home(cx: &Cx) -> Result<impl View> {
     let user = crate::auth::require_user(cx).await?;
     let query = query_params::<HomeQuery>(cx)?;
-    let mine = tenants_of_user(app_context::<Db>(cx), &user.id)
+    let mine = tenants_of_user(context::<Db>(cx), &user.id)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let tenants_line = match mine.len() {
@@ -278,7 +285,7 @@ pub async fn home(cx: &Cx) -> Result<impl View> {
                         <li>
                             <a
                                 class=(class!(CARD, "h-full gap-3 px-5 py-5 transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg motion-reduce:transition-none"))
-                                href=(href!(t::slug::index, t::slug::Slug(row.slug.clone())))
+                                href=(href!(t::slug::index, t::slug::slug: row.slug.clone()))
                             >
                                 <span class="flex items-center gap-3">
                                     <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary [&>svg]:size-4">

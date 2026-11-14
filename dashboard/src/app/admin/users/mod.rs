@@ -5,7 +5,7 @@ pub mod user_id;
 use timada_identity::{count_users, list_users};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
@@ -75,7 +75,7 @@ pub async fn users(cx: &Cx) -> Result<impl View> {
     let query = query_params::<UsersQuery>(cx)?;
     let q = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let page_number = query.page.unwrap_or(1).max(1);
-    let db = app_context::<Db>(cx);
+    let db = context::<Db>(cx);
     let total = count_users(db, q)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -129,7 +129,7 @@ pub async fn users(cx: &Cx) -> Result<impl View> {
                                 attrs: attributes! { class=(if row.deleted { "text-muted-foreground" } else { "" }) },
                                 table_cell(
                                     <span class="flex flex-wrap items-center gap-2">
-                                        <a class=(LINK) href=(href!(user_id::user, user_id::UserId(row.id.clone())))>(&row.label)</a>
+                                        <a class=(LINK) href=(href!(user_id::user, user_id::user_id: row.id.clone()))>(&row.label)</a>
                                         if row.id == me.id { <span class="text-muted-foreground">"(you)"</span> }
                                         if row.deleted { status_badge(tone: Tone::Neutral, "deleted") }
                                     </span>

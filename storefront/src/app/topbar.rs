@@ -10,6 +10,7 @@
 use timada_storefront::LiveAnnouncement;
 use topcoat::{
     Result,
+    context::Cx,
     view::{Unescaped, View, view},
 };
 
@@ -44,7 +45,7 @@ pub const TOPBAR_SCRIPT: &str = r#"
 
 /// The bar, or nothing when no announcement is live.
 #[topcoat::view::component]
-pub async fn announcement_bar(announcements: &[LiveAnnouncement]) -> Result<impl View> {
+pub async fn announcement_bar(cx: &Cx, announcements: &[LiveAnnouncement]) -> Result<impl View> {
     Ok(view! {
         if !announcements.is_empty() {
             <div class="topbar" role="region" aria-label="Annonces" data-announcements="">

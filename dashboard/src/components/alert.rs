@@ -1,5 +1,6 @@
 use topcoat::{
     Result,
+    context::Cx,
     view::{Attributes, Child, StaticClass, View, class, component, view},
 };
 
@@ -62,6 +63,7 @@ const BASE: StaticClass = class!(
 /// ```
 #[component]
 pub async fn alert(
+    cx: &Cx,
     /// The visual style of the notice.
     #[default]
     variant: AlertVariant,
@@ -86,6 +88,7 @@ pub async fn alert(
 /// The heading of an alert.
 #[component]
 pub async fn alert_title(
+    cx: &Cx,
     #[default] mut attrs: Attributes,
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
@@ -105,6 +108,7 @@ pub async fn alert_title(
 /// Text that explains the alert and any action the reader should take.
 #[component]
 pub async fn alert_description(
+    cx: &Cx,
     #[default] mut attrs: Attributes,
     #[default] child: Child<'_>,
 ) -> Result<impl View> {

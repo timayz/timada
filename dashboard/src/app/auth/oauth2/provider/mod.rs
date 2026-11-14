@@ -6,11 +6,11 @@ use serde::Deserialize;
 use timada_identity::OAuth2Mode;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         content::Form,
         error::{SeeOther, bad_request, not_found, see_other},
-        module_param, path_param, route,
+        module_param, route,
     },
 };
 
@@ -34,8 +34,8 @@ struct StartForm {
 /// applies and nothing can start a flow by following a link.
 #[route(POST)]
 pub async fn start(cx: &Cx, Form(form): Form<StartForm>) -> Result<SeeOther> {
-    let name = path_param::<Provider>(cx);
-    let providers = app_context::<Providers>(cx);
+    let name = provider(cx);
+    let providers = context::<Providers>(cx);
     let Some(provider) = providers.get(name) else {
         return Err(not_found().into());
     };

@@ -13,13 +13,13 @@ use std::sync::Arc;
 use timada_tenancy::PERMISSION_PAYMENTS_MANAGE;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     icon::icon,
     router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::components::alert::{AlertVariant, alert, alert_description};
@@ -41,7 +41,7 @@ struct PaymentsQuery {
 }
 
 pub fn payments_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -50,10 +50,10 @@ pub fn payments_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&s
 /// storefront shows the payment form (or stops) at once. A failure only
 /// delays it: the payment-setup subscription writes it too.
 pub async fn publish_setup(cx: &Cx, access: &TenantAccess) {
-    let payments = app_context::<Arc<Payments>>(cx);
+    let payments = context::<Arc<Payments>>(cx);
     let published = async {
         let Some(tenant) = payments
-            .active_tenant(app_context::<Executor>(cx), &access.tenant.id)
+            .active_tenant(context::<Executor>(cx), &access.tenant.id)
             .await?
         else {
             return Ok(());
@@ -70,7 +70,7 @@ pub async fn publish_setup(cx: &Cx, access: &TenantAccess) {
 pub fn webhook_url(cx: &Cx, tenant_id: &str) -> String {
     format!(
         "{}/stripe/webhooks/{tenant_id}",
-        app_context::<Config>(cx).server.url.trim_end_matches('/')
+        context::<Config>(cx).server.url.trim_end_matches('/')
     )
 }
 
@@ -83,7 +83,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<PaymentsQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let TenantAccess { tenant, .. } = access;
-    let enabled = app_context::<Arc<Payments>>(cx).enabled();
+    let enabled = context::<Arc<Payments>>(cx).enabled();
     let webhook = webhook_url(cx, &tenant.id);
     let slug = tenant.slug.clone();
     let settings = tenant.payments.clone();
@@ -91,7 +91,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // payments are still held or owed, and from when that is allowed.
     let stopped = match settings.as_ref().and_then(|settings| settings.stopped_at) {
         Some(stopped_at) => Some(Stopped {
-            owed: timada_orders::money_owed(app_context::<Db>(cx), &tenant.id)
+            owed: timada_orders::money_owed(context::<Db>(cx), &tenant.id)
                 .await
                 .map_err(topcoat::Error::from_anyhow)?,
             forgettable_at: stopped_at + timada_tenancy::FORGET_PAYMENTS_AFTER_SECS,
@@ -140,11 +140,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <time datetime=(stopped.forgettable_at)>(format_time(stopped.forgettable_at))</time>
                             ", once nothing is held or owed."
                         </p>
-                        <form method="post" action=(href!(forget::forget, Slug(slug.clone())))>
+                        <form method="post" action=(href!(forget::forget, slug: slug.clone()))>
                             button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Forget the keys")
                         </form>
                     } else {
-                        <form method="post" action=(href!(remove::remove, Slug(slug.clone())))>
+                        <form method="post" action=(href!(remove::remove, slug: slug.clone()))>
                             button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Stop taking payments")
                         </form>
                     }
@@ -172,7 +172,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         ", and copy its signing secret."
                     </li>
                 </ol>
-                <form method="post" action=(href!(configure::configure, Slug(slug.clone()))) class="flex max-w-xl flex-col gap-4">
+                <form method="post" action=(href!(configure::configure, slug: slug.clone())) class="flex max-w-xl flex-col gap-4">
                     field(
                         field_label(attrs: attributes! { for="payments-publishable" }, "Publishable key")
                         input(attrs: attributes! {

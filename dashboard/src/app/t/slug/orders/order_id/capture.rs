@@ -4,14 +4,14 @@ use timada_orders::{CaptureClaim, OrderError};
 use timada_tenancy::PERMISSION_ORDERS_MANAGE;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{OrderId, order_url};
+use super::{order_id, order_url};
 use crate::app::t::slug::orders::orders;
 use crate::app::t::slug::require_tenant;
 use crate::payments::Payments;
@@ -27,12 +27,12 @@ pub async fn capture(cx: &Cx) -> Result<SeeOther> {
     access
         .require_permission(cx, PERMISSION_ORDERS_MANAGE)
         .await?;
-    let order_id = path_param::<OrderId>(cx).to_owned();
+    let order_id = order_id(cx).to_owned();
     let slug = access.tenant.slug.clone();
     let back = |error: Option<&str>, message: Option<&str>| {
         see_other(order_url(cx, &slug, &order_id, error, message))
     };
-    let payments = app_context::<Arc<Payments>>(cx);
+    let payments = context::<Arc<Payments>>(cx);
     let Some(account) = payments
         .account_of(&access.tenant)
         .map_err(topcoat::Error::from_anyhow)?

@@ -18,7 +18,7 @@ use timada_newsletter::{
 use timada_tenancy::{PERMISSION_NEWSLETTER_MANAGE, PERMISSION_NEWSLETTER_READ};
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, see_other},
         href, page, query_params,
@@ -26,7 +26,7 @@ use topcoat::{
     view::{View, attributes, view},
 };
 
-use super::{Slug, TenantAccess, TenantNav, require_tenant};
+use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
@@ -63,7 +63,7 @@ struct NewsletterLink<'a> {
 
 /// The newsletter page, with a flash error code or message.
 pub fn newsletter_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
-    href!(index, Slug(slug.to_owned()))
+    href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
 }
@@ -139,7 +139,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let can_manage = access.can(cx, PERMISSION_NEWSLETTER_MANAGE).await?;
     let TenantAccess { tenant, .. } = access;
-    let pool = app_context::<Db>(cx);
+    let pool = context::<Db>(cx);
     let filter = SubscriberFilter { status };
     let total = count_subscribers(pool, &tenant.id, &filter)
         .await
@@ -168,7 +168,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_link = {
         let slug = slug.clone();
         move |page: u32| {
-            href!(index, Slug(slug.clone()))
+            href!(index, slug: slug.clone())
                 .query(NewsletterLink {
                     status: status_value,
                     page: Some(page),
@@ -186,7 +186,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             page_header(
                 title: "Newsletter",
                 subtitle: Some(subtitle.as_str()),
-                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(campaigns::index, Slug(slug.clone())))>"Campaigns"</a>
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(campaigns::index, slug: slug.clone()))>"Campaigns"</a>
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
@@ -235,12 +235,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     table_cell(
                                         <div class="flex justify-end gap-2">
                                             if row.status() != SubscriberStatus::Unsubscribed {
-                                                <form method="post" action=(href!(unsubscribe::unsubscribe, Slug(slug.clone())))>
+                                                <form method="post" action=(href!(unsubscribe::unsubscribe, slug: slug.clone()))>
                                                     <input type="hidden" name="subscriber_id" value=(&row.id)>
                                                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Unsubscribe")
                                                 </form>
                                             }
-                                            <form method="post" action=(href!(erase::erase, Slug(slug.clone())))>
+                                            <form method="post" action=(href!(erase::erase, slug: slug.clone()))>
                                                 <input type="hidden" name="subscriber_id" value=(&row.id)>
                                                 button(variant: ButtonVariant::Destructive, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Erase")
                                             </form>

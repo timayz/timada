@@ -16,7 +16,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use topcoat::context::{Cx, app_context};
+use topcoat::context::{Cx, context};
 use topcoat::router::{
     Body, HeaderValue, Method, RouteFn, RouteFuture, RouterBuilder, header::CONTENT_TYPE,
     response::Response,
@@ -48,7 +48,7 @@ pub async fn serve(listen: SocketAddr, readiness: Arc<Readiness>) -> Result<Metr
     let router = RouterBuilder::new()
         .route(RouteFn::new(Method::GET, "/metrics", metrics_route))
         .route(RouteFn::new(Method::GET, "/ready", ready_route))
-        .app_context(readiness)
+        .with(readiness)
         .build();
     let (stop, stopped) = oneshot::channel();
     let task = tokio::spawn(async move {
@@ -65,7 +65,7 @@ pub async fn serve(listen: SocketAddr, readiness: Arc<Readiness>) -> Result<Metr
 /// `GET /metrics`.
 fn metrics_route(cx: &Cx, _body: Body) -> RouteFuture<'_> {
     Box::pin(async move {
-        let readiness = app_context::<Arc<Readiness>>(cx);
+        let readiness = context::<Arc<Readiness>>(cx);
         let report = readiness
             .report()
             .await

@@ -16,7 +16,7 @@ use topcoat::{
 use super::scenario_id::scenario_url;
 use super::{automations, automations_url};
 use crate::app::auth::Flash;
-use crate::app::t::slug::{Slug, TenantNav, require_tenant};
+use crate::app::t::slug::{TenantNav, require_tenant, slug};
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
@@ -42,7 +42,7 @@ pub async fn new(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let tenant = access.tenant;
     let title = format!("New scenario · Automations · {}", tenant.name);
-    let action = href!(create, Slug(tenant.slug.clone())).resolve(cx);
+    let action = href!(create, slug: tenant.slug.clone()).resolve(cx);
     let back = automations_url(cx, &tenant.slug, None, None);
     Ok(view! {
         document(
@@ -85,7 +85,7 @@ pub async fn create(cx: &Cx, Form(form): Form<NewForm>) -> Result<SeeOther> {
     {
         Ok(id) => Ok(see_other(scenario_url(cx, &slug, &id, None, None))),
         Err(err) if err.is_user_facing() => Ok(see_other(
-            href!(new, Slug(slug))
+            href!(new, slug: slug)
                 .query(Flash {
                     error: err.code(),
                     message: None,

@@ -5,11 +5,11 @@ use topcoat::{
     router::{
         content::Form,
         error::{SeeOther, see_other},
-        path_param, route,
+        route,
     },
 };
 
-use super::{UserId, user_url};
+use super::{user_id, user_url};
 use crate::app::admin::{error_code, require_admin};
 use crate::auth::identity;
 
@@ -21,7 +21,7 @@ struct RoleForm {
 #[route(POST)]
 pub async fn role(cx: &Cx, Form(form): Form<RoleForm>) -> Result<SeeOther> {
     let me = require_admin(cx).await?;
-    let id = path_param::<UserId>(cx);
+    let id = user_id(cx);
     match identity(cx).set_admin(&me.id, id, form.admin).await {
         Ok(()) => Ok(see_other(user_url(
             cx,

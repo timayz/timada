@@ -3,7 +3,7 @@ use std::sync::Arc;
 use timada_tenancy::AuthorizeAliexpress;
 use topcoat::{
     Result,
-    context::{Cx, app_context},
+    context::{Cx, context},
     router::{
         error::{SeeOther, see_other},
         query_params, route,
@@ -62,7 +62,7 @@ pub async fn callback(cx: &Cx) -> Result<SeeOther> {
     let Some(code) = query.code.clone().filter(|code| !code.is_empty()) else {
         return refused("aliexpress_connect_refused");
     };
-    let aliexpress = app_context::<Arc<Aliexpress>>(cx);
+    let aliexpress = context::<Arc<Aliexpress>>(cx);
     if !aliexpress.enabled() {
         return refused("aliexpress_disabled");
     }
