@@ -139,6 +139,7 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         config.cluster.as_ref(),
         config.server.region.as_deref(),
         &config.server.also_serves,
+        config.server.also_serves_no_region,
         &config.database.path,
         store.clone(),
     )

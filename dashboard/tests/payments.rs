@@ -545,9 +545,10 @@ async fn harness_on<G: PaymentGateway + 'static>(
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
     db::migrate_store_read_models(&store).await.unwrap();
     let store_db = db::Db::from(store.clone());
-    let (cluster, platform, _) = cluster::open(None, None, &[], &dir.join("timada.db"), store)
-        .await
-        .unwrap();
+    let (cluster, platform, _) =
+        cluster::open(None, None, &[], false, &dir.join("timada.db"), store)
+            .await
+            .unwrap();
     let payments = Arc::new(Payments::new(
         Some(seal::Sealer::new("payments", SEAL_KEY)),
         stripe.clone(),

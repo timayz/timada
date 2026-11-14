@@ -27,6 +27,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.cluster.as_ref(),
         config.server.region.as_deref(),
         &config.server.also_serves,
+        config.server.also_serves_no_region,
         &config.database.path,
         store.clone(),
     )
@@ -485,7 +486,8 @@ pub struct Deps {
 type Make = fn(&Deps) -> SubscriptionBuilder<Executor>;
 
 /// A worker built from a subscription: the one the table lists, or its copy
-/// for a region this node also serves, filtered on that region's key.
+/// for a region this node also serves, filtered on that region's key, or
+/// its copy for the events written without a region, filtered on no key.
 type Planned = (
     String,
     Kind,
@@ -504,17 +506,23 @@ enum Kind {
     PerNode,
     /// The node's own region (the executor's default routing key, which the
     /// builder leaves alone), and each region of `server.also_serves` as a
-    /// worker of its own: a saga, whose work a region's nodes do for it.
+    /// worker of its own, as are the events written without a region under
+    /// `server.also_serves_no_region`: a saga, whose work a region's nodes
+    /// do for it.
     Sharded,
 }
 
 /// The workers to start for `server`: every subscription once, and the
 /// sharded ones again for each region this node also serves, named after it
-/// (`payments for us-east-3`). Without a region, one worker each, following
-/// the events written without a key, as before.
+/// (`payments for us-east-3`), and once more for the events written without
+/// a region when it serves those too (`payments for no region`). That last
+/// copy keeps its cursor under the saga's bare key, where this node kept it
+/// while it had no region, and writes what it creates in the node's region.
+/// Without a region, one worker each, following the events written without
+/// a key, as before.
 fn planned(server: &crate::config::ServerConfig) -> Vec<Planned> {
     debug_assert!(
-        server.also_serves.is_empty() || server.region.is_some(),
+        (server.also_serves.is_empty() && !server.also_serves_no_region) || server.region.is_some(),
         "validated by Config::load"
     );
     let mut planned: Vec<Planned> = Vec::new();
@@ -527,6 +535,13 @@ fn planned(server: &crate::config::ServerConfig) -> Vec<Planned> {
                     format!("{name} for {region}"),
                     *kind,
                     Box::new(move |deps: &Deps| make(deps).routing_key(region.clone())),
+                ));
+            }
+            if server.also_serves_no_region {
+                planned.push((
+                    format!("{name} for no region"),
+                    *kind,
+                    Box::new(move |deps: &Deps| make(deps).no_routing_key()),
                 ));
             }
         }
@@ -731,6 +746,7 @@ mod tests {
             port: 3000,
             region: region.map(str::to_owned),
             also_serves: also_serves.iter().map(|s| s.to_string()).collect(),
+            also_serves_no_region: false,
             trusted_proxies: Vec::new(),
         }
     }
@@ -764,6 +780,26 @@ mod tests {
         // together.
         let at = more.iter().position(|n| n == "payments").unwrap();
         assert_eq!(more[at + 1], "payments for us-east-3");
+    }
+
+    /// A node that also serves the events written without a region runs
+    /// every saga once more for them, after its copies for other regions.
+    #[test]
+    fn a_saga_is_planned_once_more_for_the_events_without_a_region() {
+        let sagas = SUBSCRIPTIONS
+            .iter()
+            .filter(|(_, kind, _)| *kind == Kind::Sharded)
+            .count();
+        let keyless = names(&ServerConfig {
+            also_serves_no_region: true,
+            ..server(Some("eu-west-1"), &["us-east-3"])
+        });
+        assert_eq!(keyless.len(), SUBSCRIPTIONS.len() + 2 * sagas);
+        let at = keyless.iter().position(|n| n == "payments").unwrap();
+        assert_eq!(keyless[at + 1], "payments for us-east-3");
+        assert_eq!(keyless[at + 2], "payments for no region");
+        assert!(!keyless.iter().any(|n| n == "catalog for no region"));
+        assert!(!keyless.iter().any(|n| n == "shopper keys for no region"));
     }
 
     /// Every subscription in the table is classified on purpose: the read
