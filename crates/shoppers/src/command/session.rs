@@ -4,7 +4,7 @@ use crate::aggregator::{Registered, SessionEnded, SessionStarted, SessionsRevoke
 use crate::error::ShopperError;
 use crate::value_object::{SESSION_TTL_SECS, generate_token, session_id, shopper_id};
 
-use super::{SessionState, ShopperState, email_aad, normalize_email};
+use super::{SessionState, ShopperState, email_aad, normalize_email, reusable_key};
 use timada_core::CodeVerifier;
 use timada_core::keys::{self as key, Key as ShopperKey, Keys as ShopperKeys, new_key_id};
 
@@ -38,9 +38,9 @@ pub struct ResolvedShopper {
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Burns the code mailed to `email`, creates the shopper on a first
-    /// sign-in (under the key its codes drew, or a fresh one kept in `keys`
-    /// first), and opens a session for [`SESSION_TTL_SECS`]. `now` is unix
-    /// seconds.
+    /// sign-in (under the key its codes drew, unless a deletion of the
+    /// account destroyed it, or a fresh one kept in `keys` first), and opens
+    /// a session for [`SESSION_TTL_SECS`]. `now` is unix seconds.
     pub async fn sign_in(
         &self,
         keys: &dyn ShopperKeys,
@@ -55,7 +55,8 @@ impl<E: Executor> super::Command<E> {
             .await?;
 
         let shopper_id = shopper_id(&email);
-        let writer = match self.load_shopper_any(&shopper_id).await? {
+        let shopper = self.load_shopper_any(&shopper_id).await?;
+        let writer = match &shopper {
             Some(shopper) if !shopper.forgotten => None,
             // The address deleted its account: it registers again, afresh.
             Some(forgotten) => Some(forgotten.write()?),
@@ -63,15 +64,14 @@ impl<E: Executor> super::Command<E> {
         };
         if let Some(mut writer) = writer {
             // The address's key is the one its codes drew, so one key covers
-            // what the address recorded before and after it registered. A
-            // key is kept before the event names it, so no event ever points
-            // at a key nobody holds.
-            let drawn = match self.load_challenge(&email).await? {
-                Some(challenge) if !challenge.key_id.is_empty() => keys
-                    .get(&challenge.key_id)
-                    .await?
-                    .map(|key| (challenge.key_id, key)),
-                _ => None,
+            // what the address recorded before and after it registered,
+            // unless the account's deletion destroyed it. A key is kept
+            // before the event names it, so no event ever points at a key
+            // nobody holds.
+            let challenge = self.load_challenge(&email).await?;
+            let drawn = match reusable_key(shopper.as_ref(), challenge.as_ref()) {
+                Some(key_id) => keys.get(key_id).await?.map(|key| (key_id.to_owned(), key)),
+                None => None,
             };
             let fresh = drawn.is_none();
             let (key_id, key) = match drawn {
