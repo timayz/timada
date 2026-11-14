@@ -38,7 +38,7 @@ use evento::metadata::Event;
 use evento::remote::{Client, ServerHandle};
 use evento::subscription::{Context, SubscriptionBuilder};
 use timada_catalog::{CreateProduct, ProductState};
-use timada_tenancy::aggregator::Created;
+use timada_tenancy::aggregator::{Created, Renamed};
 use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenancyError,
     read_model_subscription,
@@ -85,11 +85,12 @@ impl Node {
 
     /// Opens node `id` over its own files; a fresh node migrates them first.
     async fn start(root: &Path, id: u64, peers: &[SocketAddr], tuning: Tuning) -> Self {
-        Self::start_in(root, id, peers, tuning, None, &[]).await
+        Self::start_in(root, id, peers, tuning, None, &[], false).await
     }
 
     /// [`start`](Self::start) for a node serving `region`, and doing the
-    /// work of the regions of `also_serves` too.
+    /// work of the regions of `also_serves` too, and with `no_region` the
+    /// work on what was written without one.
     async fn start_in(
         root: &Path,
         id: u64,
@@ -97,6 +98,7 @@ impl Node {
         tuning: Tuning,
         region: Option<&str>,
         also_serves: &[&str],
+        no_region: bool,
     ) -> Self {
         let dir = root.join(format!("node{id}"));
         std::fs::create_dir_all(&dir).unwrap();
@@ -118,6 +120,7 @@ impl Node {
                 .iter()
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>(),
+            no_region,
             &path,
             store,
         )
@@ -891,9 +894,9 @@ async fn the_nodes_up_share_out_what_they_do() {
     let addrs = free_addrs().await;
     let tuning = Tuning::default();
     let (n0, n1, n2) = tokio::join!(
-        Node::start_in(&root, 0, &addrs, tuning, Some("eu"), &[]),
-        Node::start_in(&root, 1, &addrs, tuning, Some("us"), &[]),
-        Node::start_in(&root, 2, &addrs, tuning, Some("eu"), &["us"]),
+        Node::start_in(&root, 0, &addrs, tuning, Some("eu"), &[], false),
+        Node::start_in(&root, 1, &addrs, tuning, Some("us"), &[], false),
+        Node::start_in(&root, 2, &addrs, tuning, Some("eu"), &["us"], false),
     );
     let (eu, us) = (Among::Region(Some("eu")), Among::Region(Some("us")));
 
@@ -932,9 +935,9 @@ async fn the_nodes_without_a_region_share_the_work_on_events_without_one() {
     let addrs = free_addrs().await;
     let tuning = Tuning::default();
     let (n0, n1, n2) = tokio::join!(
-        Node::start_in(&root, 0, &addrs, tuning, None, &[]),
-        Node::start_in(&root, 1, &addrs, tuning, Some("eu"), &[]),
-        Node::start_in(&root, 2, &addrs, tuning, None, &[]),
+        Node::start_in(&root, 0, &addrs, tuning, None, &[], false),
+        Node::start_in(&root, 1, &addrs, tuning, Some("eu"), &[], false),
+        Node::start_in(&root, 2, &addrs, tuning, None, &[], false),
     );
     let (keyless, eu) = (Among::Region(None), Among::Region(Some("eu")));
 
@@ -967,7 +970,9 @@ async fn concurrent_writers_never_see_stale_versions() {
     let root = temp_root("stress");
     let path = root.join("timada.db");
     let store = db::open_store(&path).await.unwrap();
-    let (cluster, store, _) = cluster::open(None, None, &[], &path, store).await.unwrap();
+    let (cluster, store, _) = cluster::open(None, None, &[], false, &path, store)
+        .await
+        .unwrap();
     let mut tasks = tokio::task::JoinSet::new();
     for t in 0..64 {
         let store = store.clone();
@@ -1021,12 +1026,117 @@ async fn on_created<E: evento::Executor>(
     Ok(())
 }
 
+#[evento::subscription]
+async fn on_renamed<E: evento::Executor>(
+    context: &Context<'_, E>,
+    event: Event<Renamed>,
+) -> anyhow::Result<()> {
+    let seen: Seen = context.extract();
+    seen.0.lock().unwrap().push(event.data.name.clone());
+    Ok(())
+}
+
 /// A saga as `serve` builds one: no routing key of its own, so it follows the
-/// node's region; `.routing_key(r)` for a region the node also serves.
+/// node's region; `.routing_key(r)` for a region the node also serves, and
+/// `.no_routing_key()` for the events written without a region.
 fn saga(seen: &Seen) -> SubscriptionBuilder<Executor> {
     SubscriptionBuilder::new("test/created-saga")
         .data(seen.clone())
         .handler(on_created())
+        .handler(on_renamed())
+}
+
+/// Giving regions to a cluster that ran without them (#517). A stream keeps
+/// the key it was created with, even none, so a tenant created before is
+/// still written to without a region afterwards. All three nodes come back
+/// serving `eu`, and node 2 also serves what has no region: its copy of the
+/// saga sees the old tenant's rename, from where the saga stopped before the
+/// regions (the creation is not seen again), and no region's saga does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_with_a_region_follows_the_streams_created_without_one() {
+    let root = temp_root("no-region");
+    let addrs = free_addrs().await;
+    let tuning = Tuning::default();
+    let (n0, n1, n2) = tokio::join!(
+        Node::start_in(&root, 0, &addrs, tuning, None, &[], false),
+        Node::start_in(&root, 1, &addrs, tuning, None, &[], false),
+        Node::start_in(&root, 2, &addrs, tuning, None, &[], false),
+    );
+    let nodes = [n0, n1, n2];
+    let before = Seen::default();
+    let saga_before = saga(&before).start(&nodes[2].store).await.unwrap();
+    let acme = create_everywhere(&nodes, "acme").await;
+    eventually(
+        "node 2 sees the tenant created without a region",
+        async || before.names() == ["acme"],
+    )
+    .await;
+    saga_before.shutdown().await.unwrap();
+    for node in nodes {
+        node.stop().await;
+    }
+
+    let (n0, n1, n2) = tokio::join!(
+        Node::start_in(&root, 0, &addrs, tuning, Some("eu"), &[], false),
+        Node::start_in(&root, 1, &addrs, tuning, Some("eu"), &[], false),
+        Node::start_in(&root, 2, &addrs, tuning, Some("eu"), &[], true),
+    );
+    let nodes = [n0, n1, n2];
+    let seen: [Seen; 3] = Default::default();
+    let no_region = Seen::default();
+    let mut sagas = Vec::new();
+    for (node, seen) in nodes.iter().zip(&seen) {
+        sagas.push(saga(seen).start(&node.store).await.unwrap());
+    }
+    sagas.push(
+        saga(&no_region)
+            .no_routing_key()
+            .start(&nodes[2].store)
+            .await
+            .unwrap(),
+    );
+
+    // The old tenant's stream has no region; the new tenant is eu's.
+    // The nodes just came back together: a first write can come before
+    // they hear each other.
+    let tenancy = Command(nodes[0].store.clone());
+    eventually("the old tenant is renamed", async || {
+        tenancy
+            .rename_tenant("alice", &acme.id, "acme again")
+            .await
+            .is_ok()
+    })
+    .await;
+    create_everywhere(&nodes, "globex").await;
+    eventually("node 2 sees the old tenant renamed", async || {
+        no_region.names() == ["acme again"]
+    })
+    .await;
+    eventually("every node sees eu's tenant", async || {
+        seen.iter().all(|seen| seen.names() == ["globex"])
+    })
+    .await;
+    // Enough passes for a wrongly routed event to have shown up.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        no_region.names(),
+        ["acme again"],
+        "the rename alone, from where the saga stopped"
+    );
+    for (id, seen) in seen.iter().enumerate() {
+        assert_eq!(
+            seen.names(),
+            ["globex"],
+            "node {id}'s eu saga sees eu alone"
+        );
+    }
+
+    for saga in sagas {
+        saga.shutdown().await.unwrap();
+    }
+    for node in nodes {
+        node.stop().await;
+    }
 }
 
 /// Decision 1 of the CQRS review: a saga runs on the nodes of the event's
@@ -1040,9 +1150,9 @@ async fn a_saga_runs_on_the_nodes_of_its_region_and_where_it_is_also_served() {
     let addrs = free_addrs().await;
     let tuning = Tuning::default();
     let (n0, n1, n2) = tokio::join!(
-        Node::start_in(&root, 0, &addrs, tuning, Some("eu"), &[]),
-        Node::start_in(&root, 1, &addrs, tuning, Some("us"), &[]),
-        Node::start_in(&root, 2, &addrs, tuning, Some("eu"), &["us"]),
+        Node::start_in(&root, 0, &addrs, tuning, Some("eu"), &[], false),
+        Node::start_in(&root, 1, &addrs, tuning, Some("us"), &[], false),
+        Node::start_in(&root, 2, &addrs, tuning, Some("eu"), &["us"], false),
     );
     let nodes = [n0, n1, n2];
     let seen: [Seen; 3] = Default::default();
