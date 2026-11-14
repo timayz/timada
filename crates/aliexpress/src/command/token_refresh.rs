@@ -6,8 +6,11 @@
 //! or a company write that fails, must not lose them. The next node to find
 //! the access due applies what the claim recorded instead of asking again,
 //! and takes over a claim whose node went quiet before recording anything.
-//! The claim lives in the platform's own streams, next to the company, not
-//! under any tenant.
+//! An answer whose access lapses when the one renewed did renews nothing:
+//! its tokens are still the company's, the latest AliExpress handed out, and
+//! once the claim goes stale the next node asks again with them, as after a
+//! refusal (#560). The claim lives in the platform's own streams, next to
+//! the company, not under any tenant.
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
@@ -26,7 +29,8 @@ pub struct TokenRefreshState {
     pub id: String,
     /// When the latest claim was made (unix seconds).
     pub claimed_at: u64,
-    /// What AliExpress answered, once recorded.
+    /// What AliExpress last answered, once recorded: nothing is recorded
+    /// over tokens that renew the access ([`record_token_renewal`]).
     pub renewed: Option<RenewedTokens>,
 }
 
@@ -46,9 +50,7 @@ async fn on_claimed(event: Event<Claimed>, state: &mut TokenRefreshState) -> any
 
 #[evento::handler]
 async fn on_renewed(event: Event<Renewed>, state: &mut TokenRefreshState) -> anyhow::Result<()> {
-    state
-        .renewed
-        .get_or_insert_with(|| event.data.tokens.clone());
+    state.renewed = Some(event.data.tokens.clone());
     Ok(())
 }
 
@@ -56,12 +58,16 @@ async fn on_renewed(event: Event<Renewed>, state: &mut TokenRefreshState) -> any
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenRenewal {
     /// It took the renewal on: it asks AliExpress, then records what it got
-    /// ([`record_token_renewal`]).
-    Claimed,
+    /// ([`record_token_renewal`]). `standing`: what AliExpress answered an
+    /// earlier claim of the same token with, which renewed nothing. The
+    /// company is owed those tokens whatever the new answer, and their
+    /// refresh token is the one to ask with: the latest AliExpress gave.
+    Claimed { standing: Option<RenewedTokens> },
     /// Another node took it on a moment ago.
     Held,
     /// AliExpress answered already: these are the tokens the company is
-    /// owed, to apply without asking again.
+    /// owed, to apply without asking again. Ones that renew nothing
+    /// ([`RenewedTokens::renews`]) come back until the claim goes stale.
     Renewed(RenewedTokens),
 }
 
@@ -80,7 +86,8 @@ pub async fn load_token_refresh<E: Executor>(
 
 /// Takes the renewal of `company_id`'s token lapsing at `expires_at` on, at
 /// `now` (unix seconds): see [`TokenRenewal`]. A claim older than
-/// [`TOKEN_CLAIM_STALE_SECS`] with nothing recorded is taken over.
+/// [`TOKEN_CLAIM_STALE_SECS`] with nothing recorded that renews the token is
+/// taken over.
 pub async fn claim_token_refresh<E: Executor>(
     executor: &E,
     actor: &str,
@@ -92,26 +99,41 @@ pub async fn claim_token_refresh<E: Executor>(
         claimed_by: actor.to_owned(),
     };
     for _ in 0..CLAIM_ATTEMPTS {
-        let written = match load_token_refresh(executor, company_id, expires_at).await? {
+        let (written, standing) = match load_token_refresh(executor, company_id, expires_at).await?
+        {
             Some(state) => {
-                if let Some(tokens) = state.renewed {
-                    return Ok(TokenRenewal::Renewed(tokens));
+                if let Some(tokens) = state
+                    .renewed
+                    .as_ref()
+                    .filter(|tokens| tokens.renews(expires_at))
+                {
+                    return Ok(TokenRenewal::Renewed(tokens.clone()));
                 }
                 if now < state.claimed_at.saturating_add(TOKEN_CLAIM_STALE_SECS) {
-                    return Ok(TokenRenewal::Held);
+                    // Taken on a moment ago, or answered with tokens that
+                    // renew nothing: those are the company's meanwhile.
+                    return Ok(state
+                        .renewed
+                        .clone()
+                        .map_or(TokenRenewal::Held, TokenRenewal::Renewed));
                 }
-                state.write()?.event(&claimed).commit(executor).await
+                let standing = state.renewed.clone();
+                (
+                    state.write()?.event(&claimed).commit(executor).await,
+                    standing,
+                )
             }
-            None => {
+            None => (
                 evento::append(token_refresh_id(company_id, expires_at))
                     .original_version(0)
                     .event(&claimed)
                     .commit(executor)
-                    .await
-            }
+                    .await,
+                None,
+            ),
         };
         match written {
-            Ok(_) => return Ok(TokenRenewal::Claimed),
+            Ok(_) => return Ok(TokenRenewal::Claimed { standing }),
             // Another node claimed or recorded meanwhile: decide again.
             Err(WriteError::InvalidOriginalVersion) => {}
             Err(err) => return Err(err.into()),
@@ -121,8 +143,10 @@ pub async fn claim_token_refresh<E: Executor>(
 }
 
 /// Records the tokens AliExpress answered the claim of `company_id`'s token
-/// lapsing at `expires_at` with. The first tokens recorded stand: a node
-/// that took the claim over and was answered too records nothing more.
+/// lapsing at `expires_at` with. The first tokens that renew it stand: a
+/// node that took the claim over and was answered too records nothing more.
+/// Tokens that renew nothing are recorded all the same, as the only copy,
+/// and give way to the next answer.
 pub async fn record_token_renewal<E: Executor>(
     executor: &E,
     actor: &str,
@@ -134,7 +158,11 @@ pub async fn record_token_renewal<E: Executor>(
         let state = load_token_refresh(executor, company_id, expires_at)
             .await?
             .ok_or_else(|| anyhow::anyhow!("no claim on the renewal of {company_id}'s token"))?;
-        if state.renewed.is_some() {
+        if state
+            .renewed
+            .as_ref()
+            .is_some_and(|recorded| recorded.renews(expires_at) || recorded == tokens)
+        {
             return Ok(());
         }
         let written = state

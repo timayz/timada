@@ -187,9 +187,10 @@ async fn one_node_renews_a_token() {
         refresh_expires_at: 0,
         account: "buyer".to_owned(),
     };
+    let claimed = TokenRenewal::Claimed { standing: None };
     assert_eq!(
         claim("node-a", "company-1", 1_700_000_000, now).await,
-        TokenRenewal::Claimed
+        claimed
     );
     assert_eq!(
         claim("node-b", "company-1", 1_700_000_000, now).await,
@@ -198,11 +199,11 @@ async fn one_node_renews_a_token() {
     // The next token is a renewal of its own, and so is another company's.
     assert_eq!(
         claim("node-b", "company-1", 1_700_086_400, now).await,
-        TokenRenewal::Claimed
+        claimed
     );
     assert_eq!(
         claim("node-b", "company-2", 1_700_000_000, now).await,
-        TokenRenewal::Claimed
+        claimed
     );
 
     // Node a went quiet before recording anything: b takes over once the
@@ -217,7 +218,7 @@ async fn one_node_renews_a_token() {
     let stale = claimed_at + TOKEN_CLAIM_STALE_SECS + 1;
     assert_eq!(
         claim("node-b", "company-1", 1_700_000_000, stale).await,
-        TokenRenewal::Claimed
+        claimed
     );
     for (actor, access) in [("node-b", 2), ("node-a", 1)] {
         timada_aliexpress::record_token_renewal(
@@ -234,6 +235,83 @@ async fn one_node_renews_a_token() {
     assert_eq!(
         claim("node-c", "company-1", 1_700_000_000, stale + 3_600).await,
         TokenRenewal::Renewed(tokens(2))
+    );
+}
+
+/// AliExpress answers with tokens lapsing when the access renewed does
+/// (#560): they are the company's while the claim holds, then the claim is
+/// taken over to ask again with them, and the first answer that renews the
+/// access stands over any that follows.
+#[tokio::test]
+async fn tokens_that_renew_nothing_give_way_once_the_claim_is_stale() {
+    use timada_aliexpress::{RenewedTokens, TOKEN_CLAIM_STALE_SECS, TokenRenewal};
+
+    let executor = executor().await;
+    let renewing = 1_700_000_000;
+    let tokens = |access: u8, expires_at: u64| RenewedTokens {
+        access_token_sealed: vec![access],
+        refresh_token_sealed: vec![access, 1],
+        expires_at,
+        refresh_expires_at: 0,
+        account: "buyer".to_owned(),
+    };
+    let unmoved = tokens(1, renewing);
+    let renewed = tokens(2, renewing + 86_400);
+    let claim = |at: u64| {
+        let executor = executor.clone();
+        async move {
+            timada_aliexpress::claim_token_refresh(&executor, "node-a", "company-1", renewing, at)
+                .await
+                .unwrap()
+        }
+    };
+    let record = |tokens: RenewedTokens| {
+        let executor = executor.clone();
+        async move {
+            timada_aliexpress::record_token_renewal(
+                &executor,
+                "node-a",
+                "company-1",
+                renewing,
+                &tokens,
+            )
+            .await
+            .unwrap()
+        }
+    };
+
+    assert!(!unmoved.renews(renewing));
+    assert!(renewed.renews(renewing));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    assert_eq!(claim(now).await, TokenRenewal::Claimed { standing: None });
+    record(unmoved.clone()).await;
+    // Recorded once: the same answer again writes nothing.
+    record(unmoved.clone()).await;
+    let state = timada_aliexpress::load_token_refresh(&executor, "company-1", renewing)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(state.renewed.as_ref(), Some(&unmoved));
+    assert_eq!(state.aggregate_version().unwrap(), 2);
+    // Meanwhile every look gets them, asking nothing.
+    assert_eq!(claim(now + 1).await, TokenRenewal::Renewed(unmoved.clone()));
+    // Stale, the claim is taken again, standing on what AliExpress gave.
+    let stale = state.claimed_at + TOKEN_CLAIM_STALE_SECS;
+    assert_eq!(
+        claim(stale).await,
+        TokenRenewal::Claimed {
+            standing: Some(unmoved.clone())
+        }
+    );
+    record(renewed.clone()).await;
+    // A late answer that renews nothing changes nothing any more.
+    record(tokens(3, renewing)).await;
+    assert_eq!(
+        claim(stale + 3_600).await,
+        TokenRenewal::Renewed(renewed.clone())
     );
 }
 

@@ -127,6 +127,11 @@ anything imported: the platform keeps which companies are connected and until wh
 `timada-aliexpress/TokenRefresh` claim, keyed by company and token). An access
 AliExpress no longer renews means an owner connects again.
 
+AliExpress may answer a renewal with an access that lapses when the old one did (the
+same lifetime, counted from the same second). That renews nothing: the company gets
+the new tokens once, the log says so, and AliExpress is asked again once the claim
+is ten minutes old, with the refresh token it gave last, as after a refusal.
+
 Each imported product, and each order placed on AliExpress, belongs to one of the
 nodes up, by a hash of its stream's id over the nodes heard from in the last 30
 seconds, so one node sweeps it and one node answers a request for it, and the app's

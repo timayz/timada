@@ -1,5 +1,6 @@
 mod common;
 
+use evento::ProjectionAggregate;
 use timada_core::db::Db;
 
 use common::*;
@@ -393,6 +394,44 @@ async fn a_renewal_racing_another_write_still_lands() {
             .unwrap();
         assert_eq!(authorization.expires_at, expires_at as u64, "round {round}");
     }
+}
+
+/// Tokens whose access lapses when the renewed one did leave the company
+/// due at the same time (#560): written once, then found there, whichever
+/// node applies them again.
+#[tokio::test]
+async fn tokens_the_company_holds_already_are_not_written_again() {
+    let (executor, _) = executor_with_pool().await;
+    let cmd = Command(executor.clone());
+    let owner = new_id();
+    let company = company(&cmd, &owner, "12002701600092").await;
+    cmd.authorize_aliexpress(&owner, &company, tokens(NOW + DAY, 0))
+        .await
+        .unwrap();
+    let unmoved = AuthorizeAliexpress {
+        access_token_sealed: vec![6],
+        ..tokens(NOW + DAY, 0)
+    };
+    assert!(
+        cmd.refresh_aliexpress("host", &company, (NOW + DAY) as u64, unmoved.clone())
+            .await
+            .unwrap()
+    );
+    let version = cmd
+        .load_company(&company)
+        .await
+        .unwrap()
+        .unwrap()
+        .aggregate_version()
+        .unwrap();
+    assert!(
+        !cmd.refresh_aliexpress("host", &company, (NOW + DAY) as u64, unmoved)
+            .await
+            .unwrap()
+    );
+    let after = cmd.load_company(&company).await.unwrap().unwrap();
+    assert_eq!(after.aggregate_version().unwrap(), version);
+    assert_eq!(after.aliexpress.unwrap().access_token_sealed, vec![6]);
 }
 
 /// A renewal finding the authorization it renews replaced (an owner

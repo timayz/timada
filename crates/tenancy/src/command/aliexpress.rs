@@ -117,15 +117,17 @@ impl<E: Executor> super::Command<E> {
     /// ownership applies; `actor` names the host's job. `renewing` is when
     /// the renewed access lapses: an authorization changed since (renewed
     /// by another node, or an owner connected again) is left alone, and so
-    /// is a company with no account any more.
+    /// is a company with no account any more. Whether the tokens were
+    /// written: a company holding them already is left alone too, as tokens
+    /// that renew nothing leave it lapsing at `renewing` (#560).
     ///
     /// The tokens are the only copy AliExpress handed out, so another write
     /// to the company landing first (an owner added, the identity changed)
     /// does not lose them: the company is read again and the tokens written
     /// again. So does a write whose outcome is unknown: read again, the
     /// company tells whether it landed (its access no longer lapses at
-    /// `renewing`). A store not taking writes is the caller's to retry,
-    /// later, with the same tokens.
+    /// `renewing`, or holds them). A store not taking writes is the caller's
+    /// to retry, later, with the same tokens.
     pub async fn refresh_aliexpress(
         &self,
         actor: &str,
@@ -133,16 +135,24 @@ impl<E: Executor> super::Command<E> {
         renewing: u64,
         cmd: AuthorizeAliexpress,
         routing_key: Option<String>,
-    ) -> Result<(), TenancyError> {
+    ) -> Result<bool, TenancyError> {
         let mut attempt = 1;
         loop {
             let company = self.require_company(company_id).await?;
-            if company
+            let Some(current) = company
                 .aliexpress
                 .as_ref()
-                .is_none_or(|current| current.expires_at != renewing)
+                .filter(|current| current.expires_at == renewing)
+            else {
+                return Ok(false);
+            };
+            if current.access_token_sealed == cmd.access_token_sealed
+                && current.refresh_token_sealed == cmd.refresh_token_sealed
+                && current.expires_at == cmd.expires_at
+                && current.refresh_expires_at == cmd.refresh_expires_at
+                && current.account == cmd.account
             {
-                return Ok(());
+                return Ok(false);
             }
             let written = self
                 .write_authorization(actor, company, cmd.clone(), routing_key.clone())
@@ -153,7 +163,7 @@ impl<E: Executor> super::Command<E> {
                 )) if attempt < RENEWAL_ATTEMPTS => {
                     attempt += 1;
                 }
-                written => return written,
+                written => return written.map(|()| true),
             }
         }
     }
