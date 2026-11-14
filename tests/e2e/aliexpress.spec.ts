@@ -410,6 +410,13 @@ test("a connected shop with nothing imported still has its access renewed", asyn
 // number once it ships. The storefront runs on a port of its own.
 const app = new StorefrontApp(Number(process.env.E2E_ALIEXPRESS_SHOP_PORT ?? 3458));
 
+/// Who buys: an address of the test's own, as the mails to it are counted
+/// while the other workers' shoppers buy too.
+let shopper = "";
+
+test.beforeEach(() => {
+  shopper = uniqueEmail("ada");
+});
 test.afterEach(() => app.stop());
 
 /// A shopper fills the storefront's checkout for `quantity` roses,
@@ -424,7 +431,7 @@ async function fillCheckout(page: Page, quantity: number) {
   // published, offers the checkout at once (#558).
   await page.goto(`${app.url}/cart`);
   await page.getByRole("link", { name: "Commander" }).click();
-  await page.getByLabel("E-mail", { exact: true }).fill("ada@example.org");
+  await page.getByLabel("E-mail", { exact: true }).fill(shopper);
   await page.getByLabel("Nom complet").fill("Ada Lovelace");
   await page.getByLabel("Adresse", { exact: true }).fill("1 rue de la Paix");
   await page.getByLabel("Pays", { exact: true }).selectOption("FR");
@@ -596,7 +603,7 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
     const firstIntent = stripe.lastIntent()!;
     const firstReference = (await page.locator("[data-order-reference]").textContent()) ?? "";
     await expect(page.locator("[data-order-status]")).toHaveAttribute("data-order-status", "authorized");
-    const cancelMails = await mailCountOf(request, "ada@example.org", "Cancelled: your ");
+    const cancelMails = await mailCountOf(request, shopper, "Cancelled: your ");
     await page.getByText("Annuler ma commande").click();
     await page.getByRole("button", { name: "Confirmer l'annulation" }).click();
     await expect(page.locator("[data-order-cancel-notice]")).toHaveText(
@@ -608,7 +615,7 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
     expect(firstIntent.captured).toBe(false);
     expect(stripe.refunds).toEqual([]);
     // And is mailed so: the hold goes back, nothing to refund.
-    const cancelled = await mailTo(request, "ada@example.org", "Cancelled: your ", cancelMails);
+    const cancelled = await mailTo(request, shopper, "Cancelled: your ", cancelMails);
     expect(cancelled.subject).toContain(firstReference);
     expect(cancelled.html).toContain("Nothing was charged");
     // The merchant sees it cancelled, its hold given back; it is not placed.
@@ -633,7 +640,7 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
     const secondShopOrder = page.url();
     const secondReference = (await page.locator("[data-order-reference]").textContent()) ?? "";
     await expect(page.locator("[data-order-cancel]")).toBeVisible();
-    const paidMails = await mailCountOf(request, "ada@example.org", "Payment received for your ");
+    const paidMails = await mailCountOf(request, shopper, "Payment received for your ");
     // Stopped while its money is held: no new payment, the keys kept until
     // the merchant forgets them. Saving them again takes payments again.
     await expect(async () => {
@@ -666,7 +673,7 @@ test("a shopper cancels their order until the shop places it on AliExpress", asy
     }).toPass({ timeout: 15_000 });
     await expect(page.locator("[data-order-cancel]")).toHaveCount(0);
     // The money taken, the shopper is mailed with the invoice's link.
-    const receipt = await mailTo(request, "ada@example.org", "Payment received for your ", paidMails);
+    const receipt = await mailTo(request, shopper, "Payment received for your ", paidMails);
     expect(receipt.subject).toContain(secondReference);
     await expect(async () => {
       await page.goto(`/t/${slug}/orders/${second}`);

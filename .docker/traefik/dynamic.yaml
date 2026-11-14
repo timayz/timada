@@ -24,6 +24,27 @@ http:
       priority: 25
       entryPoints:
         - https
+    # `make e2e` runs the browser suite on one server per Playwright worker
+    # (scripts/e2e.sh), on the cluster's ports: s<N>.timada.localhost reaches
+    # server N alone.
+    timada-e2e-0:
+      rule: "Host(`s0.timada.localhost`)"
+      tls: true
+      service: timada-e2e-0
+      entryPoints:
+        - https
+    timada-e2e-1:
+      rule: "Host(`s1.timada.localhost`)"
+      tls: true
+      service: timada-e2e-1
+      entryPoints:
+        - https
+    timada-e2e-2:
+      rule: "Host(`s2.timada.localhost`)"
+      tls: true
+      service: timada-e2e-2
+      entryPoints:
+        - https
 
   services:
     # The three nodes of the local cluster (`cluster.web_peers` in
@@ -46,6 +67,20 @@ http:
       loadBalancer:
         servers:
           - url: "http://host.docker.internal:3457"
+    # The servers of `make e2e`, one each and with no health check: a server
+    # stalled by the disk flushing a build answers late rather than not at all.
+    timada-e2e-0:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:3000"
+    timada-e2e-1:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:3001"
+    timada-e2e-2:
+      loadBalancer:
+        servers:
+          - url: "http://host.docker.internal:3002"
 
 # The store API, for the shops: STORE_ADDR=store.timada.localhost:4320 with
 # STORE_TLS_CA=/etc/ssl/certs/ca-certificates.crt. Traefik ends TLS here and

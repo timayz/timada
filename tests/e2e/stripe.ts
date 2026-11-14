@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import type { Page } from "@playwright/test";
+import { standInPort } from "./shard";
 
 // A stand-in for Stripe's API for the browser suite: every call goes on to
 // stripe-mock (compose.yml), so the dashboard reads answers shaped exactly as
@@ -8,9 +9,9 @@ import type { Page } from "@playwright/test";
 // amount a payment was opened with, the idempotency key that opened it,
 // whether the shopper confirmed it (its money held), and whether the money
 // was then taken or the hold given back. config/e2e.toml points the dashboard
-// at it.
+// at it, and scripts/e2e.sh each next server 100 ports further on.
 
-export const STRIPE_PORT = Number(process.env.E2E_STRIPE_PORT ?? 12112);
+export const STRIPE_PORT = Number(process.env.E2E_STRIPE_PORT ?? standInPort(12112));
 const STRIPE_MOCK = process.env.E2E_STRIPE_MOCK_URL ?? "http://localhost:12111";
 
 type Intent = {

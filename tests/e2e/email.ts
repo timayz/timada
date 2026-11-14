@@ -2,7 +2,8 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 // Registering and signing in with an e-mail address. The codes are read back
 // from the development mailbox of compose.yml (MailDev), whose REST API lists
-// every message it received.
+// every message it received, all of a recipient's when asked. The mailbox is
+// shared by every worker, so a spec reads only an address of its own.
 
 export const MAILDEV = process.env.MAILDEV_URL ?? "http://localhost:1080";
 export const PASSWORD = "correct horse battery";
@@ -22,12 +23,13 @@ type MailDevMessage = {
 };
 
 async function messagesTo(request: APIRequestContext, email: string): Promise<MailDevMessage[]> {
-  const response = await request.get(`${MAILDEV}/email`);
+  // MailDev picks the recipient's messages itself (an exact match: the suite's
+  // addresses are lower case). The whole list is megabytes once the container
+  // has been up for a few runs, every one of them parsed here at every poll.
+  const response = await request.get(`${MAILDEV}/email`, { params: { "to.address": email } });
   expect(response.ok(), `the development mailbox at ${MAILDEV} must be up (make up)`).toBe(true);
-  const all = (await response.json()) as MailDevMessage[];
-  return all
-    .filter((m) => m.to.some((t) => t.address.toLowerCase() === email.toLowerCase()))
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  const mine = (await response.json()) as MailDevMessage[];
+  return mine.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 }
 
 /// How many messages `email` received so far; pass it to `latestCode` so a
