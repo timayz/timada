@@ -83,6 +83,9 @@ pub struct Aliexpress {
     import_fee_cents: u64,
     /// The euro's rates, for a shop buying in another currency.
     euro_rates: Arc<dyn EuroRates>,
+    /// How many orders a company's account places an hour; 0 for no pace
+    /// ([`Self::paced_until`]).
+    orders_per_hour: u32,
 }
 
 /// How many reads after pushes run at once on a node: a burst of pushes
@@ -142,6 +145,7 @@ impl Aliexpress {
             import_duty_cents: config.import_duty_cents,
             import_fee_cents: config.import_fee_cents,
             euro_rates,
+            orders_per_hour: config.orders_per_hour,
         }))
     }
 
@@ -286,7 +290,10 @@ impl Aliexpress {
     }
 
     /// Renews the company's tokens when the access token lapses within a
-    /// day, on one node per token (the one that claims the renewal in the
+    /// quarter of its lifetime, a day at most
+    /// ([`timada_aliexpress::refresh_margin`]: the lifetime is counted from
+    /// when the company got the token), on one node per token (the one that
+    /// claims the renewal in the
     /// platform's streams of `store`); the company as it then is, read back
     /// from `store`. The tokens AliExpress answers are recorded on the claim
     /// before the company hears of them, so a node that stops in between, or
@@ -305,7 +312,10 @@ impl Aliexpress {
         let Some(authorization) = &company.aliexpress else {
             return Ok(company);
         };
-        if authorization.expires_at > now + timada_aliexpress::REFRESH_MARGIN_SECS {
+        let lifetime = authorization
+            .expires_at
+            .saturating_sub(authorization.authorized_at);
+        if authorization.expires_at > now + timada_aliexpress::refresh_margin(lifetime) {
             return Ok(company);
         }
         if authorization.refresh_expires_at != 0 && authorization.refresh_expires_at <= now {
@@ -412,6 +422,35 @@ impl Aliexpress {
             tracing::info!(company = %company.id, "AliExpress access renewed");
         }
         Ok(tenancy.load_company(&company.id).await?.unwrap_or(company))
+    }
+
+    /// Until when (unix seconds) `company_id`'s account places no order, by
+    /// its pace (`orders_per_hour`, spread across the hour: one at most every
+    /// hour / `orders_per_hour`, and no more than that many in the last hour),
+    /// as this node's read model knows what the account was asked to place;
+    /// `None` when one may go at `now`. Nodes placing at the same moment may
+    /// each let one through: a pace, not a lock (#470).
+    pub async fn paced_until(
+        &self,
+        db: &Db,
+        company_id: &str,
+        now: u64,
+    ) -> anyhow::Result<Option<u64>> {
+        if self.orders_per_hour == 0 {
+            return Ok(None);
+        }
+        const HOUR: u64 = 60 * 60;
+        let spacing = HOUR / u64::from(self.orders_per_hour);
+        let (asked, earliest, latest) =
+            timada_aliexpress::asked_on_account(db, company_id, now.saturating_sub(HOUR) as i64)
+                .await?;
+        let mut until = latest.map_or(0, |latest| latest.max(0) as u64 + spacing);
+        if asked >= self.orders_per_hour
+            && let Some(earliest) = earliest
+        {
+            until = until.max(earliest.max(0) as u64 + HOUR);
+        }
+        Ok((until > now).then_some(until))
     }
 
     /// Where an owner goes to connect the company's account.

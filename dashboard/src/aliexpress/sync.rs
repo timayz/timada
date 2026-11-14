@@ -16,20 +16,26 @@
 //! products the orders'.
 //!
 //! On a timer of its own, the sweep renews every connected company's access a
-//! day before it lapses, whether or not its shops have anything imported,
-//! records what this node placed on AliExpress while the store refused the
-//! record, and says of the orders of this node's share left being placed that
-//! AliExpress may have them. Nothing there waits for the budget, so a lane
-//! short of calls never holds a renewal up.
+//! quarter of its life before it lapses (a day at most), whether or not its
+//! shops have anything imported; on another, it records what this node placed
+//! on AliExpress while the store refused the record, and says of the orders of
+//! this node's share left being placed that AliExpress may have them: a slow
+//! AliExpress answering renewals holds none of that up. Every minute, it asks
+//! again for the orders of its share whose attempt bought nothing, a while
+//! after each failure, and places those that waited their account's pace
+//! (#470). Nothing there waits for the budget, so a lane short of calls never
+//! holds a renewal or an order up.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::db::Db;
+use crate::payments::Payments;
 use timada_aliexpress::{
     ALIEXPRESS_SUPPLIER, AliexpressError, FORWARD_STALL_SECS, FORWARD_WATCH_SECS, ForwardRow,
-    ForwardStatus, forget_unrecorded, forwards_due, forwards_stalled, links_due, note_forward_read,
+    ForwardStatus, forget_parcels_followed_before, forget_unrecorded, forwards_due,
+    forwards_stalled, forwards_to_retry, forwards_waiting, links_due, note_forward_read,
     note_parcels_delivered, note_parcels_followed, note_tried, note_unrecorded_try, parcels_due,
     unrecorded,
 };
@@ -37,7 +43,7 @@ use timada_tenancy::{CompanyState, TenantState};
 use tokio::task::JoinHandle;
 
 use super::budget::Lane;
-use super::forward::{CheckResult, MAY_HAVE_PLACED};
+use super::forward::{CheckResult, ForwardResult, MAY_HAVE_PLACED};
 
 use super::{ALIEXPRESS_ACTOR, Aliexpress, SyncMode};
 use crate::cluster::Executor;
@@ -63,6 +69,16 @@ const LONGEST_IDLE: Duration = Duration::from_secs(60);
 /// not moved for a week waits this many.
 pub const PARCEL_STILL_PERIODS: u64 = 8;
 
+/// How long an order asked for may go untaken before the sweep places it:
+/// the nodes take one on within a moment, so one left longer waited its
+/// account's pace, or no node took it on.
+pub const WAITING_SECS: u64 = 60;
+
+/// How long ago an order may have been asked for and still be placed by the
+/// sweep: one older was asked for while every node was away, and its
+/// merchant decides.
+pub const WAITING_AT_MOST_SECS: u64 = 24 * 60 * 60;
+
 pub struct AliexpressSync {
     /// The read models: the imports, the forwards, the companies' access.
     db: Db,
@@ -71,28 +87,47 @@ pub struct AliexpressSync {
     /// started from, and a token is renewed by the node that claims it.
     store: Executor,
     aliexpress: Arc<Aliexpress>,
+    /// Whether the provider holds an order's money, for the orders the
+    /// sweep places.
+    payments: Arc<Payments>,
     /// How often the timer runs, and how soon an order with every parcel
     /// known is read again.
     every: Duration,
 }
 
 impl AliexpressSync {
-    pub fn new(db: Db, store: Executor, aliexpress: Arc<Aliexpress>, every: Duration) -> Arc<Self> {
+    pub fn new(
+        db: Db,
+        store: Executor,
+        aliexpress: Arc<Aliexpress>,
+        payments: Arc<Payments>,
+        every: Duration,
+    ) -> Arc<Self> {
         Arc::new(Self {
             db,
             store,
             aliexpress,
+            payments,
             every,
         })
     }
 
-    /// Sweeps every `every`, the first time right away, and meanwhile reads
-    /// what is due in each lane as the budget allows.
+    /// Renews and settles every `every`, the first time right away, each on
+    /// a tick of its own; places again what is owed it every minute at most;
+    /// and meanwhile reads what is due in each lane as the budget allows.
     pub fn start(self: Arc<Self>) -> JoinHandle<()> {
         tokio::spawn(async move {
             let idle = self.every.min(LONGEST_IDLE);
             tokio::join!(
-                self.sweep_every(),
+                self.every_tick(self.every, "AliExpress accounts not renewed", |now| {
+                    self.renew(now)
+                }),
+                self.every_tick(self.every, "AliExpress orders not settled", |now| {
+                    self.settle(now)
+                }),
+                self.every_tick(idle, "AliExpress orders not placed again", |now| {
+                    self.retry(now)
+                }),
                 self.drip(Lane::Products, idle),
                 self.drip(Lane::Orders, idle),
                 self.drip(Lane::Parcels, idle),
@@ -100,13 +135,19 @@ impl AliexpressSync {
         })
     }
 
-    async fn sweep_every(&self) {
-        let mut tick = tokio::time::interval(self.every);
+    /// Runs `pass` every `period`, the first time right away; a tick missed
+    /// while it ran is skipped, and a failure is logged with `failed`.
+    async fn every_tick<'a, F, Fut>(&'a self, period: Duration, failed: &str, pass: F)
+    where
+        F: Fn(u64) -> Fut + 'a,
+        Fut: std::future::Future<Output = anyhow::Result<()>> + 'a,
+    {
+        let mut tick = tokio::time::interval(period);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
-            if let Err(err) = self.sweep(crate::auth::now()).await {
-                tracing::error!(error = %err, "AliExpress accounts and orders not swept");
+            if let Err(err) = pass(crate::auth::now()).await {
+                tracing::error!(error = %err, "{failed}");
             }
         }
     }
@@ -186,19 +227,116 @@ impl AliexpressSync {
         Ok(due.len())
     }
 
-    /// Renews the access that lapses within a day, records what this node
-    /// placed on AliExpress and could not record then, and says of the
-    /// orders of this node's share left being placed that AliExpress may
-    /// have them. Nothing here asks AliExpress but the renewals, which never
-    /// wait.
-    pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
+    /// Renews the access that lapses soon. The renewals never wait for the
+    /// budget.
+    pub async fn renew(&self, now: u64) -> anyhow::Result<()> {
         if !self.aliexpress.enabled() {
             return Ok(());
         }
-        self.renew_due(now).await?;
+        self.renew_due(now).await
+    }
+
+    /// Records what this node placed on AliExpress and could not record then,
+    /// says of the orders of this node's share left being placed that
+    /// AliExpress may have them, and forgets when it followed the parcels of
+    /// orders past their watch. Nothing here asks AliExpress.
+    pub async fn settle(&self, now: u64) -> anyhow::Result<()> {
+        if !self.aliexpress.enabled() {
+            return Ok(());
+        }
         self.record_unrecorded().await?;
         self.settle_stalled(now).await?;
+        forget_parcels_followed_before(&self.db, now.saturating_sub(FORWARD_WATCH_SECS)).await?;
         Ok(())
+    }
+
+    /// Asks again for the orders of this node's share whose last attempt
+    /// bought nothing, once their wait is over ([`forwards_to_retry`]), and
+    /// places those asked for and left waiting their account's pace, or that
+    /// no node took on ([`forwards_waiting`]).
+    pub async fn retry(&self, now: u64) -> anyhow::Result<()> {
+        if !self.aliexpress.enabled() {
+            return Ok(());
+        }
+        self.retry_failed(now).await?;
+        self.place_waiting(now).await?;
+        Ok(())
+    }
+
+    /// Asks again for the orders of this node's share whose attempt bought
+    /// nothing and whose wait is over; how many. The forward's own state
+    /// decides ([`timada_aliexpress::ForwardState::retry_at`]); the read
+    /// model only says which to look at. The forward subscription places
+    /// each, as any order asked for.
+    pub async fn retry_failed(&self, now: u64) -> anyhow::Result<usize> {
+        let due =
+            forwards_to_retry(&self.db, now as i64, self.aliexpress.share(), SWEEP_LIMIT).await?;
+        let mut asked = 0;
+        for row in &due {
+            let forwards = timada_aliexpress::Command::new(self.store.clone(), &row.tenant_id);
+            let still = match forwards.load_forward_by_id(&row.id).await {
+                Ok(forward) => {
+                    forward.filter(|forward| forward.retry_at().is_some_and(|at| at <= now))
+                }
+                Err(err) => {
+                    tracing::error!(tenant = %row.tenant_id, forward = %row.id, error = %err, "an AliExpress order not placed again");
+                    continue;
+                }
+            };
+            let Some(forward) = still else {
+                continue;
+            };
+            match forwards
+                .request_forward(ALIEXPRESS_ACTOR, &forward.order_id, false)
+                .await
+            {
+                Ok(_) => {
+                    tracing::info!(tenant = %row.tenant_id, order = %forward.order_id, forward = %row.id, failures = forward.failures, reason = ?forward.last_error, "AliExpress order placed again on its own");
+                    asked += 1;
+                }
+                Err(AliexpressError::AlreadyForwarded | AliexpressError::Forwarding) => {}
+                Err(err) => {
+                    tracing::error!(tenant = %row.tenant_id, forward = %row.id, error = %err, "an AliExpress order not placed again");
+                }
+            }
+        }
+        Ok(asked)
+    }
+
+    /// Places the orders of this node's share asked for between a day and a
+    /// minute ago and taken on by no node: held back by their account's pace
+    /// (placed now if its turn came), or asked for while no node took them
+    /// on. How many it placed or failed, the ones still paced aside.
+    pub async fn place_waiting(&self, now: u64) -> anyhow::Result<usize> {
+        let waiting = forwards_waiting(
+            &self.db,
+            now.saturating_sub(WAITING_SECS) as i64,
+            now.saturating_sub(WAITING_AT_MOST_SECS) as i64,
+            self.aliexpress.share(),
+            SWEEP_LIMIT,
+        )
+        .await?;
+        let mut went = 0;
+        for row in &waiting {
+            match self
+                .aliexpress
+                .forward_order(
+                    &self.store,
+                    &self.db,
+                    &self.payments,
+                    &row.tenant_id,
+                    &row.id,
+                )
+                .await
+            {
+                Ok(ForwardResult::Paced(_) | ForwardResult::Skipped) => {}
+                Ok(_) => went += 1,
+                Err(err) => {
+                    tracing::error!(tenant = %row.tenant_id, forward = %row.id, error = %err, "an AliExpress order left waiting not placed");
+                }
+            }
+        }
+        Ok(went)
     }
 
     /// Asks AliExpress where the parcels of this node's share of the orders
@@ -445,8 +583,10 @@ impl AliexpressSync {
     }
 
     /// Renews the access of every connected company due within the margin,
-    /// the soonest first. The company's own state decides (the read model
-    /// may lag), and one node per token renews it.
+    /// the soonest first: the read model is asked for those lapsing within
+    /// the longest margin, a day, and the company's own state decides
+    /// ([`Aliexpress::refresh_if_due`]: the read model may lag, and a token
+    /// living a day or less is renewed later). One node per token renews it.
     async fn renew_due(&self, now: u64) -> anyhow::Result<()> {
         let before = now.saturating_add(timada_aliexpress::REFRESH_MARGIN_SECS) as i64;
         let due =

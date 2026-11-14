@@ -337,6 +337,16 @@ impl Shop {
     /// cents) when they ship into the EU from outside; the euro buys 4.25
     /// zlotys today.
     async fn charging(duty_cents: u64, fee_cents: u64) -> Self {
+        Self::with(duty_cents, fee_cents, 0).await
+    }
+
+    /// The shop, its company's account placing `orders_per_hour` orders an
+    /// hour at most.
+    async fn pacing(orders_per_hour: u32) -> Self {
+        Self::with(0, 0, orders_per_hour).await
+    }
+
+    async fn with(duty_cents: u64, fee_cents: u64, orders_per_hour: u32) -> Self {
         let turso = evento::Turso::in_memory_concurrent().await.unwrap();
         crate::db::migrate_store_read_models(&turso).await.unwrap();
         let db = Db::from(turso.clone());
@@ -361,6 +371,7 @@ impl Shop {
                 read_fresh_secs: 60,
                 import_duty_cents: duty_cents,
                 import_fee_cents: fee_cents,
+                orders_per_hour,
             },
             false,
             quota,
@@ -1030,6 +1041,7 @@ async fn the_sweep_reads_once_a_period_what_is_due() {
         shop.db.clone(),
         shop.store.clone(),
         shop.aliexpress.clone(),
+        shop.payments.clone(),
         SWEEP_EVERY,
     );
     let now = crate::auth::now();
@@ -1058,6 +1070,7 @@ async fn a_shop_that_cannot_read_is_passed_over_without_a_read() {
         shop.db.clone(),
         shop.store.clone(),
         shop.aliexpress.clone(),
+        shop.payments.clone(),
         SWEEP_EVERY,
     );
     let tenancy = timada_tenancy::Command(shop.store.clone());
@@ -1143,6 +1156,7 @@ async fn the_sweep_spends_the_day_on_what_shoppers_want_first() {
         shop.db.clone(),
         shop.store.clone(),
         shop.aliexpress.clone(),
+        shop.payments.clone(),
         SWEEP_EVERY,
     );
     // Another shop's product on sale, tried long before this one.
@@ -1244,6 +1258,7 @@ async fn an_open_order_is_read_by_the_node_it_belongs_to() {
         shop.db.clone(),
         shop.store.clone(),
         shop.aliexpress.clone(),
+        shop.payments.clone(),
         SWEEP_EVERY,
     );
     let forward_id = shop.placed_on_aliexpress().await;
@@ -1267,6 +1282,7 @@ async fn an_open_order_is_read_once_a_period_when_no_push_comes() {
         shop.db.clone(),
         shop.store.clone(),
         shop.aliexpress.clone(),
+        shop.payments.clone(),
         SWEEP_EVERY,
     );
     shop.placed_on_aliexpress().await;
@@ -1297,6 +1313,7 @@ async fn a_push_saves_the_sweep_its_read() {
         shop.db.clone(),
         shop.store.clone(),
         shop.aliexpress.clone(),
+        shop.payments.clone(),
         SWEEP_EVERY,
     );
     let forward_id = shop.placed_on_aliexpress().await;
@@ -1335,6 +1352,7 @@ async fn a_node_that_stopped_with_the_parcels_known_leaves_the_order_to_the_next
         shop.db.clone(),
         shop.store.clone(),
         shop.aliexpress.clone(),
+        shop.payments.clone(),
         SWEEP_EVERY,
     );
     let forward_id = shop.placed_on_aliexpress().await;
@@ -1392,6 +1410,7 @@ async fn a_shop_that_cannot_read_takes_no_turn_with_its_open_orders() {
         shop.db.clone(),
         shop.store.clone(),
         shop.aliexpress.clone(),
+        shop.payments.clone(),
         SWEEP_EVERY,
     );
     let forward_id = shop.placed_on_aliexpress().await;
@@ -1518,6 +1537,7 @@ async fn a_confirmed_push_ends_the_following_of_the_parcels() {
         shop.db.clone(),
         shop.store.clone(),
         shop.aliexpress.clone(),
+        shop.payments.clone(),
         SWEEP_EVERY,
     );
     let forward_id = shop.placed_on_aliexpress().await;
@@ -1825,7 +1845,9 @@ async fn recorded_tokens_reach_the_company_without_asking_again() {
     let now = crate::auth::now();
     let company_id = shop.tenant.company.as_ref().unwrap().company_id.clone();
     let tenancy = timada_tenancy::Command(shop.store.clone());
-    let due = now + 3_600;
+    // An access lapsing the second it was given: no lifetime to take a
+    // quarter of, so due within the day.
+    let due = now;
     tenancy
         .authorize_aliexpress(
             ALICE,
@@ -1895,7 +1917,10 @@ async fn a_renewal_that_moves_no_expiry_is_written_once_and_asked_again_later() 
     let now = crate::auth::now();
     let company_id = shop.tenant.company.as_ref().unwrap().company_id.clone();
     let tenancy = timada_tenancy::Command(shop.store.clone());
-    let due = now + 3_600;
+    // An access lapsing the second it was given: no lifetime to take a
+    // quarter of, so due within the day, and so is one renewed to lapse
+    // then too.
+    let due = now;
     tenancy
         .authorize_aliexpress(
             ALICE,
@@ -1968,6 +1993,52 @@ async fn a_renewal_that_moves_no_expiry_is_written_once_and_asked_again_later() 
         .unwrap();
     assert_eq!(shop.stand_in.renewals(), ["refresh", "refresh-1"]);
     assert_eq!(company.aliexpress.unwrap().expires_at, later + 30 * 86_400);
+}
+
+/// A token living eight hours is renewed when two are left, a quarter of its
+/// life, not at every look as a day's margin would (#472).
+#[tokio::test]
+async fn a_short_lived_token_is_renewed_a_quarter_of_its_life_early() {
+    let shop = Shop::new().await;
+    let company_id = shop.tenant.company.as_ref().unwrap().company_id.clone();
+    let tenancy = timada_tenancy::Command(shop.store.clone());
+    let now = crate::auth::now();
+    tenancy
+        .authorize_aliexpress(
+            ALICE,
+            &company_id,
+            AuthorizeAliexpress {
+                access_token_sealed: shop.aliexpress.seal(&company_id, "token").unwrap(),
+                refresh_token_sealed: shop.aliexpress.seal(&company_id, "refresh").unwrap(),
+                expires_at: now + 8 * 3_600,
+                refresh_expires_at: 0,
+                account: "shop@example.org".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let company = tenancy.load_company(&company_id).await.unwrap().unwrap();
+    // The lifetime counts from the authorization's own time.
+    let authorization = company.aliexpress.clone().unwrap();
+    let due_from =
+        authorization.expires_at - (authorization.expires_at - authorization.authorized_at) / 4;
+
+    shop.aliexpress
+        .refresh_if_due(&shop.store, company.clone(), due_from - 1)
+        .await
+        .unwrap();
+    assert!(
+        shop.stand_in.renewals().is_empty(),
+        "six hours left is not due"
+    );
+
+    let renewed = shop
+        .aliexpress
+        .refresh_if_due(&shop.store, company, due_from)
+        .await
+        .unwrap();
+    assert_eq!(shop.stand_in.renewals(), ["refresh"]);
+    assert!(renewed.aliexpress.unwrap().expires_at > authorization.expires_at);
 }
 
 /// The store of a node whose next `fails` writes of the event `name` of the
@@ -2141,16 +2212,22 @@ impl Shop {
 
     /// The same, its money taken (`paid`) or only held.
     async fn order_to_place_with(&self, paid: bool) -> String {
+        self.order_to_place_as("an-order", paid).await
+    }
+
+    /// The same, as the order `order_id`.
+    async fn order_to_place_as(&self, order_id: &str, paid: bool) -> String {
+        let cart_id = format!("{order_id}-cart");
         let product = timada_catalog::Command::new(self.store.clone(), &self.tenant.id)
             .load_product(&self.product_id)
             .await
             .unwrap()
             .unwrap();
-        let mut write = evento::append("an-order");
+        let mut write = evento::append(order_id);
         write.tenant(&self.tenant.id).original_version(0).event(
             &timada_orders::aggregator::Placed {
                 reference: "K7Q4-MZP2".to_owned(),
-                cart_id: "a-cart".to_owned(),
+                cart_id: cart_id.clone(),
                 email: "ada@example.com".to_owned(),
                 shipping: timada_orders::ShippingAddress {
                     name: "Ada Lovelace".into(),
@@ -2170,7 +2247,7 @@ impl Shop {
                 }],
                 currency: "EUR".to_owned(),
                 total_cents: 862,
-                payment: self.held_payment("a-cart", 862),
+                payment: self.held_payment(&cart_id, 862),
                 supplier: Some(timada_aliexpress::ALIEXPRESS_SUPPLIER.to_owned()),
                 placed_by: "storefront".to_owned(),
             },
@@ -2184,7 +2261,7 @@ impl Shop {
         }
         write.commit(&self.store).await.unwrap();
         self.links()
-            .request_forward(ALIEXPRESS_ACTOR, "an-order", false)
+            .request_forward(ALIEXPRESS_ACTOR, order_id, false)
             .await
             .unwrap()
     }
@@ -2280,6 +2357,167 @@ impl Shop {
     }
 }
 
+/// AliExpress did not answer before it was asked to place the order: nothing
+/// can have been bought, so the sweep asks for it again once its wait is
+/// over, and it is placed then (#470).
+#[tokio::test]
+async fn an_order_aliexpress_did_not_answer_for_is_placed_again_on_its_own() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        shop.payments.clone(),
+        SWEEP_EVERY,
+    );
+    let forward_id = shop.order_to_place().await;
+    shop.stand_in.down.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        shop.forward_on(&shop.store, &forward_id).await,
+        super::forward::ForwardResult::Failed(_)
+    ));
+    let failed = shop.forward(&forward_id).await;
+    assert!(failed.retry, "{:?}", failed.last_error);
+    let retry_at = failed.retry_at().unwrap();
+    assert_eq!(
+        retry_at,
+        failed.failed_at.unwrap() + timada_aliexpress::FORWARD_RETRY_DELAYS_SECS[0]
+    );
+    shop.follow_read_models().await;
+
+    assert_eq!(
+        sweep.retry_failed(retry_at - 1).await.unwrap(),
+        0,
+        "not yet"
+    );
+    assert_eq!(sweep.retry_failed(retry_at).await.unwrap(), 1);
+    let asked = shop.forward(&forward_id).await;
+    assert_eq!(asked.status, timada_aliexpress::ForwardStatus::Requested);
+    assert_eq!(asked.failures, 1, "the dashboard's own request counts on");
+
+    // AliExpress is back: the forward subscription places it.
+    shop.stand_in.down.store(false, Ordering::SeqCst);
+    assert!(matches!(
+        shop.forward_on(&shop.store, &forward_id).await,
+        super::forward::ForwardResult::Placed(_)
+    ));
+    assert_eq!(shop.placed(), 1);
+}
+
+/// A refusal for the merchant to settle (AliExpress no longer sells the
+/// item) is never placed again on its own.
+#[tokio::test]
+async fn an_order_refused_for_good_waits_for_the_merchant() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        shop.payments.clone(),
+        SWEEP_EVERY,
+    );
+    let forward_id = shop.order_to_place().await;
+    shop.stand_in.offline.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        shop.forward_on(&shop.store, &forward_id).await,
+        super::forward::ForwardResult::Failed(_)
+    ));
+    let refused = shop.forward(&forward_id).await;
+    assert!(!refused.retry);
+    assert_eq!(refused.retry_at(), None);
+    shop.follow_read_models().await;
+    let later = crate::auth::now() + 2 * 86_400;
+    assert_eq!(sweep.retry_failed(later).await.unwrap(), 0);
+    assert_eq!(shop.placed(), 0);
+}
+
+/// An order asked for and taken on by no node is placed by the sweep once it
+/// waited a minute (#470).
+#[tokio::test]
+async fn an_order_no_node_took_on_is_placed_by_the_sweep() {
+    let shop = Shop::new().await;
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        shop.payments.clone(),
+        SWEEP_EVERY,
+    );
+    let forward_id = shop.order_to_place().await;
+    shop.follow_read_models().await;
+    let now = crate::auth::now();
+
+    assert_eq!(sweep.place_waiting(now).await.unwrap(), 0, "a moment ago");
+    assert_eq!(
+        sweep
+            .place_waiting(now + super::sync::WAITING_SECS + 1)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        shop.forward(&forward_id).await.status,
+        timada_aliexpress::ForwardStatus::Placed
+    );
+}
+
+/// With a pace of one order an hour, the account's second order waits its
+/// turn, untouched: the sweep leaves it waiting, and its turn comes an hour
+/// after the first was asked for (#470).
+#[tokio::test]
+async fn an_account_places_no_more_orders_than_its_pace() {
+    let shop = Shop::pacing(1).await;
+    let sweep = AliexpressSync::new(
+        shop.db.clone(),
+        shop.store.clone(),
+        shop.aliexpress.clone(),
+        shop.payments.clone(),
+        SWEEP_EVERY,
+    );
+    let first = shop.order_to_place().await;
+    assert!(matches!(
+        shop.forward_on(&shop.store, &first).await,
+        super::forward::ForwardResult::Placed(_)
+    ));
+    shop.follow_read_models().await;
+    let asked_at = shop.forward(&first).await.asked_at.unwrap();
+
+    let second = shop.order_to_place_as("another-order", true).await;
+    let version = shop.forward(&second).await;
+    assert_eq!(
+        shop.forward_on(&shop.store, &second).await,
+        super::forward::ForwardResult::Paced(asked_at + 3_600)
+    );
+    assert_eq!(shop.forward(&second).await, version, "untouched");
+    assert_eq!(shop.placed(), 1);
+
+    shop.follow_read_models().await;
+    let now = crate::auth::now();
+    assert_eq!(
+        sweep
+            .place_waiting(now + super::sync::WAITING_SECS + 1)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(shop.placed(), 1);
+    let company_id = &shop.tenant.company.as_ref().unwrap().company_id;
+    assert_eq!(
+        shop.aliexpress
+            .paced_until(&shop.db, company_id, asked_at + 3_599)
+            .await
+            .unwrap(),
+        Some(asked_at + 3_600)
+    );
+    assert_eq!(
+        shop.aliexpress
+            .paced_until(&shop.db, company_id, asked_at + 3_600)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
 /// AliExpress took the order while the store refused the record for a
 /// moment: it is recorded once writes come back, by the same run, and its
 /// AliExpress order then names the forward for the pushes.
@@ -2318,6 +2556,7 @@ async fn an_order_aliexpress_took_is_recorded_by_the_sweep_when_the_store_refuse
         shop.db.clone(),
         shop.store.clone(),
         shop.aliexpress.clone(),
+        shop.payments.clone(),
         SWEEP_EVERY,
     );
     let forward_id = shop.order_to_place().await;
@@ -2425,6 +2664,7 @@ async fn a_stalled_attempt_keeps_the_fence_against_a_later_refusal() {
         shop.db.clone(),
         shop.store.clone(),
         shop.aliexpress.clone(),
+        shop.payments.clone(),
         SWEEP_EVERY,
     );
     let forward_id = shop.order_to_place_with(false).await;
@@ -2443,7 +2683,7 @@ async fn a_stalled_attempt_keeps_the_fence_against_a_later_refusal() {
         .unwrap();
     assert!(
         forwards
-            .begin_asking(ALIEXPRESS_ACTOR, &forward_id, version)
+            .begin_asking(ALIEXPRESS_ACTOR, &forward_id, version, "company-1")
             .await
             .unwrap()
     );
@@ -2505,7 +2745,7 @@ async fn an_order_placed_again_before_the_sweep_keeps_the_fence() {
         .unwrap();
     assert!(
         forwards
-            .begin_asking(ALIEXPRESS_ACTOR, &forward_id, version)
+            .begin_asking(ALIEXPRESS_ACTOR, &forward_id, version, "company-1")
             .await
             .unwrap()
     );
@@ -2550,6 +2790,7 @@ async fn a_refusal_the_order_never_hears_of_is_left_to_the_stall_sweep() {
         shop.db.clone(),
         shop.store.clone(),
         shop.aliexpress.clone(),
+        shop.payments.clone(),
         SWEEP_EVERY,
     );
     let forward_id = shop.order_to_place_with(false).await;

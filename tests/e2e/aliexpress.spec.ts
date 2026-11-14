@@ -361,8 +361,9 @@ test("the dashboard reads imported products again on its own, and renews the acc
   page,
 }) => {
   const aliexpress = new FakeAliexpress();
-  // A token that lapses within the day is renewed by the next sweep.
-  aliexpress.tokenLifetime = 60;
+  // The connection's token lives four seconds: the sweep renews it with one
+  // second left, a quarter of its life.
+  aliexpress.connectionTokenLifetime = 4;
   await aliexpress.start();
   try {
     const productUrl = await importedShop(page, aliexpress);
@@ -390,13 +391,13 @@ test("the dashboard reads imported products again on its own, and renews the acc
 
 test("a connected shop with nothing imported still has its access renewed", async ({ page }) => {
   const aliexpress = new FakeAliexpress();
-  aliexpress.tokenLifetime = 60;
+  aliexpress.connectionTokenLifetime = 4;
   await aliexpress.start();
   try {
     await connectedShop(page, "Ali Idle Shop");
     // Shops of the other specs are swept too: this one's renewal is the one
     // asked with the token its connection got.
-    const issued = aliexpress.refreshTokens.at(-1);
+    const issued = aliexpress.connections.at(-1);
     await expect(async () => {
       expect(aliexpress.renewedWith).toContain(issued);
     }).toPass({ timeout: 15_000 });

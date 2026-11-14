@@ -816,7 +816,7 @@ async fn an_order_is_placed_once_and_read_until_it_ships() {
         .unwrap();
     assert!(forwards.start_forward(ALICE, &id).await.unwrap());
     forwards
-        .record_forward_failure(ALICE, &id, "AliExpress refused: address")
+        .record_forward_failure(ALICE, &id, "AliExpress refused: address", false)
         .await
         .unwrap();
     let failed = forwards.load_forward("order-1").await.unwrap().unwrap();
@@ -1030,10 +1030,23 @@ async fn an_attempt_overtaken_before_asking_is_fenced_out() {
     assert!(forwards.start_forward(ALICE, &id).await.unwrap());
     let (_, second) = forwards.load_forward_versioned(&id).await.unwrap().unwrap();
 
-    assert!(!forwards.begin_asking(ALICE, &id, first).await.unwrap());
-    assert!(forwards.begin_asking(ALICE, &id, second).await.unwrap());
     assert!(
-        !forwards.begin_asking(ALICE, &id, second).await.unwrap(),
+        !forwards
+            .begin_asking(ALICE, &id, first, "company-1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        forwards
+            .begin_asking(ALICE, &id, second, "company-1")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !forwards
+            .begin_asking(ALICE, &id, second, "company-1")
+            .await
+            .unwrap(),
         "asked once"
     );
 }
@@ -1240,4 +1253,69 @@ fn a_delivery_service_says_how_many_days_it_takes() {
         describe_options(&[option(Some(8), Some(15))], "EUR"),
         "CAINIAO_STANDARD (free, tracked, 8–15 days)"
     );
+}
+
+/// An attempt that bought nothing is placed again on its own, a while after
+/// each failure, five times at most; the dashboard's own requests count on,
+/// a member's starts the tries over, and a refusal for the merchant is never
+/// tried again (#470).
+#[tokio::test]
+async fn a_failure_that_bought_nothing_is_tried_again_a_few_times() {
+    use timada_aliexpress::{ALIEXPRESS_ACTOR, FORWARD_RETRY_DELAYS_SECS};
+
+    let executor = executor().await;
+    let forwards = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let id = forwards
+        .request_forward(ALIEXPRESS_ACTOR, "order-1", false)
+        .await
+        .unwrap();
+    let fail = async |retry: bool| {
+        assert!(forwards.start_forward(ALIEXPRESS_ACTOR, &id).await.unwrap());
+        forwards
+            .record_forward_failure(ALIEXPRESS_ACTOR, &id, "AliExpress did not answer", retry)
+            .await
+            .unwrap();
+        forwards.load_forward("order-1").await.unwrap().unwrap()
+    };
+
+    for (tries, delay) in FORWARD_RETRY_DELAYS_SECS.iter().enumerate() {
+        let failed = fail(true).await;
+        assert_eq!(failed.failures as usize, tries + 1);
+        assert_eq!(failed.retry_at(), Some(failed.failed_at.unwrap() + delay));
+        forwards
+            .request_forward(ALIEXPRESS_ACTOR, "order-1", false)
+            .await
+            .unwrap();
+        assert_eq!(
+            forwards
+                .load_forward("order-1")
+                .await
+                .unwrap()
+                .unwrap()
+                .retry_at(),
+            None
+        );
+    }
+    // The tries ran out: the merchant decides.
+    let failed = fail(true).await;
+    assert!(failed.retry);
+    assert_eq!(failed.retry_at(), None);
+
+    // A member asking starts them over.
+    forwards
+        .request_forward(ALICE, "order-1", false)
+        .await
+        .unwrap();
+    let failed = fail(true).await;
+    assert_eq!(failed.failures, 1);
+    assert!(failed.retry_at().is_some());
+
+    // A refusal for the merchant is tried no more.
+    forwards
+        .request_forward(ALIEXPRESS_ACTOR, "order-1", false)
+        .await
+        .unwrap();
+    let refused = fail(false).await;
+    assert!(!refused.retry);
+    assert_eq!(refused.retry_at(), None);
 }
