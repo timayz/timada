@@ -396,6 +396,133 @@ async fn forgetting_a_shopper_ends_every_session_and_the_next_sign_in_starts_afr
     assert!(shopper.addresses.is_empty());
 }
 
+/// The keys of another node, which has not read the account's deletion yet:
+/// it still holds the key `key_id` names after the deleting node destroyed
+/// it. Taken while the account stands.
+async fn node_behind(shoppers: &Shoppers, key_id: &str) -> MemoryKeys {
+    let behind = MemoryKeys::default();
+    let key = shoppers.keys.get(key_id).await.unwrap().unwrap();
+    behind.put(key_id, &key).await.unwrap();
+    behind
+}
+
+#[tokio::test]
+async fn a_node_behind_on_a_deletion_seals_the_next_code_under_a_fresh_key() {
+    let shoppers = shoppers().await;
+    let one = signed_in(&shoppers, EMAIL, NOW).await;
+    let first = shoppers
+        .load_shopper(&one.shopper_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let behind = node_behind(&shoppers, &first.key_id).await;
+    shoppers
+        .forget(&shoppers.keys, &one.shopper_id, None)
+        .await
+        .unwrap();
+
+    // The address asks for a code again, through the node behind.
+    let issued = shoppers
+        .issue_code(&behind, &codes(), EMAIL, None, NOW + CODE_RESEND_AFTER_SECS)
+        .await
+        .unwrap();
+    let challenge = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(challenge.key_id, first.key_id, "never the destroyed key");
+
+    // The node reads the deletion and destroys the key: the code is mailed
+    // all the same.
+    behind.delete(&first.key_id).await.unwrap();
+    let mail = shoppers
+        .claim_code_mail(
+            &behind,
+            &codes(),
+            &challenge.id,
+            challenge.issued_version,
+            Claimant {
+                node: "node-b",
+                now: NOW + CODE_RESEND_AFTER_SECS,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("the code is mailed");
+    assert_eq!(mail.email, "ada@example.com");
+    assert_eq!(mail.code, issued.code);
+}
+
+#[tokio::test]
+async fn a_code_from_before_a_deletion_registers_afresh_on_a_node_behind() {
+    let shoppers = shoppers().await;
+    let one = signed_in(&shoppers, EMAIL, NOW).await;
+    let first = shoppers
+        .load_shopper(&one.shopper_id)
+        .await
+        .unwrap()
+        .unwrap();
+    // Asked for while the account stands: sealed under its key.
+    let issued = shoppers
+        .issue_code(
+            &shoppers.keys,
+            &codes(),
+            EMAIL,
+            None,
+            NOW + CODE_RESEND_AFTER_SECS,
+        )
+        .await
+        .unwrap();
+    let behind = node_behind(&shoppers, &first.key_id).await;
+    shoppers
+        .forget(&shoppers.keys, &one.shopper_id, None)
+        .await
+        .unwrap();
+
+    // Typed after the deletion, through the node behind: the address
+    // registers again, under a key of its own.
+    next_millisecond().await;
+    let again = shoppers
+        .sign_in(
+            &behind,
+            &codes(),
+            EMAIL,
+            &issued.code,
+            NOW + CODE_RESEND_AFTER_SECS + 1,
+        )
+        .await
+        .unwrap();
+    let registered = shoppers
+        .load_shopper(&again.shopper_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(registered.key_id, first.key_id, "never the destroyed key");
+    behind.delete(&first.key_id).await.unwrap();
+    let shopper = registered.open_with(&behind).await.unwrap().unwrap();
+    assert_eq!(shopper.email, "ada@example.com");
+
+    // The address's next code takes the account's key, so deleting the
+    // account leaves it unreadable too.
+    shoppers
+        .issue_code(
+            &behind,
+            &codes(),
+            EMAIL,
+            None,
+            NOW + 2 * CODE_RESEND_AFTER_SECS + 1,
+        )
+        .await
+        .unwrap();
+    let challenge = shoppers
+        .load_challenge("ada@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(challenge.key_id, registered.key_id);
+}
+
 /// Bytes that hold `needle` anywhere.
 fn holds(haystack: &[u8], needle: &str) -> bool {
     haystack

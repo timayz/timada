@@ -9,7 +9,8 @@
 //! under the address's own key, drawn by its first code and kept by the
 //! caller ([`ShopperKeys`]). The account the address registers takes the
 //! same key ([`Command::sign_in`](super::Command::sign_in)), so deleting the
-//! account leaves the challenge's addresses unreadable too.
+//! account leaves the challenge's addresses unreadable too, and the next
+//! code draws a new one.
 
 use evento::{Executor, ProjectionAggregate, WriteError};
 use timada_core::keys::{self as key, Key as ShopperKey, Keys as ShopperKeys, new_key_id};
@@ -20,9 +21,11 @@ use crate::aggregator::{
     MailUndeliverable,
 };
 use crate::error::ShopperError;
-use crate::value_object::{CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, challenge_id};
+use crate::value_object::{
+    CODE_MAX_ATTEMPTS, CODE_RESEND_AFTER_SECS, CODE_TTL_SECS, challenge_id, shopper_id,
+};
 
-use super::{ChallengeState, challenge_email_aad};
+use super::{ChallengeState, challenge_email_aad, reusable_key};
 
 /// Reload-and-retry budget for a write on a challenge that raced another
 /// (a guess landing while the mail is claimed, or the mail's outcome while a
@@ -81,10 +84,13 @@ impl<E: Executor> super::Command<E> {
     /// [`CODE_RESEND_AFTER_SECS`] of a live one is refused, unless that one
     /// could not be delivered: then the shopper may try again at once. The
     /// first code of an address draws its key, which `keys` holds before the
-    /// event names it; later ones reseal the address under the same key
-    /// while it is readable. The mail's subscription writes on the same
-    /// stream, so a write landing between the read and this one's own is no
-    /// verdict: the request is decided again on the fresh state.
+    /// event names it; later ones reseal the address under its account's
+    /// key, or the one the earlier codes drew, unless a deletion of the
+    /// account destroyed it. The account's stream tells, as the executor
+    /// reads it: `keys` may still hold a deleted account's key on a node
+    /// behind. The mail's subscription writes on the same stream, so a
+    /// write landing between the read and this one's own is no verdict: the
+    /// request is decided again on the fresh state.
     pub async fn issue_code(
         &self,
         keys: &dyn ShopperKeys,
@@ -113,16 +119,20 @@ impl<E: Executor> super::Command<E> {
                 {
                     return Err(ShopperError::CodeRecentlySent);
                 }
-                let (key_id, key) = match &existing {
-                    Some(existing) if !existing.key_id.is_empty() => {
-                        match keys.get(&existing.key_id).await? {
-                            Some(key) => (existing.key_id.clone(), key),
-                            // The account was deleted: the address starts
-                            // afresh, under a new key.
-                            None => draw_key(keys, &mut drawn).await?,
-                        }
-                    }
-                    _ => draw_key(keys, &mut drawn).await?,
+                // No code yet, no account: a sign-in consumes one. Read
+                // after the challenge, so only a deletion landing between
+                // this read and the write can slip by.
+                let shopper = match &existing {
+                    Some(_) => self.load_shopper_any(&shopper_id(&email)).await?,
+                    None => None,
+                };
+                let (key_id, key) = match reusable_key(shopper.as_ref(), existing.as_ref()) {
+                    Some(key_id) => match keys.get(key_id).await? {
+                        Some(key) => (key_id.to_owned(), key),
+                        // Read nowhere: the address starts afresh.
+                        None => draw_key(keys, &mut drawn).await?,
+                    },
+                    None => draw_key(keys, &mut drawn).await?,
                 };
                 let issued = CodeIssued {
                     key_id: key_id.clone(),

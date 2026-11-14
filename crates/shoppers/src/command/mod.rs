@@ -142,6 +142,10 @@ pub struct ShopperState {
     /// The shopper deleted their account; every command treats it as gone
     /// until the address signs in again.
     pub forgotten: bool,
+    /// The keys the account's deletions destroyed, oldest first. The
+    /// address's codes may still name one: nothing is sealed under it again
+    /// ([`reusable_key`]).
+    pub destroyed_keys: Vec<String>,
 }
 
 impl Shopper {
@@ -153,6 +157,13 @@ impl Shopper {
 impl ShopperState {
     pub fn address(&self, address_id: &str) -> Option<&SealedAddress> {
         self.addresses.iter().find(|saved| saved.id == address_id)
+    }
+
+    /// Whether a deletion of the account destroyed the key `key_id` names.
+    pub fn destroyed(&self, key_id: &str) -> bool {
+        self.destroyed_keys
+            .iter()
+            .any(|destroyed| destroyed == key_id)
     }
 
     /// The personal data, opened with the key `key_id` names. Fails under
@@ -197,6 +208,23 @@ impl ShopperState {
         };
         self.open(&key).map(Some)
     }
+}
+
+/// The key an address's personal data may still be sealed under: its
+/// account's while the account stands, else the one its codes drew, unless a
+/// deletion of the account destroyed it. The account's stream tells, not a
+/// node's copy of the keys: a node destroys a deleted account's key once it
+/// reads the deletion, and holds it until then. `None`: a fresh key is due.
+pub(crate) fn reusable_key<'a>(
+    shopper: Option<&'a ShopperState>,
+    challenge: Option<&'a ChallengeState>,
+) -> Option<&'a str> {
+    if let Some(shopper) = shopper.filter(|shopper| !shopper.forgotten) {
+        return Some(&shopper.key_id);
+    }
+    let key_id = challenge?.key_id.as_str();
+    let destroyed = shopper.is_some_and(|shopper| shopper.destroyed(key_id));
+    (!key_id.is_empty() && !destroyed).then_some(key_id)
 }
 
 /// What a sealed address signed in with is bound to.
@@ -274,6 +302,7 @@ async fn on_sessions_revoked(
 
 #[evento::handler]
 async fn on_forgotten(event: Event<Forgotten>, state: &mut ShopperState) -> anyhow::Result<()> {
+    state.destroyed_keys.push(event.data.key_id.to_owned());
     state.key_id.clear();
     state.email.clear();
     state.addresses.clear();

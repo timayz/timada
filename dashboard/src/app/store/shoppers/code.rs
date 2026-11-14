@@ -73,6 +73,8 @@ pub async fn code(cx: &Cx, Form(form): Form<CodeForm>) -> Result<Answer> {
     let store = super::super::store(cx, &access);
     let keys = super::keys(cx, &access.tenant.id);
     // Recorded here, mailed by the subscription that follows the stream.
+    // Read through the cluster: whether the address's account was deleted
+    // decides the code's key, and a node behind may not know it yet.
     if let Err(err) = timada_shoppers::Command::new(store.executor().clone(), store.tenant_id())
         .issue_code(
             &*keys,
