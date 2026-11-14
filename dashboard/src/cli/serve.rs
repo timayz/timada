@@ -274,7 +274,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.monitoring.ready_lag(),
     ));
     let metrics = match config.monitoring.metrics_listen {
-        Some(listen) => Some(crate::metrics::serve(listen, readiness.clone()).await?),
+        Some(listen) => {
+            Some(crate::metrics::serve(listen, readiness.clone(), &config.database.path).await?)
+        }
         None => None,
     };
 
