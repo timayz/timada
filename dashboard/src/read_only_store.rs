@@ -174,6 +174,13 @@ impl Executor for ReadOnly {
         self.inner.write_watch()
     }
 
+    fn write_watch_for(
+        &self,
+        interest: &evento::WriteInterest,
+    ) -> Option<tokio::sync::watch::Receiver<u64>> {
+        self.inner.write_watch_for(interest)
+    }
+
     async fn stable_timestamp(&self) -> anyhow::Result<Option<u64>> {
         self.inner.stable_timestamp().await
     }
