@@ -69,8 +69,21 @@ pub const FORWARD_STALL_SECS: u64 = 30 * 60;
 /// than their own ([`ImportCharge`](crate::ImportCharge)).
 pub const IMPORT_LOW_VALUE_EURO_CENTS: u64 = 15_000;
 
-/// How long before an access token lapses it is renewed.
+/// How long before an access token lapses it is renewed, at most: a quarter
+/// of its lifetime when that is shorter ([`refresh_margin`]).
 pub const REFRESH_MARGIN_SECS: u64 = 24 * 60 * 60;
+
+/// How long before an access token given `lifetime_secs` to live lapses it
+/// is renewed: a quarter of its life, a day at most (#472). A margin as long
+/// as a token lasting a day or less would renew it at every look; a quarter
+/// renews it about once a lifetime. A lifetime not known (0) takes the day.
+pub fn refresh_margin(lifetime_secs: u64) -> u64 {
+    if lifetime_secs == 0 {
+        REFRESH_MARGIN_SECS
+    } else {
+        REFRESH_MARGIN_SECS.min(lifetime_secs / 4)
+    }
+}
 
 /// Who writes what the dashboard does on its own (imports, syncs).
 pub const ALIEXPRESS_ACTOR: &str = "timada-aliexpress";
@@ -100,6 +113,14 @@ pub fn parse_product_id(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_token_is_renewed_a_quarter_of_its_life_early_a_day_at_most() {
+        assert_eq!(refresh_margin(30 * 86_400), REFRESH_MARGIN_SECS);
+        assert_eq!(refresh_margin(86_400), 6 * 3_600);
+        assert_eq!(refresh_margin(8 * 3_600), 2 * 3_600);
+        assert_eq!(refresh_margin(0), REFRESH_MARGIN_SECS);
+    }
 
     #[test]
     fn a_product_number_is_read_from_a_number_or_an_address() {

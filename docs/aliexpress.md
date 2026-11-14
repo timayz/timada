@@ -145,8 +145,9 @@ connected), waits for the next period like one that worked, so it takes no turn 
 the others.
 
 On a timer of its own (`sync_check_secs`, an hour by default), a node renews every
-connected company's access a day before it lapses, whether or not its shops have
-anything imported: the platform keeps which companies are connected and until when
+connected company's access a quarter of its lifetime before it lapses, a day at most
+(a token living a day is renewed with six hours left, not at every sweep, #472),
+whether or not its shops have anything imported: the platform keeps which companies are connected and until when
 (`tenancy_aliexpress_accounts`), and one node per token renews it (a
 `timada-aliexpress/TokenRefresh` claim, keyed by company and token). An access
 AliExpress no longer renews means an owner connects again.
@@ -492,8 +493,9 @@ the buyer confirmed receiving the goods (`OrderConfirmed`: the push reads the la
 steps once more, then no more), or 60 days after the forward closed, as long as an
 order is read. The node keeps which forwards it followed to the door
 (`aliexpress_read_times.delivered`, its own table), so a node taking a forward over
-asks once and finds the same. A parcel AliExpress will not tell of is logged and the
-others still followed.
+asks once and finds the same; the hourly sweep forgets those rows once their order's
+60 days are over, or they would pile up for good (#472). A parcel AliExpress will not
+tell of is logged and the others still followed.
 
 AliExpress may close an order without shipping it: its push says `OrderClosed`, which
 stands even when the order cannot be read, and a read showing `FINISH` with no parcel

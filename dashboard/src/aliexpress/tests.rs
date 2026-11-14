@@ -1825,7 +1825,9 @@ async fn recorded_tokens_reach_the_company_without_asking_again() {
     let now = crate::auth::now();
     let company_id = shop.tenant.company.as_ref().unwrap().company_id.clone();
     let tenancy = timada_tenancy::Command(shop.store.clone());
-    let due = now + 3_600;
+    // An access lapsing the second it was given: no lifetime to take a
+    // quarter of, so due within the day.
+    let due = now;
     tenancy
         .authorize_aliexpress(
             ALICE,
@@ -1895,7 +1897,10 @@ async fn a_renewal_that_moves_no_expiry_is_written_once_and_asked_again_later() 
     let now = crate::auth::now();
     let company_id = shop.tenant.company.as_ref().unwrap().company_id.clone();
     let tenancy = timada_tenancy::Command(shop.store.clone());
-    let due = now + 3_600;
+    // An access lapsing the second it was given: no lifetime to take a
+    // quarter of, so due within the day, and so is one renewed to lapse
+    // then too.
+    let due = now;
     tenancy
         .authorize_aliexpress(
             ALICE,
@@ -1968,6 +1973,52 @@ async fn a_renewal_that_moves_no_expiry_is_written_once_and_asked_again_later() 
         .unwrap();
     assert_eq!(shop.stand_in.renewals(), ["refresh", "refresh-1"]);
     assert_eq!(company.aliexpress.unwrap().expires_at, later + 30 * 86_400);
+}
+
+/// A token living eight hours is renewed when two are left, a quarter of its
+/// life, not at every look as a day's margin would (#472).
+#[tokio::test]
+async fn a_short_lived_token_is_renewed_a_quarter_of_its_life_early() {
+    let shop = Shop::new().await;
+    let company_id = shop.tenant.company.as_ref().unwrap().company_id.clone();
+    let tenancy = timada_tenancy::Command(shop.store.clone());
+    let now = crate::auth::now();
+    tenancy
+        .authorize_aliexpress(
+            ALICE,
+            &company_id,
+            AuthorizeAliexpress {
+                access_token_sealed: shop.aliexpress.seal(&company_id, "token").unwrap(),
+                refresh_token_sealed: shop.aliexpress.seal(&company_id, "refresh").unwrap(),
+                expires_at: now + 8 * 3_600,
+                refresh_expires_at: 0,
+                account: "shop@example.org".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let company = tenancy.load_company(&company_id).await.unwrap().unwrap();
+    // The lifetime counts from the authorization's own time.
+    let authorization = company.aliexpress.clone().unwrap();
+    let due_from =
+        authorization.expires_at - (authorization.expires_at - authorization.authorized_at) / 4;
+
+    shop.aliexpress
+        .refresh_if_due(&shop.store, company.clone(), due_from - 1)
+        .await
+        .unwrap();
+    assert!(
+        shop.stand_in.renewals().is_empty(),
+        "six hours left is not due"
+    );
+
+    let renewed = shop
+        .aliexpress
+        .refresh_if_due(&shop.store, company, due_from)
+        .await
+        .unwrap();
+    assert_eq!(shop.stand_in.renewals(), ["refresh"]);
+    assert!(renewed.aliexpress.unwrap().expires_at > authorization.expires_at);
 }
 
 /// The store of a node whose next `fails` writes of the event `name` of the

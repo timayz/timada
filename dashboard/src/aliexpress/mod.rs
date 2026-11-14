@@ -286,7 +286,10 @@ impl Aliexpress {
     }
 
     /// Renews the company's tokens when the access token lapses within a
-    /// day, on one node per token (the one that claims the renewal in the
+    /// quarter of its lifetime, a day at most
+    /// ([`timada_aliexpress::refresh_margin`]: the lifetime is counted from
+    /// when the company got the token), on one node per token (the one that
+    /// claims the renewal in the
     /// platform's streams of `store`); the company as it then is, read back
     /// from `store`. The tokens AliExpress answers are recorded on the claim
     /// before the company hears of them, so a node that stops in between, or
@@ -305,7 +308,10 @@ impl Aliexpress {
         let Some(authorization) = &company.aliexpress else {
             return Ok(company);
         };
-        if authorization.expires_at > now + timada_aliexpress::REFRESH_MARGIN_SECS {
+        let lifetime = authorization
+            .expires_at
+            .saturating_sub(authorization.authorized_at);
+        if authorization.expires_at > now + timada_aliexpress::refresh_margin(lifetime) {
             return Ok(company);
         }
         if authorization.refresh_expires_at != 0 && authorization.refresh_expires_at <= now {

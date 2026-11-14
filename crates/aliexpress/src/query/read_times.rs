@@ -20,7 +20,9 @@
 //! it. A node that lost it reads each of its items once more, a period
 //! early, which is all the harm a lost row does. A row outlives its use
 //! otherwise: the read-model subscription drops it ([`forget`]) once the
-//! item is unlinked or the order is no longer read again.
+//! item is unlinked or the order is no longer read again, and the sweep
+//! drops the parcels' rows once their order's watch is over
+//! ([`forget_parcels_followed_before`]).
 
 use timada_core::db::Db;
 
@@ -103,6 +105,22 @@ pub async fn note_parcels_delivered(
     )
     .await?;
     Ok(())
+}
+
+/// Forgets when this node followed the parcels of the orders whose parcels
+/// were last asked about before `before` (unix seconds): past the watch of
+/// an order ([`FORWARD_WATCH_SECS`](crate::FORWARD_WATCH_SECS)) nothing asks
+/// about them again, and their rows would pile up for good (#472). A parcel
+/// is first asked about as its forward closes, so a row last tried that long
+/// ago belongs to a forward closed longer ago still. How many went.
+pub async fn forget_parcels_followed_before(db: &Db, before: u64) -> anyhow::Result<u64> {
+    let gone = db
+        .execute(
+            "DELETE FROM aliexpress_read_times WHERE id LIKE 'parcels:%' AND tried_at < ?1",
+            (before as i64,),
+        )
+        .await?;
+    Ok(gone)
 }
 
 /// The key the parcels of `forward_id` are followed under.

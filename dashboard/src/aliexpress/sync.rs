@@ -16,7 +16,8 @@
 //! products the orders'.
 //!
 //! On a timer of its own, the sweep renews every connected company's access a
-//! day before it lapses, whether or not its shops have anything imported,
+//! quarter of its life before it lapses (a day at most), whether or not its
+//! shops have anything imported,
 //! records what this node placed on AliExpress while the store refused the
 //! record, and says of the orders of this node's share left being placed that
 //! AliExpress may have them. Nothing there waits for the budget, so a lane
@@ -29,9 +30,9 @@ use std::time::Duration;
 use crate::db::Db;
 use timada_aliexpress::{
     ALIEXPRESS_SUPPLIER, AliexpressError, FORWARD_STALL_SECS, FORWARD_WATCH_SECS, ForwardRow,
-    ForwardStatus, forget_unrecorded, forwards_due, forwards_stalled, links_due, note_forward_read,
-    note_parcels_delivered, note_parcels_followed, note_tried, note_unrecorded_try, parcels_due,
-    unrecorded,
+    ForwardStatus, forget_parcels_followed_before, forget_unrecorded, forwards_due,
+    forwards_stalled, links_due, note_forward_read, note_parcels_delivered, note_parcels_followed,
+    note_tried, note_unrecorded_try, parcels_due, unrecorded,
 };
 use timada_tenancy::{CompanyState, TenantState};
 use tokio::task::JoinHandle;
@@ -186,11 +187,11 @@ impl AliexpressSync {
         Ok(due.len())
     }
 
-    /// Renews the access that lapses within a day, records what this node
-    /// placed on AliExpress and could not record then, and says of the
-    /// orders of this node's share left being placed that AliExpress may
-    /// have them. Nothing here asks AliExpress but the renewals, which never
-    /// wait.
+    /// Renews the access that lapses soon, records what this node placed on
+    /// AliExpress and could not record then, says of the orders of this
+    /// node's share left being placed that AliExpress may have them, and
+    /// forgets when it followed the parcels of orders past their watch.
+    /// Nothing here asks AliExpress but the renewals, which never wait.
     pub async fn sweep(&self, now: u64) -> anyhow::Result<()> {
         if !self.aliexpress.enabled() {
             return Ok(());
@@ -198,6 +199,7 @@ impl AliexpressSync {
         self.renew_due(now).await?;
         self.record_unrecorded().await?;
         self.settle_stalled(now).await?;
+        forget_parcels_followed_before(&self.db, now.saturating_sub(FORWARD_WATCH_SECS)).await?;
         Ok(())
     }
 
@@ -445,8 +447,10 @@ impl AliexpressSync {
     }
 
     /// Renews the access of every connected company due within the margin,
-    /// the soonest first. The company's own state decides (the read model
-    /// may lag), and one node per token renews it.
+    /// the soonest first: the read model is asked for those lapsing within
+    /// the longest margin, a day, and the company's own state decides
+    /// ([`Aliexpress::refresh_if_due`]: the read model may lag, and a token
+    /// living a day or less is renewed later). One node per token renews it.
     async fn renew_due(&self, now: u64) -> anyhow::Result<()> {
         let before = now.saturating_add(timada_aliexpress::REFRESH_MARGIN_SECS) as i64;
         let due =
