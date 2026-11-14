@@ -3,14 +3,15 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { STORE_API_PORT } from "./shard";
 
 // Shared between the specs of the storefront: a merchant mints an API key and
 // publishes products in the dashboard, then the storefront binary (a separate
 // process built on timada-storefront) is booted with the key and followed
 // until it has synced the catalog.
 
-/// The store API address the storefront connects to.
-export const STORE_ADDR = process.env.E2E_STORE_ADDR ?? "127.0.0.1:4321";
+/// The store API address the storefront connects to: this worker's server's.
+export const STORE_ADDR = process.env.E2E_STORE_ADDR ?? `127.0.0.1:${STORE_API_PORT}`;
 
 /// A 1x1 PNG, as the bytes a browser posts when a file is chosen.
 export const PNG = Buffer.from(

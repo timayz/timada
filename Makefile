@@ -12,9 +12,12 @@ load_settings = keep=$$(export -p | grep ' STORE_' || true); \
 
 start: up dev
 
+# The proxy's certificate: the development hosts, and the servers of `make e2e`
+# (s<N>.timada.localhost), whose storefronts check it. Then
+# `docker compose restart traefik`.
 cert:
 	mkdir -p .docker/traefik/certs
-	sudo mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt traefik.localhost timada.localhost storefront.localhost store.timada.localhost
+	sudo mkcert -key-file .docker/traefik/certs/timada.key -cert-file .docker/traefik/certs/timada.crt traefik.localhost timada.localhost storefront.localhost store.timada.localhost '*.timada.localhost'
 
 cert.install:
 		sudo mkcert -install
@@ -115,14 +118,19 @@ aliexpress.tunnel:
 	set -a; [ ! -f $(NGROK_SETTINGS) ] || . "$(abspath $(NGROK_SETTINGS))"; set +a; eval "$$keep"; \
 	ngrok http $${NGROK_URL:+--url=$$NGROK_URL} http://localhost:3000
 
-# Browser tests on a fresh database behind the compose Traefik, with the compose
-# dex container as the OIDC provider (`make up` first).
+# Browser tests on fresh databases behind the compose Traefik, with the compose
+# dex container as the OIDC provider (`make up` first). Three servers run the
+# spec files side by side, one Playwright worker each, at s0 to
+# s2.timada.localhost (`make cert` names them); each logs to
+# data/e2e/shard<N>.log. E2E_SHARDS=1 runs the suite on one server at
+# https://timada.localhost instead, its output in the terminal.
 e2e:
 	scripts/e2e.sh
 
-# The same tests on a cluster of three nodes. Traefik sends each request to the
-# next node, so the page after a change is answered by a node that did not make
-# it. It takes about half again as long; each node logs to data/e2e/node<N>.log.
+# The same tests on a cluster of three nodes, one spec file at a time. Traefik
+# sends each request to the next node, so the page after a change is answered
+# by a node that did not make it. It takes about four times as long; each node
+# logs to data/e2e/node<N>.log.
 e2e.cluster:
 	E2E_NODES=3 scripts/e2e.sh
 

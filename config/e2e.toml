@@ -1,7 +1,9 @@
 # End-to-end test configuration, used by `make e2e` (scripts/e2e.sh): a
 # throwaway database that is reset before every run, so the first user the
-# tests register is the administrator. Everything in here is a test fixture;
-# nothing is a secret.
+# tests register is the administrator. scripts/e2e.sh runs three servers on
+# it, each taking its own ports, files and address from TIMADA__* variables,
+# and the stand-ins below 100 ports further on for each next server.
+# Everything in here is a test fixture; nothing is a secret.
 
 [server]
 # Traefik from compose.yml forwards to this process from the Docker bridge, and

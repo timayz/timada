@@ -23,6 +23,10 @@ staticClients:
     name: Timada
     redirectURIs:
       - https://timada.localhost/auth/oauth2/dex/callback
+      # The servers of `make e2e`, one per Playwright worker (scripts/e2e.sh).
+      - https://s0.timada.localhost/auth/oauth2/dex/callback
+      - https://s1.timada.localhost/auth/oauth2/dex/callback
+      - https://s2.timada.localhost/auth/oauth2/dex/callback
 
 enablePasswordDB: true
 staticPasswords:
