@@ -135,9 +135,11 @@ import charge, and AliExpress bills these charges with the order (#557: an order
 from China to Italy on 2026-11-04 paid 5.66 of tax on 6.28 of goods and delivery, an
 order from a German warehouse its 19 % VAT alone).
 
-Each node goes through the imported products due, its own share, and asks for each to
-be read again: a `SyncRequested` on the item's stream, which says who asked. A product
-is due when it was last tried longer ago than `[aliexpress] sync_every_secs` (a day).
+Each node goes through the imported products due, its own share, and reads each
+again. A read asked for is no event: the node a product belongs to reads it, and the
+item's stream hears only of what a read found (#472), so a product read every day for
+years stays far from the 65,535 versions a stream holds. A product is due when it was
+last tried longer ago than `[aliexpress] sync_every_secs` (a day).
 A read that failed, or a shop that cannot read for now (suspended, or no account
 connected), waits for the next period like one that worked, so it takes no turn from
 the others.
@@ -157,7 +159,7 @@ is ten minutes old, with the refresh token it gave last, as after a refusal.
 Each imported product, and each order placed on AliExpress, belongs to one of the
 nodes up, by a hash of its stream's id over the nodes heard from in the last 30
 seconds, so one node sweeps it and one node answers a request for it, and the app's
-quota is spent once. A request (a `SyncRequested`, a cart add, a push) is answered
+quota is spent once. A request (a cart add, a push) is answered
 among the nodes that see it: those serving its region or, for one written without a
 region, the nodes without one, each counted once the regions it serves came in with
 its gossip. A node that stops is left out once it has been silent that long:
@@ -165,9 +167,10 @@ what it held and had not read yet is shared out to the others, and the sweep fin
 still due. Two nodes that disagree for a moment read one twice or leave it for later,
 neither of which harms it.
 
-*Sync now*, on the AliExpress page or on the product page, asks the same way, naming
-the member, and waits up to ten seconds so the page can say what the read found.
-Past that, the page says the read is on its way. A read does four things:
+*Sync now*, on the AliExpress page or on the product page, reads the product on the
+node serving the page, in the member's name, and waits up to ten seconds so the page
+can say what the read found. Past that, the page says the read is on its way, and it
+carries on. A read does four things:
 
 - each variant's stock becomes what AliExpress has;
 - with a rule (the product's own, else the shop's), each price follows the cost;
@@ -249,9 +252,10 @@ A product read often must not grow its stream with every read, so a read writes 
 the item's stream (`Synced`, `SyncFailed`) only when it has something to say: a cost,
 a combination or whether AliExpress sells it changed, a failure for a new reason, or a
 problem that is over. A read a member asked for always records how it went, since they
-wait for it. Otherwise only this node's read model notes the time (`last_synced_at`
-for a read that worked, `last_tried_at` for any read asked for or made), which other
-nodes learn from the next request or record. What AliExpress has left goes to the
+wait for it. Otherwise only this node notes the time (`aliexpress_read_times`:
+`synced_at` for a read that worked, `tried_at` for any read made), which other nodes
+learn from the next record. The item's state is snapshotted on each node, so loading
+it reads the last snapshot and the events after it, not the whole stream. What AliExpress has left goes to the
 variant's stock in the catalog and nowhere else: it moves with every sale, and the
 stock streams are made for that.
 
@@ -288,12 +292,11 @@ last read is under a minute old.
 
 ### When a shopper adds to a cart
 
-When a shopper puts an imported product in a cart, the node it belongs to asks for a
-read (`SyncRequested`), unless the product was tried in the last hour. The read lands
-well before the pay click, so what the checkout shows is usually already what
-AliExpress asks and the read before the payment finds nothing to refuse. The hour keeps
-the stream of a product selling around the clock from growing: a stream's versions run
-out at 65,535.
+When a shopper puts an imported product in a cart, the node it belongs to reads it,
+unless the product was tried in the last hour. The read lands well before the pay
+click, so what the checkout shows is usually already what AliExpress asks and the read
+before the payment finds nothing to refuse. The hour spares the app's calls: a product
+selling around the clock costs one read an hour, and the payment reads it anyway.
 
 ### New combinations
 

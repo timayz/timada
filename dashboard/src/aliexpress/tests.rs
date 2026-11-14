@@ -580,8 +580,8 @@ impl Shop {
             .unwrap();
     }
 
-    /// The node's subscription catches up with the requests.
-    async fn follow_requests(&self) {
+    /// The node's subscription catches up with the carts.
+    async fn follow_carts(&self) {
         reads_subscription::<Evento>(self.aliexpress.clone(), self.db.clone(), self.store.clone())
             .run_once(&self.store)
             .await
@@ -598,7 +598,7 @@ impl Shop {
     async fn read_at(&self, at: u64) {
         self.db
             .execute(
-                "UPDATE aliexpress_products SET last_synced_at = ?1, last_tried_at = ?1",
+                "UPDATE aliexpress_products SET last_synced_at = ?1",
                 (at as i64,),
             )
             .await
@@ -855,19 +855,15 @@ async fn a_read_a_member_waits_for_records_its_outcome_even_when_nothing_changed
     let version = shop.version().await;
 
     shop.sync(SyncMode::Asked { by: ALICE }).await;
-
     assert_eq!(shop.version().await, version + 1);
-    let link = shop
-        .links()
-        .load_link_by_id(&shop.link_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(link.answered_version, version + 1);
+
+    // The dashboard's own, finding nothing new, writes nothing.
+    shop.sync(SyncMode::Routine).await;
+    assert_eq!(shop.version().await, version + 1);
 }
 
 #[tokio::test]
-async fn a_request_during_a_read_leaves_the_read_its_record() {
+async fn a_change_the_read_does_not_hold_leaves_the_read_its_record() {
     let shop = Arc::new(Shop::new().await);
     *shop.stand_in.cost.lock().unwrap() = "5.00".to_owned();
     shop.stand_in.held.store(true, Ordering::SeqCst);
@@ -877,13 +873,21 @@ async fn a_request_during_a_read_leaves_the_read_its_record() {
     });
     shop.stand_in.holding.notified().await;
 
-    // The sweep asks while the member's read is out: it changes nothing the
-    // read knew of.
-    let asked = shop
-        .links()
-        .request_sync(ALIEXPRESS_ACTOR, &shop.link_id)
+    // The merchant gives the product its own rule while the read is out: it
+    // changes nothing the read knew of, and the next read prices by it.
+    shop.links()
+        .set_pricing(
+            ALICE,
+            &shop.link_id,
+            Some(Pricing::flat(PricingRule {
+                multiplier_bps: 30_000,
+                plus_cents: 0,
+                rounding: Rounding::Cent,
+            })),
+        )
         .await
         .unwrap();
+    let version = shop.version().await;
     shop.stand_in.answer.notify_one();
 
     assert_eq!(
@@ -893,17 +897,17 @@ async fn a_request_during_a_read_leaves_the_read_its_record() {
             repriced: 1
         }
     );
+    assert_eq!(
+        shop.version().await,
+        version + 1,
+        "the member has their answer"
+    );
     let link = shop
         .links()
         .load_link_by_id(&shop.link_id)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(
-        link.answered_version,
-        asked + 1,
-        "the member has their answer"
-    );
     assert_eq!(link.skus[0].cost_cents, 500);
 }
 
@@ -976,54 +980,10 @@ async fn the_same_failure_is_recorded_once_and_the_next_read_clears_it() {
     assert_eq!(shop.row().await.last_error, None);
 }
 
+/// The sweep reads what is due itself: no request goes on the item's stream,
+/// and a read that finds nothing new writes nothing there (#472).
 #[tokio::test]
-async fn a_request_is_read_by_the_node_the_item_belongs_to() {
-    let shop = Shop::new().await;
-    shop.links()
-        .request_sync(ALIEXPRESS_ACTOR, &shop.link_id)
-        .await
-        .unwrap();
-
-    // Not this node's: left to the other.
-    *shop.region_share.lock().unwrap() = shop.elsewhere();
-    shop.follow_requests().await;
-    assert_eq!(shop.stand_in.reads(), 0);
-
-    // A later one, this node's.
-    *shop.region_share.lock().unwrap() = Share::ALONE;
-    shop.links()
-        .request_sync(ALIEXPRESS_ACTOR, &shop.link_id)
-        .await
-        .unwrap();
-    shop.follow_requests().await;
-    assert_eq!(shop.stand_in.reads(), 1);
-}
-
-#[tokio::test]
-async fn who_asked_decides_what_the_read_records() {
-    let shop = Shop::new().await;
-
-    // The dashboard on its own: nothing changed, nothing more than the request.
-    let asked = shop
-        .links()
-        .request_sync(ALIEXPRESS_ACTOR, &shop.link_id)
-        .await
-        .unwrap();
-    shop.follow_requests().await;
-    assert_eq!(shop.version().await, asked);
-
-    // A member: what comes after the request says how it went.
-    let asked = shop
-        .links()
-        .request_sync(ALICE, &shop.link_id)
-        .await
-        .unwrap();
-    shop.follow_requests().await;
-    assert_eq!(shop.version().await, asked + 1);
-}
-
-#[tokio::test]
-async fn the_sweep_asks_once_a_period_for_what_is_due() {
+async fn the_sweep_reads_once_a_period_what_is_due() {
     let shop = Shop::new().await;
     let sweep = AliexpressSync::new(
         shop.db.clone(),
@@ -1033,23 +993,25 @@ async fn the_sweep_asks_once_a_period_for_what_is_due() {
     );
     let now = crate::auth::now();
 
-    assert_eq!(sweep.ask_due(now).await.unwrap(), 0, "just imported");
+    assert_eq!(sweep.read_due(now).await.unwrap(), 0, "just imported");
 
     let later = now + shop.aliexpress.sync_every_secs() + 1;
     let version = shop.version().await;
-    assert_eq!(sweep.ask_due(later).await.unwrap(), 1);
-    assert_eq!(shop.version().await, version + 1);
-    assert_eq!(sweep.ask_due(later).await.unwrap(), 0, "asked already");
-    assert_eq!(shop.version().await, version + 1);
+    assert_eq!(sweep.read_due(later).await.unwrap(), 1);
+    assert_eq!(shop.stand_in.reads(), 1);
+    assert_eq!(shop.version().await, version, "nothing new to record");
+    assert_eq!(sweep.read_due(later).await.unwrap(), 0, "read already");
+    assert_eq!(shop.stand_in.reads(), 1);
 
     // A node holding another share leaves it alone.
     *shop.share.lock().unwrap() = shop.elsewhere();
     let after = later + shop.aliexpress.sync_every_secs() + 1;
-    assert_eq!(sweep.ask_due(after).await.unwrap(), 0);
+    assert_eq!(sweep.read_due(after).await.unwrap(), 0);
+    assert_eq!(shop.stand_in.reads(), 1);
 }
 
 #[tokio::test]
-async fn a_shop_that_cannot_read_is_passed_over_without_a_request() {
+async fn a_shop_that_cannot_read_is_passed_over_without_a_read() {
     let shop = Shop::new().await;
     let sweep = AliexpressSync::new(
         shop.db.clone(),
@@ -1065,12 +1027,12 @@ async fn a_shop_that_cannot_read_is_passed_over_without_a_request() {
     let later = crate::auth::now() + shop.aliexpress.sync_every_secs() + 1;
     let version = shop.version().await;
 
-    assert_eq!(sweep.ask_due(later).await.unwrap(), 1);
+    assert_eq!(sweep.read_due(later).await.unwrap(), 1);
 
-    assert_eq!(shop.version().await, version, "no request");
+    assert_eq!(shop.version().await, version);
     assert_eq!(shop.row().await.last_tried_at, Some(later as i64));
     assert_eq!(shop.stand_in.reads(), 0);
-    assert_eq!(sweep.ask_due(later).await.unwrap(), 0, "passed over");
+    assert_eq!(sweep.read_due(later).await.unwrap(), 0, "passed over");
 }
 
 #[tokio::test]
@@ -1168,10 +1130,9 @@ async fn the_sweep_spends_the_day_on_what_shoppers_want_first() {
     let ids: Vec<&str> = due.iter().map(|link| link.id.as_str()).collect();
     assert_eq!(ids, [shop.link_id.as_str(), "other-item"]);
 
-    // The other shop is not connected, so only this one's is asked for.
-    let version = shop.version().await;
-    assert_eq!(sweep.ask_due(later).await.unwrap(), 2);
-    assert_eq!(shop.version().await, version + 1);
+    // The other shop is not connected, so only this one's is read.
+    assert_eq!(sweep.read_due(later).await.unwrap(), 2);
+    assert_eq!(shop.stand_in.reads(), 1);
 }
 
 impl Shop {
@@ -1714,45 +1675,37 @@ async fn a_shop_without_its_account_goes_by_the_last_read() {
 }
 
 #[tokio::test]
-async fn a_cart_add_asks_for_an_item_not_tried_lately_once() {
+async fn a_cart_add_reads_an_item_not_tried_lately_once() {
     let shop = Shop::new().await;
-    shop.follow_requests().await;
+    shop.follow_carts().await;
     shop.read_at(100).await;
     let version = shop.version().await;
 
     // Not this node's: left to the other.
     *shop.region_share.lock().unwrap() = shop.elsewhere();
     shop.add_to_cart().await;
-    shop.follow_requests().await;
+    shop.follow_carts().await;
     assert_eq!(shop.version().await, version);
     assert_eq!(shop.stand_in.reads(), 0);
 
-    // This node's: asked for, and the request read in turn.
+    // This node's: read, and nothing on the item's stream but what the read
+    // found (nothing new).
     *shop.region_share.lock().unwrap() = Share::ALONE;
     shop.add_to_cart().await;
-    shop.follow_requests().await;
-    assert_eq!(shop.version().await, version + 1);
-    let link = shop
-        .links()
-        .load_link_by_id(&shop.link_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(link.last_requested_at.is_some());
-    shop.follow_requests().await;
+    shop.follow_carts().await;
     assert_eq!(shop.stand_in.reads(), 1);
+    assert_eq!(shop.version().await, version);
 
-    // Tried a moment ago: the next carts ask for nothing.
+    // Tried a moment ago: the next carts read nothing.
     shop.add_to_cart().await;
-    shop.follow_requests().await;
-    assert_eq!(shop.version().await, version + 1);
+    shop.follow_carts().await;
     assert_eq!(shop.stand_in.reads(), 1);
 }
 
 #[tokio::test]
 async fn a_cart_add_of_a_product_not_imported_asks_for_nothing() {
     let shop = Shop::new().await;
-    shop.follow_requests().await;
+    shop.follow_carts().await;
     let catalog = timada_catalog::Command::new(shop.store.clone(), &shop.tenant.id);
     let mug = catalog
         .create_product(
@@ -1783,7 +1736,7 @@ async fn a_cart_add_of_a_product_not_imported_asks_for_nothing() {
         .unwrap();
     let version = shop.version().await;
 
-    shop.follow_requests().await;
+    shop.follow_carts().await;
 
     assert_eq!(shop.version().await, version);
     assert_eq!(shop.stand_in.reads(), 0);
