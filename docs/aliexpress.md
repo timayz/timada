@@ -255,9 +255,14 @@ problem that is over. A read a member asked for always records how it went, sinc
 wait for it. Otherwise only this node notes the time (`aliexpress_read_times`:
 `synced_at` for a read that worked, `tried_at` for any read made), which other nodes
 learn from the next record. The item's state is snapshotted on each node, so loading
-it reads the last snapshot and the events after it, not the whole stream. What AliExpress has left goes to the
-variant's stock in the catalog and nowhere else: it moves with every sale, and the
-stock streams are made for that.
+it reads the last snapshot and the events after it, not the whole stream.
+
+What AliExpress has left goes to the variant's stock in the catalog and nowhere else:
+it moves with every sale, and the stock streams are made for that. It is counted as is
+while it is few, and as 20 once it is more (`PLENTY`, #472): shoppers are told how many
+are left under six, and a checkout may want every one left, but a well-stocked item's
+sales elsewhere would otherwise write its stock at every read, replicated to every
+storefront, for nothing a shopper sees. A checkout takes at most 20 of a combination.
 
 ### Before a payment
 

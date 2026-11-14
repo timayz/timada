@@ -536,7 +536,11 @@ The read models (`catalog_stock`, `storefront_stock`, and the `stock_state` /
 `stock_json` / `in_stock` columns of the product rows) carry what is on the shelf,
 worked out when the stock or the product changes. They leave holds out, since a hold
 lapses without an event: a page may say "in stock" while the last one waits for
-another shopper's payment, and the cart then refuses it.
+another shopper's payment, and the cart then refuses it. A stock event that leaves
+the shelf as the rows have it (a hold, its release) writes nothing, and a count that
+moves while the thing stays counted and neither runs out nor comes back writes its
+own number without loading the product (#472): the product is replayed only when the
+summary may change.
 
 ## Product pictures
 

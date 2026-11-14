@@ -691,13 +691,54 @@ async fn a_read_that_finds_nothing_new_writes_nothing_and_notes_when_it_was() {
 async fn a_read_that_only_finds_the_stock_moved_counts_it_in_the_catalog_alone() {
     let shop = Shop::new().await;
     let version = shop.version().await;
-    assert_eq!(shop.rose().await, (862, 120));
+    assert_eq!(shop.rose().await, (862, 20), "120 is plenty, counted as 20");
 
     shop.stand_in.stock.store(7, Ordering::SeqCst);
     shop.sync(SyncMode::Routine).await;
 
     assert_eq!(shop.rose().await, (862, 7));
     assert_eq!(shop.version().await, version, "no event on the link");
+}
+
+/// A well-stocked item's count moving with AliExpress's own sales writes no
+/// stock at all: past plenty, the shop counts it as plenty (#472).
+#[tokio::test]
+async fn a_well_stocked_items_count_moving_writes_nothing() {
+    use evento::ProjectionAggregate;
+
+    let shop = Shop::new().await;
+    let catalog = timada_catalog::Command::new(shop.store.clone(), &shop.tenant.id);
+    let rose = catalog
+        .load_product(&shop.product_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .variants[0]
+        .id
+        .clone();
+    let stock_version = async || {
+        catalog
+            .load_stock(&shop.product_id, Some(&rose))
+            .await
+            .unwrap()
+            .unwrap()
+            .aggregate_version()
+            .unwrap()
+    };
+    let before = stock_version().await;
+
+    for left in [118, 64, 20] {
+        shop.stand_in.stock.store(left, Ordering::SeqCst);
+        shop.sync(SyncMode::Routine).await;
+        assert_eq!(shop.rose().await, (862, 20), "{left} left");
+    }
+    assert_eq!(stock_version().await, before);
+
+    // Few, each one counts.
+    shop.stand_in.stock.store(19, Ordering::SeqCst);
+    shop.sync(SyncMode::Routine).await;
+    assert_eq!(shop.rose().await, (862, 19));
+    assert_eq!(stock_version().await, before + 1);
 }
 
 #[tokio::test]

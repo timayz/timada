@@ -261,13 +261,73 @@ async fn on_stock_event<E: Executor>(
     else {
         return Ok(());
     };
-    let product = product_projection()
-        .load(&stock.product_id)
-        .execute(context.executor)
+    // A checkout's hold, or its release, leaves the shelf as the rows have
+    // it. A count that moves while the thing stays counted, and neither runs
+    // out nor comes back, only changes its own number on the product's row.
+    // Only else is the product loaded (#472): a supplier's stock moving, or
+    // a checkout, costs no product replay.
+    let key = stock.variant_id.as_deref().unwrap_or("");
+    let was: Option<(bool, i64)> = db
+        .fetch_optional(
+            "SELECT tracked, on_hand FROM storefront_stock WHERE product_id = ?1 AND variant_id = ?2",
+            (stock.product_id.as_str(), key),
+        )
         .await?;
-    upsert_stock(&db, &stock, product.as_ref()).await?;
+    match was {
+        Some(was) if was == (stock.tracked, i64::from(stock.on_hand)) => {}
+        Some((tracked, on_hand))
+            if tracked == stock.tracked && (on_hand > 0) == (stock.on_hand > 0) =>
+        {
+            recount_stock(&db, &stock).await?;
+        }
+        _ => {
+            let product = product_projection()
+                .load(&stock.product_id)
+                .execute(context.executor)
+                .await?;
+            upsert_stock(&db, &stock, product.as_ref()).await?;
+        }
+    }
     reflected.note(&event, stock.aggregate_version);
     Ok(())
+}
+
+/// The stock row of one thing whose count moved, and that count on its
+/// product's row, when the row counts it (a thing on sale and counted):
+/// whether the product can be bought is as it was.
+async fn recount_stock(db: &Db, stock: &StockState) -> anyhow::Result<()> {
+    db.write(stock, |tx, stock| {
+        Box::pin(async move {
+            let key = stock.variant_id.as_deref().unwrap_or("");
+            execute(
+                tx,
+                "UPDATE storefront_stock SET on_hand = ?3 WHERE product_id = ?1 AND variant_id = ?2",
+                (stock.product_id.as_str(), key, i64::from(stock.on_hand)),
+            )
+            .await?;
+            let row: Option<(String,)> = fetch_optional(
+                tx,
+                "SELECT stock_json FROM storefront_products WHERE id = ?1",
+                (stock.product_id.as_str(),),
+            )
+            .await?;
+            let Some((json,)) = row else {
+                return Ok(());
+            };
+            let mut counted: std::collections::BTreeMap<String, u32> = serde_json::from_str(&json)?;
+            if let Some(left) = counted.get_mut(key) {
+                *left = stock.on_hand;
+                execute(
+                    tx,
+                    "UPDATE storefront_products SET stock_json = ?2 WHERE id = ?1",
+                    (stock.product_id.as_str(), serde_json::to_string(&counted)?),
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    })
+    .await
 }
 
 /// The stock row of one thing, and what its product's row says of it.
@@ -1800,6 +1860,67 @@ mod tests {
                 "{statement}: {plan:?}"
             );
         }
+    }
+
+    /// A count that moves while the thing stays counted and in stock
+    /// changes its own number on the product's row, nothing else (#472).
+    #[tokio::test]
+    async fn a_count_that_moves_changes_its_own_number_alone() {
+        let db = db().await;
+        product(&db, "tunnel", "published", &[]).await;
+        db.execute(
+            "UPDATE storefront_products SET stock_json = '{\"rose\":7,\"blue\":3}'",
+            (),
+        )
+        .await
+        .unwrap();
+        for (variant, on_hand) in [("rose", 7), ("blue", 3), ("hidden", 9)] {
+            db.execute(
+                "INSERT INTO storefront_stock (product_id, variant_id, tracked, on_hand)
+                 VALUES ('tunnel', ?1, 1, ?2)",
+                (variant, on_hand),
+            )
+            .await
+            .unwrap();
+        }
+        let stock = |variant: &str, on_hand| StockState {
+            product_id: "tunnel".to_owned(),
+            variant_id: Some(variant.to_owned()),
+            tracked: true,
+            on_hand,
+            ..Default::default()
+        };
+        recount_stock(&db, &stock("rose", 6)).await.unwrap();
+        // One the product does not sell keeps out of what the row counts.
+        recount_stock(&db, &stock("hidden", 8)).await.unwrap();
+
+        let (json,): (String,) = db
+            .fetch_one(
+                "SELECT stock_json FROM storefront_products WHERE id = 'tunnel'",
+                (),
+            )
+            .await
+            .unwrap();
+        let counted: std::collections::BTreeMap<String, u32> = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            counted,
+            [("blue".to_owned(), 3), ("rose".to_owned(), 6)].into()
+        );
+        let rows: Vec<(String, i64)> = db
+            .fetch_all(
+                "SELECT variant_id, on_hand FROM storefront_stock ORDER BY variant_id",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                ("blue".to_owned(), 3),
+                ("hidden".to_owned(), 8),
+                ("rose".to_owned(), 6)
+            ]
+        );
     }
 
     #[tokio::test]
