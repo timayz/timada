@@ -31,8 +31,9 @@ pub mod support_client;
 pub mod topbar;
 
 use timada_storefront::{
-    CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, Store,
-    TIME_ZONE_SCRIPT, is_store_unavailable, menu, product_image, products, recent_reviews,
+    CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, SocialCard, Store,
+    TIME_ZONE_SCRIPT, absolute_url, is_store_unavailable, json_ld, menu, organization_ld,
+    product_image, products, recent_reviews, website_ld,
 };
 use topcoat::{
     Result,
@@ -144,6 +145,21 @@ pub async fn document(
     /// says.
     #[default]
     noindex: bool,
+    /// The address search engines keep for the page, as a path: its own
+    /// unless said otherwise (a filtered listing names the plain one, a
+    /// variant's address the product's).
+    #[default]
+    canonical: Option<&str>,
+    /// A picture a shared link shows, as a whole address.
+    #[default]
+    image: Option<&str>,
+    /// What the page sells, in minor units of a currency, for a shared
+    /// link.
+    #[default]
+    price: Option<(i64, &str)>,
+    /// What the page shows, as schema.org data.
+    #[default]
+    structured: &[serde_json::Value],
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
     // The page answering an outage asks the dashboard nothing more; any
@@ -179,6 +195,16 @@ pub async fn document(
     let signed_in = accounts && !away && crate::shopper::signed_in(cx).await.is_some();
     let announcements = timada_storefront::announcements(cx).await?;
     let noindex = noindex || sitemap::is_private(original_uri(cx).path());
+    let canonical = absolute_url(cx, canonical.unwrap_or(original_uri(cx).path()));
+    let card = SocialCard {
+        title,
+        description: description.unwrap_or_default(),
+        url: &canonical,
+        site_name: SHOP_NAME,
+        image,
+        price,
+    }
+    .tags();
     let page_title = if title == SHOP_NAME {
         format!("{SHOP_NAME} : {TAGLINE}")
     } else {
@@ -196,6 +222,17 @@ pub async fn document(
                 }
                 if noindex {
                     <meta name="robots" content="noindex">
+                }
+                <link rel="canonical" href=(&canonical)>
+                for tag in &card {
+                    if tag.property {
+                        <meta property=(tag.key) content=(&tag.content)>
+                    } else {
+                        <meta name=(tag.key) content=(&tag.content)>
+                    }
+                }
+                for data in structured {
+                    <script type="application/ld+json">(Unescaped::new_unchecked(json_ld(data)))</script>
                 }
                 <style>(Unescaped::new_unchecked(THEME_CSS))</style>
                 <style>(Unescaped::new_unchecked(DRAWER_CSS))</style>
@@ -413,9 +450,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map(|node| href!(c::slug::index, c::slug::slug: node.category.slug.clone()).resolve(cx))
         .unwrap_or_else(|| href!(boutique::index).resolve(cx));
 
+    // Who the shop is, for the name a search result shows.
+    let home = absolute_url(cx, &href!(index).resolve(cx));
+    let structured = [
+        organization_ld(SHOP_NAME, &home, Some(CONTACT_EMAIL)),
+        website_ld(SHOP_NAME, &home),
+    ];
+
     Ok(view! {
         document(
             title: SHOP_NAME,
+            structured: &structured,
             nav: &nav,
             <section class="hero">
                 <div class="wrap">

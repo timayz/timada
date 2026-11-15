@@ -199,6 +199,46 @@ account, orders, the search…) and out of filtered listings, and marks those sa
 `<meta name="robots" content="noindex">`, as it does a listing sorted another way. A
 page further down a listing (`page=`) stays open: it has products of its own.
 
+### The head of a page
+
+What a page's `<head>` says beyond its title is the host's to write; the library gives
+the content:
+
+```rust
+use timada_storefront::{ProductPageLd, SocialCard, absolute_url, breadcrumb_ld, json_ld,
+    organization_ld, product_ld, website_ld};
+
+let url = absolute_url(cx, &format!("/p/{}", product.slug));     // the canonical address
+let card = SocialCard { title: &seo.title, description: &seo.description, url: &url,
+    site_name: "Acme", image: product.image().map(|i| i.url.as_str()),
+    price: Some((1990, "EUR")) }.tags();                          // Open Graph and Twitter
+let data = product_ld(&product,
+    &ProductPageLd { url: &url, description: &seo.description, reviews: &reviews.items },
+    |variant| format!("{url}?v={}", variant.id));
+// <script type="application/ld+json">{json_ld(&data)}</script>
+```
+
+`SocialCard::tags` gives each tag with whether its key goes in `property` (Open Graph)
+or `name` (Twitter); a price makes the card a product's, a picture makes it large.
+`product_ld` writes a schema.org `Product` with its offer, or a `ProductGroup` with a
+`Product` per variant on sale, each with its own offer at the address the closure gives
+it. It carries `aggregateRating` only when the product has published reviews, and as
+`review` the ones handed to it, which must be the ones the page shows. `breadcrumb_ld`
+takes `(name, address)` pairs from the home down, `organization_ld` and `website_ld`
+name the shop on its home page (no rating there: a shop's rating of itself is ignored).
+`json_ld` writes the JSON so that nothing in it can close the script.
+
+The storefront's layout writes on every page a `<link rel="canonical">` to the page's
+own address, the card, and the data the page hands it:
+
+- a listing filtered, searched or sorted another way names the plain listing and is
+  `noindex`; each page further down keeps its own address (`?page=N`) and canonical,
+  reached by plain links;
+- a product's page opens on one variant at `?v=<variant id>` (its price, its picture
+  first, its values picked), which the table of variants links to and the data gives
+  as that variant's offer; the canonical stays the address without it;
+- brand and GTIN are not in the data yet: a product has neither until #540.
+
 ## Browsing the categories
 
 ```rust
