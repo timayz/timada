@@ -55,6 +55,37 @@ pub fn truncate_slug(slug: &str, max: usize) -> String {
     slug[..slug.len().min(max)].trim_matches('-').to_owned()
 }
 
+/// How many former slugs are remembered for one thing: the oldest is
+/// forgotten past that, so a thing renamed for years keeps a short list.
+pub const MAX_FORMER_SLUGS: usize = 20;
+
+/// A slug something went by before a rename, and when it left it (unix
+/// seconds): what an old address is answered from, with a redirect to the
+/// new one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormerSlug {
+    pub slug: String,
+    pub left_at: u64,
+}
+
+/// Notes that the thing left `old` for `new` at `at`: `old` joins `former`
+/// (once, at its latest leaving), `new` leaves it when the thing went by it
+/// before, and the oldest go past [`MAX_FORMER_SLUGS`]. The same slug is
+/// no move.
+pub fn leave_slug(former: &mut Vec<FormerSlug>, old: &str, new: &str, at: u64) {
+    if old == new {
+        return;
+    }
+    former.retain(|was| was.slug != old && was.slug != new);
+    former.push(FormerSlug {
+        slug: old.to_owned(),
+        left_at: at,
+    });
+    if former.len() > MAX_FORMER_SLUGS {
+        former.drain(..former.len() - MAX_FORMER_SLUGS);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +107,47 @@ mod tests {
         assert_eq!(suffixed.len(), 12, "{suffixed}");
         assert!(suffixed.starts_with("blue-m-"), "{suffixed}");
         assert_ne!(suffixed_slug("blue-mug", 64), suffixed_slug("blue-mug", 64));
+    }
+
+    #[test]
+    fn a_left_slug_is_remembered_once_and_forgotten_when_taken_back() {
+        let mut former = Vec::new();
+        leave_slug(&mut former, "mug", "mug", 1);
+        assert!(former.is_empty(), "the same slug is no move");
+        leave_slug(&mut former, "mug", "cup", 2);
+        leave_slug(&mut former, "cup", "pot", 3);
+        let slugs = |former: &[FormerSlug]| -> Vec<(String, u64)> {
+            former.iter().map(|f| (f.slug.clone(), f.left_at)).collect()
+        };
+        assert_eq!(
+            slugs(&former),
+            [("mug".to_owned(), 2), ("cup".to_owned(), 3)]
+        );
+        // Back to an old one: it is the slug again, not a former one.
+        leave_slug(&mut former, "pot", "mug", 4);
+        assert_eq!(
+            slugs(&former),
+            [("cup".to_owned(), 3), ("pot".to_owned(), 4)]
+        );
+        // Left again: remembered at its latest leaving.
+        leave_slug(&mut former, "mug", "cup", 5);
+        assert_eq!(
+            slugs(&former),
+            [("pot".to_owned(), 4), ("mug".to_owned(), 5)]
+        );
+
+        for n in 0..(MAX_FORMER_SLUGS as u64 + 5) {
+            leave_slug(
+                &mut former,
+                &format!("s{n}"),
+                &format!("s{}", n + 1),
+                10 + n,
+            );
+        }
+        assert_eq!(former.len(), MAX_FORMER_SLUGS);
+        assert_eq!(
+            former.last().unwrap().slug,
+            format!("s{}", MAX_FORMER_SLUGS + 4)
+        );
     }
 }

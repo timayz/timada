@@ -288,6 +288,8 @@ event timada-pages/Page::SeoSet { meta_title: String, meta_description: String, 
 event timada-pages/Page::Unpublished { unpublished_by: String }
 event timada-pages/PageSlug::Claimed { page_id: String, page_version: u16 }
 event timada-pages/PageSlug::Released unit
+event timada-pages/Redirects::RedirectAdded { redirect_id: String, from: String, to: String, added_by: String }
+event timada-pages/Redirects::RedirectRemoved { redirect_id: String, removed_by: String }
 event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }
 event timada-reviews/Review::Published { published_by: String }
 event timada-reviews/Review::Rejected { reason: String, rejected_by: String }

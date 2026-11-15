@@ -114,3 +114,23 @@ pub enum Announcements {
         removed_by: String,
     },
 }
+
+/// The old addresses the shop still answers, each with a permanent
+/// redirect to where its content is now: one stream per shop, with the id
+/// [`redirects_id`](crate::redirects_id). For a shop moved from another
+/// platform, whose addresses a rename here never knew.
+#[evento::aggregate(name = "timada-pages/Redirects")]
+pub enum Redirects {
+    /// `from` is a path with no query (`/products/blue-mug`), `to` a path
+    /// of the shop (`/p/blue-mug`).
+    RedirectAdded {
+        redirect_id: String,
+        from: String,
+        to: String,
+        added_by: String,
+    },
+    RedirectRemoved {
+        redirect_id: String,
+        removed_by: String,
+    },
+}

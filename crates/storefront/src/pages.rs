@@ -8,7 +8,7 @@
 //! from [`StoreConfig::media_url`](crate::StoreConfig::media_url).
 
 use evento::{Executor, metadata::RawEvent, subscription::Context};
-use timada_core::db::{Db, FromRow};
+use timada_core::db::{Db, FromRow, execute};
 use timada_pages::aggregator::Page;
 use timada_pages::{PageState, markdown_text, page_projection, render_markdown};
 use topcoat_core::context::Cx;
@@ -17,6 +17,7 @@ use topcoat_router::error::not_found;
 
 use crate::context::store;
 use crate::query::search_key;
+use crate::redirects::{PAGE, write_former_slugs};
 
 /// The longest description a page gives search engines when the merchant
 /// wrote none: the start of its text.
@@ -165,35 +166,45 @@ pub(crate) async fn on_page_event<E: Executor>(
 }
 
 async fn upsert_page(db: &Db, page: &PageState) -> anyhow::Result<()> {
-    if !page.published || page.deleted {
-        db.execute(
-            "DELETE FROM storefront_pages WHERE id = ?1",
-            (page.id.as_str(),),
-        )
-        .await?;
-        return Ok(());
-    }
-    db.execute(
-        "INSERT INTO storefront_pages (id, slug, title, body, text, meta_title,
-            meta_description, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-         ON CONFLICT (id) DO UPDATE SET
-            slug = excluded.slug, title = excluded.title, body = excluded.body,
-            text = excluded.text, meta_title = excluded.meta_title,
-            meta_description = excluded.meta_description, updated_at = excluded.updated_at",
-        (
-            page.id.as_str(),
-            page.slug.as_str(),
-            page.title.as_str(),
-            page.body.as_str(),
-            markdown_text(&page.body),
-            page.meta_title.as_str(),
-            page.meta_description.as_str(),
-            page.updated_at as i64,
-        ),
-    )
-    .await?;
-    Ok(())
+    db.write(page, |tx, page| {
+        Box::pin(async move {
+            if !page.published || page.deleted {
+                execute(
+                    tx,
+                    "DELETE FROM storefront_pages WHERE id = ?1",
+                    (page.id.as_str(),),
+                )
+                .await?;
+                // A page nobody reads is not redirected to.
+                return write_former_slugs(tx, PAGE, &page.id, &[]).await;
+            }
+            execute(
+                tx,
+                "INSERT INTO storefront_pages (id, slug, title, body, text, meta_title,
+                    meta_description, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT (id) DO UPDATE SET
+                    slug = excluded.slug, title = excluded.title, body = excluded.body,
+                    text = excluded.text, meta_title = excluded.meta_title,
+                    meta_description = excluded.meta_description,
+                    updated_at = excluded.updated_at",
+                (
+                    page.id.as_str(),
+                    page.slug.as_str(),
+                    page.title.as_str(),
+                    page.body.as_str(),
+                    markdown_text(&page.body),
+                    page.meta_title.as_str(),
+                    page.meta_description.as_str(),
+                    page.updated_at as i64,
+                ),
+            )
+            .await?;
+            // The slugs it left: where an old address is redirected from.
+            write_former_slugs(tx, PAGE, &page.id, &page.former_slugs).await
+        })
+    })
+    .await
 }
 
 /// The first `max` characters of `text`, cut at a word and marked as cut.

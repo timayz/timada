@@ -239,6 +239,39 @@ own address, the card, and the data the page hands it:
   as that variant's offer; the canonical stays the address without it;
 - brand and GTIN are not in the data yet: a product has neither until #540.
 
+### An address that moved
+
+A product renamed in the back office moves to the slug of its new name, and a page can
+be moved to another slug. The copy remembers the slugs each one left (twenty at most,
+the oldest forgotten first), and an archived product's last one, so the host can answer
+an old address with a permanent redirect instead of a 404:
+
+```rust
+use timada_storefront::{MovedProduct, moved_page, moved_product, redirect_for};
+
+match moved_product(cx, old_slug).await? {
+    Some(MovedProduct::Product(slug)) => { /* 308 to the product's page */ }
+    Some(MovedProduct::Category(slug)) => { /* archived: 308 to its category */ }
+    None => { /* a 404 */ }
+}
+let page_slug = moved_page(cx, old_slug).await?;            // a published page's new slug
+let to = redirect_for(cx, "/products/blue-mug").await?;     // the merchant's own list
+```
+
+Ask only once the page itself found nothing: a slug something else took since belongs
+to that thing. `moved_product` gives the published product that left the slug last; for
+an archived one, the first live category it was filed under, and nothing when it has
+none, when it is a draft or when it was deleted. `redirect_for` reads the list a
+merchant keeps under **Redirects** in the back office, for the addresses of a shop moved
+from another platform: an old path (no query, a trailing slash aside) and the path of
+the shop it sends to. A redirect never leads to another one.
+
+The storefront does this in one layer (`storefront/src/app/moved.rs`): a `GET` or `HEAD`
+that ends in a 404 is looked up in the merchant's list, then as a product's address
+(`/p/{slug}`), then as one of its own pages, and answered with a 308. Each old address
+goes to its own page, never all of them to the home, and they are kept for as long as
+the product or the page is.
+
 ## Browsing the categories
 
 ```rust
