@@ -998,7 +998,21 @@ catalogue snapshot into a tenant and prints a storefront's settings for it (see
 `docs/storefront.md`); `snapshot save` keeps the platform (the database, pictures,
 keys, and with `--also` a storefront's own file) in a directory, and
 `snapshot restore` puts one back, every node of a cluster from copies taken together.
-Everything but `serve` runs with the server stopped.
+Everything but `serve` and `snapshot save` runs with the server stopped.
+
+`snapshot save` under a running server is a node's backup with no downtime: the
+server copies the database's three files while it holds back the one thing that moves
+what is in one into another (the checkpoint that folds the commit log into the file),
+asked over `<database>.sock`, a socket its user alone can open. The copy is the
+database as stopping the server at that moment would leave it, with every write that
+returned before it began; the writes go on meanwhile, into the commit log. The keys
+and pictures are copied after it, so the copy holds every one its database names. What
+was removed while the copy was taken is the exception: a picture deleted meanwhile is
+missing where the kept database still shows it, and an account deleted meanwhile stays
+unreadable, its key gone. A copy taken from a node alone goes back on a node alone. One
+taken from a cluster's node is kept but cannot be restored yet (#597): a cluster is
+restored from copies of every node, taken together with all of them stopped, and a node
+that lost its files takes the store from its peers (`rejoin`).
 
 ## Testing
 

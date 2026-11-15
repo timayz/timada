@@ -31,6 +31,8 @@ mod db;
 mod mailroom;
 #[path = "../src/media/schema.rs"]
 mod media;
+#[path = "../src/store_copy.rs"]
+mod store_copy;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -109,7 +111,7 @@ async fn what_a_store_costs() {
     assert!(!path.exists(), "{} holds a store already", path.display());
 
     let store = db::open_store(&path).await.unwrap();
-    let (cluster, executor, _) = cluster::open(None, None, &[], false, &path, store)
+    let (cluster, executor, _) = cluster::open(None, None, &[], false, &path, store.clone())
         .await
         .unwrap();
     let tenant = Command(executor.clone())
@@ -149,15 +151,40 @@ async fn what_a_store_costs() {
     let products = commands / COMMANDS_PER_PRODUCT / writers;
     let cpu = cpu_time();
     let started = Instant::now();
+    // With `SIZING_COPY=<n>`, n copies of the store taken while it is written
+    // (`snapshot save` under a running server), at even steps of the run:
+    // how long each took, and the commands that went through meanwhile.
+    let done = Arc::new(AtomicU64::new(0));
+    let copies = knob("SIZING_COPY", 0);
+    let copy = (copies != 0).then(|| {
+        let (store, done, dir, path) = (store.clone(), done.clone(), dir.clone(), path.clone());
+        tokio::spawn(async move {
+            let mut taken = Vec::new();
+            for n in 1..=copies {
+                while done.load(Ordering::Relaxed) < commands * n / (copies + 1) {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                let to = dir.join(format!("copy-{n}.db"));
+                let (at, before) = (Instant::now(), done.load(Ordering::Relaxed));
+                store_copy::copy(&store, &path, &to).await.unwrap();
+                let meanwhile = done.load(Ordering::Relaxed) - before;
+                taken.push((at.elapsed(), before, meanwhile, to));
+            }
+            taken
+        })
+    });
+    // The commands the store refused: none, but for what a copy costs.
+    let failed = Arc::new(AtomicU64::new(0));
     let mut tasks = tokio::task::JoinSet::new();
     for w in 0..writers {
         let catalog = timada_catalog::Command::new(executor.clone(), &tenant.id);
+        let (done, failed) = (done.clone(), failed.clone());
         tasks.spawn(async move {
             // How long each command took, in microseconds.
             let mut took = Vec::new();
             for p in 0..products {
                 let at = Instant::now();
-                let product = catalog
+                let created = catalog
                     .create_product(
                         "alice",
                         CreateProduct {
@@ -165,16 +192,37 @@ async fn what_a_store_costs() {
                             slug: None,
                         },
                     )
-                    .await
-                    .unwrap();
+                    .await;
+                let product = match created {
+                    Ok(product) => product,
+                    Err(err) => {
+                        eprintln!(
+                            "{:?}: a command failed after {:?}: {err}",
+                            started.elapsed(),
+                            at.elapsed()
+                        );
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                };
                 took.push(at.elapsed().as_micros() as u64);
+                done.fetch_add(1, Ordering::Relaxed);
                 for r in 1..COMMANDS_PER_PRODUCT {
                     let at = Instant::now();
-                    catalog
+                    if let Err(err) = catalog
                         .rename_product("alice", &product.id, &format!("Thing {w}.{p}.{r}"))
                         .await
-                        .unwrap();
+                    {
+                        eprintln!(
+                            "{:?}: a command failed after {:?}: {err}",
+                            started.elapsed(),
+                            at.elapsed()
+                        );
+                        failed.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
                     took.push(at.elapsed().as_micros() as u64);
+                    done.fetch_add(1, Ordering::Relaxed);
                 }
             }
             took
@@ -186,7 +234,19 @@ async fn what_a_store_costs() {
     }
     let elapsed = started.elapsed();
     let cpu = cpu_time() - cpu;
+    let copy = match copy {
+        Some(copy) => Some(copy.await.unwrap()),
+        None => None,
+    };
     sampler.abort();
+    // And one with nothing written.
+    let idle_copy = if copies != 0 {
+        let (at, to) = (Instant::now(), dir.join("idle-copy.db"));
+        store_copy::copy(&store, &path, &to).await.unwrap();
+        Some((at.elapsed(), sizes(&to).iter().sum::<u64>()))
+    } else {
+        None
+    };
     took.sort_unstable();
     let at = |q: f64| took[((took.len() - 1) as f64 * q) as usize] as f64 / 1000.0;
 
@@ -235,13 +295,14 @@ async fn what_a_store_costs() {
         mib(peaks[1].load(Ordering::Relaxed)),
     );
     println!(
-        "a command took: p50 {:.1} ms, p99 {:.1} ms, p99.9 {:.1} ms, max {:.1} ms; {} over 100 ms, {} over 1 s",
+        "a command took: p50 {:.1} ms, p99 {:.1} ms, p99.9 {:.1} ms, max {:.1} ms; {} over 100 ms, {} over 1 s, {} failed",
         at(0.5),
         at(0.99),
         at(0.999),
         at(1.0),
         took.iter().filter(|t| **t > 100_000).count(),
         took.iter().filter(|t| **t > 1_000_000).count(),
+        failed.load(Ordering::Relaxed),
     );
     println!(
         "processor: {:.1} s over the run, {:.2} cores, {:.2} ms per command",
@@ -249,6 +310,32 @@ async fn what_a_store_costs() {
         cpu.as_secs_f64() / elapsed.as_secs_f64(),
         cpu.as_secs_f64() * 1000.0 / took.len() as f64,
     );
+    for (took, before, meanwhile, to) in copy.unwrap_or_default() {
+        let size: u64 = sizes(&to).iter().sum();
+        // The copy opens as a store, and holds what was written before it:
+        // two events a command.
+        let held = number(&to, "SELECT CAST(COUNT(*) AS REAL) FROM event").await;
+        assert!(
+            held >= (before * 2) as f64,
+            "{} holds {held} events, {before} commands were in before it",
+            to.display()
+        );
+        println!(
+            "a copy while written, {before} commands in: {:.2} s for {:.1} MiB ({:.0} MiB/s), {:.0} commands/s meanwhile; it holds {held:.0} events",
+            took.as_secs_f64(),
+            mib(size),
+            mib(size) / took.as_secs_f64(),
+            meanwhile as f64 / took.as_secs_f64(),
+        );
+    }
+    if let Some((took, size)) = idle_copy {
+        println!(
+            "a copy with nothing written: {:.2} s for {:.1} MiB, {:.0} MiB/s",
+            took.as_secs_f64(),
+            mib(size),
+            mib(size) / took.as_secs_f64(),
+        );
+    }
     if std::env::var_os("SIZING_DIR").is_none() {
         std::fs::remove_dir_all(&dir).unwrap();
     }
