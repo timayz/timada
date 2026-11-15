@@ -50,17 +50,18 @@ use crate::aggregator::category::{
 use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
     AiWritingDeclared, Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Classified,
-    Created, Deleted, DeliveryDaysSet, Described, FeedLabelsSet, FeedListingSet, Identified,
-    ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionHidden,
-    OptionKindSet, OptionLabelled, OptionRemoved, OptionRenamed, OptionShown, OptionValueLabelled,
-    OptionValuesChanged, Priced, Published, Released, Renamed, SeoSet, TaxCategorySet,
-    Uncategorized, Unpublished, VariantDefined, VariantIdentified, VariantImaged, VariantPriced,
-    VariantRemoved, VariantSkuChanged, VariantsRepriced,
+    CompareAtSet, Created, Deleted, DeliveryDaysSet, Described, FeedLabelsSet, FeedListingSet,
+    Identified, ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined,
+    OptionHidden, OptionKindSet, OptionLabelled, OptionRemoved, OptionRenamed, OptionShown,
+    OptionValueLabelled, OptionValuesChanged, Priced, Published, Released, Renamed, SeoSet,
+    TaxCategorySet, Uncategorized, Unpublished, VariantCompareAtSet, VariantDefined,
+    VariantIdentified, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged,
+    VariantsRepriced,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
-    DeliveryDays, FEED_LABELS, MAX_CATEGORY_DEPTH, OptionSelection, category_slug_id, format_money,
-    product_sku_id, product_slug_id, sku_key,
+    DeliveryDays, FEED_LABELS, MAX_CATEGORY_DEPTH, OptionSelection, PriceTrail, category_slug_id,
+    format_money, product_sku_id, product_slug_id, sku_key,
 };
 use timada_core::{FormerSlug, Picture, leave_slug};
 
@@ -217,6 +218,11 @@ pub struct ProductVariant {
     pub gtin: Option<String>,
     /// Its maker's own number for it.
     pub mpn: Option<String>,
+    /// The price a reduction is announced against, as the merchant set it;
+    /// [`ProductState::compare_at`] is what a shopper is shown.
+    pub compare_at_cents: Option<u64>,
+    /// What it was on sale at, for a reduction to be measured from.
+    pub price_trail: PriceTrail,
 }
 
 impl ProductVariant {
@@ -273,6 +279,13 @@ pub struct ProductState {
     /// description.
     pub meta_description: String,
     pub price: Option<Price>,
+    /// The price a reduction of a product sold as is is announced against,
+    /// as the merchant set it; [`compare_at`](Self::compare_at) is what a
+    /// shopper is shown.
+    pub compare_at_cents: Option<u64>,
+    /// What a product sold as is was on sale at, for a reduction to be
+    /// measured from.
+    pub price_trail: PriceTrail,
     pub status: ProductStatus,
     /// Gone for good: archived, and its rows dropped from every listing. The
     /// state still says what it was (its pictures, for one), for whoever
@@ -370,6 +383,74 @@ impl ProductState {
             .as_ref()
             .map(|price| price.currency.as_str())
             .or_else(|| self.variants.first().map(|v| v.price.currency.as_str()))
+    }
+
+    /// What the product (`variant_id` `None`) or one of its variants costs.
+    pub fn amount_of(&self, variant_id: Option<&str>) -> Option<u64> {
+        match variant_id {
+            Some(variant_id) => self.variant(variant_id).map(|v| v.price.amount_cents),
+            None => self.price.as_ref().map(|price| price.amount_cents),
+        }
+    }
+
+    /// The price struck through beside that of the product (`variant_id`
+    /// `None`) or of one of its variants: the one the merchant set, while
+    /// it is above the price.
+    pub fn compare_at(&self, variant_id: Option<&str>) -> Option<u64> {
+        let set = match variant_id {
+            Some(variant_id) => self.variant(variant_id)?.compare_at_cents,
+            None => self.compare_at_cents,
+        }?;
+        (set > self.amount_of(variant_id)?).then_some(set)
+    }
+
+    /// The most a reduction on the product (`variant_id` `None`) or on one
+    /// of its variants may be measured from: the lowest it was on sale at
+    /// in the thirty days before its current price. `None` when it was on
+    /// sale at nothing else over those days.
+    pub fn compare_at_ceiling(&self, variant_id: Option<&str>) -> Option<u64> {
+        match variant_id {
+            Some(variant_id) => self
+                .variant(variant_id)?
+                .price_trail
+                .lowest_before_current(),
+            None => self.price_trail.lowest_before_current(),
+        }
+    }
+
+    /// Notes what everything it sells is on sale at from `at` on, or that
+    /// it is off sale: a draft's prices are nobody's to pay.
+    fn trail_prices(&mut self, at: u64) {
+        let on_sale = self.is_published();
+        let own = self.price.as_ref().map(|price| price.amount_cents);
+        self.price_trail.record(at, own.filter(|_| on_sale));
+        for variant in &mut self.variants {
+            let amount = variant.price.amount_cents;
+            variant.price_trail.record(at, on_sale.then_some(amount));
+        }
+        self.drop_stale_compare_at();
+    }
+
+    /// A price that caught up with the one it was compared with is no
+    /// reduction any more: the comparison goes, and does not come back if
+    /// the price later drops again (that would be another reduction,
+    /// measured from other prices).
+    fn drop_stale_compare_at(&mut self) {
+        let own = self.price.as_ref().map(|price| price.amount_cents);
+        if self
+            .compare_at_cents
+            .is_some_and(|set| own.is_none_or(|amount| set <= amount))
+        {
+            self.compare_at_cents = None;
+        }
+        for variant in &mut self.variants {
+            if variant
+                .compare_at_cents
+                .is_some_and(|set| set <= variant.price.amount_cents)
+            {
+                variant.compare_at_cents = None;
+            }
+        }
     }
 
     /// Whether a shopping feed carries it: on sale, and not taken out of the
@@ -545,6 +626,8 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_feed_labels_set())
         .handler(on_ai_writing_declared())
         .handler(on_feed_listing_set())
+        .handler(on_compare_at_set())
+        .handler(on_variant_compare_at_set())
         .strict()
 }
 
@@ -594,6 +677,7 @@ async fn on_priced(event: Event<Priced>, product: &mut ProductState) -> anyhow::
         amount_cents: event.data.amount_cents,
         currency: event.data.currency.to_owned(),
     });
+    product.trail_prices(event.timestamp);
     product.updated_at = event.timestamp;
     Ok(())
 }
@@ -601,6 +685,7 @@ async fn on_priced(event: Event<Priced>, product: &mut ProductState) -> anyhow::
 #[evento::handler]
 async fn on_published(event: Event<Published>, product: &mut ProductState) -> anyhow::Result<()> {
     product.status = ProductStatus::Published;
+    product.trail_prices(event.timestamp);
     product.updated_at = event.timestamp;
     Ok(())
 }
@@ -611,6 +696,7 @@ async fn on_unpublished(
     product: &mut ProductState,
 ) -> anyhow::Result<()> {
     product.status = ProductStatus::Draft;
+    product.trail_prices(event.timestamp);
     product.updated_at = event.timestamp;
     Ok(())
 }
@@ -618,6 +704,7 @@ async fn on_unpublished(
 #[evento::handler]
 async fn on_archived(event: Event<Archived>, product: &mut ProductState) -> anyhow::Result<()> {
     product.status = ProductStatus::Archived;
+    product.trail_prices(event.timestamp);
     product.updated_at = event.timestamp;
     Ok(())
 }
@@ -921,7 +1008,10 @@ async fn on_variant_defined(
         image_id: event.data.image_id.to_owned(),
         gtin: None,
         mpn: None,
+        compare_at_cents: None,
+        price_trail: PriceTrail::default(),
     });
+    product.trail_prices(event.timestamp);
     product.updated_at = event.timestamp;
     Ok(())
 }
@@ -941,6 +1031,7 @@ async fn on_variant_priced(
             currency: event.data.currency.to_owned(),
         };
     }
+    product.trail_prices(event.timestamp);
     product.updated_at = event.timestamp;
     Ok(())
 }
@@ -962,6 +1053,7 @@ async fn on_variants_repriced(
             };
         }
     }
+    product.trail_prices(event.timestamp);
     product.updated_at = event.timestamp;
     Ok(())
 }
@@ -1137,6 +1229,32 @@ async fn on_ai_writing_declared(
 ) -> anyhow::Result<()> {
     product.ai_title = event.data.title;
     product.ai_description = event.data.description;
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_compare_at_set(
+    event: Event<CompareAtSet>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.compare_at_cents = event.data.amount_cents;
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_variant_compare_at_set(
+    event: Event<VariantCompareAtSet>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(variant) = product
+        .variants
+        .iter_mut()
+        .find(|variant| variant.id == event.data.variant_id)
+    {
+        variant.compare_at_cents = event.data.amount_cents;
+    }
     product.updated_at = event.timestamp;
     Ok(())
 }

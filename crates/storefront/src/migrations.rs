@@ -32,7 +32,9 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         // stand in; a category's are the same. `brand`, `gtin` and `mpn`
         // are who makes the product and the numbers it is known under, for
         // what a page tells search engines; a variant's own are in
-        // `variants_json`.
+        // `variants_json`. `compare_at_cents` is the price a reduction is
+        // announced against, there only while it is above the price; a
+        // variant's own is in `variants_json` too.
         "CREATE TABLE storefront_products (
             id TEXT PRIMARY KEY,
             slug TEXT NOT NULL,
@@ -62,7 +64,8 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             meta_description TEXT NOT NULL DEFAULT '',
             brand TEXT,
             gtin TEXT,
-            mpn TEXT
+            mpn TEXT,
+            compare_at_cents INTEGER
         );
         CREATE UNIQUE INDEX storefront_products_slug ON storefront_products (slug)
             WHERE status <> 'archived';

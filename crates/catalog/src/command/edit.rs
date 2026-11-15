@@ -1,6 +1,8 @@
 use evento::{Executor, ProjectionAggregate};
 
-use crate::aggregator::{Described, Priced, Renamed, SeoSet, TaxCategorySet};
+use crate::aggregator::{
+    CompareAtSet, Described, Priced, Renamed, SeoSet, TaxCategorySet, VariantCompareAtSet,
+};
 use crate::error::CatalogError;
 use crate::value_object::{
     TAX_CATEGORIES, TAX_CATEGORY_STANDARD, normalize_currency, normalize_description,
@@ -158,6 +160,68 @@ impl<E: Executor> super::Command<E> {
             .tenant(&self.tenant)
             .commit(&self.executor)
             .await?;
+        Ok(())
+    }
+
+    /// Sets the price a reduction is announced against, struck through
+    /// beside the price of the product (`variant_id` `None`) or of one of
+    /// its variants; `None` announces none. It has to be above the price,
+    /// and at most the lowest the thing was on sale at in the thirty days
+    /// before its current price: a reduction is measured from a price
+    /// shoppers really had, so a thing on sale at one price only is
+    /// refused. The same is a no-op.
+    pub async fn set_compare_at(
+        &self,
+        actor: &str,
+        product_id: &str,
+        variant_id: Option<&str>,
+        amount_cents: Option<u64>,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let product = self.require_editable(product_id).await?;
+        let set = match variant_id {
+            Some(variant_id) => {
+                product
+                    .variant(variant_id)
+                    .ok_or(CatalogError::VariantNotFound)?
+                    .compare_at_cents
+            }
+            None => product.compare_at_cents,
+        };
+        if set == amount_cents {
+            return Ok(());
+        }
+        if let Some(amount_cents) = amount_cents {
+            if amount_cents > crate::MAX_AMOUNT_CENTS {
+                return Err(CatalogError::InvalidAmount);
+            }
+            let price = product
+                .amount_of(variant_id)
+                .ok_or(CatalogError::NotPriced)?;
+            if amount_cents <= price {
+                return Err(CatalogError::CompareAtNotAbove);
+            }
+            let ceiling = product
+                .compare_at_ceiling(variant_id)
+                .ok_or(CatalogError::NoEarlierPrice)?;
+            if amount_cents > ceiling {
+                return Err(CatalogError::CompareAtAboveEarlier);
+            }
+        }
+        let mut write = product.write()?;
+        write.routing_key_opt(routing_key);
+        match variant_id {
+            Some(variant_id) => write.event(&VariantCompareAtSet {
+                variant_id: variant_id.to_owned(),
+                amount_cents,
+                set_by: actor.to_owned(),
+            }),
+            None => write.event(&CompareAtSet {
+                amount_cents,
+                set_by: actor.to_owned(),
+            }),
+        };
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(())
     }
 

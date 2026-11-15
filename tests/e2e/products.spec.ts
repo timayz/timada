@@ -498,3 +498,51 @@ test("a shop opens its shopping feed at a secret address, moves it and closes it
     expect((await request.get(second)).status()).toBe(404);
   }).toPass({ timeout: 15_000 });
 });
+
+test("a reduction is measured from a price the product was on sale at, and the feed sends it as a sale", async ({ page, request }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name, slug } = uniqueTenant("Reduction Shop");
+  await createTenant(page, name);
+  const mugUrl = await publishProduct(page, slug, "Blue Mug", "20.00");
+
+  // On sale at one price only: nothing to be reduced from.
+  await page.goto(mugUrl);
+  await page.getByLabel("Reduced from").fill("25.00");
+  await page.getByRole("button", { name: "Apply reduction" }).click();
+  await expect(page).toHaveURL(/error=no_earlier_price/);
+  await expect(page.getByRole("alert")).toContainText("lower its price first");
+
+  // Lowered to 15: reduced from 20, the lowest it was on sale at, no more.
+  await page.getByLabel("Price").fill("15.00");
+  await page.getByRole("button", { name: "Set price" }).click();
+  await expect(page.getByRole("status")).toContainText("Price set.");
+  await expect(page.locator("[data-compare-at-form]")).toContainText("At most 20.00 €");
+  await page.getByLabel("Reduced from").fill("25.00");
+  await page.getByRole("button", { name: "Apply reduction" }).click();
+  await expect(page).toHaveURL(/error=compare_at_above_earlier/);
+  await page.getByLabel("Reduced from").fill("20.00");
+  await page.getByRole("button", { name: "Apply reduction" }).click();
+  await expect(page.getByRole("status")).toContainText("Reduction saved.");
+  await expect(page.getByLabel("Reduced from")).toHaveValue("20.00");
+
+  // The feed sends what it is down from as the price, and what a shopper
+  // pays as the sale price.
+  await page.goto(`/t/${slug}/api-keys`);
+  await page.getByLabel("Where shoppers find the shop").fill("https://shop.example");
+  await page.getByRole("button", { name: "Save address" }).click();
+  await page.goto(`/t/${slug}/feed`);
+  await page.getByRole("button", { name: "Open the feed" }).click();
+  const address = await page.getByLabel("Feed address").inputValue();
+  await expect(async () => {
+    const answer = await request.get(address);
+    expect(answer.status()).toBe(200);
+    expect(await answer.text()).toContain("<g:price>20.00 EUR</g:price>\n<g:sale_price>15.00 EUR</g:sale_price>");
+  }).toPass({ timeout: 15_000 });
+
+  // Back at 20, there is no reduction left to show.
+  await page.goto(mugUrl);
+  await page.getByLabel("Price").fill("20.00");
+  await page.getByRole("button", { name: "Set price" }).click();
+  await expect(page.getByRole("status")).toContainText("Price set.");
+  await expect(page.getByLabel("Reduced from")).toHaveValue("");
+});

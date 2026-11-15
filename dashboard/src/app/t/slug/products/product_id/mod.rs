@@ -6,6 +6,7 @@ pub mod archive;
 pub mod attributes;
 pub mod categorize;
 pub mod classify;
+pub mod compare_at;
 pub mod delete;
 pub mod delivery_days;
 pub mod describe;
@@ -275,6 +276,12 @@ pub struct VariantRow {
     pub image_id: String,
     pub gtin: String,
     pub mpn: String,
+    /// The price its reduction is announced against, as the form wants it
+    /// typed; empty without one.
+    pub compare_at: String,
+    /// The most that may be: its lowest price of the thirty days before
+    /// the current one, or empty when it had no other.
+    pub compare_at_ceiling: String,
     pub stock: StockView,
     /// Whether shoppers can buy it: a hidden option may leave it off sale.
     pub on_sale: bool,
@@ -389,6 +396,14 @@ impl VariantRow {
             image_id: variant.image_id.clone().unwrap_or_default(),
             gtin: variant.gtin.clone().unwrap_or_default(),
             mpn: variant.mpn.clone().unwrap_or_default(),
+            compare_at: product
+                .compare_at(Some(&variant.id))
+                .map(timada_core::format_amount)
+                .unwrap_or_default(),
+            compare_at_ceiling: product
+                .compare_at_ceiling(Some(&variant.id))
+                .map(timada_core::format_amount)
+                .unwrap_or_default(),
             stock,
             on_sale: product.sells(variant),
         }
@@ -667,6 +682,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     if link.is_some() {
         tabs.push(page_tab(Tab::AliExpress, "AliExpress", None));
     }
+    // The reduction of a product sold as is, and the most it may be
+    // measured from.
+    let compare_at = product
+        .compare_at(None)
+        .map(timada_core::format_amount)
+        .unwrap_or_default();
+    let compare_at_hint = match product.compare_at_ceiling(None) {
+        Some(ceiling) => format!(
+            "Struck through beside what it costs. At most {}: the lowest it was on sale at in the 30 days before its current one. Empty announces no reduction.",
+            format_money(ceiling, &current_currency)
+        ),
+        None => "It was on sale at nothing else in the 30 days before its current one, so there is no reduction to announce yet: lower it first.".to_owned(),
+    };
     // What the shopping tab fills its fields with.
     let brand = product.brand.clone().unwrap_or_default();
     let gtin = product.gtin.clone().unwrap_or_default();
@@ -781,6 +809,21 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Set price")
                             </div>
                         </form>
+                        if !has_variants && product.price.is_some() {
+                            <form method="post" action=(href!(compare_at::compare_at, slug: slug.clone(), product_id: product.id.clone())) class=(class!(CARD, "gap-4 px-6")) data-compare-at-form="">
+                                field(
+                                    field_label(attrs: attributes! { for="product-compare-at" }, "Reduced from")
+                                    field_description(attrs: attributes! { id="product-compare-at-hint" }, (&compare_at_hint))
+                                    input(attrs: attributes! {
+                                        id="product-compare-at" name="amount" type="text" inputmode="decimal" placeholder="19.90"
+                                        aria-describedby="product-compare-at-hint" value=(&compare_at)
+                                    })
+                                )
+                                <div>
+                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Apply reduction")
+                                </div>
+                            </form>
+                        }
                         if charges_vat {
                             <form method="post" action=(href!(tax_category::tax_category, slug: slug.clone(), product_id: product.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                                 field(
@@ -1104,7 +1147,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 if !options.is_empty() {
                     section_card(
                         title: Some("Variants"),
-                        description: Some("One combination a shopper buys, with its own price. A product with variants is published without a price of its own."),
+                        description: Some("One combination a shopper buys, with its own price. A product with variants is published without a price of its own. A variant on sale for less than before may say what it is reduced from: at most the lowest it was on sale at in the 30 days before its current price."),
                         table(
                             attrs: attributes! { data-variants="" },
                             table_header(
@@ -1148,8 +1191,20 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                                     )
                                                     button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Set")
                                                 </form>
+                                                <form method="post" action=(href!(variants::variant_id::compare_at::compare_at, slug: slug.clone(), product_id: product.id.clone(), variants::variant_id::variant_id: variant.id.clone())) class="mt-1 flex items-center gap-1" data-variant-compare-at="">
+                                                    <label class="text-xs text-muted-foreground" for=(format!("variant-compare-at-{}", variant.id))>"Reduced from" <span class="sr-only">", for " (&variant.selections)</span></label>
+                                                    input(attrs: attributes! {
+                                                        id=(format!("variant-compare-at-{}", variant.id)) name="amount" type="text" inputmode="decimal"
+                                                        class="h-8 w-20 px-2" value=(&variant.compare_at)
+                                                        placeholder=(if variant.compare_at_ceiling.is_empty() { "—".to_owned() } else { format!("≤ {}", variant.compare_at_ceiling) })
+                                                    })
+                                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Apply reduction")
+                                                </form>
                                             } else {
                                                 (&variant.amount) " " (&variant.currency)
+                                                if !variant.compare_at.is_empty() {
+                                                    " " <s class="text-muted-foreground">(&variant.compare_at)</s>
+                                                }
                                             }
                                         )
                                         table_cell(
@@ -1675,6 +1730,13 @@ pub struct SeoForm {
 pub struct PriceForm {
     pub amount: String,
     pub currency: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct CompareAtForm {
+    /// Empty announces no reduction.
+    #[serde(default)]
+    pub amount: String,
 }
 
 #[derive(serde::Deserialize)]

@@ -206,9 +206,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <h1 data-product=(&product.slug)>(&product.name)</h1>
                         <p class="price">
                             if let Some(variant) = &shown {
+                                if let Some(was) = variant.compare_at_cents {
+                                    <s class="was" data-compare-at=""><span class="unseen">"Ancien prix : "</span>(money(was, &variant.currency))</s>
+                                }
                                 <span data-price="" data-shown-variant=(&variant.id)>(money(variant.amount_cents, &variant.currency))</span>
                             } else {
                                 if varies { <small>"Plage de prix"</small> }
+                                if let (Some(was), Some(currency)) = (product.compare_at_cents, product.currency.as_deref()) {
+                                    if product.variants.is_empty() {
+                                        <s class="was" data-compare-at=""><span class="unseen">"Ancien prix : "</span>(money(was, currency))</s>
+                                    }
+                                }
                                 <span data-price="">(price_line(&product))</span>
                             }
                         </p>

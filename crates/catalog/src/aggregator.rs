@@ -266,6 +266,21 @@ pub enum Product {
         description: bool,
         declared_by: String,
     },
+    /// The price a reduction is announced against, struck through beside
+    /// the price of a product sold as is; `None` announces none. In the
+    /// product's currency. The command holds it to the lowest price the
+    /// product was on sale at in the thirty days before its current one,
+    /// which is what a reduction may be measured from.
+    CompareAtSet {
+        amount_cents: Option<u64>,
+        set_by: String,
+    },
+    /// The same for one variant.
+    VariantCompareAtSet {
+        variant_id: String,
+        amount_cents: Option<u64>,
+        set_by: String,
+    },
     /// Whether the shop's shopping feed carries it. A product is in the
     /// feed from the day it is published; one taken out stays in the shop
     /// and out of the ads.

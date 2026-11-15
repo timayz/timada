@@ -586,7 +586,7 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
             let slug_search = search_key(&product.slug);
             let name_search = search_key(&product.name);
             let options_json = options_json(product)?;
-            // Twenty-five values: more than a tuple of parameters holds. The
+            // Twenty-six values: more than a tuple of parameters holds. The
             // same numbering serves the insert and the update, the two
             // search keys last so the update can leave them off.
             let mut values = vec![
@@ -614,6 +614,7 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                 Value::from(product.brand.as_deref()),
                 Value::from(product.gtin.as_deref()),
                 Value::from(product.mpn.as_deref()),
+                Value::from(product.compare_at(None).map(|cents| cents as i64)),
             ];
             match &was {
                 None => {
@@ -718,16 +719,16 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
     .await
 }
 
-/// The row of a new product, every column: `?22` and `?23` are the search
+/// The row of a new product, every column: `?23` and `?24` are the search
 /// keys; the delivery time shown is the product's own, else the shop's
 /// default.
 const PRODUCT_INSERT: &str = "INSERT INTO storefront_products (id, slug, name, description,
     amount_cents, currency, status, updated_at, images_json, options_json, variants_json,
     attributes_json, min_amount_cents, max_amount_cents, own_delivery_min_days,
-    own_delivery_max_days, meta_title, meta_description, brand, gtin, mpn, slug_search,
-    name_search, delivery_min_days, delivery_max_days)
+    own_delivery_max_days, meta_title, meta_description, brand, gtin, mpn, compare_at_cents,
+    slug_search, name_search, delivery_min_days, delivery_max_days)
  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-    ?20, ?21, ?22, ?23,
+    ?20, ?21, ?22, ?23, ?24,
     coalesce(?15, (SELECT min_days FROM storefront_delivery_default)),
     coalesce(?16, (SELECT max_days FROM storefront_delivery_default)))";
 
@@ -739,7 +740,7 @@ const PRODUCT_UPDATE: &str = "UPDATE storefront_products SET
     updated_at = ?8, images_json = ?9, options_json = ?10, variants_json = ?11,
     attributes_json = ?12, min_amount_cents = ?13, max_amount_cents = ?14,
     own_delivery_min_days = ?15, own_delivery_max_days = ?16, meta_title = ?17,
-    meta_description = ?18, brand = ?19, gtin = ?20, mpn = ?21,
+    meta_description = ?18, brand = ?19, gtin = ?20, mpn = ?21, compare_at_cents = ?22,
     delivery_min_days = coalesce(?15, (SELECT min_days FROM storefront_delivery_default)),
     delivery_max_days = coalesce(?16, (SELECT max_days FROM storefront_delivery_default))
  WHERE id = ?1";
@@ -751,10 +752,10 @@ const PRODUCT_UPDATE_SEARCHED: &str = "UPDATE storefront_products SET
     updated_at = ?8, images_json = ?9, options_json = ?10, variants_json = ?11,
     attributes_json = ?12, min_amount_cents = ?13, max_amount_cents = ?14,
     own_delivery_min_days = ?15, own_delivery_max_days = ?16, meta_title = ?17,
-    meta_description = ?18, brand = ?19, gtin = ?20, mpn = ?21,
+    meta_description = ?18, brand = ?19, gtin = ?20, mpn = ?21, compare_at_cents = ?22,
     delivery_min_days = coalesce(?15, (SELECT min_days FROM storefront_delivery_default)),
     delivery_max_days = coalesce(?16, (SELECT max_days FROM storefront_delivery_default)),
-    slug_search = ?22, name_search = ?23
+    slug_search = ?23, name_search = ?24
  WHERE id = ?1";
 
 /// One row of `storefront_product_options`: a value an option of the product
@@ -865,6 +866,9 @@ fn variants_json(product: &ProductState) -> anyhow::Result<String> {
             image_id: variant.image_id.clone(),
             gtin: variant.gtin.clone(),
             mpn: variant.mpn.clone(),
+            compare_at_cents: product
+                .compare_at(Some(&variant.id))
+                .map(|cents| cents as i64),
         })
         .collect();
     Ok(serde_json::to_string(&variants)?)

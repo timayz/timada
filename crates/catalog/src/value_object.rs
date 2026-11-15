@@ -262,6 +262,89 @@ impl DeliveryDays {
     }
 }
 
+/// How far back a reduction looks for the price it is measured from: the
+/// lowest the thing was on sale at over these days before its current
+/// price (article L. 112-1-1 of the French consumer code, from directive
+/// (EU) 2019/2161).
+pub const PRIOR_PRICE_DAYS: u64 = 30;
+
+/// What a thing was on sale at, change after change: what a reduction may
+/// be measured from. Only what shoppers could pay counts, so a draft leaves
+/// no trace and an unpublished product a gap. Kept no further back than
+/// [`PRIOR_PRICE_DAYS`] before the current price.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PriceTrail {
+    points: Vec<PricePoint>,
+}
+
+/// A change in what a thing is on sale at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PricePoint {
+    /// Unix seconds.
+    pub at: u64,
+    /// `None` while it is off sale.
+    pub amount_cents: Option<u64>,
+}
+
+impl PriceTrail {
+    /// Notes what the thing is on sale at from `at` on; `None` takes it
+    /// off sale. The same as before changes nothing.
+    pub fn record(&mut self, at: u64, amount_cents: Option<u64>) {
+        let last = self.points.last().map(|point| point.amount_cents);
+        if last == Some(amount_cents) || (last.is_none() && amount_cents.is_none()) {
+            return;
+        }
+        self.points.push(PricePoint { at, amount_cents });
+        // What ended before the window of the current price is of no use
+        // to any later question.
+        if let Some(began) = self.current_began() {
+            let opens = self.points[began]
+                .at
+                .saturating_sub(PRIOR_PRICE_DAYS * 86_400);
+            let keep = (0..began)
+                .find(|at| self.points[at + 1].at >= opens)
+                .unwrap_or(began);
+            self.points.drain(..keep);
+        }
+    }
+
+    /// The changes kept, oldest first.
+    pub fn points(&self) -> &[PricePoint] {
+        &self.points
+    }
+
+    /// Where the current price began: the first point of the run that ends
+    /// the trail and holds nothing but that price and times off sale, so
+    /// taking a product off sale and back does not make its price a new
+    /// one. `None` for a thing that was never on sale.
+    fn current_began(&self) -> Option<usize> {
+        let current = self.points.iter().rev().find_map(|p| p.amount_cents)?;
+        let run = self
+            .points
+            .iter()
+            .rev()
+            .take_while(|point| point.amount_cents.is_none_or(|amount| amount == current))
+            .count();
+        // The run may open on a time off sale: the price began after it.
+        (self.points.len() - run..self.points.len())
+            .find(|at| self.points[*at].amount_cents.is_some())
+    }
+
+    /// The lowest the thing was on sale at over the [`PRIOR_PRICE_DAYS`]
+    /// before its current price began: the most a reduction may be measured
+    /// from. `None` when it was on sale at nothing else over those days.
+    pub fn lowest_before_current(&self) -> Option<u64> {
+        let began = self.current_began()?;
+        let opens = self.points[began]
+            .at
+            .saturating_sub(PRIOR_PRICE_DAYS * 86_400);
+        (0..began)
+            .filter(|at| self.points[at + 1].at >= opens)
+            .filter_map(|at| self.points[at].amount_cents)
+            .min()
+    }
+}
+
 /// The stream of the shop's shopping feed: one per tenant store.
 pub fn feed_id() -> String {
     evento::hash_ids(vec!["feed"])
@@ -638,6 +721,87 @@ pub fn format_money(amount_cents: u64, currency: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DAY: u64 = 86_400;
+
+    fn trail(points: &[(u64, Option<u64>)]) -> PriceTrail {
+        let mut trail = PriceTrail::default();
+        for (day, amount) in points {
+            trail.record(day * DAY, *amount);
+        }
+        trail
+    }
+
+    #[test]
+    fn a_reduction_is_measured_from_the_lowest_price_of_the_thirty_days_before() {
+        // Never on sale, or at one price only: nothing to compare with.
+        assert_eq!(trail(&[]).lowest_before_current(), None);
+        assert_eq!(trail(&[(100, Some(2000))]).lowest_before_current(), None);
+        // 20 € for months, then 15 €: measured from 20 €.
+        let lowered = trail(&[(100, Some(2000)), (200, Some(1500))]);
+        assert_eq!(lowered.lowest_before_current(), Some(2000));
+        // The lowest of the window, not the last: 20 €, 12 € for a week,
+        // 18 €, then 15 €.
+        let dipped = trail(&[
+            (100, Some(2000)),
+            (180, Some(1200)),
+            (187, Some(1800)),
+            (200, Some(1500)),
+        ]);
+        assert_eq!(dipped.lowest_before_current(), Some(1200));
+        // A price that ended more than thirty days before does not count.
+        let long_ago = trail(&[(100, Some(1200)), (150, Some(1800)), (200, Some(1500))]);
+        assert_eq!(long_ago.lowest_before_current(), Some(1800));
+        // One that ended on the thirtieth day does.
+        let edge = trail(&[(100, Some(1200)), (170, Some(1800)), (200, Some(1500))]);
+        assert_eq!(edge.lowest_before_current(), Some(1200));
+        // Changed twice within a second, the first still was a price.
+        let mut quick = PriceTrail::default();
+        quick.record(5, Some(2000));
+        quick.record(5, Some(1500));
+        assert_eq!(quick.lowest_before_current(), Some(2000));
+    }
+
+    #[test]
+    fn time_off_sale_is_no_price_and_does_not_make_the_price_a_new_one() {
+        // Off sale and back at the same price: still measured from 20 €.
+        let back = trail(&[
+            (100, Some(2000)),
+            (120, Some(1500)),
+            (125, None),
+            (128, Some(1500)),
+        ]);
+        assert_eq!(back.lowest_before_current(), Some(2000));
+        // Off sale for two months, then back cheaper: 20 € was not a price
+        // of the thirty days before.
+        let gone = trail(&[(100, Some(2000)), (110, None), (200, Some(1500))]);
+        assert_eq!(gone.lowest_before_current(), None);
+        // Off sale for a week only: it was.
+        let away = trail(&[(100, Some(2000)), (193, None), (200, Some(1500))]);
+        assert_eq!(away.lowest_before_current(), Some(2000));
+        // Off sale now: the price it had is still the current one.
+        let off = trail(&[(100, Some(2000)), (120, Some(1500)), (125, None)]);
+        assert_eq!(off.lowest_before_current(), Some(2000));
+        // A draft leaves no trace.
+        let mut draft = PriceTrail::default();
+        draft.record(5, None);
+        assert!(draft.points().is_empty());
+    }
+
+    #[test]
+    fn a_trail_keeps_the_thirty_days_before_the_current_price_and_no_more() {
+        let mut daily = PriceTrail::default();
+        for day in 0..400 {
+            daily.record(day * DAY, Some(1000 + day));
+        }
+        // The thirty days before the last change, the price in force when
+        // they opened, and the current one.
+        assert_eq!(daily.points().len(), 32);
+        assert_eq!(daily.lowest_before_current(), Some(1000 + 368));
+        // The same price again is no change.
+        daily.record(500 * DAY, Some(1399));
+        assert_eq!(daily.points().len(), 32);
+    }
 
     #[test]
     fn slugs_derive_from_names() {
