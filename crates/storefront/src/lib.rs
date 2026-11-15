@@ -42,6 +42,7 @@ mod read_model;
 mod reviews;
 mod router;
 mod shoppers;
+mod sitemap;
 mod store;
 mod support;
 
@@ -64,6 +65,7 @@ pub use read_model::*;
 pub use reviews::*;
 pub use router::*;
 pub use shoppers::*;
+pub use sitemap::*;
 pub use store::*;
 pub use support::*;
 /// How long delivery takes, as [`Product`] and [`CartView`] carry it.
