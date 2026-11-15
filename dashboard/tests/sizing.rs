@@ -11,7 +11,9 @@
 //! `SIZING_COMMANDS` (100000) catalog commands, about two events each, are
 //! run by `SIZING_WRITERS` (20) writers at once on one node over a file store opened as `serve` opens it,
 //! with `SIZING_SUBSCRIPTIONS` (0) subscriptions that follow none of those
-//! events, as most of a node's sagas do for most writes. `SIZING_DIR` keeps
+//! events, as most of a node's sagas do for most writes, and look at the store
+//! every `SIZING_POLL_MS` (250, evento's own) all the same; `SIZING_IDLE_SECS`
+//! (0) then leaves them that long with nothing written, to cost a look alone. `SIZING_DIR` keeps
 //! the store where it says instead of a temporary directory, on the disk to
 //! measure.
 //!
@@ -97,6 +99,7 @@ async fn what_a_store_costs() {
     let commands = knob("SIZING_COMMANDS", 100_000);
     let writers = knob("SIZING_WRITERS", 20);
     let subscriptions = knob("SIZING_SUBSCRIPTIONS", 0);
+    let poll = Duration::from_millis(knob("SIZING_POLL_MS", 250));
     let dir = std::env::var("SIZING_DIR").map_or_else(
         |_| std::env::temp_dir().join(format!("timada-sizing-{}", ulid::Ulid::generate())),
         PathBuf::from,
@@ -121,6 +124,7 @@ async fn what_a_store_costs() {
         workers.push(
             SubscriptionBuilder::<Executor>::new(format!("sizing/{n}"))
                 .handler(on_tenant_created())
+                .poll_interval(poll)
                 .start(&executor)
                 .await
                 .unwrap(),
@@ -186,6 +190,19 @@ async fn what_a_store_costs() {
     took.sort_unstable();
     let at = |q: f64| took[((took.len() - 1) as f64 * q) as usize] as f64 / 1000.0;
 
+    // What the subscriptions' looks cost with nothing written.
+    let idle = Duration::from_secs(knob("SIZING_IDLE_SECS", 0));
+    if !idle.is_zero() {
+        let before = cpu_time();
+        tokio::time::sleep(idle).await;
+        let used = (cpu_time() - before).as_secs_f64();
+        let looks = subscriptions as f64 * idle.as_secs_f64() / poll.as_secs_f64();
+        println!(
+            "idle for {idle:?}: {used:.2} s of processor, {:.2} ms per look",
+            used * 1000.0 / looks.max(1.0),
+        );
+    }
+
     for worker in workers {
         worker.shutdown().await.unwrap();
     }
@@ -201,7 +218,7 @@ async fn what_a_store_costs() {
 
     println!("store at {}", path.display());
     println!(
-        "{written:.0} events by {writers} writers, {subscriptions} subscriptions, in {:.1} s: {:.0} commands/s",
+        "{written:.0} events by {writers} writers, {subscriptions} subscriptions (a look every {poll:?}), in {:.1} s: {:.0} commands/s",
         elapsed.as_secs_f64(),
         took.len() as f64 / elapsed.as_secs_f64(),
     );

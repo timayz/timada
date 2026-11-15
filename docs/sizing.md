@@ -76,10 +76,25 @@ A node runs 47 workers (more with `server.also_serves` and
 A write now wakes only the subscriptions that follow one of its events
 (timayz/evento#531, in `b03d06d`); before, every write woke them all, and 47
 of them doing nothing cost 37 ms of processor per command and cut the
-throughput to a third. What is left costs a third of the throughput and 1.6 ms
-of processor per command, and a longer tail: 260 of 100,000 commands took
-over a second (none without the subscriptions), the longest 2.7 s. One run
-each; the cause of what is left is not looked into.
+throughput to a third.
+
+What is left is the look each subscription takes at the store every 250 ms
+whether or not anything was written (timayz/evento#536): 188 looks a second
+for 47 subscriptions.
+
+| 47 subscriptions | Commands/s | Processor per command |
+|---|---|---|
+| Looking every 250 ms | 651 to 933 (four runs) | 4.6 to 5.0 ms (three of them) |
+| Never looking (`SIZING_POLL_MS=3600000`) | 912, 1009 | 3.3 ms |
+
+- **While writes run a look costs about 6 ms of processor**, over one core
+  for the 47 of them. With nothing written it costs 0.8 ms, 0.15 core in all,
+  the same at 4,000 events as at 200,000 (`SIZING_IDLE_SECS`).
+- The throughput and the tail move more from run to run than the processor
+  does: 0, 79 and 260 commands of 100,000 took over a second in three runs
+  with the looks, 0 and 20 in two runs without.
+- Count one core per node for it under load, and again per extra region
+  served.
 
 ## Not measured
 
