@@ -2,8 +2,8 @@
 //! it, what shoppers said, and what goes with it.
 
 use timada_storefront::{
-    categories, category_path, menu_of, product_categories, product_image, related_products,
-    require_product, reviews_of, stars,
+    categories, category_path, menu_of, product_categories, product_image, product_seo,
+    related_products, require_product, reviews_of, stars,
 };
 use topcoat::{
     Result,
@@ -37,6 +37,7 @@ const RELATED: u32 = 4;
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<ProductPageQuery>(cx)?;
     let product = require_product(cx, slug(cx)).await?;
+    let seo = product_seo(cx, &product).await?;
     let reviews = reviews_of(cx, &product, query.reviews.unwrap_or(1)).await?;
     let slug = product.slug.clone();
     let reviews_link = move |page: u32| {
@@ -77,7 +78,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         document(
-            title: &product.name,
+            title: &seo.title,
+            description: Some(seo.description.as_str()).filter(|text| !text.is_empty()),
             nav: &nav,
             <div class="wrap">
                 <nav class="crumbs" aria-label="Fil d'Ariane" data-crumbs="">

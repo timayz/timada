@@ -47,9 +47,9 @@ test("an owner creates, edits, publishes, archives and deletes a product", async
   await page.getByRole("button", { name: "Set price" }).click();
   await expect(page.getByRole("status")).toContainText("Price set.");
   await expect(page.getByLabel("Price")).toHaveValue("12.50");
-  await page.getByLabel("Description").fill("Holds 50 cl of anything hot.");
+  await page.getByLabel("Description", { exact: true }).fill("Holds 50 cl of anything hot.");
   await page.getByRole("button", { name: "Save description" }).click();
-  await expect(page.getByLabel("Description")).toHaveValue("Holds 50 cl of anything hot.");
+  await expect(page.getByLabel("Description", { exact: true })).toHaveValue("Holds 50 cl of anything hot.");
   await page.getByLabel("Name", { exact: true }).fill("Big Blue Mug");
   await page.getByRole("button", { name: "Rename" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Big Blue Mug");

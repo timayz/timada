@@ -7,9 +7,10 @@ use topcoat_router::error::not_found;
 
 use crate::money::MoneyFormat;
 use crate::query::{
-    Category, CategoryNode, FacetValue, Product, ProductPage, ProductQuery, category_ancestors,
-    menu_of, published_categories, published_category_body, published_category_by_slug,
-    published_option_values, published_product_by_slug, published_products,
+    Category, CategoryNode, FacetValue, Product, ProductPage, ProductQuery, Seo,
+    category_ancestors, menu_of, published_categories, published_category_body,
+    published_category_by_slug, published_option_values, published_product_by_slug,
+    published_products,
 };
 use crate::store::Store;
 
@@ -112,6 +113,23 @@ pub async fn category_by_slug(cx: &Cx, slug: &str) -> Result<Option<Category>> {
 /// has none.
 pub async fn category_body(cx: &Cx, category_id: &str) -> Result<String> {
     published_category_body(store(cx).db(), category_id)
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// What search engines show for a category's page: the title and the
+/// description the merchant wrote for them, else its name and description.
+pub async fn category_seo(cx: &Cx, category: &Category) -> Result<Seo> {
+    crate::query::published_category_seo(store(cx).db(), category)
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// What search engines show for a product's page: the title and the
+/// description the merchant wrote for them, else its name and the start of
+/// its description.
+pub async fn product_seo(cx: &Cx, product: &Product) -> Result<Seo> {
+    crate::query::published_product_seo(store(cx).db(), product)
         .await
         .map_err(Error::from_anyhow)
 }

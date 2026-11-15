@@ -45,12 +45,12 @@ use timada_catalog::{
 use timada_core::db::Db;
 use timada_core::{Picture, Rendition, RenditionFile};
 use timada_storefront::{
-    CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Store, StoreConfig, StoreTls,
+    CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Seo, Store, StoreConfig, StoreTls,
     StoreUnavailable, SubscriptionState, category_ancestors, find_category, is_unavailable,
     live_announcements, menu_of, published_categories, published_category_body,
-    published_category_by_slug, published_option_values, published_page, published_product_by_slug,
-    published_product_categories, published_products, published_related_products,
-    search_published_pages,
+    published_category_by_slug, published_category_seo, published_option_values, published_page,
+    published_product_by_slug, published_product_categories, published_product_seo,
+    published_products, published_related_products, search_published_pages,
 };
 use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenantState,
@@ -625,6 +625,117 @@ async fn stock(
     }
     catalog.publish_product("alice", &product.id).await.unwrap();
     product.id
+}
+
+#[tokio::test]
+async fn a_store_shows_search_engines_the_merchants_words_or_the_pages_own() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme);
+    let mats = catalog
+        .create_category(
+            "alice",
+            CreateCategory {
+                name: "Mats".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .describe_category("alice", &mats.id, "Soft mats\nfor every cat.")
+        .await
+        .unwrap();
+    let wool = stock(&catalog, "Wool Mat", 1990, &[&mats.id]).await;
+    let long = format!("Warm in winter. {}", "A mat of real wool. ".repeat(20));
+    catalog
+        .describe_product("alice", &wool, &long)
+        .await
+        .unwrap();
+
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
+    eventually("the described product reaches the copy", async || {
+        published_product_by_slug(&db, "wool-mat")
+            .await
+            .unwrap()
+            .is_some_and(|product| product.description.starts_with("Warm"))
+    })
+    .await;
+    eventually("and so does the category", async || {
+        published_category_by_slug(&db, "mats")
+            .await
+            .unwrap()
+            .is_some_and(|category| !category.description.is_empty())
+    })
+    .await;
+
+    // Nothing set: the name, and the description on one line, cut at a word
+    // where a search engine would cut it.
+    let product = published_product_by_slug(&db, "wool-mat")
+        .await
+        .unwrap()
+        .unwrap();
+    let seo = published_product_seo(&db, &product).await.unwrap();
+    assert_eq!(seo.title, "Wool Mat");
+    assert!(
+        seo.description
+            .starts_with("Warm in winter. A mat of real wool.")
+    );
+    assert!(seo.description.ends_with('…'), "{}", seo.description);
+    assert!(seo.description.chars().count() <= 160);
+    let category = published_category_by_slug(&db, "mats")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        published_category_seo(&db, &category).await.unwrap(),
+        Seo {
+            title: "Mats".into(),
+            description: "Soft mats for every cat.".into(),
+        }
+    );
+
+    // The merchant's own words replace them, and leave what a shopper reads.
+    catalog
+        .set_product_seo("alice", &wool, "Wool cat mat | Acme", "A warm mat.")
+        .await
+        .unwrap();
+    catalog
+        .set_category_seo("alice", &mats.id, "Cat mats | Acme", "")
+        .await
+        .unwrap();
+    eventually("the product's reach the copy", async || {
+        published_product_seo(&db, &product).await.unwrap().title == "Wool cat mat | Acme"
+    })
+    .await;
+    eventually("the category's too", async || {
+        published_category_seo(&db, &category).await.unwrap().title == "Cat mats | Acme"
+    })
+    .await;
+    assert_eq!(
+        published_product_seo(&db, &product)
+            .await
+            .unwrap()
+            .description,
+        "A warm mat."
+    );
+    assert_eq!(
+        published_category_seo(&db, &category)
+            .await
+            .unwrap()
+            .description,
+        "Soft mats for every cat.",
+        "a description left empty keeps the page's own"
+    );
+    let shown = published_product_by_slug(&db, "wool-mat")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(shown.name, "Wool Mat");
+
+    store.shutdown().await;
 }
 
 #[tokio::test]

@@ -55,6 +55,7 @@ event timada-catalog/Category::HiddenFromMenu { hidden_by: String }
 event timada-catalog/Category::Moved { parent_id: Option<String>, moved_by: String }
 event timada-catalog/Category::Positioned { position: u32, positioned_by: String }
 event timada-catalog/Category::Renamed { name: String, renamed_by: String }
+event timada-catalog/Category::SeoSet { meta_title: String, meta_description: String, set_by: String }
 event timada-catalog/Category::ShownInMenu { shown_by: String }
 event timada-catalog/CategorySlug::Claimed { category_id: String }
 event timada-catalog/CategorySlug::Released unit
@@ -82,6 +83,7 @@ event timada-catalog/Product::OptionValuesChanged { option_id: String, values: V
 event timada-catalog/Product::Priced { amount_cents: u64, currency: String, priced_by: String }
 event timada-catalog/Product::Published { published_by: String }
 event timada-catalog/Product::Renamed { name: String, slug: String, renamed_by: String }
+event timada-catalog/Product::SeoSet { meta_title: String, meta_description: String, set_by: String }
 event timada-catalog/Product::TaxCategorySet { category: Option<String>, set_by: String }
 event timada-catalog/Product::Uncategorized { category_id: String, uncategorized_by: String }
 event timada-catalog/Product::Unpublished { unpublished_by: String }

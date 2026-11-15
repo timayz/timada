@@ -5,6 +5,7 @@ use crate::CatalogError;
 pub const MAX_NAME_LEN: usize = 120;
 pub const MAX_DESCRIPTION_LEN: usize = 4000;
 pub use timada_core::MIN_SLUG_LEN;
+pub use timada_core::{MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN};
 pub const MAX_SLUG_LEN: usize = 64;
 /// Length of the random suffix added when a derived slug is already taken.
 pub use timada_core::SLUG_SUFFIX_LEN;
@@ -390,6 +391,16 @@ pub fn normalize_description(description: &str) -> Result<String, CatalogError> 
         return Err(CatalogError::InvalidDescription);
     }
     Ok(description.to_owned())
+}
+
+/// Trims the search engines' title and description of a product or a
+/// category and checks their length. Empty is fine: the name and the
+/// description stand in.
+pub fn normalize_seo(
+    meta_title: &str,
+    meta_description: &str,
+) -> Result<(String, String), CatalogError> {
+    timada_core::normalize_seo(meta_title, meta_description).ok_or(CatalogError::InvalidSeo)
 }
 
 /// Lowercases and validates a slug: `[a-z0-9]`, `-` inside, 2 to 64 characters.

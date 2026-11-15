@@ -1,10 +1,10 @@
 use evento::{Executor, ProjectionAggregate};
 
-use crate::aggregator::{Described, Priced, Renamed, TaxCategorySet};
+use crate::aggregator::{Described, Priced, Renamed, SeoSet, TaxCategorySet};
 use crate::error::CatalogError;
 use crate::value_object::{
     TAX_CATEGORIES, TAX_CATEGORY_STANDARD, normalize_currency, normalize_description,
-    normalize_name, slugify,
+    normalize_name, normalize_seo, slugify,
 };
 
 use super::Price;
@@ -81,6 +81,35 @@ impl<E: Executor> super::Command<E> {
             .event(&Described {
                 description,
                 described_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await?;
+        Ok(())
+    }
+
+    /// Sets what search engines show for the product's page; empty goes back
+    /// to its name and description. The same is a no-op.
+    pub async fn set_product_seo(
+        &self,
+        actor: &str,
+        product_id: &str,
+        meta_title: &str,
+        meta_description: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let (meta_title, meta_description) = normalize_seo(meta_title, meta_description)?;
+        let product = self.require_editable(product_id).await?;
+        if product.meta_title == meta_title && product.meta_description == meta_description {
+            return Ok(());
+        }
+        product
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&SeoSet {
+                meta_title,
+                meta_description,
+                set_by: actor.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)

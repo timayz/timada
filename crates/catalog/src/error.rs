@@ -1,4 +1,5 @@
 use evento::WriteError;
+use timada_core::{MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
@@ -10,6 +11,10 @@ pub enum CatalogError {
     SlugTaken,
     #[error("the description must be at most 4000 characters")]
     InvalidDescription,
+    #[error(
+        "the search engines' title is at most {MAX_META_TITLE_LEN} characters, the description {MAX_META_DESCRIPTION_LEN}"
+    )]
+    InvalidSeo,
     #[error("the amount must be a positive number with at most two decimals")]
     InvalidAmount,
     #[error("unknown currency")]
@@ -133,6 +138,7 @@ impl CatalogError {
             Self::InvalidSlug => "invalid_product_slug",
             Self::SlugTaken => "product_slug_taken",
             Self::InvalidDescription => "invalid_description",
+            Self::InvalidSeo => "invalid_seo",
             Self::InvalidAmount => "invalid_amount",
             Self::InvalidCurrency => "invalid_currency",
             Self::NotFound => "product_not_found",

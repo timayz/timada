@@ -52,7 +52,7 @@ test("an owner builds a category tree and files a product under it", async ({ pa
   await page.getByRole("button", { name: "Rename" }).click();
   await expect(page.getByRole("status")).toContainText("Category renamed.");
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Cat mats");
-  await page.getByLabel("Description").fill("Where a cat naps.");
+  await page.getByLabel("Description", { exact: true }).fill("Where a cat naps.");
   await page.getByRole("button", { name: "Save description" }).click();
   await expect(page.locator("[data-category-description]")).toContainText("Where a cat naps");
   await expect(page.locator("[data-category-body]")).toHaveText("—");

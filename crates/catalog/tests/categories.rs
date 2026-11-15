@@ -129,6 +129,49 @@ async fn categories_nest_three_levels_deep_and_no_further() {
 }
 
 #[tokio::test]
+async fn what_search_engines_show_of_a_category_is_its_own() {
+    let cmd = command().await;
+    let category = create_category(&cmd, "Bedding").await;
+    assert_eq!(category.meta_title, "");
+    assert_eq!(category.meta_description, "");
+
+    cmd.set_category_seo(
+        ALICE,
+        &category.id,
+        " Cat beds and mats | Acme ",
+        "Soft beds\nfor  cats. ",
+    )
+    .await
+    .unwrap();
+    let set = cmd.load_category(&category.id).await.unwrap().unwrap();
+    assert_eq!(set.meta_title, "Cat beds and mats | Acme");
+    assert_eq!(set.meta_description, "Soft beds for cats.");
+    assert_eq!(set.name, "Bedding");
+
+    let version = set.aggregate_version;
+    cmd.set_category_seo(
+        ALICE,
+        &category.id,
+        "Cat beds and mats | Acme",
+        "Soft beds for cats.",
+    )
+    .await
+    .unwrap();
+    let again = cmd.load_category(&category.id).await.unwrap().unwrap();
+    assert_eq!(again.aggregate_version, version, "no event for no change");
+
+    let long = cmd
+        .set_category_seo(ALICE, &category.id, &"t".repeat(71), "")
+        .await;
+    assert!(matches!(long, Err(CatalogError::InvalidSeo)), "{long:?}");
+    let missing = cmd.set_category_seo(ALICE, "nope", "Title", "").await;
+    assert!(
+        matches!(missing, Err(CatalogError::CategoryNotFound)),
+        "{missing:?}"
+    );
+}
+
+#[tokio::test]
 async fn editing_a_category_is_idempotent() {
     let cmd = command().await;
     let category = create_category(&cmd, "Bedding").await;
@@ -294,6 +337,7 @@ async fn an_archived_category_leaves_its_slug_and_takes_no_edits() {
         cmd.rename_category(ALICE, &first.id, "Nope").await,
         cmd.describe_category(ALICE, &first.id, "Nope").await,
         cmd.write_category_body(ALICE, &first.id, "Nope").await,
+        cmd.set_category_seo(ALICE, &first.id, "Nope", "").await,
         cmd.move_category(ALICE, &first.id, None).await,
         cmd.position_category(ALICE, &first.id, 1).await,
         cmd.set_category_in_menu(ALICE, &first.id, false).await,
