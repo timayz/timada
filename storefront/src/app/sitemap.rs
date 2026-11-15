@@ -39,10 +39,16 @@ pub const PRIVATE_PATHS: &[&str] = &[
     "/store",
 ];
 
-/// A listing narrowed by a filter or a search is the same products again:
-/// crawlers stay out of it too. A page further down a listing (`page=`) is
-/// not: it has products of its own.
-const FILTERED: &[&str] = &["/*?*q=", "/*?*min_price=", "/*?*max_price=", "/*?*couleur="];
+/// A listing searched, narrowed by a filter or sorted is the same products
+/// again: crawlers stay out of it too. A page further down a listing
+/// (`page=`) is not: it has products of its own.
+const FILTERED: &[&str] = &[
+    "/*?*q=",
+    "/*?*sort=",
+    "/*?*min_price=",
+    "/*?*max_price=",
+    "/*?*couleur=",
+];
 
 /// How long a crawler may keep a file before asking again.
 const CACHE: &str = "public, max-age=3600";

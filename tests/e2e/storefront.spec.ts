@@ -531,6 +531,67 @@ test("the storefront shows the catalogue in French", async ({
   await page.goto(`${app.url}/cart`);
   await expect(noindex).toHaveCount(1);
 
+  // Every page names the one address search engines keep for it, draws a
+  // card for a shared link, and says what it shows as data.
+  const canonical = page.locator("link[rel=canonical]");
+  const meta = (property: string) => page.locator(`meta[property="${property}"]`);
+  const data = async () =>
+    (await page.locator('script[type="application/ld+json"]').allTextContents()).map((text) => JSON.parse(text));
+  await page.goto(`${app.url}/`);
+  await expect(canonical).toHaveAttribute("href", `${app.url}/`);
+  await expect(meta("og:type")).toHaveAttribute("content", "website");
+  await expect(meta("og:site_name")).toHaveAttribute("content", "Ma boutique");
+  expect((await data()).map((d) => d["@type"])).toEqual(["Organization", "WebSite"]);
+  // A listing sorted or filtered names the plain one.
+  await page.goto(`${app.url}/c/tapis?sort=price_asc&couleur=rose`);
+  await expect(canonical).toHaveAttribute("href", `${app.url}/c/tapis`);
+  const [trail] = await data();
+  expect(trail["@type"]).toBe("BreadcrumbList");
+  expect(trail.itemListElement.map((item: { name: string; item: string }) => [item.name, item.item])).toEqual([
+    ["Accueil", `${app.url}/`],
+    ["Couchage", `${app.url}/c/couchage`],
+    ["Tapis", `${app.url}/c/tapis`],
+  ]);
+  expect(rules).toContain("Disallow: /*?*sort=\n");
+  // A product sold as is: one offer, its picture at the page's size.
+  await page.goto(`${app.url}/p/tapis-fraicheur`);
+  await expect(canonical).toHaveAttribute("href", `${app.url}/p/tapis-fraicheur`);
+  await expect(meta("og:type")).toHaveAttribute("content", "product");
+  await expect(meta("og:title")).toHaveAttribute("content", "Tapis rafraîchissant pour chat");
+  await expect(meta("og:image")).toHaveAttribute("content", /\/1200\/.+\.webp$/);
+  await expect(meta("product:price:amount")).toHaveAttribute("content", "19.90");
+  await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute("content", "summary_large_image");
+  const [matData, matTrail] = await data();
+  expect(matData["@type"]).toBe("Product");
+  expect(matData.name).toBe("Tapis fraîcheur");
+  expect(matData.description).toBe("Un tapis qui garde votre chat au frais.");
+  expect(matData.offers).toMatchObject({
+    url: `${app.url}/p/tapis-fraicheur`,
+    price: "19.90",
+    priceCurrency: "EUR",
+    availability: "https://schema.org/InStock",
+  });
+  expect(matData.aggregateRating).toBeUndefined();
+  expect(matTrail.itemListElement).toHaveLength(4);
+  // A product with variants: a group, and an address for each variant,
+  // which opens the page on it and still names the product's address.
+  await page.goto(`${app.url}/p/collier-etoile`);
+  const [collar] = await data();
+  expect(collar["@type"]).toBe("ProductGroup");
+  expect(collar.hasVariant.map((v: { name: string; offers: { price: string } }) => [v.name, v.offers.price])).toEqual([
+    ["Collier étoilé – Rose", "9.90"],
+    ["Collier étoilé – Bleu", "59.90"],
+  ]);
+  const blue: string = collar.hasVariant[1].offers.url;
+  expect(blue).toMatch(new RegExp(`^${app.url}/p/collier-etoile\\?v=`));
+  await expect(page.locator("[data-variants] a").nth(1)).toHaveAttribute("href", blue.slice(app.url.length));
+  await page.goto(blue);
+  await expect(page.locator("[data-shown-variant]")).toHaveText("59,90€");
+  await expect(page.locator("select[data-option=Couleur]")).toHaveValue("Bleu");
+  await expect(canonical).toHaveAttribute("href", `${app.url}/p/collier-etoile`);
+  await expect(meta("product:price:amount")).toHaveAttribute("content", "59.90");
+  await expect(noindex).toHaveCount(0);
+
   // A page the merchant has not written yet is a 404, and the old
   // `/pages/…` addresses are gone.
   expect((await page.goto(`${app.url}/mentions-legales`))?.status()).toBe(404);

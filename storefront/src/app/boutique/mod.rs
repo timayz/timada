@@ -30,7 +30,9 @@ struct CatalogQuery {
 struct CatalogLink<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     q: Option<&'a str>,
-    page: u32,
+    /// Left out for the first page, so it has one address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     min_price: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,7 +66,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         href!(index)
             .query(CatalogLink {
                 q: wanted.q.as_deref(),
-                page: number,
+                page: (number > 1).then_some(number),
                 min_price: filters.min_price,
                 max_price: filters.max_price,
                 couleur: filters.couleur.as_deref(),
@@ -79,11 +81,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
     // A search or a filter shows products the plain catalogue lists too.
     let narrowed = q.is_some() || filters.is_active();
+    // Search engines keep the plain catalogue for those, and each page of
+    // it for itself.
+    let canonical = if narrowed {
+        href!(index).resolve(cx)
+    } else {
+        link(&Filters::default(), page.page)
+    };
 
     Ok(view! {
         document(
             title: &title,
             noindex: narrowed,
+            canonical: Some(canonical.as_str()),
             nav: &nav,
             <div class="wrap">
                 <nav class="crumbs" aria-label="Fil d'Ariane" data-crumbs="">
