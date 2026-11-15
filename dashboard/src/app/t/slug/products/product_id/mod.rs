@@ -12,6 +12,7 @@ pub mod options;
 pub mod price;
 pub mod publish;
 pub mod rename;
+pub mod seo;
 pub mod stock;
 pub mod tax_category;
 pub mod uncategorize;
@@ -22,9 +23,10 @@ use std::sync::Arc;
 
 use timada_catalog::{
     CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_ATTRIBUTE_VALUE_LEN,
-    MAX_DELIVERY_DAYS, MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_NAME_LEN,
-    MAX_OPTION_LABEL_LEN, MAX_OPTION_NAME_LEN, MAX_OPTIONS, MAX_SKU_LEN, MAX_VARIANTS,
-    ProductOption, ProductState, ProductVariant, TAX_CATEGORIES, format_money, tax_category_label,
+    MAX_DELIVERY_DAYS, MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_META_DESCRIPTION_LEN,
+    MAX_META_TITLE_LEN, MAX_NAME_LEN, MAX_OPTION_LABEL_LEN, MAX_OPTION_NAME_LEN, MAX_OPTIONS,
+    MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant, TAX_CATEGORIES,
+    format_money, tax_category_label,
 };
 use timada_core::Rendition;
 use timada_tenancy::{
@@ -49,7 +51,7 @@ use crate::auth::user_labels;
 use crate::components::badge::{BadgeVariant, badge};
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::card::CARD;
-use crate::components::field::{field, field_label};
+use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
 use crate::components::select::select;
 use crate::components::table::{
@@ -804,6 +806,30 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save description")
                             </div>
                         </form>
+                        <form method="post" action=(href!(seo::seo, slug: slug.clone(), product_id: product.id.clone())) class=(class!(CARD, "gap-4 px-6 md:col-span-2"))>
+                            field(
+                                field_label(attrs: attributes! { for="product-meta-title" }, "Search engines' title")
+                                field_description(attrs: attributes! { id="product-meta-title-hint" }, "Empty uses the product's name.")
+                                input(attrs: attributes! {
+                                    id="product-meta-title" name="meta_title" type="text" maxlength=(MAX_META_TITLE_LEN)
+                                    aria-describedby="product-meta-title-hint" value=(&product.meta_title)
+                                })
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="product-meta-description" }, "Search engines' description")
+                                field_description(attrs: attributes! { id="product-meta-description-hint" }, "Empty uses the start of the description.")
+                                textarea(
+                                    attrs: attributes! {
+                                        id="product-meta-description" name="meta_description" rows="3" maxlength=(MAX_META_DESCRIPTION_LEN)
+                                        aria-describedby="product-meta-description-hint"
+                                    },
+                                    (&product.meta_description)
+                                )
+                            )
+                            <div>
+                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save for search engines")
+                            </div>
+                        </form>
                     </section>
                 }
 
@@ -1403,6 +1429,14 @@ pub struct RenameForm {
 pub struct DescribeForm {
     #[serde(default)]
     pub description: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct SeoForm {
+    #[serde(default)]
+    pub meta_title: String,
+    #[serde(default)]
+    pub meta_description: String,
 }
 
 #[derive(serde::Deserialize)]

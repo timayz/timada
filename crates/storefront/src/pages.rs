@@ -20,7 +20,7 @@ use crate::query::search_key;
 
 /// The longest description a page gives search engines when the merchant
 /// wrote none: the start of its text.
-const DESCRIPTION_CHARS: usize = 160;
+pub(crate) const DESCRIPTION_CHARS: usize = 160;
 
 /// A published page, ready to show.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,7 +197,7 @@ async fn upsert_page(db: &Db, page: &PageState) -> anyhow::Result<()> {
 }
 
 /// The first `max` characters of `text`, cut at a word and marked as cut.
-fn excerpt(text: &str, max: usize) -> String {
+pub(crate) fn excerpt(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_owned();
     }

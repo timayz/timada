@@ -205,6 +205,13 @@ pub enum Product {
         days: Option<DeliveryDays>,
         set_by: String,
     },
+    /// What search engines show for its page; empty falls back to the name
+    /// and the description.
+    SeoSet {
+        meta_title: String,
+        meta_description: String,
+        set_by: String,
+    },
 }
 
 /// The delivery time of a product that gives none: one stream per tenant
@@ -302,6 +309,13 @@ pub mod category {
         /// Back in the shop's menu.
         ShownInMenu {
             shown_by: String,
+        },
+        /// What search engines show for its page; empty falls back to the
+        /// name and the description.
+        SeoSet {
+            meta_title: String,
+            meta_description: String,
+            set_by: String,
         },
     }
 

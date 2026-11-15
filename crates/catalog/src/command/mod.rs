@@ -41,16 +41,16 @@ use crate::aggregator::category::{
     Claimed as CategorySlugClaimed, Created as CategoryCreated, Described as CategoryDescribed,
     HiddenFromMenu as CategoryHiddenFromMenu, Moved as CategoryMoved,
     Positioned as CategoryPositioned, Released as CategorySlugReleased, Renamed as CategoryRenamed,
-    ShownInMenu as CategoryShownInMenu,
+    SeoSet as CategorySeoSet, ShownInMenu as CategoryShownInMenu,
 };
 use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
     Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Created, Deleted,
     DeliveryDaysSet, Described, ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered,
     OptionDefined, OptionHidden, OptionLabelled, OptionRemoved, OptionRenamed, OptionShown,
-    OptionValueLabelled, OptionValuesChanged, Priced, Published, Released, Renamed, TaxCategorySet,
-    Uncategorized, Unpublished, VariantDefined, VariantImaged, VariantPriced, VariantRemoved,
-    VariantSkuChanged, VariantsRepriced,
+    OptionValueLabelled, OptionValuesChanged, Priced, Published, Released, Renamed, SeoSet,
+    TaxCategorySet, Uncategorized, Unpublished, VariantDefined, VariantImaged, VariantPriced,
+    VariantRemoved, VariantSkuChanged, VariantsRepriced,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
@@ -252,6 +252,11 @@ pub struct ProductState {
     pub slug: String,
     pub name: String,
     pub description: String,
+    /// The title search engines show; empty for the name.
+    pub meta_title: String,
+    /// The description search engines show; empty for the start of the
+    /// description.
+    pub meta_description: String,
     pub price: Option<Price>,
     pub status: ProductStatus,
     /// Gone for good: archived, and its rows dropped from every listing. The
@@ -486,6 +491,7 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_attribute_removed())
         .handler(on_tax_category_set())
         .handler(on_delivery_days_set())
+        .handler(on_seo_set())
         .strict()
 }
 
@@ -511,6 +517,14 @@ async fn on_renamed(event: Event<Renamed>, product: &mut ProductState) -> anyhow
 #[evento::handler]
 async fn on_described(event: Event<Described>, product: &mut ProductState) -> anyhow::Result<()> {
     product.description = event.data.description.to_owned();
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_seo_set(event: Event<SeoSet>, product: &mut ProductState) -> anyhow::Result<()> {
+    product.meta_title = event.data.meta_title.to_owned();
+    product.meta_description = event.data.meta_description.to_owned();
     product.updated_at = event.timestamp;
     Ok(())
 }
@@ -1048,6 +1062,10 @@ pub struct CategoryState {
     pub description: String,
     /// The text below its products.
     pub body: String,
+    /// The title search engines show; empty for the name.
+    pub meta_title: String,
+    /// The description search engines show; empty for the description.
+    pub meta_description: String,
     /// `None` for a top-level category.
     pub parent_id: Option<String>,
     /// Where it sorts among its siblings, lowest first.
@@ -1073,6 +1091,7 @@ pub fn category_projection<E: Executor>() -> Projection<E, CategoryState> {
         .handler(on_category_archived())
         .handler(on_category_hidden_from_menu())
         .handler(on_category_shown_in_menu())
+        .handler(on_category_seo_set())
         .strict()
 }
 
@@ -1117,6 +1136,17 @@ async fn on_category_body_written(
     category: &mut CategoryState,
 ) -> anyhow::Result<()> {
     category.body = event.data.body.to_owned();
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_seo_set(
+    event: Event<CategorySeoSet>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.meta_title = event.data.meta_title.to_owned();
+    category.meta_description = event.data.meta_description.to_owned();
     category.updated_at = event.timestamp;
     Ok(())
 }

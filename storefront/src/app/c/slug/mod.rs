@@ -2,8 +2,8 @@
 //! the price and colour filters.
 
 use timada_storefront::{
-    ProductQuery, ProductSort, categories, category_body, category_path, menu_of, option_values,
-    products, require_category_in,
+    ProductQuery, ProductSort, categories, category_body, category_path, category_seo, menu_of,
+    option_values, products, require_category_in,
 };
 use topcoat::{
     Result,
@@ -59,6 +59,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let category = node.category.clone();
     let children = node.children.clone();
     let crumbs = category_path(&tree, &category);
+    let seo = category_seo(cx, &category).await?;
     let query = query_params::<CategoryQuery>(cx)?;
     // The longer text about the category, on its first page only.
     let body = if query.page.unwrap_or(1) <= 1 {
@@ -107,7 +108,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
     Ok(view! {
         document(
-            title: &category.name,
+            title: &seo.title,
+            description: Some(seo.description.as_str()).filter(|text| !text.is_empty()),
             nav: &nav,
             <div class="wrap">
                 <nav class="crumbs" aria-label="Fil d'Ariane" data-crumbs="">

@@ -7,10 +7,12 @@ pub mod menu;
 pub mod move_to;
 pub mod position;
 pub mod rename;
+pub mod seo;
 
 use timada_catalog::{
     CategoryRow, CategoryState, MAX_CATEGORY_BODY_LEN, MAX_CATEGORY_DESCRIPTION_LEN,
-    MAX_CATEGORY_NAME_LEN, category_by_id, live_child_count,
+    MAX_CATEGORY_NAME_LEN, MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, category_by_id,
+    live_child_count,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
@@ -36,7 +38,7 @@ use crate::components::breadcrumb::{
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::card::CARD;
 use crate::components::checkbox::checkbox;
-use crate::components::field::{field, field_label};
+use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
 use crate::components::label::label;
 use crate::components::select::select;
@@ -326,6 +328,28 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                         <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save description")</div>
                     </form>
+                    <form method="post" action=(href!(seo::seo, slug: slug.clone(), category_id: category.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
+                        field(
+                            field_label(attrs: attributes! { for="category-meta-title" }, "Search engines' title")
+                            field_description(attrs: attributes! { id="category-meta-title-hint" }, "Empty uses the category's name.")
+                            input(attrs: attributes! {
+                                id="category-meta-title" name="meta_title" type="text" maxlength=(MAX_META_TITLE_LEN)
+                                aria-describedby="category-meta-title-hint" value=(&category.meta_title)
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="category-meta-description" }, "Search engines' description")
+                            field_description(attrs: attributes! { id="category-meta-description-hint" }, "Empty uses the category's description.")
+                            textarea(
+                                attrs: attributes! {
+                                    id="category-meta-description" name="meta_description" rows="3" maxlength=(MAX_META_DESCRIPTION_LEN)
+                                    aria-describedby="category-meta-description-hint"
+                                },
+                                (&category.meta_description)
+                            )
+                        )
+                        <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save for search engines")</div>
+                    </form>
                     <form method="post" action=(href!(menu::menu, slug: slug.clone(), category_id: category.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                         label(
                             checkbox(attrs: attributes! { name="in_menu" value="on" checked=(!category.hidden_from_menu) })
@@ -359,6 +383,14 @@ struct ProductsOfCategory<'a> {
 #[derive(serde::Deserialize)]
 pub struct RenameForm {
     pub name: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct SeoForm {
+    #[serde(default)]
+    pub meta_title: String,
+    #[serde(default)]
+    pub meta_description: String,
 }
 
 #[derive(serde::Deserialize)]

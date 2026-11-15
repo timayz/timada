@@ -141,6 +141,11 @@ test("the storefront shows the catalogue in French", async ({
     .fill("Comment choisir un couchage pour chat ?");
   await page.getByRole("button", { name: "Save description" }).click();
   await expect(page.getByRole("status")).toContainText("Description saved.");
+  // What search engines show for it, apart from the name a shopper reads.
+  await page.getByLabel("Search engines' title").fill("Couchages pour chat");
+  await page.getByRole("button", { name: "Save for search engines" }).click();
+  await expect(page.getByRole("status")).toContainText("Saved for search engines.");
+  await expect(page.getByLabel("Search engines' title")).toHaveValue("Couchages pour chat");
   await createCategory(page, slug, "Tapis", "Couchage");
   const mat = await publishProduct(
     page,
@@ -150,6 +155,11 @@ test("the storefront shows the catalogue in French", async ({
     "Tapis",
   );
   await addPicture(page, mat, "Un tapis bleu");
+  await page.goto(mat);
+  await page.getByLabel("Search engines' title").fill("Tapis rafraîchissant pour chat");
+  await page.getByLabel("Search engines' description").fill("Un tapis qui garde\nvotre chat au frais.");
+  await page.getByRole("button", { name: "Save for search engines" }).click();
+  await expect(page.getByRole("status")).toContainText("Saved for search engines.");
   await publishProduct(page, slug, "Panier douillet", "34.90", "Couchage");
   // A collar in two colours, priced apart: what the filters are tried on.
   await publishVariedProduct(
@@ -235,6 +245,10 @@ test("the storefront shows the catalogue in French", async ({
   // shop's sort labels.
   await page.goto(`${app.url}/c/couchage`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Couchage");
+  // Search engines read the merchant's title; with no description written
+  // anywhere, the page gives them none.
+  await expect(page).toHaveTitle("Couchages pour chat – Ma boutique");
+  await expect(page.locator("meta[name=description]")).toHaveCount(0);
   await expect(page.locator("[data-crumbs]")).toContainText(
     "Accueil / Couchage",
   );
@@ -340,6 +354,11 @@ test("the storefront shows the catalogue in French", async ({
   await page.goto(`${app.url}/p/tapis-fraicheur`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "Tapis fraîcheur",
+  );
+  await expect(page).toHaveTitle("Tapis rafraîchissant pour chat – Ma boutique");
+  await expect(page.locator("meta[name=description]")).toHaveAttribute(
+    "content",
+    "Un tapis qui garde votre chat au frais.",
   );
   await expect(page.locator("[data-crumbs]")).toContainText(
     "Accueil / Couchage / Tapis / Tapis fraîcheur",
