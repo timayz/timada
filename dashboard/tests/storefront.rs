@@ -949,6 +949,51 @@ async fn a_store_knows_who_makes_a_product_and_under_which_numbers() {
     assert_eq!(collar.variants[0].mpn.as_deref(), Some("C-RED"));
     assert_eq!(collar.brand, None);
 
+    // A reduction reaches the copy with the price it is down from, and
+    // leaves it when the price catches up.
+    assert_eq!(mug.compare_at_cents, None);
+    catalog
+        .price_product("alice", &mug.id, 990, "EUR")
+        .await
+        .unwrap();
+    catalog
+        .set_compare_at("alice", &mug.id, None, Some(1250))
+        .await
+        .unwrap();
+    catalog
+        .price_variant("alice", &collar.id, &red, 790, "EUR")
+        .await
+        .unwrap();
+    catalog
+        .set_compare_at("alice", &collar.id, Some(&red), Some(990))
+        .await
+        .unwrap();
+    eventually("the reductions reach the copy", async || {
+        let mug = published_product_by_slug(&db, "blue-mug")
+            .await
+            .unwrap()
+            .unwrap();
+        let collar = published_product_by_slug(&db, "collar")
+            .await
+            .unwrap()
+            .unwrap();
+        (mug.amount_cents, mug.compare_at_cents) == (Some(990), Some(1250))
+            && collar.variants[0].compare_at_cents == Some(990)
+    })
+    .await;
+    catalog
+        .price_product("alice", &mug.id, 1250, "EUR")
+        .await
+        .unwrap();
+    eventually("a price back where it was shows no reduction", async || {
+        let mug = published_product_by_slug(&db, "blue-mug")
+            .await
+            .unwrap()
+            .unwrap();
+        (mug.amount_cents, mug.compare_at_cents) == (Some(1250), None)
+    })
+    .await;
+
     store.shutdown().await;
 }
 

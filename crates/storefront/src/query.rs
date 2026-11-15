@@ -105,9 +105,20 @@ pub struct Variant {
     /// Its maker's own number for it.
     #[serde(default)]
     pub mpn: Option<String>,
+    /// The price its reduction is announced against, to strike through
+    /// beside its price: above it whenever it is there.
+    #[serde(default)]
+    pub compare_at_cents: Option<i64>,
 }
 
 impl Variant {
+    /// The price it is down from, as `money` writes it; `None` without a
+    /// reduction.
+    pub fn compare_at_with(&self, money: &MoneyFormat) -> Option<String> {
+        self.compare_at_cents
+            .map(|cents| money.format(cents.max(0) as u64, &self.currency))
+    }
+
     /// The price as a person reads it (`22.90 €`).
     pub fn price(&self) -> String {
         self.price_with(&MoneyFormat::default())
@@ -231,6 +242,10 @@ pub struct Product {
     /// Its maker's own number for a product sold as is; a variant has its
     /// own.
     pub mpn: Option<String>,
+    /// The price the reduction of a product sold as is is announced
+    /// against, to strike through beside its price: above it whenever it
+    /// is there. A variant has its own.
+    pub compare_at_cents: Option<i64>,
 }
 
 impl FromRow for Product {
@@ -266,11 +281,20 @@ impl FromRow for Product {
             brand: row.get("brand")?,
             gtin: row.get("gtin")?,
             mpn: row.get("mpn")?,
+            compare_at_cents: row.get("compare_at_cents")?,
         })
     }
 }
 
 impl Product {
+    /// The price a product sold as is is down from, as `money` writes it;
+    /// `None` without a reduction.
+    pub fn compare_at_with(&self, money: &MoneyFormat) -> Option<String> {
+        let currency = self.currency.as_deref()?;
+        self.compare_at_cents
+            .map(|cents| money.format(cents.max(0) as u64, currency))
+    }
+
     /// How many are left of the product (`variant_id` `None`) or of one of
     /// its variants; `None` when the shop does not count it (no limit).
     pub fn left(&self, variant_id: Option<&str>) -> Option<u32> {
@@ -548,7 +572,8 @@ macro_rules! product_columns {
         "p.id, p.slug, p.name, p.description, p.amount_cents, p.currency, p.updated_at,
          p.images_json, p.options_json, p.variants_json, p.attributes_json, p.min_amount_cents,
          p.max_amount_cents, p.review_count, p.rating_x100, p.stock_json, p.in_stock,
-         p.delivery_min_days, p.delivery_max_days, p.brand, p.gtin, p.mpn"
+         p.delivery_min_days, p.delivery_max_days, p.brand, p.gtin, p.mpn,
+         p.compare_at_cents"
     };
 }
 

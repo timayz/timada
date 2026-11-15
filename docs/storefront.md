@@ -244,6 +244,11 @@ own address, the card, and the data the page hands it:
   variant under that name (`"color": "Rouge"`); the other options stay free properties.
   The labels, the Google category and the audience are for a shopping feed only and do
   not reach the storefront's copy.
+- a reduction: `product.compare_at_cents` (a product sold as is) and
+  `variant.compare_at_cents` are the price to strike through, there only while above the
+  price; `compare_at_with(&money)` writes it. The back office holds it to the lowest
+  price of the thirty days before, so a storefront shows it as it is. The data gives it
+  as the offer's `priceSpecification` (`StrikethroughPrice`).
 
 ### An address that moved
 

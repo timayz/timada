@@ -113,6 +113,13 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_audience" => "Choose one of the listed age groups and genders.",
         "invalid_option_kind" => "Choose one of the listed kinds.",
         "option_kind_taken" => "Another option of this product is already of this kind.",
+        "compare_at_not_above" => "What it is reduced from has to be more than what it costs now.",
+        "no_earlier_price" => {
+            "It was on sale at nothing else in the 30 days before its current price, so there is no reduction to announce: lower its price first."
+        }
+        "compare_at_above_earlier" => {
+            "A reduction is measured from the lowest it was on sale at in the 30 days before its current price, no more."
+        }
         "invalid_amount" => "Enter the price as a number with at most two decimals, like 12.50.",
         "invalid_currency" => "Choose one of the listed currencies.",
         "product_not_found" => "This product does not exist.",

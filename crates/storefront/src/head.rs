@@ -157,7 +157,13 @@ pub fn product_ld(
         if let (Some(cents), Some(currency)) = (product.amount_cents, &product.currency) {
             ld.insert(
                 "offers".into(),
-                offer(page.url, cents, currency, !product.is_sold_out(None)),
+                offer(
+                    page.url,
+                    cents,
+                    product.compare_at_cents,
+                    currency,
+                    !product.is_sold_out(None),
+                ),
             );
         }
     } else {
@@ -265,6 +271,7 @@ fn variant_ld(product: &Product, variant: &Variant, url: &str) -> Value {
         offer(
             url,
             variant.amount_cents,
+            variant.compare_at_cents,
             &variant.currency,
             !product.is_sold_out(Some(&variant.id)),
         ),
@@ -272,8 +279,10 @@ fn variant_ld(product: &Product, variant: &Variant, url: &str) -> Value {
     Value::Object(ld)
 }
 
-fn offer(url: &str, cents: i64, currency: &str, in_stock: bool) -> Value {
-    json!({
+/// What a shopper pays, and the price it is down from when the page
+/// strikes one through.
+fn offer(url: &str, cents: i64, compare_at: Option<i64>, currency: &str, in_stock: bool) -> Value {
+    let mut offer = json!({
         "@type": "Offer",
         "url": url,
         "price": decimal(cents),
@@ -284,7 +293,16 @@ fn offer(url: &str, cents: i64, currency: &str, in_stock: bool) -> Value {
         } else {
             "https://schema.org/OutOfStock"
         },
-    })
+    });
+    if let Some(compare_at) = compare_at {
+        offer["priceSpecification"] = json!({
+            "@type": "UnitPriceSpecification",
+            "priceType": "https://schema.org/StrikethroughPrice",
+            "price": decimal(compare_at),
+            "priceCurrency": currency,
+        });
+    }
+    offer
 }
 
 fn review_ld(review: &Review) -> Value {
@@ -398,6 +416,7 @@ mod tests {
             brand: None,
             gtin: None,
             mpn: None,
+            compare_at_cents: None,
         }
     }
 
@@ -474,6 +493,7 @@ mod tests {
                 image_id: image.map(str::to_owned),
                 gtin: None,
                 mpn: None,
+                compare_at_cents: None,
             };
         collar.variants = vec![
             variant("v1", "red", 990, Some("MUG-R"), Some("b")),
@@ -538,6 +558,11 @@ mod tests {
         let ld = product_ld(&mug, &page(&[]), |_| unreachable!());
         assert_eq!(ld["brand"], json!({ "@type": "Brand", "name": "Acme" }));
         assert_eq!(ld["gtin"], "4006381333931");
+        assert!(ld["offers"].get("priceSpecification").is_none());
+        mug.compare_at_cents = Some(2490);
+        let ld = product_ld(&mug, &page(&[]), |_| unreachable!());
+        assert_eq!(ld["offers"]["price"], "19.90");
+        assert_eq!(ld["offers"]["priceSpecification"]["price"], "24.90");
         assert_eq!(ld["mpn"], "MUG-01");
     }
 
@@ -574,6 +599,7 @@ mod tests {
             image_id: None,
             gtin: Some("036000291452".into()),
             mpn: Some("C-R".into()),
+            compare_at_cents: Some(1290),
         }];
         let ld = product_ld(&collar, &page(&[]), |_| "https://shop.example/p/c".into());
         assert_eq!(ld["brand"]["name"], "Acme");
@@ -584,6 +610,16 @@ mod tests {
         );
         let variant = &ld["hasVariant"][0];
         assert_eq!(variant["gtin"], "036000291452");
+        assert_eq!(variant["offers"]["price"], "9.90");
+        assert_eq!(
+            variant["offers"]["priceSpecification"],
+            json!({
+                "@type": "UnitPriceSpecification",
+                "priceType": "https://schema.org/StrikethroughPrice",
+                "price": "12.90",
+                "priceCurrency": "EUR",
+            })
+        );
         assert_eq!(variant["mpn"], "C-R");
         assert_eq!(variant["color"], "Rouge");
         assert_eq!(variant["size"], "Rouge");

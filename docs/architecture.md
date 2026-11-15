@@ -505,6 +505,20 @@ of products at once) and whether a machine wrote its name or its description
 the brand, the numbers and the option kinds, for its structured data; the rest is for
 the feed alone.
 
+**A price reduction.** A product sold as is, and each variant, may carry the price its
+reduction is announced against (`CompareAtSet`, `VariantCompareAtSet`): the storefront
+strikes it through beside the price, its structured data gives it as a
+`StrikethroughPrice`, and the feed sends it as `price` with what a shopper pays as
+`sale_price`. French law (article L. 112-1-1 of the consumer code, from directive (EU)
+2019/2161) measures a reduction from the lowest price of the thirty days before it, so
+the command does: the write model keeps a `PriceTrail` per thing, the prices it was *on
+sale* at (a draft's price leaves no trace, time unpublished is a gap), no further back
+than thirty days before the current one, and `set_compare_at` refuses anything above the
+lowest of them, and any comparison at all for a thing on sale at one price only. Later
+price changes are folded, not checked again: a further cut keeps the comparison (the
+reduction goes on from the same price), and a price that catches up with it drops it for
+good, since a later cut would be another reduction measured from other prices.
+
 **The shopping feed.** A shop publishes its products for Google Merchant Center at
 `GET /feeds/{token}/google` on the dashboard, with no session: the address is the key.
 `timada-catalog/Feed` (one stream per tenant store) holds the token, 32 random bytes;

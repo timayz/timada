@@ -358,6 +358,11 @@ pub async fn product_card(cx: &Cx, product: &Product) -> Result<impl View> {
                 <h3 class="card-title"><a href=(&link)>(&product.name)</a></h3>
                 <p class="card-price">
                     if varies { <small>"Plage de prix"</small> }
+                    if let (Some(was), Some(currency)) = (product.compare_at_cents, product.currency.as_deref()) {
+                        if product.variants.is_empty() {
+                            <s class="was" data-compare-at=""><span class="unseen">"Ancien prix : "</span>(money(was, currency))</s>
+                        }
+                    }
                     <span data-price="">(price_line(product))</span>
                 </p>
                 if let (Some(rating), Some(whole)) = (product.rating(), product.rating_stars()) {

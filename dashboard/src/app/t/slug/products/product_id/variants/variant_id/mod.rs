@@ -1,5 +1,6 @@
 //! One combination a product sells.
 
+pub mod compare_at;
 pub mod identify;
 pub mod image;
 pub mod price;
