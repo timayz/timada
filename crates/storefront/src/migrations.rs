@@ -203,6 +203,23 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             starts_at INTEGER,
             ends_at INTEGER
         );
+        -- The slugs a product or a page (`kind`) went by before a rename,
+        -- and when it left each: what an old address is redirected from. An
+        -- archived product's last slug is here too, its row no longer
+        -- answering to it.
+        CREATE TABLE storefront_former_slugs (
+            kind TEXT NOT NULL,
+            slug TEXT NOT NULL,
+            id TEXT NOT NULL,
+            left_at INTEGER NOT NULL,
+            PRIMARY KEY (kind, slug, id)
+        );
+        CREATE INDEX storefront_former_slugs_of ON storefront_former_slugs (kind, id);
+        -- The merchant's own redirects: an old path and where it sends.
+        CREATE TABLE storefront_redirects (
+            from_path TEXT PRIMARY KEY,
+            to_path TEXT NOT NULL
+        );
         -- The shop's delivery time for a product that gives none: one row,
         -- or none while the shop gives no default.
         CREATE TABLE storefront_delivery_default (
@@ -227,6 +244,8 @@ pub const TABLES: &[&str] = &[
     "storefront_pages",
     "storefront_announcements",
     "storefront_delivery_default",
+    "storefront_former_slugs",
+    "storefront_redirects",
 ];
 
 /// Applies the library's pending migrations to the local database (evento's

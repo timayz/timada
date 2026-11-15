@@ -43,8 +43,8 @@ use ulid::Ulid;
 
 /// The aggregate types a key holding `store:read` alone reads: what a page
 /// that shows the catalog loads (`crates/storefront`'s catalog subscription
-/// and the product, stock, delivery time, review, page and announcement
-/// views).
+/// and the product, stock, delivery time, review, page, announcement and
+/// redirect views).
 pub fn catalog_reads() -> Vec<&'static str> {
     vec![
         timada_catalog::aggregator::Product::aggregate_type(),
@@ -55,6 +55,7 @@ pub fn catalog_reads() -> Vec<&'static str> {
         timada_reviews::aggregator::Review::aggregate_type(),
         timada_pages::aggregator::Page::aggregate_type(),
         timada_pages::aggregator::Announcements::aggregate_type(),
+        timada_pages::aggregator::Redirects::aggregate_type(),
     ]
 }
 

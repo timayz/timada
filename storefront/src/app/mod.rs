@@ -16,6 +16,7 @@ pub mod filters;
 pub mod indisponible;
 pub mod mentions_legales;
 pub mod menu;
+pub mod moved;
 pub mod newsletter;
 pub mod orders;
 pub mod own_page;
@@ -73,6 +74,7 @@ pub fn router(store: Store, cookie_key: Key, trusted_proxies: Vec<IpNet>) -> Rou
     module_router!()
         .discover()
         .layer(UnavailablePage)
+        .layer(moved::MovedAddress)
         .layer(LayerFn::new(Some("/orders"), pass).with(BodyLimit::max(REVIEW_LIMIT)))
         .trusted_proxies(TrustedProxies::new().networks(trusted_proxies))
         .layer(CookieLayer::new())

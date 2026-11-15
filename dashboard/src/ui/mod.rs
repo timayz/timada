@@ -216,6 +216,15 @@ pub fn describe_error(code: &str) -> &'static str {
         "announcement_invalid_window" => "Give the dates as day and time, the end after the start.",
         "too_many_announcements" => "The bar holds at most 10 announcements.",
         "announcement_not_found" => "This announcement does not exist.",
+        "redirect_invalid" => {
+            "A redirect goes from an old path (/…, without a ?, accents written as %C3%A9) to a path of the storefront (/…), each at most 300 characters."
+        }
+        "redirect_exists" => "This old path already redirects. Delete that redirect first.",
+        "redirect_chain" => {
+            "A redirect cannot lead to another redirect: send the old path straight to the page."
+        }
+        "too_many_redirects" => "A shop keeps at most 500 redirects.",
+        "redirect_not_found" => "This redirect does not exist.",
         "campaign_sent" => "This campaign was sent already: it can no longer be changed.",
         "campaign_invalid_schedule" => {
             "This schedule does not hold together: pick at least one day (every week), a day 1 to 28 (every month), an end time after the start time, and dates from today on."

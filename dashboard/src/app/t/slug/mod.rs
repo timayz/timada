@@ -21,6 +21,7 @@ pub mod orders;
 pub mod pages;
 pub mod payments;
 pub mod products;
+pub mod redirects;
 pub mod rename;
 pub mod reviews;
 pub mod roles;

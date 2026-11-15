@@ -45,12 +45,13 @@ use timada_catalog::{
 use timada_core::db::Db;
 use timada_core::{Picture, Rendition, RenditionFile};
 use timada_storefront::{
-    CATALOG_SUBSCRIPTION, ProductQuery, ProductSort, Seo, Store, StoreConfig, StoreTls,
-    StoreUnavailable, SubscriptionState, category_ancestors, find_category, is_unavailable,
-    live_announcements, menu_of, published_categories, published_category_body,
-    published_category_by_slug, published_category_seo, published_option_values, published_page,
-    published_product_by_slug, published_product_categories, published_product_seo,
-    published_products, published_related_products, search_published_pages,
+    CATALOG_SUBSCRIPTION, MovedProduct, ProductQuery, ProductSort, Seo, Store, StoreConfig,
+    StoreTls, StoreUnavailable, SubscriptionState, category_ancestors, find_category,
+    is_unavailable, live_announcements, menu_of, moved_page_slug, moved_product_slug,
+    published_categories, published_category_body, published_category_by_slug,
+    published_category_seo, published_option_values, published_page, published_product_by_slug,
+    published_product_categories, published_product_seo, published_products,
+    published_related_products, redirect_target, search_published_pages,
 };
 use timada_tenancy::{
     Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenantState,
@@ -734,6 +735,109 @@ async fn a_store_shows_search_engines_the_merchants_words_or_the_pages_own() {
         .unwrap()
         .unwrap();
     assert_eq!(shown.name, "Wool Mat");
+
+    store.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_store_knows_where_an_old_address_went() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    // A key that only reads: the redirects are part of what a shop shows.
+    let (token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme);
+    let pages = h.pages(&acme);
+    let mugs = catalog
+        .create_category(
+            "alice",
+            CreateCategory {
+                name: "Mugs".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let blue = stock(&catalog, "Blue Mug", 1250, &[&mugs.id]).await;
+    let old = stock(&catalog, "Old Mug", 990, &[&mugs.id]).await;
+    let about = pages
+        .create_page(
+            "alice",
+            timada_pages::CreatePage {
+                title: "About us".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    pages.publish_page("alice", &about).await.unwrap();
+
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
+    eventually("the products reach the copy", async || {
+        published(&db).await.len() == 2
+    })
+    .await;
+    assert_eq!(moved_product_slug(&db, "blue-mug").await.unwrap(), None);
+
+    // Renamed: the slug it left leads to the one it has.
+    catalog
+        .rename_product("alice", &blue, "Tea Cup")
+        .await
+        .unwrap();
+    eventually("the old slug leads to the new one", async || {
+        moved_product_slug(&db, "blue-mug").await.unwrap()
+            == Some(MovedProduct::Product("tea-cup".into()))
+    })
+    .await;
+    // Renamed back: the slug is its own again, and the other one is old.
+    catalog
+        .rename_product("alice", &blue, "Blue Mug")
+        .await
+        .unwrap();
+    eventually("the slug it took back is no longer old", async || {
+        moved_product_slug(&db, "blue-mug").await.unwrap().is_none()
+            && moved_product_slug(&db, "tea-cup").await.unwrap()
+                == Some(MovedProduct::Product("blue-mug".into()))
+    })
+    .await;
+
+    // Archived: its address leads to the category it was filed under.
+    catalog.archive_product("alice", &old).await.unwrap();
+    eventually("an archived product leads to its category", async || {
+        moved_product_slug(&db, "old-mug").await.unwrap()
+            == Some(MovedProduct::Category("mugs".into()))
+    })
+    .await;
+
+    // A page moved to another slug, and the merchant's own list.
+    pages
+        .rename_page("alice", &about, "qui-sommes-nous")
+        .await
+        .unwrap();
+    eventually("the page's old slug leads to the new one", async || {
+        moved_page_slug(&db, "about-us").await.unwrap().as_deref() == Some("qui-sommes-nous")
+    })
+    .await;
+    let redirect = pages
+        .add_redirect("alice", "/products/blue-mug", "/p/blue-mug")
+        .await
+        .unwrap();
+    eventually("the merchant's redirect reaches the copy", async || {
+        redirect_target(&db, "/products/blue-mug")
+            .await
+            .unwrap()
+            .as_deref()
+            == Some("/p/blue-mug")
+    })
+    .await;
+    pages.remove_redirect("alice", &redirect).await.unwrap();
+    eventually("and leaves it when deleted", async || {
+        redirect_target(&db, "/products/blue-mug")
+            .await
+            .unwrap()
+            .is_none()
+    })
+    .await;
 
     store.shutdown().await;
 }

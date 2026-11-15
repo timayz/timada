@@ -7,12 +7,14 @@
 
 mod announcements;
 mod page;
+mod redirects;
 mod slug_index;
 
 use std::ops::Deref;
 
 pub use announcements::*;
 pub use page::*;
+pub use redirects::*;
 
 use evento::{Executor, Projection, metadata::Event};
 
@@ -21,6 +23,7 @@ use crate::aggregator::{
     SeoSet, Unpublished,
 };
 use crate::value_object::page_slug_id;
+use timada_core::{FormerSlug, leave_slug};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor> {
@@ -91,6 +94,9 @@ impl PageImage {
 pub struct PageState {
     pub id: String,
     pub slug: String,
+    /// The slugs it went by before a rename, oldest first: an old address
+    /// is answered with a redirect to the new one.
+    pub former_slugs: Vec<FormerSlug>,
     pub title: String,
     /// Markdown.
     pub body: String,
@@ -165,6 +171,12 @@ async fn on_seo_set(event: Event<SeoSet>, page: &mut PageState) -> anyhow::Resul
 
 #[evento::handler]
 async fn on_renamed(event: Event<Renamed>, page: &mut PageState) -> anyhow::Result<()> {
+    leave_slug(
+        &mut page.former_slugs,
+        &page.slug,
+        &event.data.slug,
+        event.timestamp,
+    );
     page.slug = event.data.slug.to_owned();
     page.updated_at = event.timestamp;
     Ok(())

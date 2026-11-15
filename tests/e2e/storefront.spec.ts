@@ -1130,6 +1130,93 @@ test("a postal code overseas moves the order there, when the shop ships there", 
   await expect(shipping).toHaveText("4,90€");
 });
 
+test("an address that moved answers with a redirect for good", async ({
+  page,
+  request,
+}) => {
+  await registerWithEmail(page, uniqueEmail("storefront-moved"));
+  const { name, slug } = uniqueTenant("Storefront Moved");
+  await createTenant(page, name);
+  await createCategory(page, slug, "Mugs");
+  const mug = await publishProduct(page, slug, "Blue Mug", "12.50", "Mugs");
+  const old = await publishProduct(page, slug, "Old Mug", "9.90", "Mugs");
+  const delivery = await publishPage(page, slug, "Livraison", "Sous 48 h.");
+  await app.start(request, await mintKey(page, slug, false), 2);
+
+  /// Where `path` answers from, without following: the status and the
+  /// `Location`.
+  const answer = async (path: string) => {
+    const response = await request.get(`${app.url}${path}`, { maxRedirects: 0 });
+    return [response.status(), response.headers()["location"] ?? null];
+  };
+  /// Waits for the storefront's copy to follow the back office.
+  const leads = async (path: string, to: string | null) => {
+    await expect(async () => {
+      expect(await answer(path)).toEqual(to ? [308, to] : [404, null]);
+    }).toPass({ timeout: 15_000 });
+  };
+  await leads("/p/tea-cup", null);
+  expect((await answer("/p/blue-mug"))[0]).toBe(200);
+
+  // A product renamed: its old address leads to the new one.
+  await page.goto(mug);
+  await page.getByLabel("Name", { exact: true }).fill("Tea Cup");
+  await page.getByRole("button", { name: "Rename" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Tea Cup");
+  await leads("/p/blue-mug", "/p/tea-cup");
+  expect((await answer("/p/tea-cup"))[0]).toBe(200);
+  // A browser lands on the product, which names its new address.
+  await page.goto(`${app.url}/p/blue-mug`);
+  await expect(page).toHaveURL(`${app.url}/p/tea-cup`);
+  await expect(page.locator("link[rel=canonical]")).toHaveAttribute("href", `${app.url}/p/tea-cup`);
+
+  // A product archived: its address leads to the category it was in.
+  await page.goto(old);
+  await page.getByRole("button", { name: "Archive" }).click();
+  await leads("/p/old-mug", "/c/mugs");
+
+  // A page moved to the address the shop serves it at.
+  expect((await answer("/livraison"))[0]).toBe(404);
+  await page.goto(delivery);
+  await page.locator("#page-slug").fill("politique-de-livraison");
+  await page.getByRole("button", { name: "Move", exact: true }).click();
+  await leads("/livraison", "/politique-de-livraison");
+
+  // The merchant's own list, for the addresses of another platform.
+  await page.goto(`/t/${slug}/redirects`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Redirects");
+  await page.getByLabel("Old path").fill("/products/blue-mug/");
+  await page.getByLabel("Sends to").fill("/p/tea-cup");
+  await page.getByRole("button", { name: "Add redirect" }).click();
+  await expect(page.getByRole("status")).toContainText("Redirect added");
+  const row = page.locator('[data-redirect="/products/blue-mug"]');
+  await expect(row.locator("[data-redirect-to]")).toHaveText("/p/tea-cup");
+  await leads("/products/blue-mug", "/p/tea-cup");
+  await leads("/products/blue-mug/", "/p/tea-cup");
+  // Checked: no chain, nothing twice, nowhere outside the shop.
+  for (const [from, to, refusal] of [
+    ["/products/blue-mug", "/p/other", "already redirects"],
+    ["/older", "/products/blue-mug", "cannot lead to another redirect"],
+    ["/elsewhere", "https://example.com/", "A redirect goes from an old path"],
+  ]) {
+    await page.getByLabel("Old path").fill(from);
+    await page.getByLabel("Sends to").fill(to);
+    await page.getByRole("button", { name: "Add redirect" }).click();
+    await expect(page.getByRole("alert")).toContainText(refusal);
+  }
+  // An address nobody ever had stays unknown, and a posted form is never
+  // sent on.
+  expect(await answer("/products/other")).toEqual([404, null]);
+  expect(await answer("/p/never-was")).toEqual([404, null]);
+  const posted = await request.post(`${app.url}/products/blue-mug`, { maxRedirects: 0 });
+  expect(posted.status()).not.toBe(308);
+
+  // Deleted, the old path is unknown again.
+  await row.getByRole("button", { name: "Delete the redirect from /products/blue-mug" }).click();
+  await expect(page.getByRole("status")).toContainText("Redirect deleted.");
+  await leads("/products/blue-mug", null);
+});
+
 test("the storefront stops cleanly when told to", async ({ page, request }) => {
   await registerWithEmail(page, uniqueEmail("storefront-stop"));
   const { name, slug } = uniqueTenant("Storefront Stop");

@@ -64,6 +64,10 @@ async fn renaming_frees_the_old_slug() {
         "qui-sommes-nous"
     );
     assert!(pages.load_page_by_slug("about-us").await.unwrap().is_none());
+    // The slug it left is remembered, for the old address to redirect.
+    let renamed = pages.load_page(&id).await.unwrap().unwrap();
+    assert_eq!(renamed.former_slugs.len(), 1);
+    assert_eq!(renamed.former_slugs[0].slug, "about-us");
     // The old slug is free for another page.
     pages.rename_page(ALICE, &other, "about-us").await.unwrap();
     assert_eq!(
