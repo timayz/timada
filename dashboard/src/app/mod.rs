@@ -5,6 +5,7 @@ pub mod aliexpress;
 pub mod auth;
 pub mod cluster;
 pub mod companies;
+pub mod feeds;
 pub mod invitations;
 mod server_errors;
 pub mod store;

@@ -460,3 +460,51 @@ async fn an_archived_product_takes_none_of_it() {
         Err(CatalogError::Archived)
     ));
 }
+
+#[tokio::test]
+async fn a_product_leaves_the_feed_and_comes_back() {
+    let cmd = command().await;
+    let mug = create_product(&cmd, "Blue Mug").await;
+    let id = mug.id.as_str();
+    // A draft is in no feed, whatever it says.
+    assert!(!cmd.load_product(id).await.unwrap().unwrap().is_in_feed());
+    cmd.price_product(ALICE, id, 1250, "EUR").await.unwrap();
+    cmd.publish_product(ALICE, id).await.unwrap();
+    let listed = cmd.load_product(id).await.unwrap().unwrap();
+    assert!(listed.is_in_feed(), "a published product is in the feed");
+    let version = listed.aggregate_version().unwrap();
+
+    cmd.list_in_feed(ALICE, id, true).await.unwrap();
+    cmd.list_in_feed(ALICE, id, false).await.unwrap();
+    cmd.list_in_feed(ALICE, id, false).await.unwrap();
+    let out = cmd.load_product(id).await.unwrap().unwrap();
+    assert!(out.off_feed && !out.is_in_feed());
+    assert!(out.is_published(), "it stays in the shop");
+    assert_eq!(out.aggregate_version().unwrap(), version + 1);
+
+    cmd.list_in_feed(ALICE, id, true).await.unwrap();
+    assert!(cmd.load_product(id).await.unwrap().unwrap().is_in_feed());
+}
+
+#[tokio::test]
+async fn a_feed_opens_at_an_address_of_its_own_and_moves_or_closes() {
+    let cmd = command().await;
+    assert_eq!(cmd.load_feed_token().await.unwrap(), None);
+    // Closing what is not open writes nothing.
+    cmd.close_feed(ALICE).await.unwrap();
+
+    let first = cmd.open_feed(ALICE).await.unwrap();
+    assert_eq!(first.len(), 64);
+    assert!(first.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_eq!(cmd.load_feed_token().await.unwrap(), Some(first.clone()));
+
+    // Opened again, it moves: the address it had is gone.
+    let second = cmd.open_feed(ALICE).await.unwrap();
+    assert_ne!(first, second);
+    assert_eq!(cmd.load_feed_token().await.unwrap(), Some(second));
+
+    cmd.close_feed(ALICE).await.unwrap();
+    assert_eq!(cmd.load_feed_token().await.unwrap(), None);
+    let third = cmd.open_feed(ALICE).await.unwrap();
+    assert_eq!(cmd.load_feed_token().await.unwrap(), Some(third));
+}

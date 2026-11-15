@@ -45,6 +45,9 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 webp = "0.3"
 # A picture's bytes, shared by the copies sent to the other nodes.
 bytes = "1"
+# The trait a response body written page by page implements (the shopping
+# feed); the version hyper already brings.
+http-body = "1"
 rcgen = "0.14"
 uuid = { version = "1", features = ["v5"] }
 ciborium = "0.2"

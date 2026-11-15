@@ -6,7 +6,8 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{
-    AiWritingDeclared, Classified, FeedLabelsSet, Identified, OptionKindSet, VariantIdentified,
+    AiWritingDeclared, Classified, FeedLabelsSet, FeedListingSet, Identified, OptionKindSet,
+    VariantIdentified,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
@@ -252,6 +253,32 @@ impl<E: Executor> super::Command<E> {
             .routing_key_opt(routing_key)
             .event(&FeedLabelsSet {
                 labels,
+                set_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await?;
+        Ok(())
+    }
+
+    /// Puts the product in the shop's shopping feed or takes it out; it
+    /// stays in the shop either way. The same is a no-op.
+    pub async fn list_in_feed(
+        &self,
+        actor: &str,
+        product_id: &str,
+        listed: bool,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let product = self.require_editable(product_id).await?;
+        if product.off_feed != listed {
+            return Ok(());
+        }
+        product
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&FeedListingSet {
+                listed,
                 set_by: actor.to_owned(),
             })
             .tenant(&self.tenant)

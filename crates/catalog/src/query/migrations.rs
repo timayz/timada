@@ -33,7 +33,11 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         // one row per combination, `on_sale` for those a shopper can buy,
         // `label` the values as the shop shows them (`Sable / Large`).
         // `catalog_delivery_default` is the shop's delivery time, one row per
-        // tenant that set one.
+        // tenant that set one. `catalog_feed_products` is what a shopping
+        // feed says of each product it carries (published, priced, not
+        // taken out of the feed), as JSON a feed is written from a page of
+        // rows at a time; `catalog_feeds` is which tenant's feed answers at
+        // an address, one row per open feed.
         "CREATE TABLE catalog_products (
             tenant_id TEXT NOT NULL,
             id TEXT NOT NULL,
@@ -70,6 +74,17 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             on_sale INTEGER NOT NULL,
             PRIMARY KEY (tenant_id, product_id, id)
         );
+        CREATE TABLE catalog_feed_products (
+            tenant_id TEXT NOT NULL,
+            id TEXT NOT NULL,
+            item_json TEXT NOT NULL,
+            PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE catalog_feeds (
+            token TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX catalog_feeds_tenant ON catalog_feeds (tenant_id);
         CREATE TABLE catalog_delivery_default (
             tenant_id TEXT NOT NULL,
             min_days INTEGER,
@@ -137,6 +152,8 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
 pub const TABLES: &[&str] = &[
     "catalog_products",
     "catalog_variants",
+    "catalog_feed_products",
+    "catalog_feeds",
     "catalog_delivery_default",
     "catalog_categories",
     "catalog_product_categories",

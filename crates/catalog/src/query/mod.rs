@@ -5,12 +5,14 @@
 //! database (every row carries the tenant id), and [`products`] queries it.
 
 mod categories;
+mod feed;
 mod migrations;
 mod products;
 mod read_model;
 mod sellable;
 
 pub use categories::*;
+pub use feed::*;
 pub use migrations::*;
 pub use products::*;
 pub use read_model::*;

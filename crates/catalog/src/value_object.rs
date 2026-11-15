@@ -262,6 +262,27 @@ impl DeliveryDays {
     }
 }
 
+/// The stream of the shop's shopping feed: one per tenant store.
+pub fn feed_id() -> String {
+    evento::hash_ids(vec!["feed"])
+}
+
+/// A fresh address for a shopping feed: 32 random bytes in hexadecimal,
+/// from the thread generator (seeded by the OS).
+pub fn new_feed_token() -> String {
+    use rand::RngCore;
+    use std::fmt::Write;
+
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    bytes
+        .iter()
+        .fold(String::with_capacity(64), |mut token, byte| {
+            let _ = write!(token, "{byte:02x}");
+            token
+        })
+}
+
 /// The stream of the shop's default delivery time: one per tenant store.
 pub fn delivery_default_id() -> String {
     evento::hash_ids(vec!["delivery-default"])
