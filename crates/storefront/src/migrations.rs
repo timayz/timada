@@ -227,7 +227,7 @@ pub const TABLES: &[&str] = &[
 /// [`Store::connect`](crate::Store::connect) runs it; a host can also run it
 /// ahead of time, without reaching the store.
 pub async fn migrate(db: &Db) -> anyhow::Result<()> {
-    let mut conn = db.connect()?;
+    let mut conn = db.store().connect()?;
     MIGRATIONS
         .to_latest(&mut conn)
         .await

@@ -281,8 +281,10 @@ mod tests {
             confirmed,
             rejoin_required,
             rolled_back: false,
+            founded_apart: false,
             copy_pending: false,
             joined_at_start: false,
+            founded_at_start: false,
         }
     }
 

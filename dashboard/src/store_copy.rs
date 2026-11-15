@@ -4,7 +4,7 @@
 //! The store is three files: the database, its write-ahead log and its
 //! commit log. A write lands in the commit log, appended to it, and the
 //! database folds the log into the two other files now and then (a
-//! checkpoint, every 4 MB of log), emptying it. Copied under a running
+//! checkpoint, every 256 KiB of log), emptying it. Copied under a running
 //! server the three would not go together: a checkpoint between two of them
 //! leaves a copy that is neither the store before it nor after.
 //!
@@ -60,7 +60,7 @@ pub fn socket_path(store: &Path) -> PathBuf {
 pub async fn copy(store: &Store, store_path: &Path, to: &Path) -> Result<()> {
     ensure!(!to.exists(), "{} exists already", to.display());
     let conn = store
-        .connect()
+        .connect_read()
         .context("cannot open a connection for the copy")?;
     hold_checkpoints(&conn).await?;
     let copied = copy_files(store_files(store_path), store_files(to)).await;
