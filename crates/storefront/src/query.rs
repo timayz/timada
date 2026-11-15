@@ -9,6 +9,7 @@ use timada_core::like_contains;
 use timada_core::{Picture, Rendition};
 
 use crate::money::MoneyFormat;
+use crate::pages::{DESCRIPTION_CHARS, excerpt};
 use crate::read_model::{OptionRow, WHOLE_SHOP, distinct_option_rows};
 
 /// A picture of a product, in the two sizes the store keeps it
@@ -1370,6 +1371,62 @@ pub async fn published_category_body(db: &Db, category_id: &str) -> anyhow::Resu
         )
         .await?;
     Ok(body.map(|(body,)| body).unwrap_or_default())
+}
+
+/// What search engines show for a product's or a category's page: the
+/// merchant's own words, or what the page shows a visitor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Seo {
+    /// The merchant's title, else the name.
+    pub title: String,
+    /// The merchant's description, else the start of the page's own, on one
+    /// line; empty when it has neither.
+    pub description: String,
+}
+
+impl Seo {
+    /// What the merchant wrote, with `name` and `description` standing in
+    /// for what was left empty.
+    fn of(meta: Option<(String, String)>, name: &str, description: &str) -> Self {
+        let (meta_title, meta_description) = meta.unwrap_or_default();
+        Self {
+            title: if meta_title.is_empty() {
+                name.to_owned()
+            } else {
+                meta_title
+            },
+            description: if meta_description.is_empty() {
+                let line = description.split_whitespace().collect::<Vec<_>>().join(" ");
+                excerpt(&line, DESCRIPTION_CHARS)
+            } else {
+                meta_description
+            },
+        }
+    }
+}
+
+/// What search engines show for a product's page. Apart from [`Product`],
+/// so the rows a listing loads do not carry it.
+pub async fn published_product_seo(db: &Db, product: &Product) -> anyhow::Result<Seo> {
+    let meta = db
+        .fetch_optional(
+            "SELECT meta_title, meta_description FROM storefront_products WHERE id = ?1",
+            (product.id.as_str(),),
+        )
+        .await?;
+    Ok(Seo::of(meta, &product.name, &product.description))
+}
+
+/// What search engines show for a category's page. Apart from [`Category`],
+/// so the trees every page loads do not carry it.
+pub async fn published_category_seo(db: &Db, category: &Category) -> anyhow::Result<Seo> {
+    let meta = db
+        .fetch_optional(
+            "SELECT meta_title, meta_description FROM storefront_categories WHERE id = ?1",
+            (category.id.as_str(),),
+        )
+        .await?;
+    Ok(Seo::of(meta, &category.name, &category.description))
 }
 
 /// The live categories above `category`, top-level first: a breadcrumb,

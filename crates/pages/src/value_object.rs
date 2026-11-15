@@ -5,11 +5,7 @@ use crate::error::PageError;
 pub const MAX_TITLE_LEN: usize = 120;
 /// The longest body, in characters: room for the longest terms of sale.
 pub const MAX_BODY_LEN: usize = 100_000;
-/// What search engines show of a title before cutting it.
-pub const MAX_META_TITLE_LEN: usize = 70;
-/// What search engines show of a description before cutting it.
-pub const MAX_META_DESCRIPTION_LEN: usize = 160;
-pub use timada_core::MIN_SLUG_LEN;
+pub use timada_core::{MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MIN_SLUG_LEN};
 pub const MAX_SLUG_LEN: usize = 64;
 /// The slug of a title with no usable characters.
 pub const FALLBACK_SLUG: &str = "page";
@@ -59,17 +55,7 @@ pub fn normalize_seo(
     meta_title: &str,
     meta_description: &str,
 ) -> Result<(String, String), PageError> {
-    let meta_title = meta_title.trim();
-    let meta_description = meta_description
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if meta_title.chars().count() > MAX_META_TITLE_LEN
-        || meta_description.chars().count() > MAX_META_DESCRIPTION_LEN
-    {
-        return Err(PageError::InvalidSeo);
-    }
-    Ok((meta_title.to_owned(), meta_description))
+    timada_core::normalize_seo(meta_title, meta_description).ok_or(PageError::InvalidSeo)
 }
 
 /// Lowercases and validates a slug: `[a-z0-9]`, `-` inside, 2 to 64 characters.

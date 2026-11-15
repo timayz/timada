@@ -271,3 +271,57 @@ fn delivery_days_read_from_a_form_and_make_a_window() {
     );
     assert_eq!(DeliveryDays::window([None, None]), None);
 }
+
+#[tokio::test]
+async fn what_search_engines_show_is_set_apart_from_the_name_and_description() {
+    let cmd = command().await;
+    let product = create_product(&cmd, "Blue Mug").await;
+    let id = product.id.as_str();
+    assert_eq!(product.meta_title, "");
+    assert_eq!(product.meta_description, "");
+
+    cmd.set_product_seo(
+        ALICE,
+        id,
+        " Blue mug 50 cl | Acme ",
+        "  A mug\nthat holds  tea. ",
+    )
+    .await
+    .unwrap();
+    let set = cmd.load_product(id).await.unwrap().unwrap();
+    assert_eq!(set.meta_title, "Blue mug 50 cl | Acme");
+    assert_eq!(set.meta_description, "A mug that holds tea.");
+    assert_eq!(set.name, "Blue Mug", "the name is the shopper's");
+
+    let version = set.aggregate_version().unwrap();
+    cmd.set_product_seo(ALICE, id, "Blue mug 50 cl | Acme", "A mug that holds tea.")
+        .await
+        .unwrap();
+    let again = cmd.load_product(id).await.unwrap().unwrap();
+    assert_eq!(
+        again.aggregate_version().unwrap(),
+        version,
+        "no event for no change"
+    );
+
+    for (title, description) in [
+        ("t".repeat(71), String::new()),
+        (String::new(), "d".repeat(161)),
+    ] {
+        let err = cmd.set_product_seo(ALICE, id, &title, &description).await;
+        assert!(matches!(err, Err(CatalogError::InvalidSeo)), "{err:?}");
+    }
+
+    // Emptied, the page goes back to the name and the description.
+    cmd.set_product_seo(ALICE, id, "", " ").await.unwrap();
+    let emptied = cmd.load_product(id).await.unwrap().unwrap();
+    assert_eq!(emptied.meta_title, "");
+    assert_eq!(emptied.meta_description, "");
+
+    cmd.archive_product(ALICE, id).await.unwrap();
+    let archived = cmd.set_product_seo(ALICE, id, "Nope", "").await;
+    assert!(
+        matches!(archived, Err(CatalogError::Archived)),
+        "{archived:?}"
+    );
+}

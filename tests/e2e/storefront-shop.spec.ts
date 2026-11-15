@@ -46,7 +46,7 @@ test("the shop serves the tenant's published catalogue with its key", async ({
   await expect(page.getByRole("status")).toContainText("Product created.");
   await page.getByLabel("Price").fill("12.50");
   await page.getByRole("button", { name: "Set price" }).click();
-  await page.getByLabel("Description").fill("Holds 50 cl of anything hot.");
+  await page.getByLabel("Description", { exact: true }).fill("Holds 50 cl of anything hot.");
   await page.getByRole("button", { name: "Save description" }).click();
   await expect(page.getByRole("status")).toContainText("Description saved.");
   await productTab(page, "Pictures");

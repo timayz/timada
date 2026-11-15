@@ -27,6 +27,9 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         // anywhere in a word as `LIKE '%q%'` would. `own_delivery_*` is the
         // product's own delivery time, `delivery_*` what a page shows: that
         // one, else the shop's default (`storefront_delivery_default`).
+        // `meta_title` and `meta_description` are what the merchant wrote
+        // for search engines, empty when the name and the description
+        // stand in; a category's are the same.
         "CREATE TABLE storefront_products (
             id TEXT PRIMARY KEY,
             slug TEXT NOT NULL,
@@ -51,7 +54,9 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             own_delivery_min_days INTEGER,
             own_delivery_max_days INTEGER,
             delivery_min_days INTEGER,
-            delivery_max_days INTEGER
+            delivery_max_days INTEGER,
+            meta_title TEXT NOT NULL DEFAULT '',
+            meta_description TEXT NOT NULL DEFAULT ''
         );
         CREATE UNIQUE INDEX storefront_products_slug ON storefront_products (slug)
             WHERE status <> 'archived';
@@ -86,7 +91,9 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             in_menu INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             product_count INTEGER NOT NULL DEFAULT 0,
-            subtree_count INTEGER NOT NULL DEFAULT 0
+            subtree_count INTEGER NOT NULL DEFAULT 0,
+            meta_title TEXT NOT NULL DEFAULT '',
+            meta_description TEXT NOT NULL DEFAULT ''
         );
         CREATE UNIQUE INDEX storefront_categories_slug ON storefront_categories (slug)
             WHERE archived = 0;

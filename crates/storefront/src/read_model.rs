@@ -581,9 +581,9 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
             let slug_search = search_key(&product.slug);
             let name_search = search_key(&product.name);
             let options_json = options_json(product)?;
-            // Twenty values: more than a tuple of parameters holds. The same
-            // numbering serves the insert and the update, the two search
-            // keys last so the update can leave them off.
+            // Twenty-two values: more than a tuple of parameters holds. The
+            // same numbering serves the insert and the update, the two
+            // search keys last so the update can leave them off.
             let mut values = vec![
                 Value::from(product.id.as_str()),
                 Value::from(product.slug.as_str()),
@@ -604,6 +604,8 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                 Value::from(product.price_range().map(|(_, max, _)| max as i64)),
                 Value::from(product.delivery_days.map(|days| i64::from(days.min))),
                 Value::from(product.delivery_days.map(|days| i64::from(days.max))),
+                Value::from(product.meta_title.as_str()),
+                Value::from(product.meta_description.as_str()),
             ];
             match &was {
                 None => {
@@ -697,14 +699,16 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
     .await
 }
 
-/// The row of a new product, every column: `?17` and `?18` are the search
+/// The row of a new product, every column: `?19` and `?20` are the search
 /// keys; the delivery time shown is the product's own, else the shop's
 /// default.
 const PRODUCT_INSERT: &str = "INSERT INTO storefront_products (id, slug, name, description,
     amount_cents, currency, status, updated_at, images_json, options_json, variants_json,
     attributes_json, min_amount_cents, max_amount_cents, own_delivery_min_days,
-    own_delivery_max_days, slug_search, name_search, delivery_min_days, delivery_max_days)
- VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+    own_delivery_max_days, meta_title, meta_description, slug_search, name_search,
+    delivery_min_days, delivery_max_days)
+ VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+    ?20,
     coalesce(?15, (SELECT min_days FROM storefront_delivery_default)),
     coalesce(?16, (SELECT max_days FROM storefront_delivery_default)))";
 
@@ -715,7 +719,8 @@ const PRODUCT_UPDATE: &str = "UPDATE storefront_products SET
     slug = ?2, name = ?3, description = ?4, amount_cents = ?5, currency = ?6, status = ?7,
     updated_at = ?8, images_json = ?9, options_json = ?10, variants_json = ?11,
     attributes_json = ?12, min_amount_cents = ?13, max_amount_cents = ?14,
-    own_delivery_min_days = ?15, own_delivery_max_days = ?16,
+    own_delivery_min_days = ?15, own_delivery_max_days = ?16, meta_title = ?17,
+    meta_description = ?18,
     delivery_min_days = coalesce(?15, (SELECT min_days FROM storefront_delivery_default)),
     delivery_max_days = coalesce(?16, (SELECT max_days FROM storefront_delivery_default))
  WHERE id = ?1";
@@ -726,10 +731,11 @@ const PRODUCT_UPDATE_SEARCHED: &str = "UPDATE storefront_products SET
     slug = ?2, name = ?3, description = ?4, amount_cents = ?5, currency = ?6, status = ?7,
     updated_at = ?8, images_json = ?9, options_json = ?10, variants_json = ?11,
     attributes_json = ?12, min_amount_cents = ?13, max_amount_cents = ?14,
-    own_delivery_min_days = ?15, own_delivery_max_days = ?16,
+    own_delivery_min_days = ?15, own_delivery_max_days = ?16, meta_title = ?17,
+    meta_description = ?18,
     delivery_min_days = coalesce(?15, (SELECT min_days FROM storefront_delivery_default)),
     delivery_max_days = coalesce(?16, (SELECT max_days FROM storefront_delivery_default)),
-    slug_search = ?17, name_search = ?18
+    slug_search = ?19, name_search = ?20
  WHERE id = ?1";
 
 /// One row of `storefront_product_options`: a value an option of the product
@@ -869,11 +875,14 @@ async fn upsert_category(db: &Db, category: &CategoryState) -> anyhow::Result<()
             execute(
                 tx,
                 "INSERT INTO storefront_categories (id, slug, name, description, parent_id,
-                    position, archived, in_menu, updated_at, body)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                    position, archived, in_menu, updated_at, body, meta_title,
+                    meta_description)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT (id) DO UPDATE SET
                     slug = excluded.slug, name = excluded.name,
                     description = excluded.description, body = excluded.body,
+                    meta_title = excluded.meta_title,
+                    meta_description = excluded.meta_description,
                     parent_id = excluded.parent_id, position = excluded.position,
                     archived = excluded.archived, in_menu = excluded.in_menu,
                     updated_at = excluded.updated_at",
@@ -888,6 +897,8 @@ async fn upsert_category(db: &Db, category: &CategoryState) -> anyhow::Result<()
                     !category.hidden_from_menu,
                     category.updated_at as i64,
                     category.body.as_str(),
+                    category.meta_title.as_str(),
+                    category.meta_description.as_str(),
                 ),
             )
             .await?;

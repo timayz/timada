@@ -145,6 +145,22 @@ ProductQuery::default()
 `price_desc`), and `as_str` writes it back into a link. A product with no price sorts
 last either way.
 
+A product's and a category's page tell search engines what the merchant wrote for them
+in the back office, and what the page shows a visitor where the merchant wrote nothing:
+
+```rust
+use timada_storefront::{category_seo, product_seo};
+
+let seo = product_seo(cx, &product).await?;     // Seo { title, description }
+let seo = category_seo(cx, &category).await?;
+// <title>{seo.title}</title>, <meta name="description" content="{seo.description}">
+```
+
+`title` is the merchant's or the name. `description` is the merchant's, or the page's own
+description on one line, cut at a word within 160 characters; it is empty when there is
+neither, and the page then writes no `description` at all. Both are read apart from
+`Product` and `Category`, so a listing and the menu do not carry them.
+
 ## Browsing the categories
 
 ```rust

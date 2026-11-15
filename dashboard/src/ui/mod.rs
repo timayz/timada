@@ -96,6 +96,9 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_product_slug" => "A product slug is 2 to 64 lowercase letters, digits and dashes.",
         "product_slug_taken" => "Another product already uses this slug.",
         "invalid_description" => "A description is at most 4000 characters.",
+        "invalid_seo" => {
+            "The search engines' title is at most 70 characters, the description at most 160."
+        }
         "invalid_amount" => "Enter the price as a number with at most two decimals, like 12.50.",
         "invalid_currency" => "Choose one of the listed currencies.",
         "product_not_found" => "This product does not exist.",

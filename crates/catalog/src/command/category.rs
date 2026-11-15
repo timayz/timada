@@ -4,14 +4,14 @@ use evento::{Executor, ProjectionAggregate};
 use ulid::Ulid;
 
 use crate::aggregator::category::{
-    Archived, BodyWritten, Created, Described, HiddenFromMenu, Moved, Positioned, Renamed,
+    Archived, BodyWritten, Created, Described, HiddenFromMenu, Moved, Positioned, Renamed, SeoSet,
     ShownInMenu,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
     FALLBACK_CATEGORY_SLUG, MAX_CATEGORY_DEPTH, normalize_category_body,
-    normalize_category_description, normalize_category_name, normalize_slug, slugify_or,
-    suffixed_slug,
+    normalize_category_description, normalize_category_name, normalize_seo, normalize_slug,
+    slugify_or, suffixed_slug,
 };
 
 use super::CategoryState;
@@ -173,6 +173,35 @@ impl<E: Executor> super::Command<E> {
             .event(&BodyWritten {
                 body,
                 written_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await?;
+        Ok(())
+    }
+
+    /// Sets what search engines show for the category's page; empty goes
+    /// back to its name and description. The same is a no-op.
+    pub async fn set_category_seo(
+        &self,
+        actor: &str,
+        category_id: &str,
+        meta_title: &str,
+        meta_description: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let (meta_title, meta_description) = normalize_seo(meta_title, meta_description)?;
+        let category = self.require_live_category(category_id).await?;
+        if category.meta_title == meta_title && category.meta_description == meta_description {
+            return Ok(());
+        }
+        category
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&SeoSet {
+                meta_title,
+                meta_description,
+                set_by: actor.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)

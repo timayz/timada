@@ -6,8 +6,8 @@
 //! ([`claim`]), which of the nodes up takes a piece of work ([`share`]),
 //! and the small rules every
 //! context would otherwise write for itself: the canonical form of an
-//! e-mail address ([`email`]), of a slug ([`slug`]) and of a currency
-//! ([`currency`]), the clock ([`time`]), calendar dates ([`civil`]), an
+//! e-mail address ([`email`]), of a slug ([`slug`]), of a currency
+//! ([`currency`]) and of what a page tells search engines ([`seo`]), the clock ([`time`]), calendar dates ([`civil`]), an
 //! amount for a person to read ([`money`]) and a `LIKE` pattern ([`sql`]),
 //! and the database the read models share with the store ([`db`]). No web
 //! framework: contexts depend on this crate and on evento, nothing more
@@ -24,6 +24,7 @@ pub mod money;
 pub mod page;
 pub mod picture;
 pub mod sending;
+pub mod seo;
 pub mod share;
 pub mod slug;
 pub mod sql;
@@ -44,6 +45,7 @@ pub use sending::{
     Claim, Claimant, LEASE_SECS, Outcome as MailOutcome, RETRY_DELAYS_SECS, Record as MailRecord,
     Sending, Status as MailStatus,
 };
+pub use seo::{MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, normalize_seo};
 pub use share::{Share, shard_of};
 pub use slug::{
     MIN_SLUG_LEN, SLUG_SUFFIX_LEN, normalize_slug, slugify, suffixed_slug, truncate_slug,
