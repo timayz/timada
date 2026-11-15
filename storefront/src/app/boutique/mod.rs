@@ -77,9 +77,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         None => "Nos produits".to_owned(),
     };
 
+    // A search or a filter shows products the plain catalogue lists too.
+    let narrowed = q.is_some() || filters.is_active();
+
     Ok(view! {
         document(
             title: &title,
+            noindex: narrowed,
             nav: &nav,
             <div class="wrap">
                 <nav class="crumbs" aria-label="Fil d'Ariane" data-crumbs="">

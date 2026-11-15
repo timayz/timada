@@ -85,6 +85,12 @@ struct ServeArgs {
     #[arg(long, env = "STORE_COOKIE_KEY", hide_env_values = true)]
     store_cookie_key: Option<String>,
 
+    /// The address shoppers reach the shop at (`https://shop.example`), which
+    /// the sitemap and `robots.txt` are written under. Unset, it is the
+    /// address listened on, over http
+    #[arg(long, env = "PUBLIC_URL")]
+    public_url: Option<String>,
+
     /// The address to listen on
     #[arg(long, env = "HOST", default_value = "127.0.0.1")]
     host: String,
@@ -205,6 +211,11 @@ async fn serve(db: StoreDb, args: ServeArgs) -> anyhow::Result<()> {
     if let Some(api) = args.store_api_url {
         config = config.api_url(api);
     }
+    config = config.public_url(
+        args.public_url
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or_else(|| format!("http://{}:{}", args.host, args.port)),
+    );
 
     let cookie_key = match args.store_cookie_key {
         Some(secret) if secret.len() >= 32 => Key::derive_from(secret.as_bytes()),

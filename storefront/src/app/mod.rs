@@ -2,7 +2,7 @@
 //! at `/c/{slug}`, a product at `/p/{slug}`, the cart at `/cart`, the checkout
 //! at `/checkout`, a placed order at `/orders/{order_id}`, the shopper's
 //! account at `/account`, the support page at `/support-client`, the shop's
-//! own pages at their own addresses (`/mentions-legales`, …), and the library's `/store/status`. One stylesheet
+//! own pages at their own addresses (`/mentions-legales`, …), `/robots.txt` and `/sitemap.xml` for search engines, and the library's `/store/status`. One stylesheet
 //! (`theme.css`) inlined in every page, layout only, and no asset bundle.
 
 pub mod account;
@@ -26,6 +26,7 @@ pub mod politique_de_remboursement;
 pub mod qui_sommes_nous;
 pub mod reviews;
 pub mod search;
+pub mod sitemap;
 pub mod support_client;
 pub mod topbar;
 
@@ -137,6 +138,12 @@ pub async fn document(
     /// What search engines show under the title.
     #[default]
     description: Option<&str>,
+    /// Keeps the page out of search engines: a listing narrowed or sorted,
+    /// which shows the products of its plain address again. The pages under
+    /// [`PRIVATE_PATHS`](sitemap::PRIVATE_PATHS) are kept out whatever this
+    /// says.
+    #[default]
+    noindex: bool,
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
     // The page answering an outage asks the dashboard nothing more; any
@@ -171,6 +178,7 @@ pub async fn document(
     let accounts = accounts_enabled(cx);
     let signed_in = accounts && !away && crate::shopper::signed_in(cx).await.is_some();
     let announcements = timada_storefront::announcements(cx).await?;
+    let noindex = noindex || sitemap::is_private(original_uri(cx).path());
     let page_title = if title == SHOP_NAME {
         format!("{SHOP_NAME} : {TAGLINE}")
     } else {
@@ -185,6 +193,9 @@ pub async fn document(
                 <title>(page_title)</title>
                 if let Some(description) = description {
                     <meta name="description" content=(description)>
+                }
+                if noindex {
+                    <meta name="robots" content="noindex">
                 }
                 <style>(Unescaped::new_unchecked(THEME_CSS))</style>
                 <style>(Unescaped::new_unchecked(DRAWER_CSS))</style>

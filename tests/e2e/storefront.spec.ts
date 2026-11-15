@@ -489,6 +489,48 @@ test("the storefront shows the catalogue in French", async ({
       timeout: 1000,
     });
   }).toPass({ timeout: 15_000 });
+  // What search engines are told: where the sitemap is and what to leave
+  // alone, then the files, with whole addresses.
+  const robots = await request.get(`${app.url}/robots.txt`);
+  expect(robots.headers()["content-type"]).toContain("text/plain");
+  const rules = await robots.text();
+  expect(rules).toContain("User-agent: *\nDisallow: /account\nDisallow: /cart\n");
+  expect(rules).toContain("Disallow: /*?*couleur=\n");
+  expect(rules).toContain(`Sitemap: ${app.url}/sitemap.xml\n`);
+  const sitemap = await request.get(`${app.url}/sitemap.xml`);
+  expect(sitemap.headers()["content-type"]).toContain("application/xml");
+  const files = await sitemap.text();
+  expect(files).toContain(`<sitemap><loc>${app.url}/sitemap-pages.xml</loc></sitemap>`);
+  expect(files).toContain(`<sitemap><loc>${app.url}/sitemap-products.xml?part=1</loc></sitemap>`);
+  expect(files).not.toContain("part=2");
+  const listed = await (await request.get(`${app.url}/sitemap-pages.xml`)).text();
+  expect(listed).toContain(`<url><loc>${app.url}/</loc></url>`);
+  expect(listed).toContain(`<url><loc>${app.url}/boutique</loc></url>`);
+  expect(listed).toMatch(new RegExp(`<url><loc>${app.url}/c/couchage</loc><lastmod>\\d{4}-\\d{2}-\\d{2}</lastmod></url>`));
+  expect(listed).toContain(`<loc>${app.url}/c/tapis</loc>`);
+  // A page is listed once its text is published, at the shop's address for it.
+  expect(listed).toContain(`<loc>${app.url}/politique-de-livraison</loc>`);
+  expect(listed).not.toContain("mentions-legales");
+  const sold = await (await request.get(`${app.url}/sitemap-products.xml?part=1`)).text();
+  expect(sold).toMatch(new RegExp(`<url><loc>${app.url}/p/tapis-fraicheur</loc><lastmod>\\d{4}-\\d{2}-\\d{2}</lastmod></url>`));
+  expect(sold).toContain(`<loc>${app.url}/p/collier-etoile</loc>`);
+  expect((await request.get(`${app.url}/sitemap-products.xml?part=2`)).status()).toBe(404);
+  // A page a search engine has no use for says so; a listing does once it
+  // is narrowed or sorted, not as it is.
+  const noindex = page.locator("meta[name=robots][content=noindex]");
+  await page.goto(`${app.url}/c/tapis`);
+  await expect(noindex).toHaveCount(0);
+  await page.goto(`${app.url}/c/tapis?sort=price_asc`);
+  await expect(noindex).toHaveCount(1);
+  await page.goto(`${app.url}/c/tapis?couleur=rose`);
+  await expect(noindex).toHaveCount(1);
+  await page.goto(`${app.url}/boutique`);
+  await expect(noindex).toHaveCount(0);
+  await page.goto(`${app.url}/boutique?q=collier`);
+  await expect(noindex).toHaveCount(1);
+  await page.goto(`${app.url}/cart`);
+  await expect(noindex).toHaveCount(1);
+
   // A page the merchant has not written yet is a 404, and the old
   // `/pages/…` addresses are gone.
   expect((await page.goto(`${app.url}/mentions-legales`))?.status()).toBe(404);

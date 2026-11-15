@@ -161,6 +161,44 @@ description on one line, cut at a word within 160 characters; it is empty when t
 neither, and the page then writes no `description` at all. Both are read apart from
 `Product` and `Category`, so a listing and the menu do not carry them.
 
+## For search engines
+
+A sitemap and `robots.txt` name whole addresses, so the library is told where shoppers
+reach the shop (`StoreConfig::public_url`, the storefront's `PUBLIC_URL`); without it
+`absolute_url` returns the path alone. Which address a product or a category has is the
+host's, so the library reads the slugs off the local copy and writes the files, and the
+host serves them at routes of its own:
+
+```rust
+use timada_storefront::{Sitemap, SitemapIndex, absolute_url, robots_txt,
+    sitemap_categories, sitemap_pages, sitemap_parts, sitemap_products};
+
+// /sitemap.xml: an index of the files below.
+let mut index = SitemapIndex::new().sitemap(&absolute_url(cx, "/sitemap-pages.xml"));
+for part in 1..=sitemap_parts(cx).await? { /* index.sitemap(…?part=N) */ }
+// One file of products: at most SITEMAP_PRODUCTS (10,000), oldest first.
+let mut file = Sitemap::new();
+for product in sitemap_products(cx, part).await? {
+    file = file.url(&absolute_url(cx, &format!("/p/{}", product.slug)), Some(product.updated_at));
+}
+let xml = file.xml();                                  // serve as SITEMAP_CONTENT_TYPE
+let txt = robots_txt(&absolute_url(cx, "/sitemap.xml"), &["/cart", "/checkout"]);
+```
+
+`sitemap_categories` gives the live categories and `sitemap_pages` the published pages
+of the shop, each with its slug and when it last changed, which becomes `<lastmod>`.
+Products are listed in the order of their ids, so a product stays in its file while
+others are added after it. Everything is read off the local copy and answers while the
+dashboard is away.
+
+The storefront serves `/robots.txt`, `/sitemap.xml`, `/sitemap-pages.xml` (the home,
+the catalogue, the support page, the categories, its own pages once published) and
+`/sitemap-products.xml?part=N`. It keeps crawlers out of what a shopper does rather than
+reads (`PRIVATE_PATHS` in `storefront/src/app/sitemap.rs`: the cart, the checkout, the
+account, orders, the search…) and out of filtered listings, and marks those same pages
+`<meta name="robots" content="noindex">`, as it does a listing sorted another way. A
+page further down a listing (`page=`) stays open: it has products of its own.
+
 ## Browsing the categories
 
 ```rust
@@ -723,7 +761,9 @@ It listens on 3457 (`PORT`) and keeps its copy of the catalog in `storefront.db`
 other knobs, `TRUSTED_PROXIES` (comma-separated addresses or CIDR networks) names the
 reverse proxies whose `X-Forwarded-For` gives the shopper's address, and
 `STORE_COOKIE_KEY` (at least 32 bytes) encrypts the shopper cookies; unset, a random key
-is made at startup and the cookies do not survive a restart. `RUST_LOG` sets what is
+is made at startup and the cookies do not survive a restart. `PUBLIC_URL` is the address
+shoppers reach the shop at (`https://shop.example`), which the sitemap and `robots.txt`
+are written under; unset, it is the address listened on, over http. `RUST_LOG` sets what is
 logged; by default `info`, with the search index and the store engine kept to warnings.
 `storefront migrate` prepares the local database and exits, without reaching the store.
 

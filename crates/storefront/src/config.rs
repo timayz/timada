@@ -83,6 +83,11 @@ pub struct StoreConfig {
     /// sign-ins, over HTTPS with the same key; without it the store shows
     /// the catalog and sells nothing.
     pub api_url: Option<String>,
+    /// The address shoppers reach the shop at, with no trailing slash
+    /// (`https://shop.example`): what a sitemap, `robots.txt` and any link
+    /// that leaves the page are written under. Without it such a link is
+    /// only its path.
+    pub public_url: Option<String>,
     /// The URL prefix of the library's own endpoints (`/store`).
     pub prefix: Cow<'static, str>,
     /// How every amount a person reads is written: `12.50 €` unless the
@@ -100,6 +105,7 @@ impl StoreConfig {
             prefix: Cow::Borrowed(DEFAULT_PREFIX),
             media_url: None,
             api_url: None,
+            public_url: None,
             money: MoneyFormat::default(),
         }
     }
@@ -129,6 +135,15 @@ impl StoreConfig {
         let base = base.into();
         let base = base.trim_end_matches('/');
         self.api_url = (!base.is_empty()).then(|| base.to_owned());
+        self
+    }
+
+    /// The address shoppers reach the shop at (`https://shop.example`); a
+    /// trailing slash is dropped.
+    pub fn public_url(mut self, base: impl Into<String>) -> Self {
+        let base = base.into();
+        let base = base.trim_end_matches('/');
+        self.public_url = (!base.is_empty()).then(|| base.to_owned());
         self
     }
 
@@ -164,6 +179,7 @@ impl fmt::Debug for StoreConfig {
             .field("request_timeout", &self.request_timeout)
             .field("media_url", &self.media_url)
             .field("api_url", &self.api_url)
+            .field("public_url", &self.public_url)
             .field("prefix", &self.prefix)
             .field("money", &self.money)
             .finish()

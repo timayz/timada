@@ -106,9 +106,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map(|(_, label)| *label)
         .unwrap_or_default();
 
+    // Filtered or sorted another way, it shows the category's products
+    // again.
+    let narrowed = filters.is_active() || sort != ProductSort::default();
+
     Ok(view! {
         document(
             title: &seo.title,
+            noindex: narrowed,
             description: Some(seo.description.as_str()).filter(|text| !text.is_empty()),
             nav: &nav,
             <div class="wrap">
