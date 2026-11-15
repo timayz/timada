@@ -54,9 +54,14 @@ impl Db {
     }
 
     /// A connection for several reads in a row (a page that runs more than
-    /// one query). Cheap: connections share the database's pager.
+    /// one query). Cheap: connections share the database's pager. It does
+    /// not wait on a lock inside the database, which keeps a thread busy all
+    /// the while: a read that finds the database locked comes back at once
+    /// and is run again by [`fetch_all`] and friends after a pause that is
+    /// slept. A statement that writes goes through [`Db::write`], or a
+    /// connection of the store's ([`Db::store`]).
     pub fn connect(&self) -> Result<Connection> {
-        self.0.connect()
+        self.0.connect_read()
     }
 
     /// Runs `body` over `env` as one transaction, committed: what a
@@ -145,9 +150,11 @@ impl Db {
     }
 }
 
-/// How many times a statement finding the database locked is run again: an
-/// MVCC checkpoint stops the world for a moment.
-const BUSY_ATTEMPTS: u32 = 200;
+/// How long a read that keeps finding the database locked is run again
+/// before it fails: an MVCC checkpoint stops the world for a moment. Counted
+/// in time, so it is the same on a connection that waits on a lock itself
+/// and on one that does not ([`Db::connect`]).
+const BUSY_PATIENCE: Duration = Duration::from_secs(15);
 
 /// Runs `sql` on `conn` for its rows: the column names and the rows.
 async fn rows(
@@ -155,7 +162,8 @@ async fn rows(
     sql: &str,
     params: Params,
 ) -> Result<(Vec<String>, Vec<turso::Row>)> {
-    let mut attempt = 0;
+    let started = std::time::Instant::now();
+    let mut attempt = 0u32;
     loop {
         attempt += 1;
         let outcome: turso::Result<_> = async {
@@ -169,7 +177,7 @@ async fn rows(
         }
         .await;
         match outcome {
-            Err(turso::Error::Busy(_)) if attempt < BUSY_ATTEMPTS => {
+            Err(turso::Error::Busy(_)) if started.elapsed() < BUSY_PATIENCE => {
                 tokio::time::sleep(Duration::from_millis(u64::from(Ord::min(attempt, 20)))).await;
             }
             outcome => return outcome.with_context(|| format!("query failed: {}", summary(sql))),
