@@ -505,6 +505,42 @@ of products at once) and whether a machine wrote its name or its description
 the brand, the numbers and the option kinds, for its structured data; the rest is for
 the feed alone.
 
+**The shopping feed.** A shop publishes its products for Google Merchant Center at
+`GET /feeds/{token}/google` on the dashboard, with no session: the address is the key.
+`timada-catalog/Feed` (one stream per tenant store) holds the token, 32 random bytes;
+opening the feed again moves it to a new one and the old address stops answering, and
+`catalog_feeds` maps a token to its tenant. The token is kept as it is, not hashed: the
+merchant reads the address again whenever Merchant Center asks for it, and what it
+guards is what the storefront shows anyway.
+
+The feed is written from the catalog's read model. `catalog_feed_products` holds one
+row per product a feed carries (published, priced, and not taken out with
+`FeedListingSet`), as JSON with everything a feed says of it, hidden options and
+variants off sale already left out. Stock moves too often to be copied there: a page of
+rows reads `catalog_stock` over its own range of ids. `timada_catalog::write_google_items`
+turns a row into Merchant Center's XML, one item per variant on sale grouped by
+`item_group_id`; the rows know nothing of Google, so another reader is another writer.
+The dashboard (`feed.rs`) adds what only it knows (the storefront's address, the
+delivery methods, where pictures are served from) and sends the XML 200 products at a
+time behind the response, so a large shop is never held in memory; a read that fails
+breaks the response off instead of ending it early. What the feed does with the data:
+
+- an item links to `/p/{slug}` under the storefront's address, and to `?v={variant id}`
+  for a variant; a shop that has not set the address has no feed (404);
+- pictures are the 1200 px renditions (Merchant Center refuses small ones), the
+  variant's own first, ten more at most;
+- `availability` is `out_of_stock` for a counted thing with none left;
+- a title or a description a machine wrote goes in `structured_title` /
+  `structured_description` with `trained_algorithmic_media`, not in the plain
+  attribute;
+- a product said to have no identifier sends `identifier_exists` `no`; otherwise a
+  variant without GTIN nor part number sends its own code as `mpn` when the product
+  has a brand;
+- each delivery method gives a `shipping` price per country it names, free from its
+  threshold, with the delivery time (the product's, else the shop's) as transit days.
+  A method that ships everywhere names no country, and a feed needs one: it is left to
+  the account's delivery settings in Merchant Center.
+
 A product leaves the catalog one of two ways. `Archived` is final and keeps it on
 record: no more edits, its slug and codes free again, its row still listed as
 archived. `Deleted` is for a product nobody ever ordered: it is archived and, on
