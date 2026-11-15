@@ -175,6 +175,11 @@ impl Store {
         self.inner.config.media_url.as_deref()
     }
 
+    /// The address shoppers reach the shop at, when the host said so.
+    pub fn public_url(&self) -> Option<&str> {
+        self.inner.config.public_url.as_deref()
+    }
+
     /// How every amount a person reads is written
     /// ([`StoreConfig::money`](crate::StoreConfig::money)). The views the
     /// library builds carry it; this is for code that formats on its own.

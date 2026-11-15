@@ -88,10 +88,11 @@ snapshot.chatounette:
 # Traefik reaches it from the Docker bridge, so its X-Forwarded-For names the
 # shopper the dashboard limits sign-in codes for. STORE_API_URL is the dashboard
 # the reviews, sign-ins and contact messages go to; the dev one unless set.
+# PUBLIC_URL is the address the sitemap and robots.txt are written under.
 storefront:
 	@$(load_settings); \
 	: "$${STORE_TOKEN:?run make seed first, or set it}"; \
-	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_API_URL=$${STORE_API_URL-https://timada.localhost} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p storefront
+	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_API_URL=$${STORE_API_URL-https://timada.localhost} PUBLIC_URL=$${PUBLIC_URL-https://storefront.localhost} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p storefront
 
 storefront.migrate:
 	cargo run -p storefront -- migrate
