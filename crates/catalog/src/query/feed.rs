@@ -46,6 +46,9 @@ pub struct FeedProduct {
     pub currency: String,
     /// The price of a product sold as is.
     pub amount_cents: Option<u64>,
+    /// The price its reduction is announced against, when it has one.
+    #[serde(default)]
+    pub compare_at_cents: Option<u64>,
     /// The combinations on sale; empty for a product sold as is.
     pub variants: Vec<FeedVariant>,
     /// Its own delivery time; `None` is the shop's default.
@@ -65,6 +68,9 @@ pub struct FeedVariant {
     /// `None` when every option is hidden.
     pub label: Option<String>,
     pub amount_cents: u64,
+    /// The price its reduction is announced against, when it has one.
+    #[serde(default)]
+    pub compare_at_cents: Option<u64>,
     pub sku: Option<String>,
     pub gtin: Option<String>,
     pub mpn: Option<String>,
@@ -99,12 +105,14 @@ impl FeedProduct {
             images: product.images.iter().map(|i| i.id.clone()).collect(),
             currency: product.currency()?.to_owned(),
             amount_cents: product.price.as_ref().map(|price| price.amount_cents),
+            compare_at_cents: product.compare_at(None),
             variants: product
                 .sold_variants()
                 .map(|variant| FeedVariant {
                     id: variant.id.clone(),
                     label: product.variant_label(variant),
                     amount_cents: variant.price.amount_cents,
+                    compare_at_cents: product.compare_at(Some(&variant.id)),
                     sku: variant.sku.clone(),
                     gtin: variant.gtin.clone(),
                     mpn: variant.mpn.clone(),
@@ -312,6 +320,7 @@ pub fn write_google_items(
                 label: None,
                 link: page,
                 amount_cents,
+                compare_at_cents: product.compare_at_cents,
                 image_id: None,
                 gtin: product.gtin.as_deref(),
                 mpn: product.mpn.as_deref(),
@@ -338,6 +347,7 @@ pub fn write_google_items(
                 label: variant.label.as_deref(),
                 link: format!("{page}?v={}", variant.id),
                 amount_cents: variant.amount_cents,
+                compare_at_cents: variant.compare_at_cents,
                 image_id: variant.image_id.as_deref(),
                 gtin: variant.gtin.as_deref(),
                 mpn: variant.mpn.as_deref().or(stand_in),
@@ -356,6 +366,7 @@ struct Item<'a> {
     label: Option<&'a str>,
     link: String,
     amount_cents: u64,
+    compare_at_cents: Option<u64>,
     /// The picture shown first, when it has one of its own.
     image_id: Option<&'a str>,
     gtin: Option<&'a str>,
@@ -421,7 +432,19 @@ fn write_google_item(
             "in_stock"
         },
     );
-    tag(out, "price", &money(item.amount_cents, &product.currency));
+    // A reduction: the price it is down from is the price, and what a
+    // shopper pays the sale price.
+    match item.compare_at_cents {
+        Some(compare_at) => {
+            tag(out, "price", &money(compare_at, &product.currency));
+            tag(
+                out,
+                "sale_price",
+                &money(item.amount_cents, &product.currency),
+            );
+        }
+        None => tag(out, "price", &money(item.amount_cents, &product.currency)),
+    }
     tag(out, "condition", "new");
     if let Some(brand) = &product.brand {
         tag(out, "brand", brand);
@@ -557,6 +580,7 @@ mod tests {
             images: vec!["a".into(), "b".into()],
             currency: "EUR".into(),
             amount_cents: Some(1250),
+            compare_at_cents: None,
             variants: Vec::new(),
             delivery_days: None,
             sold_out: BTreeSet::new(),
@@ -679,6 +703,7 @@ mod tests {
                 id: "v1".into(),
                 label: Some("Sable / S".into()),
                 amount_cents: 2290,
+                compare_at_cents: Some(2990),
                 sku: Some("H-SABLE-S".into()),
                 gtin: Some("036000291452".into()),
                 mpn: None,
@@ -692,6 +717,7 @@ mod tests {
                 id: "v2".into(),
                 label: None,
                 amount_cents: 6000,
+                compare_at_cents: None,
                 sku: Some("H-BLUE".into()),
                 gtin: None,
                 mpn: None,
@@ -711,7 +737,10 @@ mod tests {
              <g:additional_image_link>https://media.example/1200/a.webp</g:additional_image_link>"
         ));
         assert!(first.contains("<g:availability>in_stock</g:availability>"));
-        assert!(first.contains("<g:price>22.90 EUR</g:price>"));
+        // Down from 29.90 €: that is the price, and 22.90 € the sale price.
+        assert!(
+            first.contains("<g:price>29.90 EUR</g:price>\n<g:sale_price>22.90 EUR</g:sale_price>")
+        );
         // A GTIN is enough: the merchant's code is not passed off as the
         // maker's.
         assert!(first.contains("<g:gtin>036000291452</g:gtin>") && !first.contains("<g:mpn>"));
@@ -722,6 +751,7 @@ mod tests {
 
         assert!(second.contains("<g:title>Blue Mug</g:title>"));
         assert!(second.contains("<g:availability>out_of_stock</g:availability>"));
+        assert!(second.contains("<g:price>60.00 EUR</g:price>") && !second.contains("sale_price"));
         assert!(second.contains("<g:mpn>H-BLUE</g:mpn>"), "{second}");
         // Free from 50 €.
         assert!(second.contains("<g:service>Colissimo</g:service>\n<g:price>0.00 EUR</g:price>"));

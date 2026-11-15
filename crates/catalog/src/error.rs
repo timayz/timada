@@ -33,6 +33,16 @@ pub enum CatalogError {
     InvalidOptionKind,
     #[error("another option of this product is already of this kind")]
     OptionKindTaken,
+    #[error("the price before a reduction is higher than the price")]
+    CompareAtNotAbove,
+    #[error(
+        "no earlier price to compare with: it was on sale at no other price in the 30 days before this one"
+    )]
+    NoEarlierPrice,
+    #[error(
+        "the price before a reduction is at most the lowest it was on sale at in the 30 days before this one"
+    )]
+    CompareAtAboveEarlier,
     #[error("the amount must be a positive number with at most two decimals")]
     InvalidAmount,
     #[error("unknown currency")]
@@ -166,6 +176,9 @@ impl CatalogError {
             Self::InvalidAudience => "invalid_audience",
             Self::InvalidOptionKind => "invalid_option_kind",
             Self::OptionKindTaken => "option_kind_taken",
+            Self::CompareAtNotAbove => "compare_at_not_above",
+            Self::NoEarlierPrice => "no_earlier_price",
+            Self::CompareAtAboveEarlier => "compare_at_above_earlier",
             Self::InvalidAmount => "invalid_amount",
             Self::InvalidCurrency => "invalid_currency",
             Self::NotFound => "product_not_found",

@@ -74,6 +74,19 @@ async fn a_feed_carries_what_is_on_sale_and_not_taken_out() {
     let sold_out = items.iter().find(|item| item.id == red).unwrap();
     assert!(sold_out.sold_out.contains(""), "none left on the shelf");
 
+    // Lowered, with what it is down from.
+    cmd.price_product(ALICE, &blue, 990, "EUR").await.unwrap();
+    cmd.set_compare_at(ALICE, &blue, None, Some(1250))
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+    let items = feed_products(&pool, TENANT, None, 50).await.unwrap();
+    let item = items.iter().find(|item| item.id == blue).unwrap();
+    assert_eq!(
+        (item.amount_cents, item.compare_at_cents),
+        (Some(990), Some(1250))
+    );
+
     // A page at a time.
     let first = feed_products(&pool, TENANT, None, 1).await.unwrap();
     assert_eq!(first.len(), 1);

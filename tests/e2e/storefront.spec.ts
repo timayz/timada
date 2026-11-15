@@ -169,7 +169,7 @@ test("the storefront shows the catalogue in French", async ({
     "Couleur",
     [
       ["Rose", "9.90"],
-      ["Bleu", "59.90"],
+      ["Bleu", "69.90"],
     ],
     "Tapis",
   );
@@ -185,6 +185,19 @@ test("the storefront shows the catalogue in French", async ({
   await page.getByLabel("To a feed, Couleur is").selectOption("color");
   await page.getByRole("button", { name: "Save kind" }).click();
   await expect(page.getByRole("status")).toContainText("Option kind saved.");
+  // The blue one, on sale at 69.90, goes down to 59.90: it may say what
+  // it is reduced from, and no more than that.
+  const blueRow = page.locator("[data-variant]").filter({ hasText: "Couleur: Bleu" });
+  await page.goto(`${collarUrl}?tab=variants`);
+  await page.getByLabel("Price of Couleur: Bleu").fill("59.90");
+  await page.getByLabel("Price of Couleur: Bleu").press("Enter");
+  await expect(page.getByRole("status")).toContainText("Variant price set.");
+  await page.getByLabel("Reduced from, for Couleur: Bleu").fill("79.90");
+  await blueRow.getByRole("button", { name: "Apply reduction" }).click();
+  await expect(page).toHaveURL(/error=compare_at_above_earlier/);
+  await page.getByLabel("Reduced from, for Couleur: Bleu").fill("69.90");
+  await blueRow.getByRole("button", { name: "Apply reduction" }).click();
+  await expect(page.getByRole("status")).toContainText("Reduction saved.");
 
   const key = await mintKey(page, slug, true);
   await app.start(request, key, 3);
@@ -604,8 +617,14 @@ test("the storefront shows the catalogue in French", async ({
   const blue: string = collar.hasVariant[1].offers.url;
   expect(blue).toMatch(new RegExp(`^${app.url}/p/collier-etoile\\?v=`));
   await expect(page.locator("[data-variants] a").nth(1)).toHaveAttribute("href", blue.slice(app.url.length));
+  expect(collar.hasVariant[1].offers.priceSpecification).toMatchObject({
+    priceType: "https://schema.org/StrikethroughPrice",
+    price: "69.90",
+  });
+  expect(collar.hasVariant[0].offers.priceSpecification).toBeUndefined();
   await page.goto(blue);
   await expect(page.locator("[data-shown-variant]")).toHaveText("59,90€");
+  await expect(page.locator("s[data-compare-at]")).toHaveText("Ancien prix : 69,90€");
   await expect(page.locator("select[data-option=Couleur]")).toHaveValue("Bleu");
   await expect(canonical).toHaveAttribute("href", `${app.url}/p/collier-etoile`);
   await expect(meta("product:price:amount")).toHaveAttribute("content", "59.90");
