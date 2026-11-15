@@ -23,6 +23,18 @@
 //! included. The `rejoin` command sets the mark by hand, for a store that
 //! was lost.
 //!
+//! A cluster also begins again from one node's store, copied while the
+//! cluster served (`snapshot restore --from-one-node`, #597): the copy goes
+//! under every node with the `found` file next to it ([`founding_mark`]),
+//! and the next `serve` drops the journal that came with the copy, which is
+//! its node's alone, and opens the node over the copy's events as one of a
+//! new cluster. The nodes serve once most of them opened over the same
+//! events. A node that did not, left out of the restore or given another
+//! copy, is of another cluster than its peers: it refuses writes
+//! (`NodeHealth::founded_apart`) until it is given the same copy, or copies
+//! the store from them with its own journal dropped
+//! (`rejoin --drop-journal`, [`mark_for_rejoin_without_journal`]).
+//!
 //! With peers, a read of one aggregate through the store waits behind a read
 //! barrier, a consensus round with a quorum, so it reflects every write that
 //! committed before it began, whichever node took the write. [`open`] also
@@ -122,6 +134,38 @@ pub fn mark_for_rejoin(store: &Path) -> Result<PathBuf> {
 /// Removes the mark of the store at `store`, if any.
 pub fn clear_rejoin_mark(store: &Path) -> Result<()> {
     RejoinMark::clear(&state_dir(store))
+}
+
+/// [`mark_for_rejoin`], the node's journal dropped with its store: for a
+/// node of another cluster than its peers, left out when they began again
+/// from one node's copy. Its journal is the old cluster's, which the new one
+/// counts for nothing.
+pub fn mark_for_rejoin_without_journal(store: &Path) -> Result<PathBuf> {
+    RejoinMark::DiscardJournal.write(&state_dir(store))
+}
+
+/// The founding mark of the store at `store`: present from the moment the
+/// store is put back as what a new cluster begins with until the node
+/// opened over it. The name is evento's host's ([`mark_for_founding`]
+/// returns it).
+pub fn founding_mark(store: &Path) -> PathBuf {
+    state_dir(store).join("found")
+}
+
+/// Asks the next open to begin a new cluster over the store at `store`: the
+/// journal that came with it is dropped and its events are what the cluster
+/// starts from. The same store goes under every node, each marked.
+pub fn mark_for_founding(store: &Path) -> Result<PathBuf> {
+    Cluster::mark_for_founding(state_dir(store))
+}
+
+/// Removes the founding mark of the store at `store`, if any.
+pub fn clear_founding_mark(store: &Path) -> Result<()> {
+    match std::fs::remove_file(founding_mark(store)) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).context("cannot remove the founding mark"),
+    }
 }
 
 /// The name of the mark the `rebuild` command leaves next to the store: the
@@ -347,6 +391,18 @@ mod tests {
                 label: label.map(str::to_owned),
             })
             .collect()
+    }
+
+    #[test]
+    fn the_founding_mark_is_where_the_host_looks_for_it() {
+        let dir = std::env::temp_dir().join(format!("timada-found-{}", ulid::Ulid::generate()));
+        let store = dir.join("timada.db");
+        assert_eq!(mark_for_founding(&store).unwrap(), founding_mark(&store));
+        assert!(founding_mark(&store).exists());
+        clear_founding_mark(&store).unwrap();
+        clear_founding_mark(&store).unwrap();
+        assert!(!founding_mark(&store).exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

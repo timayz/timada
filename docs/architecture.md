@@ -269,7 +269,15 @@ by construction.
    file first: an empty journal comes back under the node's own id through evento's
    amnesia fence). A node back before anything was tidied up past it is simply waited
    for again. A journal found to be an older copy of itself is marked the same way,
-   journal included. `/admin/cluster` shows this node (`Cluster::health`): the writes
+   journal included. A cluster brought back from one node's copy (`snapshot restore
+   --from-one-node`, see *The command line*) is a new cluster: each node restored
+   drops the journal that came with the copy at its next start (the `found` file
+   next to the store, read by evento's host) and opens over the copy's events, and
+   they serve once most of them did. A node that was not given the copy is of
+   another cluster than its peers: it refuses writes, `/ready` and `/admin/cluster`
+   say so (`of another cluster`, `cluster_founded_apart_total`), and it comes back
+   restored the same way or by `rejoin --drop-journal`, which drops its journal
+   with its store before the copy from a peer. `/admin/cluster` shows this node (`Cluster::health`): the writes
    it keeps, how each other node stands, whether a copy is needed; `Cluster::watch`
    warns in the log at four fifths of the backlog and whenever a node is given up.
 2. **Subscriptions** (`serve.rs`, `subscriptions()`). Every subscription the node runs
@@ -997,7 +1005,8 @@ store for a copy from a peer at the next start (see *The runtime*); `seed` loads
 catalogue snapshot into a tenant and prints a storefront's settings for it (see
 `docs/storefront.md`); `snapshot save` keeps the platform (the database, pictures,
 keys, and with `--also` a storefront's own file) in a directory, and
-`snapshot restore` puts one back, every node of a cluster from copies taken together.
+`snapshot restore` puts one back: on a cluster, every node from its own copy, all
+taken together (`--all-nodes`), or one node's copy on every node (`--from-one-node`).
 Everything but `serve` and `snapshot save` runs with the server stopped.
 
 `snapshot save` under a running server is a node's backup with no downtime: the
@@ -1009,10 +1018,23 @@ returned before it began; the writes go on meanwhile, into the commit log. The k
 and pictures are copied after it, so the copy holds every one its database names. What
 was removed while the copy was taken is the exception: a picture deleted meanwhile is
 missing where the kept database still shows it, and an account deleted meanwhile stays
-unreadable, its key gone. A copy taken from a node alone goes back on a node alone. One
-taken from a cluster's node is kept but cannot be restored yet (#597): a cluster is
-restored from copies of every node, taken together with all of them stopped, and a node
-that lost its files takes the store from its peers (`rejoin`).
+unreadable, its key gone. A copy taken from a node alone goes back on a node alone.
+
+A cluster is brought back from such a copy of one of its nodes (#597): stop every
+node, run `snapshot restore <dir> --from-one-node` with the same copy on each, and
+start them. The copy's consensus journal is one node's at a moment of its own, so no
+node goes on from it. Each drops it at its next start and begins a new cluster over
+the copy's events, read models and cursors, with its pictures and keys; the nodes
+serve once most of them started over the same copy (two of three), and the last may be
+restored later, or copy the store from the others (`rejoin --drop-journal`). What the
+cluster wrote after the copy was taken is lost, as with any backup, and so the old
+cluster must be stopped for good first: a node of it still running, or started again
+over its old files, is told it is of another cluster and refuses writes. The same flag
+puts any one node's copy on a cluster, one taken with the server stopped included, and
+a cluster node's copy goes back on a node alone without it. The other restore of a
+cluster stays: every node from its own copy, all taken together with every node
+stopped (`--all-nodes`), which loses nothing. A node that lost its files needs neither:
+it takes the store from its peers (`rejoin`).
 
 ## Testing
 

@@ -229,6 +229,8 @@ pub fn judge(
 pub fn node_state(health: &NodeHealth) -> &'static str {
     if health.rolled_back {
         "journal rolled back"
+    } else if health.founded_apart {
+        "of another cluster"
     } else if health.rejoin_required || health.copy_pending {
         "copy needed"
     } else if !health.confirmed {

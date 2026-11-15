@@ -25,12 +25,22 @@
 //! A cluster node's store holds its consensus journal: brought back alone to
 //! an older state, it is an older copy of itself among peers that went on,
 //! which the cluster refuses. On a cluster, `restore` therefore runs only
-//! when told that every node is restored from copies taken together, with
-//! all of them stopped. A copy taken while a cluster's node served is one
-//! node's at a moment of its own, with a journal no other node's copy
-//! agrees with: nothing restores it yet (#597), on a cluster or a node
-//! alone. A cluster's node that lost its files needs no copy: it takes the
-//! store from its peers (`rejoin`).
+//! when told which of two restores it is part of. `--all-nodes`: every node
+//! is restored from its own copy, all taken together with every node
+//! stopped, and the cluster goes on as it was at that stop.
+//! `--from-one-node` (#597): one node's copy, such as one taken while the
+//! cluster served, is put back on every node, all of them stopped. Its
+//! journal is that node's alone, at a moment of its own, so no node goes on
+//! from it: the store is marked ([`crate::cluster::mark_for_founding`]) and
+//! each node, at its next start, drops that journal and begins a new
+//! cluster over the copy's events, read models and cursors. What the old
+//! cluster wrote after the copy is gone, as with any backup. The nodes
+//! serve once most of them started over the same copy; one left out comes
+//! back with the same restore, or copies the store from the others
+//! (`rejoin --drop-journal`). A copy taken while a cluster's node served
+//! goes back on a node alone the same way, with no flag. A cluster's node
+//! that lost its files needs no copy: it takes the store from its peers
+//! (`rejoin`).
 
 use std::path::{Path, PathBuf};
 
@@ -63,10 +73,14 @@ pub enum SnapshotAction {
     /// Put a kept platform back, replacing this node's (server stopped)
     Restore {
         dir: PathBuf,
-        /// On a cluster: every node is restored from copies taken together,
-        /// all of them stopped
-        #[arg(long)]
+        /// On a cluster: every node is restored from its own copy, all taken
+        /// together with every node stopped
+        #[arg(long, conflicts_with = "from_one_node")]
         all_nodes: bool,
+        /// On a cluster: this one node's copy is put back on every node, all
+        /// of them stopped, and the cluster begins again from it
+        #[arg(long)]
+        from_one_node: bool,
         /// A file kept with `--also`, put back where it was (repeatable)
         #[arg(long = "also")]
         also: Vec<PathBuf>,
@@ -117,14 +131,13 @@ pub async fn snapshot(config: Config, args: SnapshotArgs) -> Result<()> {
                     None
                 }
             };
-            let cannot_restore = serving.as_ref().is_some_and(|s| s.cluster_node);
+            let one_of_several = serving.as_ref().is_some_and(|s| s.cluster_node);
             save(&paths, &dir, replace, &also, serving).await?;
-            if cannot_restore {
-                tracing::warn!(
+            if one_of_several {
+                tracing::info!(
                     dir = %dir.display(),
-                    "platform kept while this node served; nothing restores a copy taken while a \
-                     cluster's node served yet (#597): a restore of the cluster takes copies of \
-                     every node, taken together with all of them stopped"
+                    "platform kept while this node served: the cluster is brought back from it \
+                     by putting it on every node, all stopped (snapshot restore --from-one-node)"
                 );
             } else {
                 tracing::info!(dir = %dir.display(), "platform kept");
@@ -133,46 +146,101 @@ pub async fn snapshot(config: Config, args: SnapshotArgs) -> Result<()> {
         SnapshotAction::Restore {
             dir,
             all_nodes,
+            from_one_node,
             also,
         } => {
             super::refuse_if_serving(&config).await?;
-            restorable(&dir, config.cluster.is_some(), all_nodes)?;
-            restore(&paths, &dir, &also).await?;
-            tracing::info!(dir = %dir.display(), "platform restored");
+            let cluster_node = config.cluster.is_some();
+            let put_back = restorable(&dir, cluster_node, all_nodes, from_one_node)?;
+            restore(&paths, &dir, &also, put_back).await?;
+            match (put_back, cluster_node) {
+                (PutBack::AsItWas, _) => {
+                    tracing::info!(dir = %dir.display(), "platform restored");
+                }
+                (PutBack::NewCluster, false) => tracing::info!(
+                    dir = %dir.display(),
+                    "platform restored from a copy of another node: this node starts over its \
+                     events, with a journal of its own"
+                ),
+                (PutBack::NewCluster, true) => tracing::warn!(
+                    dir = %dir.display(),
+                    "platform restored: at its next start this node begins a new cluster over \
+                     the copy. Put the same copy back on the other nodes before starting any, \
+                     with every node of the old cluster stopped; they serve once most of them \
+                     started. A node left out refuses writes until it is restored the same way \
+                     or copies the store from the others (rejoin --drop-journal)"
+                ),
+            }
         }
     }
     Ok(())
 }
 
+/// How a snapshot's store goes back on a node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PutBack {
+    /// With its consensus journal: the node goes on from where the copy
+    /// left it.
+    AsItWas,
+    /// As what a new cluster begins with: the journal in the copy is one
+    /// node's at a moment of its own, and is dropped at the next start
+    /// ([`crate::cluster::mark_for_founding`]).
+    NewCluster,
+}
+
 /// Whether the snapshot in `dir` may be put back on this node, of a cluster
-/// or alone.
-fn restorable(dir: &Path, cluster_node: bool, all_nodes: bool) -> Result<()> {
-    match std::fs::read_to_string(dir.join(WHILE_SERVING)) {
+/// or alone, and how.
+fn restorable(
+    dir: &Path,
+    cluster_node: bool,
+    all_nodes: bool,
+    from_one_node: bool,
+) -> Result<PutBack> {
+    let while_serving = match std::fs::read_to_string(dir.join(WHILE_SERVING)) {
         Ok(taken_on) => {
             ensure!(
-                taken_on != CLUSTER_NODE,
-                "{} was taken while a cluster's node served: it is that node at a moment of its \
-                 own, which no other node's copy agrees with, and nothing restores it yet (#597)",
-                dir.display()
+                taken_on == ALONE || taken_on == CLUSTER_NODE,
+                "{} does not say what it was taken on",
+                dir.join(WHILE_SERVING).display()
             );
-            ensure!(
-                !cluster_node,
-                "{} was taken while its node served, alone: a cluster is restored from copies of \
-                 every node, taken together with all of them stopped",
-                dir.display()
-            );
+            Some(taken_on)
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => ensure!(
-            !cluster_node || all_nodes,
-            "this node is part of a cluster: restored alone, it would be an older copy of itself \
-             that the other nodes refuse. Restore every node from copies taken together, all \
-             stopped, and say so with --all-nodes"
-        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => {
             return Err(err).with_context(|| format!("cannot read {}", dir.display()));
         }
+    };
+    if from_one_node {
+        return Ok(PutBack::NewCluster);
     }
-    Ok(())
+    if !cluster_node {
+        // A cluster node's journal names peers a node alone never hears.
+        return Ok(match while_serving.as_deref() {
+            Some(CLUSTER_NODE) => PutBack::NewCluster,
+            _ => PutBack::AsItWas,
+        });
+    }
+    match (while_serving.is_some(), all_nodes) {
+        (false, true) => Ok(PutBack::AsItWas),
+        (true, true) => bail!(
+            "{} was taken while its node served: it is one node's copy at a moment of its own, \
+             no part of copies taken together. Put it back on every node, all of them stopped, \
+             with --from-one-node",
+            dir.display()
+        ),
+        (true, false) => bail!(
+            "this node is part of a cluster and {} is one node's copy: put it back on every \
+             node, all of them stopped, and say so with --from-one-node. The cluster begins \
+             again from it, without what was written after it was taken",
+            dir.display()
+        ),
+        (false, false) => bail!(
+            "this node is part of a cluster: restored alone, it would be an older copy of itself \
+             that the other nodes refuse. Either restore every node from its own copy, all \
+             taken together with every node stopped (--all-nodes), or put this one copy back \
+             on every node, all of them stopped (--from-one-node)"
+        ),
+    }
 }
 
 /// The server over the store, asked for its copy.
@@ -193,6 +261,11 @@ async fn save(
         !joining_marker(&paths.store).exists(),
         "the store is marked for a copy from another node: start the node first, or let it \
          start again"
+    );
+    ensure!(
+        !crate::cluster::founding_mark(&paths.store).exists(),
+        "the store is marked as what a new cluster begins with, its journal still the one of \
+         the copy it came from: start the node first"
     );
     if dir.exists() {
         ensure!(
@@ -242,7 +315,7 @@ async fn save(
     Ok(())
 }
 
-async fn restore(paths: &Paths, dir: &Path, also: &[PathBuf]) -> Result<()> {
+async fn restore(paths: &Paths, dir: &Path, also: &[PathBuf], put_back: PutBack) -> Result<()> {
     ensure!(
         dir.join(STORE).is_file(),
         "{} holds no {STORE}: not a snapshot",
@@ -257,6 +330,12 @@ async fn restore(paths: &Paths, dir: &Path, also: &[PathBuf]) -> Result<()> {
         );
     }
 
+    // Marked before the store is there: a restore cut short never leaves a
+    // copy's store to be opened under the journal that came with it.
+    crate::cluster::clear_founding_mark(&paths.store)?;
+    if put_back == PutBack::NewCluster {
+        crate::cluster::mark_for_founding(&paths.store)?;
+    }
     put_store(&dir.join(STORE), &paths.store)?;
     let _ = std::fs::remove_file(joining_marker(&paths.store));
     replace_dir(&dir.join(MEDIA), &paths.media)?;
@@ -462,16 +541,30 @@ mod tests {
         std::fs::write(&env, "STORE_TOKEN=other\n").unwrap();
         std::fs::write(joining_marker(&paths.store), b"").unwrap();
 
-        restore(&paths, &kept, &also).await.unwrap();
+        restore(&paths, &kept, &also, PutBack::AsItWas)
+            .await
+            .unwrap();
         assert_eq!(store_value(&paths.store).await, 1);
         assert_eq!(value(&storefront).await, 100);
         assert!(root.join("data/media/t1/a.jpg").is_file());
         assert!(!kept.join(MEDIA).join("t1/c.jpg.01J.part").exists());
         assert!(!kept.join(WHILE_SERVING).exists());
-        // On a cluster it goes back with every node's, taken together.
-        assert!(restorable(&kept, true, false).is_err());
-        restorable(&kept, true, true).unwrap();
-        restorable(&kept, false, false).unwrap();
+        // On a cluster it goes back with every node's, taken together, or
+        // alone on every node as what a new cluster begins with.
+        assert!(restorable(&kept, true, false, false).is_err());
+        assert_eq!(
+            restorable(&kept, true, true, false).unwrap(),
+            PutBack::AsItWas
+        );
+        assert_eq!(
+            restorable(&kept, true, false, true).unwrap(),
+            PutBack::NewCluster
+        );
+        assert_eq!(
+            restorable(&kept, false, false, false).unwrap(),
+            PutBack::AsItWas
+        );
+        assert!(!crate::cluster::founding_mark(&paths.store).exists());
         assert!(
             !root.join("data/media/t1/b.jpg").exists(),
             "the platform's later picture goes"
@@ -640,14 +733,19 @@ mod tests {
             std::fs::read_to_string(kept.join(WHILE_SERVING)).unwrap(),
             ALONE
         );
-        restorable(&kept, false, false).unwrap();
-        assert!(
-            restorable(&kept, true, true).is_err(),
-            "one node's copy is no cluster's"
+        assert_eq!(
+            restorable(&kept, false, false, false).unwrap(),
+            PutBack::AsItWas
         );
-        std::fs::write(kept.join(WHILE_SERVING), CLUSTER_NODE).unwrap();
-        assert!(restorable(&kept, false, false).is_err());
-        assert!(restorable(&kept, true, true).is_err());
+        assert!(
+            restorable(&kept, true, true, false).is_err(),
+            "one node's copy is no part of copies taken together"
+        );
+        assert!(restorable(&kept, true, false, false).is_err());
+        assert_eq!(
+            restorable(&kept, true, false, true).unwrap(),
+            PutBack::NewCluster
+        );
 
         // Put back on another node alone: it opens, lists and finds what was
         // written before the copy and nothing written after it, and writes.
@@ -656,18 +754,80 @@ mod tests {
             media: root.join("other/media"),
             data_keys: root.join("other/keys"),
         };
-        restore(&other, &kept, &[]).await.unwrap();
+        restore(&other, &kept, &[], PutBack::AsItWas).await.unwrap();
         assert!(root.join("other/media/t1/a.jpg").is_file());
         let (other_cluster, other_executor, other_store, other_catalog) = node(&other.store).await;
-        assert_eq!(found(&other_store, "before", &before).await, [before]);
+        assert!(!other_cluster.health().founded_at_start);
+        assert_eq!(
+            found(&other_store, "before", &before).await,
+            std::slice::from_ref(&before)
+        );
         let new = create_tenant(&other_executor, "After the copy came back").await;
         assert_eq!(found(&other_store, "after", &new).await, [new]);
 
-        for (cluster, catalog) in [(cluster, catalog), (other_cluster, other_catalog)] {
+        // Had a cluster's node taken it, its journal would be no node's to
+        // go on from: a node alone begins over its events instead, with no
+        // flag, and a cluster's node when told the copy goes on every node.
+        std::fs::write(kept.join(WHILE_SERVING), CLUSTER_NODE).unwrap();
+        assert!(restorable(&kept, true, true, false).is_err());
+        assert!(restorable(&kept, true, false, false).is_err());
+        assert_eq!(
+            restorable(&kept, true, false, true).unwrap(),
+            PutBack::NewCluster
+        );
+        let put_back = restorable(&kept, false, false, false).unwrap();
+        assert_eq!(put_back, PutBack::NewCluster);
+        let third = Paths {
+            store: root.join("third/store.db"),
+            media: root.join("third/media"),
+            data_keys: root.join("third/keys"),
+        };
+        restore(&third, &kept, &[], put_back).await.unwrap();
+        let mark = crate::cluster::founding_mark(&third.store);
+        assert!(mark.exists());
+        assert!(
+            save(&third, &root.join("kept-marked"), false, &[], None)
+                .await
+                .is_err(),
+            "a store still under its copy's journal is not kept"
+        );
+        let (third_cluster, third_executor, third_store, third_catalog) = node(&third.store).await;
+        assert!(third_cluster.health().founded_at_start);
+        assert!(third_cluster.health().serving());
+        assert!(!mark.exists(), "the mark goes once the node began");
+        assert_eq!(
+            found(&third_store, "before", &before).await,
+            std::slice::from_ref(&before)
+        );
+        let new = create_tenant(&third_executor, "After the new beginning").await;
+        assert_eq!(
+            found(&third_store, "beginning", &new).await,
+            std::slice::from_ref(&new)
+        );
+        // Its next start is a plain one, over a journal of its own.
+        third_catalog.stop();
+        third_catalog.stopped().await;
+        third_cluster.shutdown().await;
+        drop((third_executor, third_store));
+        let (third_cluster, _third_executor, third_store, third_catalog) = node(&third.store).await;
+        assert!(!third_cluster.health().founded_at_start);
+        assert!(third_cluster.health().serving());
+        assert_eq!(found(&third_store, "beginning", &new).await, [new]);
+        // A plain restore over a store marked takes the mark away.
+        crate::cluster::mark_for_founding(&other.store).unwrap();
+
+        for (cluster, catalog) in [
+            (cluster, catalog),
+            (other_cluster, other_catalog),
+            (third_cluster, third_catalog),
+        ] {
             catalog.stop();
             catalog.stopped().await;
             cluster.shutdown().await;
         }
+        std::fs::write(kept.join(WHILE_SERVING), ALONE).unwrap();
+        restore(&other, &kept, &[], PutBack::AsItWas).await.unwrap();
+        assert!(!crate::cluster::founding_mark(&other.store).exists());
         copies.shutdown().await;
         assert!(!crate::store_copy::socket_path(&paths.store).exists());
         std::fs::remove_dir_all(&root).unwrap();
