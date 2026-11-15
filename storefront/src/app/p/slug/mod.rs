@@ -2,8 +2,9 @@
 //! it, what shoppers said, and what goes with it.
 
 use timada_storefront::{
-    categories, category_path, menu_of, product_categories, product_image, product_seo,
-    related_products, require_product, reviews_of, stars,
+    ProductPageLd, absolute_url, breadcrumb_ld, categories, category_path, menu_of,
+    product_categories, product_image, product_ld, product_seo, related_products, require_product,
+    reviews_of, stars,
 };
 use topcoat::{
     Result,
@@ -23,6 +24,15 @@ struct ProductPageQuery {
     error: Option<String>,
     /// The page of reviews, 1-based.
     reviews: Option<u32>,
+    /// A variant's id: the page opens on it, with its price, its picture
+    /// first and its values picked. The address a search engine lists that
+    /// variant at.
+    v: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct VariantLink<'a> {
+    v: &'a str,
 }
 
 #[derive(serde::Serialize)]
@@ -75,11 +85,98 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         Some((intro, more)) => (intro.trim().to_owned(), more.trim().to_owned()),
         None => (product.description.trim().to_owned(), String::new()),
     };
+    // The variant the address names, when the product sells it. The view
+    // keeps what it shows, so these are copies.
+    let shown = query
+        .v
+        .as_deref()
+        .and_then(|id| product.variants.iter().find(|variant| variant.id == id))
+        .cloned();
+    let shown_image = shown
+        .as_ref()
+        .and_then(|variant| variant.image_id.as_deref())
+        .and_then(|id| product.images.iter().find(|image| image.id == id));
+    // Its picture leads the gallery.
+    let gallery: Vec<timada_storefront::Image> = shown_image
+        .into_iter()
+        .chain(
+            product
+                .images
+                .iter()
+                .filter(|image| shown_image.is_none_or(|shown| shown.id != image.id)),
+        )
+        .cloned()
+        .collect();
+    let shown_sold_out = shown
+        .as_ref()
+        .is_some_and(|variant| product.is_sold_out(Some(&variant.id)));
+    // Each variant's own address, in the variants' order.
+    let variant_paths: Vec<String> = product
+        .variants
+        .iter()
+        .map(|variant| {
+            href!(index, slug: product.slug.clone())
+                .query(VariantLink { v: &variant.id })
+                .resolve(cx)
+        })
+        .collect();
+
+    // For search engines: one address for the product whatever variant or
+    // page of reviews is open, and what this page shows as data.
+    let path = href!(index, slug: product.slug.clone()).resolve(cx);
+    let canonical = absolute_url(cx, &path);
+    let home = absolute_url(cx, &href!(crate::app::index).resolve(cx));
+    let trail: Vec<(String, String)> = crumbs
+        .iter()
+        .map(|crumb| {
+            let path =
+                href!(crate::app::c::slug::index, crate::app::c::slug::slug: crumb.slug.clone())
+                    .resolve(cx);
+            (crumb.name.clone(), absolute_url(cx, &path))
+        })
+        .collect();
+    let structured = [
+        product_ld(
+            &product,
+            &ProductPageLd {
+                url: &canonical,
+                description: &seo.description,
+                reviews: &reviews.items,
+            },
+            |variant| {
+                let position = product.variants.iter().position(|v| v.id == variant.id);
+                absolute_url(cx, position.map_or(path.as_str(), |n| &variant_paths[n]))
+            },
+        ),
+        breadcrumb_ld(
+            [("Accueil", home.as_str())]
+                .into_iter()
+                .chain(
+                    trail
+                        .iter()
+                        .map(|(name, url)| (name.as_str(), url.as_str())),
+                )
+                .chain([(product.name.as_str(), canonical.as_str())]),
+        ),
+    ];
+    // A shared link shows the variant opened, else the product's first
+    // picture and lowest price.
+    let card_image = gallery.first().map(|image| image.url.clone());
+    let card_price = match &shown {
+        Some(variant) => Some((variant.amount_cents, variant.currency.clone())),
+        None => product
+            .min_amount_cents
+            .map(|cents| (cents, currency.clone())),
+    };
 
     Ok(view! {
         document(
             title: &seo.title,
             description: Some(seo.description.as_str()).filter(|text| !text.is_empty()),
+            canonical: Some(path.as_str()),
+            image: card_image.as_deref(),
+            price: card_price.as_ref().map(|(cents, currency)| (*cents, currency.as_str())),
+            structured: &structured,
             nav: &nav,
             <div class="wrap">
                 <nav class="crumbs" aria-label="Fil d'Ariane" data-crumbs="">
@@ -96,7 +193,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <ul class="gallery" data-gallery="">
                                 // The first spans the gallery: the page rendition, with
                                 // the small one for phones; the others are tiles.
-                                for (position, image) in product.images.iter().enumerate() {
+                                for (position, image) in gallery.iter().enumerate() {
                                     <li>product_image(image: image, large: position == 0, attrs: attributes! { class="photo" })</li>
                                 }
                             </ul>
@@ -105,8 +202,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <div class="buy">
                         <h1 data-product=(&product.slug)>(&product.name)</h1>
                         <p class="price">
-                            if varies { <small>"Plage de prix"</small> }
-                            <span data-price="">(price_line(&product))</span>
+                            if let Some(variant) = &shown {
+                                <span data-price="" data-shown-variant=(&variant.id)>(money(variant.amount_cents, &variant.currency))</span>
+                            } else {
+                                if varies { <small>"Plage de prix"</small> }
+                                <span data-price="">(price_line(&product))</span>
+                            }
                         </p>
                         if let (Some(rating), Some(whole)) = (product.rating(), product.rating_stars()) {
                             <p class="rating" data-product-rating=(format!("{rating:.1}"))>
@@ -123,7 +224,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         if let Some(code) = query.error.as_deref() {
                             <p class="notice" role="alert">(say(code))</p>
                         }
-                        if sold_out {
+                        if sold_out || shown_sold_out {
                             <p class="stock" data-stock="sold-out">"Épuisé"</p>
                         } else if let Some(left) = few_left {
                             <p class="stock" data-stock=(left)>"Plus que " (left) " en stock"</p>
@@ -138,7 +239,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     <label for=(format!("option-{}", option.id))>(option.display_name())</label>
                                     <select id=(format!("option-{}", option.id)) name=(format!("{OPTION_FIELD_PREFIX}{}", option.id)) data-option=(&option.name)>
                                         for value in &option.values {
-                                            <option value=(value)>(option.display_value(value))</option>
+                                            <option value=(value) selected=(shown.as_ref().is_some_and(|variant| variant.value_of(&option.id) == Some(value.as_str())))>(option.display_value(value))</option>
                                         }
                                     </select>
                                 </p>
@@ -172,10 +273,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        for variant in &product.variants {
+                                        for (nth, variant) in product.variants.iter().enumerate() {
                                             <tr data-variant=(&variant.id) data-price=(variant.amount_cents) data-sold-out=(product.is_sold_out(Some(&variant.id)))>
-                                                for option in &product.options {
-                                                    <td>(variant.value_of(&option.id).map_or("—", |value| option.display_value(value)))</td>
+                                                // The first cell links to the page opened on
+                                                // this variant: its own address.
+                                                for (position, option) in product.options.iter().enumerate() {
+                                                    <td>
+                                                        if position == 0 {
+                                                            <a href=(&variant_paths[nth]) aria-current=((shown.as_ref().map(|shown| shown.id.as_str()) == Some(variant.id.as_str())).then_some("true"))>(variant.value_of(&option.id).map_or("—", |value| option.display_value(value)))</a>
+                                                        } else {
+                                                            (variant.value_of(&option.id).map_or("—", |value| option.display_value(value)))
+                                                        }
+                                                    </td>
                                                 }
                                                 <td class="price">(money(variant.amount_cents, &currency))</td>
                                                 <td>

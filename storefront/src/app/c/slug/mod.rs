@@ -2,8 +2,8 @@
 //! the price and colour filters.
 
 use timada_storefront::{
-    ProductQuery, ProductSort, categories, category_body, category_path, category_seo, menu_of,
-    option_values, products, require_category_in,
+    ProductQuery, ProductSort, absolute_url, breadcrumb_ld, categories, category_body,
+    category_path, category_seo, menu_of, option_values, products, require_category_in,
 };
 use topcoat::{
     Result,
@@ -29,10 +29,14 @@ struct CategoryQuery {
     couleur: Option<String>,
 }
 
+/// A link into the listing. The default sort and the first page are left
+/// out, so the plain listing and each page after it have one address.
 #[derive(serde::Serialize)]
 struct CategoryLink<'a> {
-    sort: &'a str,
-    page: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sort: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     min_price: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,13 +89,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page = products(cx, &wanted).await?;
     let colours = option_values(cx, &wanted, COLOUR).await?;
     let link = {
-        let sort = sort.as_str();
+        let sort = (sort != ProductSort::default()).then(|| sort.as_str());
         let slug = category.slug.clone();
         move |filters: &Filters, number: u32| {
             href!(index, slug: slug.clone())
                 .query(CategoryLink {
                     sort,
-                    page: number,
+                    page: (number > 1).then_some(number),
                     min_price: filters.min_price,
                     max_price: filters.max_price,
                     couleur: filters.couleur.as_deref(),
@@ -109,11 +113,36 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // Filtered or sorted another way, it shows the category's products
     // again.
     let narrowed = filters.is_active() || sort != ProductSort::default();
+    // Search engines keep the plain listing for those, and each page of it
+    // for itself.
+    let canonical = if narrowed {
+        href!(index, slug: category.slug.clone()).resolve(cx)
+    } else {
+        link(&Filters::default(), page.page)
+    };
+    let home = absolute_url(cx, &href!(crate::app::index).resolve(cx));
+    let trail: Vec<(String, String)> = crumbs
+        .iter()
+        .chain([&category])
+        .map(|crumb| {
+            let path = href!(index, slug: crumb.slug.clone()).resolve(cx);
+            (crumb.name.clone(), absolute_url(cx, &path))
+        })
+        .collect();
+    let structured = [breadcrumb_ld(
+        [("Accueil", home.as_str())].into_iter().chain(
+            trail
+                .iter()
+                .map(|(name, url)| (name.as_str(), url.as_str())),
+        ),
+    )];
 
     Ok(view! {
         document(
             title: &seo.title,
             noindex: narrowed,
+            canonical: Some(canonical.as_str()),
+            structured: &structured,
             description: Some(seo.description.as_str()).filter(|text| !text.is_empty()),
             nav: &nav,
             <div class="wrap">
