@@ -111,3 +111,55 @@ pub fn normalize_announcement(
     }
     Ok(text)
 }
+
+/// How many redirects a shop keeps: a short list written by hand.
+pub const MAX_REDIRECTS: usize = 500;
+/// The longest path of a redirect, either side.
+pub const MAX_REDIRECT_PATH_LEN: usize = 300;
+
+/// The stream of the shop's redirects: one per tenant store.
+pub fn redirects_id() -> String {
+    evento::hash_ids(vec!["redirects"])
+}
+
+/// A fresh id for a redirect: a ULID.
+pub fn new_redirect_id() -> String {
+    ulid::Ulid::generate().to_string()
+}
+
+/// Whether `path` is a path of the shop: `/…`, not `//host`, with no blank
+/// and nothing a header or an attribute would trip on.
+fn is_shop_path(path: &str) -> bool {
+    path.starts_with('/')
+        && !path.starts_with("//")
+        && path.chars().count() <= MAX_REDIRECT_PATH_LEN
+        && !path
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '"' | '<' | '>' | '\\'))
+}
+
+/// The old path of a redirect: a path of the shop with no query and no
+/// fragment, its trailing slash dropped, written as a request carries it:
+/// in ASCII, anything else percent-encoded (`/caf%C3%A9`), since it is
+/// compared with the request's path as it comes. The home is refused: it
+/// answers.
+pub fn normalize_redirect_from(from: &str) -> Result<String, PageError> {
+    let from = from.trim();
+    if !is_shop_path(from) || !from.is_ascii() || from.contains(['?', '#']) {
+        return Err(PageError::InvalidRedirect);
+    }
+    let from = from.trim_end_matches('/');
+    if from.is_empty() {
+        return Err(PageError::InvalidRedirect);
+    }
+    Ok(from.to_owned())
+}
+
+/// Where a redirect sends: a path of the shop, which may carry a query.
+pub fn normalize_redirect_to(to: &str) -> Result<String, PageError> {
+    let to = to.trim();
+    if !is_shop_path(to) {
+        return Err(PageError::InvalidRedirect);
+    }
+    Ok(to.to_owned())
+}

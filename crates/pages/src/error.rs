@@ -2,7 +2,8 @@ use evento::WriteError;
 
 use crate::value_object::{
     MAX_ANNOUNCEMENT_LEN, MAX_ANNOUNCEMENTS, MAX_BODY_LEN, MAX_IMAGES_PER_PAGE,
-    MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_TITLE_LEN,
+    MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_REDIRECT_PATH_LEN, MAX_REDIRECTS,
+    MAX_TITLE_LEN,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +39,18 @@ pub enum PageError {
     TooManyAnnouncements,
     #[error("announcement not found")]
     AnnouncementNotFound,
+    #[error(
+        "a redirect goes from an old path (/…, no query) to a path of the shop, each at most {MAX_REDIRECT_PATH_LEN} characters"
+    )]
+    InvalidRedirect,
+    #[error("this old path already redirects")]
+    RedirectExists,
+    #[error("a redirect cannot lead to another redirect")]
+    RedirectChain,
+    #[error("a shop keeps at most {MAX_REDIRECTS} redirects")]
+    TooManyRedirects,
+    #[error("redirect not found")]
+    RedirectNotFound,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -74,6 +87,11 @@ impl PageError {
             Self::InvalidAnnouncementWindow => "announcement_invalid_window",
             Self::TooManyAnnouncements => "too_many_announcements",
             Self::AnnouncementNotFound => "announcement_not_found",
+            Self::InvalidRedirect => "redirect_invalid",
+            Self::RedirectExists => "redirect_exists",
+            Self::RedirectChain => "redirect_chain",
+            Self::TooManyRedirects => "too_many_redirects",
+            Self::RedirectNotFound => "redirect_not_found",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })

@@ -44,12 +44,15 @@ use timada_catalog::{
     CategoryLink, CategoryState, ProductState, StockState, StockSummary, category_counts,
     category_projection, delivery_default_projection, product_projection, stock_projection,
 };
+use timada_core::FormerSlug;
 use timada_core::db::{
     Connection, Db, FromRow, Value, execute, fetch_all, fetch_optional, params_from_iter,
     search_key,
 };
 use timada_reviews::aggregator::Review;
 use timada_reviews::{ReviewState, review_projection};
+
+use crate::redirects::write_former_slugs;
 
 /// The cursor identity of the catalog subscription, in the local database.
 pub const CATALOG_SUBSCRIPTION: &str = "storefront/catalog";
@@ -66,6 +69,7 @@ pub fn catalog_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(on_review_event())
         .handler(crate::pages::on_page_event())
         .handler(crate::announcements::on_announcements_event())
+        .handler(crate::redirects::on_redirects_event())
         .handler(on_delivery_default_event())
         .any_routing_key()
 }
@@ -238,6 +242,7 @@ async fn delete_product_rows(db: &Db, product_id: &str) -> anyhow::Result<()> {
             ] {
                 execute(tx, statement, (product_id,)).await?;
             }
+            write_former_slugs(tx, crate::redirects::PRODUCT, product_id, &[]).await?;
             Ok(())
         })
     })
@@ -691,6 +696,17 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                 },
             )
             .await?;
+            // The slugs it left, and the one an archived product no longer
+            // answers to: where an old address is redirected from.
+            let mut former = product.former_slugs.clone();
+            if product.is_archived() {
+                former.retain(|was| was.slug != product.slug);
+                former.push(FormerSlug {
+                    slug: product.slug.clone(),
+                    left_at: product.updated_at,
+                });
+            }
+            write_former_slugs(tx, crate::redirects::PRODUCT, &product.id, &former).await?;
             // A variant added or removed changes what is counted.
             refresh_stock(tx, product).await?;
             Ok(())

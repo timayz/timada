@@ -48,7 +48,8 @@ pub use sending::{
 pub use seo::{MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, normalize_seo};
 pub use share::{Share, shard_of};
 pub use slug::{
-    MIN_SLUG_LEN, SLUG_SUFFIX_LEN, normalize_slug, slugify, suffixed_slug, truncate_slug,
+    FormerSlug, MAX_FORMER_SLUGS, MIN_SLUG_LEN, SLUG_SUFFIX_LEN, leave_slug, normalize_slug,
+    slugify, suffixed_slug, truncate_slug,
 };
 pub use sql::like_contains;
 pub use time::unix_now;

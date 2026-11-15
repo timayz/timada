@@ -49,6 +49,14 @@ async fn renaming_moves_the_product_to_the_slug_of_its_new_name() {
     cmd.rename_product(ALICE, &mug.id, "Tea Cup").await.unwrap();
     let renamed = cmd.load_product(&mug.id).await.unwrap().unwrap();
     assert_eq!(renamed.slug, "tea-cup");
+    // The slug it left is remembered, for the old address to redirect.
+    let former: Vec<&str> = renamed
+        .former_slugs
+        .iter()
+        .map(|was| was.slug.as_str())
+        .collect();
+    assert_eq!(former, ["blue-mug"]);
+    assert_eq!(renamed.former_slugs[0].left_at, renamed.updated_at);
     let found = cmd.load_product_by_slug("tea-cup").await.unwrap().unwrap();
     assert_eq!(found.id, mug.id);
     assert!(

@@ -57,7 +57,7 @@ use crate::value_object::{
     DeliveryDays, MAX_CATEGORY_DEPTH, OptionSelection, category_slug_id, format_money,
     product_sku_id, product_slug_id, sku_key,
 };
-use timada_core::Picture;
+use timada_core::{FormerSlug, Picture, leave_slug};
 
 /// How many times a claim or a release reads its index entry again after
 /// losing a race for it.
@@ -250,6 +250,9 @@ impl fmt::Display for Price {
 pub struct ProductState {
     pub id: String,
     pub slug: String,
+    /// The slugs it went by before a rename, oldest first: an old address
+    /// is answered with a redirect to the new one.
+    pub former_slugs: Vec<FormerSlug>,
     pub name: String,
     pub description: String,
     /// The title search engines show; empty for the name.
@@ -509,6 +512,12 @@ async fn on_created(event: Event<Created>, product: &mut ProductState) -> anyhow
 #[evento::handler]
 async fn on_renamed(event: Event<Renamed>, product: &mut ProductState) -> anyhow::Result<()> {
     product.name = event.data.name.to_owned();
+    leave_slug(
+        &mut product.former_slugs,
+        &product.slug,
+        &event.data.slug,
+        event.timestamp,
+    );
     product.slug = event.data.slug.to_owned();
     product.updated_at = event.timestamp;
     Ok(())
