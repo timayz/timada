@@ -1,12 +1,16 @@
 //! `/t/{slug}/products/{product_id}`: one product, read from its own stream
 //! (so an edit shows at once), with the forms that change it.
 
+pub mod ai_writing;
 pub mod archive;
 pub mod attributes;
 pub mod categorize;
+pub mod classify;
 pub mod delete;
 pub mod delivery_days;
 pub mod describe;
+pub mod feed_labels;
+pub mod identify;
 pub mod images;
 pub mod options;
 pub mod price;
@@ -22,11 +26,12 @@ pub mod variants;
 use std::sync::Arc;
 
 use timada_catalog::{
-    CURRENCIES, CategoryState, MAX_ALT_LEN, MAX_ATTRIBUTE_NAME_LEN, MAX_ATTRIBUTE_VALUE_LEN,
-    MAX_DELIVERY_DAYS, MAX_DESCRIPTION_LEN, MAX_IMAGES_PER_PRODUCT, MAX_META_DESCRIPTION_LEN,
-    MAX_META_TITLE_LEN, MAX_NAME_LEN, MAX_OPTION_LABEL_LEN, MAX_OPTION_NAME_LEN, MAX_OPTIONS,
-    MAX_SKU_LEN, MAX_VARIANTS, ProductOption, ProductState, ProductVariant, TAX_CATEGORIES,
-    format_money, tax_category_label,
+    AGE_GROUPS, CURRENCIES, CategoryState, GENDERS, MAX_ALT_LEN, MAX_ATTRIBUTE_NAME_LEN,
+    MAX_ATTRIBUTE_VALUE_LEN, MAX_BRAND_LEN, MAX_DELIVERY_DAYS, MAX_DESCRIPTION_LEN,
+    MAX_FEED_LABEL_LEN, MAX_GOOGLE_CATEGORY_LEN, MAX_IMAGES_PER_PRODUCT, MAX_META_DESCRIPTION_LEN,
+    MAX_META_TITLE_LEN, MAX_MPN_LEN, MAX_NAME_LEN, MAX_OPTION_LABEL_LEN, MAX_OPTION_NAME_LEN,
+    MAX_OPTIONS, MAX_SKU_LEN, MAX_VARIANTS, OPTION_KINDS, ProductOption, ProductState,
+    ProductVariant, TAX_CATEGORIES, format_money, tax_category_label,
 };
 use timada_core::Rendition;
 use timada_tenancy::{
@@ -51,8 +56,10 @@ use crate::auth::user_labels;
 use crate::components::badge::{BadgeVariant, badge};
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::card::CARD;
+use crate::components::checkbox::checkbox;
 use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
+use crate::components::label::label;
 use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
@@ -85,6 +92,7 @@ pub enum Tab {
     Categories,
     Variants,
     Facts,
+    Shopping,
     AliExpress,
 }
 
@@ -97,6 +105,7 @@ impl Tab {
             Self::Categories => Some("categories"),
             Self::Variants => Some("variants"),
             Self::Facts => Some("facts"),
+            Self::Shopping => Some("shopping"),
             Self::AliExpress => Some("aliexpress"),
         }
     }
@@ -107,6 +116,7 @@ impl Tab {
             Self::Categories,
             Self::Variants,
             Self::Facts,
+            Self::Shopping,
             Self::AliExpress,
         ]
         .into_iter()
@@ -216,6 +226,8 @@ pub struct OptionRow {
     pub fixed_value: String,
     /// The values it can be hidden at: something stays on sale at each.
     pub hide_at: Vec<String>,
+    /// What it is to a shopping feed (`OPTION_KINDS`); empty for none.
+    pub kind: String,
 }
 
 impl OptionRow {
@@ -245,6 +257,7 @@ impl OptionRow {
                 })
                 .cloned()
                 .collect(),
+            kind: option.kind.clone().unwrap_or_default(),
         }
     }
 }
@@ -259,6 +272,8 @@ pub struct VariantRow {
     pub amount: String,
     pub currency: String,
     pub image_id: String,
+    pub gtin: String,
+    pub mpn: String,
     pub stock: StockView,
     /// Whether shoppers can buy it: a hidden option may leave it off sale.
     pub on_sale: bool,
@@ -371,6 +386,8 @@ impl VariantRow {
             ),
             currency: variant.price.currency.clone(),
             image_id: variant.image_id.clone().unwrap_or_default(),
+            gtin: variant.gtin.clone().unwrap_or_default(),
+            mpn: variant.mpn.clone().unwrap_or_default(),
             stock,
             on_sale: product.sells(variant),
         }
@@ -644,10 +661,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         page_tab(Tab::Categories, "Categories", Some(memberships.len())),
         page_tab(Tab::Variants, "Options & variants", Some(variants.len())),
         page_tab(Tab::Facts, "Facts", Some(attributes.len())),
+        page_tab(Tab::Shopping, "Shopping feed", None),
     ];
     if link.is_some() {
         tabs.push(page_tab(Tab::AliExpress, "AliExpress", None));
     }
+    // What the shopping tab fills its fields with.
+    let brand = product.brand.clone().unwrap_or_default();
+    let gtin = product.gtin.clone().unwrap_or_default();
+    let mpn = product.mpn.clone().unwrap_or_default();
+    let google_category = product.google_category.clone().unwrap_or_default();
+    let age_group = product.age_group.clone().unwrap_or_default();
+    let gender = product.gender.clone().unwrap_or_default();
+    let feed_labels = product.feed_labels.clone();
     let title = format!("{} · Products · {}", product.name, tenant.name);
     Ok(view! {
         document(
@@ -1295,6 +1321,195 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 )
             }
 
+            if tab == Tab::Shopping {
+                section_card(
+                    title: Some("Identifiers"),
+                    description: Some("Who makes the product and the numbers it is known under in every shop. A shopping feed asks for the brand, and for the GTIN (the digits under the barcode) wherever the product has one. A product with variants gives each its own numbers, below."),
+                    <form method="post" action=(href!(identify::identify, slug: slug.clone(), product_id: product.id.clone())) data-identifiers="">
+                        <fieldset disabled=(!editable) class="flex max-w-xl flex-col gap-4">
+                            field(
+                                field_label(attrs: attributes! { for="product-brand" }, "Brand")
+                                input(attrs: attributes! {
+                                    id="product-brand" name="brand" type="text" maxlength=(MAX_BRAND_LEN) value=(&brand)
+                                })
+                            )
+                            if !has_variants {
+                                field(
+                                    field_label(attrs: attributes! { for="product-gtin" }, "GTIN")
+                                    field_description(attrs: attributes! { id="product-gtin-hint" }, "8, 12, 13 or 14 digits: an EAN, a UPC or an ISBN.")
+                                    input(attrs: attributes! {
+                                        id="product-gtin" name="gtin" type="text" inputmode="numeric" maxlength="20"
+                                        aria-describedby="product-gtin-hint" value=(&gtin)
+                                    })
+                                )
+                                field(
+                                    field_label(attrs: attributes! { for="product-mpn" }, "Part number (MPN)")
+                                    field_description(attrs: attributes! { id="product-mpn-hint" }, "The maker's own number for it.")
+                                    input(attrs: attributes! {
+                                        id="product-mpn" name="mpn" type="text" maxlength=(MAX_MPN_LEN)
+                                        aria-describedby="product-mpn-hint" value=(&mpn)
+                                    })
+                                )
+                            }
+                            label(
+                                checkbox(attrs: attributes! { name="no_identifier" value="on" checked=(product.no_identifier) })
+                                "This product has no GTIN and no part number"
+                            )
+                            <p class="text-sm text-muted-foreground">"Tick it only for what truly has none, like something made by hand or to order: a feed then says so instead of leaving the numbers out."</p>
+                            if editable {
+                                <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save identifiers")</div>
+                            }
+                        </fieldset>
+                    </form>
+                    if has_variants {
+                        table(
+                            attrs: attributes! { class="mt-6" data-variant-identifiers="" },
+                            table_header(
+                                table_row(
+                                    table_head("Combination")
+                                    table_head("GTIN")
+                                    table_head("Part number (MPN)")
+                                    table_head(<span class="sr-only">"Actions"</span>)
+                                )
+                            )
+                            table_body(
+                                for variant in &variants {
+                                    table_row(
+                                        attrs: attributes! { data-variant=(&variant.id) },
+                                        table_cell((&variant.selections))
+                                        table_cell(
+                                            <label class="sr-only" for=(format!("variant-gtin-{}", variant.id))>"GTIN of " (&variant.selections)</label>
+                                            input(attrs: attributes! {
+                                                id=(format!("variant-gtin-{}", variant.id)) form=(format!("variant-identifiers-{}", variant.id))
+                                                name="gtin" type="text" inputmode="numeric" maxlength="20" disabled=(!editable)
+                                                class="h-8 w-40 px-2" value=(&variant.gtin)
+                                            })
+                                        )
+                                        table_cell(
+                                            <label class="sr-only" for=(format!("variant-mpn-{}", variant.id))>"Part number of " (&variant.selections)</label>
+                                            input(attrs: attributes! {
+                                                id=(format!("variant-mpn-{}", variant.id)) form=(format!("variant-identifiers-{}", variant.id))
+                                                name="mpn" type="text" maxlength=(MAX_MPN_LEN) disabled=(!editable)
+                                                class="h-8 w-40 px-2" value=(&variant.mpn)
+                                            })
+                                        )
+                                        table_cell(
+                                            attrs: attributes! { class="text-right" },
+                                            if editable {
+                                                <form method="post" id=(format!("variant-identifiers-{}", variant.id)) action=(href!(variants::variant_id::identify::identify, slug: slug.clone(), product_id: product.id.clone(), variants::variant_id::variant_id: variant.id.clone()))>
+                                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-7 px-2 text-xs" }, "Save")
+                                                </form>
+                                            }
+                                        )
+                                    )
+                                }
+                            )
+                        )
+                    }
+                )
+
+                section_card(
+                    title: Some("Where a feed files it"),
+                    description: Some("Its category in Google's product taxonomy, as its number or its full path, and whom it is made for. Clothing and shoes need the age group and the gender; most other goods need neither."),
+                    <form method="post" action=(href!(classify::classify, slug: slug.clone(), product_id: product.id.clone())) data-classification="">
+                        <fieldset disabled=(!editable) class="flex max-w-xl flex-col gap-4">
+                            field(
+                                field_label(attrs: attributes! { for="product-google-category" }, "Google product category")
+                                input(attrs: attributes! {
+                                    id="product-google-category" name="google_category" type="text" maxlength=(MAX_GOOGLE_CATEGORY_LEN)
+                                    value=(&google_category) placeholder="Animals & Pet Supplies > Pet Supplies > Cat Supplies"
+                                })
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="product-age-group" }, "Age group")
+                                select(
+                                    attrs: attributes! { id="product-age-group" name="age_group" class="w-64" },
+                                    <option value="" selected=(age_group.is_empty())>"Not said"</option>
+                                    for (key, label) in AGE_GROUPS {
+                                        <option value=(*key) selected=(age_group == *key)>(*label)</option>
+                                    }
+                                )
+                            )
+                            field(
+                                field_label(attrs: attributes! { for="product-gender" }, "Gender")
+                                select(
+                                    attrs: attributes! { id="product-gender" name="gender" class="w-64" },
+                                    <option value="" selected=(gender.is_empty())>"Not said"</option>
+                                    for (key, label) in GENDERS {
+                                        <option value=(*key) selected=(gender == *key)>(*label)</option>
+                                    }
+                                )
+                            )
+                            if editable {
+                                <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save classification")</div>
+                            }
+                        </fieldset>
+                    </form>
+                    if !options.is_empty() {
+                        <ul class="mt-6 flex flex-col gap-2 border-t border-border pt-4" data-option-kinds="">
+                            for option in &options {
+                                <li data-option=(&option.id)>
+                                    <form method="post" action=(href!(options::option_id::kind::kind, slug: slug.clone(), product_id: product.id.clone(), options::option_id::option_id: option.id.clone())) class="flex flex-wrap items-center gap-2">
+                                        <label class="text-sm" for=(format!("option-kind-{}", option.id))>"To a feed, " (&option.name) " is"</label>
+                                        select(
+                                            attrs: attributes! { id=(format!("option-kind-{}", option.id)) name="kind" class="w-48" disabled=(!editable) },
+                                            <option value="" selected=(option.kind.is_empty())>"None of these"</option>
+                                            for (key, label) in OPTION_KINDS {
+                                                <option value=(*key) selected=(option.kind == *key)>(*label)</option>
+                                            }
+                                        )
+                                        if editable {
+                                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save kind")
+                                        }
+                                    </form>
+                                </li>
+                            }
+                        </ul>
+                    }
+                )
+
+                section_card(
+                    title: Some("Campaign labels"),
+                    description: Some("Five free labels to group products by in ad campaigns: a margin tier, where it ships from, a season. Shoppers never see them. The products list sets one on many products at once."),
+                    <form method="post" action=(href!(feed_labels::feed_labels, slug: slug.clone(), product_id: product.id.clone())) data-feed-labels="">
+                        <fieldset disabled=(!editable) class="flex max-w-xl flex-col gap-4">
+                            for (n, feed_label) in feed_labels.iter().enumerate() {
+                                field(
+                                    field_label(attrs: attributes! { for=(format!("product-feed-label-{n}")) }, "Label " (n))
+                                    input(attrs: attributes! {
+                                        id=(format!("product-feed-label-{n}")) name=(format!("label_{n}")) type="text"
+                                        maxlength=(MAX_FEED_LABEL_LEN) value=(feed_label)
+                                    })
+                                )
+                            }
+                            if editable {
+                                <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save labels")</div>
+                            }
+                        </fieldset>
+                    </form>
+                )
+
+                section_card(
+                    title: Some("Written by a machine"),
+                    description: Some("A shopping feed has to say which texts generative AI wrote. Tick what applies to this product as it reads today."),
+                    <form method="post" action=(href!(ai_writing::ai_writing, slug: slug.clone(), product_id: product.id.clone())) data-ai-writing="">
+                        <fieldset disabled=(!editable) class="flex max-w-xl flex-col gap-4">
+                            label(
+                                checkbox(attrs: attributes! { name="title" value="on" checked=(product.ai_title) })
+                                "AI wrote the name"
+                            )
+                            label(
+                                checkbox(attrs: attributes! { name="description" value="on" checked=(product.ai_description) })
+                                "AI wrote the description"
+                            )
+                            if editable {
+                                <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save")</div>
+                            }
+                        </fieldset>
+                    </form>
+                )
+            }
+
             if tab == Tab::AliExpress {
                 if let Some(link) = &link {
                     section_card(
@@ -1443,6 +1658,55 @@ pub struct SeoForm {
 pub struct PriceForm {
     pub amount: String,
     pub currency: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct IdentifyForm {
+    #[serde(default)]
+    pub brand: String,
+    /// Not posted for a product with variants: each has its own.
+    #[serde(default)]
+    pub gtin: String,
+    #[serde(default)]
+    pub mpn: String,
+    /// An unticked checkbox is not sent at all.
+    #[serde(default)]
+    pub no_identifier: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ClassifyForm {
+    #[serde(default)]
+    pub google_category: String,
+    /// A key of `AGE_GROUPS`, or empty.
+    #[serde(default)]
+    pub age_group: String,
+    /// A key of `GENDERS`, or empty.
+    #[serde(default)]
+    pub gender: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct FeedLabelsForm {
+    #[serde(default)]
+    pub label_0: String,
+    #[serde(default)]
+    pub label_1: String,
+    #[serde(default)]
+    pub label_2: String,
+    #[serde(default)]
+    pub label_3: String,
+    #[serde(default)]
+    pub label_4: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct AiWritingForm {
+    /// An unticked checkbox is not sent at all.
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(serde::Deserialize)]

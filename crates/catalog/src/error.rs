@@ -15,6 +15,24 @@ pub enum CatalogError {
         "the search engines' title is at most {MAX_META_TITLE_LEN} characters, the description {MAX_META_DESCRIPTION_LEN}"
     )]
     InvalidSeo,
+    #[error("a brand is at most 70 characters")]
+    InvalidBrand,
+    #[error("a GTIN is the 8, 12, 13 or 14 digits under a barcode")]
+    InvalidGtin,
+    #[error("a manufacturer's part number is at most 70 characters")]
+    InvalidMpn,
+    #[error("a product said to have no identifier carries no GTIN and no part number")]
+    IdentifierConflict,
+    #[error("a product carries five labels, each at most 100 characters")]
+    InvalidFeedLabel,
+    #[error("a Google product category is at most 750 characters")]
+    InvalidGoogleCategory,
+    #[error("unknown age group or gender")]
+    InvalidAudience,
+    #[error("an option is a colour, a size, a material, a pattern or none of them")]
+    InvalidOptionKind,
+    #[error("another option of this product is already of this kind")]
+    OptionKindTaken,
     #[error("the amount must be a positive number with at most two decimals")]
     InvalidAmount,
     #[error("unknown currency")]
@@ -139,6 +157,15 @@ impl CatalogError {
             Self::SlugTaken => "product_slug_taken",
             Self::InvalidDescription => "invalid_description",
             Self::InvalidSeo => "invalid_seo",
+            Self::InvalidBrand => "invalid_brand",
+            Self::InvalidGtin => "invalid_gtin",
+            Self::InvalidMpn => "invalid_mpn",
+            Self::IdentifierConflict => "identifier_conflict",
+            Self::InvalidFeedLabel => "invalid_feed_label",
+            Self::InvalidGoogleCategory => "invalid_google_category",
+            Self::InvalidAudience => "invalid_audience",
+            Self::InvalidOptionKind => "invalid_option_kind",
+            Self::OptionKindTaken => "option_kind_taken",
             Self::InvalidAmount => "invalid_amount",
             Self::InvalidCurrency => "invalid_currency",
             Self::NotFound => "product_not_found",

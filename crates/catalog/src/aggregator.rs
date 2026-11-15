@@ -212,6 +212,60 @@ pub enum Product {
         meta_description: String,
         set_by: String,
     },
+    /// What tells the product apart from every other one sold anywhere: who
+    /// makes it, the number under its barcode and the maker's own number
+    /// for it. The two numbers are those of a product sold as is; one with
+    /// variants gives each its own ([`VariantIdentified`]).
+    /// `no_identifier` says it truly has none (made by hand, made to
+    /// order), which a shopping feed must be told rather than left to
+    /// guess.
+    ///
+    /// [`VariantIdentified`]: Product::VariantIdentified
+    Identified {
+        brand: Option<String>,
+        gtin: Option<String>,
+        mpn: Option<String>,
+        no_identifier: bool,
+        identified_by: String,
+    },
+    VariantIdentified {
+        variant_id: String,
+        gtin: Option<String>,
+        mpn: Option<String>,
+        identified_by: String,
+    },
+    /// Where a shopping feed files it: a category of Google's product
+    /// taxonomy (its number or its path), and whom it is made for
+    /// ([`AGE_GROUPS`](crate::AGE_GROUPS), [`GENDERS`](crate::GENDERS)).
+    Classified {
+        google_category: Option<String>,
+        age_group: Option<String>,
+        gender: Option<String>,
+        classified_by: String,
+    },
+    /// What an option is to a feed and to search engines
+    /// ([`OPTION_KINDS`](crate::OPTION_KINDS)); `None` for an option that is
+    /// none of them. A product has at most one option of each kind.
+    OptionKindSet {
+        option_id: String,
+        kind: Option<String>,
+        set_by: String,
+    },
+    /// The free labels a merchant groups products by in ad campaigns
+    /// (margin tier, origin, season): always
+    /// [`FEED_LABELS`](crate::FEED_LABELS) of them, empty where there is
+    /// none.
+    FeedLabelsSet {
+        labels: Vec<String>,
+        set_by: String,
+    },
+    /// Whether its name and its description were written by a machine,
+    /// which a shopping feed has to say.
+    AiWritingDeclared {
+        title: bool,
+        description: bool,
+        declared_by: String,
+    },
 }
 
 /// The delivery time of a product that gives none: one stream per tenant
