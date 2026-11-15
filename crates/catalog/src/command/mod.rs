@@ -11,6 +11,7 @@ mod category_slug_index;
 mod create;
 mod delivery;
 mod edit;
+mod feed;
 mod image;
 mod lifecycle;
 mod option;
@@ -28,6 +29,7 @@ use std::ops::Deref;
 pub use category::*;
 pub use create::*;
 pub use delivery::*;
+pub use feed::*;
 pub use image::*;
 pub use option::*;
 pub use ordered::*;
@@ -45,16 +47,17 @@ use crate::aggregator::category::{
 };
 use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
-    Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Created, Deleted,
-    DeliveryDaysSet, Described, ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered,
-    OptionDefined, OptionHidden, OptionLabelled, OptionRemoved, OptionRenamed, OptionShown,
-    OptionValueLabelled, OptionValuesChanged, Priced, Published, Released, Renamed, SeoSet,
-    TaxCategorySet, Uncategorized, Unpublished, VariantDefined, VariantImaged, VariantPriced,
+    AiWritingDeclared, Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Classified,
+    Created, Deleted, DeliveryDaysSet, Described, FeedLabelsSet, Identified, ImageAdded,
+    ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionHidden, OptionKindSet,
+    OptionLabelled, OptionRemoved, OptionRenamed, OptionShown, OptionValueLabelled,
+    OptionValuesChanged, Priced, Published, Released, Renamed, SeoSet, TaxCategorySet,
+    Uncategorized, Unpublished, VariantDefined, VariantIdentified, VariantImaged, VariantPriced,
     VariantRemoved, VariantSkuChanged, VariantsRepriced,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
-    DeliveryDays, MAX_CATEGORY_DEPTH, OptionSelection, category_slug_id, format_money,
+    DeliveryDays, FEED_LABELS, MAX_CATEGORY_DEPTH, OptionSelection, category_slug_id, format_money,
     product_sku_id, product_slug_id, sku_key,
 };
 use timada_core::{FormerSlug, Picture, leave_slug};
@@ -175,6 +178,9 @@ pub struct ProductOption {
     pub value_labels: BTreeMap<String, String>,
     /// The one value on sale, when the merchant hid the option from shoppers.
     pub fixed_value: Option<String>,
+    /// What it is to a feed and to search engines
+    /// ([`OPTION_KINDS`](crate::OPTION_KINDS)), when it is one of them.
+    pub kind: Option<String>,
 }
 
 impl ProductOption {
@@ -205,6 +211,10 @@ pub struct ProductVariant {
     pub price: Price,
     /// One of the product's pictures, shown when this variant is picked.
     pub image_id: Option<String>,
+    /// The number under its barcode.
+    pub gtin: Option<String>,
+    /// Its maker's own number for it.
+    pub mpn: Option<String>,
 }
 
 impl ProductVariant {
@@ -282,6 +292,29 @@ pub struct ProductState {
     pub tax_category: Option<String>,
     /// How long delivery takes; `None` is the shop's default.
     pub delivery_days: Option<DeliveryDays>,
+    /// Who makes it.
+    pub brand: Option<String>,
+    /// The number under the barcode of a product sold as is; a variant has
+    /// its own.
+    pub gtin: Option<String>,
+    /// Its maker's own number for a product sold as is; a variant has its
+    /// own.
+    pub mpn: Option<String>,
+    /// It truly has no GTIN and no part number, and a feed says so.
+    pub no_identifier: bool,
+    /// Its category in Google's product taxonomy: a number or a path.
+    pub google_category: Option<String>,
+    /// The ages it is made for ([`AGE_GROUPS`](crate::AGE_GROUPS)).
+    pub age_group: Option<String>,
+    /// Whom it is made for ([`GENDERS`](crate::GENDERS)).
+    pub gender: Option<String>,
+    /// What a merchant groups it by in ad campaigns; empty where there is
+    /// no label.
+    pub feed_labels: [String; FEED_LABELS],
+    /// A machine wrote its name.
+    pub ai_title: bool,
+    /// A machine wrote its description.
+    pub ai_description: bool,
     pub created_by: String,
     /// Unix seconds of `Created`.
     pub created_at: u64,
@@ -495,6 +528,12 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_tax_category_set())
         .handler(on_delivery_days_set())
         .handler(on_seo_set())
+        .handler(on_identified())
+        .handler(on_variant_identified())
+        .handler(on_classified())
+        .handler(on_option_kind_set())
+        .handler(on_feed_labels_set())
+        .handler(on_ai_writing_declared())
         .strict()
 }
 
@@ -728,6 +767,7 @@ async fn on_option_defined(
         label: None,
         value_labels: BTreeMap::new(),
         fixed_value: None,
+        kind: None,
     });
     product.updated_at = event.timestamp;
     Ok(())
@@ -868,6 +908,8 @@ async fn on_variant_defined(
             currency: event.data.currency.to_owned(),
         },
         image_id: event.data.image_id.to_owned(),
+        gtin: None,
+        mpn: None,
     });
     product.updated_at = event.timestamp;
     Ok(())
@@ -1005,6 +1047,85 @@ async fn on_delivery_days_set(
     product: &mut ProductState,
 ) -> anyhow::Result<()> {
     product.delivery_days = event.data.days;
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_identified(event: Event<Identified>, product: &mut ProductState) -> anyhow::Result<()> {
+    product.brand = event.data.brand.to_owned();
+    product.gtin = event.data.gtin.to_owned();
+    product.mpn = event.data.mpn.to_owned();
+    product.no_identifier = event.data.no_identifier;
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_variant_identified(
+    event: Event<VariantIdentified>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(variant) = product
+        .variants
+        .iter_mut()
+        .find(|variant| variant.id == event.data.variant_id)
+    {
+        variant.gtin = event.data.gtin.to_owned();
+        variant.mpn = event.data.mpn.to_owned();
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_classified(event: Event<Classified>, product: &mut ProductState) -> anyhow::Result<()> {
+    product.google_category = event.data.google_category.to_owned();
+    product.age_group = event.data.age_group.to_owned();
+    product.gender = event.data.gender.to_owned();
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_option_kind_set(
+    event: Event<OptionKindSet>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    if let Some(option) = product
+        .options
+        .iter_mut()
+        .find(|option| option.id == event.data.option_id)
+    {
+        option.kind = event.data.kind.to_owned();
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_feed_labels_set(
+    event: Event<FeedLabelsSet>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    let mut labels = event.data.labels.iter();
+    for slot in &mut product.feed_labels {
+        *slot = labels
+            .next()
+            .map(|label| label.to_owned())
+            .unwrap_or_default();
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_ai_writing_declared(
+    event: Event<AiWritingDeclared>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.ai_title = event.data.title;
+    product.ai_description = event.data.description;
     product.updated_at = event.timestamp;
     Ok(())
 }

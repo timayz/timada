@@ -99,6 +99,20 @@ pub fn describe_error(code: &str) -> &'static str {
         "invalid_seo" => {
             "The search engines' title is at most 70 characters, the description at most 160."
         }
+        "invalid_brand" => "A brand is at most 70 characters.",
+        "invalid_gtin" => {
+            "A GTIN is the 8, 12, 13 or 14 digits under a barcode. Check it for a mistyped digit."
+        }
+        "invalid_mpn" => "A part number is at most 70 characters.",
+        "identifier_conflict" => {
+            "A product said to have no identifier carries no GTIN and no part number, on itself or on a variant."
+        }
+        "invalid_feed_label" => "A label is at most 100 characters.",
+        "no_product_ticked" => "Tick the products to label first.",
+        "invalid_google_category" => "A Google product category is at most 750 characters.",
+        "invalid_audience" => "Choose one of the listed age groups and genders.",
+        "invalid_option_kind" => "Choose one of the listed kinds.",
+        "option_kind_taken" => "Another option of this product is already of this kind.",
         "invalid_amount" => "Enter the price as a number with at most two decimals, like 12.50.",
         "invalid_currency" => "Choose one of the listed currencies.",
         "product_not_found" => "This product does not exist.",

@@ -162,7 +162,7 @@ test("the storefront shows the catalogue in French", async ({
   await expect(page.getByRole("status")).toContainText("Saved for search engines.");
   await publishProduct(page, slug, "Panier douillet", "34.90", "Couchage");
   // A collar in two colours, priced apart: what the filters are tried on.
-  await publishVariedProduct(
+  const collarUrl = await publishVariedProduct(
     page,
     slug,
     "Collier étoilé",
@@ -173,6 +173,18 @@ test("the storefront shows the catalogue in French", async ({
     ],
     "Tapis",
   );
+  // Who makes it, the number under the pink one's barcode, and what its
+  // option is to a search engine.
+  await page.goto(`${collarUrl}?tab=shopping`);
+  await page.getByLabel("Brand").fill("Chatounette");
+  await page.getByRole("button", { name: "Save identifiers" }).click();
+  await expect(page.getByRole("status")).toContainText("Identifiers saved.");
+  await page.getByLabel("GTIN of Couleur: Rose").fill("4006381333931");
+  await page.locator("[data-variant-identifiers] tr").filter({ hasText: "Couleur: Rose" }).getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status")).toContainText("Variant identifiers saved.");
+  await page.getByLabel("To a feed, Couleur is").selectOption("color");
+  await page.getByRole("button", { name: "Save kind" }).click();
+  await expect(page.getByRole("status")).toContainText("Option kind saved.");
 
   const key = await mintKey(page, slug, true);
   await app.start(request, key, 3);
@@ -576,8 +588,15 @@ test("the storefront shows the catalogue in French", async ({
   // A product with variants: a group, and an address for each variant,
   // which opens the page on it and still names the product's address.
   await page.goto(`${app.url}/p/collier-etoile`);
+  await expect(page.locator("[data-brand]")).toHaveText("Chatounette");
   const [collar] = await data();
   expect(collar["@type"]).toBe("ProductGroup");
+  expect(collar.brand).toEqual({ "@type": "Brand", name: "Chatounette" });
+  expect(collar.variesBy).toEqual(["https://schema.org/color"]);
+  expect(collar.hasVariant.map((v: { gtin?: string; color: string }) => [v.color, v.gtin])).toEqual([
+    ["Rose", "4006381333931"],
+    ["Bleu", undefined],
+  ]);
   expect(collar.hasVariant.map((v: { name: string; offers: { price: string } }) => [v.name, v.offers.price])).toEqual([
     ["Collier étoilé – Rose", "9.90"],
     ["Collier étoilé – Bleu", "59.90"],

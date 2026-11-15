@@ -29,7 +29,10 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         // one, else the shop's default (`storefront_delivery_default`).
         // `meta_title` and `meta_description` are what the merchant wrote
         // for search engines, empty when the name and the description
-        // stand in; a category's are the same.
+        // stand in; a category's are the same. `brand`, `gtin` and `mpn`
+        // are who makes the product and the numbers it is known under, for
+        // what a page tells search engines; a variant's own are in
+        // `variants_json`.
         "CREATE TABLE storefront_products (
             id TEXT PRIMARY KEY,
             slug TEXT NOT NULL,
@@ -56,7 +59,10 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             delivery_min_days INTEGER,
             delivery_max_days INTEGER,
             meta_title TEXT NOT NULL DEFAULT '',
-            meta_description TEXT NOT NULL DEFAULT ''
+            meta_description TEXT NOT NULL DEFAULT '',
+            brand TEXT,
+            gtin TEXT,
+            mpn TEXT
         );
         CREATE UNIQUE INDEX storefront_products_slug ON storefront_products (slug)
             WHERE status <> 'archived';

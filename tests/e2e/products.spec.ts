@@ -309,3 +309,103 @@ test("an owner makes a product vary by colour and size, each combination priced"
     );
   }).toPass({ timeout: 15_000 });
 });
+
+test("an owner prepares a product for a shopping feed and labels products from the list", async ({ page }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name, slug } = uniqueTenant("Feed Shop");
+  await createTenant(page, name);
+
+  // A mug sold as is, and a harness in one colour.
+  await page.goto(`/t/${slug}/products`);
+  await page.getByLabel("Name").fill("Blue Mug");
+  await page.getByRole("button", { name: "Create product" }).click();
+  await expect(page.getByRole("status")).toContainText("Product created.");
+  const mugUrl = page.url().split("?")[0];
+  await page.goto(`/t/${slug}/products`);
+  await page.getByLabel("Name").fill("Cat Harness");
+  await page.getByRole("button", { name: "Create product" }).click();
+  await expect(page.getByRole("status")).toContainText("Product created.");
+  const harnessUrl = page.url().split("?")[0];
+  await page.goto(`${harnessUrl}?tab=variants`);
+  await page.getByLabel("Add an option").fill("Colour");
+  await page.getByLabel("Values, one a line").fill("Beige");
+  await page.getByRole("button", { name: "Add option" }).click();
+  await expect(page.getByRole("status")).toContainText("Option added.");
+  await page.getByLabel("Colour", { exact: true }).selectOption("Beige");
+  await page.getByLabel("Variant price").fill("22.90");
+  await page.getByRole("button", { name: "Add variant" }).click();
+  await expect(page.getByRole("status")).toContainText("Variant added.");
+
+  // The mug: its brand and its numbers, a GTIN checked by its last digit.
+  await page.goto(mugUrl);
+  await productTab(page, "Shopping feed");
+  await page.getByLabel("Brand").fill("Acme");
+  await page.getByLabel("GTIN", { exact: true }).fill("4006381333932");
+  await page.getByRole("button", { name: "Save identifiers" }).click();
+  await expect(page).toHaveURL(/tab=shopping.*error=invalid_gtin/);
+  await expect(page.getByRole("alert")).toContainText("mistyped digit");
+  await page.getByLabel("Brand").fill("Acme");
+  await page.getByLabel("GTIN", { exact: true }).fill("4006381 333931");
+  await page.getByLabel("Part number (MPN)").fill("MUG-01");
+  await page.getByRole("button", { name: "Save identifiers" }).click();
+  await expect(page.getByRole("status")).toContainText("Identifiers saved.");
+  await expect(page.getByLabel("Brand")).toHaveValue("Acme");
+  await expect(page.getByLabel("GTIN", { exact: true })).toHaveValue("4006381333931");
+  // Having none is said, not left blank, and not beside a number.
+  await page.getByLabel("This product has no GTIN and no part number").check();
+  await page.getByRole("button", { name: "Save identifiers" }).click();
+  await expect(page).toHaveURL(/error=identifier_conflict/);
+
+  // Where a feed files it, its labels, and what a machine wrote.
+  await page.getByLabel("Google product category").fill("Home & Garden > Kitchen & Dining > Tableware > Drinkware > Mugs");
+  await page.getByLabel("Age group").selectOption("adult");
+  await page.getByLabel("Gender").selectOption("unisex");
+  await page.getByRole("button", { name: "Save classification" }).click();
+  await expect(page.getByRole("status")).toContainText("Classification saved.");
+  await expect(page.getByLabel("Age group")).toHaveValue("adult");
+  await expect(page.getByLabel("Google product category")).toHaveValue(/Mugs$/);
+  await page.getByLabel("Label 0").fill("high margin");
+  await page.getByRole("button", { name: "Save labels" }).click();
+  await expect(page.getByRole("status")).toContainText("Labels saved.");
+  await page.getByLabel("AI wrote the description").check();
+  await page.locator("[data-ai-writing]").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status")).toContainText("Saved.");
+  await expect(page.getByLabel("AI wrote the description")).toBeChecked();
+  await expect(page.getByLabel("AI wrote the name")).not.toBeChecked();
+
+  // The harness: its variant has numbers of its own, and its option is a
+  // colour to a feed.
+  await page.goto(`${harnessUrl}?tab=shopping`);
+  await expect(page.getByLabel("GTIN", { exact: true })).toHaveCount(0);
+  await page.getByLabel("GTIN of Colour: Beige").fill("036000291452");
+  await page.getByLabel("Part number of Colour: Beige").fill("H-BEIGE");
+  await page.locator("[data-variant-identifiers]").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status")).toContainText("Variant identifiers saved.");
+  await expect(page.getByLabel("GTIN of Colour: Beige")).toHaveValue("036000291452");
+  await page.getByLabel("To a feed, Colour is").selectOption("color");
+  await page.getByRole("button", { name: "Save kind" }).click();
+  await expect(page.getByRole("status")).toContainText("Option kind saved.");
+  await expect(page.getByLabel("To a feed, Colour is")).toHaveValue("color");
+
+  // From the list, one label on both at once; the list comes back as it
+  // stood, and the mug's other label is untouched.
+  await expect(async () => {
+    await page.goto(`/t/${slug}/products?status=all`);
+    await expect(page.locator("[data-product]")).toHaveCount(2, { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Label the ticked products" }).click();
+  await expect(page).toHaveURL(/status=all.*error=no_product_ticked/);
+  await page.getByLabel("Select every product listed").check();
+  await expect(page.getByLabel("Select Blue Mug")).toBeChecked();
+  await page.getByLabel("Campaign label").selectOption("2");
+  await page.getByLabel("Its value for the ticked products").fill("winter");
+  await page.getByRole("button", { name: "Label the ticked products" }).click();
+  await expect(page.getByRole("status")).toContainText("Label 2 set on 2 products.");
+  await expect(page).toHaveURL(/status=all/);
+  for (const url of [mugUrl, harnessUrl]) {
+    await page.goto(`${url}?tab=shopping`);
+    await expect(page.getByLabel("Label 2")).toHaveValue("winter");
+  }
+  await page.goto(`${mugUrl}?tab=shopping`);
+  await expect(page.getByLabel("Label 0")).toHaveValue("high margin");
+});

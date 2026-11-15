@@ -586,7 +586,7 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
             let slug_search = search_key(&product.slug);
             let name_search = search_key(&product.name);
             let options_json = options_json(product)?;
-            // Twenty-two values: more than a tuple of parameters holds. The
+            // Twenty-five values: more than a tuple of parameters holds. The
             // same numbering serves the insert and the update, the two
             // search keys last so the update can leave them off.
             let mut values = vec![
@@ -611,6 +611,9 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                 Value::from(product.delivery_days.map(|days| i64::from(days.max))),
                 Value::from(product.meta_title.as_str()),
                 Value::from(product.meta_description.as_str()),
+                Value::from(product.brand.as_deref()),
+                Value::from(product.gtin.as_deref()),
+                Value::from(product.mpn.as_deref()),
             ];
             match &was {
                 None => {
@@ -715,16 +718,16 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
     .await
 }
 
-/// The row of a new product, every column: `?19` and `?20` are the search
+/// The row of a new product, every column: `?22` and `?23` are the search
 /// keys; the delivery time shown is the product's own, else the shop's
 /// default.
 const PRODUCT_INSERT: &str = "INSERT INTO storefront_products (id, slug, name, description,
     amount_cents, currency, status, updated_at, images_json, options_json, variants_json,
     attributes_json, min_amount_cents, max_amount_cents, own_delivery_min_days,
-    own_delivery_max_days, meta_title, meta_description, slug_search, name_search,
-    delivery_min_days, delivery_max_days)
+    own_delivery_max_days, meta_title, meta_description, brand, gtin, mpn, slug_search,
+    name_search, delivery_min_days, delivery_max_days)
  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-    ?20,
+    ?20, ?21, ?22, ?23,
     coalesce(?15, (SELECT min_days FROM storefront_delivery_default)),
     coalesce(?16, (SELECT max_days FROM storefront_delivery_default)))";
 
@@ -736,7 +739,7 @@ const PRODUCT_UPDATE: &str = "UPDATE storefront_products SET
     updated_at = ?8, images_json = ?9, options_json = ?10, variants_json = ?11,
     attributes_json = ?12, min_amount_cents = ?13, max_amount_cents = ?14,
     own_delivery_min_days = ?15, own_delivery_max_days = ?16, meta_title = ?17,
-    meta_description = ?18,
+    meta_description = ?18, brand = ?19, gtin = ?20, mpn = ?21,
     delivery_min_days = coalesce(?15, (SELECT min_days FROM storefront_delivery_default)),
     delivery_max_days = coalesce(?16, (SELECT max_days FROM storefront_delivery_default))
  WHERE id = ?1";
@@ -748,10 +751,10 @@ const PRODUCT_UPDATE_SEARCHED: &str = "UPDATE storefront_products SET
     updated_at = ?8, images_json = ?9, options_json = ?10, variants_json = ?11,
     attributes_json = ?12, min_amount_cents = ?13, max_amount_cents = ?14,
     own_delivery_min_days = ?15, own_delivery_max_days = ?16, meta_title = ?17,
-    meta_description = ?18,
+    meta_description = ?18, brand = ?19, gtin = ?20, mpn = ?21,
     delivery_min_days = coalesce(?15, (SELECT min_days FROM storefront_delivery_default)),
     delivery_max_days = coalesce(?16, (SELECT max_days FROM storefront_delivery_default)),
-    slug_search = ?19, name_search = ?20
+    slug_search = ?22, name_search = ?23
  WHERE id = ?1";
 
 /// One row of `storefront_product_options`: a value an option of the product
@@ -836,6 +839,7 @@ fn options_json(product: &ProductState) -> anyhow::Result<String> {
             values: product.values_on_sale(option).cloned().collect(),
             label: option.label.clone(),
             value_labels: option.value_labels.clone(),
+            kind: option.kind.clone(),
         })
         .collect();
     Ok(serde_json::to_string(&options)?)
@@ -859,6 +863,8 @@ fn variants_json(product: &ProductState) -> anyhow::Result<String> {
             amount_cents: variant.price.amount_cents as i64,
             currency: variant.price.currency.clone(),
             image_id: variant.image_id.clone(),
+            gtin: variant.gtin.clone(),
+            mpn: variant.mpn.clone(),
         })
         .collect();
     Ok(serde_json::to_string(&variants)?)

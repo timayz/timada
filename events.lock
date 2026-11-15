@@ -60,20 +60,25 @@ event timada-catalog/Category::ShownInMenu { shown_by: String }
 event timada-catalog/CategorySlug::Claimed { category_id: String }
 event timada-catalog/CategorySlug::Released unit
 event timada-catalog/DeliveryDefault::DefaultDeliveryDaysSet { days: Option<DeliveryDays>, set_by: String }
+event timada-catalog/Product::AiWritingDeclared { title: bool, description: bool, declared_by: String }
 event timada-catalog/Product::Archived { archived_by: String }
 event timada-catalog/Product::AttributeRemoved { name: String, removed_by: String }
 event timada-catalog/Product::AttributeSet { name: String, value: String, set_by: String }
 event timada-catalog/Product::Categorized { category_id: String, categorized_by: String }
+event timada-catalog/Product::Classified { google_category: Option<String>, age_group: Option<String>, gender: Option<String>, classified_by: String }
 event timada-catalog/Product::Created { slug: String, name: String, created_by: String }
 event timada-catalog/Product::Deleted { deleted_by: String }
 event timada-catalog/Product::DeliveryDaysSet { days: Option<DeliveryDays>, set_by: String }
 event timada-catalog/Product::Described { description: String, described_by: String }
+event timada-catalog/Product::FeedLabelsSet { labels: Vec<String>, set_by: String }
+event timada-catalog/Product::Identified { brand: Option<String>, gtin: Option<String>, mpn: Option<String>, no_identifier: bool, identified_by: String }
 event timada-catalog/Product::ImageAdded { image_id: String, picture: timada_core::Picture, alt: String, added_by: String }
 event timada-catalog/Product::ImageAltChanged { image_id: String, alt: String, changed_by: String }
 event timada-catalog/Product::ImageRemoved { image_id: String, removed_by: String }
 event timada-catalog/Product::ImagesReordered { image_ids: Vec<String>, reordered_by: String }
 event timada-catalog/Product::OptionDefined { option_id: String, name: String, values: Vec<String>, defined_by: String }
 event timada-catalog/Product::OptionHidden { option_id: String, value: String, hidden_by: String }
+event timada-catalog/Product::OptionKindSet { option_id: String, kind: Option<String>, set_by: String }
 event timada-catalog/Product::OptionLabelled { option_id: String, label: Option<String>, labelled_by: String }
 event timada-catalog/Product::OptionRemoved { option_id: String, removed_by: String }
 event timada-catalog/Product::OptionRenamed { option_id: String, name: String, renamed_by: String }
@@ -88,6 +93,7 @@ event timada-catalog/Product::TaxCategorySet { category: Option<String>, set_by:
 event timada-catalog/Product::Uncategorized { category_id: String, uncategorized_by: String }
 event timada-catalog/Product::Unpublished { unpublished_by: String }
 event timada-catalog/Product::VariantDefined { variant_id: String, selections: Vec<OptionSelection>, sku: Option<String>, amount_cents: u64, currency: String, image_id: Option<String>, defined_by: String }
+event timada-catalog/Product::VariantIdentified { variant_id: String, gtin: Option<String>, mpn: Option<String>, identified_by: String }
 event timada-catalog/Product::VariantImaged { variant_id: String, image_id: Option<String>, imaged_by: String }
 event timada-catalog/Product::VariantPriced { variant_id: String, amount_cents: u64, currency: String, priced_by: String }
 event timada-catalog/Product::VariantRemoved { variant_id: String, removed_by: String }

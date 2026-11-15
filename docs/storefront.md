@@ -237,7 +237,13 @@ own address, the card, and the data the page hands it:
 - a product's page opens on one variant at `?v=<variant id>` (its price, its picture
   first, its values picked), which the table of variants links to and the data gives
   as that variant's offer; the canonical stays the address without it;
-- brand and GTIN are not in the data yet: a product has neither until #540.
+- the data names the brand, the GTIN and the maker's part number where the merchant
+  gave them (`product.brand`, `product.gtin`, `product.mpn`, and `gtin` / `mpn` on each
+  `Variant`). An option the merchant said is a colour, a size, a material or a pattern
+  (`ProductOption::kind`) is listed in the group's `variesBy` and written on each
+  variant under that name (`"color": "Rouge"`); the other options stay free properties.
+  The labels, the Google category and the audience are for a shopping feed only and do
+  not reach the storefront's copy.
 
 ### An address that moved
 

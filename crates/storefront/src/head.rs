@@ -147,9 +147,13 @@ pub fn product_ld(
     if !images.is_empty() {
         ld.insert("image".into(), json!(images));
     }
+    if let Some(brand) = &product.brand {
+        ld.insert("brand".into(), json!({ "@type": "Brand", "name": brand }));
+    }
     if product.variants.is_empty() {
         ld.insert("@type".into(), json!("Product"));
         ld.insert("sku".into(), json!(product.id));
+        identifiers(&mut ld, product.gtin.as_deref(), product.mpn.as_deref());
         if let (Some(cents), Some(currency)) = (product.amount_cents, &product.currency) {
             ld.insert(
                 "offers".into(),
@@ -159,6 +163,15 @@ pub fn product_ld(
     } else {
         ld.insert("@type".into(), json!("ProductGroup"));
         ld.insert("productGroupID".into(), json!(product.id));
+        let varies_by: Vec<String> = product
+            .options
+            .iter()
+            .filter_map(|option| option.kind.as_deref())
+            .map(|kind| format!("https://schema.org/{kind}"))
+            .collect();
+        if !varies_by.is_empty() {
+            ld.insert("variesBy".into(), json!(varies_by));
+        }
         let variants: Vec<Value> = product
             .variants
             .iter()
@@ -184,8 +197,20 @@ pub fn product_ld(
     Value::Object(ld)
 }
 
+/// The numbers a product or a variant is known under, where it has them.
+fn identifiers(ld: &mut Map<String, Value>, gtin: Option<&str>, mpn: Option<&str>) {
+    if let Some(gtin) = gtin {
+        ld.insert("gtin".into(), json!(gtin));
+    }
+    if let Some(mpn) = mpn {
+        ld.insert("mpn".into(), json!(mpn));
+    }
+}
+
 /// One variant of a group: named after the product and what it takes,
-/// with its own code, picture and offer.
+/// with its own code, numbers, picture and offer. What it takes for an
+/// option search engines know (a colour, a size) goes under that name, the
+/// rest as free properties.
 fn variant_ld(product: &Product, variant: &Variant, url: &str) -> Value {
     let label = product.variant_label(variant);
     let mut ld = Map::new();
@@ -210,21 +235,28 @@ fn variant_ld(product: &Product, variant: &Variant, url: &str) -> Value {
     if let Some(image) = image {
         ld.insert("image".into(), json!(image.url));
     }
-    let properties: Vec<Value> = variant
-        .selections
-        .iter()
-        .filter_map(|selection| {
-            let option = product
-                .options
-                .iter()
-                .find(|option| option.id == selection.option_id)?;
-            Some(json!({
+    identifiers(&mut ld, variant.gtin.as_deref(), variant.mpn.as_deref());
+    let mut properties: Vec<Value> = Vec::new();
+    for selection in &variant.selections {
+        let Some(option) = product
+            .options
+            .iter()
+            .find(|option| option.id == selection.option_id)
+        else {
+            continue;
+        };
+        let value = option.display_value(&selection.value);
+        match &option.kind {
+            Some(kind) => {
+                ld.insert(kind.clone(), json!(value));
+            }
+            None => properties.push(json!({
                 "@type": "PropertyValue",
                 "name": option.display_name(),
-                "value": option.display_value(&selection.value),
-            }))
-        })
-        .collect();
+                "value": value,
+            })),
+        }
+    }
     if !properties.is_empty() {
         ld.insert("additionalProperty".into(), json!(properties));
     }
@@ -363,6 +395,9 @@ mod tests {
             stock: BTreeMap::new(),
             in_stock: true,
             delivery_days: None,
+            brand: None,
+            gtin: None,
+            mpn: None,
         }
     }
 
@@ -424,6 +459,7 @@ mod tests {
             values: vec!["red".into(), "blue".into()],
             label: Some("Couleur".into()),
             value_labels: BTreeMap::from([("red".to_owned(), "Rouge".to_owned())]),
+            kind: None,
         }];
         let variant =
             |id: &str, value: &str, cents, sku: Option<&str>, image: Option<&str>| Variant {
@@ -436,6 +472,8 @@ mod tests {
                 amount_cents: cents,
                 currency: "EUR".into(),
                 image_id: image.map(str::to_owned),
+                gtin: None,
+                mpn: None,
             };
         collar.variants = vec![
             variant("v1", "red", 990, Some("MUG-R"), Some("b")),
@@ -486,6 +524,72 @@ mod tests {
                     },
                 },
             ])
+        );
+    }
+
+    #[test]
+    fn a_brand_and_the_numbers_are_told_where_the_product_has_them() {
+        let mut mug = product();
+        let ld = product_ld(&mug, &page(&[]), |_| unreachable!());
+        assert!(ld.get("brand").is_none() && ld.get("gtin").is_none() && ld.get("mpn").is_none());
+        mug.brand = Some("Acme".into());
+        mug.gtin = Some("4006381333931".into());
+        mug.mpn = Some("MUG-01".into());
+        let ld = product_ld(&mug, &page(&[]), |_| unreachable!());
+        assert_eq!(ld["brand"], json!({ "@type": "Brand", "name": "Acme" }));
+        assert_eq!(ld["gtin"], "4006381333931");
+        assert_eq!(ld["mpn"], "MUG-01");
+    }
+
+    #[test]
+    fn a_group_says_what_it_varies_by_and_a_variant_what_it_takes() {
+        let mut collar = product();
+        collar.brand = Some("Acme".into());
+        // The product's own numbers are not a variant's.
+        collar.gtin = Some("4006381333931".into());
+        let option = |id: &str, name: &str, kind: Option<&str>| ProductOption {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            values: vec!["a".into()],
+            label: None,
+            value_labels: BTreeMap::from([("a".to_owned(), "Rouge".to_owned())]),
+            kind: kind.map(str::to_owned),
+        };
+        collar.options = vec![
+            option("o1", "Color", Some("color")),
+            option("o2", "Size", Some("size")),
+            option("o3", "Clasp", None),
+        ];
+        collar.variants = vec![Variant {
+            id: "v1".into(),
+            selections: ["o1", "o2", "o3"]
+                .map(|option_id| Selection {
+                    option_id: option_id.into(),
+                    value: "a".into(),
+                })
+                .to_vec(),
+            sku: None,
+            amount_cents: 990,
+            currency: "EUR".into(),
+            image_id: None,
+            gtin: Some("036000291452".into()),
+            mpn: Some("C-R".into()),
+        }];
+        let ld = product_ld(&collar, &page(&[]), |_| "https://shop.example/p/c".into());
+        assert_eq!(ld["brand"]["name"], "Acme");
+        assert!(ld.get("gtin").is_none());
+        assert_eq!(
+            ld["variesBy"],
+            json!(["https://schema.org/color", "https://schema.org/size"])
+        );
+        let variant = &ld["hasVariant"][0];
+        assert_eq!(variant["gtin"], "036000291452");
+        assert_eq!(variant["mpn"], "C-R");
+        assert_eq!(variant["color"], "Rouge");
+        assert_eq!(variant["size"], "Rouge");
+        assert_eq!(
+            variant["additionalProperty"],
+            json!([{ "@type": "PropertyValue", "name": "Clasp", "value": "Rouge" }])
         );
     }
 

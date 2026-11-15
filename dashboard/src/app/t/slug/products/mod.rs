@@ -4,11 +4,12 @@
 //! reads its stream.
 
 pub mod create;
+pub mod label;
 pub mod product_id;
 
 use timada_catalog::{
-    CatalogError, Command, MAX_NAME_LEN, ProductFilter, ProductStatus, categories_of_tenant,
-    count_products, products_of_tenant,
+    CatalogError, Command, FEED_LABELS, MAX_FEED_LABEL_LEN, MAX_NAME_LEN, ProductFilter,
+    ProductStatus, categories_of_tenant, count_products, products_of_tenant,
 };
 use timada_core::page::{Cursor, PageFrom};
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
@@ -16,13 +17,14 @@ use topcoat::{
     Result,
     context::{Cx, context},
     router::{href, page, query_params},
-    view::{View, attributes, view},
+    view::{Unescaped, View, attributes, view},
 };
 
 use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::cluster::Executor;
 use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::checkbox::checkbox;
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
 use crate::components::select::select;
@@ -36,6 +38,22 @@ use crate::ui::{
 };
 
 const PAGE_SIZE: i64 = 50;
+
+/// The form labelling the ticked rows; the checkboxes sit in the table and
+/// name it.
+const LABEL_FORM: &str = "label-products";
+
+/// Ticks or unticks every row of the page at once.
+const SELECT_ALL_SCRIPT: &str = r#"
+for (const all of document.querySelectorAll("[data-select-all]")) {
+  all.hidden = false;
+  all.addEventListener("change", () => {
+    for (const box of document.querySelectorAll("[data-select-product]")) {
+      box.checked = all.checked;
+    }
+  });
+}
+"#;
 
 #[topcoat::router::query_params(error = bad_request)]
 struct ProductsQuery {
@@ -54,6 +72,8 @@ struct ProductsQuery {
     message: Option<String>,
 }
 
+/// Where the list stands: what it filters by and the page it is on. A link
+/// to another page carries it, and so does a form that comes back here.
 #[derive(serde::Serialize)]
 struct ProductsLink<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -66,6 +86,8 @@ struct ProductsLink<'a> {
     after: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     before: Option<&'a str>,
+    #[serde(flatten)]
+    flash: Flash<'a>,
 }
 
 /// The value of the status filter that lists every product.
@@ -185,6 +207,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     status: status_param,
                     after,
                     before,
+                    flash: Flash {
+                        error: None,
+                        message: None,
+                    },
                 })
                 .resolve(cx)
         }
@@ -199,6 +225,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         1 => "1 product".to_owned(),
         n => format!("{n} products"),
     };
+    let columns = if can_manage { 7 } else { 6 };
     let title = format!("Products · {}", tenant.name);
 
     Ok(view! {
@@ -238,6 +265,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 table(
                     table_header(
                         table_row(
+                            if can_manage {
+                                table_head(
+                                    attrs: attributes! { class="w-8" },
+                                    <span class="sr-only">"Select"</span>
+                                    checkbox(attrs: attributes! { hidden="" data-select-all="" aria-label="Select every product listed" })
+                                )
+                            }
                             table_head("Name")
                             table_head("Slug")
                             table_head(attrs: attributes! { class="text-right" }, "Price")
@@ -248,11 +282,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                     table_body(
                         if rows.is_empty() {
-                            empty_row(colspan: 6, text: empty_text(&filter))
+                            empty_row(colspan: columns, text: empty_text(&filter))
                         }
                         for row in &rows {
                             table_row(
                                 attrs: attributes! { data-product=(&row.slug) data-product-status=(&row.status) },
+                                if can_manage {
+                                    table_cell(
+                                        checkbox(attrs: attributes! {
+                                            form=(LABEL_FORM) name=(format!("{}{}", label::PRODUCT_FIELD, row.id)) value="on"
+                                            data-select-product="" aria-label=(format!("Select {}", row.name))
+                                        })
+                                    )
+                                }
                                 table_cell(
                                     <a class=(LINK) href=(href!(product_id::index, slug: slug.clone(), product_id::product_id: row.id.clone()))>(&row.name)</a>
                                 )
@@ -266,6 +308,34 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                 )
                 cursor_pager(summary: &summary, newer: newer, older: older)
+                if can_manage && !rows.is_empty() {
+                    <form method="post" id=(LABEL_FORM) action=(href!(label::label, slug: slug.clone())) class="mt-4 flex flex-wrap items-end gap-2 border-t border-border pt-4">
+                        // Where the list stands, so the answer comes back to it.
+                        for (name, value) in [("q", q), ("category", category), ("status", status_param), ("after", query.after.as_deref()), ("before", query.before.as_deref())] {
+                            if let Some(value) = value {
+                                <input type="hidden" name=(name) value=(value)>
+                            }
+                        }
+                        field(
+                            field_label(attrs: attributes! { for="label-products-index" }, "Campaign label")
+                            select(
+                                attrs: attributes! { id="label-products-index" name="index" class="w-32" },
+                                for n in 0..FEED_LABELS {
+                                    <option value=(n)>"Label " (n)</option>
+                                }
+                            )
+                        )
+                        field(
+                            attrs: attributes! { class="min-w-0 flex-1 sm:max-w-xs" },
+                            field_label(attrs: attributes! { for="label-products-value" }, "Its value for the ticked products")
+                            input(attrs: attributes! {
+                                id="label-products-value" name="label" type="text" maxlength=(MAX_FEED_LABEL_LEN) placeholder="Empty clears it"
+                            })
+                        )
+                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-9" }, "Label the ticked products")
+                    </form>
+                    <script>(Unescaped::new_unchecked(SELECT_ALL_SCRIPT))</script>
+                }
             )
 
             if can_manage {

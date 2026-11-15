@@ -79,6 +79,38 @@ pub const MAX_SKU_LEN: usize = 64;
 pub const MAX_ATTRIBUTES: usize = 30;
 pub const MAX_ATTRIBUTE_NAME_LEN: usize = 40;
 pub const MAX_ATTRIBUTE_VALUE_LEN: usize = 400;
+/// The longest brand and the longest manufacturer's part number a shopping
+/// feed takes.
+pub const MAX_BRAND_LEN: usize = 70;
+pub const MAX_MPN_LEN: usize = 70;
+/// How many free labels a product carries for ad campaigns: a shopping
+/// feed's `custom_label_0` to `custom_label_4`.
+pub const FEED_LABELS: usize = 5;
+pub const MAX_FEED_LABEL_LEN: usize = 100;
+/// The longest category of Google's product taxonomy: its number (`2271`)
+/// or its full path (`Apparel & Accessories > Clothing > Dresses`).
+pub const MAX_GOOGLE_CATEGORY_LEN: usize = 750;
+/// The ages a product is made for, as a shopping feed names them, with the
+/// label a page shows.
+pub const AGE_GROUPS: &[(&str, &str)] = &[
+    ("newborn", "Newborn (up to 3 months)"),
+    ("infant", "Infant (3 to 12 months)"),
+    ("toddler", "Toddler (1 to 5 years)"),
+    ("kids", "Kids (5 to 13 years)"),
+    ("adult", "Adult"),
+];
+/// Whom a product is made for, as a shopping feed names them.
+pub const GENDERS: &[(&str, &str)] =
+    &[("female", "Female"), ("male", "Male"), ("unisex", "Unisex")];
+/// What an option can be to a shopping feed and to search engines, which
+/// know only these ways for a product to vary. An option of another kind
+/// (where it ships from) is none of them.
+pub const OPTION_KINDS: &[(&str, &str)] = &[
+    ("color", "Colour"),
+    ("size", "Size"),
+    ("material", "Material"),
+    ("pattern", "Pattern"),
+];
 
 /// One option of a variant and the value it takes: `Colour` is `Beige`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, bitcode::Encode, bitcode::Decode)]
@@ -312,6 +344,112 @@ pub fn normalize_attribute(name: &str, value: &str) -> Result<(String, String), 
         return Err(CatalogError::InvalidAttribute);
     }
     Ok((name.to_owned(), value.to_owned()))
+}
+
+/// Trims a brand and checks it is at most 70 characters; an empty one is
+/// no brand.
+pub fn normalize_brand(brand: Option<&str>) -> Result<Option<String>, CatalogError> {
+    let Some(brand) = brand.map(str::trim).filter(|brand| !brand.is_empty()) else {
+        return Ok(None);
+    };
+    if brand.chars().count() > MAX_BRAND_LEN {
+        return Err(CatalogError::InvalidBrand);
+    }
+    Ok(Some(brand.to_owned()))
+}
+
+/// A trade item number (the digits under a barcode) without the spaces and
+/// dashes it is often written with: 8, 12, 13 or 14 digits, the last one
+/// checking the others as GS1 reckons it. An empty one is none.
+pub fn normalize_gtin(gtin: Option<&str>) -> Result<Option<String>, CatalogError> {
+    let Some(gtin) = gtin.map(str::trim).filter(|gtin| !gtin.is_empty()) else {
+        return Ok(None);
+    };
+    let digits: String = gtin.chars().filter(|c| *c != ' ' && *c != '-').collect();
+    if !matches!(digits.len(), 8 | 12 | 13 | 14) || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(CatalogError::InvalidGtin);
+    }
+    // From the right, the check digit left out, the digits weigh 3 and 1 in
+    // turn; the check digit brings their sum to a multiple of ten.
+    let (body, check) = digits.as_bytes().split_at(digits.len() - 1);
+    let sum: u32 = body
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(at, digit)| u32::from(digit - b'0') * if at % 2 == 0 { 3 } else { 1 })
+        .sum();
+    if (10 - sum % 10) % 10 != u32::from(check[0] - b'0') {
+        return Err(CatalogError::InvalidGtin);
+    }
+    Ok(Some(digits))
+}
+
+/// Trims a manufacturer's part number and checks it is at most 70
+/// characters; an empty one is none.
+pub fn normalize_mpn(mpn: Option<&str>) -> Result<Option<String>, CatalogError> {
+    let Some(mpn) = mpn.map(str::trim).filter(|mpn| !mpn.is_empty()) else {
+        return Ok(None);
+    };
+    if mpn.chars().count() > MAX_MPN_LEN {
+        return Err(CatalogError::InvalidMpn);
+    }
+    Ok(Some(mpn.to_owned()))
+}
+
+/// The five labels of a product, each trimmed and at most 100 characters;
+/// those not given are empty, and a sixth is refused.
+pub fn normalize_feed_labels<S: AsRef<str>>(
+    labels: &[S],
+) -> Result<[String; FEED_LABELS], CatalogError> {
+    if labels.len() > FEED_LABELS {
+        return Err(CatalogError::InvalidFeedLabel);
+    }
+    let mut out: [String; FEED_LABELS] = Default::default();
+    for (slot, label) in out.iter_mut().zip(labels) {
+        *slot = normalize_feed_label(label.as_ref())?;
+    }
+    Ok(out)
+}
+
+/// One label of a product, trimmed and at most 100 characters; empty is no
+/// label.
+pub fn normalize_feed_label(label: &str) -> Result<String, CatalogError> {
+    let label = label.trim();
+    if label.chars().count() > MAX_FEED_LABEL_LEN {
+        return Err(CatalogError::InvalidFeedLabel);
+    }
+    Ok(label.to_owned())
+}
+
+/// Trims a category of Google's product taxonomy, its number or its path,
+/// and checks its length; an empty one is none.
+pub fn normalize_google_category(category: Option<&str>) -> Result<Option<String>, CatalogError> {
+    let Some(category) = category.map(str::trim).filter(|c| !c.is_empty()) else {
+        return Ok(None);
+    };
+    if category.chars().count() > MAX_GOOGLE_CATEGORY_LEN {
+        return Err(CatalogError::InvalidGoogleCategory);
+    }
+    Ok(Some(category.to_owned()))
+}
+
+/// One key of a closed list (`AGE_GROUPS`, `GENDERS`, `OPTION_KINDS`), in
+/// lowercase; an empty one is none and an unknown one is `None` inside.
+pub fn known_key(list: &[(&str, &str)], key: Option<&str>) -> Option<Option<String>> {
+    let Some(key) = key.map(str::trim).filter(|key| !key.is_empty()) else {
+        return Some(None);
+    };
+    let key = key.to_ascii_lowercase();
+    list.iter()
+        .any(|(known, _)| *known == key)
+        .then_some(Some(key))
+}
+
+/// The label of a key of a closed list, or the key itself if unknown.
+pub fn key_label<'a>(list: &[(&'a str, &'a str)], key: &'a str) -> &'a str {
+    list.iter()
+        .find(|(known, _)| *known == key)
+        .map_or(key, |(_, label)| label)
 }
 
 /// A fresh id for a variant or an option.
