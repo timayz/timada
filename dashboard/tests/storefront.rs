@@ -843,6 +843,116 @@ async fn a_store_knows_where_an_old_address_went() {
 }
 
 #[tokio::test]
+async fn a_store_knows_who_makes_a_product_and_under_which_numbers() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme);
+    let mug = stock(&catalog, "Blue Mug", 1250, &[]).await;
+    let collar = stock(&catalog, "Collar", 990, &[]).await;
+    let colour = catalog
+        .define_option("alice", &collar, "Colour", vec!["Red".into()])
+        .await
+        .unwrap();
+    let red = catalog
+        .define_variant(
+            "alice",
+            &collar,
+            timada_catalog::DefineVariant {
+                selections: vec![timada_catalog::OptionSelection {
+                    option_id: colour.clone(),
+                    value: "Red".into(),
+                }],
+                sku: None,
+                amount_cents: 990,
+                currency: "EUR".into(),
+                image_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
+    eventually("both products reach the copy", async || {
+        published_product_by_slug(&db, "collar")
+            .await
+            .unwrap()
+            .is_some_and(|collar| collar.variants.len() == 1)
+            && published_product_by_slug(&db, "blue-mug")
+                .await
+                .unwrap()
+                .is_some()
+    })
+    .await;
+    // Nothing said yet.
+    let plain = published_product_by_slug(&db, "blue-mug")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((plain.brand, plain.gtin, plain.mpn), (None, None, None));
+
+    catalog
+        .identify_product(
+            "alice",
+            &mug,
+            timada_catalog::Identify {
+                brand: Some("Acme".into()),
+                gtin: Some("4006381333931".into()),
+                mpn: Some("MUG-01".into()),
+                no_identifier: false,
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .identify_variant("alice", &collar, &red, Some("036000291452"), Some("C-RED"))
+        .await
+        .unwrap();
+    catalog
+        .set_option_kind("alice", &collar, &colour, Some("color"))
+        .await
+        .unwrap();
+    // What only a feed reads stays out of the shop's copy and off its pages.
+    catalog
+        .set_feed_label("alice", &mug, 0, "high margin")
+        .await
+        .unwrap();
+
+    eventually("the mug's numbers reach the copy", async || {
+        published_product_by_slug(&db, "blue-mug")
+            .await
+            .unwrap()
+            .is_some_and(|mug| mug.gtin.is_some())
+    })
+    .await;
+    let mug = published_product_by_slug(&db, "blue-mug")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(mug.brand.as_deref(), Some("Acme"));
+    assert_eq!(mug.gtin.as_deref(), Some("4006381333931"));
+    assert_eq!(mug.mpn.as_deref(), Some("MUG-01"));
+    eventually("the collar's option says what it is", async || {
+        published_product_by_slug(&db, "collar")
+            .await
+            .unwrap()
+            .is_some_and(|collar| collar.options[0].kind.is_some())
+    })
+    .await;
+    let collar = published_product_by_slug(&db, "collar")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(collar.options[0].kind.as_deref(), Some("color"));
+    assert_eq!(collar.variants[0].gtin.as_deref(), Some("036000291452"));
+    assert_eq!(collar.variants[0].mpn.as_deref(), Some("C-RED"));
+    assert_eq!(collar.brand, None);
+
+    store.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
     let h = harness(None).await;
     let acme = h.create("acme").await;

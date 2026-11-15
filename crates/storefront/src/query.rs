@@ -68,6 +68,10 @@ pub struct ProductOption {
     /// labelled.
     #[serde(default)]
     pub value_labels: BTreeMap<String, String>,
+    /// What the option is to search engines, when the merchant said:
+    /// `color`, `size`, `material` or `pattern`.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 impl ProductOption {
@@ -95,6 +99,12 @@ pub struct Variant {
     pub currency: String,
     /// One of the product's pictures, shown when this variant is picked.
     pub image_id: Option<String>,
+    /// The number under its barcode.
+    #[serde(default)]
+    pub gtin: Option<String>,
+    /// Its maker's own number for it.
+    #[serde(default)]
+    pub mpn: Option<String>,
 }
 
 impl Variant {
@@ -213,6 +223,14 @@ pub struct Product {
     pub in_stock: bool,
     /// How long delivery takes: its own time, else the shop's default.
     pub delivery_days: Option<DeliveryDays>,
+    /// Who makes it.
+    pub brand: Option<String>,
+    /// The number under the barcode of a product sold as is; a variant has
+    /// its own.
+    pub gtin: Option<String>,
+    /// Its maker's own number for a product sold as is; a variant has its
+    /// own.
+    pub mpn: Option<String>,
 }
 
 impl FromRow for Product {
@@ -245,6 +263,9 @@ impl FromRow for Product {
                 }),
                 _ => None,
             },
+            brand: row.get("brand")?,
+            gtin: row.get("gtin")?,
+            mpn: row.get("mpn")?,
         })
     }
 }
@@ -527,7 +548,7 @@ macro_rules! product_columns {
         "p.id, p.slug, p.name, p.description, p.amount_cents, p.currency, p.updated_at,
          p.images_json, p.options_json, p.variants_json, p.attributes_json, p.min_amount_cents,
          p.max_amount_cents, p.review_count, p.rating_x100, p.stock_json, p.in_stock,
-         p.delivery_min_days, p.delivery_max_days"
+         p.delivery_min_days, p.delivery_max_days, p.brand, p.gtin, p.mpn"
     };
 }
 
@@ -1586,6 +1607,7 @@ mod sql {
                 values: colours.iter().map(|c| (*c).to_owned()).collect(),
                 label: None,
                 value_labels: BTreeMap::new(),
+                kind: None,
             }])
             .unwrap()
         };

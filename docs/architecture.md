@@ -493,6 +493,18 @@ Codes are unique across a tenant through the same index-aggregate pattern as slu
 (`timada-catalog/ProductSku`), compared without regard to case. A variant that goes,
 one whose code changes, and an archived product, give their codes back.
 
+A product also carries what a shopping feed and search engines ask of it, set on the
+"Shopping feed" tab of its page (`command/feed.rs`): who makes it and the numbers it is
+known under (`Identified`: brand, GTIN, part number, or that it truly has none; a
+variant has its own numbers, `VariantIdentified`), where a feed files it (`Classified`:
+Google's product category, age group, gender), what each option is to a feed
+(`OptionKindSet`: a colour, a size, a material or a pattern, one option a kind), five
+free labels for ad campaigns (`FeedLabelsSet`, which the products list sets on a page
+of products at once) and whether a machine wrote its name or its description
+(`AiWritingDeclared`). A GTIN is checked by its last digit. The storefront's copy takes
+the brand, the numbers and the option kinds, for its structured data; the rest is for
+the feed alone.
+
 A product leaves the catalog one of two ways. `Archived` is final and keeps it on
 record: no more edits, its slug and codes free again, its row still listed as
 archived. `Deleted` is for a product nobody ever ordered: it is archived and, on

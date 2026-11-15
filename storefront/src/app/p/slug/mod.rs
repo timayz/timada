@@ -200,6 +200,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     </div>
                     <div class="buy">
+                        if let Some(brand) = &product.brand {
+                            <span class="eyebrow" data-brand="">(brand)</span>
+                        }
                         <h1 data-product=(&product.slug)>(&product.name)</h1>
                         <p class="price">
                             if let Some(variant) = &shown {

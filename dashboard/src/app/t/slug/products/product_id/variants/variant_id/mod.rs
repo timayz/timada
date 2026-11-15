@@ -1,5 +1,6 @@
 //! One combination a product sells.
 
+pub mod identify;
 pub mod image;
 pub mod price;
 pub mod remove;
@@ -25,4 +26,12 @@ pub struct SkuForm {
 pub struct ImageForm {
     #[serde(default)]
     pub image_id: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct IdentifyForm {
+    #[serde(default)]
+    pub gtin: String,
+    #[serde(default)]
+    pub mpn: String,
 }
