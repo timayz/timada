@@ -279,6 +279,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         }
         None => None,
     };
+    // `snapshot save` asks this server for a copy of the store (#593).
+    let store_copies = crate::store_copy::serve(&config.database.path, store.clone())?;
 
     // The operator's alert for a node that stays away: this node nearing the
     // writes it may keep for it, or a node given up on.
@@ -438,6 +440,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     if let Some(metrics) = metrics {
         metrics.shutdown().await;
     }
+    store_copies.shutdown().await;
     cluster_watch.abort();
     mailroom_sends.abort();
     picture_fetches.abort();

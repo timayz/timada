@@ -39,6 +39,15 @@ these are the floor.
   a commit log that keeps growing says the checkpoints fail.
 - **Free space:** budget three times the store per node: the store, a
   `snapshot save` of it, and room to grow.
+- **A copy while serving** (`snapshot save` under a running server, #593)
+  costs what the files take to read: 0.2 s for 360 MiB on the memory
+  filesystem, forty copies during a run of 200,000 commands slowing no command
+  and failing none. No checkpoint runs while it
+  lasts, so the writes made meanwhile stay in the commit log and are folded in
+  together when it ends, every write waiting for that: count a second of wait
+  per 13 MiB of log, a mebibyte being about a thousand events. A copy that
+  lasts a minute on a node writing a hundred events a second leaves 6 MiB.
+  (`SIZING_COPY=<n>` takes n copies during the run and opens each.)
 
 ## Writes
 
@@ -105,4 +114,4 @@ for 47 subscriptions.
   shop is now told of that shop's writes alone.
 - The sign-in and contact limits ask every other node at each check
   (`rate_limit.rs`): three requests per check on three nodes.
-- A backup while serving: `snapshot save` wants the node stopped (#593).
+- Restoring a copy taken while a cluster's node served (#597).
