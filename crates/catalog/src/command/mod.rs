@@ -12,6 +12,7 @@ mod create;
 mod delivery;
 mod edit;
 mod feed;
+mod feed_address;
 mod image;
 mod lifecycle;
 mod option;
@@ -30,6 +31,7 @@ pub use category::*;
 pub use create::*;
 pub use delivery::*;
 pub use feed::*;
+pub use feed_address::*;
 pub use image::*;
 pub use option::*;
 pub use ordered::*;
@@ -48,9 +50,9 @@ use crate::aggregator::category::{
 use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
     AiWritingDeclared, Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Classified,
-    Created, Deleted, DeliveryDaysSet, Described, FeedLabelsSet, Identified, ImageAdded,
-    ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionHidden, OptionKindSet,
-    OptionLabelled, OptionRemoved, OptionRenamed, OptionShown, OptionValueLabelled,
+    Created, Deleted, DeliveryDaysSet, Described, FeedLabelsSet, FeedListingSet, Identified,
+    ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined, OptionHidden,
+    OptionKindSet, OptionLabelled, OptionRemoved, OptionRenamed, OptionShown, OptionValueLabelled,
     OptionValuesChanged, Priced, Published, Released, Renamed, SeoSet, TaxCategorySet,
     Uncategorized, Unpublished, VariantDefined, VariantIdentified, VariantImaged, VariantPriced,
     VariantRemoved, VariantSkuChanged, VariantsRepriced,
@@ -315,6 +317,8 @@ pub struct ProductState {
     pub ai_title: bool,
     /// A machine wrote its description.
     pub ai_description: bool,
+    /// The merchant took it out of the shopping feed.
+    pub off_feed: bool,
     pub created_by: String,
     /// Unix seconds of `Created`.
     pub created_at: u64,
@@ -366,6 +370,12 @@ impl ProductState {
             .as_ref()
             .map(|price| price.currency.as_str())
             .or_else(|| self.variants.first().map(|v| v.price.currency.as_str()))
+    }
+
+    /// Whether a shopping feed carries it: on sale, and not taken out of the
+    /// feed.
+    pub fn is_in_feed(&self) -> bool {
+        self.is_published() && self.is_priced() && !self.off_feed
     }
 
     /// Whether a shopper could be charged for it: a plain price, or at least
@@ -534,6 +544,7 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_option_kind_set())
         .handler(on_feed_labels_set())
         .handler(on_ai_writing_declared())
+        .handler(on_feed_listing_set())
         .strict()
 }
 
@@ -1126,6 +1137,16 @@ async fn on_ai_writing_declared(
 ) -> anyhow::Result<()> {
     product.ai_title = event.data.title;
     product.ai_description = event.data.description;
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_feed_listing_set(
+    event: Event<FeedListingSet>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.off_feed = !event.data.listed;
     product.updated_at = event.timestamp;
     Ok(())
 }

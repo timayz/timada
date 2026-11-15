@@ -13,6 +13,7 @@ imagesize.workspace = true
 image.workspace = true
 webp.workspace = true
 bytes.workspace = true
+http-body.workspace = true
 evento.workspace = true
 timada-core = { path = "../crates/core" }
 jiff.workspace = true

@@ -30,12 +30,14 @@ use timada_core::db::{
 use timada_core::{Picture, Rendition};
 
 use crate::aggregator::category::Category;
+use crate::aggregator::feed::Feed;
 use crate::aggregator::stock::StockItem;
 use crate::aggregator::{DeliveryDefault, Product};
 use crate::command::{
     CategoryState, ProductState, StockState, StockSummary, category_projection,
-    delivery_default_projection, product_projection, stock_projection,
+    delivery_default_projection, feed_projection, product_projection, stock_projection,
 };
+use crate::query::feed::settle_feed_product;
 use crate::query::{PRODUCTS, refresh_category_counts};
 
 /// The cursor identity of the read-model subscription, in the store.
@@ -50,6 +52,7 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(on_category_event())
         .handler(on_stock_event())
         .handler(on_delivery_default_event())
+        .handler(on_feed_event())
         .any_routing_key()
 }
 
@@ -83,6 +86,48 @@ async fn on_delivery_default_event<E: Executor>(
     )
     .await?;
     Ok(())
+}
+
+/// The address a tenant's feed answers at: one row while it is open, none
+/// once closed. An address it moved from goes with the row it had.
+#[evento::subscription_all]
+async fn on_feed_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<Feed>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(state) = feed_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    if superseded(&event, state.aggregate_version) {
+        return Ok(());
+    }
+    let env = (event.tenant.as_str(), state.token.as_deref());
+    db.write(&env, |tx, (tenant_id, token)| {
+        Box::pin(async move {
+            execute(
+                tx,
+                "DELETE FROM catalog_feeds WHERE tenant_id = ?1",
+                (*tenant_id,),
+            )
+            .await?;
+            if let Some(token) = token {
+                execute(
+                    tx,
+                    "INSERT INTO catalog_feeds (token, tenant_id) VALUES (?1, ?2)",
+                    (*token, *tenant_id),
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    })
+    .await
 }
 
 /// Whether the stream the event belongs to has already moved past it: the
@@ -260,6 +305,7 @@ pub(crate) async fn delete_product_rows(
                 "DELETE FROM catalog_product_categories WHERE tenant_id = ?1 AND product_id = ?2",
                 "DELETE FROM catalog_stock WHERE tenant_id = ?1 AND product_id = ?2",
                 "DELETE FROM catalog_variants WHERE tenant_id = ?1 AND product_id = ?2",
+                "DELETE FROM catalog_feed_products WHERE tenant_id = ?1 AND id = ?2",
                 "DELETE FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
             ] {
                 execute(tx, statement, (*tenant_id, *product_id)).await?;
@@ -486,6 +532,7 @@ pub async fn upsert_product(
             if was.is_none() || !variants_as_before {
                 refresh_stock_state(tx, tenant_id, product).await?;
             }
+            settle_feed_product(tx, tenant_id, product).await?;
             Ok(())
         })
     })

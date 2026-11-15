@@ -60,6 +60,8 @@ event timada-catalog/Category::ShownInMenu { shown_by: String }
 event timada-catalog/CategorySlug::Claimed { category_id: String }
 event timada-catalog/CategorySlug::Released unit
 event timada-catalog/DeliveryDefault::DefaultDeliveryDaysSet { days: Option<DeliveryDays>, set_by: String }
+event timada-catalog/Feed::Closed { closed_by: String }
+event timada-catalog/Feed::Opened { token: String, opened_by: String }
 event timada-catalog/Product::AiWritingDeclared { title: bool, description: bool, declared_by: String }
 event timada-catalog/Product::Archived { archived_by: String }
 event timada-catalog/Product::AttributeRemoved { name: String, removed_by: String }
@@ -71,6 +73,7 @@ event timada-catalog/Product::Deleted { deleted_by: String }
 event timada-catalog/Product::DeliveryDaysSet { days: Option<DeliveryDays>, set_by: String }
 event timada-catalog/Product::Described { description: String, described_by: String }
 event timada-catalog/Product::FeedLabelsSet { labels: Vec<String>, set_by: String }
+event timada-catalog/Product::FeedListingSet { listed: bool, set_by: String }
 event timada-catalog/Product::Identified { brand: Option<String>, gtin: Option<String>, mpn: Option<String>, no_identifier: bool, identified_by: String }
 event timada-catalog/Product::ImageAdded { image_id: String, picture: timada_core::Picture, alt: String, added_by: String }
 event timada-catalog/Product::ImageAltChanged { image_id: String, alt: String, changed_by: String }

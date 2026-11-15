@@ -10,6 +10,7 @@ pub mod carts;
 pub mod categories;
 pub mod customers;
 pub mod discounts;
+pub mod feed;
 pub mod invoices;
 pub mod invoicing;
 pub mod mail;

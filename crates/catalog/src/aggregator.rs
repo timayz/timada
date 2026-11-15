@@ -266,6 +266,29 @@ pub enum Product {
         description: bool,
         declared_by: String,
     },
+    /// Whether the shop's shopping feed carries it. A product is in the
+    /// feed from the day it is published; one taken out stays in the shop
+    /// and out of the ads.
+    FeedListingSet {
+        listed: bool,
+        set_by: String,
+    },
+}
+
+pub mod feed {
+    /// The shop's shopping feed: one stream per tenant store, with the id
+    /// [`feed_id`](crate::feed_id). The feed is read at an address nobody
+    /// can guess, which `token` is: whoever has it reads the feed, so it is
+    /// given to the feed's reader (Google Merchant Center) and to nobody
+    /// else.
+    #[evento::aggregate(name = "timada-catalog/Feed")]
+    pub enum Feed {
+        /// The feed answers at `token` from now on, and at no address it
+        /// had before.
+        Opened { token: String, opened_by: String },
+        /// The feed answers nowhere.
+        Closed { closed_by: String },
+    }
 }
 
 /// The delivery time of a product that gives none: one stream per tenant

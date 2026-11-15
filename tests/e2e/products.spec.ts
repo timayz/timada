@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { productTab, selectByText } from "./forms";
 import { invite, inviteLink } from "./invitations";
+import { publishProduct } from "./storefront";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // The catalog: an owner creates a product under /t/{slug}/products, edits it
@@ -408,4 +409,92 @@ test("an owner prepares a product for a shopping feed and labels products from t
   }
   await page.goto(`${mugUrl}?tab=shopping`);
   await expect(page.getByLabel("Label 0")).toHaveValue("high margin");
+});
+
+test("a shop opens its shopping feed at a secret address, moves it and closes it", async ({ page, request }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name, slug } = uniqueTenant("Feed Address Shop");
+  await createTenant(page, name);
+  const mugUrl = await publishProduct(page, slug, "Blue Mug", "12.50");
+  await page.goto(mugUrl);
+  await page.getByLabel("Description", { exact: true }).fill("Holds 50 cl & more.");
+  await page.getByRole("button", { name: "Save description" }).click();
+  await expect(page.getByRole("status")).toContainText("Description saved.");
+  await page.goto(`${mugUrl}?tab=shopping`);
+  await page.getByLabel("Brand").fill("Acme");
+  await page.getByRole("button", { name: "Save identifiers" }).click();
+  await expect(page.getByRole("status")).toContainText("Identifiers saved.");
+  await page.getByLabel("AI wrote the description").check();
+  await page.locator("[data-ai-writing]").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status")).toContainText("Saved.");
+  // A plate that stays in the shop and out of the ads.
+  const plateUrl = await publishProduct(page, slug, "Plate", "8.00");
+  await page.goto(`${plateUrl}?tab=shopping`);
+  await expect(page.getByLabel("Send this product to the shopping feed")).toBeChecked();
+  await page.getByLabel("Send this product to the shopping feed").uncheck();
+  await page.getByRole("button", { name: "Save feed listing" }).click();
+  await expect(page.getByRole("status")).toContainText("Out of the shopping feed.");
+  await expect(page.getByLabel("Send this product to the shopping feed")).not.toBeChecked();
+
+  // Closed until opened; then it has an address nobody can guess.
+  await page.goto(`/t/${slug}/products`);
+  await page.getByRole("link", { name: "Shopping feed", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/t/${slug}/feed$`));
+  await expect(page.locator("[data-feed-state]")).toHaveAttribute("data-feed-state", "closed");
+  await expect(page.locator("[data-feed-needs-storefront]")).toBeVisible();
+  await page.getByRole("button", { name: "Open the feed" }).click();
+  await expect(page.getByRole("status")).toContainText("The feed is open at a new address.");
+  await expect(page.locator("[data-feed-state]")).toHaveAttribute("data-feed-state", "open");
+  const first = await page.getByLabel("Feed address").inputValue();
+  expect(first).toMatch(/\/feeds\/[0-9a-f]{64}\/google$/);
+
+  // Without the shop's address a feed has no link to give: it answers
+  // nothing. A request with no session reads it once the address is set.
+  await expect(async () => {
+    await page.reload();
+    await expect(page.locator("[data-feed-products]")).toHaveAttribute("data-feed-products", "1", { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  expect((await request.get(first)).status()).toBe(404);
+  await page.goto(`/t/${slug}/api-keys`);
+  await page.getByLabel("Where shoppers find the shop").fill("https://shop.example");
+  await page.getByRole("button", { name: "Save address" }).click();
+  let xml = "";
+  await expect(async () => {
+    const answer = await request.get(first);
+    expect(answer.status()).toBe(200);
+    expect(answer.headers()["content-type"]).toContain("application/xml");
+    xml = await answer.text();
+  }).toPass({ timeout: 15_000 });
+  expect(xml).toContain('<rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">');
+  expect(xml.match(/<item>/g)).toHaveLength(1);
+  expect(xml).toContain("<g:title>Blue Mug</g:title>");
+  expect(xml).toContain("<g:link>https://shop.example/p/blue-mug</g:link>");
+  expect(xml).toContain("<g:price>12.50 EUR</g:price>");
+  expect(xml).toContain("<g:availability>in_stock</g:availability>");
+  expect(xml).toContain("<g:brand>Acme</g:brand>");
+  // What a machine wrote is sent as such, not as the plain attribute.
+  expect(xml).toContain("<g:content>Holds 50 cl &amp; more.</g:content>");
+  expect(xml).toContain("<g:digital_source_type>trained_algorithmic_media</g:digital_source_type>");
+  expect(xml).not.toContain("<g:description>");
+  expect(xml).not.toContain("Plate");
+  expect(xml.trimEnd().endsWith("</rss>")).toBe(true);
+
+  // Moved, the old address stops answering; closed, the new one does too.
+  await page.goto(`/t/${slug}/feed`);
+  await expect(page.locator("[data-feed-needs-storefront]")).toHaveCount(0);
+  await page.getByRole("button", { name: "Move to a new address" }).click();
+  await expect(page.getByRole("status")).toContainText("The feed is open at a new address.");
+  const second = await page.getByLabel("Feed address").inputValue();
+  expect(second).not.toBe(first);
+  await expect(async () => {
+    expect((await request.get(first)).status()).toBe(404);
+    expect((await request.get(second)).status()).toBe(200);
+  }).toPass({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Close the feed" }).click();
+  await expect(page.getByRole("status")).toContainText("The feed is closed.");
+  await expect(page.locator("[data-feed-state]")).toHaveAttribute("data-feed-state", "closed");
+  await expect(page.getByLabel("Feed address")).toHaveCount(0);
+  await expect(async () => {
+    expect((await request.get(second)).status()).toBe(404);
+  }).toPass({ timeout: 15_000 });
 });

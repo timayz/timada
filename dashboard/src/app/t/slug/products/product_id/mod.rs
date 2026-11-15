@@ -10,6 +10,7 @@ pub mod delete;
 pub mod delivery_days;
 pub mod describe;
 pub mod feed_labels;
+pub mod feed_listing;
 pub mod identify;
 pub mod images;
 pub mod options;
@@ -1323,6 +1324,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             if tab == Tab::Shopping {
                 section_card(
+                    title: Some("In the feed"),
+                    description: Some("The shop's shopping feed carries every published product. One taken out of it stays in the shop and out of the ads."),
+                    <form method="post" action=(href!(feed_listing::feed_listing, slug: slug.clone(), product_id: product.id.clone())) data-feed-listing="">
+                        <fieldset disabled=(!editable) class="flex max-w-xl flex-col gap-4">
+                            label(
+                                checkbox(attrs: attributes! { name="listed" value="on" checked=(!product.off_feed) })
+                                "Send this product to the shopping feed"
+                            )
+                            if editable {
+                                <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save feed listing")</div>
+                            }
+                        </fieldset>
+                    </form>
+                )
+
+                section_card(
                     title: Some("Identifiers"),
                     description: Some("Who makes the product and the numbers it is known under in every shop. A shopping feed asks for the brand, and for the GTIN (the digits under the barcode) wherever the product has one. A product with variants gives each its own numbers, below."),
                     <form method="post" action=(href!(identify::identify, slug: slug.clone(), product_id: product.id.clone())) data-identifiers="">
@@ -1698,6 +1715,13 @@ pub struct FeedLabelsForm {
     pub label_3: String,
     #[serde(default)]
     pub label_4: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct FeedListingForm {
+    /// An unticked checkbox is not sent at all.
+    #[serde(default)]
+    pub listed: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
