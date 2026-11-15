@@ -1255,6 +1255,98 @@ test("an address that moved answers with a redirect for good", async ({
   await leads("/products/blue-mug", null);
 });
 
+test("a visitor answers the cookie banner, and Google's consent mode follows", async ({
+  page,
+  request,
+}) => {
+  await registerWithEmail(page, uniqueEmail("storefront-consent"));
+  const { name, slug } = uniqueTenant("Storefront Consent");
+  await createTenant(page, name);
+  await app.start(request, await mintKey(page, slug), 0);
+
+  /// What the page told Google's consent mode, in order: `default` then,
+  /// once answered, `update`.
+  const told = () =>
+    page.evaluate(() =>
+      ((window as unknown as { dataLayer: unknown[][] }).dataLayer ?? [])
+        .map((entry) => Array.from(entry))
+        .filter((entry) => entry[0] === "consent")
+        .map((entry) => [entry[1], entry[2]]),
+    );
+  const all = (value: string) => ({
+    ad_storage: value,
+    ad_user_data: value,
+    ad_personalization: value,
+    analytics_storage: value,
+  });
+  const kept = async () =>
+    (await page.context().cookies(app.url)).find((cookie) => cookie.name === "consent");
+
+  // Nothing is allowed before an answer, and the banner asks on every page.
+  await page.goto(`${app.url}/boutique?utm_source=lettre`);
+  const banner = page.locator("[data-consent]");
+  await expect(banner).toBeVisible();
+  expect(await told()).toEqual([["default", all("denied")]]);
+  expect(await kept()).toBeUndefined();
+
+  // Refusing takes one click and comes back to the same address.
+  await banner.getByRole("button", { name: "Tout refuser" }).click();
+  await expect(page).toHaveURL(`${app.url}/boutique?utm_source=lettre`);
+  await expect(banner).toHaveCount(0);
+  expect((await kept())?.value).toBe("none");
+  expect(await told()).toEqual([
+    ["default", all("denied")],
+    ["update", all("denied")],
+  ]);
+  // The answer is kept six months, then the banner asks again.
+  const days = ((await kept())!.expires - Date.now() / 1000) / 86_400;
+  expect(days).toBeGreaterThan(179);
+  expect(days).toBeLessThan(181);
+
+  // The footer leads to the choices, where the answer changes: one purpose
+  // allowed, the other not.
+  await page.getByRole("link", { name: "Gestion des cookies" }).click();
+  await expect(page).toHaveURL(`${app.url}/cookies`);
+  await expect(page.locator("meta[name=robots][content=noindex]")).toHaveCount(1);
+  const choices = page.locator("[data-cookies]");
+  await expect(choices).toHaveAttribute("data-cookies", "none");
+  await expect(choices.getByRole("checkbox", { name: /Mesure d'audience/ })).not.toBeChecked();
+  await choices.getByRole("checkbox", { name: /Mesure d'audience/ }).check();
+  await choices.getByRole("button", { name: "Enregistrer mes choix" }).click();
+  await expect(page.getByRole("status")).toHaveText("Votre choix est enregistré.");
+  await expect(choices).toHaveAttribute("data-cookies", "analytics");
+  await expect(choices.getByRole("checkbox", { name: /Mesure d'audience/ })).toBeChecked();
+  await expect(choices.getByRole("checkbox", { name: /Publicité/ })).not.toBeChecked();
+  expect(await told()).toEqual([
+    ["default", all("denied")],
+    ["update", { ...all("denied"), analytics_storage: "granted" }],
+  ]);
+
+  // Accepting everything grants the four signals on the pages that follow.
+  await choices.getByRole("button", { name: "Tout accepter" }).click();
+  await expect(choices).toHaveAttribute("data-cookies", "analytics.ads");
+  await page.goto(`${app.url}/`);
+  await expect(banner).toHaveCount(0);
+  expect(await told()).toEqual([
+    ["default", all("denied")],
+    ["update", all("granted")],
+  ]);
+
+  // A browser without the answer is asked again, and can accept from the
+  // banner; a form that names another site sends nobody there.
+  await page.context().clearCookies({ name: "consent" });
+  await page.goto(`${app.url}/boutique`);
+  await banner.getByRole("button", { name: "Tout accepter" }).click();
+  await expect(page).toHaveURL(`${app.url}/boutique`);
+  expect((await kept())?.value).toBe("analytics.ads");
+  const elsewhere = await request.post(`${app.url}/cookies`, {
+    form: { answer: "all", from: "//example.com/" },
+    maxRedirects: 0,
+  });
+  expect(elsewhere.status()).toBe(303);
+  expect(elsewhere.headers()["location"]).toBe("/");
+});
+
 test("the storefront stops cleanly when told to", async ({ page, request }) => {
   await registerWithEmail(page, uniqueEmail("storefront-stop"));
   const { name, slug } = uniqueTenant("Storefront Stop");
