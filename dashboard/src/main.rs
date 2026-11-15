@@ -83,8 +83,9 @@ enum Commands {
     /// Create the databases if needed and apply pending migrations
     Migrate,
     /// Mark the store for a copy from another node at the next start (server
-    /// stopped): after the other nodes gave this one up, or a lost store file
-    Rejoin,
+    /// stopped): after the other nodes gave this one up, a lost store file,
+    /// or a node left out when the cluster began again from one node's copy
+    Rejoin(cli::RejoinArgs),
     /// Empty a read model and forget its cursor (server stopped); the next
     /// start fills it again from the store before serving
     Rebuild(cli::RebuildArgs),
@@ -114,7 +115,7 @@ async fn main() -> Result<()> {
     }) {
         Commands::Serve { host, port } => cli::serve(config, host, port).await,
         Commands::Migrate => cli::migrate(config).await,
-        Commands::Rejoin => cli::rejoin(config).await,
+        Commands::Rejoin(args) => cli::rejoin(config, args).await,
         Commands::Rebuild(args) => cli::rebuild(config, args).await,
         Commands::Seed(args) => cli::seed(config, args).await,
         Commands::Snapshot(args) => cli::snapshot(config, args).await,

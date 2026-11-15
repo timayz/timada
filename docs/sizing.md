@@ -126,4 +126,6 @@ The figures below are from `b03d06d`, when they cost over a core.
   shop is now told of that shop's writes alone.
 - The sign-in and contact limits ask every other node at each check
   (`rate_limit.rs`): three requests per check on three nodes.
-- Restoring a copy taken while a cluster's node served (#597).
+- How long a node takes to begin a new cluster over a copy put back
+  (`snapshot restore --from-one-node`, #597): it reads every event once before
+  it serves.

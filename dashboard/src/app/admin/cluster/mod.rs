@@ -109,6 +109,8 @@ fn worker_label(state: &WorkerState) -> (&'static str, Tone, String) {
 fn state(health: &NodeHealth) -> (&'static str, Tone) {
     if health.rolled_back {
         ("Journal rolled back", Tone::Warning)
+    } else if health.founded_apart {
+        ("Of another cluster", Tone::Warning)
     } else if health.rejoin_required || health.copy_pending {
         ("Copy needed", Tone::Warning)
     } else if !health.confirmed {
@@ -221,6 +223,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         "This node's journal is an older copy of itself, so it refuses writes until it copies the store and the journal back. Restart it: the copy happens at startup."
                     )
                 )
+            } else if health.founded_apart {
+                alert(
+                    variant: AlertVariant::Destructive,
+                    attrs: attributes! { role="alert" class="mb-6" },
+                    icon(data: icons::WARNING)
+                    alert_description(
+                        "The other nodes began again from a copy this node was not given, so it refuses writes. Stop it, then either put that same copy back on it (snapshot restore --from-one-node) or have it copy the store from them (rejoin --drop-journal), and start it."
+                    )
+                )
             } else if health.rejoin_required || health.copy_pending {
                 alert(
                     variant: AlertVariant::Warning,
@@ -269,6 +280,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                     if health.joined_at_start {
                         fact(term: "Last start", "copied the store from another node")
+                    }
+                    if health.founded_at_start {
+                        fact(term: "Last start", "began a new cluster from a copy put back")
                     }
                 )
             )

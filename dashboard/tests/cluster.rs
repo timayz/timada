@@ -3,7 +3,8 @@
 //! catches up on its own, a node away longer than its peers wait for it is
 //! told so and copies the store back at its next start, a node at its write
 //! backlog refuses writes, the nodes up know who they are, a key cut off
-//! through one node loses its store connections on another, and a node
+//! through one node loses its store connections on another, a cluster begins
+//! again from one node's store copied while it served, and a node
 //! alone still serves the reads that need no quorum: a storefront's key and
 //! catalog, a shopper's answered request to pay and their order.
 //!
@@ -28,6 +29,8 @@ mod read_only_store;
 mod store_api;
 #[path = "../src/store_carts.rs"]
 mod store_carts;
+#[path = "../src/store_copy.rs"]
+mod store_copy;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -1196,6 +1199,148 @@ async fn a_saga_runs_on_the_nodes_of_its_region_and_where_it_is_also_served() {
         saga.shutdown().await.unwrap();
     }
     for node in nodes {
+        node.stop().await;
+    }
+}
+
+/// Puts the store kept at `kept` in place of node `id`'s, marked as what a
+/// new cluster begins with: what `snapshot restore --from-one-node` does to
+/// a node's store.
+fn put_back_to_begin_again(root: &Path, id: u64, kept: &Path) {
+    let path = Node::store_path(root, id);
+    db::remove_store(&path).unwrap();
+    cluster::mark_for_founding(&path).unwrap();
+    for (source, target) in db::store_files(kept).iter().zip(db::store_files(&path)) {
+        if source.is_file() {
+            std::fs::copy(source, target).unwrap();
+        }
+    }
+}
+
+/// Issue #597: one node's store, copied while the cluster served, holds
+/// that node's journal alone, which no node may go on from. Put back on two
+/// of the three and marked, it is what a new cluster begins with: the two
+/// serve the copy's events and write on. The third, left with the old
+/// cluster's files, is of another cluster and refuses writes until it
+/// copies the store from the two, its own journal dropped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cluster_begins_again_from_one_nodes_copy_taken_while_it_served() {
+    let root = temp_root("found");
+    let addrs = free_addrs().await;
+    let tuning = Tuning::default();
+    let nodes = start_all(&root, &addrs, tuning).await;
+    let acme = create_everywhere(&nodes, "acme").await;
+    create_product(&nodes[0], &acme, "Kept").await;
+    let written = events_in(&Node::store_path(&root, 0), None).await;
+    await_events(
+        &Node::store_path(&root, 1),
+        None,
+        written,
+        "node 1 holds what node 0 wrote",
+    )
+    .await;
+
+    // Node 1's store is copied while the three serve, and they write on.
+    let kept = root.join("kept.db");
+    store_copy::copy(nodes[1].db.store(), &Node::store_path(&root, 1), &kept)
+        .await
+        .unwrap();
+    let lost = create_product(&nodes[2], &acme, "Written after the copy").await;
+    for node in nodes {
+        node.stop().await;
+    }
+
+    // The copy goes under nodes 0 and 1; node 2 keeps the old cluster's.
+    for id in [0, 1] {
+        put_back_to_begin_again(&root, id, &kept);
+    }
+    let (n0, n1) = tokio::join!(
+        Node::start(&root, 0, &addrs, tuning),
+        Node::start(&root, 1, &addrs, tuning),
+    );
+    for (id, node) in [(0, &n0), (1, &n1)] {
+        assert!(node.cluster.health().founded_at_start);
+        // Each serves once it heard the other opened over the same events.
+        eventually("the two confirm one another", async || {
+            node.cluster.health().serving()
+        })
+        .await;
+        let path = Node::store_path(&root, id);
+        assert!(!cluster::founding_mark(&path).exists());
+        assert_eq!(
+            events_in(&path, None).await,
+            written,
+            "node {id} holds the copy's events and no other"
+        );
+        // The read models came with the store, and the cursors with them.
+        assert!(
+            timada_tenancy::active_tenant_ids(&node.db)
+                .await
+                .unwrap()
+                .contains(&acme.id)
+        );
+    }
+    assert!(
+        n0.catalog(&acme)
+            .load_product(&lost.id)
+            .await
+            .unwrap()
+            .is_none(),
+        "what was written after the copy is gone"
+    );
+    let after = create_product(&n1, &acme, "After the new beginning").await;
+    let written = events_in(&Node::store_path(&root, 1), None).await;
+    await_events(
+        &Node::store_path(&root, 0),
+        None,
+        written,
+        "node 0 holds what node 1 wrote since",
+    )
+    .await;
+
+    // Node 2 comes back over the old cluster's files: of another cluster.
+    let n2 = Node::start(&root, 2, &addrs, tuning).await;
+    eventually("node 2 finds itself of another cluster", async || {
+        n2.cluster.health().founded_apart
+    })
+    .await;
+    assert!(!n2.cluster.health().serving());
+    assert!(
+        n2.catalog(&acme)
+            .create_product(
+                "alice",
+                CreateProduct {
+                    name: "Refused".into(),
+                    slug: None,
+                },
+            )
+            .await
+            .is_err(),
+        "a node of another cluster takes no write"
+    );
+    assert!(n0.cluster.health().serving() && n1.cluster.health().serving());
+    n2.stop().await;
+
+    // Its store and its journal dropped, it copies the two's and serves.
+    cluster::mark_for_rejoin_without_journal(&Node::store_path(&root, 2)).unwrap();
+    let n2 = Node::start(&root, 2, &addrs, tuning).await;
+    let health = n2.cluster.health();
+    assert!(
+        health.joined_at_start && !health.founded_apart,
+        "{health:?}"
+    );
+    await_events(
+        &Node::store_path(&root, 2),
+        None,
+        written,
+        "node 2 holds the new cluster's store",
+    )
+    .await;
+    eventually("node 2 serves", async || n2.cluster.health().serving()).await;
+    let seen = n2.catalog(&acme).load_product(&after.id).await.unwrap();
+    assert!(seen.is_some(), "node 2 reads what the two wrote without it");
+    create_product(&n2, &acme, "Through node 2").await;
+    for node in [n0, n1, n2] {
         node.stop().await;
     }
 }
