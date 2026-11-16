@@ -254,6 +254,11 @@ event timada-orders/Cart::ShippingGranted { request_id: String, method_id: Strin
 event timada-orders/Cart::ShippingMethodChosen { request_id: String, method_id: String, chosen_by: String }
 event timada-orders/Cart::SourceGiven { request_id: String, source: OrderSource, given_by: String }
 event timada-orders/Cart::TimeZoneGiven { request_id: String, time_zone: String, given_by: String }
+event timada-orders/ExportSchedule::ExportRunDelivered { delivered_at: u64, due_at: u64, delivered_by: String }
+event timada-orders/ExportSchedule::ExportRunFailed { reason: String, failed_at: u64, retry_at: Option<u64>, due_at: u64, failed_by: String }
+event timada-orders/ExportSchedule::ExportRunStarted { first_day: String, last_day: String, attempt: u32, started_at: u64, started_by: String }
+event timada-orders/ExportSchedule::ExportScheduled { what: String, every: String, mail: Option<String>, url_sealed: Option<String>, since_day: String, due_at: u64, scheduled_by: String }
+event timada-orders/ExportSchedule::ExportUnscheduled { unscheduled_by: String }
 event timada-orders/Order::BillingAddressSet { billing: ShippingAddress, set_by: String }
 event timada-orders/Order::BrowserSet { browser: Browser, set_by: String }
 event timada-orders/Order::CancellationRequested { reason: String, requested_by: String }

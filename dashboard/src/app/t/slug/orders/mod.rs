@@ -25,7 +25,7 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::db::Db;
-use crate::export::export_card;
+use crate::export::{export_card, schedule_card, schedule_view};
 use crate::ui::{
     LINK, Shell, Tone, cursor_pager, document, empty_row, filter_bar, format_time, notice,
     page_header, section_card, status_badge,
@@ -89,6 +89,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let before = query.before.as_deref().and_then(Cursor::parse);
     let from = PageFrom::of(after.as_ref(), before.as_ref());
     let nav = TenantNav::of(cx, &access).await?;
+    let schedule = schedule_view(cx, &access, timada_orders::ExportKind::Orders).await?;
     let TenantAccess { tenant, .. } = access;
     let pool = context::<Db>(cx);
     let filter = OrderFilter::default().status(status).search(q);
@@ -187,6 +188,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             export_card(
                 action: href!(export::export, slug: slug.clone()).resolve(cx),
                 description: "The orders placed over some days, one line per item with its price, quantity and kind of goods for VAT; each line says again what is the order's own: who and where it ships to, its discount, shipping, total and refunds, its invoice's number and VAT, and what brought the shopper.",
+            )
+            schedule_card(
+                action: href!(super::export_schedule::export_schedule, slug: slug.clone()).resolve(cx),
+                schedule: &schedule,
             )
         )
     })

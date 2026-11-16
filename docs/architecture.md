@@ -735,6 +735,29 @@ mark so a spreadsheet reads it as UTF-8. A cell a shopper typed that starts like
 formula (`=`, `+`, `-`, `@`) is led by an apostrophe, so a spreadsheet shows it
 instead of working it out.
 
+An owner of the shop, and nobody else whatever their role, may have each of the three
+files go out on its own (`timada-orders/ExportSchedule`, one stream per kind of file):
+every day, every Monday or every first of the month, for the days since the one
+before, an hour after the period ended on the shop's clock. By mail, the file does not
+travel: the mail says it is ready and links to the export's own address for those
+days, which opens for a member signed in whose role reads the page. To a web address,
+the file is posted as the page writes it, signed as a scenario's webhook is
+(`Timada-Signature`, HMAC-SHA256 of `"{t}.{body}"` under a secret of the schedule's
+own, shown to the owner) with an `Idempotency-Key` that is the same on every try
+(`{tenant}:{kind}:{first day}:{last day}`). The address has to be on the internet
+(`dashboard/src/net.rs`) and is kept sealed under `secrets.key`.
+
+Nothing in the store fires later, so every node sweeps each minute
+(`dashboard/src/scheduled_exports.rs`) the schedules whose time came
+(`orders_export_schedules`, read off `due_at`), each node those of its part of the
+shops. The stream decides: a run is started on it at the version read
+(`ExportRunStarted`, the claim), sent, then settled (`ExportRunDelivered`,
+`ExportRunFailed`), so two nodes that disagree for a moment send it once. A run never
+settled, its node having stopped, is started again a quarter of an hour later. An
+address that does not answer is tried five times over nine hours, then the days are
+given up and the schedule moves on; the page says so, and the owner exports them by
+hand. A file posted is held in memory to be signed, and refused past 32 MB.
+
 ## Product pictures
 
 The event store records what a picture is, never its bytes. The upload itself is not

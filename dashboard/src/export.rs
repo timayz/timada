@@ -16,7 +16,9 @@ use timada_core::format_amount;
 use timada_core::page::Cursor;
 use timada_invoicing::{OrderInvoice, invoice_of_order};
 use timada_newsletter::subscribers_page;
-use timada_orders::{OrderState, Period, orders_placed_over};
+use timada_orders::{
+    ExportDestination, ExportEvery, ExportKind, OrderState, Period, orders_placed_over,
+};
 use timada_shoppers::shoppers_page;
 use tokio::sync::mpsc;
 use topcoat::{
@@ -28,6 +30,7 @@ use topcoat::{
 
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::input::input;
+use crate::components::select::select;
 use crate::db::Db;
 use crate::feed::{Broken, Pages};
 use crate::ui::section_card;
@@ -215,10 +218,13 @@ fn head(columns: &[&str]) -> String {
     out
 }
 
-/// A file written behind the response: `pages` gives each next part of it
+/// The parts of a file, as they are written.
+type Parts = mpsc::Receiver<std::result::Result<Bytes, Broken>>;
+
+/// A file written behind its reader: `pages` gives each next part of it
 /// from where the one before ended (`None` first), and `None` once there is
-/// no more. A read that fails breaks the body off rather than end it early.
-fn written<C, F, Fut>(what: &'static str, tenant_id: String, columns: &[&str], pages: F) -> Body
+/// no more. A read that fails breaks the file off rather than end it early.
+fn written<C, F, Fut>(what: &'static str, tenant_id: String, columns: &[&str], pages: F) -> Parts
 where
     C: Send + 'static,
     F: Fn(Option<C>) -> Fut + Send + 'static,
@@ -249,12 +255,46 @@ where
             }
         }
     });
-    Body::new(Pages::of(body))
+    body
+}
+
+/// The file as the body of a response.
+fn download(parts: Parts) -> Body {
+    Body::new(Pages::of(parts))
+}
+
+/// The file of `kind` for `period`, whole, to post it somewhere: `None`
+/// once it grows past `limit` bytes.
+pub async fn file(
+    db: Db,
+    tenant_id: String,
+    kind: ExportKind,
+    period: Period,
+    limit: usize,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    let mut parts = match kind {
+        ExportKind::Orders => orders_parts(db, tenant_id, period),
+        ExportKind::Customers => customers_parts(db, tenant_id, period),
+        ExportKind::Newsletter => subscribers_parts(db, tenant_id, period),
+    };
+    let mut file = Vec::new();
+    while let Some(part) = parts.recv().await {
+        let part = part.map_err(|err| anyhow::anyhow!("{err}"))?;
+        if file.len() + part.len() > limit {
+            return Ok(None);
+        }
+        file.extend_from_slice(&part);
+    }
+    Ok(Some(file))
 }
 
 /// The orders of a tenant placed over `period`, oldest first, one line per
 /// item, each order with its invoice's number and VAT once it has one.
 pub fn orders_csv(db: Db, tenant_id: String, period: Period) -> Body {
+    download(orders_parts(db, tenant_id, period))
+}
+
+fn orders_parts(db: Db, tenant_id: String, period: Period) -> Parts {
     let tenant = tenant_id.clone();
     written(
         "orders",
@@ -287,6 +327,10 @@ pub const CUSTOMER_COLUMNS: [&str; 4] = ["email", "customer_since", "orders", "s
 
 /// The shoppers of a tenant who first signed in over `period`.
 pub fn customers_csv(db: Db, tenant_id: String, period: Period) -> Body {
+    download(customers_parts(db, tenant_id, period))
+}
+
+fn customers_parts(db: Db, tenant_id: String, period: Period) -> Parts {
     let tenant = tenant_id.clone();
     written(
         "customers",
@@ -340,6 +384,10 @@ pub const SUBSCRIBER_COLUMNS: [&str; 8] = [
 /// whatever their status: the file says it, and only the confirmed ones
 /// agreed to be written to.
 pub fn subscribers_csv(db: Db, tenant_id: String, period: Period) -> Body {
+    download(subscribers_parts(db, tenant_id, period))
+}
+
+fn subscribers_parts(db: Db, tenant_id: String, period: Period) -> Parts {
     let tenant = tenant_id.clone();
     written(
         "subscribers",
@@ -422,6 +470,203 @@ pub async fn export_card(cx: &Cx, action: String, description: &str) -> Result<i
             </form>
             <p class="mt-2 text-sm text-muted-foreground">"Leave both days empty for everything. The file opens in a spreadsheet; its times are in UTC."</p>
         )
+    })
+}
+
+/// A shop's scheduled export of one kind, as its page shows it.
+pub struct ScheduleView {
+    /// `orders`, `customers` or `newsletter`.
+    pub what: &'static str,
+    /// The member looking is an owner of the shop: they alone set it.
+    pub owner: bool,
+    /// `daily`, `weekly` or `monthly`; `None`: nothing scheduled.
+    pub every: Option<&'static str>,
+    /// The address told by mail, when it goes by mail.
+    pub mail: String,
+    /// Whether the file is posted to an address.
+    pub posted: bool,
+    /// That address, opened for an owner.
+    pub url: String,
+    /// The secret its files are signed under, for an owner.
+    pub secret: Option<String>,
+    /// How the last export went, or that one is being tried again.
+    pub last: Option<String>,
+    /// Whether that was a failure.
+    pub failed: bool,
+    /// Whether an address can be kept on this installation.
+    pub can_post: bool,
+}
+
+/// The schedule of `kind` as the member of `access` may see it, read from
+/// the tenant's own stream, so a change shows at once.
+pub async fn schedule_view(
+    cx: &Cx,
+    access: &crate::app::t::slug::TenantAccess,
+    kind: ExportKind,
+) -> Result<ScheduleView> {
+    use topcoat::context::context;
+
+    let crate::app::WebhookSealing(keys, _) = context::<crate::app::WebhookSealing>(cx);
+    let owner = access.is_owner();
+    let mut view = ScheduleView {
+        what: kind.key(),
+        owner,
+        every: None,
+        mail: String::new(),
+        posted: false,
+        url: String::new(),
+        secret: None,
+        last: None,
+        failed: false,
+        can_post: keys.is_some(),
+    };
+    let state = crate::app::t::slug::shipping::orders(access)?
+        .load_export_schedule(kind)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let Some(state) = state else {
+        return Ok(view);
+    };
+    let Some(plan) = &state.plan else {
+        return Ok(view);
+    };
+    view.every = Some(plan.every.key());
+    match &plan.destination {
+        ExportDestination::Mail(address) => view.mail = address.clone(),
+        ExportDestination::Url { sealed } => {
+            view.posted = true;
+            if let (true, Some(keys)) = (owner, keys) {
+                view.url =
+                    crate::scheduled_exports::open_address(keys, access.tenant_id(), kind, sealed)
+                        .unwrap_or_default();
+                view.secret = Some(crate::scheduled_exports::signing_secret(
+                    keys,
+                    access.tenant_id(),
+                    kind,
+                ));
+            }
+        }
+    }
+    let days = |first: Date, last: Date| {
+        if first == last {
+            first.to_string()
+        } else {
+            format!("{first} to {last}")
+        }
+    };
+    if let Some(run) = &state.run {
+        view.last = Some(format!(
+            "The export of {} is being sent (try {}).",
+            days(run.first_day, run.last_day),
+            run.attempt
+        ));
+    } else if let Some(ended) = &state.ended {
+        match &ended.failure {
+            Some(reason) => {
+                view.failed = true;
+                view.last = Some(format!(
+                    "The export of {} was not taken: {reason} Export these days by hand above.",
+                    days(ended.first_day, ended.last_day)
+                ));
+            }
+            None => {
+                view.last = Some(format!(
+                    "Last sent: {}.",
+                    days(ended.first_day, ended.last_day)
+                ));
+            }
+        }
+    }
+    Ok(view)
+}
+
+/// What a schedule's rhythm is called.
+fn every_label(every: &str) -> &'static str {
+    match ExportEvery::parse(every) {
+        Some(ExportEvery::Daily) => "Every day, for the day before",
+        Some(ExportEvery::Weekly) => "Every Monday, for the week before",
+        Some(ExportEvery::Monthly) | None => "Every first of the month, for the month before",
+    }
+}
+
+/// The card a list page shows its scheduled export in. An owner sets it
+/// there; another member sees that there is one, and where it goes, and
+/// nothing while there is none.
+#[component]
+pub async fn schedule_card(cx: &Cx, action: String, schedule: &ScheduleView) -> Result<impl View> {
+    let scheduled = schedule.every.is_some();
+    let state = match (scheduled, schedule.posted) {
+        (false, _) => "none",
+        (true, false) => "mail",
+        (true, true) => "url",
+    };
+    let every = schedule.every.unwrap_or("weekly");
+    Ok(view! {
+        if schedule.owner || scheduled {
+            section_card(
+                title: Some("Scheduled export"),
+                description: Some("The same file on its own, for the days since the one before. Only an owner of the shop sets it."),
+                <div class="flex flex-col gap-3" data-export-schedule=(state)>
+                    if scheduled {
+                        <p class="text-sm" data-export-schedule-summary="">
+                            (every_label(every))
+                            if schedule.posted {
+                                ", posted to an address."
+                            } else {
+                                ", told by mail to " <strong>(&schedule.mail)</strong> "."
+                            }
+                        </p>
+                    }
+                    if let Some(last) = &schedule.last {
+                        <p class=(if schedule.failed { "text-sm text-destructive" } else { "text-sm text-muted-foreground" }) data-export-schedule-last="">(last)</p>
+                    }
+                    if schedule.owner {
+                        <form method="post" action=(&action) class="flex max-w-2xl flex-col gap-3">
+                            <input type="hidden" name="what" value=(schedule.what)>
+                            <div class="flex flex-col gap-1">
+                                <label class="text-sm font-medium" for="export-every">"How often"</label>
+                                select(
+                                    attrs: attributes! { id="export-every" name="every" class="w-80" },
+                                    for option in ExportEvery::ALL {
+                                        <option value=(option.key()) selected=(option.key() == every)>(every_label(option.key()))</option>
+                                    }
+                                )
+                            </div>
+                            <fieldset class="flex flex-col gap-2">
+                                <legend class="text-sm font-medium">"Where it goes"</legend>
+                                <label class="flex items-center gap-2 text-sm"><input type="radio" name="to" value="mail" checked=(!schedule.posted) class="accent-primary"> " A mail that says it is ready"</label>
+                                <label class="flex items-center gap-2 text-sm"><input type="radio" name="to" value="url" checked=(schedule.posted) disabled=(!schedule.can_post) class="accent-primary"> " The file, posted to an address"</label>
+                            </fieldset>
+                            <div class="flex flex-col gap-1">
+                                <label class="text-sm font-medium" for="export-mail">"E-mail address to tell"</label>
+                                input(attrs: attributes! { id="export-mail" name="mail" type="email" class="w-80" value=(&schedule.mail) aria-describedby="export-mail-hint" autocomplete="off" })
+                                <p id="export-mail-hint" class="text-sm text-muted-foreground">"The mail carries a link, not the file: it opens for a member of the shop signed in, whose role reads these rows."</p>
+                            </div>
+                            <div class="flex flex-col gap-1">
+                                <label class="text-sm font-medium" for="export-url">"Address to post the file to"</label>
+                                input(attrs: attributes! { id="export-url" name="url" type="url" class="w-full" value=(&schedule.url) placeholder="https://" aria-describedby="export-url-hint" autocomplete="off" disabled=(!schedule.can_post) })
+                                <p id="export-url-hint" class="text-sm text-muted-foreground">
+                                    if schedule.can_post {
+                                        "An https address on the internet. The CSV file is posted as the request's body, signed in its " <code>"Timada-Signature"</code> " header, with an " <code>"Idempotency-Key"</code> " that is the same when a delivery is tried again."
+                                    } else {
+                                        "Not available on this installation: its operator has not set the key the addresses are kept under."
+                                    }
+                                </p>
+                            </div>
+                            if let Some(secret) = &schedule.secret {
+                                <p class="text-sm">"Signing secret: " <code data-export-secret="">(secret)</code></p>
+                            }
+                            <div class="flex flex-wrap gap-2">
+                                button(size: ButtonSize::Sm, attrs: attributes! { type="submit" name="action" value="save" class="h-9" }, "Save the schedule")
+                                if scheduled {
+                                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" name="action" value="remove" class="h-9" formnovalidate="" }, "Take it off")
+                                }
+                            </div>
+                        </form>
+                    }
+                </div>
+            )
+        }
     })
 }
 
