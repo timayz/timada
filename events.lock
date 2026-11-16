@@ -104,11 +104,16 @@ event timada-catalog/Product::VariantPriced { variant_id: String, amount_cents: 
 event timada-catalog/Product::VariantRemoved { variant_id: String, removed_by: String }
 event timada-catalog/Product::VariantSkuChanged { variant_id: String, sku: Option<String>, changed_by: String }
 event timada-catalog/Product::VariantsRepriced { prices: Vec<VariantPrice>, currency: String, repriced_by: String }
+event timada-catalog/ProductCost::CostSet { product_id: String, amount_cents: Option<u64>, set_by: String }
+event timada-catalog/ProductCost::OwnCostsSet { product_id: String, shipping_cents: Option<u64>, import_cents: Option<u64>, set_by: String }
+event timada-catalog/ProductCost::VariantCostsSet { product_id: String, costs: Vec<VariantCost>, set_by: String }
 event timada-catalog/ProductOrdered::Ordered { order_id: String, ordered_by: String }
 event timada-catalog/ProductSku::Claimed { product_id: String, variant_id: String, product_version: u16 }
 event timada-catalog/ProductSku::Released unit
 event timada-catalog/ProductSlug::Claimed { product_id: String, product_version: u16 }
 event timada-catalog/ProductSlug::Released unit
+event timada-catalog/SaleCosts::MarginTiersSet { medium_from_bps: u32, high_from_bps: u32, feed_label: Option<u8>, set_by: String }
+event timada-catalog/SaleCosts::SaleCostsSet { currency: String, shipping_cents: u64, import_cents: u64, fixed_cents: u64, payment_fee_bps: u32, payment_fee_cents: u64, set_by: String }
 event timada-catalog/StockItem::Consumed { cart_id: String, order_id: String, quantity: u32, consumed_by: String }
 event timada-catalog/StockItem::OnHandSet { on_hand: u32, set_by: String }
 event timada-catalog/StockItem::Opened { product_id: String, variant_id: Option<String>, tracked: bool, on_hand: u32, holds: Vec<CarriedHold>, recent: Vec<CarriedTake>, opened_by: String }
@@ -224,6 +229,7 @@ event timada-orders/Cart::BuyerIdentified { request_id: String, vat_number: Stri
 event timada-orders/Cart::CheckedOut { order_id: String, checked_out_by: String }
 event timada-orders/Cart::CheckoutClaimed { request_id: String, claimant: String, claimed_by: String }
 event timada-orders/Cart::CheckoutRequested { request_id: String, email: String, shipping: ShippingAddress, note: Option<String>, expected_total_cents: Option<u64>, requested_by: String }
+event timada-orders/Cart::CostsReckoned { request_id: String, costs: OrderCosts, reckoned_by: String }
 event timada-orders/Cart::Created { created_by: String }
 event timada-orders/Cart::DiscountApplied { code: String, applied_by: String }
 event timada-orders/Cart::DiscountGranted { request_id: String, discount_id: String, code: String, subtotal_cents: u64, amount_cents: u64, granted_by: String }
@@ -250,6 +256,7 @@ event timada-orders/Order::CancellationRequested { reason: String, requested_by:
 event timada-orders/Order::Cancelled { reason: String, cancelled_by: String }
 event timada-orders/Order::CaptureFailed { payment_id: String, reason: String, failed_by: String }
 event timada-orders/Order::CaptureRequested { payment_id: String, amount_cents: u64, requested_by: String }
+event timada-orders/Order::CostsKept { costs: OrderCosts, kept_by: String }
 event timada-orders/Order::Discounted { discount_id: String, code: String, subtotal_cents: u64, amount_cents: u64, discounted_by: String }
 event timada-orders/Order::Fulfilled { tracking: Option<String>, tracking_url: Option<String>, fulfilled_by: String }
 event timada-orders/Order::HoldLapseReminded { payment_id: String, reminded_by: String }
@@ -415,6 +422,7 @@ type timada_catalog::value_object::CarriedTake { order_id: String, cart_id: Opti
 type timada_catalog::value_object::DeliveryDays { min: u16, max: u16 }
 type timada_catalog::value_object::OptionSelection { option_id: String, value: String }
 type timada_catalog::value_object::TakenLine { product_id: String, variant_id: Option<String>, quantity: u32 }
+type timada_catalog::value_object::VariantCost { variant_id: String, amount_cents: Option<u64> }
 type timada_catalog::value_object::VariantPrice { variant_id: String, amount_cents: u64 }
 type timada_core::picture::Picture { width: u32, height: u32, listing: RenditionFile, page: RenditionFile }
 type timada_core::picture::RenditionFile { width: u32, height: u32, size: u64, sha256: [u8;32] }
@@ -435,6 +443,7 @@ type timada_invoicing::value_object::VatSubtotal { rate_bps: u32, base_cents: u6
 type timada_orders::value_object::Browser { user_agent: Option<String>, fbp: Option<String>, fbc: Option<String>, page: Option<String> }
 type timada_orders::value_object::Checkpoint { at: String, place: String, description: String }
 type timada_orders::value_object::Click { gclid: Option<String>, gbraid: Option<String>, wbraid: Option<String>, fbclid: Option<String>, utm_source: Option<String>, utm_medium: Option<String>, utm_campaign: Option<String>, utm_term: Option<String>, utm_content: Option<String>, referrer: Option<String>, landing: Option<String>, at: u64 }
+type timada_orders::value_object::OrderCosts { unit_costs: Vec<Option<u64>>, shipping_cents: u64, import_cents: u64, fixed_cents: u64, payment_fee_cents: u64, vat_cents: u64 }
 type timada_orders::value_object::OrderLine { product_id: String, variant_id: Option<String>, name: String, variant_label: Option<String>, sku: Option<String>, unit_amount_cents: u64, quantity: u32, tax_category: String, delivery_days: Option<timada_catalog::DeliveryDays> }
 type timada_orders::value_object::OrderSource { first: Click, last: Click }
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String, capture_before: Option<u64> }

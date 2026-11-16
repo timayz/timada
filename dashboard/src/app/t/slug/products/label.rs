@@ -20,11 +20,41 @@ use crate::app::t::slug::{require_tenant, slug};
 /// reads them back out.
 pub const PRODUCT_FIELD: &str = "product:";
 
-/// Everything the form posts: `index` and `label`, where the list stood
-/// (`q`, `category`, `status`, `after`, `before`), plus one `product:<id>`
-/// a ticked row. `BTreeMap` because the set of fields is the page's, not
-/// the form's.
-type LabelForm = BTreeMap<String, String>;
+/// Everything the form posts: `index` and `label` (or `cost`, for the
+/// button that costs the ticked rows), where the list stood (`q`,
+/// `category`, `status`, `after`, `before`), plus one `product:<id>` a
+/// ticked row. `BTreeMap` because the set of fields is the page's, not the
+/// form's.
+pub type TickedForm = BTreeMap<String, String>;
+
+/// A field of the form, when it was filled in.
+pub fn field<'a>(form: &'a TickedForm, name: &str) -> Option<&'a str> {
+    form.get(name).map(String::as_str).filter(|v| !v.is_empty())
+}
+
+/// The rows ticked.
+pub fn ticked(form: &TickedForm) -> Vec<&str> {
+    form.keys()
+        .filter_map(|key| key.strip_prefix(PRODUCT_FIELD))
+        .collect()
+}
+
+/// Back to the list where the form says it stood, with a flash error code
+/// or message.
+pub fn back(cx: &Cx, form: &TickedForm, error: Option<&str>, message: Option<&str>) -> SeeOther {
+    see_other(
+        href!(super::index, slug: slug(cx).to_owned())
+            .query(ProductsLink {
+                q: field(form, "q"),
+                category: field(form, "category"),
+                status: field(form, "status"),
+                after: field(form, "after"),
+                before: field(form, "before"),
+                flash: Flash { error, message },
+            })
+            .resolve(cx),
+    )
+}
 
 /// Sets one campaign label on every ticked product and comes back to the
 /// list where it stood.
@@ -36,35 +66,17 @@ type LabelForm = BTreeMap<String, String>;
 /// stops there; the products before it keep the label and the same form
 /// sent again finishes the rest.
 #[route(POST)]
-pub async fn label(cx: &Cx, Form(form): Form<LabelForm>) -> Result<SeeOther> {
+pub async fn label(cx: &Cx, Form(form): Form<TickedForm>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
     access
         .require_permission(cx, PERMISSION_PRODUCTS_MANAGE)
         .await?;
-    let slug = access.tenant.slug.clone();
-    let field = |name: &str| form.get(name).map(String::as_str).filter(|v| !v.is_empty());
-    let back = |error: Option<&str>, message: Option<&str>| {
-        see_other(
-            href!(super::index, slug: slug.clone())
-                .query(ProductsLink {
-                    q: field("q"),
-                    category: field("category"),
-                    status: field("status"),
-                    after: field("after"),
-                    before: field("before"),
-                    flash: Flash { error, message },
-                })
-                .resolve(cx),
-        )
-    };
-    let products: Vec<&str> = form
-        .keys()
-        .filter_map(|key| key.strip_prefix(PRODUCT_FIELD))
-        .collect();
+    let back = |error: Option<&str>, message: Option<&str>| back(cx, &form, error, message);
+    let products = ticked(&form);
     if products.is_empty() {
         return Ok(back(Some("no_product_ticked"), None));
     }
-    let index = field("index").and_then(|index| index.parse::<usize>().ok());
+    let index = field(&form, "index").and_then(|index| index.parse::<usize>().ok());
     let (Some(index), true) = (index, products.len() <= PAGE_SIZE as usize) else {
         return Ok(back(Some("invalid_feed_label"), None));
     };

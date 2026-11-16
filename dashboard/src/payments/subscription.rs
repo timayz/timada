@@ -439,6 +439,22 @@ impl Checkouts {
             postal_code: pending.request.shipping.postal_code.clone(),
             vat_number: pending.request.vat_number.clone(),
         };
+        // What the sale leaves is told from the order on, so the VAT it is
+        // expected to carry is kept with its costs: the orders know no tax.
+        if let Some(costs) = &mut pending.costs {
+            let lines: Vec<(&str, u64)> = pending
+                .lines
+                .iter()
+                .map(|line| (line.tax_category(), line.amount_cents()))
+                .collect();
+            costs.vat_cents = tax::expected_vat_cents(
+                profile,
+                &destination,
+                &lines,
+                &pending.currency,
+                pending.total_cents,
+            );
+        }
         if tax::needs_euro_rate(profile, &destination, &pending.currency) {
             let day = timada_core::civil::format_date(now);
             let published = match self.euro_rates.rate_on(&pending.currency, &day).await {

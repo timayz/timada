@@ -20,6 +20,7 @@ mod key_vault;
 mod mail;
 mod mail_fault;
 mod mailroom;
+mod margins;
 mod media;
 mod media_images;
 mod message_keys;

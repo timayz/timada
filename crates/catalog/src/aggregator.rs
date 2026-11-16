@@ -2,7 +2,7 @@
 //! a change of shape is a new variant, never a changed field. Each event
 //! carries who did it, so the stream is its own audit trail.
 
-use crate::value_object::{DeliveryDays, OptionSelection, VariantPrice};
+use crate::value_object::{DeliveryDays, OptionSelection, VariantCost, VariantPrice};
 
 /// A product of the tenant's catalog. Its id is a ULID.
 #[evento::aggregate(name = "timada-catalog/Product")]
@@ -286,6 +286,78 @@ pub enum Product {
     /// and out of the ads.
     FeedListingSet {
         listed: bool,
+        set_by: String,
+    },
+}
+
+/// What the shop pays for the things one product sells: one stream per
+/// product, with the deterministic id
+/// [`product_cost_id`](crate::product_cost_id). Apart from the product's own
+/// stream on purpose: a storefront reads that one, and what a shop pays its
+/// supplier is no storefront's business; and a supplier's cost that moves
+/// every week fills this stream, not the product's. Nothing here is ever
+/// shown to a shopper: what a sale leaves is worked out from it.
+#[evento::aggregate(name = "timada-catalog/ProductCost")]
+pub enum ProductCost {
+    /// What the shop pays for one of a product sold as is, in the product's
+    /// currency; `None` when it is not known.
+    CostSet {
+        product_id: String,
+        amount_cents: Option<u64>,
+        set_by: String,
+    },
+    /// What the shop pays for one of each of these combinations, in one
+    /// event: a merchant fills a table, a supplier's read moves several at
+    /// once.
+    VariantCostsSet {
+        product_id: String,
+        costs: Vec<VariantCost>,
+        set_by: String,
+    },
+    /// What sending one and importing one cost the shop for this product,
+    /// where they are not the shop's usual ([`SaleCosts`]): a supplier who
+    /// ships it apart, goods that come from inside the EU and pay nothing at
+    /// the border. `None` is the shop's.
+    OwnCostsSet {
+        product_id: String,
+        shipping_cents: Option<u64>,
+        import_cents: Option<u64>,
+        set_by: String,
+    },
+}
+
+/// What a sale costs the shop beyond the goods, and how its margins are
+/// graded: one stream per tenant store, with the id
+/// [`sale_costs_id`](crate::sale_costs_id). No stream means no such cost.
+#[evento::aggregate(name = "timada-catalog/SaleCosts")]
+pub enum SaleCosts {
+    /// Replaces what was there. The amounts are in `currency`, and count
+    /// for what is sold in it.
+    SaleCostsSet {
+        currency: String,
+        /// What sending a parcel costs the shop.
+        shipping_cents: u64,
+        /// What the border charges for one kind of item in a parcel: the
+        /// customs duty and the processing fee on goods shipped from
+        /// outside the EU.
+        import_cents: u64,
+        /// The share of the shop's fixed costs a sale carries.
+        fixed_cents: u64,
+        /// What the payment provider keeps of the amount paid, in basis
+        /// points (`150` is 1.5 %).
+        payment_fee_bps: u32,
+        /// And for each payment whatever its amount.
+        payment_fee_cents: u64,
+        set_by: String,
+    },
+    /// From which share of the price, in basis points, a margin is
+    /// `medium` and `high` ([`MarginTier`](crate::MarginTier)), and which of
+    /// the feed's labels carries the tier (from 0) so campaigns group
+    /// products by it; `None` leaves the labels to the merchant.
+    MarginTiersSet {
+        medium_from_bps: u32,
+        high_from_bps: u32,
+        feed_label: Option<u8>,
         set_by: String,
     },
 }

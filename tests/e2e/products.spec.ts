@@ -568,3 +568,97 @@ test("a reduction is measured from a price the product was on sale at, and the f
   await expect(page.getByRole("status")).toContainText("Price set.");
   await expect(page.getByLabel("Reduced from")).toHaveValue("");
 });
+
+test("a shop says what its goods and its sales cost, reads each margin, and its feed grades them", async ({ page, request }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name, slug } = uniqueTenant("Margin Shop");
+  await createTenant(page, name);
+  const mugUrl = await publishProduct(page, slug, "Blue Mug", "12.50");
+
+  // What a sale costs the shop, whatever it sells.
+  await page.goto(`/t/${slug}/products`);
+  await page.getByRole("link", { name: "Costs", exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/t/${slug}/costs$`));
+  await page.getByLabel("Sending a parcel").fill("1");
+  await page.getByLabel("Payment fee, in % of the amount paid").fill("1.5");
+  await page.getByLabel("Payment fee, for each payment").fill("0.25");
+  await page.getByRole("button", { name: "Save costs" }).click();
+  await expect(page.getByRole("status")).toContainText("Costs saved.");
+  await expect(page.getByLabel("Sending a parcel")).toHaveValue("1.00");
+  await expect(page.getByLabel("Payment fee, in % of the amount paid")).toHaveValue("1.50");
+
+  // A high margin starts above a medium one; label 1 of the feed says the tier.
+  await page.getByLabel("Medium from, in % of the price").fill("50");
+  await page.getByRole("button", { name: "Save tiers" }).click();
+  await expect(page.getByRole("alert")).toContainText("A high margin starts above a medium one");
+  await expect(page.getByLabel("Medium from, in % of the price")).toHaveValue("20.00");
+  await page.getByLabel("Feed label that says the tier").selectOption("1");
+  await page.getByRole("button", { name: "Save tiers" }).click();
+  await expect(page.getByRole("status")).toContainText("Tiers saved.");
+  await expect(page.getByLabel("Feed label that says the tier")).toHaveValue("1");
+
+  // The mug: no margin until it has a cost.
+  await page.goto(mugUrl);
+  await productTab(page, "Cost & margin");
+  const row = page.locator("[data-margin-row]");
+  await expect(row).toContainText("Not told: its cost is not known.");
+  await page.getByLabel("Cost of one (EUR)").fill("4");
+  await page.getByRole("button", { name: "Record what it costs" }).click();
+  await expect(page.getByRole("status")).toContainText("Costs saved.");
+  await expect(page.getByLabel("Cost of one (EUR)")).toHaveValue("4.00");
+  // 12.50, less 4.00, 1.00 to send it and 0.44 to be paid (the shop charges
+  // no VAT): 7.06 left, which an ad bringing 1.78 for 1 just pays for.
+  await expect(row.locator("[data-margin]")).toHaveAttribute("data-margin", "706");
+  await expect(row.locator("[data-margin]")).toHaveText("7.06 €");
+  await expect(row).toHaveAttribute("data-tier", "high");
+  await expect(row.locator("[data-break-even]")).toHaveText("1.78");
+
+  // What if it sold at 6.00: 0.66 left.
+  await page.getByLabel("What if it sold at (EUR)").fill("6");
+  await page.getByRole("button", { name: "Work it out" }).click();
+  await expect(page).toHaveURL(/tab=margin/);
+  await expect(page.locator("[data-what-if-shown]")).toContainText("6.00 EUR");
+  await expect(row.locator("[data-margin]")).toHaveAttribute("data-margin", "66");
+  await expect(row).toHaveAttribute("data-tier", "low");
+
+  // Sent by its supplier at no cost to the shop: its own, not the shop's.
+  await page.goto(`${mugUrl}?tab=margin`);
+  await page.getByLabel("Sending one (EUR)").fill("0");
+  await page.getByRole("button", { name: "Record these two" }).click();
+  await expect(page.getByRole("status")).toContainText("Costs saved.");
+  await expect(page.getByLabel("Sending one (EUR)")).toHaveValue("0.00");
+  await expect(row.locator("[data-margin]")).toHaveAttribute("data-margin", "806");
+
+  // The feed says the tier in the label given to it.
+  await page.goto(`/t/${slug}/api-keys`);
+  await page.getByLabel("Where shoppers find the shop").fill("https://shop.example");
+  await page.getByRole("button", { name: "Save address" }).click();
+  await page.goto(`/t/${slug}/feed`);
+  await page.getByRole("button", { name: "Open the feed" }).click();
+  await expect(page.getByRole("status")).toContainText("The feed is open at a new address.");
+  const feed = await page.getByLabel("Feed address").inputValue();
+  await expect(async () => {
+    const answer = await request.get(feed);
+    expect(answer.status()).toBe(200);
+    expect(await answer.text()).toContain("<g:custom_label_1>high</g:custom_label_1>");
+  }).toPass({ timeout: 15_000 });
+
+  // From the list, a cost on every ticked product: at 13.00 the mug loses
+  // money, and the feed says so.
+  await expect(async () => {
+    await page.goto(`/t/${slug}/products?status=all`);
+    await expect(page.locator("[data-product]")).toHaveCount(1, { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Cost the ticked products" }).click();
+  await expect(page).toHaveURL(/status=all.*error=no_product_ticked/);
+  await page.getByLabel("Select every product listed").check();
+  await page.getByLabel("What one of each costs the shop").fill("13");
+  await page.getByRole("button", { name: "Cost the ticked products" }).click();
+  await expect(page.getByRole("status")).toContainText("Cost set on 1 product.");
+  await expect(page).toHaveURL(/status=all/);
+  await expect(async () => {
+    expect(await (await request.get(feed)).text()).toContain("<g:custom_label_1>loss</g:custom_label_1>");
+  }).toPass({ timeout: 15_000 });
+  await page.goto(`${mugUrl}?tab=margin`);
+  await expect(row.locator("[data-break-even]")).toHaveText("None: it loses money");
+});

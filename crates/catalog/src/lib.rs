@@ -17,12 +17,14 @@
 pub mod aggregator;
 mod command;
 mod error;
+mod margin;
 mod query;
 mod releases;
 mod value_object;
 
 pub use command::*;
 pub use error::*;
+pub use margin::*;
 pub use query::*;
 pub use releases::*;
 pub use value_object::*;

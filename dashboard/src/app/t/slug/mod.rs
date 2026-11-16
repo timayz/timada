@@ -8,6 +8,7 @@ pub mod api_keys;
 pub mod automations;
 pub mod carts;
 pub mod categories;
+pub mod costs;
 pub mod customers;
 pub mod discounts;
 pub mod feed;

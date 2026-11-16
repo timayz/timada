@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use evento::Executor;
 use timada_catalog::{
     AddImage, CatalogError, DefineVariant, MAX_OPTION_VALUES, MAX_VARIANTS, OptionSelection,
-    ProductState, VariantPrice,
+    ProductState, VariantCost, VariantPrice,
 };
 use timada_catalog_import::Images;
 use timada_catalog_import::woocommerce::fit_sku;
@@ -97,6 +97,7 @@ pub async fn track_imported<E: Executor>(
                 .await?;
             links.push(link_of(sku, None));
         }
+        cost_loaded(catalog, actor, product_id, &links).await?;
         return Ok(links);
     }
     for (sku, variant_id) in skus.iter().zip(variant_ids) {
@@ -113,7 +114,83 @@ pub async fn track_imported<E: Executor>(
             .await?;
         links.push(link_of(sku, Some(variant_id.clone())));
     }
+    cost_loaded(catalog, actor, product_id, &links).await?;
     Ok(links)
+}
+
+/// Tells the catalog what the linked things cost the shop: what AliExpress
+/// asks for each, as `links` have it, so the product's margin and the
+/// profit of its orders follow the supplier. A cost within `tolerance_bps`
+/// of the one the catalog has is left alone, as a price is: a supplier's
+/// cost moving by a cent a day must not fill the product's stream (#472).
+/// A link whose variant is gone is skipped. What the catalog refuses for a
+/// reason of the product's own is left for the next read.
+async fn cost_linked<E: Executor>(
+    catalog: &timada_catalog::Command<E>,
+    actor: &str,
+    product: &ProductState,
+    links: &[SkuLink],
+    tolerance_bps: u32,
+) -> Result<(), CatalogError> {
+    let known = catalog.load_product_costs(&product.id).await?;
+    let moved = |current: Option<u64>, cost_cents: u64| {
+        !current.is_some_and(|current| within(current, cost_cents, tolerance_bps))
+    };
+    let mut costs: Vec<VariantCost> = Vec::new();
+    let mut own: Option<u64> = None;
+    for link in links {
+        match link.variant_id.as_deref() {
+            Some(variant_id) => {
+                if product.variant(variant_id).is_some()
+                    && moved(known.cost_of(Some(variant_id)), link.cost_cents)
+                {
+                    costs.push(VariantCost {
+                        variant_id: variant_id.to_owned(),
+                        amount_cents: Some(link.cost_cents),
+                    });
+                }
+            }
+            None if product.variants.is_empty() && moved(known.cost_cents, link.cost_cents) => {
+                own = Some(link.cost_cents);
+            }
+            None => {}
+        }
+    }
+    let written = async {
+        if !costs.is_empty() {
+            catalog
+                .set_variant_costs(actor, &product.id, &costs)
+                .await?;
+        }
+        if own.is_some() {
+            catalog.set_cost(actor, &product.id, own).await?;
+        }
+        Ok::<(), CatalogError>(())
+    };
+    match written.await {
+        Err(err) if err.is_user_facing() => {
+            tracing::warn!(product = %product.id, %err, "the supplier's costs were not recorded");
+            Ok(())
+        }
+        other => other,
+    }
+}
+
+/// [`cost_linked`] for a product just imported or given new variants:
+/// read as it stands now, every cost recorded as AliExpress says it.
+async fn cost_loaded<E: Executor>(
+    catalog: &timada_catalog::Command<E>,
+    actor: &str,
+    product_id: &str,
+    links: &[SkuLink],
+) -> Result<(), CatalogError> {
+    let Some(product) = catalog.load_product(product_id).await? else {
+        return Ok(());
+    };
+    if product.is_archived() {
+        return Ok(());
+    }
+    cost_linked(catalog, actor, &product, links, 0).await
 }
 
 fn link_of(sku: &MappedSku, variant_id: Option<String>) -> SkuLink {
@@ -288,6 +365,11 @@ pub async fn apply_sync<E: Executor>(
         }
         _ => Vec::new(),
     };
+    // The catalog's costs are read only when this read moved one: most
+    // reads find the supplier asking what it asked before.
+    if skus != link.skus {
+        cost_linked(catalog, actor, &state, &skus, tolerance_bps).await?;
+    }
     outcome.skus = skus;
     if outcome.offline && state.is_published() {
         catalog.unpublish_product(actor, product_id).await?;
@@ -563,6 +645,7 @@ pub async fn add_combinations<E: Executor>(
             cost_cents: found.cost_cents,
         });
     }
+    cost_loaded(catalog, actor, product_id, &outcome.skus).await?;
     Ok(outcome)
 }
 

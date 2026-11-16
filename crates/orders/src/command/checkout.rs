@@ -9,17 +9,18 @@ use ulid::Ulid;
 use super::PendingReturn;
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BrowserGiven, BrowserSet, BuyerIdentified, CheckedOut,
-    CheckoutClaimed, CheckoutRequested, Claimed, DiscountGranted, Discounted, LanguageGiven,
-    LanguageSet, NewsletterOptInSet, NewsletterOptedIn, PaymentCancelled, PaymentRefused,
-    PaymentRequested, PaymentReturnRefused, PaymentReturnRequested, PaymentReturned, Placed,
-    Released, ShippingCharged, ShippingGranted, ShippingMethodChosen, SourceGiven, SourceSet,
-    TimeZoneGiven, TimeZoneSet,
+    CheckoutClaimed, CheckoutRequested, Claimed, CostsKept, CostsReckoned, DiscountGranted,
+    Discounted, LanguageGiven, LanguageSet, NewsletterOptInSet, NewsletterOptedIn,
+    PaymentCancelled, PaymentRefused, PaymentRequested, PaymentReturnRefused,
+    PaymentReturnRequested, PaymentReturned, Placed, Released, ShippingCharged, ShippingGranted,
+    ShippingMethodChosen, SourceGiven, SourceSet, TimeZoneGiven, TimeZoneSet,
 };
 use crate::error::OrderError;
 use crate::value_object::{
-    Browser, MAX_REASON_LEN, OrderLine, OrderSource, Payment, ShippingAddress, new_reference,
-    normalize_billing, normalize_browser, normalize_buyer_vat_number, normalize_email,
-    normalize_note, normalize_shipping, normalize_source, order_id, order_reference_id,
+    Browser, MAX_REASON_LEN, OrderCosts, OrderLine, OrderSource, Payment, ShippingAddress,
+    new_reference, normalize_billing, normalize_browser, normalize_buyer_vat_number,
+    normalize_email, normalize_note, normalize_shipping, normalize_source, order_id,
+    order_reference_id,
 };
 
 use super::{
@@ -595,6 +596,10 @@ pub struct PendingPayment {
     /// is then taken once they are bought from it. The orders know no
     /// supplier: the dashboard says, before it records the payment.
     pub supplier: Option<String>,
+    /// What the sale costs the shop, when it said what some of the goods
+    /// cost it; the order keeps it. Its VAT is the dashboard's to say,
+    /// before it records the payment: the orders know no tax.
+    pub costs: Option<OrderCosts>,
 }
 
 /// What the checkout of a request holds, or may hold: the goods (one hold
@@ -668,6 +673,9 @@ impl<E: Executor> super::Command<E> {
             return Err(OrderError::PriceChanged { total_cents });
         }
         let currency = quote.currency.ok_or(OrderError::EmptyCart)?;
+        let costs = self
+            .reckon_costs(&quote.lines, &currency, total_cents)
+            .await?;
         Ok(Some(PendingPayment {
             request: request.clone(),
             lines: quote.lines,
@@ -676,7 +684,50 @@ impl<E: Executor> super::Command<E> {
             discount: quote.discount,
             shipping,
             supplier: None,
+            costs,
         }))
+    }
+
+    /// What a sale of `lines` for `total_cents` costs the shop, as the
+    /// catalog has it now: what it pays for each line's product, read from
+    /// the product's cost stream (one read a product), and what a sale
+    /// costs it beyond the goods. `None` when it said the cost of none of
+    /// them.
+    async fn reckon_costs(
+        &self,
+        lines: &[OrderLine],
+        currency: &str,
+        total_cents: u64,
+    ) -> Result<Option<OrderCosts>, OrderError> {
+        let mut products: Vec<(&str, timada_catalog::ProductCosts)> = Vec::new();
+        for line in lines {
+            if !products.iter().any(|(id, _)| *id == line.product_id) {
+                let costs = timada_catalog::load_product_costs(
+                    &self.executor,
+                    &self.tenant,
+                    &line.product_id,
+                )
+                .await?;
+                products.push((&line.product_id, costs));
+            }
+        }
+        if products.iter().all(|(_, costs)| costs.is_empty()) {
+            return Ok(None);
+        }
+        let shop = timada_catalog::load_sale_costs(&self.executor, &self.tenant).await?;
+        Ok(OrderCosts::reckon(
+            lines,
+            |line| {
+                products
+                    .iter()
+                    .find(|(id, _)| *id == line.product_id)
+                    .map(|(_, costs)| costs.unit_costs(line.variant_id.as_deref()))
+                    .unwrap_or_default()
+            },
+            shop.costs.as_ref(),
+            currency,
+            total_cents,
+        ))
     }
 
     /// The shipping a request is charged: `None` in a shop without methods;
@@ -996,6 +1047,13 @@ impl<E: Executor> super::Command<E> {
                     name: shipping.name.clone(),
                     amount_cents: shipping.amount_cents,
                     granted_by: actor.to_owned(),
+                });
+            }
+            if let Some(costs) = &pending.costs {
+                write.event(&CostsReckoned {
+                    request_id: request_id.clone(),
+                    costs: costs.clone(),
+                    reckoned_by: actor.to_owned(),
                 });
             }
             let written = write.tenant(&self.tenant).commit(&self.executor).await;
@@ -1359,6 +1417,12 @@ impl<E: Executor> super::Command<E> {
             write.event(&BrowserSet {
                 browser: browser.clone(),
                 set_by: actor.to_owned(),
+            });
+        }
+        if let Some(costs) = &snapshot.costs {
+            write.event(&CostsKept {
+                costs: costs.clone(),
+                kept_by: actor.to_owned(),
             });
         }
         let placed = write.tenant(&self.tenant).commit(&self.executor).await;

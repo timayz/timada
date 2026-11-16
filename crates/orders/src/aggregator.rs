@@ -4,7 +4,9 @@
 //! [`STOREFRONT_ACTOR`](crate::STOREFRONT_ACTOR), since a guest has no
 //! account to name.
 
-use crate::value_object::{Browser, Checkpoint, OrderLine, OrderSource, Payment, ShippingAddress};
+use crate::value_object::{
+    Browser, Checkpoint, OrderCosts, OrderLine, OrderSource, Payment, ShippingAddress,
+};
 
 /// What a shopper means to buy. Its id is a ULID the storefront keeps (a
 /// cookie, typically). A line is a product, or one variant of it, and a
@@ -190,6 +192,15 @@ pub enum Cart {
         name: String,
         amount_cents: u64,
         granted_by: String,
+    },
+    /// What the sale a request pays for costs the shop, written with its
+    /// `PaymentRequested` when the shop said what some of the goods cost
+    /// it. Written by the dashboard, never a shopper, and told to no
+    /// storefront.
+    CostsReckoned {
+        request_id: String,
+        costs: OrderCosts,
+        reckoned_by: String,
     },
     /// The payment of a request was cancelled with the provider before the
     /// shopper confirmed it: what the checkout held (the goods, the
@@ -427,6 +438,10 @@ pub enum Order {
     /// gave it: the shopper allowed advertising, and the sale may be told
     /// to the shop's advertising platforms from the server.
     BrowserSet { browser: Browser, set_by: String },
+    /// What the sale cost the shop, written with `Placed` when its payment
+    /// was reckoned with costs: what the order left is told from it,
+    /// whatever its products cost later.
+    CostsKept { costs: OrderCosts, kept_by: String },
     /// The merchant was told that the hold on the shopper's card
     /// (`payment_id`) lapses soon while the supplier may have the order.
     /// Written by the node that mails them, before the mail goes out and

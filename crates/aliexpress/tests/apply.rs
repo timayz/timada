@@ -1012,3 +1012,54 @@ async fn a_read_brings_in_the_days_delivery_takes() {
     sync(&fixture()).await;
     assert_eq!(product().await.delivery_days, None);
 }
+
+/// What AliExpress asks for each combination is what it costs the shop:
+/// the import says it, a read that finds another cost says the new one,
+/// and one within the tolerance of what the catalog has is left alone.
+/// None of it touches the product's own stream.
+#[tokio::test]
+async fn the_supplier_s_costs_are_the_catalog_s() {
+    let executor = executor().await;
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let (link_id, product_id) = imported(&executor).await;
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+    let rose = product.variants[0].id.clone();
+    let cost = async || {
+        let costs = catalog.load_product_costs(&product_id).await.unwrap();
+        costs.cost_of(Some(&rose))
+    };
+    // The import: 4.31, as the fixture quotes it.
+    assert_eq!(cost().await, Some(431));
+    let costs = catalog.load_product_costs(&product_id).await.unwrap();
+    assert_eq!(costs.variants.len(), product.variants.len());
+
+    let read_at = |cost: u64| {
+        let mut read = fixture();
+        read.skus[0].cost_cents = Some(cost);
+        read
+    };
+    // The same read moves nothing.
+    apply_sync(&catalog, "sync", &link, Some(&fixture()), None, 200)
+        .await
+        .unwrap();
+    assert_eq!(cost().await, Some(431));
+
+    // 2 % of 4.31 is 8 cents: 4.35 stays, 4.50 is recorded.
+    apply_sync(&catalog, "sync", &link, Some(&read_at(435)), None, 200)
+        .await
+        .unwrap();
+    assert_eq!(cost().await, Some(431));
+    apply_sync(&catalog, "sync", &link, Some(&read_at(450)), None, 200)
+        .await
+        .unwrap();
+    assert_eq!(cost().await, Some(450));
+
+    let after = catalog.load_product(&product_id).await.unwrap().unwrap();
+    assert_eq!(
+        after.aggregate_version().unwrap(),
+        product.aggregate_version().unwrap(),
+        "a cost is not the product's to carry"
+    );
+}

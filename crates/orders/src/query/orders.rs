@@ -5,6 +5,7 @@ use timada_core::db::{Db, FromRow, Tally, tenant_fts_query};
 use timada_core::page::{Cursor, Page, PageFrom, Side, read_page};
 
 use crate::command::{OrderRefund, OrderState, OrderStatus, OutsideSettlement};
+use crate::value_object::OrderCosts;
 use timada_catalog::format_money;
 
 /// An order as its row keeps it: the whole [`OrderState`], with the facts
@@ -25,6 +26,8 @@ pub struct OrderRecord {
     pub invoicing_failure: Option<String>,
     #[serde(default)]
     pub refunds: Vec<OrderRefund>,
+    #[serde(default)]
+    pub costs: Option<OrderCosts>,
 }
 
 impl OrderRecord {
@@ -39,6 +42,7 @@ impl OrderRecord {
             fulfilled_by: order.fulfilled_by.clone(),
             invoicing_failure: order.invoicing_failure.clone(),
             refunds: order.refunds.clone(),
+            costs: order.costs.clone(),
         }
     }
 
@@ -57,6 +61,7 @@ impl OrderRecord {
             fulfilled_by: self.fulfilled_by,
             invoicing_failure: self.invoicing_failure,
             refunds: self.refunds,
+            costs: self.costs,
             ..self.order
         }
     }

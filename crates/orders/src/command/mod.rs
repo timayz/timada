@@ -32,19 +32,21 @@ use timada_core::Sending;
 use crate::aggregator::{
     BillingAddressGiven, BillingAddressSet, BrowserGiven, BrowserSet, BusinessBuyersAccepted,
     BusinessBuyersRefused, BuyerIdentified, CancellationRequested, Cancelled, CaptureFailed,
-    CaptureRequested, CheckedOut, CheckoutClaimed, CheckoutRequested, Claimed, Created,
-    DiscountApplied, DiscountGranted, DiscountRemoved, Discounted, Expired, Fulfilled,
-    HoldLapseReminded, InvoicingFailed, InvoicingRequested, ItemAdded, ItemRemoved, LanguageGiven,
-    LanguageSet, MailClaimed, MailDeferred, MailFailed, MailSent, MailUndeliverable, MethodAdded,
-    MethodChanged, MethodRemoved, NewsletterOptInSet, NewsletterOptedIn, Owed as MailOwed, Paid,
-    PaymentCancelled, PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturnRefused,
-    PaymentReturnRequested, PaymentReturned, PaymentsDisabled, PaymentsEnabled, Placed,
-    QuantitySet, RefundRequested, Refunded, Released as ReferenceReleased, SettledOutside,
-    ShippingCharged, ShippingGranted, ShippingMethodChosen, SourceGiven, SourceSet,
+    CaptureRequested, CheckedOut, CheckoutClaimed, CheckoutRequested, Claimed, CostsKept,
+    CostsReckoned, Created, DiscountApplied, DiscountGranted, DiscountRemoved, Discounted, Expired,
+    Fulfilled, HoldLapseReminded, InvoicingFailed, InvoicingRequested, ItemAdded, ItemRemoved,
+    LanguageGiven, LanguageSet, MailClaimed, MailDeferred, MailFailed, MailSent, MailUndeliverable,
+    MethodAdded, MethodChanged, MethodRemoved, NewsletterOptInSet, NewsletterOptedIn,
+    Owed as MailOwed, Paid, PaymentCancelled, PaymentRefused, PaymentReleased, PaymentRequested,
+    PaymentReturnRefused, PaymentReturnRequested, PaymentReturned, PaymentsDisabled,
+    PaymentsEnabled, Placed, QuantitySet, RefundRequested, Refunded, Released as ReferenceReleased,
+    SettledOutside, ShippingCharged, ShippingGranted, ShippingMethodChosen, SourceGiven, SourceSet,
     StorefrontAddressCleared, StorefrontAddressSet, SupplierOrderRefused, SupplierOrderRuledOut,
     SupplierOrderStarted, SupplierOrderUncertain, TimeZoneGiven, TimeZoneSet,
 };
-use crate::value_object::{Browser, OrderLine, OrderSource, Payment, ShippingAddress, order_id};
+use crate::value_object::{
+    Browser, OrderCosts, OrderLine, OrderSource, Payment, ShippingAddress, order_id,
+};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor> {
@@ -147,6 +149,10 @@ pub struct PaymentSnapshot {
     /// Who supplies some of the goods once the order is placed
     /// (`aliexpress`): the money is taken once they are bought from it.
     pub supplier: Option<String>,
+    /// What the sale costs the shop, when it said what some of the goods
+    /// cost it. Not a storefront's business.
+    #[serde(skip)]
+    pub costs: Option<OrderCosts>,
     /// Unix seconds the payment was opened at: what the checkout holds (the
     /// goods, the discount's use) was taken just before, so it has lapsed
     /// once the reservation's length has passed since.
@@ -469,6 +475,7 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_discount_granted())
         .handler(on_shipping_method_chosen())
         .handler(on_shipping_granted())
+        .handler(on_costs_reckoned())
         .handler(on_language_given())
         .handler(on_time_zone_given())
         .handler(on_source_given())
@@ -622,6 +629,7 @@ async fn on_payment_requested(
             discount: None,
             shipping: None,
             supplier: event.data.supplier.to_owned(),
+            costs: None,
             opened_at: event.timestamp,
         })));
     }
@@ -883,6 +891,23 @@ async fn on_shipping_granted(
     Ok(())
 }
 
+#[evento::handler]
+async fn on_costs_reckoned(
+    event: Event<CostsReckoned>,
+    cart: &mut CartState,
+) -> anyhow::Result<()> {
+    // Written right after the `PaymentRequested` it is reckoned for.
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|r| r.request_id == event.data.request_id)
+        && let Some(PaymentAnswer::Requested(payment)) = &mut request.answer
+    {
+        payment.costs = Some(event.data.costs.to_owned());
+    }
+    Ok(())
+}
+
 // =============================================================================
 // Order
 // =============================================================================
@@ -1028,6 +1053,10 @@ pub struct OrderState {
     /// advertising). The host's business, told to no storefront.
     #[serde(skip)]
     pub browser: Option<Browser>,
+    /// What the sale cost the shop, when it had said what some of the
+    /// goods cost it. The shop's business, told to no storefront.
+    #[serde(skip)]
+    pub costs: Option<OrderCosts>,
     /// What went back to the shopper, in minor units, all refunds together.
     pub refunded_cents: u64,
     /// The provider's ids of those refunds.
@@ -1127,6 +1156,15 @@ impl OrderState {
     /// they were sold.
     pub fn delivery_window(&self) -> Option<timada_catalog::DeliveryDays> {
         timada_catalog::DeliveryDays::window(self.lines.iter().map(|line| line.delivery_days))
+    }
+
+    /// What the sale left the shop; negative when it lost money, `None`
+    /// when the shop had not said what every line cost it. A refund is not
+    /// taken off: it is the order as it was sold.
+    pub fn profit_cents(&self) -> Option<i64> {
+        self.costs
+            .as_ref()?
+            .profit_cents(&self.lines, self.total_cents)
     }
 
     /// What was taken and not given back yet: nothing while the payment is
@@ -1297,6 +1335,7 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_newsletter_opt_in_set())
         .handler(on_time_zone_set())
         .handler(on_source_set())
+        .handler(on_costs_kept())
         .handler(on_browser_set())
         .handler(on_hold_lapse_reminded())
         .handler(on_settled_outside())
@@ -1531,6 +1570,12 @@ async fn on_shipping_charged(
 #[evento::handler]
 async fn on_browser_set(event: Event<BrowserSet>, order: &mut OrderState) -> anyhow::Result<()> {
     order.browser = Some(event.data.browser.to_owned());
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_costs_kept(event: Event<CostsKept>, order: &mut OrderState) -> anyhow::Result<()> {
+    order.costs = Some(event.data.costs.to_owned());
     Ok(())
 }
 
