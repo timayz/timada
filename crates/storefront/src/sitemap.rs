@@ -1,7 +1,7 @@
 //! What a search engine is told to read: the addresses of a sitemap, read
 //! off the local copy so they answer when the store is away, and the XML
 //! and `robots.txt` they are written as. Which address a product, a
-//! category or a page has is the host's: the library gives the slugs and
+//! category, a page or an article has is the host's: the library gives the slugs and
 //! writes the files.
 
 use timada_core::civil::format_date;
@@ -76,6 +76,21 @@ pub async fn published_sitemap_pages(db: &Db) -> anyhow::Result<Vec<SitemapEntry
     .await
 }
 
+/// How many articles a sitemap lists: the most recent ones, should a blog
+/// ever hold more.
+pub const SITEMAP_ARTICLES: u32 = 10_000;
+
+/// The published articles of the blog, the most recent first.
+pub async fn published_sitemap_articles(db: &Db) -> anyhow::Result<Vec<SitemapEntry>> {
+    db.fetch_all(
+        "SELECT slug, updated_at FROM storefront_articles
+         INDEXED BY storefront_articles_published
+         ORDER BY published_at DESC, id DESC LIMIT ?1",
+        (i64::from(SITEMAP_ARTICLES),),
+    )
+    .await
+}
+
 /// How many product files the sitemap has ([`sitemap_products`] reads one).
 pub async fn sitemap_parts(cx: &Cx) -> Result<u32> {
     published_sitemap_parts(store(cx).db())
@@ -101,6 +116,13 @@ pub async fn sitemap_categories(cx: &Cx) -> Result<Vec<SitemapEntry>> {
 /// The shop's published pages, for the sitemap.
 pub async fn sitemap_pages(cx: &Cx) -> Result<Vec<SitemapEntry>> {
     published_sitemap_pages(store(cx).db())
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// The blog's published articles, for the sitemap.
+pub async fn sitemap_articles(cx: &Cx) -> Result<Vec<SitemapEntry>> {
+    published_sitemap_articles(store(cx).db())
         .await
         .map_err(Error::from_anyhow)
 }

@@ -2,12 +2,14 @@
 //! at `/c/{slug}`, a product at `/p/{slug}`, the cart at `/cart`, the checkout
 //! at `/checkout`, a placed order at `/orders/{order_id}`, the shopper's
 //! account at `/account`, the support page at `/support-client`, the shop's
-//! own pages at their own addresses (`/mentions-legales`, …), the cookie
+//! own pages at their own addresses (`/mentions-legales`, …), its blog at
+//! `/blog` and `/blog/{slug}`, the cookie
 //! banner's choices at `/cookies`, `/robots.txt` and `/sitemap.xml` for search
 //! engines, and the library's `/store/status`. One stylesheet (`theme.css`)
 //! inlined in every page, layout only, and no asset bundle.
 
 pub mod account;
+pub mod blog;
 pub mod boutique;
 pub mod c;
 pub mod cart;
@@ -191,6 +193,9 @@ pub async fn document(
     /// link.
     #[default]
     price: Option<(i64, &str)>,
+    /// When the page's article came out (Unix seconds), for a shared link.
+    #[default]
+    published: Option<i64>,
     /// What the page shows, as schema.org data.
     #[default]
     structured: &[serde_json::Value],
@@ -286,6 +291,7 @@ pub async fn document(
         site_name: SHOP_NAME,
         image,
         price,
+        published_at: published,
     }
     .tags();
     let page_title = if title == SHOP_NAME {
@@ -396,6 +402,8 @@ pub async fn document(
 /// back office.
 #[topcoat::view::component]
 pub async fn site_footer(cx: &Cx) -> Result<impl View> {
+    // The blog is linked once it has something to read.
+    let blog = timada_storefront::has_articles(cx).await?;
     Ok(view! {
         <footer class="sitefooter">
             <div class="wrap">
@@ -421,6 +429,9 @@ pub async fn site_footer(cx: &Cx) -> Result<impl View> {
                         <li><a href=(href!(boutique::index))>"Nos produits"</a></li>
                         <li><a href=(href!(support_client::index))>"Support client"</a></li>
                         <li><a href=(href!(qui_sommes_nous::index))>"Qui sommes-nous ?"</a></li>
+                        if blog {
+                            <li><a href=(href!(blog::index)) data-blog-link="">"Blog"</a></li>
+                        }
                     </ul>
                 </div>
                 <div>

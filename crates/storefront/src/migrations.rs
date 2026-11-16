@@ -203,6 +203,25 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             updated_at INTEGER NOT NULL
         );
         CREATE INDEX storefront_pages_slug ON storefront_pages (slug);
+        -- The published articles of the blog. `excerpt` is the start of the
+        -- body's text, for a list to show when the article has no summary;
+        -- `cover_json` the cover's picture, when it has one.
+        CREATE TABLE storefront_articles (
+            id TEXT PRIMARY KEY,
+            slug TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            body TEXT NOT NULL,
+            excerpt TEXT NOT NULL,
+            meta_title TEXT NOT NULL,
+            meta_description TEXT NOT NULL,
+            cover_json TEXT,
+            published_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX storefront_articles_slug ON storefront_articles (slug);
+        CREATE INDEX storefront_articles_published
+            ON storefront_articles (published_at DESC, id DESC);
         -- The shop's Google tag as the back office has it: one row, there
         -- once it was first set up.
         CREATE TABLE storefront_google_tag (
@@ -241,7 +260,7 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             starts_at INTEGER,
             ends_at INTEGER
         );
-        -- The slugs a product or a page (`kind`) went by before a rename,
+        -- The slugs a product, a page or an article (`kind`) went by before a rename,
         -- and when it left each: what an old address is redirected from. An
         -- archived product's last slug is here too, its row no longer
         -- answering to it.
@@ -280,6 +299,7 @@ pub const TABLES: &[&str] = &[
     "storefront_reviews",
     "storefront_stock",
     "storefront_pages",
+    "storefront_articles",
     "storefront_announcements",
     "storefront_delivery_default",
     "storefront_former_slugs",

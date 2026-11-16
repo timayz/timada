@@ -1,5 +1,5 @@
-//! Frees the index entries of the slugs a page let go of: renamed, or
-//! deleted.
+//! Frees the index entries of the slugs a page or an article let go of:
+//! renamed, or deleted.
 //!
 //! The commands only write what the page did; this subscription gives the
 //! slugs back, so a node dying after the command, or a command asked again,
@@ -17,6 +17,7 @@ use evento::{
 };
 
 use crate::Command;
+use crate::aggregator::article::{Deleted as ArticleDeleted, Renamed as ArticleRenamed};
 use crate::aggregator::{Deleted, Renamed};
 
 /// The cursor identity of the subscription, in the store.
@@ -35,6 +36,8 @@ pub fn release_subscription<E: Executor>(store: Evento) -> SubscriptionBuilder<E
         .data(Store(store))
         .handler(on_renamed())
         .handler(on_deleted())
+        .handler(on_article_renamed())
+        .handler(on_article_deleted())
         // A saga: it follows the node's own region (the executor's default
         // routing key), so a region's nodes do its work and the other
         // regions' nodes leave it to them.
@@ -71,4 +74,36 @@ async fn on_deleted<E: Executor>(
     event: Event<Deleted>,
 ) -> anyhow::Result<()> {
     release_page(context, &event).await
+}
+
+/// Frees what the article of `event` let go of up to it.
+async fn release_article<E: Executor, D>(
+    context: &Context<'_, E>,
+    event: &Event<'_, D>,
+) -> anyhow::Result<()> {
+    let store: Store = context.extract();
+    Command::new(store.0, &event.tenant)
+        .release_article_given_up(
+            &event.aggregate_id,
+            event.version,
+            event.routing_key.clone(),
+        )
+        .await?;
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_article_renamed<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<ArticleRenamed>,
+) -> anyhow::Result<()> {
+    release_article(context, &event).await
+}
+
+#[evento::subscription]
+async fn on_article_deleted<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<ArticleDeleted>,
+) -> anyhow::Result<()> {
+    release_article(context, &event).await
 }

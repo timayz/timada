@@ -6,6 +6,8 @@
 //! at most.
 
 mod announcements;
+mod article;
+mod article_slug_index;
 mod google_tag;
 mod meta_pixel;
 mod page;
@@ -15,6 +17,7 @@ mod slug_index;
 use std::ops::Deref;
 
 pub use announcements::*;
+pub use article::*;
 pub use google_tag::*;
 pub use meta_pixel::*;
 pub use page::*;
