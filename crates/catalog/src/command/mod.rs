@@ -5,6 +5,7 @@
 //! stale. None of them is snapshotted: a product stream is a handful of events.
 
 mod attribute;
+mod best_sellers;
 mod categorize;
 mod category;
 mod category_slug_index;
@@ -28,6 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::ops::Deref;
 
+pub use best_sellers::*;
 pub use category::*;
 pub use cost::*;
 pub use create::*;

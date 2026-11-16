@@ -287,6 +287,7 @@ test("the storefront shows the catalogue in French", async ({
     "3 résultats affichés",
   );
   await expect(page.locator("[data-sort] option")).toHaveText([
+    "Tri par popularité",
     "Tri du plus récent au plus ancien",
     "Tri par notes moyennes",
     "Tri par tarif croissant",

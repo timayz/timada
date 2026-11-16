@@ -39,10 +39,11 @@ use evento::{
 };
 use timada_catalog::aggregator::category::Category;
 use timada_catalog::aggregator::stock::StockItem;
-use timada_catalog::aggregator::{DeliveryDefault, Product};
+use timada_catalog::aggregator::{BestSellers, DeliveryDefault, Product};
 use timada_catalog::{
-    CategoryLink, CategoryState, ProductState, StockState, StockSummary, category_counts,
-    category_projection, delivery_default_projection, product_projection, stock_projection,
+    CategoryLink, CategoryState, ProductState, StockState, StockSummary, best_sellers_projection,
+    category_counts, category_projection, delivery_default_projection, product_projection,
+    stock_projection,
 };
 use timada_core::FormerSlug;
 use timada_core::db::{
@@ -76,6 +77,7 @@ pub fn catalog_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(crate::terms::on_shipping_methods_event())
         .handler(crate::terms::on_return_policy_event())
         .handler(on_delivery_default_event())
+        .handler(on_best_sellers_event())
         .any_routing_key()
 }
 
@@ -1076,11 +1078,89 @@ async fn file_product(
     Ok(())
 }
 
+/// Takes the shop's best sellers as the back office last ranked them.
+#[evento::subscription_all]
+async fn on_best_sellers_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<BestSellers>,
+) -> anyhow::Result<()> {
+    let reflected: Reflected = context.extract();
+    if reflected.covers(&event) {
+        return Ok(());
+    }
+    let db: Db = context.extract();
+    let Some(state) = best_sellers_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    rank_best_sellers(&db, &state.product_ids).await?;
+    reflected.note(&event, state.aggregate_version);
+    Ok(())
+}
+
+/// Makes the best sellers of the copy what `ranked` says, the best first,
+/// touching only the products whose rank moved: the ranking's own rows,
+/// and the rank each page that lists the product sorts it by.
+pub(crate) async fn rank_best_sellers(db: &Db, ranked: &[String]) -> anyhow::Result<()> {
+    db.write(ranked, |tx, ranked| {
+        Box::pin(async move {
+            let were: HashMap<String, i64> = fetch_all::<(String, i64)>(
+                tx,
+                "SELECT product_id, sold_rank FROM storefront_best_sellers",
+                (),
+            )
+            .await?
+            .into_iter()
+            .collect();
+            // The best has the highest rank, so a product not ranked (0)
+            // comes after every one that is.
+            let wanted: HashMap<&str, i64> = ranked
+                .iter()
+                .enumerate()
+                .map(|(place, id)| (id.as_str(), (ranked.len() - place) as i64))
+                .collect();
+            for id in were.keys().filter(|id| !wanted.contains_key(id.as_str())) {
+                execute(
+                    tx,
+                    "DELETE FROM storefront_best_sellers WHERE product_id = ?1",
+                    (id.as_str(),),
+                )
+                .await?;
+                execute(tx, RANK_LISTINGS, (id.as_str(), 0)).await?;
+            }
+            for (id, rank) in &wanted {
+                if were.get(*id) == Some(rank) {
+                    continue;
+                }
+                execute(
+                    tx,
+                    "INSERT INTO storefront_best_sellers (product_id, sold_rank) VALUES (?1, ?2)
+                     ON CONFLICT (product_id) DO UPDATE SET sold_rank = excluded.sold_rank",
+                    (*id, *rank),
+                )
+                .await?;
+                execute(tx, RANK_LISTINGS, (*id, *rank)).await?;
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+/// Writes a product's rank on every page that lists it: binds the product,
+/// then the rank.
+const RANK_LISTINGS: &str =
+    "UPDATE storefront_category_products SET sold_rank = ?2 WHERE product_id = ?1";
+
 /// Lists a product on a category's page, with the keys the page sorts by
 /// copied from its row: binds the category, then the product.
 const INSERT_LISTING: &str = "INSERT INTO storefront_category_products (category_id, product_id,
-    updated_at, min_amount_cents, max_amount_cents, review_count, rating_x100)
- SELECT ?1, id, updated_at, min_amount_cents, max_amount_cents, review_count, rating_x100
+    updated_at, min_amount_cents, max_amount_cents, review_count, rating_x100, sold_rank)
+ SELECT ?1, id, updated_at, min_amount_cents, max_amount_cents, review_count, rating_x100,
+    coalesce((SELECT sold_rank FROM storefront_best_sellers WHERE product_id = ?2), 0)
  FROM storefront_products WHERE id = ?2";
 
 /// Takes a product off a category's page: binds the category, then the

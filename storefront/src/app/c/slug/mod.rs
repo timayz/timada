@@ -47,8 +47,14 @@ struct CategoryLink<'a> {
     couleur: Option<&'a str>,
 }
 
+/// How a category lists its products until a shopper asks otherwise: what
+/// sells best first, then the newest, which is the whole order of a shop
+/// that has sold nothing yet.
+const DEFAULT_SORT: ProductSort = ProductSort::BestSelling;
+
 /// The sort menu, as the shop words it.
 const SORTS: &[(ProductSort, &str)] = &[
+    (ProductSort::BestSelling, "Tri par popularité"),
     (ProductSort::Newest, "Tri du plus récent au plus ancien"),
     (ProductSort::TopRated, "Tri par notes moyennes"),
     (ProductSort::PriceAsc, "Tri par tarif croissant"),
@@ -72,7 +78,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .sort
         .as_deref()
         .map(ProductSort::parse)
-        .unwrap_or_default();
+        .unwrap_or(DEFAULT_SORT);
     let filters = Filters::new(query.min_price, query.max_price, query.couleur.clone());
     // The products of this category and of everything below it, which is
     // what a shopper expects from a top-level entry.
@@ -85,7 +91,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     );
     // Filtered or sorted another way, it shows the category's products
     // again.
-    let narrowed = filters.is_active() || sort != ProductSort::default();
+    let narrowed = filters.is_active() || sort != DEFAULT_SORT;
     // The plain listing opens on the products the merchant put first, and
     // lists the others after them: its first page is longer by those.
     let pinned = if narrowed { Vec::new() } else { hub.pinned };
@@ -99,7 +105,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     }
     let colours = option_values(cx, &wanted, COLOUR).await?;
     let link = {
-        let sort = (sort != ProductSort::default()).then(|| sort.as_str());
+        let sort = (sort != DEFAULT_SORT).then(|| sort.as_str());
         let slug = category.slug.clone();
         move |filters: &Filters, number: u32| {
             href!(index, slug: slug.clone())

@@ -3,6 +3,7 @@ mod app;
 mod auth;
 mod authz;
 mod automations;
+mod best_sellers;
 mod cli;
 mod cluster;
 mod code_mails;

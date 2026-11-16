@@ -240,6 +240,15 @@ dir = "data/shopper-keys"
 # # How often, in seconds, this node looks for carts to drop.
 # check_secs = 3600
 
+# A storefront can list its products by what sells best. Every node ranks,
+# for its own part of the shops, the products each sold the most units of
+# lately, and writes the ranking to the shop's catalog when it changed.
+# [best_sellers]
+# # Days of sales a ranking counts (at least 1).
+# days = 30
+# # How often, in seconds, this node ranks its shops.
+# check_secs = 21600
+
 # How many invitations members may mail. Past either limit, the members page
 # refuses to send another one until older ones leave the window. Withdrawn
 # and accepted invitations still count. The limits hold across every node.
