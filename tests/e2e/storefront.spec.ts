@@ -1255,6 +1255,176 @@ test("an address that moved answers with a redirect for good", async ({
   await leads("/products/blue-mug", null);
 });
 
+test("the blog lists the merchant's articles, each with its contents and the products it shows", async ({
+  page,
+  request,
+}) => {
+  await registerWithEmail(page, uniqueEmail("storefront-blog"));
+  const { name, slug } = uniqueTenant("Storefront Blog");
+  await createTenant(page, name);
+  await createCategory(page, slug, "Tapis");
+  await publishProduct(page, slug, "Tapis bleu", "19.90", "Tapis");
+  await app.start(request, await mintKey(page, slug, false), 1);
+
+  // Nothing published: the blog answers, kept out of search engines, the
+  // footer does not link to it and the sitemap does not list it.
+  await page.goto(`${app.url}/blog`);
+  await expect(page.locator("[data-blog-empty]")).toBeVisible();
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex");
+  await expect(page.locator("[data-blog-link]")).toHaveCount(0);
+  expect(await (await request.get(`${app.url}/sitemap-pages.xml`)).text()).not.toContain("/blog");
+
+  // The merchant writes an article: a summary, two parts, a product and a
+  // category of the shop in between.
+  await page.goto(`/t/${slug}/articles`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Blog");
+  await expect(page.getByText("No article yet.")).toBeVisible();
+  await page.getByRole("link", { name: "New article" }).click();
+  await page.locator("#article-title").fill("Bien choisir son tapis");
+  await page.locator("#article-summary").fill("Les tailles et les matières, en deux minutes.");
+  await page
+    .locator("#article-body")
+    .fill(
+      "Un tapis se choisit **à la taille** du chat.\n\n## Les tailles\n\nDu S au XL.\n\n[[product:tapis-bleu]]\n\n" +
+        "## Les matières\n\nLe coton respire.\n\n[[category:tapis]]\n\n[[product:never-was]]\n\n<script>alert(1)</script>",
+    );
+  await page.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  await expect(page.locator("#article-slug")).toHaveValue("bien-choisir-son-tapis");
+  const article = page.url().split("?")[0];
+  // The preview names what the storefront will show there.
+  const preview = page.frameLocator("[data-article-preview]");
+  await expect(preview.locator("h1")).toHaveText("Bien choisir son tapis");
+  await expect(preview.locator(".lead")).toHaveText("Les tailles et les matières, en deux minutes.");
+  await expect(preview.locator("h2#s-les-tailles")).toHaveText("Les tailles");
+  await expect(preview.locator(".shown").first()).toHaveText("Product: tapis-bleu");
+  await expect(preview.locator("script")).toHaveCount(0);
+
+  // A picture, made the cover.
+  await page
+    .getByLabel("Add a picture")
+    .setInputFiles({ name: "tapis.png", mimeType: "image/png", buffer: PNG });
+  await page.getByRole("button", { name: "Upload" }).click();
+  await expect(page.getByRole("status")).toContainText("Picture added");
+  await page.getByRole("button", { name: "Use as cover" }).click();
+  await expect(page.getByRole("status")).toContainText("Cover set.");
+  await expect(page.locator("[data-article-cover]")).toBeVisible();
+
+  // A draft is not on the blog.
+  expect((await request.get(`${app.url}/blog/bien-choisir-son-tapis`)).status()).toBe(404);
+  await page.getByRole("button", { name: "Publish" }).click();
+  await expect(page.getByRole("status")).toContainText("Published");
+  await expect(page.locator("[data-article-status]")).toHaveAttribute("data-article-status", "Published");
+  const today = new Date().toISOString().slice(0, 10);
+  await expect(page.locator("#article-date")).toHaveValue(today);
+  // A day ahead is refused.
+  const ahead = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+  await page.locator("#article-date").evaluate((input: HTMLInputElement, day) => {
+    input.removeAttribute("max");
+    input.value = day;
+  }, ahead);
+  await page.getByRole("button", { name: "Change the date" }).click();
+  await expect(page.getByRole("alert")).toContainText("An article is dated today or before.");
+
+  // The back office lists it, a moment behind.
+  await expect(async () => {
+    await page.goto(`/t/${slug}/articles`);
+    await expect(page.locator("[data-article=bien-choisir-son-tapis]")).toHaveAttribute(
+      "data-article-status",
+      "Published",
+      { timeout: 1000 },
+    );
+  }).toPass({ timeout: 15_000 });
+
+  // The storefront lists it: its title, its day, its summary and its cover.
+  await expect(async () => {
+    await page.goto(`${app.url}/blog`);
+    await expect(page.locator("[data-article=bien-choisir-son-tapis]")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  const card = page.locator("[data-article=bien-choisir-son-tapis]");
+  await expect(card.locator(".post-summary")).toHaveText("Les tailles et les matières, en deux minutes.");
+  await expect(card.locator("time")).toHaveAttribute("datetime", today);
+  await expect(card.locator("img[data-image]")).toBeVisible();
+  await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
+  await expect(page.locator("[data-blog-link]")).toHaveAttribute("href", "/blog");
+
+  // The article: its contents lead to its parts, and it shows the product
+  // and the category's products as the shop's own cards.
+  await card.getByRole("link", { name: "Bien choisir son tapis" }).click();
+  await expect(page).toHaveURL(`${app.url}/blog/bien-choisir-son-tapis`);
+  const shown = page.locator("article[data-article]");
+  await expect(shown.locator("h1")).toHaveText("Bien choisir son tapis");
+  await expect(shown.locator(".post-lead")).toHaveText("Les tailles et les matières, en deux minutes.");
+  await expect(shown.locator("img.post-cover")).toBeVisible();
+  await expect(shown.locator("strong")).toHaveText("à la taille");
+  await expect(shown.locator("script")).toHaveCount(0);
+  await expect(shown).toContainText("<script>alert(1)</script>");
+  const contents = shown.locator("[data-toc] a");
+  await expect(contents).toHaveText(["Les tailles", "Les matières"]);
+  await contents.nth(1).click();
+  await expect(page).toHaveURL(`${app.url}/blog/bien-choisir-son-tapis#s-les-matieres`);
+  await expect(shown.locator("h2#s-les-matieres")).toBeInViewport();
+  // The product it names, then the category's; the product nobody sells
+  // leaves nothing.
+  const blocks = shown.locator("[data-article-products]");
+  await expect(blocks).toHaveCount(2);
+  await expect(blocks.nth(0).locator("[data-product=tapis-bleu] [data-price]")).toHaveText("19,90€");
+  await expect(blocks.nth(0).locator("[data-article-category]")).toHaveCount(0);
+  await expect(blocks.nth(1).locator("[data-article-category]")).toHaveAttribute("href", "/c/tapis");
+  await expect(blocks.nth(1).locator("[data-product=tapis-bleu]")).toBeVisible();
+  await expect(shown).not.toContainText("never-was");
+
+  // What search engines and a shared link are told.
+  await expect(page).toHaveTitle("Bien choisir son tapis – Ma boutique");
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+    "content",
+    "Les tailles et les matières, en deux minutes.",
+  );
+  await expect(page.locator("link[rel=canonical]")).toHaveAttribute(
+    "href",
+    `${app.url}/blog/bien-choisir-son-tapis`,
+  );
+  await expect(page.locator('meta[property="og:type"]')).toHaveAttribute("content", "article");
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", /\/1200\/.+\.webp$/);
+  const data = (await page.locator('script[type="application/ld+json"]').allTextContents()).map((text) =>
+    JSON.parse(text),
+  );
+  const posting = data.find((ld) => ld["@type"] === "BlogPosting");
+  expect(posting.headline).toBe("Bien choisir son tapis");
+  expect(posting.datePublished.slice(0, 10)).toBe(today);
+  expect(posting.mainEntityOfPage).toBe(`${app.url}/blog/bien-choisir-son-tapis`);
+  expect(posting.image).toHaveLength(1);
+  expect(posting.publisher.name).toBe("Ma boutique");
+  const trail = data.find((ld) => ld["@type"] === "BreadcrumbList");
+  expect(trail.itemListElement.map((item: { name: string }) => item.name)).toEqual([
+    "Accueil",
+    "Blog",
+    "Bien choisir son tapis",
+  ]);
+  const listed = await (await request.get(`${app.url}/sitemap-pages.xml`)).text();
+  expect(listed).toContain(`<loc>${app.url}/blog</loc>`);
+  expect(listed).toContain(`<loc>${app.url}/blog/bien-choisir-son-tapis</loc>`);
+
+  // Moved to another address: the old one leads there for good.
+  await page.goto(article);
+  await page.locator("#article-slug").fill("choisir-un-tapis");
+  await page.getByRole("button", { name: "Move", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Address changed.");
+  await expect(async () => {
+    const moved = await request.get(`${app.url}/blog/bien-choisir-son-tapis`, { maxRedirects: 0 });
+    expect([moved.status(), moved.headers()["location"]]).toEqual([308, "/blog/choisir-un-tapis"]);
+  }).toPass({ timeout: 15_000 });
+
+  // Back to a draft: off the blog.
+  await page.getByRole("button", { name: "Unpublish" }).click();
+  await expect(page.getByRole("status")).toContainText("Unpublished");
+  await expect(async () => {
+    expect((await request.get(`${app.url}/blog/choisir-un-tapis`)).status()).toBe(404);
+  }).toPass({ timeout: 15_000 });
+  await page.goto(`${app.url}/blog`);
+  await expect(page.locator("[data-blog-empty]")).toBeVisible();
+});
+
 test("a visitor answers the cookie banner, and Google's consent mode follows", async ({
   page,
   request,

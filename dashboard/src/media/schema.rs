@@ -17,7 +17,7 @@ pub const LOGO_SUBSCRIPTION: &str = "timada-dashboard/mail-logos";
 
 /// `media_files`: one row per rendition file the store knows, with what a
 /// copy is checked against and what references it (`source`: `product`,
-/// `page`, `review` or `logo`, and that thing's id). A read model of the
+/// `page`, `article`, `review` or `logo`, and that thing's id). A read model of the
 /// catalog's, the pages', the reviews' and the tenants' streams, the same
 /// on every node.
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(

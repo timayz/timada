@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use timada_core::db::Db;
-use timada_pages::{Command, CreatePage};
+use timada_pages::{Command, CreateArticle, CreatePage};
 
 pub type Pages = Command<evento::Turso>;
 
@@ -41,5 +41,14 @@ pub fn draft(title: &str) -> CreatePage {
         slug: String::new(),
         title: title.to_owned(),
         body: "## Article 1\r\n\r\nLes ventes sont fermes.\r\n\r\n".to_owned(),
+    }
+}
+
+pub fn article_draft(title: &str) -> CreateArticle {
+    CreateArticle {
+        slug: String::new(),
+        title: title.to_owned(),
+        summary: " Comment choisir,\nen deux minutes. ".to_owned(),
+        body: "## Les tailles\r\n\r\nDu S au XL.\r\n\r\n".to_owned(),
     }
 }

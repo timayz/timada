@@ -1,13 +1,13 @@
 //! What search engines are told: `/robots.txt`, and `/sitemap.xml` with the
 //! files it lists, `/sitemap-pages.xml` (the home, the catalogue, the
-//! categories, the shop's own pages) and `/sitemap-products.xml?part=N`
+//! categories, the shop's own pages, the blog and its articles) and `/sitemap-products.xml?part=N`
 //! (the products, [`SITEMAP_PRODUCTS`](timada_storefront::SITEMAP_PRODUCTS) a
 //! file). All of it is read off the shop's own copy, so it answers while
 //! the dashboard is away.
 
 use timada_storefront::{
-    SITEMAP_CONTENT_TYPE, Sitemap, SitemapIndex, absolute_url, robots_txt, sitemap_categories,
-    sitemap_pages, sitemap_parts, sitemap_products,
+    SITEMAP_CONTENT_TYPE, Sitemap, SitemapIndex, absolute_url, robots_txt, sitemap_articles,
+    sitemap_categories, sitemap_pages, sitemap_parts, sitemap_products,
 };
 use topcoat::{
     Result,
@@ -21,7 +21,7 @@ use topcoat::{
     },
 };
 
-use crate::app::{boutique, c, own_page, p, support_client};
+use crate::app::{blog, boutique, c, own_page, p, support_client};
 
 /// What a shopper does rather than reads: nothing a search engine should
 /// crawl or list. `robots.txt` keeps crawlers out of these and the layout
@@ -111,6 +111,16 @@ pub async fn pages(cx: &Cx) -> Result<impl IntoResponse> {
         if let Some(path) = own_page::url(cx, &page.slug) {
             sitemap = sitemap.url(&absolute_url(cx, &path), Some(page.updated_at));
         }
+    }
+    // The blog once it has something to read, then each article.
+    let articles = sitemap_articles(cx).await?;
+    if let Some(latest) = articles.iter().map(|article| article.updated_at).max() {
+        let path = href!(blog::index).resolve(cx);
+        sitemap = sitemap.url(&absolute_url(cx, &path), Some(latest));
+    }
+    for article in articles {
+        let path = href!(blog::slug::index, blog::slug::slug: article.slug.clone()).resolve(cx);
+        sitemap = sitemap.url(&absolute_url(cx, &path), Some(article.updated_at));
     }
     Ok(xml(sitemap.xml()))
 }

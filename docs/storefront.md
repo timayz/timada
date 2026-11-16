@@ -185,14 +185,16 @@ let xml = file.xml();                                  // serve as SITEMAP_CONTE
 let txt = robots_txt(&absolute_url(cx, "/sitemap.xml"), &["/cart", "/checkout"]);
 ```
 
-`sitemap_categories` gives the live categories and `sitemap_pages` the published pages
-of the shop, each with its slug and when it last changed, which becomes `<lastmod>`.
+`sitemap_categories` gives the live categories, `sitemap_pages` the published pages of
+the shop and `sitemap_articles` the blog's published articles (the 10,000 most recent),
+each with its slug and when it last changed, which becomes `<lastmod>`.
 Products are listed in the order of their ids, so a product stays in its file while
 others are added after it. Everything is read off the local copy and answers while the
 dashboard is away.
 
 The storefront serves `/robots.txt`, `/sitemap.xml`, `/sitemap-pages.xml` (the home,
-the catalogue, the support page, the categories, its own pages once published) and
+the catalogue, the support page, the categories, its own pages once published, the
+blog and its articles once it has one) and
 `/sitemap-products.xml?part=N`. It keeps crawlers out of what a shopper does rather than
 reads (`PRIVATE_PATHS` in `storefront/src/app/sitemap.rs`: the cart, the checkout, the
 account, orders, the search…) and out of filtered listings, and marks those same pages
@@ -441,13 +443,14 @@ browser to the checkout only in a shop that has a pixel.
 
 ### An address that moved
 
-A product renamed in the back office moves to the slug of its new name, and a page can
-be moved to another slug. The copy remembers the slugs each one left (twenty at most,
+A product renamed in the back office moves to the slug of its new name, and a page or
+an article of the blog can be moved to another slug. The copy remembers the slugs each one left (twenty at most,
 the oldest forgotten first), and an archived product's last one, so the host can answer
 an old address with a permanent redirect instead of a 404:
 
 ```rust
-use timada_storefront::{MovedProduct, moved_page, moved_product, redirect_for};
+use timada_storefront::{MovedProduct, moved_article, moved_page, moved_product,
+    redirect_for};
 
 match moved_product(cx, old_slug).await? {
     Some(MovedProduct::Product(slug)) => { /* 308 to the product's page */ }
@@ -455,6 +458,7 @@ match moved_product(cx, old_slug).await? {
     None => { /* a 404 */ }
 }
 let page_slug = moved_page(cx, old_slug).await?;            // a published page's new slug
+let article_slug = moved_article(cx, old_slug).await?;      // a published article's
 let to = redirect_for(cx, "/products/blue-mug").await?;     // the merchant's own list
 ```
 
@@ -468,7 +472,8 @@ the shop it sends to. A redirect never leads to another one.
 
 The storefront does this in one layer (`storefront/src/app/moved.rs`): a `GET` or `HEAD`
 that ends in a 404 is looked up in the merchant's list, then as a product's address
-(`/p/{slug}`), then as one of its own pages, and answered with a 308. Each old address
+(`/p/{slug}`), an article's (`/blog/{slug}`), then as one of its own pages, and
+answered with a 308. Each old address
 goes to its own page, never all of them to the home, and they are kept for as long as
 the product or the page is.
 
@@ -527,6 +532,72 @@ let found = timada_storefront::search_pages(cx, "livrais", 3).await?; // [PageLi
 `meta_description` is theirs or the start of the text. `search_pages` matches a word of
 the title or text that starts with the query, accents aside, titles first; the host
 keeps the hits it has a route for.
+
+## The blog
+
+Articles are the merchant's too, written under `/t/{slug}/articles` (`timada-pages`):
+informational content a shop ranks with beyond its categories, and that links into
+them. A published article is copied into `storefront_articles`, and leaves it when
+unpublished or deleted; the host decides where the blog is and how it looks.
+
+```rust
+use timada_storefront::{ArticleBlock, articles, has_articles, require_article};
+
+let listed = articles(cx, page, 12).await?;   // the most recent first
+// listed.articles: [ArticleCard { slug, title, summary, cover, published_at }]
+// listed.page, listed.pages
+
+let article = require_article(cx, slug).await?;   // a draft or an unknown slug is a 404
+for block in &article.blocks {
+    match block {
+        ArticleBlock::Html(html) => { /* cleaned: write it unescaped */ }
+        ArticleBlock::Product(slug) => { /* product_by_slug, then the host's own card */ }
+        ArticleBlock::Category(slug) => { /* category_by_slug, a few of its products */ }
+    }
+}
+// article.headings: [ArticleHeading { level, id, text }], for a table of contents
+let linked = has_articles(cx).await?;        // whether a link to the blog leads somewhere
+```
+
+The body is the same Markdown as a page's, with two things more. Its `##` and `###`
+headings carry an id each (`s-` then the heading's slug, numbered when two read the
+same), listed in `headings` for a table of contents. And a line of its own reading
+`[[product:blue-mug]]` or `[[category:mugs]]` names a product or a category of the shop
+by its slug: the body comes cut there, so the host draws its own card in between. Only
+a paragraph of the body itself counts (one quoted, listed or shown as code is text),
+and a product no longer on sale is the host's to leave out.
+
+A card's `summary` is the merchant's, or the start of the text; `cover` is one of the
+article's pictures (an `Image`, as a product's), when the merchant picked one.
+`published_at` is the day the article says it came out: the first time it was
+published, unless the merchant gave another (an article brought from another blog
+keeps its day; a day ahead is refused, and nothing is published on a schedule).
+`meta_description` is the merchant's, else the summary, else the start of the text.
+
+For search engines and shared links, `article_ld` gives the article as schema.org data
+(`BlogPosting`: headline, dates, picture, the shop as author and publisher) and
+`SocialCard::published_at` makes the card an article's:
+
+```rust
+use timada_storefront::{ArticleLd, article_ld};
+
+let ld = article_ld(&ArticleLd {
+    title: &article.title,
+    description: &article.meta_description,
+    url: &url,                          // whole addresses
+    image: cover_url.as_deref(),
+    published_at: article.published_at,
+    updated_at: article.updated_at,
+    publisher: "Ma boutique",
+    publisher_url: &home,
+});
+```
+
+The storefront serves the list at `/blog` (twelve a page; empty, it is `noindex`, out
+of the sitemap, and the footer does not link to it) and an article at `/blog/{slug}`:
+its day, summary and cover, a table of contents once it has two headings, and the
+products it names as the shop's own cards (a category shows its four newest under a
+link to it).
 
 ## Announcements
 
@@ -982,7 +1053,7 @@ announcements, a masthead with the search, the category bar, a home with the new
 the category tiles, the latest reviews and the four promises, listings with sort labels
 and, on a category's first page, its longer text below the products, a product page
 with its gallery, option menus, reassurance block, folding description and facts and
-its reviews, the shop's own pages on routes of their own, a cart with its drawer, a
+its reviews, the shop's own pages on routes of their own, a blog (`/blog`), a cart with its drawer, a
 one-page checkout (steps, details, address and Stripe's Payment and Express Checkout
 elements beside an editable cart with its VAT, reassurance and recent reviews), an
 order confirmation where the shopper reviews what they bought, and shopper accounts

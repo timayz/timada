@@ -1,8 +1,8 @@
 //! What the store knows of the pictures' files, and what this node has yet
 //! to fetch.
 //!
-//! One subscription follows the catalog's, the pages' and the reviews'
-//! streams in every tenant ([`subscription`]) and another the tenants' in
+//! One subscription follows the catalog's, the pages', the blog's and the
+//! reviews' streams in every tenant ([`subscription`]) and another the tenants' in
 //! the platform's ([`logo_subscription`], for the mail logos). For each
 //! picture recorded they write one row per rendition into `media_files`,
 //! the read model every node shares (what the file is, what it weighs, its
@@ -27,6 +27,9 @@ use evento::{Executor, metadata::Event};
 use timada_catalog::aggregator::{Deleted as ProductDeleted, ImageAdded, ImageRemoved};
 use timada_core::db::{Connection, Db, FromRow, execute, fetch_all};
 use timada_core::{Picture, Rendition, RenditionFile};
+use timada_pages::aggregator::article::{
+    Deleted as ArticleDeleted, ImageAdded as ArticleImageAdded, ImageRemoved as ArticleImageRemoved,
+};
 use timada_pages::aggregator::{
     Deleted as PageDeleted, ImageAdded as PageImageAdded, ImageRemoved as PageImageRemoved,
 };
@@ -45,6 +48,7 @@ pub use super::schema::{LOGO_SUBSCRIPTION, SUBSCRIPTION};
 pub enum Source {
     Product,
     Page,
+    Article,
     Review,
     Logo,
 }
@@ -54,13 +58,14 @@ impl Source {
         match self {
             Self::Product => "product",
             Self::Page => "page",
+            Self::Article => "article",
             Self::Review => "review",
             Self::Logo => "logo",
         }
     }
 }
 
-/// Follows every tenant's products, pages and reviews: records each picture
+/// Follows every tenant's products, pages, articles and reviews: records each picture
 /// added, with what this node has to fetch, and forgets each one removed,
 /// deleting this node's files. A handler fails only for the store or the
 /// disk, never for a peer.
@@ -77,6 +82,9 @@ pub fn subscription<E: Executor>(fetcher: Arc<Fetcher>) -> SubscriptionBuilder<E
         .handler(on_page_image_added())
         .handler(on_page_image_removed())
         .handler(on_page_deleted())
+        .handler(on_article_image_added())
+        .handler(on_article_image_removed())
+        .handler(on_article_deleted())
         .any_routing_key()
         .retry(5)
 }
@@ -409,6 +417,44 @@ async fn on_page_deleted<E: Executor>(
     let fetcher: Arc<Fetcher> = context.extract();
     fetcher
         .forget_all_of(&event.tenant, Source::Page, &event.aggregate_id)
+        .await
+}
+
+#[evento::subscription]
+async fn on_article_image_added<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<ArticleImageAdded>,
+) -> Result<()> {
+    let fetcher: Arc<Fetcher> = context.extract();
+    fetcher
+        .record(
+            &event.tenant,
+            &event.data.image_id,
+            &event.data.picture,
+            Source::Article,
+            &event.aggregate_id,
+            event.timestamp,
+        )
+        .await
+}
+
+#[evento::subscription]
+async fn on_article_image_removed<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<ArticleImageRemoved>,
+) -> Result<()> {
+    let fetcher: Arc<Fetcher> = context.extract();
+    fetcher.forget(&event.tenant, &event.data.image_id).await
+}
+
+#[evento::subscription]
+async fn on_article_deleted<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<ArticleDeleted>,
+) -> Result<()> {
+    let fetcher: Arc<Fetcher> = context.extract();
+    fetcher
+        .forget_all_of(&event.tenant, Source::Article, &event.aggregate_id)
         .await
 }
 

@@ -187,3 +187,84 @@ pub enum MetaPixel {
         refused_by: String,
     },
 }
+
+/// The blog's events, in their own module: the macro names an event struct
+/// after its variant, and `Created`, `Edited`, `Renamed`… already belong to
+/// the page above.
+pub mod article {
+    /// One article of the shop's blog. Its id is a fresh
+    /// [`new_article_id`](crate::new_article_id).
+    #[evento::aggregate(name = "timada-pages/Article")]
+    pub enum Article {
+        /// Written as a draft: nobody outside the back office sees it.
+        Created {
+            slug: String,
+            title: String,
+            /// What the blog's list and a shared link say of it, in a
+            /// sentence or two; empty falls back to the start of the body.
+            summary: String,
+            /// Markdown, as the merchant wrote it.
+            body: String,
+            created_by: String,
+        },
+        Edited {
+            title: String,
+            summary: String,
+            body: String,
+            edited_by: String,
+        },
+        /// What search engines show for it; empty falls back to the title
+        /// and the summary.
+        SeoSet {
+            meta_title: String,
+            meta_description: String,
+            set_by: String,
+        },
+        /// Moved to another slug, which [`ArticleSlug`] holds from then on.
+        Renamed { slug: String, renamed_by: String },
+        /// Shown on the blog. The first time dates the article, unless
+        /// [`Dated`](Article::Dated) did.
+        Published { published_by: String },
+        /// Back to a draft; it keeps its date.
+        Unpublished { unpublished_by: String },
+        /// The day the article says it was published (Unix seconds), which
+        /// the blog sorts by: an article brought from another blog keeps
+        /// the day it first came out.
+        Dated { published_at: u64, dated_by: String },
+        /// A picture uploaded for the article, kept in the two renditions
+        /// `picture` describes ([`timada_core::Picture`]) and named in the
+        /// body as `{image_id}.webp`.
+        ImageAdded {
+            image_id: String,
+            picture: timada_core::Picture,
+            added_by: String,
+        },
+        /// Taken off; the cover goes with it when it was this picture.
+        ImageRemoved {
+            image_id: String,
+            removed_by: String,
+        },
+        /// The picture, one of the article's own, the blog's list and a
+        /// shared link show; `None` leaves the article without one.
+        CoverSet {
+            image_id: Option<String>,
+            set_by: String,
+        },
+        /// Gone for good: its slug is free again and its pictures deleted.
+        Deleted { deleted_by: String },
+    }
+
+    /// The index `slug → article`: one stream per slug, with the
+    /// deterministic id [`article_slug_id`](crate::article_slug_id).
+    #[evento::aggregate(name = "timada-pages/ArticleSlug")]
+    pub enum ArticleSlug {
+        /// `article_version` is the version of the article the claim was
+        /// made at: its next write moves it to the slug or fails, so an
+        /// article past it has used the claim or never will.
+        Claimed {
+            article_id: String,
+            article_version: u16,
+        },
+        Released,
+    }
+}

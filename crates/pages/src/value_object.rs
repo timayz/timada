@@ -76,6 +76,39 @@ pub fn is_image_file(file: &str) -> bool {
     timada_core::is_picture_file(file)
 }
 
+/// The longest summary of an article: two sentences.
+pub const MAX_SUMMARY_LEN: usize = 300;
+/// The slug of an article whose title has no usable characters.
+pub const FALLBACK_ARTICLE_SLUG: &str = "article";
+
+/// A fresh id for an article: a ULID.
+pub fn new_article_id() -> String {
+    ulid::Ulid::generate().to_string()
+}
+
+/// The index stream of an article slug: the blog's slugs are its own, so
+/// an article and a page may share one.
+pub fn article_slug_id(slug: &str) -> String {
+    evento::hash_ids(vec!["article-slug", slug])
+}
+
+/// The slug an article's title gives, as [`slugify`] does a page's; a title
+/// with nothing usable gives [`FALLBACK_ARTICLE_SLUG`].
+pub fn article_slug(title: &str) -> String {
+    timada_core::slugify(title, MAX_SLUG_LEN, FALLBACK_ARTICLE_SLUG)
+}
+
+/// Puts a summary on one line and checks it is at most
+/// [`MAX_SUMMARY_LEN`] characters. Empty is fine: the start of the body
+/// stands in.
+pub fn normalize_summary(summary: &str) -> Result<String, PageError> {
+    let summary = summary.split_whitespace().collect::<Vec<_>>().join(" ");
+    if summary.chars().count() > MAX_SUMMARY_LEN {
+        return Err(PageError::InvalidSummary);
+    }
+    Ok(summary)
+}
+
 /// How many messages the top bar holds, shown or hidden.
 pub const MAX_ANNOUNCEMENTS: usize = 10;
 /// The longest message, marks included: one line on a phone, two at most.

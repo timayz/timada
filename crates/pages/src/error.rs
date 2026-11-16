@@ -3,7 +3,7 @@ use evento::WriteError;
 use crate::value_object::{
     MAX_ANNOUNCEMENT_LEN, MAX_ANNOUNCEMENTS, MAX_BODY_LEN, MAX_IMAGES_PER_PAGE,
     MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_REDIRECT_PATH_LEN, MAX_REDIRECTS,
-    MAX_TITLE_LEN,
+    MAX_SUMMARY_LEN, MAX_TITLE_LEN,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -29,6 +29,15 @@ pub enum PageError {
     NotFound,
     #[error("picture not found")]
     ImageNotFound,
+    #[error("a summary is at most {MAX_SUMMARY_LEN} characters")]
+    InvalidSummary,
+    #[error("an article is dated today or before")]
+    InvalidArticleDate,
+    #[error("another article has this slug")]
+    ArticleSlugTaken,
+    /// Unknown, or deleted.
+    #[error("article not found")]
+    ArticleNotFound,
     #[error("an announcement is 1 to {MAX_ANNOUNCEMENT_LEN} characters")]
     InvalidAnnouncement,
     #[error("an announcement links at most once, to a page of the shop or an https address")]
@@ -92,6 +101,10 @@ impl PageError {
             Self::UnsupportedImage => "unsupported_image",
             Self::NotFound => "page_not_found",
             Self::ImageNotFound => "page_image_not_found",
+            Self::InvalidSummary => "article_invalid_summary",
+            Self::InvalidArticleDate => "article_invalid_date",
+            Self::ArticleSlugTaken => "article_slug_taken",
+            Self::ArticleNotFound => "article_not_found",
             Self::InvalidAnnouncement => "announcement_invalid",
             Self::InvalidAnnouncementLink => "announcement_invalid_link",
             Self::InvalidAnnouncementWindow => "announcement_invalid_window",

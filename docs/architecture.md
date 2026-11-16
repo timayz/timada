@@ -26,7 +26,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/shoppers` | `timada-shoppers` | A shop's customers who sign in: mailed codes, sessions, saved addresses, in a tenant's store |
 | `crates/support` | `timada-support` | The messages visitors send through a shop's contact form, and whether the merchant handled them |
 | `crates/newsletter` | `timada-newsletter` | The addresses that asked for a shop's news, confirmed through a mailed link (double opt-in) |
-| `crates/pages` | `timada-pages` | The shop's own pages (legal notice, terms, about) in Markdown: drafts, publication, pictures; the storefront picks them by slug |
+| `crates/pages` | `timada-pages` | The shop's own pages (legal notice, terms, about) and its blog's articles in Markdown: drafts, publication, pictures; the storefront picks pages by slug and lists articles |
 | `crates/automations` | `timada-automations` | The scenarios a shop's team draws: a trigger, then a tree of steps, kept as a definition the editor works on (see `docs/automations.md`) |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
@@ -1114,6 +1114,19 @@ CommonMark with tables, raw HTML shown as text, only the page's own pictures (se
 from the shop's media address), and the result cleaned by an allow-list sanitiser.
 The back office (`/t/{slug}/pages`, `pages:read` / `pages:manage`) writes a page beside
 that rendering in a sandboxed frame; the list is the `pages` read model.
+
+An article of the blog is an `Article` stream beside it, with slugs of its own (an
+`ArticleSlug` index, so an article and a page may share one: they answer at two
+addresses) and the same life: a draft until `Published`, moved by `Renamed`, its
+pictures kept and deleted the same way. It carries three things more: a summary for
+the blog's list, a cover picked among its pictures (`CoverSet`; the picture removed
+takes the cover with it), and the day it says it came out, which the first `Published`
+sets and `Dated` changes (today or before: nothing is published on a schedule).
+`render_article` renders its body as a page's, gives its `##` and `###` headings an id
+each for a table of contents, and cuts it where a line of its own names a product or a
+category (`[[product:slug]]`, `[[category:slug]]`) for the storefront to draw there.
+The back office (`/t/{slug}/articles`, under the pages' two permissions) lists them from
+the `articles` read model, the most recent first, page after page.
 
 The shop's Google tag and Meta pixel live here too, one stream each (`GoogleTag`,
 `MetaPixel`): what the storefront writes into its pages, held back as each visitor's

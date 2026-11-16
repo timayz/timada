@@ -1,7 +1,7 @@
 //! What a page's `<head>` tells a search engine or a network that shows a
 //! link to it: the tags a shared link is drawn from ([`SocialCard`]) and
 //! the structured data a search result is enriched with ([`product_ld`],
-//! [`breadcrumb_ld`], [`organization_ld`], [`website_ld`]). Structured data
+//! [`article_ld`], [`breadcrumb_ld`], [`organization_ld`], [`website_ld`]). Structured data
 //! says what the page shows and nothing more: a rating only where the
 //! reviews are, a price only where one is read.
 //!
@@ -41,6 +41,9 @@ pub struct SocialCard<'a> {
     /// What the page sells, in minor units of a currency: makes the card a
     /// product's.
     pub price: Option<(i64, &'a str)>,
+    /// When the page's article came out, in Unix seconds: makes the card an
+    /// article's.
+    pub published_at: Option<i64>,
 }
 
 impl SocialCard<'_> {
@@ -61,6 +64,8 @@ impl SocialCard<'_> {
                 "og:type",
                 if self.price.is_some() {
                     "product"
+                } else if self.published_at.is_some() {
+                    "article"
                 } else {
                     "website"
                 },
@@ -78,6 +83,9 @@ impl SocialCard<'_> {
         if let Some((cents, currency)) = self.price {
             tags.push(og("product:price:amount", &decimal(cents)));
             tags.push(og("product:price:currency", currency));
+        }
+        if let Some(at) = self.published_at {
+            tags.push(og("article:published_time", &date_time(at)));
         }
         tags.push(twitter(
             "twitter:card",
@@ -103,6 +111,19 @@ impl SocialCard<'_> {
 fn decimal(cents: i64) -> String {
     let cents = cents.max(0);
     format!("{}.{:02}", cents / 100, cents % 100)
+}
+
+/// Unix seconds as structured data writes a moment: `2026-11-16T09:30:00Z`.
+fn date_time(at: i64) -> String {
+    let at = u64::try_from(at).unwrap_or_default();
+    let of_day = at % 86_400;
+    format!(
+        "{}T{:02}:{:02}:{:02}Z",
+        format_date(at),
+        of_day / 3600,
+        of_day % 3600 / 60,
+        of_day % 60
+    )
 }
 
 /// `value` as the text of a `<script type="application/ld+json">`: JSON in
@@ -462,6 +483,54 @@ pub fn breadcrumb_ld<'a>(crumbs: impl IntoIterator<Item = (&'a str, &'a str)>) -
         "@type": "BreadcrumbList",
         "itemListElement": items,
     })
+}
+
+/// What [`article_ld`] says of a blog article.
+pub struct ArticleLd<'a> {
+    pub title: &'a str,
+    /// Left out when empty.
+    pub description: &'a str,
+    /// The article's whole address.
+    pub url: &'a str,
+    /// Its cover's whole address, when it has one.
+    pub image: Option<&'a str>,
+    /// Unix seconds.
+    pub published_at: i64,
+    pub updated_at: i64,
+    /// The shop's name: who wrote and published it.
+    pub publisher: &'a str,
+    /// The shop's home, whole.
+    pub publisher_url: &'a str,
+}
+
+/// A blog article as schema.org data (`BlogPosting`): its headline, its
+/// dates, its picture, and the shop as its author and publisher.
+pub fn article_ld(article: &ArticleLd<'_>) -> Value {
+    let shop = json!({
+        "@type": "Organization",
+        "name": article.publisher,
+        "url": article.publisher_url,
+    });
+    let mut ld = Map::new();
+    ld.insert("@context".into(), json!("https://schema.org"));
+    ld.insert("@type".into(), json!("BlogPosting"));
+    ld.insert("headline".into(), json!(article.title));
+    if !article.description.is_empty() {
+        ld.insert("description".into(), json!(article.description));
+    }
+    ld.insert("mainEntityOfPage".into(), json!(article.url));
+    ld.insert("url".into(), json!(article.url));
+    if let Some(image) = article.image {
+        ld.insert("image".into(), json!([image]));
+    }
+    ld.insert(
+        "datePublished".into(),
+        json!(date_time(article.published_at)),
+    );
+    ld.insert("dateModified".into(), json!(date_time(article.updated_at)));
+    ld.insert("author".into(), shop.clone());
+    ld.insert("publisher".into(), shop);
+    Value::Object(ld)
 }
 
 /// The shop as an organization, for its home page. No rating: a shop's
@@ -939,6 +1008,46 @@ mod tests {
     }
 
     #[test]
+    fn an_article_gives_its_dates_and_the_shop_as_its_author() {
+        let ld = article_ld(&ArticleLd {
+            title: "Bien choisir son tapis",
+            description: "",
+            url: "https://shop.example/blog/choisir",
+            image: Some("https://media.example/1200/a.webp"),
+            published_at: 1_709_164_800,
+            updated_at: 1_709_164_800 + 3_723,
+            publisher: "Acme",
+            publisher_url: "https://shop.example/",
+        });
+        assert_eq!(ld["@type"], "BlogPosting");
+        assert_eq!(ld["headline"], "Bien choisir son tapis");
+        assert_eq!(ld["datePublished"], "2024-02-29T00:00:00Z");
+        assert_eq!(ld["dateModified"], "2024-02-29T01:02:03Z");
+        assert_eq!(ld["image"][0], "https://media.example/1200/a.webp");
+        assert_eq!(ld["author"]["name"], "Acme");
+        assert!(ld.get("description").is_none());
+
+        let tags = SocialCard {
+            title: "Bien choisir son tapis",
+            url: "https://shop.example/blog/choisir",
+            site_name: "Acme",
+            published_at: Some(1_709_164_800),
+            ..SocialCard::default()
+        }
+        .tags();
+        let content = |key: &str| {
+            tags.iter()
+                .find(|tag| tag.key == key)
+                .map(|tag| tag.content.as_str())
+        };
+        assert_eq!(content("og:type"), Some("article"));
+        assert_eq!(
+            content("article:published_time"),
+            Some("2024-02-29T00:00:00Z")
+        );
+    }
+
+    #[test]
     fn the_home_names_the_shop_without_rating_it() {
         let org = organization_ld("Acme", "https://shop.example/", Some("hello@shop.example"));
         assert_eq!(
@@ -1002,6 +1111,7 @@ mod tests {
             site_name: "Acme",
             image: Some("https://media.example/1200/a.webp"),
             price: Some((1990, "EUR")),
+            published_at: None,
         };
         let tags = product.tags();
         let content = |key: &str| {
