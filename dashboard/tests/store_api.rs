@@ -648,6 +648,18 @@ async fn a_checkout_key_reads_how_the_shop_sells_and_never_a_cart_or_order() {
         format!("{refused:#}").contains("may not read"),
         "{refused:#}"
     );
+    // Nor what the shop pays for its goods and its sales: the products are
+    // a storefront's to read, their costs are not.
+    for costs in [
+        <timada_catalog::aggregator::ProductCost as evento::Aggregate>::aggregate_type(),
+        <timada_catalog::aggregator::SaleCosts as evento::Aggregate>::aggregate_type(),
+    ] {
+        let refused = read_type(&shop, costs).await.unwrap_err();
+        assert!(
+            format!("{refused:#}").contains("may not read"),
+            "{refused:#}"
+        );
+    }
     // A key without store:checkout reads the catalog, not how the shop
     // sells, and no cart either.
     let (reader_token, _) = h.key_with(&acme, SCOPE_STORE_READ).await;

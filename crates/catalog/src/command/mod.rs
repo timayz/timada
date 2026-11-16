@@ -8,6 +8,7 @@ mod attribute;
 mod categorize;
 mod category;
 mod category_slug_index;
+mod cost;
 mod create;
 mod delivery;
 mod edit;
@@ -28,6 +29,7 @@ use std::fmt;
 use std::ops::Deref;
 
 pub use category::*;
+pub use cost::*;
 pub use create::*;
 pub use delivery::*;
 pub use feed::*;

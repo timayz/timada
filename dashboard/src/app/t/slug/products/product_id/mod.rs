@@ -7,6 +7,7 @@ pub mod attributes;
 pub mod categorize;
 pub mod classify;
 pub mod compare_at;
+pub mod cost;
 pub mod delete;
 pub mod delivery_days;
 pub mod describe;
@@ -14,7 +15,9 @@ pub mod feed_labels;
 pub mod feed_listing;
 pub mod identify;
 pub mod images;
+pub mod margin;
 pub mod options;
+pub mod own_costs;
 pub mod price;
 pub mod publish;
 pub mod rename;
@@ -73,6 +76,7 @@ use crate::ui::{
     LINK, PageTab, Shell, document, empty_row, fact, facts, format_time, notice, page_header,
     page_tabs, section_card, status_badge,
 };
+use margin::{MarginView, margin_tab};
 use timada_invoicing::format_rate_fr;
 use timada_invoicing::tax::rate_bps;
 
@@ -81,6 +85,8 @@ module_param!(pub product_id);
 #[topcoat::router::query_params(error = bad_request)]
 struct ProductQuery {
     tab: Option<String>,
+    /// The price the margin tab is asked about, as typed.
+    what_if: Option<String>,
     error: Option<String>,
     message: Option<String>,
 }
@@ -95,12 +101,13 @@ pub enum Tab {
     Variants,
     Facts,
     Shopping,
+    Margin,
     AliExpress,
 }
 
 impl Tab {
     /// What `?tab=` says; nothing for the tab the page opens on.
-    fn key(self) -> Option<&'static str> {
+    pub(crate) fn key(self) -> Option<&'static str> {
         match self {
             Self::Overview => None,
             Self::Pictures => Some("pictures"),
@@ -108,6 +115,7 @@ impl Tab {
             Self::Variants => Some("variants"),
             Self::Facts => Some("facts"),
             Self::Shopping => Some("shopping"),
+            Self::Margin => Some("margin"),
             Self::AliExpress => Some("aliexpress"),
         }
     }
@@ -119,6 +127,7 @@ impl Tab {
             Self::Variants,
             Self::Facts,
             Self::Shopping,
+            Self::Margin,
             Self::AliExpress,
         ]
         .into_iter()
@@ -638,6 +647,38 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .filter(|row| !product.categories.contains(&row.category.id))
         .map(Choice::of)
         .collect();
+    // Only the margin tab reads what a sale costs the shop and the VAT in
+    // a price.
+    let margin_view = if tab == Tab::Margin {
+        let gateway = catalog(&access)?;
+        let costs = gateway
+            .load_sale_costs()
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        let own = gateway
+            .load_product_costs(&product.id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        let profile =
+            crate::margins::tax_profile(context::<crate::cluster::Executor>(cx), &access.tenant)
+                .await
+                .map_err(topcoat::Error::from_anyhow)?;
+        // What is not an amount is not asked about.
+        let what_if = query.what_if.as_deref().and_then(|typed| {
+            let cents = timada_catalog::parse_amount(typed).ok()?;
+            Some((cents, timada_core::format_amount(cents)))
+        });
+        Some(MarginView::of(
+            &product,
+            &own,
+            costs.costs.as_ref(),
+            costs.tiers(),
+            timada_invoicing::tax::home_rate_bps(profile, product.tax_category()),
+            what_if,
+        ))
+    } else {
+        None
+    };
     let TenantAccess { tenant, .. } = access;
     // The kind of goods only matters to a merchant who charges VAT.
     let charges_vat = crate::app::tenants::tenancy(cx)
@@ -678,6 +719,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         page_tab(Tab::Variants, "Options & variants", Some(variants.len())),
         page_tab(Tab::Facts, "Facts", Some(attributes.len())),
         page_tab(Tab::Shopping, "Shopping feed", None),
+        page_tab(Tab::Margin, "Cost & margin", None),
     ];
     if link.is_some() {
         tabs.push(page_tab(Tab::AliExpress, "AliExpress", None));
@@ -1377,6 +1419,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 )
             }
 
+            if let Some(margin) = &margin_view {
+                margin_tab(editable: editable, margin: margin)
+            }
+
             if tab == Tab::Shopping {
                 section_card(
                     title: Some("In the feed"),
@@ -1777,6 +1823,29 @@ pub struct FeedLabelsForm {
     pub label_3: String,
     #[serde(default)]
     pub label_4: String,
+}
+
+/// What the product costs, as its margin tab posts it.
+#[derive(serde::Deserialize)]
+pub struct CostForm {
+    /// Of a product sold as is; empty forgets it.
+    #[serde(default)]
+    pub cost: Option<String>,
+    /// One cost for every combination; empty sets each from its own field.
+    #[serde(default)]
+    pub every: String,
+    /// The combinations' own fields, among anything else posted.
+    #[serde(flatten)]
+    pub fields: std::collections::HashMap<String, String>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct OwnCostsForm {
+    /// Both empty for the shop's.
+    #[serde(default)]
+    pub shipping: String,
+    #[serde(default)]
+    pub import: String,
 }
 
 #[derive(serde::Deserialize)]

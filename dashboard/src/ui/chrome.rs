@@ -107,7 +107,7 @@ struct Section {
 
 /// A tenant's sections, in rail order. The labels are what the pages and
 /// the browser tests call them.
-static SECTIONS: [Section; 26] = [
+static SECTIONS: [Section; 27] = [
     Section {
         key: "products",
         label: "Products",
@@ -124,6 +124,12 @@ static SECTIONS: [Section; 26] = [
         key: "feed",
         label: "Shopping feed",
         icon: icons::FEED,
+        group: Group::Catalog,
+    },
+    Section {
+        key: "costs",
+        label: "Costs",
+        icon: icons::COSTS,
         group: Group::Catalog,
     },
     Section {
@@ -269,7 +275,7 @@ static SECTIONS: [Section; 26] = [
 /// Whether the member may see a section.
 fn allowed(nav: &TenantNav, key: &str) -> bool {
     match key {
-        "products" | "feed" => nav.products,
+        "products" | "feed" | "costs" => nav.products,
         "categories" => nav.categories,
         "orders" => nav.orders,
         "carts" => nav.carts,
@@ -301,6 +307,7 @@ pub fn section_url(cx: &Cx, slug: &str, key: &str) -> String {
         "products" => href!(t::products::index, t::slug: slug).resolve(cx),
         "categories" => href!(t::categories::index, t::slug: slug).resolve(cx),
         "feed" => href!(t::feed::index, t::slug: slug).resolve(cx),
+        "costs" => href!(t::costs::index, t::slug: slug).resolve(cx),
         "orders" => href!(t::orders::index, t::slug: slug).resolve(cx),
         "carts" => href!(t::carts::index, t::slug: slug).resolve(cx),
         "customers" => href!(t::customers::index, t::slug: slug).resolve(cx),

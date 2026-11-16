@@ -5,8 +5,8 @@
 //! The rows come from the read models ([`timada_catalog::feed_products`],
 //! [`timada_reviews::reviews_page`]) and their crates write the items; this
 //! module adds what only the dashboard knows (where the shop is, what
-//! delivery costs, where the pictures are served from, which product a
-//! review is of) and sends the XML as it is written, so a shop of any size
+//! delivery costs, where the pictures are served from, the VAT a margin is
+//! graded with, which product a review is of) and sends the XML as it is written, so a shop of any size
 //! is answered without being held in memory.
 
 use std::pin::Pin;
@@ -67,11 +67,13 @@ pub async fn shop_of(
             })
         })
         .collect();
+    let costs = timada_catalog::load_sale_costs(store, &tenant.id).await?;
     Ok(Some(FeedShop {
         name: tenant.name.clone(),
         storefront_url,
         shippings,
         delivery_days: default_delivery_days(db, &tenant.id).await?,
+        margin: crate::margins::feed_margin(store, tenant, &costs).await?,
     }))
 }
 

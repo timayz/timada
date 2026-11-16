@@ -108,7 +108,7 @@ pub fn describe_error(code: &str) -> &'static str {
             "A product said to have no identifier carries no GTIN and no part number, on itself or on a variant."
         }
         "invalid_feed_label" => "A label is at most 100 characters.",
-        "no_product_ticked" => "Tick the products to label first.",
+        "no_product_ticked" => "Tick the products first.",
         "invalid_google_category" => "A Google product category is at most 750 characters.",
         "invalid_audience" => "Choose one of the listed age groups and genders.",
         "invalid_option_kind" => "Choose one of the listed kinds.",
@@ -121,6 +121,13 @@ pub fn describe_error(code: &str) -> &'static str {
             "A reduction is measured from the lowest it was on sale at in the 30 days before its current price, no more."
         }
         "invalid_amount" => "Enter the price as a number with at most two decimals, like 12.50.",
+        "cost_on_variants" => {
+            "This product is sold through its combinations: say what each of them costs."
+        }
+        "invalid_fee" => "A payment fee is between 0 and 100 % of the amount paid.",
+        "invalid_margin_tiers" => {
+            "A high margin starts above a medium one, both between 0 and 100 % of the price."
+        }
         "invalid_currency" => "Choose one of the listed currencies.",
         "product_not_found" => "This product does not exist.",
         "product_archived" => "This product is archived and cannot change any more.",

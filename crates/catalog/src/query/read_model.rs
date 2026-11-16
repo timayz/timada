@@ -14,7 +14,9 @@
 //! (`catalog_variants`, written again only when one of them moved) and the
 //! shop's delivery time
 //! (`catalog_delivery_default`) are kept too: what a cart shown to a shopper
-//! is priced with ([`sellable`](super::sellable)). One subscription follows
+//! is priced with ([`sellable`](super::sellable)); and what the shop pays
+//! for the things a product sells (`catalog_product_costs`), from the
+//! product's cost stream. One subscription follows
 //! every tenant's streams: each row carries the tenant of the event that
 //! made it, and the rows live in the store's own database ([`Db`]).
 
@@ -32,12 +34,13 @@ use timada_core::{Picture, Rendition};
 use crate::aggregator::category::Category;
 use crate::aggregator::feed::Feed;
 use crate::aggregator::stock::StockItem;
-use crate::aggregator::{DeliveryDefault, Product};
+use crate::aggregator::{DeliveryDefault, Product, ProductCost};
 use crate::command::{
     CategoryState, ProductState, StockState, StockSummary, category_projection,
-    delivery_default_projection, feed_projection, product_projection, stock_projection,
+    delivery_default_projection, feed_projection, product_cost_projection, product_projection,
+    stock_projection,
 };
-use crate::query::feed::settle_feed_product;
+use crate::query::feed::{settle_feed_product, settle_product_costs};
 use crate::query::{PRODUCTS, refresh_category_counts};
 
 /// The cursor identity of the read-model subscription, in the store.
@@ -53,7 +56,30 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(on_stock_event())
         .handler(on_delivery_default_event())
         .handler(on_feed_event())
+        .handler(on_product_cost_event())
         .any_routing_key()
+}
+
+/// What the shop pays for the things a product sells, one row a product
+/// it said something of.
+#[evento::subscription_all]
+async fn on_product_cost_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<ProductCost>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(state) = product_cost_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    if superseded(&event, state.aggregate_version) {
+        return Ok(());
+    }
+    settle_product_costs(&db, &event.tenant, &state.product_id, &state.costs).await
 }
 
 #[evento::subscription_all]
@@ -306,6 +332,7 @@ pub(crate) async fn delete_product_rows(
                 "DELETE FROM catalog_stock WHERE tenant_id = ?1 AND product_id = ?2",
                 "DELETE FROM catalog_variants WHERE tenant_id = ?1 AND product_id = ?2",
                 "DELETE FROM catalog_feed_products WHERE tenant_id = ?1 AND id = ?2",
+                "DELETE FROM catalog_product_costs WHERE tenant_id = ?1 AND product_id = ?2",
                 "DELETE FROM catalog_products WHERE tenant_id = ?1 AND id = ?2",
             ] {
                 execute(tx, statement, (*tenant_id, *product_id)).await?;
