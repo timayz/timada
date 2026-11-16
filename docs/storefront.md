@@ -206,14 +206,15 @@ the content:
 
 ```rust
 use timada_storefront::{ProductPageLd, SocialCard, absolute_url, breadcrumb_ld, json_ld,
-    organization_ld, product_ld, website_ld};
+    offer_terms, organization_ld, product_ld, website_ld};
 
 let url = absolute_url(cx, &format!("/p/{}", product.slug));     // the canonical address
 let card = SocialCard { title: &seo.title, description: &seo.description, url: &url,
     site_name: "Acme", image: product.image().map(|i| i.url.as_str()),
     price: Some((1990, "EUR")) }.tags();                          // Open Graph and Twitter
 let data = product_ld(&product,
-    &ProductPageLd { url: &url, description: &seo.description, reviews: &reviews.items },
+    &ProductPageLd { url: &url, description: &seo.description, reviews: &reviews.items,
+        terms: &offer_terms(cx).await? },
     |variant| format!("{url}?v={}", variant.id));
 // <script type="application/ld+json">{json_ld(&data)}</script>
 ```
@@ -223,7 +224,23 @@ or `name` (Twitter); a price makes the card a product's, a picture makes it larg
 `product_ld` writes a schema.org `Product` with its offer, or a `ProductGroup` with a
 `Product` per variant on sale, each with its own offer at the address the closure gives
 it. It carries `aggregateRating` only when the product has published reviews, and as
-`review` the ones handed to it, which must be the ones the page shows. `breadcrumb_ld`
+`review` the ones handed to it, which must be the ones the page shows.
+
+Every offer also says what the shop says of delivery and returns (`offer_terms`, the
+shop's shipping methods and return terms as the catalog subscription copies them):
+
+- `shippingDetails`, one `OfferShippingDetails` per shipping method priced in the
+  offer's currency: its price for that offer (nothing from the method's free
+  threshold), a `DefinedRegion` per country it names, and the product's delivery time
+  (its own, else the shop's default) as transit days, when there is one. A method that
+  ships everywhere names no country and is left out;
+- `hasMerchantReturnPolicy`, when the merchant stated return terms under Shipping: the
+  window in days, by mail, free or at the buyer's cost, for the countries the shipping
+  methods name. A shop whose methods name no country has nowhere to state it, and none
+  is written.
+
+The checkout does not read this copy: what a shopper pays for delivery stays the
+dashboard's to say. `breadcrumb_ld`
 takes `(name, address)` pairs from the home down, `organization_ld` and `website_ld`
 name the shop on its home page (no rating there: a shop's rating of itself is ignored).
 `json_ld` writes the JSON so that nothing in it can close the script.

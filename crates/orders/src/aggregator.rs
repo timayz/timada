@@ -516,6 +516,25 @@ pub enum BusinessBuyers {
     BusinessBuyersRefused { refused_by: String },
 }
 
+/// What the shop says of returns, as data search engines read beside its
+/// offers: for how long a buyer may send goods back, and who pays for it.
+/// One stream per tenant store, with the id
+/// [`return_policy_id`](crate::return_policy_id); no stream means it states
+/// none.
+#[evento::aggregate(name = "timada-orders/ReturnPolicy")]
+pub enum ReturnPolicy {
+    ReturnPolicySet {
+        /// Days from the delivery.
+        days: u32,
+        /// The shop pays for the way back.
+        free: bool,
+        set_by: String,
+    },
+    ReturnPolicyCleared {
+        cleared_by: String,
+    },
+}
+
 /// Where the tenant's storefront lives, so the mails the dashboard sends a
 /// shopper can link back to it. One stream per tenant store, with the id
 /// [`storefront_id`](crate::storefront_id); no stream means no link.

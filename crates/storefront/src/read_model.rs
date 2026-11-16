@@ -72,6 +72,8 @@ pub fn catalog_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(crate::redirects::on_redirects_event())
         .handler(crate::google_tag::on_google_tag_event())
         .handler(crate::meta_pixel::on_meta_pixel_event())
+        .handler(crate::terms::on_shipping_methods_event())
+        .handler(crate::terms::on_return_policy_event())
         .handler(on_delivery_default_event())
         .any_routing_key()
 }

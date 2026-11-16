@@ -412,6 +412,14 @@ pub fn shipping_methods_id() -> String {
     evento::hash_ids(vec!["shipping-methods"])
 }
 
+/// The longest return window a shop states, in days.
+pub const MAX_RETURN_DAYS: u32 = 365;
+
+/// The stream of the tenant's return policy: one per tenant store.
+pub fn return_policy_id() -> String {
+    evento::hash_ids(vec!["return-policy"])
+}
+
 /// The stream of where the tenant's storefront lives: one per tenant store.
 pub fn storefront_id() -> String {
     evento::hash_ids(vec!["storefront"])

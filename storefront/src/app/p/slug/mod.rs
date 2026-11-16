@@ -2,7 +2,7 @@
 //! it, what shoppers said, and what goes with it.
 
 use timada_storefront::{
-    ProductPageLd, absolute_url, breadcrumb_ld, categories, category_path, menu_of,
+    ProductPageLd, absolute_url, breadcrumb_ld, categories, category_path, menu_of, offer_terms,
     product_categories, product_image, product_ld, product_seo, related_products, require_product,
     reviews_of, stars,
 };
@@ -135,6 +135,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             (crumb.name.clone(), absolute_url(cx, &path))
         })
         .collect();
+    // What the shop says of delivery and returns, on every offer.
+    let terms = offer_terms(cx).await?;
     let structured = [
         product_ld(
             &product,
@@ -142,6 +144,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 url: &canonical,
                 description: &seo.description,
                 reviews: &reviews.items,
+                terms: &terms,
             },
             |variant| {
                 let position = product.variants.iter().position(|v| v.id == variant.id);
