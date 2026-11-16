@@ -12,13 +12,14 @@ use crate::aggregator::{
     CheckoutRequested, Claimed, DiscountGranted, Discounted, LanguageGiven, LanguageSet,
     NewsletterOptInSet, NewsletterOptedIn, PaymentCancelled, PaymentRefused, PaymentRequested,
     PaymentReturnRefused, PaymentReturnRequested, PaymentReturned, Placed, Released,
-    ShippingCharged, ShippingGranted, ShippingMethodChosen, TimeZoneGiven, TimeZoneSet,
+    ShippingCharged, ShippingGranted, ShippingMethodChosen, SourceGiven, SourceSet, TimeZoneGiven,
+    TimeZoneSet,
 };
 use crate::error::OrderError;
 use crate::value_object::{
-    MAX_REASON_LEN, OrderLine, Payment, ShippingAddress, new_reference, normalize_billing,
-    normalize_buyer_vat_number, normalize_email, normalize_note, normalize_shipping, order_id,
-    order_reference_id,
+    MAX_REASON_LEN, OrderLine, OrderSource, Payment, ShippingAddress, new_reference,
+    normalize_billing, normalize_buyer_vat_number, normalize_email, normalize_note,
+    normalize_shipping, normalize_source, order_id, order_reference_id,
 };
 
 use super::{
@@ -60,6 +61,10 @@ pub struct Checkout {
     /// The IANA time zone the shopper's browser gives; dropped when the
     /// zone database does not name it.
     pub time_zone: Option<String>,
+    /// What brought the shopper, when the storefront kept it: the first
+    /// and the last arrival. Tidied, never refused.
+    #[serde(default)]
+    pub source: Option<OrderSource>,
 }
 
 /// The order a payment made.
@@ -866,6 +871,13 @@ impl<E: Executor> super::Command<E> {
                 given_by: actor.to_owned(),
             });
         }
+        if let Some(source) = normalize_source(checkout.source) {
+            write.event(&SourceGiven {
+                request_id: request_id.clone(),
+                source,
+                given_by: actor.to_owned(),
+            });
+        }
         write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(request_id)
     }
@@ -1323,6 +1335,12 @@ impl<E: Executor> super::Command<E> {
         if let Some(time_zone) = &request.time_zone {
             write.event(&TimeZoneSet {
                 time_zone: time_zone.clone(),
+                set_by: actor.to_owned(),
+            });
+        }
+        if let Some(source) = &request.source {
+            write.event(&SourceSet {
+                source: source.clone(),
                 set_by: actor.to_owned(),
             });
         }

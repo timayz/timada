@@ -574,6 +574,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                     )
                 }
+                if let Some(source) = &order.source {
+                    card(
+                        attrs: attributes! { data-order-source=(source.channel()) },
+                        card_header(
+                            <h2 class="text-base font-semibold">"Where it came from"</h2>
+                            <p class="text-sm text-muted-foreground">"What the shopper allowed the storefront to keep."</p>
+                        )
+                        card_content(
+                            attrs: attributes! { class="flex flex-col gap-4" },
+                            if source.first != source.last {
+                                source_click(title: "Last visit before the order", click: &source.last, which: "last")
+                                source_click(title: "First visit", click: &source.first, which: "first")
+                            } else {
+                                source_click(title: "The visit before the order", click: &source.last, which: "last")
+                            }
+                        )
+                    )
+                }
                 if let Some(note) = &order.note {
                     card(
                         card_header(<h2 class="text-base font-semibold">"Note from the customer"</h2>)
@@ -883,4 +901,44 @@ pub struct CancelForm {
     /// have of the order.
     #[serde(default)]
     pub supplier_cancelled: Option<String>,
+}
+
+/// One arrival of the shopper at the shop: its channel, when, and each
+/// thing its address said.
+#[topcoat::view::component]
+async fn source_click(
+    cx: &Cx,
+    title: &str,
+    click: &timada_orders::Click,
+    which: &str,
+) -> Result<impl View> {
+    let said: Vec<(&str, &str)> = [
+        ("Campaign", &click.utm_campaign),
+        ("Term", &click.utm_term),
+        ("Content", &click.utm_content),
+        ("Google click id (gclid)", &click.gclid),
+        ("Google click id (gbraid)", &click.gbraid),
+        ("Google click id (wbraid)", &click.wbraid),
+        ("Meta click id (fbclid)", &click.fbclid),
+        ("Came from", &click.referrer),
+        ("Landed on", &click.landing),
+    ]
+    .into_iter()
+    .filter_map(|(term, value)| Some((term, value.as_deref()?)))
+    .collect();
+    Ok(view! {
+        <div data-order-source-click=(which)>
+            <h3 class="text-sm font-medium">(title)</h3>
+            <p class="text-sm">
+                <span data-order-source-channel="">(click.channel())</span>
+                " · " <time datetime=(click.at)>(format_time(click.at))</time>
+            </p>
+            <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                for (term, value) in &said {
+                    <dt class="text-muted-foreground">(*term)</dt>
+                    <dd class="break-all">(*value)</dd>
+                }
+            </dl>
+        </div>
+    })
 }

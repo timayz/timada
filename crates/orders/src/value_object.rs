@@ -23,6 +23,9 @@ pub const MAX_TRACKING_LEN: usize = 200;
 pub const MAX_TRACKING_URL_LEN: usize = 500;
 pub const MAX_REASON_LEN: usize = 500;
 pub const MAX_SHIPPING_NAME_LEN: usize = 80;
+/// The longest click id, campaign parameter, referrer or landing path kept
+/// with an order; a longer one is dropped.
+pub const MAX_SOURCE_VALUE_LEN: usize = 500;
 /// The most countries one shipping method lists.
 pub const MAX_SHIPPING_COUNTRIES: usize = 250;
 /// The most shipping methods a shop offers.
@@ -60,6 +63,139 @@ pub struct ShippingAddress {
     /// ISO 3166-1 alpha-2, uppercase (`FR`).
     pub country: String,
     pub phone: Option<String>,
+}
+
+/// One arrival at the shop: the click ids and campaign parameters its
+/// address carried, and where it came from. Frozen in `events.lock`: the
+/// fields never change.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(default)]
+pub struct Click {
+    /// Google Ads' click id.
+    pub gclid: Option<String>,
+    /// Google Ads' ids for a click from an iOS app, or to one, which carry
+    /// no `gclid`.
+    pub gbraid: Option<String>,
+    pub wbraid: Option<String>,
+    /// Meta's click id.
+    pub fbclid: Option<String>,
+    pub utm_source: Option<String>,
+    pub utm_medium: Option<String>,
+    pub utm_campaign: Option<String>,
+    pub utm_term: Option<String>,
+    pub utm_content: Option<String>,
+    /// The page the visitor came from, on another site, without its query.
+    pub referrer: Option<String>,
+    /// The path of the shop they landed on.
+    pub landing: Option<String>,
+    /// Unix seconds.
+    pub at: u64,
+}
+
+impl Click {
+    fn values_mut(&mut self) -> [&mut Option<String>; 11] {
+        [
+            &mut self.gclid,
+            &mut self.gbraid,
+            &mut self.wbraid,
+            &mut self.fbclid,
+            &mut self.utm_source,
+            &mut self.utm_medium,
+            &mut self.utm_campaign,
+            &mut self.utm_term,
+            &mut self.utm_content,
+            &mut self.referrer,
+            &mut self.landing,
+        ]
+    }
+
+    /// Whether it says where the visitor came from: a landing path alone
+    /// does not.
+    pub fn tells(&self) -> bool {
+        self.gclid.is_some()
+            || self.gbraid.is_some()
+            || self.wbraid.is_some()
+            || self.fbclid.is_some()
+            || self.utm_source.is_some()
+            || self.utm_medium.is_some()
+            || self.utm_campaign.is_some()
+            || self.utm_term.is_some()
+            || self.utm_content.is_some()
+            || self.referrer.is_some()
+    }
+
+    /// The channel it names, as `source / medium`: what the campaign's
+    /// parameters say when it has some, else `google / cpc` for a Google
+    /// Ads click, `facebook / fbclid` for a click Meta tagged (an ad or a
+    /// plain post: its id does not say), else the site it came from.
+    pub fn channel(&self) -> String {
+        if self.utm_source.is_some() || self.utm_medium.is_some() {
+            return format!(
+                "{} / {}",
+                self.utm_source.as_deref().unwrap_or("(not set)"),
+                self.utm_medium.as_deref().unwrap_or("(not set)")
+            )
+            .to_lowercase();
+        }
+        if self.gclid.is_some() || self.gbraid.is_some() || self.wbraid.is_some() {
+            return "google / cpc".to_owned();
+        }
+        if self.fbclid.is_some() {
+            return "facebook / fbclid".to_owned();
+        }
+        match self.referrer.as_deref().and_then(host_of) {
+            Some(host) => format!("{host} / referral"),
+            None => "(not set)".to_owned(),
+        }
+    }
+}
+
+/// The host of an `http(s)` address, lowercase, without `www.`.
+fn host_of(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let host = rest.split(['/', '?', '#']).next()?;
+    let host = host.rsplit('@').next()?.split(':').next()?.to_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    (!host.is_empty()).then(|| host.to_owned())
+}
+
+/// What brought the shopper of an order: the first arrival the storefront
+/// remembers and the last before they paid (the same one when there was
+/// only one). Frozen in `events.lock`: the fields never change.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub struct OrderSource {
+    pub first: Click,
+    pub last: Click,
+}
+
+impl OrderSource {
+    /// The channel the order is counted under: the last arrival's, as ad
+    /// platforms attribute a sale.
+    pub fn channel(&self) -> String {
+        self.last.channel()
+    }
 }
 
 /// One step of a parcel's journey, as the carrier words it. Frozen in
@@ -448,6 +584,36 @@ pub fn normalize_buyer_vat_number(vat_number: Option<&str>) -> Result<Option<Str
 
 pub fn normalize_note(note: Option<&str>) -> Result<Option<String>, OrderError> {
     optional_text(note, MAX_NOTE_LEN, OrderError::InvalidNote)
+}
+
+/// What a storefront says brought the shopper, as an order keeps it: each
+/// value trimmed, and dropped when empty, too long or holding a control
+/// character. Nothing is refused: what measures a sale never stops one.
+/// `None` when neither arrival says anything.
+pub fn normalize_source(source: Option<OrderSource>) -> Option<OrderSource> {
+    fn clean(mut click: Click) -> Option<Click> {
+        for value in click.values_mut() {
+            *value = value
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| {
+                    !text.is_empty()
+                        && text.chars().count() <= MAX_SOURCE_VALUE_LEN
+                        && !text.chars().any(char::is_control)
+                })
+                .map(str::to_owned);
+        }
+        click.tells().then_some(click)
+    }
+    let source = source?;
+    match (clean(source.first), clean(source.last)) {
+        (Some(first), Some(last)) => Some(OrderSource { first, last }),
+        (Some(only), None) | (None, Some(only)) => Some(OrderSource {
+            first: only.clone(),
+            last: only,
+        }),
+        (None, None) => None,
+    }
 }
 
 pub fn normalize_tracking(tracking: Option<&str>) -> Result<Option<String>, OrderError> {

@@ -8,10 +8,15 @@
 //! [`CONSENT_MAX_AGE_DAYS`](timada_storefront::CONSENT_MAX_AGE_DAYS), and
 //! the next page tells Google's Consent Mode of it
 //! ([`consent_script`](timada_storefront::consent_script)).
+//!
+//! What brought the visitor ([`crate::shopper::source`]) follows the answer:
+//! the banner's form carries the address it sat on and the site the visitor
+//! came from, so a campaign's click is kept once it is allowed, and an
+//! answer taken back drops what it no longer covers.
 
 use std::collections::HashMap;
 
-use timada_storefront::{Consent, menu};
+use timada_storefront::{Consent, click_at, menu, request_referrer};
 use topcoat::{
     Result,
     context::Cx,
@@ -27,7 +32,7 @@ use topcoat::{
 
 use crate::app::cart::site_path;
 use crate::app::document;
-use crate::shopper::{consent, set_consent};
+use crate::shopper::{consent, keep_source_within, remember_arrival, set_consent};
 
 #[topcoat::router::query_params(error = bad_request)]
 struct CookiesQuery {
@@ -45,6 +50,9 @@ pub async fn consent_banner(cx: &Cx) -> Result<impl View> {
         .path_and_query()
         .map(|here| here.as_str().to_owned())
         .unwrap_or_else(|| "/".to_owned());
+    // And the site they came from, which the page after the answer no
+    // longer knows.
+    let referrer = request_referrer(cx);
     Ok(view! {
         <section class="consent" aria-label="Cookies" data-consent="">
             <div class="wrap">
@@ -54,6 +62,9 @@ pub async fn consent_banner(cx: &Cx) -> Result<impl View> {
                 </p>
                 <form method="post" action=(href!(answer))>
                     <input type="hidden" name="from" value=(here)>
+                    if let Some(referrer) = &referrer {
+                        <input type="hidden" name="referrer" value=(referrer)>
+                    }
                     <button class="btn" name="answer" value="none">"Tout refuser"</button>
                     <button class="btn" name="answer" value="all">"Tout accepter"</button>
                     <a href=(href!(index))>"Choisir"</a>
@@ -124,6 +135,18 @@ pub async fn answer(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Resul
         _ => Consent::NONE,
     };
     set_consent(cx, consent);
+    // What brought the visitor follows the answer: what it no longer covers
+    // goes, and the arrival the banner sat on is kept now that it may be.
+    keep_source_within(cx, consent)?;
+    if let Some(from) = form.get("from")
+        && let Some(click) = click_at(
+            cx,
+            site_path(from),
+            form.get("referrer").map(String::as_str),
+        )
+    {
+        remember_arrival(cx, click, consent)?;
+    }
     let to = match form.get("from") {
         Some(from) => site_path(from).to_owned(),
         None => {
