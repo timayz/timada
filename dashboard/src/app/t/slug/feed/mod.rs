@@ -67,17 +67,55 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     // The address a reader fetches: this server's own, as it is reached
     // from outside.
+    let server = context::<Config>(cx)
+        .server
+        .url
+        .as_str()
+        .trim_end_matches('/')
+        .to_owned();
     let address = token.as_ref().map(|token| {
         format!(
-            "{}{}",
-            context::<Config>(cx)
-                .server
-                .url
-                .as_str()
-                .trim_end_matches('/'),
+            "{server}{}",
             href!(feeds::google::google, feeds::token: token.clone()).resolve(cx)
         )
     });
+    // The same products for the other catalogues, and the reviews, under
+    // the same secret: (what it is for, its field, its address, its hint).
+    let others: Vec<(&str, &str, String, &str)> = token
+        .as_ref()
+        .map(|token| {
+            vec![
+                (
+                    "Meta catalogue address",
+                    "meta",
+                    format!(
+                        "{server}{}",
+                        href!(feeds::meta::meta, feeds::token: token.clone()).resolve(cx)
+                    ),
+                    "For catalogue ads and retargeting on Facebook and Instagram: in Commerce Manager, add it to a catalogue as a scheduled data feed. Its item ids are the ones the storefront's Meta pixel sends.",
+                ),
+                (
+                    "TikTok catalogue address",
+                    "tiktok",
+                    format!(
+                        "{server}{}",
+                        href!(feeds::tiktok::tiktok, feeds::token: token.clone()).resolve(cx)
+                    ),
+                    "For TikTok catalogue ads: in TikTok Ads Manager, add it to a catalogue as a scheduled data feed.",
+                ),
+                (
+                    "Product reviews address",
+                    "google-reviews",
+                    format!(
+                        "{server}{}",
+                        href!(feeds::google_reviews::google_reviews, feeds::token: token.clone())
+                            .resolve(cx)
+                    ),
+                    "The shop's published reviews, so Shopping listings show their stars: in Merchant Center, add it as a product reviews feed. Google asks for at least 50 reviews in all before it shows ratings.",
+                ),
+            ]
+        })
+        .unwrap_or_default();
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let title = format!("Shopping feed · {}", tenant.name);
@@ -88,7 +126,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             shell: Shell::tenant(&tenant, &nav, "feed"),
             page_header(
                 title: "Shopping feed",
-                subtitle: Some("The shop's products as Google Merchant Center reads them, for Shopping ads and free listings."),
+                subtitle: Some("The shop's products as Google Merchant Center, Meta and TikTok read them, for Shopping ads, free listings and catalogue ads, and its reviews for the stars on Shopping listings."),
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
 
@@ -109,7 +147,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             section_card(
                 title: Some("Address"),
-                description: Some("Give it to Merchant Center as a scheduled fetch (a file in XML). Whoever has the address reads the feed, so it is not guessable: move the feed to a new one if this one got out, and the old one stops answering."),
+                description: Some("Give the first to Merchant Center as a scheduled fetch (a file in XML), and each of the others to its own reader. Whoever has an address reads the feed, so they are not guessable: move the feed to new ones if one got out, and the old ones stop answering."),
                 if let Some(address) = &address {
                     field(
                         attrs: attributes! { class="max-w-3xl" },
@@ -120,6 +158,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             aria-describedby="feed-address-hint" data-feed-address=""
                         })
                     )
+                    for (label, key, other, hint) in &others {
+                        field(
+                            attrs: attributes! { class="mt-4 max-w-3xl" },
+                            field_label(attrs: attributes! { for=(format!("feed-address-{key}")) }, (*label))
+                            field_description(attrs: attributes! { id=(format!("feed-address-{key}-hint")) }, (*hint))
+                            input(attrs: attributes! {
+                                id=(format!("feed-address-{key}")) type="text" readonly="" value=(other)
+                                aria-describedby=(format!("feed-address-{key}-hint")) data-feed-other=(*key)
+                            })
+                        )
+                    }
                 } else {
                     <p class="text-sm text-muted-foreground">"The feed is closed: it has no address."</p>
                 }

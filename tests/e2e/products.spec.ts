@@ -479,8 +479,28 @@ test("a shop opens its shopping feed at a secret address, moves it and closes it
   expect(xml).not.toContain("Plate");
   expect(xml.trimEnd().endsWith("</rss>")).toBe(true);
 
-  // Moved, the old address stops answering; closed, the new one does too.
+  // The same product for a Meta and a TikTok catalogue, each in its own
+  // words, and the shop's reviews for Google, under the same secret.
   await page.goto(`/t/${slug}/feed`);
+  const other = (key: string) => page.locator(`[data-feed-other="${key}"]`).inputValue();
+  const meta = await other("meta");
+  expect(meta).toBe(first.replace(/google$/, "meta"));
+  const metaXml = await (await request.get(meta)).text();
+  expect(metaXml.match(/<item>/g)).toHaveLength(1);
+  expect(metaXml).toContain("<g:availability>in stock</g:availability>");
+  expect(metaXml).toContain("<g:description>Holds 50 cl &amp; more.</g:description>");
+  expect(metaXml).not.toContain("digital_source_type");
+  const tiktokXml = await (await request.get(await other("tiktok"))).text();
+  expect(tiktokXml).toMatch(/<g:sku_id>[^<]+<\/g:sku_id>/);
+  expect(tiktokXml).toContain("<g:title>Blue Mug</g:title>");
+  const reviews = await request.get(await other("google-reviews"));
+  expect(reviews.status()).toBe(200);
+  const reviewsXml = await reviews.text();
+  expect(reviewsXml).toContain("<version>2.4</version>");
+  expect(reviewsXml).not.toContain("<review>");
+  expect(reviewsXml.trimEnd().endsWith("</feed>")).toBe(true);
+
+  // Moved, the old address stops answering; closed, the new one does too.
   await expect(page.locator("[data-feed-needs-storefront]")).toHaveCount(0);
   await page.getByRole("button", { name: "Move to a new address" }).click();
   await expect(page.getByRole("status")).toContainText("The feed is open at a new address.");
@@ -496,6 +516,8 @@ test("a shop opens its shopping feed at a secret address, moves it and closes it
   await expect(page.getByLabel("Feed address")).toHaveCount(0);
   await expect(async () => {
     expect((await request.get(second)).status()).toBe(404);
+    expect((await request.get(second.replace(/google$/, "meta"))).status()).toBe(404);
+    expect((await request.get(second.replace(/google$/, "google-reviews"))).status()).toBe(404);
   }).toPass({ timeout: 15_000 });
 });
 

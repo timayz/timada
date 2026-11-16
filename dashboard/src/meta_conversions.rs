@@ -260,7 +260,10 @@ fn user_data(order: &OrderState, browser: &Browser) -> Value {
 pub fn purchase_event(order: &OrderState, browser: &Browser) -> Value {
     let amount = |cents: u64| json!(cents as f64 / 100.0);
     let id = |line: &timada_orders::OrderLine| {
-        line.sku.clone().unwrap_or_else(|| line.product_id.clone())
+        // The id of the line's item in the shop's feeds.
+        line.variant_id
+            .clone()
+            .unwrap_or_else(|| line.product_id.clone())
     };
     let mut event = Map::new();
     event.insert("event_name".into(), json!("Purchase"));
@@ -466,6 +469,7 @@ mod tests {
                 lines: vec![OrderLine {
                     product_id: "product-1".into(),
                     name: "Mug".into(),
+                    variant_id: Some("variant-blue".into()),
                     sku: Some("MUG-BLUE".into()),
                     unit_amount_cents: 1250,
                     quantity: 2,
@@ -555,10 +559,10 @@ mod tests {
         assert_eq!(custom["value"], 29.9);
         assert_eq!(custom["currency"], "EUR");
         assert_eq!(custom["order_id"], "K7Q4-MZP2");
-        assert_eq!(custom["content_ids"], json!(["MUG-BLUE"]));
+        assert_eq!(custom["content_ids"], json!(["variant-blue"]));
         assert_eq!(
             custom["contents"],
-            json!([{ "id": "MUG-BLUE", "quantity": 2, "item_price": 12.5 }])
+            json!([{ "id": "variant-blue", "quantity": 2, "item_price": 12.5 }])
         );
         assert_eq!(custom["num_items"], 2);
     }

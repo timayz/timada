@@ -404,8 +404,9 @@ visitor allowed advertising, whatever the shop's consent mode: nothing of Meta's
 written for anyone else. The events are the arguments of one `fbq(…)` call each, with
 the event's id last: `page_view_event`, `view_content_event` (a product's page),
 `pixel_add_to_cart_event`, `initiate_checkout_event` and `pixel_purchase_event`. Their
-content ids are the ones the Google tag's items carry (the variant's SKU, else the
-product's id). An item added to the cart is written in a script of its own,
+content ids are the ones the Google tag's items carry: the variant's id, or the
+product's when it is sold as is, which is the id of its item in the shop's feeds, so an
+ad platform matches what a visitor saw to its catalogue. An item added to the cart is written in a script of its own,
 `data-pixel-events="added"`: a script that fetched a page to show a part of it calls
 `timadaPixel(page, true)`, which sends that one alone, not the page view the shopper
 never had.
