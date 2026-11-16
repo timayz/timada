@@ -5,6 +5,7 @@ use timada_core::db::{Db, FromRow, Tally, tenant_fts_query};
 use timada_core::page::{Cursor, Page, PageFrom, Side, read_page};
 
 use crate::command::{OrderRefund, OrderState, OrderStatus, OutsideSettlement};
+use crate::query::Period;
 use crate::value_object::OrderCosts;
 use timada_catalog::format_money;
 
@@ -542,3 +543,33 @@ pub async fn discount_use_counts(
         .await?;
     Ok(rows.into_iter().collect())
 }
+
+/// The next `limit` orders of a tenant placed over `period`, oldest first,
+/// after the order at `after`; each whole, as its row keeps it. What an
+/// export walks: a page at a time off `orders_orders_placed`, so a shop of
+/// any size is written without being held in memory.
+pub async fn orders_placed_over(
+    db: &Db,
+    tenant_id: &str,
+    period: Period,
+    after: Option<&Cursor>,
+    limit: i64,
+) -> anyhow::Result<Vec<OrderState>> {
+    let (at, id) = after.map_or((period.from, ""), |cursor| (cursor.at, cursor.id.as_str()));
+    let rows: Vec<(String,)> = db
+        .fetch_all(ORDERS_PLACED_OVER, (tenant_id, at, id, period.to, limit))
+        .await?;
+    rows.into_iter()
+        .map(|(state,)| {
+            serde_json::from_str::<OrderRecord>(&state)
+                .map(OrderRecord::into_state)
+                .map_err(anyhow::Error::from)
+        })
+        .collect()
+}
+
+/// See [`orders_placed_over`].
+pub const ORDERS_PLACED_OVER: &str = "SELECT state
+     FROM orders_orders INDEXED BY orders_orders_placed
+     WHERE tenant_id = ?1 AND placed_at >= ?2 AND (placed_at > ?2 OR id > ?3) AND placed_at < ?4
+     ORDER BY placed_at, id LIMIT ?5";

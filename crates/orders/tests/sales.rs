@@ -219,3 +219,84 @@ fn an_order_s_profit_is_shared_among_its_lines() {
     };
     assert_eq!(unknown.line_profits(&lines, 2833), None);
 }
+
+/// What an export walks: every order of the period once, oldest first, a
+/// page at a time from where the last one ended, each whole.
+#[tokio::test]
+async fn a_period_s_orders_are_walked_a_page_at_a_time() {
+    use timada_core::page::Cursor;
+    use timada_orders::{ORDERS_PLACED_OVER, orders_placed_over};
+
+    let (executor, pool) = shop().await;
+    let orders = Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let mut placed = Vec::new();
+    for quantity in 1..=5 {
+        let cart = cart_with(&orders, &mug, quantity).await;
+        placed.push(place(&orders, &cart, checkout()).await.order_id);
+    }
+    catch_up(&executor, &pool).await;
+
+    // Placed within the same second or not, each comes once.
+    let mut walked = Vec::new();
+    let mut after: Option<Cursor> = None;
+    loop {
+        let page = orders_placed_over(&pool, TENANT, EVER, after.as_ref(), 2)
+            .await
+            .unwrap();
+        let Some(last) = page.last() else {
+            break;
+        };
+        assert!(page.len() <= 2);
+        after = Some(Cursor {
+            at: last.placed_at as i64,
+            id: last.id.clone(),
+        });
+        walked.extend(page);
+    }
+    assert_eq!(walked.len(), 5);
+    let mut ids: Vec<&str> = walked.iter().map(|order| order.id.as_str()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 5);
+    assert!(
+        walked
+            .windows(2)
+            .all(|pair| (pair[0].placed_at, &pair[0].id) < (pair[1].placed_at, &pair[1].id)),
+        "oldest first"
+    );
+    // Whole: the lines and the address an export writes.
+    assert_eq!(walked[0].lines[0].name, "Mug");
+    assert_eq!(walked[0].shipping.name, "Ada Lovelace");
+
+    // Another period, another shop: none of them.
+    let before = Period { from: 0, to: 1 };
+    assert!(
+        orders_placed_over(&pool, TENANT, before, None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        orders_placed_over(&pool, "other", EVER, None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let plan: Vec<(i64, i64, i64, String)> = pool
+        .fetch_all(
+            &format!("EXPLAIN QUERY PLAN {ORDERS_PLACED_OVER}"),
+            (TENANT, 0i64, "", i64::MAX, 10i64),
+        )
+        .await
+        .unwrap();
+    let plan: Vec<String> = plan.into_iter().map(|(_, _, _, detail)| detail).collect();
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("SEARCH") && line.contains("orders_orders_placed")),
+        "{plan:?}"
+    );
+    assert!(!plan.iter().any(|line| line.contains("SCAN")), "{plan:?}");
+}

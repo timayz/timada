@@ -711,6 +711,21 @@ to the order. The report by category joins the catalog's memberships as they sta
 today (`catalog_product_categories`, in the same database), so a product in two
 categories counts in both.
 
+### Exports
+
+The Orders, Customers and Newsletter pages each give their list as a CSV file
+(`/t/{slug}/orders/export`, `/customers/export`, `/newsletter/export`), behind the
+permission that reads the page, for some days of the shop's clock (`?from=&to=`) or
+for everything. `dashboard/src/export.rs` writes a file behind its response, a page
+of rows at a time read off a key of the read model, as a feed is written: a shop of
+any size is exported without being held in memory. The orders file has one line per
+item, each saying again what is the order's own (address, discount, shipping, total,
+refunds, source) and, once the order is invoiced, its invoice's number and VAT.
+Amounts have two decimals, times are in UTC, and the file opens with a byte-order
+mark so a spreadsheet reads it as UTF-8. A cell a shopper typed that starts like a
+formula (`=`, `+`, `-`, `@`) is led by an apostrophe, so a spreadsheet shows it
+instead of working it out.
+
 ## Product pictures
 
 The event store records what a picture is, never its bytes. The upload itself is not

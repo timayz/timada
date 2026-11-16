@@ -89,17 +89,21 @@ impl Days {
         }
     }
 
-    /// From the first day's midnight to the midnight after the last, as
-    /// the shop's clocks have them.
     fn period(&self, zone: &TimeZone) -> Period {
-        let midnight = |day: Date| {
-            day.to_zoned(zone.clone())
-                .map_or(0, |start| start.timestamp().as_second())
-        };
-        Period {
-            from: midnight(self.first),
-            to: midnight(self.last.tomorrow().unwrap_or(self.last)),
-        }
+        period_of_days(zone, self.first, self.last)
+    }
+}
+
+/// From the first day's midnight to the midnight after the last, as the
+/// shop's clocks have them.
+pub(crate) fn period_of_days(zone: &TimeZone, first: Date, last: Date) -> Period {
+    let midnight = |day: Date| {
+        day.to_zoned(zone.clone())
+            .map_or(0, |start| start.timestamp().as_second())
+    };
+    Period {
+        from: midnight(first),
+        to: midnight(last.tomorrow().unwrap_or(last)),
     }
 }
 

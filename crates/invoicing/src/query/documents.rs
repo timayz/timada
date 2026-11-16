@@ -117,3 +117,31 @@ pub async fn oss_return(
     )
     .await
 }
+
+/// The invoice of an order, as an export names it: its number and the VAT
+/// it carries.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+pub struct OrderInvoice {
+    /// `F2026-000042`.
+    pub label: String,
+    /// All its rates together.
+    pub vat_cents: i64,
+}
+
+/// The invoice of an order; `None` while it has none.
+pub async fn invoice_of_order(
+    db: &Db,
+    tenant_id: &str,
+    order_id: &str,
+) -> anyhow::Result<Option<OrderInvoice>> {
+    db.fetch_optional(
+        "SELECT d.label AS label,
+            coalesce((SELECT sum(v.vat_cents) FROM invoicing_vat_lines v
+                WHERE v.tenant_id = d.tenant_id AND v.document_id = d.id), 0) AS vat_cents
+         FROM invoicing_documents d
+         WHERE d.tenant_id = ?1 AND d.order_id = ?2 AND d.kind = 'invoice'
+         ORDER BY d.issued_at LIMIT 1",
+        (tenant_id, order_id),
+    )
+    .await
+}
