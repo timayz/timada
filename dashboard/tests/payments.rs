@@ -623,6 +623,7 @@ fn checkout(expected_total_cents: Option<u64>) -> Checkout {
         language: None,
         newsletter: false,
         time_zone: None,
+        source: None,
     }
 }
 

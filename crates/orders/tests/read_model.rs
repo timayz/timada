@@ -4,6 +4,9 @@ use common::*;
 use timada_core::page::PageFrom;
 use timada_core::{Claimant, MailStatus};
 use timada_orders::{
+    Checkout, Click, ORDERS_BY_SOURCE, OrderSource, SourceCount, orders_by_source,
+};
+use timada_orders::{
     Command, OrderFilter, OrderStatus, cart_refused_returns, count_open_carts, count_orders,
     hold_reminders_due, open_carts, order_count, order_mails, order_state, orders_of_email,
     orders_of_tenant, payments_due, product_ever_ordered, read_model_subscription,
@@ -159,6 +162,91 @@ async fn orders_and_carts_are_listed() {
 /// A hold the provider dropped while the supplier may have the order leaves
 /// nothing to settle with the provider: the sweep passes it over until the
 /// merchant asks to cancel it.
+#[tokio::test]
+async fn orders_are_counted_by_what_brought_them() {
+    let (executor, pool) = executor_with_pool().await;
+    let orders = Command::new(executor.clone(), TENANT);
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let from = |click: Click| {
+        Some(OrderSource {
+            first: click.clone(),
+            last: click,
+        })
+    };
+    let ad = Click {
+        gclid: Some("Cj0KCQ".into()),
+        ..Click::default()
+    };
+    let letter = Click {
+        utm_source: Some("lettre".into()),
+        utm_medium: Some("email".into()),
+        ..Click::default()
+    };
+    for source in [from(ad.clone()), from(ad), from(letter), None] {
+        let cart = cart_with(&orders, &mug, 1).await;
+        pay(
+            &orders,
+            &cart,
+            Checkout {
+                source,
+                ..checkout()
+            },
+        )
+        .await;
+    }
+    for _ in 0..2 {
+        read_model_subscription::<evento::Turso>(pool.clone())
+            .run_once(&executor)
+            .await
+            .unwrap();
+    }
+
+    let count = |source: Option<&str>, orders| SourceCount {
+        source: source.map(str::to_owned),
+        orders,
+    };
+    assert_eq!(
+        orders_by_source(&pool, TENANT, 0).await.unwrap(),
+        [
+            count(Some("google / cpc"), 2),
+            // An order whose storefront did not say counts apart.
+            count(None, 1),
+            count(Some("lettre / email"), 1),
+        ]
+    );
+    // Only the orders placed since, and only this tenant's.
+    let later = u64::MAX / 4;
+    assert!(
+        orders_by_source(&pool, TENANT, later)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        orders_by_source(&pool, "another", 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // Read off the index, from the tenant's first entry: no walk of the table.
+    let plan: Vec<(i64, i64, i64, String)> = pool
+        .fetch_all(
+            &format!("EXPLAIN QUERY PLAN {ORDERS_BY_SOURCE}"),
+            (TENANT, 0i64),
+        )
+        .await
+        .unwrap();
+    let plan: Vec<String> = plan.into_iter().map(|(_, _, _, detail)| detail).collect();
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("SEARCH") && line.contains("orders_orders_source")),
+        "{plan:?}"
+    );
+    assert!(!plan.iter().any(|line| line.contains("SCAN")), "{plan:?}");
+}
+
 #[tokio::test]
 async fn an_order_kept_open_without_its_hold_waits_for_the_merchant() {
     let (executor, pool) = executor_with_pool().await;

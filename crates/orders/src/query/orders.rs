@@ -338,6 +338,34 @@ pub async fn count_orders(
     .await
 }
 
+/// How many orders a channel brought.
+#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+pub struct SourceCount {
+    /// `source / medium` ([`OrderSource::channel`](crate::OrderSource::channel));
+    /// `None` gathers the orders whose storefront did not say (the shopper
+    /// did not allow it, or it keeps no source).
+    pub source: Option<String>,
+    pub orders: i64,
+}
+
+/// The orders of a tenant placed since `since` (Unix seconds), counted by
+/// the channel that brought them, the busiest first. Read off
+/// `orders_orders_source` alone, which holds the three columns it needs.
+pub async fn orders_by_source(
+    db: &Db,
+    tenant_id: &str,
+    since: u64,
+) -> anyhow::Result<Vec<SourceCount>> {
+    db.fetch_all(ORDERS_BY_SOURCE, (tenant_id, since as i64))
+        .await
+}
+
+/// See [`orders_by_source`].
+pub const ORDERS_BY_SOURCE: &str = "SELECT source, count(*) AS orders
+     FROM orders_orders INDEXED BY orders_orders_source
+     WHERE tenant_id = ?1 AND placed_at >= ?2
+     GROUP BY source ORDER BY orders DESC, source";
+
 /// The latest orders of a tenant placed with a normalized address, newest
 /// first: what a signed-in shopper sees as their history.
 pub async fn orders_of_email(

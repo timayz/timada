@@ -2,7 +2,8 @@ mod common;
 
 use common::*;
 use timada_orders::{
-    Checkout, OrderError, OrderStatus, Payment, PaymentAnswer, ShippingAddress, order_id,
+    Checkout, Click, MAX_SOURCE_VALUE_LEN, OrderError, OrderSource, OrderStatus, Payment,
+    PaymentAnswer, ShippingAddress, order_id,
 };
 
 #[tokio::test]
@@ -519,6 +520,79 @@ async fn an_order_remembers_the_shoppers_time_zone() {
     .await;
     let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
     assert_eq!(order.time_zone, None);
+}
+
+#[tokio::test]
+async fn an_order_remembers_what_brought_the_shopper() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+    let newsletter = Click {
+        utm_source: Some(" Lettre ".into()),
+        utm_medium: Some("email".into()),
+        landing: Some("/boutique".into()),
+        at: 1_800_000_000,
+        ..Click::default()
+    };
+    let ad = Click {
+        gclid: Some("Cj0KCQ".into()),
+        // Too long to be a click id: dropped, the rest stays.
+        fbclid: Some("x".repeat(MAX_SOURCE_VALUE_LEN + 1)),
+        referrer: Some("https://www.google.com/".into()),
+        at: 1_800_000_600,
+        ..Click::default()
+    };
+
+    let cart = cart_with(&orders, &mug, 1).await;
+    let placed = pay(
+        &orders,
+        &cart,
+        Checkout {
+            source: Some(OrderSource {
+                first: newsletter,
+                last: ad,
+            }),
+            ..checkout()
+        },
+    )
+    .await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    let source = order.source.expect("the order keeps its source");
+    assert_eq!(source.first.utm_source.as_deref(), Some("Lettre"));
+    assert_eq!(source.first.channel(), "lettre / email");
+    assert_eq!(source.last.gclid.as_deref(), Some("Cj0KCQ"));
+    assert_eq!(source.last.fbclid, None);
+    assert_eq!(source.channel(), "google / cpc");
+
+    // Nothing said, or nothing that says where from: no source, and the
+    // checkout goes through all the same.
+    for source in [
+        None,
+        Some(OrderSource::default()),
+        Some(OrderSource {
+            first: Click {
+                landing: Some("/".into()),
+                utm_source: Some("  ".into()),
+                ..Click::default()
+            },
+            last: Click {
+                gclid: Some("bad\u{0}id".into()),
+                ..Click::default()
+            },
+        }),
+    ] {
+        let cart = cart_with(&orders, &mug, 1).await;
+        let placed = pay(
+            &orders,
+            &cart,
+            Checkout {
+                source,
+                ..checkout()
+            },
+        )
+        .await;
+        let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+        assert_eq!(order.source, None);
+    }
 }
 
 #[tokio::test]

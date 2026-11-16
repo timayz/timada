@@ -1056,6 +1056,95 @@ test("a shopper pays less with a discount code, once", async ({
   }
 });
 
+test("an order keeps what brought the shopper, as far as they allowed it", async ({
+  page,
+  request,
+}) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Source Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    await setLegalIdentity(page, slug);
+    const webhookUrl = await connectStripe(page, slug);
+    await app.start(request, await mintKey(page, slug, true), 1);
+
+    /// Orders what the cart holds; the order's page in the back office.
+    const order = async (fill: boolean) => {
+      await placeOrder(page, SHOP, fill);
+      await confirmPayment(page, request, SHOP, stripe, webhookUrl);
+      const reference =
+        (await page.locator("[data-order-reference]").textContent())?.trim() ??
+        "";
+      const row = page.locator(`[data-order="${reference}"]`);
+      await expect(async () => {
+        await page.goto(`/t/${slug}/orders`);
+        await expect(row).toHaveCount(1, { timeout: 1000 });
+      }).toPass({ timeout: 15_000 });
+      await row.getByRole("link", { name: reference }).click();
+      await expect(page.locator("[data-order-total]")).toBeVisible();
+    };
+
+    // A newsletter's link brings the visitor, who accepts the cookies on
+    // the page they landed on: the campaign is kept from there.
+    const landing = `${SHOP}/p/blue-mug?utm_source=Lettre&utm_medium=email&utm_campaign=rentree`;
+    await page.goto(landing);
+    await page
+      .locator("[data-consent]")
+      .getByRole("button", { name: "Tout accepter" })
+      .click();
+    await expect(page).toHaveURL(landing);
+    // Days later an ad brings them back, and they buy.
+    await page.goto(`${SHOP}/p/blue-mug?gclid=Cj0KCQtest&page=1`);
+    await addToCart(page);
+    await order(true);
+    const source = page.locator("[data-order-source]");
+    await expect(source).toHaveAttribute("data-order-source", "google / cpc");
+    const last = source.locator("[data-order-source-click=last]");
+    await expect(last.locator("[data-order-source-channel]")).toHaveText(
+      "google / cpc",
+    );
+    await expect(last).toContainText("Cj0KCQtest");
+    await expect(last).toContainText("/p/blue-mug");
+    const first = source.locator("[data-order-source-click=first]");
+    await expect(first.locator("[data-order-source-channel]")).toHaveText(
+      "lettre / email",
+    );
+    await expect(first).toContainText("rentree");
+
+    // The answer taken back takes what was kept with it: the next order,
+    // though an ad brought it, says nothing.
+    await page.goto(`${SHOP}/cookies`);
+    await page
+      .locator("[data-cookies]")
+      .getByRole("button", { name: "Tout refuser" })
+      .click();
+    await page.goto(`${SHOP}/p/blue-mug?gclid=Cj0KCQagain`);
+    await addToCart(page);
+    await order(false);
+    await expect(page.locator("[data-order-source]")).toHaveCount(0);
+
+    // Measuring allowed, advertising not: the campaign is kept, the click
+    // id is not.
+    await page.goto(`${SHOP}/cookies`);
+    const choices = page.locator("[data-cookies]");
+    await choices.getByRole("checkbox", { name: /Mesure d'audience/ }).check();
+    await choices.getByRole("button", { name: "Enregistrer mes choix" }).click();
+    await page.goto(
+      `${SHOP}/p/blue-mug?gclid=Cj0KCQthird&utm_source=google&utm_medium=cpc`,
+    );
+    await addToCart(page);
+    await order(false);
+    await expect(source).toHaveAttribute("data-order-source", "google / cpc");
+    await expect(source).not.toContainText("Cj0KCQthird");
+    await expect(source.locator("[data-order-source-click=first]")).toHaveCount(0);
+  } finally {
+    await stripe.stop();
+  }
+});
+
 test("a shopper picks a delivery method that ships to their country, and pays for it", async ({
   page,
   request,

@@ -130,6 +130,7 @@ pub fn checkout() -> Checkout {
         language: None,
         newsletter: false,
         time_zone: None,
+        source: None,
     }
 }
 
