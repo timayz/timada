@@ -2,8 +2,10 @@
 //! at `/c/{slug}`, a product at `/p/{slug}`, the cart at `/cart`, the checkout
 //! at `/checkout`, a placed order at `/orders/{order_id}`, the shopper's
 //! account at `/account`, the support page at `/support-client`, the shop's
-//! own pages at their own addresses (`/mentions-legales`, …), `/robots.txt` and `/sitemap.xml` for search engines, and the library's `/store/status`. One stylesheet
-//! (`theme.css`) inlined in every page, layout only, and no asset bundle.
+//! own pages at their own addresses (`/mentions-legales`, …), the cookie
+//! banner's choices at `/cookies`, `/robots.txt` and `/sitemap.xml` for search
+//! engines, and the library's `/store/status`. One stylesheet (`theme.css`)
+//! inlined in every page, layout only, and no asset bundle.
 
 pub mod account;
 pub mod boutique;
@@ -11,6 +13,7 @@ pub mod c;
 pub mod cart;
 pub mod checkout;
 pub mod conditions_generales_de_vente;
+pub mod cookies;
 pub mod emails;
 pub mod filters;
 pub mod indisponible;
@@ -32,9 +35,9 @@ pub mod support_client;
 pub mod topbar;
 
 use timada_storefront::{
-    CategoryNode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt, SocialCard, Store,
-    TIME_ZONE_SCRIPT, absolute_url, is_store_unavailable, json_ld, menu, organization_ld,
-    product_image, products, recent_reviews, website_ld,
+    CategoryNode, ConsentMode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt,
+    SocialCard, Store, TIME_ZONE_SCRIPT, absolute_url, consent_script, is_store_unavailable,
+    json_ld, menu, organization_ld, product_image, products, recent_reviews, website_ld,
 };
 use topcoat::{
     Result,
@@ -49,6 +52,7 @@ use topcoat::{
 
 use crate::shopper::accounts_enabled;
 use cart::drawer::{CART_SCRIPT, DRAWER_CSS, cart_drawer};
+use cookies::consent_banner;
 use indisponible::{StoreAway, UnavailablePage};
 use menu::{MENU_CSS, MENU_SCRIPT, site_menu};
 use search::{SEARCH_CSS, SEARCH_SCRIPT};
@@ -63,6 +67,12 @@ pub const SHOP_NAME: &str = "Ma boutique";
 const TAGLINE: &str = "Le slogan de votre boutique";
 /// The address the support page and the footer name.
 pub const CONTACT_EMAIL: &str = "contact@example.com";
+
+/// What the shop's tags do before a visitor answers the cookie banner:
+/// nothing at all ([`ConsentMode::Basic`]), or load with consent denied and
+/// send Google pings without cookies, which it models conversions from
+/// ([`ConsentMode::Advanced`]).
+pub const CONSENT_MODE: ConsentMode = ConsentMode::Basic;
 
 /// The layout, inlined in every page. Add your look to this sheet.
 const THEME_CSS: &str = include_str!("theme.css");
@@ -162,6 +172,10 @@ pub async fn document(
     /// What the page shows, as schema.org data.
     #[default]
     structured: &[serde_json::Value],
+    /// Leaves the cookie banner out: the page that asks the same question
+    /// at length.
+    #[default]
+    no_banner: bool,
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
     // The page answering an outage asks the dashboard nothing more; any
@@ -196,6 +210,7 @@ pub async fn document(
     let accounts = accounts_enabled(cx);
     let signed_in = accounts && !away && crate::shopper::signed_in(cx).await.is_some();
     let announcements = timada_storefront::announcements(cx).await?;
+    let consent = crate::shopper::consent(cx);
     let noindex = noindex || sitemap::is_private(original_uri(cx).path());
     let canonical = absolute_url(cx, canonical.unwrap_or(original_uri(cx).path()));
     let card = SocialCard {
@@ -225,6 +240,8 @@ pub async fn document(
                 if noindex {
                     <meta name="robots" content="noindex">
                 }
+                // Before any tag: Google's start from what the visitor allowed.
+                <script>(Unescaped::new_unchecked(consent_script(CONSENT_MODE, consent)))</script>
                 <link rel="canonical" href=(&canonical)>
                 for tag in &card {
                     if tag.property {
@@ -242,6 +259,9 @@ pub async fn document(
                 <style>(Unescaped::new_unchecked(SEARCH_CSS))</style>
             </head>
             <body>
+                if consent.is_none() && !no_banner {
+                    consent_banner()
+                }
                 announcement_bar(announcements: &announcements)
                 <header class="masthead">
                     <div class="wrap">
@@ -308,6 +328,7 @@ pub async fn site_footer(cx: &Cx) -> Result<impl View> {
                         <li><a href=(href!(politique_de_confidentialite::index))>"Politique de confidentialité"</a></li>
                         <li><a href=(href!(politique_de_remboursement::index))>"Politique de remboursement"</a></li>
                         <li><a href=(href!(politique_de_livraison::index))>"Politique de livraison"</a></li>
+                        <li><a href=(href!(cookies::index))>"Gestion des cookies"</a></li>
                     </ul>
                 </div>
                 <div>

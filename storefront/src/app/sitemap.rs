@@ -30,6 +30,7 @@ pub const PRIVATE_PATHS: &[&str] = &[
     "/account",
     "/cart",
     "/checkout",
+    "/cookies",
     "/emails",
     "/indisponible",
     "/newsletter",

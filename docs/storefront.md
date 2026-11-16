@@ -250,6 +250,43 @@ own address, the card, and the data the page hands it:
   price of the thirty days before, so a storefront shows it as it is. The data gives it
   as the offer's `priceSpecification` (`StrikethroughPrice`).
 
+### Cookie consent
+
+Before a tag measures anything, the visitor is asked. The library holds the answer's
+shape and what Google is told of it; the host keeps the cookie, as for every other:
+
+```rust
+use timada_storefront::{CONSENT_COOKIE, CONSENT_MAX_AGE_DAYS, Consent, ConsentMode,
+    consent_script};
+
+let answer: Option<Consent> = cookie(CONSENT_COOKIE).and_then(|v| Consent::parse(&v));
+// first in the <head>, before any tag:
+// <script>{consent_script(ConsentMode::Basic, answer)}</script>
+if ConsentMode::Basic.loads(answer) { /* write the third party's script */ }
+// on the banner's answer: keep Consent::ALL.cookie_value() for CONSENT_MAX_AGE_DAYS
+```
+
+A `Consent` has two purposes, `analytics` and `ads`. `consent_script` sets Consent Mode
+v2's four signals to denied (for every visitor: the page does not know where its reader
+is), then to the answer: `analytics_storage` follows the first purpose, `ad_storage`,
+`ad_user_data` and `ad_personalization` the second. No answer is a refusal. Every tag
+asks the same `Consent`: `ConsentMode::loads` before it writes a third party's script,
+and the purpose it serves before it keeps anything of its own.
+
+A shop picks one of two modes. `ConsentMode::Basic` loads nothing and sends nothing until
+a purpose is allowed. `ConsentMode::Advanced` loads the tags with every signal denied:
+they send pings without cookies, which Google models conversions from, and the script
+adds `url_passthrough` and, while ads are refused, `ads_data_redaction`. Google asks an
+advertiser for the four signals, not for a certified consent platform, so the shop's own
+banner is enough.
+
+The storefront asks at the top of every page until it is answered (`cookies.rs`):
+"Tout refuser" and "Tout accepter" side by side, and "Choisir" for `/cookies`, where each
+purpose has its box and which the footer links to so an answer can be changed. Each is a
+plain form: no script is needed. The answer is kept six months in the `consent` cookie,
+in the clear (`analytics.ads`, `analytics`, `ads` or `none`), and `CONSENT_MODE` in
+`storefront/src/app/mod.rs` picks the mode.
+
 ### An address that moved
 
 A product renamed in the back office moves to the slug of its new name, and a page can
@@ -820,6 +857,8 @@ the old tenant's products. `make reset` removes the copy and the settings with t
 - **Who you are:** `SHOP_NAME`, `TAGLINE` and `CONTACT_EMAIL` at the top of
   `storefront/src/app/mod.rs`. What the top bar says (a promo code, a sale) is written
   in the back office, under Announcements.
+- **What your tags do before a visitor answers the cookie banner:** `CONSENT_MODE`,
+  beside them (see "Cookie consent"). The banner's words are in `cookies.rs`.
 - **Your look:** add it to `storefront/src/app/theme.css`, which holds the layout only
   and is inlined in every page, with the sheets of the cart drawer, the menu and the
   search beside the code they style (`DRAWER_CSS`, `MENU_CSS`, `SEARCH_CSS`). The pages
@@ -857,7 +896,7 @@ finish, then gives the catalog subscription 5 seconds to stop, and exits with co
 
 The browser suite boots it with a key minted in the dashboard on a small catalogue
 made there: `tests/e2e/storefront.spec.ts` walks the home, a category, a product, the
-cart, the search and a shop page, and stops the process; `storefront-shop.spec.ts` checks
+cart, the search and a shop page, answers the cookie banner, and stops the process; `storefront-shop.spec.ts` checks
 the catalogue follows live, then fills a cart, checks out, pays, and uses stock, discount
 codes, delivery methods and checkout offers; `storefront-accounts.spec.ts` reviews what
 it bought, is invoiced at the VAT of where the goods go, and signs a returning shopper in
