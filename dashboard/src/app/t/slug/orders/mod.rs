@@ -3,6 +3,7 @@
 //! move them along on an order's own page. The list comes from the shared
 //! read model (a moment behind), an order's page reads its stream.
 
+pub mod export;
 pub mod order_id;
 
 use timada_core::page::{Cursor, PageFrom};
@@ -24,6 +25,7 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::db::Db;
+use crate::export::export_card;
 use crate::ui::{
     LINK, Shell, Tone, cursor_pager, document, empty_row, filter_bar, format_time, notice,
     page_header, section_card, status_badge,
@@ -181,6 +183,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                 )
                 cursor_pager(summary: &summary, newer: newer, older: older)
+            )
+            export_card(
+                action: href!(export::export, slug: slug.clone()).resolve(cx),
+                description: "The orders placed over some days, one line per item with its price, quantity and kind of goods for VAT; each line says again what is the order's own: who and where it ships to, its discount, shipping, total and refunds, its invoice's number and VAT, and what brought the shopper.",
             )
         )
     })

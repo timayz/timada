@@ -5,6 +5,7 @@
 //! shopper's account.
 
 pub mod delete;
+pub mod export;
 
 use timada_shoppers::{ShopperError, count_shoppers, shoppers_of_tenant};
 use timada_tenancy::{PERMISSION_CUSTOMERS_MANAGE, PERMISSION_CUSTOMERS_READ};
@@ -23,6 +24,7 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::db::Db;
+use crate::export::export_card;
 use crate::ui::{
     LINK, Shell, document, empty_row, format_time, notice, page_header, pager, section_card,
 };
@@ -150,6 +152,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     previous: (page_number > 1).then(|| page_link(page_number - 1)),
                     next: (page_number < pages).then(|| page_link(page_number + 1)),
                 )
+            )
+            export_card(
+                action: href!(export::export, slug: slug.clone()).resolve(cx),
+                description: "The shoppers who first signed in over some days: their address, since when, how many orders were placed with it and how many addresses they saved.",
             )
         )
     })

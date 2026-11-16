@@ -1213,6 +1213,23 @@ test("a sale keeps what it cost and shows in the sales report, by product and by
     await expect(seller).toContainText("6.42 €");
     await expect(page.locator('[data-sales-category=""]')).toContainText("In no category");
 
+    // The order as a file: one line for its one item, with what is the
+    // order's own, and its invoice's number and VAT once it is issued.
+    let csv = "";
+    await expect(async () => {
+      csv = await (await page.request.get(`/t/${slug}/orders/export`)).text();
+      expect(csv).toMatch(/,F[^,]*-\d{6},2\.08,/);
+    }).toPass({ timeout: 15_000 });
+    const lines = csv.trimEnd().split("\r\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[1].startsWith(`${reference},`)).toBe(true);
+    expect(lines[0]).toContain("reference,placed_at,status");
+    expect(lines[1]).toContain(",EUR,Blue Mug,,,1,12.50,12.50,standard,,0.00,,0.00,12.50,0.00,");
+    expect(lines[1]).toContain(",lettre / email,lettre / email,");
+    // A file of other days has none of it.
+    const other = await page.request.get(`/t/${slug}/orders/export?from=2020-01-01&to=2020-01-31`);
+    expect((await other.text()).trimEnd().split("\r\n")).toHaveLength(1);
+
     // A period before the shop sold anything is empty; the last week is not.
     await page.getByLabel("From", { exact: true }).fill("2020-01-01");
     await page.getByLabel("To", { exact: true }).fill("2020-01-31");

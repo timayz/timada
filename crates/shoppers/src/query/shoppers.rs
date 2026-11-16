@@ -48,3 +48,25 @@ pub const SHOPPERS: Tally = Tally {
     name: "shoppers",
     counted: "SELECT count(*) FROM shoppers_shoppers WHERE tenant_id = ?1 AND id = ?2",
 };
+
+/// The next `limit` shoppers of a tenant who first signed in from `from`
+/// (Unix seconds, included) to `to` (excluded), after the shopper `after`,
+/// in id order: what an export walks, a page at a time off the table's key.
+pub async fn shoppers_page(
+    db: &Db,
+    tenant_id: &str,
+    (from, to): (i64, i64),
+    after: Option<&str>,
+    limit: i64,
+) -> anyhow::Result<Vec<ShopperRow>> {
+    db.fetch_all(
+        "SELECT s.id, s.email, s.registered_at, s.address_count,
+            (SELECT COUNT(*) FROM orders_orders o
+             WHERE o.tenant_id = s.tenant_id AND o.email = s.email) AS order_count
+         FROM shoppers_shoppers s
+         WHERE s.tenant_id = ?1 AND s.id > ?2 AND s.registered_at >= ?3 AND s.registered_at < ?4
+         ORDER BY s.id LIMIT ?5",
+        (tenant_id, after.unwrap_or(""), from, to, limit),
+    )
+    .await
+}
