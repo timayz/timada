@@ -391,6 +391,17 @@ pub fn sale_costs_id() -> String {
     evento::hash_ids(vec!["sale-costs"])
 }
 
+/// How many products a ranking of best sellers names: the first pages of
+/// a listing; the others follow, the newest first.
+pub const MAX_BEST_SELLERS: usize = 100;
+
+/// The stream of the shop's best sellers for the calendar month `at` (unix
+/// seconds) falls in.
+pub fn best_sellers_id(at: u64) -> String {
+    let (year, month, _) = timada_core::civil::civil_date(at);
+    evento::hash_ids(vec!["best-sellers", &format!("{year}-{month:02}")])
+}
+
 /// The stream of the shop's default delivery time: one per tenant store.
 pub fn delivery_default_id() -> String {
     evento::hash_ids(vec!["delivery-default"])

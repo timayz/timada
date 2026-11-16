@@ -1157,12 +1157,24 @@ test("a sale keeps what it cost and shows in the sales report, by product and by
     await registerWithEmail(page, uniqueEmail("merchant"));
     const { name, slug } = uniqueTenant("Report Shop");
     await createTenant(page, name);
-    const mugUrl = await publishProduct(page, slug, "Blue Mug", "12.50");
+    await page.goto(`/t/${slug}/categories`);
+    await page.getByLabel("Name").fill("Mugs");
+    await page.getByRole("button", { name: "Create category" }).click();
+    await expect(page.getByRole("status")).toContainText("Category created.");
+    const mugUrl = await publishProduct(page, slug, "Blue Mug", "12.50", "Mugs");
+    await publishProduct(page, slug, "Red Mug", "14.50", "Mugs");
     await setLegalIdentity(page, slug);
     const webhookUrl = await connectStripe(page, slug);
-    await app.start(request, await mintKey(page, slug, true), 1);
+    await app.start(request, await mintKey(page, slug, true), 2);
 
-    // Nothing sold yet.
+    // Nothing sold yet: the category lists the newest first.
+    const listed = async () =>
+      page.locator("ul.catalog > li[data-product]").evaluateAll((cards) =>
+        cards.map((card) => card.getAttribute("data-product")),
+      );
+    await page.goto(`${SHOP}/c/mugs`);
+    expect(await listed()).toEqual(["red-mug", "blue-mug"]);
+
     await page.goto(`/t/${slug}/orders`);
     await page.getByRole("link", { name: "Sales report", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/t/${slug}/sales$`));
@@ -1180,7 +1192,13 @@ test("a sale keeps what it cost and shows in the sales report, by product and by
       .locator("[data-consent]")
       .getByRole("button", { name: "Tout accepter" })
       .click();
-    await addToCart(page);
+    // The product's own button: the other mug, shown beside it, has one too.
+    await page
+      .locator("form")
+      .filter({ hasText: "Quantité" })
+      .getByRole("button", { name: "Ajouter au panier" })
+      .click();
+    await expect(page.locator("[data-cart-drawer].open .drawer-panel")).toBeVisible();
     await placeOrder(page, SHOP, true);
     await confirmPayment(page, request, SHOP, stripe, webhookUrl);
     const reference =
@@ -1211,7 +1229,19 @@ test("a sale keeps what it cost and shows in the sales report, by product and by
     const seller = page.locator('[data-sales-product="Blue Mug"]');
     await expect(seller.locator("[data-sales-quantity]")).toHaveText("1");
     await expect(seller).toContainText("6.42 €");
-    await expect(page.locator('[data-sales-category=""]')).toContainText("In no category");
+    await expect(page.locator('[data-sales-category="Mugs"]')).toContainText("12.50 €");
+
+    // What sold comes first in its category, on the storefront: the
+    // ranking follows the sale, the newest first again when asked.
+    await expect(async () => {
+      await page.goto(`${SHOP}/c/mugs`);
+      expect(await listed()).toEqual(["blue-mug", "red-mug"]);
+    }).toPass({ timeout: 20_000 });
+    await expect(page.locator("[data-sort]")).toHaveValue("best_selling");
+    await expect(page.locator('meta[name="robots"]')).toHaveCount(0);
+    await page.goto(`${SHOP}/c/mugs?sort=newest`);
+    expect(await listed()).toEqual(["red-mug", "blue-mug"]);
+    await page.goto(`/t/${slug}/sales`);
 
     // The order as a file: one line for its one item, with what is the
     // order's own, and its invoice's number and VAT once it is issued.

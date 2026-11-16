@@ -357,6 +357,22 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.carts.check_secs.max(1),
     ));
 
+    // Each shop's best sellers are ranked from its sales, for its
+    // storefront to sort by, each node ranking its own part of the shops.
+    let live = cluster.clone();
+    let best_sellers = crate::best_sellers::BestSellers::new(
+        db.clone(),
+        local.0.clone(),
+        Arc::new(move || {
+            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, cluster::Among::All);
+            timada_core::Share { index, of }
+        }),
+        config.best_sellers.period(),
+    )
+    .start(std::time::Duration::from_secs(
+        config.best_sellers.check_secs.max(1),
+    ));
+
     // A campaign a merchant sent goes out from every node, each mailing its
     // own part of the subscribers, a lane per shop.
     let live = cluster.clone();
@@ -459,6 +475,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     unanswered_checkouts.abort();
     hold_reminders.abort();
     idle_carts.abort();
+    best_sellers.abort();
     newsletter_sends.abort();
     automation_runs.abort();
     aliexpress_sync.abort();
