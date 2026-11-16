@@ -1,7 +1,7 @@
 use evento::{Executor, ProjectionAggregate, metadata::Event};
 
 use crate::aggregator::{
-    ConversionRefused, ConversionsTokenRemoved, ConversionsTokenSet, MetaPixelSet,
+    ConversionRefused, ConversionsTokenRemoved, ConversionsTokenSet, MetaPixelSet, MetaSaleValueSet,
 };
 use crate::error::PageError;
 use crate::value_object::{MAX_META_REASON_LEN, meta_pixel_id, normalize_meta_pixel_id};
@@ -32,6 +32,8 @@ pub struct MetaPixelState {
     /// Why Meta refused the last sale sent under the token, when it did
     /// since the pixel or the token last changed.
     pub refusal: Option<String>,
+    /// A sale is worth its profit to Meta, not its total.
+    pub profit_as_value: bool,
 }
 
 pub fn meta_pixel_projection<E: Executor>() -> evento::Projection<E, MetaPixelState> {
@@ -40,6 +42,7 @@ pub fn meta_pixel_projection<E: Executor>() -> evento::Projection<E, MetaPixelSt
         .handler(on_conversions_token_set())
         .handler(on_conversions_token_removed())
         .handler(on_conversion_refused())
+        .handler(on_meta_sale_value_set())
         .strict()
 }
 
@@ -86,6 +89,15 @@ async fn on_conversion_refused(
     Ok(())
 }
 
+#[evento::handler]
+async fn on_meta_sale_value_set(
+    event: Event<MetaSaleValueSet>,
+    state: &mut MetaPixelState,
+) -> anyhow::Result<()> {
+    state.profit_as_value = event.data.profit;
+    Ok(())
+}
+
 impl<E: Executor> super::Command<E> {
     /// The shop's Meta pixel; `None` before it is first set.
     pub async fn load_meta_pixel(&self) -> anyhow::Result<Option<MetaPixelState>> {
@@ -102,13 +114,16 @@ impl<E: Executor> super::Command<E> {
     /// Sets the storefront's Meta pixel to `pixel_id` (checked for its
     /// shape only: it is written into the storefront's pages), and changes
     /// the Conversions API token as `token` says. An id left empty takes
-    /// the pixel off, and the token with it; a token needs a pixel. What
-    /// changes nothing writes nothing.
+    /// the pixel off, and the token with it; a token needs a pixel.
+    /// `profit_as_value` says what a sale is worth to Meta from now on, its
+    /// profit or its total; it stays as it was while there is no pixel.
+    /// What changes nothing writes nothing.
     pub async fn set_meta_pixel(
         &self,
         actor: &str,
         pixel_id: Option<&str>,
         token: TokenChange,
+        profit_as_value: bool,
         routing_key: Option<String>,
     ) -> Result<(), PageError> {
         let pixel_id = normalize_meta_pixel_id(pixel_id)?;
@@ -124,7 +139,12 @@ impl<E: Executor> super::Command<E> {
             (token, Some(_)) => token,
         };
         let was = state.as_ref().and_then(|state| state.pixel_id.clone());
-        if was == pixel_id && token == TokenChange::Keep {
+        let valued = state.as_ref().is_some_and(|state| state.profit_as_value);
+        let profit_as_value = match &pixel_id {
+            Some(_) => profit_as_value,
+            None => valued,
+        };
+        if was == pixel_id && token == TokenChange::Keep && valued == profit_as_value {
             return Ok(());
         }
         let mut write = match &state {
@@ -155,6 +175,12 @@ impl<E: Executor> super::Command<E> {
                     removed_by: actor.to_owned(),
                 });
             }
+        }
+        if valued != profit_as_value {
+            write.event(&MetaSaleValueSet {
+                profit: profit_as_value,
+                set_by: actor.to_owned(),
+            });
         }
         write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(())

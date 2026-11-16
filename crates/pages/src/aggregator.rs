@@ -154,6 +154,10 @@ pub enum GoogleTag {
         enhanced_conversions: bool,
         set_by: String,
     },
+    /// What a sale is worth to Google Ads from now on: its profit
+    /// (`profit`), so the shop bids on what a sale leaves it, or its total.
+    /// The total until this is first written.
+    GoogleSaleValueSet { profit: bool, set_by: String },
 }
 
 /// The shop's Meta pixel: one stream per shop, with the id
@@ -186,6 +190,10 @@ pub enum MetaPixel {
         reason: String,
         refused_by: String,
     },
+    /// What a sale is worth to Meta from now on, from the browser and from
+    /// the server alike: its profit (`profit`) or its total. The total
+    /// until this is first written.
+    MetaSaleValueSet { profit: bool, set_by: String },
 }
 
 /// The pop-up that invites a visitor of the storefront to its newsletter:

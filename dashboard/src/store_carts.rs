@@ -28,7 +28,8 @@ use serde_json::{Value, json};
 use timada_invoicing::IssuedDocument;
 use timada_orders::wire::{CartAnswer, Refusal, RequestAnswer, Started};
 use timada_orders::{
-    CartItem, CatalogReadModel, Checkout, Command, OrderError, STOREFRONT_ACTOR, StoreCatalog,
+    CartItem, CatalogReadModel, Checkout, Command, OrderError, OrderState, STOREFRONT_ACTOR,
+    StoreCatalog,
 };
 use topcoat::router::StatusCode;
 
@@ -291,7 +292,7 @@ pub async fn order_of_cart(
     )
     .await?;
     match order {
-        Some(order) => ok(&order),
+        Some(order) => ok(&told(orders, local, order).await?),
         None => Ok(not_found("order_not_found")),
     }
 }
@@ -300,11 +301,41 @@ pub async fn order_of_cart(
 /// cluster: the storefront sends the shopper back to their order once they
 /// cancelled it, whichever node took the cancellation, and the order must
 /// show it.
-pub async fn order(orders: &Command<Executor>, order_id: &str) -> anyhow::Result<Answer> {
+pub async fn order(
+    orders: &Command<Executor>,
+    local: &LocalReads,
+    order_id: &str,
+) -> anyhow::Result<Answer> {
     match orders.load_order(order_id).await? {
-        Some(order) => ok(&order),
+        Some(order) => ok(&told(orders, local, order).await?),
         None => Ok(not_found("order_not_found")),
     }
+}
+
+/// The order as a storefront is told it. What it cost the shop stays here
+/// (`#[serde(skip)]` on the state); what it left travels, as one number,
+/// only for a shop that sends Google Ads or Meta its profit as the value of
+/// a sale (#622): the storefront's page has to write that value. The shop's
+/// choice is the merchant's own setting, read from this node's file
+/// (`local`), and only for an order that has a profit to tell.
+async fn told(
+    orders: &Command<Executor>,
+    local: &LocalReads,
+    mut order: OrderState,
+) -> anyhow::Result<OrderState> {
+    let Some(profit) = order.profit_cents() else {
+        return Ok(order);
+    };
+    let pages = timada_pages::Command::new(local.0.clone(), orders.tenant());
+    let chosen = pages.google_tag().await?.profit_as_value
+        || pages
+            .load_meta_pixel()
+            .await?
+            .is_some_and(|pixel| pixel.pixel_id.is_some() && pixel.profit_as_value);
+    if chosen {
+        order.conversion_profit_cents = Some(profit);
+    }
+    Ok(order)
 }
 
 /// `GET /store/orders/{order_id}/parcels`: where the order's parcels are, as

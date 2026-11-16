@@ -25,6 +25,8 @@ pub struct MetaPixelForm {
     token: String,
     #[serde(default)]
     remove_token: String,
+    #[serde(default)]
+    profit_as_value: String,
 }
 
 /// Whether `token` looks like an access token: what Meta generates is
@@ -65,7 +67,12 @@ pub async fn set(cx: &Cx, Form(form): Form<MetaPixelForm>) -> Result<SeeOther> {
     };
     let off = form.pixel_id.trim().is_empty();
     let set = pages(&access)?
-        .set_meta_pixel(&access.user_id, Some(&form.pixel_id), change)
+        .set_meta_pixel(
+            &access.user_id,
+            Some(&form.pixel_id),
+            change,
+            !form.profit_as_value.is_empty(),
+        )
         .await;
     match set {
         Ok(()) if off => Ok(see_other(meta_pixel_url(

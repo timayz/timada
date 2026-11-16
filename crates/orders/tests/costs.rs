@@ -212,3 +212,39 @@ fn the_border_and_the_carrier_charge_by_product() {
         None
     );
 }
+
+#[test]
+fn a_sale_is_worth_its_profit_to_a_shop_that_bids_on_it_and_its_total_otherwise() {
+    let order = |unit_cost: Option<u64>| timada_orders::OrderState {
+        lines: vec![line("mug", 2)],
+        total_cents: 2_500,
+        costs: Some(OrderCosts {
+            unit_costs: vec![unit_cost],
+            vat_cents: 417,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let sold = order(Some(400));
+    assert_eq!(sold.profit_cents(), Some(2_500 - 800 - 417));
+    assert_eq!(sold.conversion_value_cents(false), 2_500);
+    assert_eq!(sold.conversion_value_cents(true), 1_283);
+    // A line with no cost: the profit is not known, the total stands.
+    assert_eq!(order(None).conversion_value_cents(true), 2_500);
+    // Sold at a loss: worth nothing, never less.
+    assert_eq!(order(Some(2_000)).conversion_value_cents(true), 0);
+    // A storefront has no costs, only the profit the store API told it.
+    let told = timada_orders::OrderState {
+        total_cents: 2_500,
+        conversion_profit_cents: Some(1_283),
+        ..Default::default()
+    };
+    assert_eq!(told.conversion_value_cents(true), 1_283);
+    assert_eq!(told.conversion_value_cents(false), 2_500);
+    // And it travels only when there is one to tell.
+    let json = serde_json::to_value(&told).unwrap();
+    assert_eq!(json["conversion_profit_cents"], 1_283);
+    let json = serde_json::to_value(&sold).unwrap();
+    assert!(json.get("conversion_profit_cents").is_none());
+    assert!(json.get("costs").is_none());
+}

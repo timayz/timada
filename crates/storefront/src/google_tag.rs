@@ -18,7 +18,10 @@
 //! a page to show a part of it (a cart drawer) hands the fetched document
 //! to `timadaTag(…)`, so the events that page carried are sent all the same.
 //!
-//! The value of a sale is the order's total, as the shopper paid it.
+//! The value of a sale is the order's total, as the shopper paid it; to
+//! Google Ads it is the sale's profit instead for a shop that chose so
+//! ([`GoogleTagSettings::profit_as_value`]), which the store API then tells
+//! with the order.
 
 use evento::{Executor, metadata::RawEvent, subscription::Context};
 use serde_json::{Map, Value, json};
@@ -43,6 +46,7 @@ struct TagRow {
     add_to_cart_label: Option<String>,
     begin_checkout_label: Option<String>,
     enhanced_conversions: i64,
+    profit_as_value: i64,
 }
 
 /// The tag as the copy holds it; `None` for a shop that set none up.
@@ -50,7 +54,7 @@ pub async fn google_tag_settings(db: &Db) -> anyhow::Result<Option<GoogleTagSett
     let row: Option<TagRow> = db
         .fetch_optional(
             "SELECT analytics_id, ads_id, purchase_label, add_to_cart_label,
-                begin_checkout_label, enhanced_conversions
+                begin_checkout_label, enhanced_conversions, profit_as_value
              FROM storefront_google_tag WHERE id = 1",
             (),
         )
@@ -63,6 +67,7 @@ pub async fn google_tag_settings(db: &Db) -> anyhow::Result<Option<GoogleTagSett
             add_to_cart_label: row.add_to_cart_label,
             begin_checkout_label: row.begin_checkout_label,
             enhanced_conversions: row.enhanced_conversions != 0,
+            profit_as_value: row.profit_as_value != 0,
         })
         .filter(GoogleTagSettings::is_set))
 }
@@ -89,14 +94,15 @@ pub(crate) async fn on_google_tag_event<E: Executor>(
         .unwrap_or_default();
     db.execute(
         "INSERT INTO storefront_google_tag (id, analytics_id, ads_id, purchase_label,
-            add_to_cart_label, begin_checkout_label, enhanced_conversions)
-         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)
+            add_to_cart_label, begin_checkout_label, enhanced_conversions, profit_as_value)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT (id) DO UPDATE SET
             analytics_id = excluded.analytics_id, ads_id = excluded.ads_id,
             purchase_label = excluded.purchase_label,
             add_to_cart_label = excluded.add_to_cart_label,
             begin_checkout_label = excluded.begin_checkout_label,
-            enhanced_conversions = excluded.enhanced_conversions",
+            enhanced_conversions = excluded.enhanced_conversions,
+            profit_as_value = excluded.profit_as_value",
         (
             tag.analytics_id.as_deref(),
             tag.ads_id.as_deref(),
@@ -104,6 +110,7 @@ pub(crate) async fn on_google_tag_event<E: Executor>(
             tag.add_to_cart_label.as_deref(),
             tag.begin_checkout_label.as_deref(),
             i64::from(tag.enhanced_conversions),
+            i64::from(tag.profit_as_value),
         ),
     )
     .await?;
@@ -308,7 +315,10 @@ pub fn order_items(order: &OrderState) -> Vec<TagItem> {
 /// What the order's confirmation page sends, once per order (the host
 /// sees to that): the primary conversion `purchase`, with the order's
 /// total as its value, its currency, its lines, and its id as the
-/// transaction id, which lets Google drop a repeat.
+/// transaction id, which lets Google drop a repeat. The Google Ads
+/// conversion is worth the sale's profit instead for a shop that bids on
+/// profit ([`OrderState::conversion_value_cents`]); Analytics, which
+/// reports revenue, is told the total either way.
 ///
 /// With enhanced conversions on and advertising allowed (`answer`), the
 /// buyer's data goes first: see [`user_data`].
@@ -337,6 +347,14 @@ pub fn purchase_events(
     );
     let enhanced =
         tag.enhanced_conversions && tag.ads_id.is_some() && answer.is_some_and(|c| c.ads);
+    if tag.profit_as_value {
+        let worth = amount(order.conversion_value_cents(true));
+        for sent in &mut sale {
+            if sent[1] == "conversion" {
+                sent[2]["value"] = worth.clone();
+            }
+        }
+    }
     if enhanced && !sale.is_empty() {
         sale.insert(
             0,
@@ -419,6 +437,7 @@ mod tests {
             add_to_cart_label: None,
             begin_checkout_label: Some("ChEcK".into()),
             enhanced_conversions: true,
+            profit_as_value: false,
         }
     }
 
@@ -519,6 +538,49 @@ mod tests {
             ..tag()
         };
         assert!(add_to_cart_events(&ads_only, "EUR", &[mug()]).is_empty());
+    }
+
+    #[test]
+    fn a_sale_is_worth_its_profit_to_google_ads_when_the_shop_chose_so() {
+        let order = |profit: Option<i64>| OrderState {
+            id: "order-1".into(),
+            currency: "EUR".into(),
+            total_cents: 2990,
+            conversion_profit_cents: profit,
+            ..Default::default()
+        };
+        let values = |tag: &GoogleTagSettings, order: &OrderState| {
+            let sale = purchase_events(tag, order, None);
+            assert_eq!(
+                (&sale[0][1], &sale[1][1]),
+                (&json!("purchase"), &json!("conversion"))
+            );
+            (sale[0][2]["value"].clone(), sale[1][2]["value"].clone())
+        };
+        let bids_on_profit = GoogleTagSettings {
+            profit_as_value: true,
+            ..tag()
+        };
+        // Analytics reports revenue: the total either way.
+        assert_eq!(
+            values(&bids_on_profit, &order(Some(1042))),
+            (json!(29.9), json!(10.42))
+        );
+        // No profit told (a line with no cost): the total.
+        assert_eq!(
+            values(&bids_on_profit, &order(None)),
+            (json!(29.9), json!(29.9))
+        );
+        // Sold at a loss: nothing.
+        assert_eq!(
+            values(&bids_on_profit, &order(Some(-300))),
+            (json!(29.9), json!(0.0))
+        );
+        // A shop that did not choose it sends the total, whatever it was told.
+        assert_eq!(
+            values(&tag(), &order(Some(1042))),
+            (json!(29.9), json!(29.9))
+        );
     }
 
     #[test]

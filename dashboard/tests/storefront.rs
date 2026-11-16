@@ -2787,7 +2787,7 @@ async fn dispatch(
         ("GET", ["store", "carts", id, "order"]) => {
             store_carts::order_of_cart(orders, local, id).await?
         }
-        ("GET", ["store", "orders", id]) => store_carts::order(orders, id).await?,
+        ("GET", ["store", "orders", id]) => store_carts::order(orders, local, id).await?,
         ("GET", ["store", "orders", id, "documents"]) => {
             store_carts::documents(orders, local, id).await?
         }
@@ -2883,12 +2883,18 @@ async fn the_dashboard_answers_for_one_cart_or_order_of_the_key_tenant() {
     // An order Acme placed: Acme's storefront reads it by its id or its
     // cart's, Globex's is told there is none.
     paid_order(&h.platform.0, &acme.id, "order-1", &[(&mug.id, "Blue Mug")]).await;
-    let (status, answer) = store_carts::order(&acme_orders, "order-1").await.unwrap();
+    let (status, answer) = store_carts::order(&acme_orders, &h.local, "order-1")
+        .await
+        .unwrap();
     assert_eq!(status, StatusCode::OK);
     assert_eq!(answer["reference"], json!("ABCD-EFGH"));
     for (status, answer) in [
-        store_carts::order(&globex_orders, "order-1").await.unwrap(),
-        store_carts::order(&acme_orders, "order-2").await.unwrap(),
+        store_carts::order(&globex_orders, &h.local, "order-1")
+            .await
+            .unwrap(),
+        store_carts::order(&acme_orders, &h.local, "order-2")
+            .await
+            .unwrap(),
         store_carts::order_of_cart(&acme_orders, &h.local, &cart_id)
             .await
             .unwrap(),
@@ -2904,6 +2910,66 @@ async fn the_dashboard_answers_for_one_cart_or_order_of_the_key_tenant() {
             )
         );
     }
+
+    // What the order cost Acme stays with Acme, and so does what it left,
+    // until Acme sends an ad platform its profit as the value of a sale:
+    // then that one number travels, for the order's page to write (#622).
+    let order = acme_orders.load_order("order-1").await.unwrap().unwrap();
+    evento::ProjectionAggregate::write(&order)
+        .unwrap()
+        .event(&timada_orders::aggregator::CostsKept {
+            costs: timada_orders::OrderCosts {
+                unit_costs: vec![Some(400)],
+                vat_cents: 167,
+                ..Default::default()
+            },
+            kept_by: "storefront".into(),
+        })
+        .tenant(&acme.id)
+        .commit(&h.platform.0)
+        .await
+        .unwrap();
+    let told = || async {
+        let (status, answer) = store_carts::order(&acme_orders, &h.local, "order-1")
+            .await
+            .unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert!(answer.get("costs").is_none(), "{answer}");
+        answer.get("conversion_profit_cents").cloned()
+    };
+    assert_eq!(told().await, None);
+    let pages = timada_pages::Command::new(h.platform.0.clone(), &acme.id);
+    let tag = timada_pages::GoogleTagSettings {
+        ads_id: Some("AW-123456789".into()),
+        purchase_label: Some("SaLe".into()),
+        ..Default::default()
+    };
+    pages.set_google_tag("alice", tag.clone()).await.unwrap();
+    assert_eq!(told().await, None);
+    pages
+        .set_google_tag(
+            "alice",
+            timada_pages::GoogleTagSettings {
+                profit_as_value: true,
+                ..tag.clone()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(told().await, Some(json!(1000 - 400 - 167)));
+    // Back to the total for Google; Meta's pixel chooses for itself.
+    pages.set_google_tag("alice", tag).await.unwrap();
+    assert_eq!(told().await, None);
+    pages
+        .set_meta_pixel(
+            "alice",
+            Some("123456"),
+            timada_pages::TokenChange::Keep,
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(told().await, Some(json!(433)));
     h.finish().await;
 }
 

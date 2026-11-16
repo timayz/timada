@@ -48,6 +48,26 @@ pub async fn meta_pixel_setting(db: &Db) -> anyhow::Result<Option<String>> {
     Ok(row.and_then(|(pixel_id,)| pixel_id))
 }
 
+/// Whether a sale is worth its profit to Meta, as the copy holds the
+/// shop's choice: its total otherwise.
+pub async fn meta_profit_as_value_setting(db: &Db) -> anyhow::Result<bool> {
+    let row: Option<(i64,)> = db
+        .fetch_optional(
+            "SELECT profit_as_value FROM storefront_meta_pixel WHERE id = 1",
+            (),
+        )
+        .await?;
+    Ok(row.is_some_and(|(profit,)| profit != 0))
+}
+
+/// Whether the shop's pixel tells a sale's profit as its value; see
+/// [`pixel_purchase_event`].
+pub async fn meta_profit_as_value(cx: &Cx) -> Result<bool> {
+    meta_profit_as_value_setting(store(cx).db())
+        .await
+        .map_err(Error::from_anyhow)
+}
+
 /// The shop's Meta pixel id, when it set one up; see the module docs.
 pub async fn meta_pixel(cx: &Cx) -> Result<Option<String>> {
     meta_pixel_setting(store(cx).db())
@@ -62,15 +82,17 @@ pub(crate) async fn on_meta_pixel_event<E: Executor>(
     event: RawEvent<MetaPixel>,
 ) -> anyhow::Result<()> {
     let db: Db = context.extract();
-    let pixel_id = meta_pixel_projection()
+    let pixel = meta_pixel_projection()
         .load(&event.aggregate_id)
         .execute(context.executor)
-        .await?
-        .and_then(|state| state.pixel_id);
+        .await?;
+    let pixel_id = pixel.as_ref().and_then(|state| state.pixel_id.as_deref());
+    let profit_as_value = pixel.as_ref().is_some_and(|state| state.profit_as_value);
     db.execute(
-        "INSERT INTO storefront_meta_pixel (id, pixel_id) VALUES (1, ?1)
-         ON CONFLICT (id) DO UPDATE SET pixel_id = excluded.pixel_id",
-        (pixel_id.as_deref(),),
+        "INSERT INTO storefront_meta_pixel (id, pixel_id, profit_as_value) VALUES (1, ?1, ?2)
+         ON CONFLICT (id) DO UPDATE SET pixel_id = excluded.pixel_id,
+            profit_as_value = excluded.profit_as_value",
+        (pixel_id, i64::from(profit_as_value)),
     )
     .await?;
     Ok(())
@@ -197,15 +219,17 @@ pub fn initiate_checkout_event(
 }
 
 /// `Purchase`: what the order's confirmation page sends, once per order
-/// (the host sees to that), with the order's total as its value and the
-/// order's id as the event's, under which the dashboard tells Meta the
-/// same sale from the server.
-pub fn pixel_purchase_event(order: &OrderState) -> Value {
+/// (the host sees to that), with the order's total as its value, or its
+/// profit for a shop that bids on profit (`profit`,
+/// [`OrderState::conversion_value_cents`]), and the order's id as the
+/// event's, under which the dashboard tells Meta the same sale from the
+/// server, worth the same.
+pub fn pixel_purchase_event(order: &OrderState, profit: bool) -> Value {
     let items = order_items(order);
     let mut params = Map::new();
     contents(&mut params, &items);
     params.insert("num_items".into(), json!(count_of(&items)));
-    params.insert("value".into(), amount(order.total_cents));
+    params.insert("value".into(), amount(order.conversion_value_cents(profit)));
     params.insert("currency".into(), json!(order.currency));
     params.insert("order_id".into(), json!(order.reference));
     track("Purchase", params, &order.id)
@@ -321,12 +345,22 @@ mod tests {
             currency: "EUR".into(),
             ..Default::default()
         };
-        let sale = pixel_purchase_event(&order);
+        let sale = pixel_purchase_event(&order, false);
         assert_eq!(sale[1], "Purchase");
         assert_eq!(sale[2]["value"], 29.9);
         assert_eq!(sale[2]["currency"], "EUR");
         assert_eq!(sale[2]["order_id"], "A-1001");
         assert_eq!(sale[3]["eventID"], "order-1");
+
+        // A shop that bids on profit: what the store API told the sale left,
+        // or the total when it told none.
+        assert_eq!(pixel_purchase_event(&order, true)[2]["value"], 29.9);
+        let order = OrderState {
+            conversion_profit_cents: Some(1042),
+            ..order
+        };
+        assert_eq!(pixel_purchase_event(&order, true)[2]["value"], 10.42);
+        assert_eq!(pixel_purchase_event(&order, false)[2]["value"], 29.9);
     }
 
     #[test]

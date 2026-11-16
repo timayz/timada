@@ -30,6 +30,8 @@ pub struct GoogleTagForm {
     begin_checkout_label: String,
     #[serde(default)]
     enhanced_conversions: String,
+    #[serde(default)]
+    profit_as_value: String,
 }
 
 /// Sets the tag up as the form says and lands back on the page.
@@ -47,6 +49,7 @@ pub async fn set(cx: &Cx, Form(form): Form<GoogleTagForm>) -> Result<SeeOther> {
         add_to_cart_label: Some(form.add_to_cart_label),
         begin_checkout_label: Some(form.begin_checkout_label),
         enhanced_conversions: !form.enhanced_conversions.is_empty(),
+        profit_as_value: !form.profit_as_value.is_empty(),
     };
     let off = !settings
         .analytics_id
