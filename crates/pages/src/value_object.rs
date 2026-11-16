@@ -163,3 +163,80 @@ pub fn normalize_redirect_to(to: &str) -> Result<String, PageError> {
     }
     Ok(to.to_owned())
 }
+
+/// The longest Google tag id or conversion label.
+pub const MAX_GOOGLE_ID_LEN: usize = 40;
+
+/// The stream of the shop's Google tag: one per tenant store.
+pub fn google_tag_id() -> String {
+    evento::hash_ids(vec!["google-tag"])
+}
+
+/// `text` trimmed, when something is left.
+fn given(text: Option<&str>) -> Option<&str> {
+    text.map(str::trim).filter(|text| !text.is_empty())
+}
+
+/// Whether `id` is `<prefix>-` then letters and digits. The ids go into
+/// the storefront's scripts, so nothing else passes.
+fn is_google_id(id: &str, prefixes: &[&str]) -> bool {
+    id.len() <= MAX_GOOGLE_ID_LEN
+        && prefixes.iter().any(|prefix| {
+            id.strip_prefix(prefix)
+                .and_then(|rest| rest.strip_prefix('-'))
+                .is_some_and(|rest| {
+                    rest.len() >= 4 && rest.bytes().all(|b| b.is_ascii_alphanumeric())
+                })
+        })
+}
+
+/// A Google Analytics measurement id (`G-XXXXXXXXXX`) or a combined Google
+/// tag's (`GT-…`), uppercase; nothing when left empty.
+pub fn normalize_analytics_id(id: Option<&str>) -> Result<Option<String>, PageError> {
+    let Some(id) = given(id) else {
+        return Ok(None);
+    };
+    let id = id.to_ascii_uppercase();
+    if is_google_id(&id, &["G", "GT"]) {
+        Ok(Some(id))
+    } else {
+        Err(PageError::InvalidGoogleTagId)
+    }
+}
+
+/// A Google Ads conversion id (`AW-123456789`); nothing when left empty.
+pub fn normalize_ads_id(id: Option<&str>) -> Result<Option<String>, PageError> {
+    let Some(id) = given(id) else {
+        return Ok(None);
+    };
+    let id = id.to_ascii_uppercase();
+    let digits = id
+        .strip_prefix("AW-")
+        .is_some_and(|rest| rest.bytes().all(|b| b.is_ascii_digit()));
+    if digits && is_google_id(&id, &["AW"]) {
+        Ok(Some(id))
+    } else {
+        Err(PageError::InvalidGoogleTagId)
+    }
+}
+
+/// The label of a Google Ads conversion action, the part after the slash
+/// of its `AW-123456789/AbC-D_efG`: letters, digits, dashes and
+/// underscores, kept as typed. The whole `AW-…/label` pasted is taken for
+/// its label. Nothing when left empty.
+pub fn normalize_conversion_label(label: Option<&str>) -> Result<Option<String>, PageError> {
+    let Some(label) = given(label) else {
+        return Ok(None);
+    };
+    let label = label.rsplit_once('/').map_or(label, |(_, label)| label);
+    let valid = !label.is_empty()
+        && label.len() <= MAX_GOOGLE_ID_LEN
+        && label
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'));
+    if valid {
+        Ok(Some(label.to_owned()))
+    } else {
+        Err(PageError::InvalidConversionLabel)
+    }
+}

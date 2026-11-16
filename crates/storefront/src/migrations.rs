@@ -203,6 +203,17 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             updated_at INTEGER NOT NULL
         );
         CREATE INDEX storefront_pages_slug ON storefront_pages (slug);
+        -- The shop's Google tag as the back office has it: one row, there
+        -- once it was first set up.
+        CREATE TABLE storefront_google_tag (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            analytics_id TEXT,
+            ads_id TEXT,
+            purchase_label TEXT,
+            add_to_cart_label TEXT,
+            begin_checkout_label TEXT,
+            enhanced_conversions INTEGER NOT NULL
+        );
         -- The shown announcements, in the bar's order; a request keeps those
         -- whose window is open (Unix seconds, NULL for an open end).
         CREATE TABLE storefront_announcements (
@@ -255,6 +266,7 @@ pub const TABLES: &[&str] = &[
     "storefront_delivery_default",
     "storefront_former_slugs",
     "storefront_redirects",
+    "storefront_google_tag",
 ];
 
 /// Applies the library's pending migrations to the local database (evento's

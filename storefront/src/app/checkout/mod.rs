@@ -763,11 +763,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map(|setup| setup.publishable_key.clone())
         .unwrap_or_default();
 
+    let events = crate::app::tag::checkout_events(cx, &cart).await?;
+
     Ok(view! {
         document(
             title: "Commander",
             nav: &nav,
             no_drawer: true,
+            events: &events,
             <div class="wrap">
                 <ol class="steps" aria-label="Étapes de la commande">
                     <li class="done"><a href=(&back_to_cart)>"Panier"</a></li>
