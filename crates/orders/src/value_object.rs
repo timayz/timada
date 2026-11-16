@@ -562,6 +562,15 @@ pub fn return_policy_id() -> String {
     evento::hash_ids(vec!["return-policy"])
 }
 
+/// The stream of the tenant's scheduled export of one kind: one per kind in
+/// a tenant store.
+pub fn export_schedule_id(kind: crate::ExportKind) -> String {
+    evento::hash_ids(vec!["export-schedule", kind.key()])
+}
+
+/// The longest reason kept of an export that was not taken.
+pub const MAX_EXPORT_REASON_LEN: usize = 300;
+
 /// The stream of where the tenant's storefront lives: one per tenant store.
 pub fn storefront_id() -> String {
     evento::hash_ids(vec!["storefront"])

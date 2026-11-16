@@ -43,6 +43,7 @@ mod readiness;
 mod reads;
 mod review_requests;
 mod saga_fault;
+mod scheduled_exports;
 mod seal;
 mod shop_mail;
 mod shopper_erasure;

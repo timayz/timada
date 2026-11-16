@@ -12,6 +12,7 @@ pub mod categories;
 pub mod costs;
 pub mod customers;
 pub mod discounts;
+pub mod export_schedule;
 pub mod feed;
 pub mod google_tag;
 pub mod invoices;

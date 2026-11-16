@@ -550,6 +550,65 @@ pub enum ReturnPolicy {
     },
 }
 
+/// An export the shop sends out on its own: its orders, its customers or
+/// its newsletter's subscribers, each day, week or month, for the days
+/// since the one before. One stream per kind of export in a tenant store,
+/// with the id [`export_schedule_id`](crate::export_schedule_id); no stream
+/// means none was ever scheduled. Scheduled by an owner of the shop; the
+/// runs are written by the dashboard.
+#[evento::aggregate(name = "timada-orders/ExportSchedule")]
+pub enum ExportSchedule {
+    /// The schedule whole, as it stands from now on: what the one before
+    /// sent, or was sending, is not this one's.
+    ExportScheduled {
+        /// `orders`, `customers` or `newsletter`.
+        what: String,
+        /// `daily`, `weekly` or `monthly`.
+        every: String,
+        /// The address a mail says the file is ready to, with a link to it;
+        /// the file never travels by mail.
+        mail: Option<String>,
+        /// The address the file is posted to, sealed by the host (base64);
+        /// it wins over `mail`.
+        url_sealed: Option<String>,
+        /// The first day the first export covers (`2026-11-16`).
+        since_day: String,
+        /// Unix seconds the first export may go out at.
+        due_at: u64,
+        scheduled_by: String,
+    },
+    ExportUnscheduled {
+        unscheduled_by: String,
+    },
+    /// A node took the export of these days (both included) to send: the
+    /// claim on it. `attempt` counts from 1; `started_at` is the clock of
+    /// the node that took it, in unix seconds.
+    ExportRunStarted {
+        first_day: String,
+        last_day: String,
+        attempt: u32,
+        started_at: u64,
+        started_by: String,
+    },
+    /// The run was taken where it goes, at `delivered_at`. `due_at`: unix
+    /// seconds the next export may go out at.
+    ExportRunDelivered {
+        delivered_at: u64,
+        due_at: u64,
+        delivered_by: String,
+    },
+    /// The run was not taken. Tried again at `retry_at` (unix seconds), or
+    /// given up when `None`: the schedule then moves on, and `due_at` is
+    /// when the next export may go out.
+    ExportRunFailed {
+        reason: String,
+        failed_at: u64,
+        retry_at: Option<u64>,
+        due_at: u64,
+        failed_by: String,
+    },
+}
+
 /// Where the tenant's storefront lives, so the mails the dashboard sends a
 /// shopper can link back to it. One stream per tenant store, with the id
 /// [`storefront_id`](crate::storefront_id); no stream means no link.

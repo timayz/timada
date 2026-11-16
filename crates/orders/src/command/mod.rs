@@ -8,6 +8,7 @@
 mod business_buyers;
 mod cart;
 mod checkout;
+mod export_schedule;
 mod lifecycle;
 mod order_mail;
 mod payment_method;
@@ -21,6 +22,7 @@ use std::ops::Deref;
 
 pub use cart::*;
 pub use checkout::*;
+pub use export_schedule::*;
 pub use lifecycle::*;
 pub use payment_method::*;
 pub use return_policy::*;

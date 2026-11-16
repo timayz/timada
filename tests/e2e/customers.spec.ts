@@ -61,6 +61,20 @@ test("deleting a customer needs customers:manage", async ({ browser, request }) 
   await owner.goto(`/t/${slug}/customers`);
   await expect(owner.getByText("signs them out everywhere")).toBeVisible();
 
+  // And the owner alone schedules the customers' file: every Monday, a mail
+  // that says it is ready, with a link and no file.
+  const schedule = owner.locator("[data-export-schedule]");
+  await expect(schedule).toHaveAttribute("data-export-schedule", "none");
+  await schedule.getByLabel("How often").selectOption("weekly");
+  await schedule.getByLabel("E-mail address to tell").fill("Books@Example.org");
+  await schedule.getByRole("button", { name: "Save the schedule" }).click();
+  await expect(owner.getByRole("status")).toContainText("Scheduled export saved.");
+  await expect(schedule).toHaveAttribute("data-export-schedule", "mail");
+  await expect(schedule.locator("[data-export-schedule-summary]")).toContainText(
+    "Every Monday, for the week before, told by mail to books@example.org.",
+  );
+  const scheduleAction = (await schedule.locator("form").getAttribute("action")) ?? "";
+
   await owner.getByRole("link", { name: "Roles", exact: true }).click();
   const define = owner.locator("form", { has: owner.getByRole("button", { name: "Define role" }) });
   await define.getByLabel("Role name").fill("support");
@@ -92,6 +106,46 @@ test("deleting a customer needs customers:manage", async ({ browser, request }) 
     maxRedirects: 0,
   });
   expect(refused.status()).toBe(403);
+  // They see that the file goes out on its own, and where; setting it is
+  // the owner's alone.
+  const seen = support.locator("[data-export-schedule]");
+  await expect(seen).toHaveAttribute("data-export-schedule", "mail");
+  await expect(seen.locator("[data-export-schedule-summary]")).toContainText("books@example.org");
+  await expect(seen.getByRole("button", { name: "Save the schedule" })).toHaveCount(0);
+  await expect(seen.getByRole("button", { name: "Take it off" })).toHaveCount(0);
+  const notTheirs = await support.request.post(scheduleAction, {
+    form: { what: "customers", every: "daily", to: "mail", mail: supportEmail },
+    maxRedirects: 0,
+  });
+  expect(notTheirs.status()).toBe(403);
+
+  // The owner has the file itself posted to an address instead: it is
+  // signed under a secret the page shows them.
+  await owner.goto(`/t/${slug}/customers`);
+  await schedule.getByLabel("How often").selectOption("daily");
+  await schedule.getByRole("radio", { name: "The file, posted to an address" }).check();
+  await schedule.getByLabel("Address to post the file to").fill("https://books.example/in/s3cret");
+  await schedule.getByRole("button", { name: "Save the schedule" }).click();
+  await expect(owner.getByRole("status")).toContainText("Scheduled export saved.");
+  await expect(schedule).toHaveAttribute("data-export-schedule", "url");
+  await expect(schedule.locator("[data-export-schedule-summary]")).toContainText(
+    "Every day, for the day before, posted to an address.",
+  );
+  await expect(schedule.getByLabel("Address to post the file to")).toHaveValue(
+    "https://books.example/in/s3cret",
+  );
+  await expect(schedule.locator("[data-export-secret]")).toHaveText(/^whsec_[0-9a-f]{64}$/);
+  // The address is the owner's to read, not another member's.
+  await support.reload();
+  await expect(seen).toHaveAttribute("data-export-schedule", "url");
+  await expect(seen).not.toContainText("books.example");
+
+  await schedule.getByRole("button", { name: "Take it off" }).click();
+  await expect(owner.getByRole("status")).toContainText("Scheduled export taken off.");
+  await expect(schedule).toHaveAttribute("data-export-schedule", "none");
+  // Nothing scheduled: nothing for another member to see.
+  await support.reload();
+  await expect(seen).toHaveCount(0);
 
   await ownerContext.close();
   await supportContext.close();

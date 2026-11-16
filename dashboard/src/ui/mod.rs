@@ -189,6 +189,14 @@ pub fn describe_error(code: &str) -> &'static str {
             "List the countries as two-letter codes separated by commas, like FR, BE."
         }
         "invalid_return_days" => "A return window is 1 to 365 days.",
+        "invalid_export_address" => {
+            "Give the e-mail address to tell, or the https address to post the file to."
+        }
+        "invalid_export_schedule" => "Pick how often the export goes out.",
+        "export_address_not_public" => "The file can only be posted to an address on the internet.",
+        "export_address_unavailable" => {
+            "Posting to an address is not available on this installation: its operator has not set the key the addresses are kept under."
+        }
         "too_many_shipping_methods" => "A shop offers at most twenty shipping methods.",
         "shipping_method_not_found" => "This shipping method does not exist.",
         "category_has_children" => "Archive or move its sub-categories first.",

@@ -162,6 +162,45 @@ pub async fn send_hold_lapse_reminder(
     Ok(())
 }
 
+/// Tells `to` that the scheduled export of `what` ("orders") of shop
+/// `tenant_name` is ready for the days `first_day` to `last_day`, with a
+/// link to it. The file does not travel: the link opens it for a member
+/// signed in whose role reads it.
+pub async fn send_export_ready(
+    cx: &Cx,
+    to: &str,
+    tenant_name: &str,
+    what: &str,
+    first_day: &str,
+    last_day: &str,
+    link: &str,
+) -> Result<()> {
+    let from = context::<MailSender>(cx).0.clone();
+    let days = if first_day == last_day {
+        first_day.to_owned()
+    } else {
+        format!("{first_day} to {last_day}")
+    };
+    let subject = format!("{tenant_name}: the export of {what} is ready ({days})");
+    let mail = Mail::builder()
+        .from(from)
+        .to([Mailbox::new(to)?])
+        .subject(&subject)
+        .html(
+            cx,
+            view! {
+                <p>"The export of the " (what) " of " <strong>(tenant_name)</strong> " for " <strong>(&days)</strong> " is ready."</p>
+                <p><a href=(link)>"Download it from the dashboard"</a></p>
+                <p>"Or open this address: " (link)</p>
+                <p>"The file is not attached: sign in with an account of the shop that may read it. This mail is sent on a schedule an owner of the shop set, and stops when they take it off."</p>
+            },
+        )
+        .await?
+        .build()?;
+    send(cx, mail).await?;
+    Ok(())
+}
+
 /// Tells a member what an automation scenario of their shop wants them to
 /// know: the merchant's subject and note, and a link to what started the
 /// run. Nothing a shopper wrote travels.

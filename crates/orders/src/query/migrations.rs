@@ -149,7 +149,15 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 name TEXT NOT NULL,
                 n INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, name)
-            );",
+            );
+        CREATE TABLE orders_export_schedules (
+                tenant_id TEXT NOT NULL,
+                what TEXT NOT NULL,
+                due_at INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, what)
+            );
+        CREATE INDEX orders_export_schedules_due
+                ON orders_export_schedules (due_at, tenant_id, what);",
     )],
 );
 
@@ -163,4 +171,5 @@ pub const TABLES: &[&str] = &[
     "orders_sale_lines",
     "orders_order_mails",
     "orders_tallies",
+    "orders_export_schedules",
 ];
