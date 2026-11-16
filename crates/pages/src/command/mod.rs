@@ -7,6 +7,7 @@
 
 mod announcements;
 mod google_tag;
+mod meta_pixel;
 mod page;
 mod redirects;
 mod slug_index;
@@ -15,6 +16,7 @@ use std::ops::Deref;
 
 pub use announcements::*;
 pub use google_tag::*;
+pub use meta_pixel::*;
 pub use page::*;
 pub use redirects::*;
 

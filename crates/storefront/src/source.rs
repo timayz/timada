@@ -14,7 +14,7 @@
 use topcoat_core::context::Cx;
 use topcoat_router::request::{headers, original_uri};
 
-pub use timada_orders::{Click, OrderSource};
+pub use timada_orders::{Browser, Click, OrderSource};
 
 use crate::consent::Consent;
 use crate::context::store;

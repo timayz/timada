@@ -1001,6 +1001,24 @@ from the shop's media address), and the result cleaned by an allow-list sanitise
 The back office (`/t/{slug}/pages`, `pages:read` / `pages:manage`) writes a page beside
 that rendering in a sandboxed frame; the list is the `pages` read model.
 
+The shop's Google tag and Meta pixel live here too, one stream each (`GoogleTag`,
+`MetaPixel`): what the storefront writes into its pages, held back as each visitor's
+answer to its cookie banner says (`docs/storefront.md`). The pixel's stream also holds
+its Conversions API token, sealed under `secrets.key` for the tenant before it is
+recorded and never shown again. With a token, the `meta conversions` saga
+(`dashboard/src/meta_conversions.rs`) tells Meta each sale from the server as well, so
+it is counted when the browser's event is lost. It follows `Order::BrowserSet`, the
+event a checkout writes with `Placed` only for a shopper who allowed advertising: an
+order without it is told to nobody. The event carries the order's id as its event id,
+the one the storefront's pixel sends with its `Purchase`, so Meta counts the two once;
+the buyer's e-mail address, phone, name, city, postal code and country go hashed. The
+call is made inside the pass with a five-second limit, as the VIES check is. A refusal
+(a revoked token) is the shop's own: its reason is written on the pixel's stream
+(`ConversionRefused`), the back office shows it beside the token, and the pass goes
+on. No answer fails the pass, which is tried again while the order is younger than an
+hour; after that the sale is left to the browser's event, so one pixel Meta keeps
+failing on never holds the other shops' sales.
+
 ## The storefront side
 
 `timada-storefront` runs inside the merchant's app. Its executor is a `Sidecar`:
@@ -1049,7 +1067,7 @@ lifetime, sign-in limits, OIDC providers), `mail` (the platform's server), `secr
 payments, mail servers or shopper accounts), `media` (the pictures' directory and
 public address, the default quota, the daily reconcile), `data_keys` (the personal-data key vault), `payments` (Stripe's
 address, for the stand-in), `invoicing` (the VAT-number check, the euro reference
-rates), `reviews`
+rates), `advertising` (Meta's address, for the stand-in), `reviews`
 (the review-request timer), `newsletter` (the send sweep), `automations` (the run
 timer, the abandoned-checkout delay), `store` (the limits on what a storefront hands
 in and the carts it starts), `carts` (how long an idle cart is kept), `invitations`

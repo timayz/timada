@@ -770,7 +770,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             title: "Commander",
             nav: &nav,
             no_drawer: true,
-            events: &events,
+            events: Some(&events),
             <div class="wrap">
                 <ol class="steps" aria-label="Étapes de la commande">
                     <li class="done"><a href=(&back_to_cart)>"Panier"</a></li>
@@ -1162,6 +1162,9 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
         time_zone: request_time_zone(cx),
         // What brought the shopper, as far as they allowed keeping it.
         source: crate::shopper::source(cx),
+        // Their browser, when they allowed advertising: the sale is then
+        // told to the shop's pixel from the server too.
+        browser: crate::app::tag::browser(cx).await?,
         newsletter: !form.newsletter.is_empty(),
     };
     let err = match start_payment(cx, &cart_id, checkout).await? {

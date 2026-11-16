@@ -219,6 +219,7 @@ event timada-newsletter/Subscriber::Unsubscribed { unsubscribed_by: String }
 event timada-orders/BusinessBuyers::BusinessBuyersAccepted { accepted_by: String }
 event timada-orders/BusinessBuyers::BusinessBuyersRefused { refused_by: String }
 event timada-orders/Cart::BillingAddressGiven { request_id: String, billing: ShippingAddress, given_by: String }
+event timada-orders/Cart::BrowserGiven { request_id: String, browser: Browser, given_by: String }
 event timada-orders/Cart::BuyerIdentified { request_id: String, vat_number: String, identified_by: String }
 event timada-orders/Cart::CheckedOut { order_id: String, checked_out_by: String }
 event timada-orders/Cart::CheckoutClaimed { request_id: String, claimant: String, claimed_by: String }
@@ -244,6 +245,7 @@ event timada-orders/Cart::ShippingMethodChosen { request_id: String, method_id: 
 event timada-orders/Cart::SourceGiven { request_id: String, source: OrderSource, given_by: String }
 event timada-orders/Cart::TimeZoneGiven { request_id: String, time_zone: String, given_by: String }
 event timada-orders/Order::BillingAddressSet { billing: ShippingAddress, set_by: String }
+event timada-orders/Order::BrowserSet { browser: Browser, set_by: String }
 event timada-orders/Order::CancellationRequested { reason: String, requested_by: String }
 event timada-orders/Order::Cancelled { reason: String, cancelled_by: String }
 event timada-orders/Order::CaptureFailed { payment_id: String, reason: String, failed_by: String }
@@ -291,6 +293,10 @@ event timada-pages/Announcements::AnnouncementMoved { announcement_id: String, p
 event timada-pages/Announcements::AnnouncementRemoved { announcement_id: String, removed_by: String }
 event timada-pages/Announcements::AnnouncementShown { announcement_id: String, shown_by: String }
 event timada-pages/GoogleTag::GoogleTagSet { analytics_id: Option<String>, ads_id: Option<String>, purchase_label: Option<String>, add_to_cart_label: Option<String>, begin_checkout_label: Option<String>, enhanced_conversions: bool, set_by: String }
+event timada-pages/MetaPixel::ConversionRefused { order_id: String, reason: String, refused_by: String }
+event timada-pages/MetaPixel::ConversionsTokenRemoved { removed_by: String }
+event timada-pages/MetaPixel::ConversionsTokenSet { token_sealed: Vec<u8>, set_by: String }
+event timada-pages/MetaPixel::MetaPixelSet { pixel_id: Option<String>, set_by: String }
 event timada-pages/Page::Created { slug: String, title: String, body: String, created_by: String }
 event timada-pages/Page::Deleted { deleted_by: String }
 event timada-pages/Page::Edited { title: String, body: String, edited_by: String }
@@ -424,6 +430,7 @@ type timada_invoicing::value_object::InvoiceShipping { name: String, amount_cent
 type timada_invoicing::value_object::IssuedDocument { document_id: String, company_id: String, kind: DocumentKind, series: String, number: u64, label: String, issued_at: u64, order_id: String, order_reference: String, paid_at: Option<u64>, payment_method: Option<String>, invoice_document_id: Option<String>, invoice_label: Option<String>, refund_id: Option<String>, seller: Seller, buyer: Address, buyer_email: String, delivery: Option<Address>, currency: String, lines: Vec<InvoiceLine>, discount: Option<InvoiceDiscount>, shipping: Option<InvoiceShipping>, vat: Vec<VatSubtotal>, total_excl_vat_cents: u64, total_vat_cents: u64, total_cents: u64, template: u16, regime: Regime, tax_country: String, buyer_vat_number: Option<String>, vies_reference: Option<String>, unchecked_vat_number: Option<String>, eu_distance_sales_cents: u64, eu_threshold_passed: bool, euro_rate: Option<ExchangeRate>, total_vat_eur_cents: Option<u64> }
 type timada_invoicing::value_object::Seller { address: Address, legal_form: String, share_capital_cents: Option<u64>, siret: String, rcs_city: Option<String>, contact_email: String, vat_number: Option<String> }
 type timada_invoicing::value_object::VatSubtotal { rate_bps: u32, base_cents: u64, vat_cents: u64 }
+type timada_orders::value_object::Browser { user_agent: Option<String>, fbp: Option<String>, fbc: Option<String>, page: Option<String> }
 type timada_orders::value_object::Checkpoint { at: String, place: String, description: String }
 type timada_orders::value_object::Click { gclid: Option<String>, gbraid: Option<String>, wbraid: Option<String>, fbclid: Option<String>, utm_source: Option<String>, utm_medium: Option<String>, utm_campaign: Option<String>, utm_term: Option<String>, utm_content: Option<String>, referrer: Option<String>, landing: Option<String>, at: u64 }
 type timada_orders::value_object::OrderLine { product_id: String, variant_id: Option<String>, name: String, variant_label: Option<String>, sku: Option<String>, unit_amount_cents: u64, quantity: u32, tax_category: String, delivery_days: Option<timada_catalog::DeliveryDays> }

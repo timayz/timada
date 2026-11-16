@@ -155,3 +155,35 @@ pub enum GoogleTag {
         set_by: String,
     },
 }
+
+/// The shop's Meta pixel: one stream per shop, with the id
+/// [`meta_pixel_id`](crate::meta_pixel_id). The storefront writes the pixel
+/// into its pages from the pixel's id, for the visitors who allowed
+/// advertising; the host sends each sale to Meta's Conversions API as well,
+/// under the token, so Meta counts it even when the browser's event is lost.
+#[evento::aggregate(name = "timada-pages/MetaPixel")]
+pub enum MetaPixel {
+    /// The pixel the storefront writes from now on; `None` takes it off,
+    /// and the token with it.
+    MetaPixelSet {
+        /// Digits, as Meta's Events Manager shows it.
+        pixel_id: Option<String>,
+        set_by: String,
+    },
+    /// The Conversions API token of the pixel, sealed by the host before it
+    /// gets here, as the payment keys are.
+    ConversionsTokenSet {
+        token_sealed: Vec<u8>,
+        set_by: String,
+    },
+    /// The token was taken off: sales are told by the browser only.
+    ConversionsTokenRemoved { removed_by: String },
+    /// Meta refused the sale of `order_id` sent under the token (a token
+    /// revoked, a pixel it does not belong to), in Meta's words. Written by
+    /// the host, once per reason; the next pixel or token set clears it.
+    ConversionRefused {
+        order_id: String,
+        reason: String,
+        refused_by: String,
+    },
+}

@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use timada_orders::{
-    Checkout, Click, MAX_SOURCE_VALUE_LEN, OrderError, OrderSource, OrderStatus, Payment,
+    Browser, Checkout, Click, MAX_SOURCE_VALUE_LEN, OrderError, OrderSource, OrderStatus, Payment,
     PaymentAnswer, ShippingAddress, order_id,
 };
 
@@ -593,6 +593,60 @@ async fn an_order_remembers_what_brought_the_shopper() {
         let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
         assert_eq!(order.source, None);
     }
+}
+
+#[tokio::test]
+async fn an_order_keeps_the_browser_a_checkout_gave() {
+    let (orders, catalog) = store().await;
+    let mug = product(&catalog, "Mug", 1250, "EUR").await;
+
+    // Nothing given (the shopper did not allow advertising): nothing kept.
+    let cart = cart_with(&orders, &mug, 1).await;
+    let placed = pay(&orders, &cart, checkout()).await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert_eq!(order.browser, None);
+
+    let cart = cart_with(&orders, &mug, 1).await;
+    let placed = pay(
+        &orders,
+        &cart,
+        Checkout {
+            browser: Some(Browser {
+                user_agent: Some(" Mozilla/5.0 (X11; Linux x86_64) ".into()),
+                fbp: Some("fb.1.1800000000000.1234567890".into()),
+                // Too long to be Meta's: dropped, the rest stays.
+                fbc: Some("x".repeat(MAX_SOURCE_VALUE_LEN + 1)),
+                page: Some("https://shop.example/checkout".into()),
+            }),
+            ..checkout()
+        },
+    )
+    .await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    let browser = order.browser.expect("the order keeps the browser");
+    assert_eq!(
+        browser.user_agent.as_deref(),
+        Some("Mozilla/5.0 (X11; Linux x86_64)")
+    );
+    assert_eq!(
+        browser.fbp.as_deref(),
+        Some("fb.1.1800000000000.1234567890")
+    );
+    assert_eq!(browser.fbc, None);
+
+    // One that says nothing still says the shopper allowed advertising.
+    let cart = cart_with(&orders, &mug, 1).await;
+    let placed = pay(
+        &orders,
+        &cart,
+        Checkout {
+            browser: Some(Browser::default()),
+            ..checkout()
+        },
+    )
+    .await;
+    let order = orders.load_order(&placed.order_id).await.unwrap().unwrap();
+    assert_eq!(order.browser, Some(Browser::default()));
 }
 
 #[tokio::test]

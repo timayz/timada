@@ -379,6 +379,48 @@ Only a fake of Google's script stands in the browser suite: whether Google Ads r
 and attributes a conversion is checked in Google's own tools (Tag Assistant, the
 conversion action's diagnostics), with a real tag on a real shop.
 
+### The Meta pixel
+
+The merchant sets the shop's Meta pixel in the back office, under Meta pixel: the
+pixel's id and, optionally, the Conversions API token of that pixel. The catalog
+subscription copies the id (the token never leaves the dashboard), and the library
+gives what a page writes:
+
+```rust
+use timada_storefront::{PIXEL_EVENTS_SCRIPT, meta_pixel, meta_pixel_head, page_view_event,
+    pixel_event_id, pixel_purchase_event, tag_events_json};
+
+let pixel = meta_pixel(cx).await?;                                 // None: no pixel set
+if let Some(head) = pixel.as_deref().and_then(|id| meta_pixel_head(id, answer)) {
+    // in the <head>: <script>{head}</script>
+    let events = [page_view_event(&pixel_event_id()), pixel_purchase_event(&order)];
+    // <script type="application/json" data-pixel-events>{tag_events_json(&events)}</script>
+    // <script>{PIXEL_EVENTS_SCRIPT}</script>
+}
+```
+
+Meta has no mode that runs without cookies, so `meta_pixel_head` is `None` until the
+visitor allowed advertising, whatever the shop's consent mode: nothing of Meta's is
+written for anyone else. The events are the arguments of one `fbq(…)` call each, with
+the event's id last: `page_view_event`, `view_content_event` (a product's page),
+`pixel_add_to_cart_event`, `initiate_checkout_event` and `pixel_purchase_event`. Their
+content ids are the ones the Google tag's items carry (the variant's SKU, else the
+product's id). An item added to the cart is written in a script of its own,
+`data-pixel-events="added"`: a script that fetched a page to show a part of it calls
+`timadaPixel(page, true)`, which sends that one alone, not the page view the shopper
+never had.
+
+A sale is told twice, and counted once. The order's page sends `Purchase` with the
+order's id as its event id. And when the checkout hands the order the shopper's
+browser (`Checkout::browser`, from `checkout_browser(cx, answer)`: the `User-Agent`,
+the pixel's `_fbp` and `_fbc` cookies and the page's address, `None` unless the shopper
+allowed advertising), the dashboard sends the same sale to Meta's Conversions API under
+the same id, if the shop gave a token: see `docs/architecture.md`. An order without a
+browser is told to nobody from the server.
+
+The storefront's layout writes the pixel on every page (`tag.rs`), and gives the
+browser to the checkout only in a shop that has a pixel.
+
 ### An address that moved
 
 A product renamed in the back office moves to the slug of its new name, and a page can
@@ -991,7 +1033,9 @@ made there: `tests/e2e/storefront.spec.ts` walks the home, a category, a product
 cart, the search and a shop page, answers the cookie banner, and stops the process; `storefront-shop.spec.ts` checks
 the catalogue follows live, then fills a cart, checks out, pays, and uses stock, discount
 codes, delivery methods and checkout offers, checks an order keeps what brought
-its shopper only as far as they allowed, and that the Google tag waits for consent and
-counts the cart, the checkout and the sale once; `storefront-accounts.spec.ts` reviews what
+its shopper only as far as they allowed, that the Google tag waits for consent and
+counts the cart, the checkout and the sale once, and that the Meta pixel waits for
+advertising to be allowed and a sale reaches a stand-in for the Conversions API under
+the id the browser sent; `storefront-accounts.spec.ts` reviews what
 it bought, is invoiced at the VAT of where the goods go, and signs a returning shopper in
 on a second browser.

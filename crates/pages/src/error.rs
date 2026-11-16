@@ -57,6 +57,10 @@ pub enum PageError {
     InvalidConversionLabel,
     #[error("conversion labels and enhanced conversions need the Google Ads id")]
     GoogleAdsIdMissing,
+    #[error("a Meta pixel id is 5 to 20 digits")]
+    InvalidMetaPixelId,
+    #[error("the Conversions API token needs the pixel it belongs to")]
+    MetaPixelMissing,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -101,6 +105,8 @@ impl PageError {
             Self::InvalidGoogleTagId => "google_tag_invalid_id",
             Self::InvalidConversionLabel => "google_tag_invalid_label",
             Self::GoogleAdsIdMissing => "google_ads_id_missing",
+            Self::InvalidMetaPixelId => "meta_pixel_invalid_id",
+            Self::MetaPixelMissing => "meta_pixel_missing",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })

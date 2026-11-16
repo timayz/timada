@@ -40,6 +40,11 @@ vies_url = "http://127.0.0.1:12113"
 # Nothing listens here: the suite sells in euros and never reads the Bank.
 euro_rates_url = "http://127.0.0.1:12114"
 
+# Sales are told to a stand-in for Meta's Conversions API that the storefront
+# spec starts (tests/e2e/meta.ts).
+[advertising]
+meta_api_url = "http://127.0.0.1:12115"
+
 # Review requests go out within seconds of falling due.
 [reviews]
 request_check_secs = 2

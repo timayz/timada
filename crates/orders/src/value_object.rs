@@ -198,6 +198,45 @@ impl OrderSource {
     }
 }
 
+/// The shopper's browser as an advertising platform matches a sale to it,
+/// given by the storefront only when the shopper allowed advertising: an
+/// order that has one may be told to the shop's advertising platforms from
+/// the server, an order without is told to none. Frozen in `events.lock`:
+/// the fields never change.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[serde(default)]
+pub struct Browser {
+    /// The browser's `User-Agent`.
+    pub user_agent: Option<String>,
+    /// Meta's id for the browser, as its pixel keeps it in `_fbp`.
+    pub fbp: Option<String>,
+    /// Meta's click id, as its pixel keeps it in `_fbc`.
+    pub fbc: Option<String>,
+    /// The address of the shop's page the checkout was on.
+    pub page: Option<String>,
+}
+
+impl Browser {
+    fn values_mut(&mut self) -> [&mut Option<String>; 4] {
+        [
+            &mut self.user_agent,
+            &mut self.fbp,
+            &mut self.fbc,
+            &mut self.page,
+        ]
+    }
+}
+
 /// One step of a parcel's journey, as the carrier words it. Frozen in
 /// `events.lock`: the fields never change.
 #[derive(
@@ -586,6 +625,19 @@ pub fn normalize_note(note: Option<&str>) -> Result<Option<String>, OrderError> 
     optional_text(note, MAX_NOTE_LEN, OrderError::InvalidNote)
 }
 
+/// A value a storefront passes on from a browser, trimmed; dropped when
+/// empty, too long or holding a control character.
+fn kept_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|text| {
+            !text.is_empty()
+                && text.chars().count() <= MAX_SOURCE_VALUE_LEN
+                && !text.chars().any(char::is_control)
+        })
+        .map(str::to_owned)
+}
+
 /// What a storefront says brought the shopper, as an order keeps it: each
 /// value trimmed, and dropped when empty, too long or holding a control
 /// character. Nothing is refused: what measures a sale never stops one.
@@ -593,15 +645,7 @@ pub fn normalize_note(note: Option<&str>) -> Result<Option<String>, OrderError> 
 pub fn normalize_source(source: Option<OrderSource>) -> Option<OrderSource> {
     fn clean(mut click: Click) -> Option<Click> {
         for value in click.values_mut() {
-            *value = value
-                .as_deref()
-                .map(str::trim)
-                .filter(|text| {
-                    !text.is_empty()
-                        && text.chars().count() <= MAX_SOURCE_VALUE_LEN
-                        && !text.chars().any(char::is_control)
-                })
-                .map(str::to_owned);
+            *value = kept_value(value.as_deref());
         }
         click.tells().then_some(click)
     }
@@ -614,6 +658,18 @@ pub fn normalize_source(source: Option<OrderSource>) -> Option<OrderSource> {
         }),
         (None, None) => None,
     }
+}
+
+/// What a storefront says of the shopper's browser, as an order keeps it:
+/// tidied as [`normalize_source`] does, never refused. Kept even when every
+/// value was dropped: that the storefront gave one says the shopper allowed
+/// advertising.
+pub fn normalize_browser(browser: Option<Browser>) -> Option<Browser> {
+    let mut browser = browser?;
+    for value in browser.values_mut() {
+        *value = kept_value(value.as_deref());
+    }
+    Some(browser)
 }
 
 pub fn normalize_tracking(tracking: Option<&str>) -> Result<Option<String>, OrderError> {
