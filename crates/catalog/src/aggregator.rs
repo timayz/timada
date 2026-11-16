@@ -393,6 +393,17 @@ pub enum BestSellers {
     },
 }
 
+/// The options a shop's listings can be narrowed by ("Couleur", "Taille"),
+/// in the order its filters show them: one stream per tenant store, with
+/// the id [`listing_filters_id`](crate::listing_filters_id). A shop that
+/// never set them leaves the choice to its storefront.
+#[evento::aggregate(name = "timada-catalog/ListingFilters")]
+pub enum ListingFilters {
+    /// The names whole, as the products' options are named; empty offers
+    /// no such filter.
+    FiltersSet { names: Vec<String>, set_by: String },
+}
+
 /// The delivery time of a product that gives none: one stream per tenant
 /// store, with the id [`delivery_default_id`](crate::delivery_default_id).
 #[evento::aggregate(name = "timada-catalog/DeliveryDefault")]

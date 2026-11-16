@@ -515,6 +515,19 @@ yet. The ranking says which products and in what order, never how many were sold
 storefront lists a category this way unless the shopper picks another order; the whole
 catalogue stays newest first.
 
+`listing_filters` gives the options the merchant marked as filters in the back office
+(under **Categories**; eight at most, in their order), or `None` while they never chose,
+which leaves the choice to the host. Each is an option's name: `option_values` gives
+the values a listing offers for it with their counts, and `with_option` narrows by one.
+
+The storefront offers the colour until the merchant chooses (`DEFAULT_FILTERS` in
+`storefront/src/app/filters.rs`), then theirs: a group of links an option, each under
+the option's folded name in the address (`?taille=m&couleur=rose`). An option whose
+name folds to a parameter the listing uses itself (`page`, `sort`, `q`…) is left out.
+Every filter link is `rel="nofollow"`, a narrowed listing is `noindex` with the plain
+one as its canonical address, and `robots.txt` keeps crawlers out of each option's
+parameter. A filter people search for deserves a category of its own instead.
+
 `category_hub` gives what the merchant set for the category's page beside its listing:
 `guide_html`, the buying guide below the products (Markdown turned into cleaned HTML,
 as a page's); `questions`, what shoppers ask and the answers, in the merchant's order;

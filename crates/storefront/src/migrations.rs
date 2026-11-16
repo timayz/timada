@@ -158,6 +158,13 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             product_id TEXT PRIMARY KEY,
             sold_rank INTEGER NOT NULL
         );
+        -- The options the shop's listings are narrowed by, as the back
+        -- office set them (a JSON list of names, in order): one row, none
+        -- while the shop never set them.
+        CREATE TABLE storefront_listing_filters (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            names_json TEXT NOT NULL
+        );
         -- How many products the whole shop's page lists, kept as they are
         -- listed and unlisted, as a category's row keeps its own count: one
         -- row, none before the first product is listed.
@@ -312,6 +319,7 @@ pub const TABLES: &[&str] = &[
     "storefront_category_products",
     "storefront_shop",
     "storefront_best_sellers",
+    "storefront_listing_filters",
     "storefront_category_facets",
     "storefront_reviews",
     "storefront_stock",

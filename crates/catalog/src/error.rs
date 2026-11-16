@@ -77,6 +77,8 @@ pub enum CatalogError {
     InvalidCategoryQuestions,
     #[error("a category shows at most eight products first")]
     TooManyPinnedProducts,
+    #[error("listings are narrowed by at most eight options")]
+    TooManyListingFilters,
     #[error("a product belongs to at most ten categories")]
     TooManyCategories,
     #[error("a product carries at most twenty pictures")]
@@ -208,6 +210,7 @@ impl CatalogError {
             Self::CategoryTooDeep => "category_too_deep",
             Self::InvalidCategoryQuestions => "category_invalid_questions",
             Self::TooManyPinnedProducts => "too_many_pinned_products",
+            Self::TooManyListingFilters => "too_many_listing_filters",
             Self::TooManyCategories => "too_many_categories",
             Self::TooManyImages => "too_many_images",
             Self::InvalidImage => "unsupported_image",

@@ -311,12 +311,12 @@ test("the storefront shows the catalogue in French", async ({
   await expect(filters.locator("[data-price-band='0-50']")).toHaveText(
     "De 0,00€ à 50,00€",
   );
-  await expect(filters.locator("[data-colour]")).toHaveText([
+  await expect(filters.locator("[data-filter=couleur]")).toHaveText([
     "Bleu (1)",
     "Rose (1)",
   ]);
   await filters.locator("summary").click();
-  await filters.locator("[data-colour=rose]").click();
+  await filters.locator("[data-filter-value=rose]").click();
   await expect(page).toHaveURL(/couleur=rose/);
   await expect(page.locator("[data-results]")).toContainText(
     "1 résultat affiché",
@@ -325,16 +325,16 @@ test("the storefront shows the catalogue in French", async ({
     /Collier étoilé/,
   );
   await expect(filters).toHaveJSProperty("open", true);
-  await expect(filters.locator("[data-colour=rose]")).toHaveAttribute(
+  await expect(filters.locator("[data-filter-value=rose]")).toHaveAttribute(
     "aria-current",
     "true",
   );
-  await expect(filters.locator("[data-colour=bleu]")).toHaveText("Bleu (1)");
+  await expect(filters.locator("[data-filter-value=bleu]")).toHaveText("Bleu (1)");
   await page.locator("[data-sort]").selectOption("price_asc");
   await page.getByRole("button", { name: "Trier" }).click();
   await expect(page).toHaveURL(/sort=price_asc/);
   await expect(page).toHaveURL(/couleur=rose/);
-  await filters.locator("[data-colour=rose]").click();
+  await filters.locator("[data-filter-value=rose]").click();
   await expect(page).not.toHaveURL(/couleur=/);
   await expect(page.locator("[data-results]")).toContainText(
     "2 résultats affichés",
@@ -352,7 +352,7 @@ test("the storefront shows the catalogue in French", async ({
     "aria-current",
     "true",
   );
-  await expect(filters.locator("[data-colour]")).toHaveText([
+  await expect(filters.locator("[data-filter=couleur]")).toHaveText([
     "Bleu (1)",
     "Rose (1)",
   ]);
@@ -360,7 +360,7 @@ test("the storefront shows the catalogue in French", async ({
   await expect(page.locator("[data-filters-empty]")).toContainText(
     "Aucun produit ne correspond à ces filtres.",
   );
-  await expect(filters.locator("[data-colour]")).toHaveCount(0);
+  await expect(filters.locator("[data-filter=couleur]")).toHaveCount(0);
   await page.locator("[data-filters-clear]").click();
   await expect(page).not.toHaveURL(/min_price=/);
   await expect(page.locator("[data-results]")).toContainText(
@@ -371,7 +371,7 @@ test("the storefront shows the catalogue in French", async ({
     "1 résultat affiché",
   );
   await expect(
-    page.locator("[data-filters] [data-colour=bleu]"),
+    page.locator("[data-filters] [data-filter-value=bleu]"),
   ).toHaveAttribute("aria-current", "true");
   await page.goto(`${app.url}/boutique?q=collier&couleur=gris`);
   await expect(page.locator("[data-filters-empty]")).toBeVisible();
@@ -1340,6 +1340,84 @@ test("a category opens on the products put first, then its guide and the questio
   // No FAQ markup: search engines stopped showing it.
   const data = await page.locator('script[type="application/ld+json"]').allTextContents();
   expect(data.join("")).not.toContain("FAQPage");
+});
+
+test("a listing is narrowed by the options the merchant marks as filters", async ({
+  page,
+  request,
+}) => {
+  await registerWithEmail(page, uniqueEmail("storefront-filters"));
+  const { name, slug } = uniqueTenant("Storefront Filters");
+  await createTenant(page, name);
+  await createCategory(page, slug, "Chat");
+  await publishVariedProduct(page, slug, "Tapis", "Taille", [["S", "19.90"], ["M", "24.90"]], "Chat");
+  await publishVariedProduct(page, slug, "Coussin", "Taille", [["M", "14.90"]], "Chat");
+  await publishVariedProduct(page, slug, "Collier", "Couleur", [["Rose", "9.90"]], "Chat");
+  await app.start(request, await mintKey(page, slug, false), 3);
+
+  // Until the merchant chooses, the storefront offers the colour alone.
+  const filters = page.locator("[data-filters]");
+  await page.goto(`${app.url}/c/chat`);
+  await expect(filters.locator("[data-filter-group]")).toHaveCount(1);
+  await expect(filters.locator("[data-filter=couleur]")).toHaveText(["Rose (1)"]);
+
+  // The merchant marks the size, then the colour.
+  await page.goto(`/t/${slug}/categories`);
+  await expect(page.locator("[data-listing-filters]")).toHaveAttribute("data-listing-filters", "unset");
+  await page.getByLabel("Options shoppers filter by").fill("Taille\nCouleur\ntaille\n");
+  await page.getByRole("button", { name: "Save filters" }).click();
+  await expect(page.getByRole("status")).toContainText("Filters saved.");
+  await expect(page.getByLabel("Options shoppers filter by")).toHaveValue("Taille\nCouleur");
+  await expect(page.locator("[data-listing-filters]")).toHaveAttribute("data-listing-filters", "set");
+
+  // The storefront offers both, in that order, with what each value counts.
+  await expect(async () => {
+    await page.goto(`${app.url}/c/chat`);
+    await expect(filters.locator("[data-filter-group]")).toHaveCount(2, { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await filters.locator("summary").click();
+  await expect(filters.locator("h3")).toHaveText([
+    "Filtrer par tarif",
+    "Filtrer par taille",
+    "Filtrer par couleur",
+  ]);
+  await expect(filters.locator("[data-filter=taille]")).toHaveText(["M (2)", "S (1)"]);
+  // Narrowed, the products are those of the plain listing again: its links
+  // are not followed, and the page is kept out of search engines.
+  const medium = filters.locator("[data-filter=taille][data-filter-value=m]");
+  await expect(medium).toHaveAttribute("rel", "nofollow");
+  await medium.click();
+  await expect(page).toHaveURL(`${app.url}/c/chat?taille=m`);
+  await expect(page.locator("[data-results]")).toHaveAttribute("data-results", "2");
+  await expect(page.locator("ul.catalog > li[data-product]")).toHaveCount(2);
+  await expect(medium).toHaveAttribute("aria-current", "true");
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex");
+  await expect(page.locator("link[rel=canonical]")).toHaveAttribute("href", `${app.url}/c/chat`);
+  // The other filter counts what is left; a sort keeps the filter.
+  await expect(filters.locator("[data-filter=couleur]")).toHaveCount(0);
+  await page.locator("[data-sort]").selectOption("price_asc");
+  await page.getByRole("button", { name: "Trier" }).click();
+  await expect(page).toHaveURL(/sort=price_asc/);
+  await expect(page).toHaveURL(/taille=m/);
+  await expect(page.locator("ul.catalog > li[data-product]").first()).toHaveAttribute("data-product", "coussin");
+  // The whole catalogue offers them too.
+  await page.goto(`${app.url}/boutique?taille=s`);
+  await expect(page.locator("ul.catalog > li[data-product]")).toHaveCount(1);
+  // Crawlers are told to stay out of each.
+  const rules = await (await request.get(`${app.url}/robots.txt`)).text();
+  expect(rules).toContain("Disallow: /*?*taille=\n");
+  expect(rules).toContain("Disallow: /*?*couleur=\n");
+
+  // None at all: the price alone, and an address naming one shows everything.
+  await page.goto(`/t/${slug}/categories`);
+  await page.getByLabel("Options shoppers filter by").fill("");
+  await page.getByRole("button", { name: "Save filters" }).click();
+  await expect(page.getByRole("status")).toContainText("Filters saved.");
+  await expect(async () => {
+    await page.goto(`${app.url}/c/chat?taille=m`);
+    await expect(filters.locator("[data-filter-group]")).toHaveCount(0, { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(page.locator("[data-results]")).toHaveAttribute("data-results", "3");
 });
 
 test("the blog lists the merchant's articles, each with its contents and the products it shows", async ({
