@@ -18,6 +18,7 @@ pub const ORDERS: IconData = iconify_icon!("lucide:shopping-bag");
 pub const CARTS: IconData = iconify_icon!("lucide:shopping-cart");
 pub const CUSTOMERS: IconData = iconify_icon!("lucide:contact");
 pub const INVOICES: IconData = iconify_icon!("lucide:file-text");
+pub const SALES: IconData = iconify_icon!("lucide:chart-column");
 pub const DISCOUNTS: IconData = iconify_icon!("lucide:ticket-percent");
 pub const OFFERS: IconData = iconify_icon!("lucide:tag");
 pub const REVIEWS: IconData = iconify_icon!("lucide:star");

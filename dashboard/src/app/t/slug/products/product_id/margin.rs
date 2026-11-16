@@ -21,7 +21,7 @@ use crate::components::input::input;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
-use crate::ui::{LINK, fact, facts, section_card};
+use crate::ui::{LINK, fact, facts, section_card, signed_money};
 
 /// The form field of one combination's cost: `cost:<variant id>`.
 pub const COST_FIELD_PREFIX: &str = "cost:";
@@ -177,16 +177,6 @@ impl MarginView {
                 .map(|shop| shop.currency.clone()),
             currency,
         }
-    }
-}
-
-/// An amount that may be a loss, `-3.20 €`.
-fn signed_money(cents: i64, currency: &str) -> String {
-    let money = format_money(cents.unsigned_abs(), currency);
-    if cents < 0 {
-        format!("-{money}")
-    } else {
-        money
     }
 }
 

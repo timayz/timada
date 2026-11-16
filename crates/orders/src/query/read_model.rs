@@ -1,7 +1,9 @@
 //! The subscription that keeps `orders_orders`, `orders_carts`,
 //! `orders_order_products` (which products each order holds, for whoever
 //! asks whether a product was ever ordered) and `orders_order_mails` (where
-//! each mail to the shopper about an order stands) current for every tenant.
+//! each mail to the shopper about an order stands) current for every tenant,
+//! with what each order and each of its lines counts for in a sales report
+//! (`orders_sales`, `orders_sale_lines`).
 //!
 //! Each handler reloads the strict write model of the stream the event
 //! belongs to and rewrites its row, so delivery may repeat (the subscription
@@ -283,7 +285,7 @@ pub(crate) async fn upsert_order(
                 )
                 .await?;
             }
-            Ok(())
+            crate::query::sales::settle_sale(tx, tenant_id, order).await
         })
     })
     .await

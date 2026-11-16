@@ -690,6 +690,42 @@ costs are in another currency than the sale. `OrderState::profit_cents` is the t
 less all of it, known only when every line had a cost; the order's page shows it.
 Both fields are `#[serde(skip)]` on what the store API answers a storefront.
 
+### The sales report
+
+`/t/{slug}/sales` sums a period's orders: revenue, orders, average basket, refunds and
+profit, then the same by the channel that brought the shopper, by product (the best
+sellers) and by category. The orders read-model subscription writes, in the
+transaction that writes an order's row, what the order counts for (`orders_sales`) and
+what each of its lines does (`orders_sale_lines`): narrow rows, summed at the time of
+asking off their `placed_at` indexes (`crates/orders/src/query/sales.rs`). Nothing is
+kept per day, so a period is any two instants, and the page takes its days from the
+shop's time zone.
+
+An order counts from the day it is placed and for nothing once cancelled; its refunds
+count in the period it was placed in, whenever they were made. Profit is told for the
+orders that kept what each of their goods cost, their refunds taken off, and the page
+says how many of the period's orders that is. A line's profit is its share of what the
+order was paid once everything the sale cost beyond the goods came off (by what the
+line sold for), less its own goods (`OrderCosts::line_profits`), so the lines add up
+to the order. The report by category joins the catalog's memberships as they stand
+today (`catalog_product_categories`, in the same database), so a product in two
+categories counts in both.
+
+### Exports
+
+The Orders, Customers and Newsletter pages each give their list as a CSV file
+(`/t/{slug}/orders/export`, `/customers/export`, `/newsletter/export`), behind the
+permission that reads the page, for some days of the shop's clock (`?from=&to=`) or
+for everything. `dashboard/src/export.rs` writes a file behind its response, a page
+of rows at a time read off a key of the read model, as a feed is written: a shop of
+any size is exported without being held in memory. The orders file has one line per
+item, each saying again what is the order's own (address, discount, shipping, total,
+refunds, source) and, once the order is invoiced, its invoice's number and VAT.
+Amounts have two decimals, times are in UTC, and the file opens with a byte-order
+mark so a spreadsheet reads it as UTF-8. A cell a shopper typed that starts like a
+formula (`=`, `+`, `-`, `@`) is led by an apostrophe, so a spreadsheet shows it
+instead of working it out.
+
 ## Product pictures
 
 The event store records what a picture is, never its bytes. The upload itself is not

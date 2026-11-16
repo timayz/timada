@@ -29,6 +29,7 @@ pub mod redirects;
 pub mod rename;
 pub mod reviews;
 pub mod roles;
+pub mod sales;
 pub mod shipping;
 pub mod time_zone;
 

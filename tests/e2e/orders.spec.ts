@@ -8,6 +8,9 @@ import { createTenant, uniqueTenant } from "./tenants";
 // `orders:read` cannot open the pages. Orders themselves are placed by a
 // storefront: see storefront.spec.ts.
 
+/// A CSV file's text without the mark it opens with for spreadsheets.
+const bare = (csv: string) => csv.replace(/^\ufeff/, "");
+
 test("an owner sees the orders and the open carts", async ({ page }) => {
   await registerWithEmail(page, uniqueEmail("owner"));
   const { name, slug } = uniqueTenant("Orders Shop");
@@ -20,6 +23,29 @@ test("an owner sees the orders and the open carts", async ({ page }) => {
   await page.getByRole("button", { name: "Filter" }).click();
   await expect(page).toHaveURL(/status=paid/);
   await expect(page.getByText("No order yet.")).toBeVisible();
+
+  // Nothing to export yet: the file is its columns alone, under a name
+  // that says the days asked for. So are the customers' and the
+  // subscribers'.
+  await page.getByLabel("First day").fill("2026-10-01");
+  await page.getByLabel("Last day").fill("2026-10-31");
+  const downloading = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export as CSV" }).click();
+  const download = await downloading;
+  expect(download.suggestedFilename()).toBe(`orders-${slug}-2026-10-01-2026-10-31.csv`);
+  const orders = await page.request.get(`/t/${slug}/orders/export`);
+  expect(orders.status()).toBe(200);
+  expect(orders.headers()["content-type"]).toContain("text/csv");
+  expect(orders.headers()["content-disposition"]).toBe(`attachment; filename="orders-${slug}.csv"`);
+  expect(bare(await orders.text())).toBe(
+    "reference,placed_at,status,email,name,address,address_2,postal_code,city,country,phone,currency,product,variant,sku,quantity,unit_price,amount,tax_category,discount_code,discount,shipping_method,shipping,order_total,refunded,invoice,vat,source,first_source,note\r\n",
+  );
+  expect(bare(await (await page.request.get(`/t/${slug}/customers/export`)).text())).toBe(
+    "email,customer_since,orders,saved_addresses\r\n",
+  );
+  expect(bare(await (await page.request.get(`/t/${slug}/newsletter/export`)).text())).toBe(
+    "email,status,language,time_zone,asked_from,asked_at,confirmed_at,unsubscribed_at\r\n",
+  );
 
   await page.getByRole("link", { name: "Carts", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/t/${slug}/carts$`));
@@ -72,6 +98,10 @@ test("the orders pages need orders:read", async ({ browser, request }) => {
   await expect(viewer.getByRole("link", { name: "Carts", exact: true })).toHaveCount(0);
   expect((await viewer.goto(`/t/${slug}/orders`))?.status()).toBe(403);
   expect((await viewer.goto(`/t/${slug}/carts`))?.status()).toBe(403);
+  // Nor take them away as a file, nor the customers or the subscribers.
+  for (const list of ["orders", "customers", "newsletter"]) {
+    expect((await viewer.request.get(`/t/${slug}/${list}/export`)).status()).toBe(403);
+  }
 
   await ownerContext.close();
   await viewerContext.close();

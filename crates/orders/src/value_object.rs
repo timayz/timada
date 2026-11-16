@@ -404,6 +404,33 @@ impl OrderCosts {
             + self.vat_cents
     }
 
+    /// What each of `lines` left of an order paid `total_cents`, in their
+    /// order: its share of the total once everything the sale cost beyond
+    /// the goods came off (by what the line was sold for, the last line
+    /// taking what rounding leaves), less what its own goods cost. They add
+    /// up to [`profit_cents`](Self::profit_cents). `None` when the cost of
+    /// one of the lines is not known.
+    pub fn line_profits(&self, lines: &[OrderLine], total_cents: u64) -> Option<Vec<i64>> {
+        self.goods_cents(lines)?;
+        let net = total_cents as i128 - self.other_cents() as i128;
+        let sold: i128 = lines.iter().map(|line| line.amount_cents() as i128).sum();
+        let mut left = net;
+        let mut profits = Vec::with_capacity(lines.len());
+        for (n, (line, cost)) in lines.iter().zip(&self.unit_costs).enumerate() {
+            let share = if n + 1 == lines.len() {
+                left
+            } else if sold == 0 {
+                0
+            } else {
+                (net * line.amount_cents() as i128).div_euclid(sold)
+            };
+            left -= share;
+            let goods = (*cost)? as i128 * i128::from(line.quantity);
+            profits.push((share - goods) as i64);
+        }
+        Some(profits)
+    }
+
     /// What an order of `lines` paid `total_cents` left; negative when it
     /// lost money, `None` when the cost of one of its lines is not known.
     pub fn profit_cents(&self, lines: &[OrderLine], total_cents: u64) -> Option<i64> {

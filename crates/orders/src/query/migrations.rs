@@ -19,7 +19,12 @@ pub const MIGRATION_APP: &str = "orders";
 /// storefront did not say, for [`orders_by_source`](crate::orders_by_source)
 /// to count by. `orders_tallies`
 /// holds how many orders and open carts each tenant has, for its
-/// home (see `ORDERS` and `OPEN_CARTS`).
+/// home (see `ORDERS` and `OPEN_CARTS`). `orders_sales` is what each order
+/// counts for in a sales report, and `orders_sale_lines` what each of its
+/// lines does: narrow rows a period is summed from, read off their
+/// `placed_at` indexes. `counted` is 0 once the order is cancelled;
+/// `profit_cents` is `NULL` for an order sold before the shop said what
+/// every one of its goods cost.
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
     &[Migration::up(
@@ -99,6 +104,35 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 order_id TEXT NOT NULL,
                 PRIMARY KEY (tenant_id, product_id, order_id)
             );
+        CREATE TABLE orders_sales (
+                tenant_id TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                placed_at INTEGER NOT NULL,
+                currency TEXT NOT NULL,
+                counted INTEGER NOT NULL,
+                total_cents INTEGER NOT NULL,
+                refunded_cents INTEGER NOT NULL,
+                item_count INTEGER NOT NULL,
+                profit_cents INTEGER,
+                source TEXT,
+                PRIMARY KEY (tenant_id, order_id)
+            );
+        CREATE INDEX orders_sales_placed ON orders_sales (tenant_id, placed_at);
+        CREATE TABLE orders_sale_lines (
+                tenant_id TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                line INTEGER NOT NULL,
+                placed_at INTEGER NOT NULL,
+                currency TEXT NOT NULL,
+                counted INTEGER NOT NULL,
+                product_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                quantity INTEGER NOT NULL,
+                amount_cents INTEGER NOT NULL,
+                profit_cents INTEGER,
+                PRIMARY KEY (tenant_id, order_id, line)
+            );
+        CREATE INDEX orders_sale_lines_placed ON orders_sale_lines (tenant_id, placed_at);
         CREATE TABLE orders_order_mails (
                 tenant_id TEXT NOT NULL,
                 order_id TEXT NOT NULL,
@@ -125,6 +159,8 @@ pub const TABLES: &[&str] = &[
     "orders_orders",
     "orders_carts",
     "orders_order_products",
+    "orders_sales",
+    "orders_sale_lines",
     "orders_order_mails",
     "orders_tallies",
 ];

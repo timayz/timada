@@ -19,6 +19,16 @@ use topcoat::{
 
 use crate::components::alert::{AlertVariant, alert, alert_description};
 
+/// An amount that may be a loss, with its currency: `-3.20 €`.
+pub fn signed_money(cents: i64, currency: &str) -> String {
+    let money = timada_core::format_money(cents.unsigned_abs(), currency);
+    if cents < 0 {
+        format!("-{money}")
+    } else {
+        money
+    }
+}
+
 /// A notice above a page's content: `error` codes from a redirect, or a
 /// confirmation message.
 #[component]

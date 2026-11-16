@@ -11,6 +11,7 @@ mod config;
 mod db;
 mod disk;
 mod ecb;
+mod export;
 mod feed;
 mod hold_reminders;
 mod idle_carts;
