@@ -188,6 +188,31 @@ pub enum MetaPixel {
     },
 }
 
+/// The pop-up that invites a visitor of the storefront to its newsletter:
+/// one stream per shop, with the id
+/// [`newsletter_popup_id`](crate::newsletter_popup_id). The storefront shows
+/// it once to a visitor, never to one who subscribed, and its form is the
+/// newsletter's own: the address is confirmed by mail as from any other.
+#[evento::aggregate(name = "timada-pages/NewsletterPopup")]
+pub enum NewsletterPopup {
+    /// The pop-up whole, as it stands from now on.
+    PopupSet {
+        /// Whether the storefront shows it.
+        shown: bool,
+        /// What it offers, in a few words ("-10 % sur votre première
+        /// commande").
+        title: String,
+        /// A sentence or two under the title; may be empty.
+        text: String,
+        /// Seconds on a page before it opens.
+        delay_secs: u32,
+        /// Whether it also opens when the pointer leaves the page upwards,
+        /// before the delay.
+        on_leave: bool,
+        set_by: String,
+    },
+}
+
 /// The blog's events, in their own module: the macro names an event struct
 /// after its variant, and `Created`, `Edited`, `Renamed`… already belong to
 /// the page above.

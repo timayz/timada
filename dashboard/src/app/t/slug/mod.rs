@@ -21,6 +21,7 @@ pub mod members;
 pub mod messages;
 pub mod meta_pixel;
 pub mod newsletter;
+pub mod newsletter_popup;
 pub mod offers;
 pub mod orders;
 pub mod pages;

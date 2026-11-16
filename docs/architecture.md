@@ -1136,6 +1136,11 @@ category (`[[product:slug]]`, `[[category:slug]]`) for the storefront to draw th
 The back office (`/t/{slug}/articles`, under the pages' two permissions) lists them from
 the `articles` read model, the most recent first, page after page.
 
+The newsletter's pop-up is one more stream of the shop's here (`NewsletterPopup`): what
+the storefront's dialog offers and when it opens, copied by the storefront while it is
+shown. Signing up from it is signing up from the footer: nothing of the double opt-in
+moved.
+
 The shop's Google tag and Meta pixel live here too, one stream each (`GoogleTag`,
 `MetaPixel`): what the storefront writes into its pages, held back as each visitor's
 answer to its cookie banner says (`docs/storefront.md`). The pixel's stream also holds

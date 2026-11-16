@@ -131,7 +131,10 @@ pub async fn subscribe(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Re
     }
     let email = form.get("email").map(String::as_str).unwrap_or_default();
     match hand_in(cx, email).await? {
-        Ok(()) => Ok(see_other(newsletter_url(cx, None, Some("sent")))),
+        Ok(()) => {
+            crate::shopper::note_subscribed(cx);
+            Ok(see_other(newsletter_url(cx, None, Some("sent"))))
+        }
         Err(refusal) => Ok(see_other(newsletter_url(cx, Some(refusal.code()), None))),
     }
 }

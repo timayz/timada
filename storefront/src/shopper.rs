@@ -56,6 +56,30 @@ pub fn set_consent(cx: &Cx, consent: Consent) {
     );
 }
 
+/// The cookie that keeps the newsletter's pop-up from a visitor: `seen`
+/// once it opened for them (the pop-up's own script writes that), `in`
+/// once they gave their address. In the clear: it holds no secret, and no
+/// one is told apart by it.
+pub const NEWSLETTER_COOKIE: &str = "newsletter";
+const NEWSLETTER_MAX_AGE_DAYS: i64 = 365;
+
+/// Whether the newsletter was put to this visitor already: its pop-up
+/// opened for them, or they subscribed.
+pub fn invited(cx: &Cx) -> bool {
+    cookies(cx).get(NEWSLETTER_COOKIE).is_some()
+}
+
+/// Notes that this visitor gave their address to the newsletter, so its
+/// pop-up never opens for them.
+pub fn note_subscribed(cx: &Cx) {
+    cookies(cx).add(
+        Cookie::build((NEWSLETTER_COOKIE, "in"))
+            .path("/")
+            .same_site(SameSite::Lax)
+            .max_age(time::Duration::days(NEWSLETTER_MAX_AGE_DAYS)),
+    );
+}
+
 /// The most a cookie holds is 4096 bytes, name and attributes included, and
 /// encrypting the source grows it by a third.
 const MAX_SOURCE_JSON_LEN: usize = 2400;
