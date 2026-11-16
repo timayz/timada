@@ -690,6 +690,15 @@ costs are in another currency than the sale. `OrderState::profit_cents` is the t
 less all of it, known only when every line had a cost; the order's page shows it.
 Both fields are `#[serde(skip)]` on what the store API answers a storefront.
 
+A shop that bids on profit says so on its Google tag page or its Meta pixel page
+(`GoogleTag::GoogleSaleValueSet`, `MetaPixel::MetaSaleValueSet`). For that shop, and no
+other, the store API tells what an order left with the order
+(`conversion_profit_cents`, one number): the order's page has to write it. The Google
+Ads conversion carries it, and so do the pixel's `Purchase` and the Conversions API
+event, which Meta counts once and must find worth the same; Analytics, which reports
+revenue, is told the total either way. An order whose profit is not known is sent at
+its total, and one sold at a loss at zero (`OrderState::conversion_value_cents`).
+
 ### The sales report
 
 `/t/{slug}/sales` sums a period's orders: revenue, orders, average basket, refunds and
