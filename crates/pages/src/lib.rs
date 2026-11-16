@@ -16,6 +16,12 @@
 //! HTML each time a page is shown, which keeps no raw HTML and no picture
 //! from elsewhere.
 //!
+//! The blog's articles live here too ([`aggregator::article`]): written,
+//! published, moved and deleted as a page is, under slugs of their own,
+//! each with a summary, a cover among its pictures and the day it came out.
+//! [`render_article`] renders one with an id on each heading, for a table of
+//! contents, cut where its body names a product or a category to show.
+//!
 //! The shop's announcements live here too: the short messages ("-10% with
 //! the code WELCOME10") the storefront's top bar cycles through, each shown
 //! or hidden, within an optional window, in the order the merchant set. One

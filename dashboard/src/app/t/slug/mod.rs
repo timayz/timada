@@ -5,6 +5,7 @@
 pub mod aliexpress;
 pub mod announcements;
 pub mod api_keys;
+pub mod articles;
 pub mod automations;
 pub mod carts;
 pub mod categories;

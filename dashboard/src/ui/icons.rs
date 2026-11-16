@@ -26,6 +26,7 @@ pub const MESSAGES: IconData = iconify_icon!("lucide:message-square");
 pub const NEWSLETTER: IconData = iconify_icon!("lucide:newspaper");
 pub const AUTOMATIONS: IconData = iconify_icon!("lucide:workflow");
 pub const PAGES: IconData = iconify_icon!("lucide:book-open");
+pub const ARTICLES: IconData = iconify_icon!("lucide:newspaper");
 pub const ANNOUNCEMENTS: IconData = iconify_icon!("lucide:megaphone");
 pub const REDIRECTS: IconData = iconify_icon!("lucide:corner-up-right");
 pub const GOOGLE_TAG: IconData = iconify_icon!("lucide:chart-no-axes-column");

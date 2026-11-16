@@ -12,7 +12,7 @@ use super::{Command, PageSlugState};
 
 /// How many times a claim or a release reads the entry again after losing
 /// a race for it.
-const CLAIM_ATTEMPTS: usize = 3;
+pub(super) const CLAIM_ATTEMPTS: usize = 3;
 
 impl<E: Executor> Command<E> {
     /// Points a normalized slug at `page_id`, at the version of the page its

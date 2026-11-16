@@ -1,8 +1,8 @@
-//! Where an old address went. A product or a page renamed in the back
-//! office leaves its slug; the copy remembers the slugs each one left
+//! Where an old address went. A product, a page or an article renamed in
+//! the back office leaves its slug; the copy remembers the slugs each one left
 //! (`storefront_former_slugs`), and an archived product's last one, so the
 //! old address can answer with a permanent redirect instead of a 404:
-//! [`moved_product`] and [`moved_page`]. A live slug always wins: the host
+//! [`moved_product`], [`moved_page`] and [`moved_article`]. A live slug always wins: the host
 //! asks only once its own page answered 404, so a slug something else
 //! claimed since shows that thing.
 //!
@@ -24,6 +24,8 @@ use crate::query::published_product_categories;
 pub(crate) const PRODUCT: &str = "product";
 /// The `kind` of a page's rows.
 pub(crate) const PAGE: &str = "page";
+/// The `kind` of a blog article's rows.
+pub(crate) const ARTICLE: &str = "article";
 
 /// Makes the former slugs of one thing in the copy what `wanted` says,
 /// writing only when they differ: most events of a product move none.
@@ -124,6 +126,21 @@ pub async fn moved_page_slug(db: &Db, slug: &str) -> anyhow::Result<Option<Strin
     Ok(now.map(|(slug,)| slug))
 }
 
+/// The slug of the published article that last went by `slug`, if any.
+pub async fn moved_article_slug(db: &Db, slug: &str) -> anyhow::Result<Option<String>> {
+    let now: Option<(String,)> = db
+        .fetch_optional(
+            "SELECT a.slug
+             FROM storefront_former_slugs f
+             JOIN storefront_articles a ON a.id = f.id
+             WHERE f.kind = ?1 AND f.slug = ?2
+             ORDER BY f.left_at DESC, f.id LIMIT 1",
+            (ARTICLE, slug),
+        )
+        .await?;
+    Ok(now.map(|(slug,)| slug))
+}
+
 /// Where the merchant's list sends the old path `path` (no query), if it
 /// names it. A trailing slash is the same path.
 pub async fn redirect_target(db: &Db, path: &str) -> anyhow::Result<Option<String>> {
@@ -152,6 +169,14 @@ pub async fn moved_product(cx: &Cx, slug: &str) -> Result<Option<MovedProduct>> 
 /// [`moved_page_slug`].
 pub async fn moved_page(cx: &Cx, slug: &str) -> Result<Option<String>> {
     moved_page_slug(store(cx).db(), slug)
+        .await
+        .map_err(Error::from_anyhow)
+}
+
+/// The slug of the published article that went by `slug`; see
+/// [`moved_article_slug`].
+pub async fn moved_article(cx: &Cx, slug: &str) -> Result<Option<String>> {
+    moved_article_slug(store(cx).db(), slug)
         .await
         .map_err(Error::from_anyhow)
 }

@@ -236,8 +236,8 @@ pub fn describe_error(code: &str) -> &'static str {
         "order_not_found" => "This order does not exist.",
         "newsletter_not_found" => "This subscriber is no longer on the list.",
         "campaign_not_found" => "This campaign does not exist.",
-        "page_invalid_title" => "A page's title is 1 to 120 characters.",
-        "page_invalid_body" => "A page is at most 100,000 characters.",
+        "page_invalid_title" => "A title is 1 to 120 characters.",
+        "page_invalid_body" => "The content is at most 100,000 characters.",
         "page_invalid_seo" => {
             "The search engines' title is at most 70 characters, the description at most 160."
         }
@@ -245,9 +245,13 @@ pub fn describe_error(code: &str) -> &'static str {
             "An address is 2 to 64 lowercase letters, digits or dashes, with no dash at either end."
         }
         "page_slug_taken" => "Another page has this address.",
-        "page_too_many_images" => "A page carries at most 50 pictures.",
+        "page_too_many_images" => "A page or an article carries at most 50 pictures.",
         "page_not_found" => "This page does not exist.",
-        "page_image_not_found" => "This picture is no longer on the page.",
+        "page_image_not_found" => "This picture is no longer there.",
+        "article_invalid_summary" => "A summary is at most 300 characters.",
+        "article_invalid_date" => "An article is dated today or before.",
+        "article_slug_taken" => "Another article has this address.",
+        "article_not_found" => "This article does not exist.",
         "announcement_invalid" => "An announcement is 1 to 200 characters.",
         "announcement_invalid_link" => {
             "An announcement links at most once, to a page of the shop (/…) or an https:// address."
