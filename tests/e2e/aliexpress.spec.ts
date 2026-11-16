@@ -733,10 +733,15 @@ test("an order AliExpress may have stays out of the shopper's hands", async ({ p
       "look at the account's orders on AliExpress before placing this one again",
     );
     // The money is still only held while AliExpress may have the order: the
-    // merchant is told to take it before the hold lapses.
-    await expect(page.locator("[data-order-hold-at-risk]")).toContainText(
-      "Check AliExpress and take the payment before",
-    );
+    // merchant is told to take it before the hold lapses. The order's own
+    // row says so, a moment behind the forwarding's.
+    await expect(async () => {
+      await page.goto(merchantOrder);
+      await expect(page.locator("[data-order-hold-at-risk]")).toContainText(
+        "Check AliExpress and take the payment before",
+        { timeout: 1000 },
+      );
+    }).toPass({ timeout: 15_000 });
     await expect(page.locator("[data-order-hold-reminded]")).toHaveCount(0);
     // AliExpress's list may not show it yet: the merchant is asked to rule
     // it out only half an hour later.

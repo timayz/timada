@@ -4,7 +4,7 @@
 //! [`STOREFRONT_ACTOR`](crate::STOREFRONT_ACTOR), since a guest has no
 //! account to name.
 
-use crate::value_object::{Checkpoint, OrderLine, Payment, ShippingAddress};
+use crate::value_object::{Checkpoint, OrderLine, OrderSource, Payment, ShippingAddress};
 
 /// What a shopper means to buy. Its id is a ULID the storefront keeps (a
 /// cookie, typically). A line is a product, or one variant of it, and a
@@ -163,6 +163,14 @@ pub enum Cart {
     TimeZoneGiven {
         request_id: String,
         time_zone: String,
+        given_by: String,
+    },
+    /// What brought the shopper to the shop, written with the
+    /// `CheckoutRequested` of the same request when the storefront kept it
+    /// (the shopper allowed it).
+    SourceGiven {
+        request_id: String,
+        source: OrderSource,
         given_by: String,
     },
     /// What shipping the payment of a request is priced with, written with
@@ -404,6 +412,9 @@ pub enum Order {
     /// The shopper's IANA time zone, written with `Placed` when their
     /// browser gave it.
     TimeZoneSet { time_zone: String, set_by: String },
+    /// What brought the shopper to the shop, written with `Placed` when
+    /// their checkout said it.
+    SourceSet { source: OrderSource, set_by: String },
     /// The merchant was told that the hold on the shopper's card
     /// (`payment_id`) lapses soon while the supplier may have the order.
     /// Written by the node that mails them, before the mail goes out and

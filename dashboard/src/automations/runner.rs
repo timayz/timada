@@ -1620,6 +1620,7 @@ mod tests {
                     language: None,
                     newsletter: false,
                     time_zone: None,
+                    source: None,
                 },
             )
             .await

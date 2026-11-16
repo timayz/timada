@@ -44,8 +44,9 @@ use topcoat::{
     context::{Cx, try_context},
     cookie::{CookieLayer, Key},
     router::{
-        Body, BodyLimit, IpNet, LayerFn, LayerFuture, Next, Router, RouterBuilderDiscoverExt,
-        TrustedProxies, href, module_router, page, request::original_uri,
+        Body, BodyLimit, IpNet, LayerFn, LayerFuture, Method, Next, Router,
+        RouterBuilderDiscoverExt, TrustedProxies, href, module_router, page,
+        request::{method, original_uri},
     },
     view::{Child, Unescaped, View, attributes, view},
 };
@@ -86,6 +87,8 @@ pub fn router(store: Store, cookie_key: Key, trusted_proxies: Vec<IpNet>) -> Rou
         .layer(UnavailablePage)
         .layer(moved::MovedAddress)
         .layer(LayerFn::new(Some("/orders"), pass).with(BodyLimit::max(REVIEW_LIMIT)))
+        // At `/` and before the cookie layer, which then runs outside it.
+        .layer(LayerFn::new(Some("/"), remember_source))
         .trusted_proxies(TrustedProxies::new().networks(trusted_proxies))
         .layer(CookieLayer::new())
         .with(cookie_key)
@@ -95,6 +98,22 @@ pub fn router(store: Store, cookie_key: Key, trusted_proxies: Vec<IpNet>) -> Rou
 
 /// Lets a request through, for a layer that only carries route context.
 fn pass<'a>(cx: &'a Cx, body: Body, next: Next<'a>) -> LayerFuture<'a> {
+    next.run(cx, body)
+}
+
+/// Keeps what brought the visitor (a click id, a campaign, another site),
+/// when the address of a page says so and they allowed it. The checkout's
+/// pages are left out: a bank's or Stripe's page sending the shopper back is
+/// not what brought them.
+fn remember_source<'a>(cx: &'a Cx, body: Body, next: Next<'a>) -> LayerFuture<'a> {
+    let path = original_uri(cx).path();
+    if *method(cx) == Method::GET
+        && !path.starts_with("/checkout")
+        && let Err(err) = crate::shopper::remember_request(cx)
+    {
+        // A sale is never lost to what measures it.
+        tracing::warn!(error = %err, "cannot keep what brought the visitor");
+    }
     next.run(cx, body)
 }
 

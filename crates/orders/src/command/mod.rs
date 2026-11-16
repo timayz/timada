@@ -38,11 +38,11 @@ use crate::aggregator::{
     PaymentRefused, PaymentReleased, PaymentRequested, PaymentReturnRefused,
     PaymentReturnRequested, PaymentReturned, PaymentsDisabled, PaymentsEnabled, Placed,
     QuantitySet, RefundRequested, Refunded, Released as ReferenceReleased, SettledOutside,
-    ShippingCharged, ShippingGranted, ShippingMethodChosen, StorefrontAddressCleared,
-    StorefrontAddressSet, SupplierOrderRefused, SupplierOrderRuledOut, SupplierOrderStarted,
-    SupplierOrderUncertain, TimeZoneGiven, TimeZoneSet,
+    ShippingCharged, ShippingGranted, ShippingMethodChosen, SourceGiven, SourceSet,
+    StorefrontAddressCleared, StorefrontAddressSet, SupplierOrderRefused, SupplierOrderRuledOut,
+    SupplierOrderStarted, SupplierOrderUncertain, TimeZoneGiven, TimeZoneSet,
 };
-use crate::value_object::{OrderLine, Payment, ShippingAddress, order_id};
+use crate::value_object::{OrderLine, OrderSource, Payment, ShippingAddress, order_id};
 
 /// The command gateway. Cheap to clone when `E` is.
 pub struct Command<E: Executor> {
@@ -211,6 +211,9 @@ pub struct CheckoutRequest {
     pub newsletter: bool,
     /// The shopper's IANA time zone, when the browser said one.
     pub time_zone: Option<String>,
+    /// What brought the shopper, when the storefront kept it.
+    #[serde(default)]
+    pub source: Option<OrderSource>,
     /// The node answering it, once one took it on. Not a storefront's
     /// business, so left out of what the dashboard answers it.
     #[serde(skip)]
@@ -462,6 +465,7 @@ pub fn cart_projection<E: Executor>() -> Projection<E, CartState> {
         .handler(on_shipping_granted())
         .handler(on_language_given())
         .handler(on_time_zone_given())
+        .handler(on_source_given())
         .handler(on_newsletter_opted_in())
         .handler(on_expired())
         .strict()
@@ -549,6 +553,7 @@ async fn on_checkout_requested(
         language: None,
         newsletter: false,
         time_zone: None,
+        source: None,
         claim: None,
         answer: None,
         returning: None,
@@ -781,6 +786,18 @@ async fn on_shipping_method_chosen(
 }
 
 #[evento::handler]
+async fn on_source_given(event: Event<SourceGiven>, cart: &mut CartState) -> anyhow::Result<()> {
+    if let Some(request) = cart
+        .requests
+        .iter_mut()
+        .find(|request| request.request_id == event.data.request_id)
+    {
+        request.source = Some(event.data.source.to_owned());
+    }
+    Ok(())
+}
+
+#[evento::handler]
 async fn on_time_zone_given(
     event: Event<TimeZoneGiven>,
     cart: &mut CartState,
@@ -984,6 +1001,9 @@ pub struct OrderState {
     pub newsletter: bool,
     /// The shopper's IANA time zone, when their browser gave it.
     pub time_zone: Option<String>,
+    /// What brought the shopper to the shop, when their checkout said it.
+    #[serde(default)]
+    pub source: Option<OrderSource>,
     /// What went back to the shopper, in minor units, all refunds together.
     pub refunded_cents: u64,
     /// The provider's ids of those refunds.
@@ -1252,6 +1272,7 @@ pub fn order_projection<E: Executor>() -> Projection<E, OrderState> {
         .handler(on_language_set())
         .handler(on_newsletter_opt_in_set())
         .handler(on_time_zone_set())
+        .handler(on_source_set())
         .handler(on_hold_lapse_reminded())
         .handler(on_settled_outside())
         .handler(on_invoicing_failed())
@@ -1479,6 +1500,12 @@ async fn on_shipping_charged(
         name: event.data.name.to_owned(),
         amount_cents: event.data.amount_cents,
     });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_source_set(event: Event<SourceSet>, order: &mut OrderState) -> anyhow::Result<()> {
+    order.source = Some(event.data.source.to_owned());
     Ok(())
 }
 

@@ -1,12 +1,15 @@
 //! What this browser holds: its cart, the orders it placed (only those, and
 //! the signed-in shopper's, may be looked at again), the address it last
-//! checked out with, and the token of the shopper signed in on it. Each lives
-//! in a private (encrypted, authenticated) cookie.
+//! checked out with, the token of the shopper signed in on it and, when the
+//! visitor allowed it, what brought them to the shop. Each lives in a private
+//! (encrypted, authenticated) cookie; the answer to the cookie banner alone
+//! is kept in the clear.
 
 use serde::{Deserialize, Serialize};
 use timada_storefront::{
-    CONSENT_COOKIE, CONSENT_MAX_AGE_DAYS, Consent, SavedAddress, ShippingAddress, Shopper,
-    is_store_unavailable, order, shopper, store,
+    CONSENT_COOKIE, CONSENT_MAX_AGE_DAYS, Click, Consent, OrderSource, SOURCE_MAX_AGE_DAYS,
+    SavedAddress, ShippingAddress, Shopper, arriving_click, click_within, is_store_unavailable,
+    order, remember_click, shopper, source_within, store,
 };
 
 use crate::app::checkout::countries;
@@ -50,6 +53,77 @@ pub fn set_consent(cx: &Cx, consent: Consent) {
             .same_site(SameSite::Lax)
             .max_age(time::Duration::days(CONSENT_MAX_AGE_DAYS)),
     );
+}
+
+/// The most a cookie holds is 4096 bytes, name and attributes included, and
+/// encrypting the source grows it by a third.
+const MAX_SOURCE_JSON_LEN: usize = 2400;
+
+fn source_store(cx: &Cx) -> UnparsedCookieStore<OrderSource, impl Cookies + '_> {
+    cookie_store(
+        jar(cx).default_max_age(time::Duration::days(SOURCE_MAX_AGE_DAYS)),
+        "source",
+    )
+}
+
+fn kept_source(cx: &Cx) -> Option<OrderSource> {
+    source_store(cx)
+        .parse()
+        .ok()
+        .flatten()
+        .map(|store| store.get())
+}
+
+/// What brought this visitor, as far as they allow it now: what the
+/// checkout hands to the order.
+pub fn source(cx: &Cx) -> Option<OrderSource> {
+    source_within(kept_source(cx)?, consent(cx))
+}
+
+/// Keeps `click` as this browser's last arrival (and its first, when it
+/// holds none), as far as `consent` covers it.
+pub fn remember_arrival(cx: &Cx, click: Click, consent: Consent) -> topcoat::Result<()> {
+    let Some(click) = click_within(click, consent) else {
+        return Ok(());
+    };
+    let mut source = remember_click(kept_source(cx), click);
+    // Two long arrivals would not fit: the last one alone does.
+    if serde_json::to_string(&source)?.len() > MAX_SOURCE_JSON_LEN {
+        source.first = source.last.clone();
+        if serde_json::to_string(&source)?.len() > MAX_SOURCE_JSON_LEN {
+            return Ok(());
+        }
+    }
+    source_store(cx).set(source).commit()?;
+    Ok(())
+}
+
+/// Keeps the arrival this request tells of, if it tells of one and the
+/// visitor allowed it. Called for every page asked for.
+pub fn remember_request(cx: &Cx) -> topcoat::Result<()> {
+    let Some(consent) = consent(cx) else {
+        return Ok(());
+    };
+    match arriving_click(cx) {
+        Some(click) => remember_arrival(cx, click, consent),
+        None => Ok(()),
+    }
+}
+
+/// Drops of the kept source what a new answer to the cookie banner no
+/// longer covers.
+pub fn keep_source_within(cx: &Cx, consent: Consent) -> topcoat::Result<()> {
+    let Some(source) = kept_source(cx) else {
+        return Ok(());
+    };
+    match source_within(source.clone(), Some(consent)) {
+        Some(allowed) if allowed == source => {}
+        Some(allowed) => {
+            source_store(cx).set(allowed).commit()?;
+        }
+        None => source_store(cx).remove(),
+    }
+    Ok(())
 }
 
 fn cart_store(cx: &Cx) -> UnparsedCookieStore<String, impl Cookies + '_> {

@@ -287,6 +287,46 @@ plain form: no script is needed. The answer is kept six months in the `consent` 
 in the clear (`analytics.ads`, `analytics`, `ads` or `none`), and `CONSENT_MODE` in
 `storefront/src/app/mod.rs` picks the mode.
 
+### What brought a shopper
+
+An order can keep where its shopper came from, for the merchant to see which campaign
+sold. The library reads an arrival off a request and the host keeps it, within what the
+visitor allowed:
+
+```rust
+use timada_storefront::{OrderSource, arriving_click, click_within, remember_click,
+    source_within, SOURCE_MAX_AGE_DAYS};
+
+// on each page asked for, once the visitor answered the banner:
+if let Some(click) = arriving_click(cx).and_then(|click| click_within(click, consent)) {
+    let source: OrderSource = remember_click(kept, click);   // keep SOURCE_MAX_AGE_DAYS
+}
+// at checkout:
+Checkout { source: kept.and_then(|source| source_within(source, answer)), ..checkout }
+```
+
+An arrival (`Click`) is an address carrying a click id (`gclid`, `gbraid`, `wbraid`,
+`fbclid`) or a campaign parameter (`utm_source`, `utm_medium`, `utm_campaign`, `utm_term`,
+`utm_content`), or a page reached from another site (its address without the query, as
+`referrer`); it also notes the path landed on and when. A page reached from the shop
+itself, or typed in, is none. `remember_click` keeps the first arrival and moves the last.
+`click_within` and `source_within` hold it to the consent: the click ids need `ads`, the
+rest `analytics`, and no answer keeps nothing; an answer taken back drops what it no
+longer covers.
+
+The order keeps both arrivals (`OrderState::source`), and its page in the back office
+shows them under "Where it came from", with the channel of each as `source / medium`:
+the campaign's own words, else `google / cpc` for a Google Ads click, `facebook / fbclid`
+for one Meta tagged, else the site it came from. The orders are counted by the last
+arrival's channel (`timada_orders::orders_by_source`); an order whose storefront said
+nothing counts apart.
+
+The storefront keeps the source ninety days in a private cookie (`shopper.rs`), reads
+arrivals in a layer over every page but the checkout's (a bank's page sending the
+shopper back is not what brought them), and has the banner's form carry the address it
+sat on and the site the visitor came from: a visitor who lands from an ad and only then
+accepts is still counted.
+
 ### An address that moved
 
 A product renamed in the back office moves to the slug of its new name, and a page can
@@ -898,6 +938,7 @@ The browser suite boots it with a key minted in the dashboard on a small catalog
 made there: `tests/e2e/storefront.spec.ts` walks the home, a category, a product, the
 cart, the search and a shop page, answers the cookie banner, and stops the process; `storefront-shop.spec.ts` checks
 the catalogue follows live, then fills a cart, checks out, pays, and uses stock, discount
-codes, delivery methods and checkout offers; `storefront-accounts.spec.ts` reviews what
+codes, delivery methods and checkout offers, and checks an order keeps what brought
+its shopper only as far as they allowed; `storefront-accounts.spec.ts` reviews what
 it bought, is invoiced at the VAT of where the goods go, and signs a returning shopper in
 on a second browser.

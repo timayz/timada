@@ -1157,6 +1157,8 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
         language: request_language(cx),
         // A scheduled newsletter keeps the shopper's hours.
         time_zone: request_time_zone(cx),
+        // What brought the shopper, as far as they allowed keeping it.
+        source: crate::shopper::source(cx),
         newsletter: !form.newsletter.is_empty(),
     };
     let err = match start_payment(cx, &cart_id, checkout).await? {

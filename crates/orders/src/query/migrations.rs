@@ -13,7 +13,11 @@ pub const MIGRATION_APP: &str = "orders";
 /// `orders_order_mails` where each mail to the shopper about an order stands.
 /// An order's `search_text` is its reference, e-mail address and name as a
 /// search finds them (`timada_core::db::tenant_search_key`), written once:
-/// none of the three changes after the order is placed. `orders_tallies`
+/// none of the three changes after the order is placed. Its `source` is
+/// the channel that brought the shopper
+/// ([`OrderSource::channel`](crate::OrderSource::channel)), `NULL` when the
+/// storefront did not say, for [`orders_by_source`](crate::orders_by_source)
+/// to count by. `orders_tallies`
 /// holds how many orders and open carts each tenant has, for its
 /// home (see `ORDERS` and `OPEN_CARTS`).
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
@@ -49,8 +53,10 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 hold_reminder_at INTEGER,
                 state TEXT NOT NULL,
                 search_text TEXT NOT NULL,
+                source TEXT,
                 PRIMARY KEY (tenant_id, id)
             );
+        CREATE INDEX orders_orders_source ON orders_orders (tenant_id, source, placed_at);
         CREATE INDEX orders_orders_placed ON orders_orders (tenant_id, placed_at, id);
         CREATE INDEX orders_orders_hold_reminder ON orders_orders (hold_reminder_at)
                 WHERE hold_reminder_at IS NOT NULL;
