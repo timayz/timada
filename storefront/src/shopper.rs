@@ -5,13 +5,17 @@
 
 use serde::{Deserialize, Serialize};
 use timada_storefront::{
-    SavedAddress, ShippingAddress, Shopper, is_store_unavailable, order, shopper, store,
+    CONSENT_COOKIE, CONSENT_MAX_AGE_DAYS, Consent, SavedAddress, ShippingAddress, Shopper,
+    is_store_unavailable, order, shopper, store,
 };
 
 use crate::app::checkout::countries;
 use topcoat::{
     context::{Cx, memoize},
-    cookie::{Cookies, SameSite, UnparsedCookieStore, cookie_store, private_cookies, time},
+    cookie::{
+        Cookie, Cookies, SameSite, UnparsedCookieStore, cookie_store, cookies, private_cookies,
+        time,
+    },
 };
 
 /// How long a browser keeps its cart, its orders and its address.
@@ -27,6 +31,25 @@ fn jar(cx: &Cx) -> impl Cookies + '_ {
         .default_path("/")
         .default_http_only(true)
         .default_max_age(time::Duration::days(MAX_AGE_DAYS))
+}
+
+/// What this visitor answered the cookie banner, if anything yet. The one
+/// cookie kept in the clear: it holds no secret, and the visitor (or a
+/// script of the shop's own) may read what was answered.
+pub fn consent(cx: &Cx) -> Option<Consent> {
+    cookies(cx)
+        .get(CONSENT_COOKIE)
+        .and_then(|cookie| Consent::parse(cookie.value()))
+}
+
+/// Keeps the answer until the banner is due to ask again.
+pub fn set_consent(cx: &Cx, consent: Consent) {
+    cookies(cx).add(
+        Cookie::build((CONSENT_COOKIE, consent.cookie_value()))
+            .path("/")
+            .same_site(SameSite::Lax)
+            .max_age(time::Duration::days(CONSENT_MAX_AGE_DAYS)),
+    );
 }
 
 fn cart_store(cx: &Cx) -> UnparsedCookieStore<String, impl Cookies + '_> {

@@ -29,6 +29,12 @@ p.stock { font-weight: 600; }
 tr[data-sold-out] { opacity: .6; }
 
 /* Top bar */
+.consent { font-size: .85rem; border-bottom: 1px solid; padding: .75rem 0; }
+.consent .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1.5rem; }
+.consent p { margin: 0; flex: 1 1 20rem; }
+.consent form { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; }
+form.cookies label.check { display: flex; gap: .5rem; align-items: baseline; margin: .75rem 0; }
+form.cookies .cookies-act { display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
 .topbar { font-size: .8rem; border-bottom: 1px solid; }
 .topbar .wrap { display: flex; align-items: center; justify-content: center; gap: 1rem; min-height: 2.2rem; }
 .topbar p { margin: 0; text-align: center; }

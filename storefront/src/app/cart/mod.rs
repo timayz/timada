@@ -44,16 +44,23 @@ pub fn back_url(cx: &Cx, back: &str, from: &str, error: Option<&str>) -> String 
     }
 }
 
+/// `from` when it is a path on this site, without its fragment; the home
+/// page for anything else (`//host`, `/\\host`, a full URL), so a form cannot
+/// send anyone elsewhere.
+pub fn site_path(from: &str) -> &str {
+    let from = from.split('#').next().unwrap_or_default();
+    if from.starts_with('/') && !from.starts_with("//") && !from.starts_with("/\\") {
+        from
+    } else {
+        "/"
+    }
+}
+
 /// `from` with the drawer open: `#cart`, and the refusal to show in it as
 /// `cart_error`. Anything but a path on this site (`//host`, `/\host`, a
 /// full URL) is the home page; refusals it already carried are dropped.
 pub fn drawer_url(from: &str, error: Option<&str>) -> String {
-    let from = from.split('#').next().unwrap_or_default();
-    let from = if from.starts_with('/') && !from.starts_with("//") && !from.starts_with("/\\") {
-        from
-    } else {
-        "/"
-    };
+    let from = site_path(from);
     let (path, query) = from.split_once('?').unwrap_or((from, ""));
     let mut pairs: Vec<String> = query
         .split('&')
