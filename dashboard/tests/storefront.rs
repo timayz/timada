@@ -48,7 +48,7 @@ use timada_storefront::{
     CATALOG_SUBSCRIPTION, MovedProduct, ProductQuery, ProductSort, Seo, Store, StoreConfig,
     StoreTls, StoreUnavailable, SubscriptionState, category_ancestors, find_category,
     is_unavailable, live_announcements, menu_of, moved_page_slug, moved_product_slug,
-    published_categories, published_category_body, published_category_by_slug,
+    published_categories, published_category_by_slug, published_category_hub,
     published_category_seo, published_option_values, published_page, published_product_by_slug,
     published_product_categories, published_product_seo, published_products,
     published_related_products, redirect_target, search_published_pages,
@@ -1042,7 +1042,7 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
         .unwrap();
     let cooling = stock(&catalog, "Cooling Mat", 2990, &[&mats.id]).await;
     let wool = stock(&catalog, "Wool Mat", 1990, &[&mats.id]).await;
-    stock(&catalog, "Feather Wand", 990, &[&toys.id]).await;
+    let wand = stock(&catalog, "Feather Wand", 990, &[&toys.id]).await;
 
     let db = h.local_db("acme-shop").await;
     let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
@@ -1091,11 +1091,46 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
         .write_category_body("alice", &mats.id, "How to pick a mat.")
         .await
         .unwrap();
-    eventually("the body reaches the store", async || {
-        published_category_body(&db, &mats.id).await.unwrap() == "How to pick a mat."
+    // So do the questions it answers and the products it puts first: of
+    // those picked, the ones its page lists.
+    catalog
+        .set_category_questions(
+            "alice",
+            &mats.id,
+            &[timada_catalog::CategoryQuestion {
+                question: "Washable?".into(),
+                answer: "Yes, at 30°.".into(),
+            }],
+        )
+        .await
+        .unwrap();
+    catalog
+        .pin_category_products(
+            "alice",
+            &mats.id,
+            &[wool.clone(), wand.clone(), cooling.clone()],
+        )
+        .await
+        .unwrap();
+    eventually("the category's page reaches the store", async || {
+        published_category_hub(&db, &mats.id, None)
+            .await
+            .unwrap()
+            .pinned
+            .len()
+            == 2
     })
     .await;
-    assert_eq!(published_category_body(&db, &toys.id).await.unwrap(), "");
+    let hub = published_category_hub(&db, &mats.id, None).await.unwrap();
+    assert_eq!(hub.guide_html.trim(), "<p>How to pick a mat.</p>");
+    assert_eq!(hub.questions.len(), 1);
+    assert_eq!(hub.questions[0].answer, "Yes, at 30°.");
+    assert_eq!(
+        hub.pinned.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+        [wool.as_str(), cooling.as_str()]
+    );
+    let none = published_category_hub(&db, &toys.id, None).await.unwrap();
+    assert!(none.guide_html.is_empty() && none.questions.is_empty() && none.pinned.is_empty());
 
     // A collection page asks for a subtree, in the order a shopper picked.
     let cheapest_first = published_products(

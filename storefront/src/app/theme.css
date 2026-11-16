@@ -133,7 +133,18 @@ form.sort select { padding: .45rem .75rem; border: 1px solid; }
 form.sort button { padding: .45rem .9rem; border: 1px solid; background: none; color: inherit; cursor: pointer; }
 p.description { max-width: 48rem; white-space: pre-line; }
 .category-body { margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid; }
-.category-body p.description { max-width: 56rem; line-height: 1.65; }
+.category-body > * { max-width: 56rem; }
+.category-body p { line-height: 1.65; }
+.category-body h2 { font-size: 1.3rem; margin: 2rem 0 .6rem; }
+.category-body h3 { font-size: 1.1rem; margin: 1.5rem 0 .5rem; }
+.category-body ul, .category-body ol { padding-left: 1.4rem; }
+.category-body img { display: block; max-width: 100%; height: auto; }
+/* The questions a category answers: each opens on its answer */
+.category-questions { margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px solid; max-width: 56rem; }
+.category-questions h2 { font-size: 1.3rem; margin: 0 0 1rem; }
+.category-questions details { border-bottom: 1px solid; padding: .75rem 0; }
+.category-questions summary { cursor: pointer; font-weight: 700; }
+.category-questions details p { margin: .6rem 0 0; line-height: 1.65; white-space: pre-line; }
 ul.chips { list-style: none; padding: 0; margin: 0 0 1.5rem; display: flex; flex-wrap: wrap; gap: .5rem; }
 ul.chips a { display: inline-block; padding: .4rem .9rem; border: 1px solid; text-decoration: none; font-size: .85rem; }
 ul.chips a:hover { text-decoration: underline; }

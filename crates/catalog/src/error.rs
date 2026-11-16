@@ -71,6 +71,12 @@ pub enum CatalogError {
     CategoryCycle,
     #[error("categories nest at most three levels deep")]
     CategoryTooDeep,
+    #[error(
+        "a category answers at most twenty questions, each of at most 200 characters with an answer of at most 1500"
+    )]
+    InvalidCategoryQuestions,
+    #[error("a category shows at most eight products first")]
+    TooManyPinnedProducts,
     #[error("a product belongs to at most ten categories")]
     TooManyCategories,
     #[error("a product carries at most twenty pictures")]
@@ -200,6 +206,8 @@ impl CatalogError {
             Self::CategoryArchived => "category_archived",
             Self::CategoryCycle => "category_cycle",
             Self::CategoryTooDeep => "category_too_deep",
+            Self::InvalidCategoryQuestions => "category_invalid_questions",
+            Self::TooManyPinnedProducts => "too_many_pinned_products",
             Self::TooManyCategories => "too_many_categories",
             Self::TooManyImages => "too_many_images",
             Self::InvalidImage => "unsupported_image",

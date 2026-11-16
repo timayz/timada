@@ -7,10 +7,9 @@ use topcoat_router::error::not_found;
 
 use crate::money::MoneyFormat;
 use crate::query::{
-    Category, CategoryNode, FacetValue, Product, ProductPage, ProductQuery, Seo,
-    category_ancestors, menu_of, published_categories, published_category_body,
-    published_category_by_slug, published_option_values, published_product_by_slug,
-    published_products,
+    Category, CategoryHub, CategoryNode, FacetValue, Product, ProductPage, ProductQuery, Seo,
+    category_ancestors, menu_of, published_categories, published_category_by_slug,
+    published_category_hub, published_option_values, published_product_by_slug, published_products,
 };
 use crate::store::Store;
 
@@ -109,12 +108,18 @@ pub async fn category_by_slug(cx: &Cx, slug: &str) -> Result<Option<Category>> {
         .map_err(Error::from_anyhow)
 }
 
-/// The text a live category's page shows below its products, empty when it
-/// has none.
-pub async fn category_body(cx: &Cx, category_id: &str) -> Result<String> {
-    published_category_body(store(cx).db(), category_id)
+/// What a live category's page shows beside its listing: its buying guide,
+/// the questions it answers and the products it puts first; see
+/// [`published_category_hub`].
+pub async fn category_hub(cx: &Cx, category_id: &str) -> Result<CategoryHub> {
+    let store = store(cx);
+    let mut hub = published_category_hub(store.db(), category_id, store.media_url())
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(Error::from_anyhow)?;
+    for product in &mut hub.pinned {
+        product.fill_urls(store.media_url());
+    }
+    Ok(hub)
 }
 
 /// What search engines show for a category's page: the title and the

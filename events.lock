@@ -54,6 +54,8 @@ event timada-catalog/Category::Described { description: String, described_by: St
 event timada-catalog/Category::HiddenFromMenu { hidden_by: String }
 event timada-catalog/Category::Moved { parent_id: Option<String>, moved_by: String }
 event timada-catalog/Category::Positioned { position: u32, positioned_by: String }
+event timada-catalog/Category::ProductsPinned { product_ids: Vec<String>, pinned_by: String }
+event timada-catalog/Category::QuestionsSet { questions: Vec<CategoryQuestion>, set_by: String }
 event timada-catalog/Category::Renamed { name: String, renamed_by: String }
 event timada-catalog/Category::SeoSet { meta_title: String, meta_description: String, set_by: String }
 event timada-catalog/Category::ShownInMenu { shown_by: String }
@@ -432,6 +434,7 @@ type timada_aliexpress::aggregator::forward::ForwardItem { ae_product_id: String
 type timada_aliexpress::value_object::RenewedTokens { access_token_sealed: Vec<u8>, refresh_token_sealed: Vec<u8>, expires_at: u64, refresh_expires_at: u64, account: String }
 type timada_catalog::value_object::CarriedHold { cart_id: String, quantity: u32, expires_at: u64 }
 type timada_catalog::value_object::CarriedTake { order_id: String, cart_id: Option<String>, restored: bool }
+type timada_catalog::value_object::CategoryQuestion { question: String, answer: String }
 type timada_catalog::value_object::DeliveryDays { min: u16, max: u16 }
 type timada_catalog::value_object::OptionSelection { option_id: String, value: String }
 type timada_catalog::value_object::TakenLine { product_id: String, variant_id: Option<String>, quantity: u32 }

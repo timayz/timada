@@ -5,14 +5,16 @@ pub mod archive;
 pub mod describe;
 pub mod menu;
 pub mod move_to;
+pub mod pin;
 pub mod position;
+pub mod questions;
 pub mod rename;
 pub mod seo;
 
 use timada_catalog::{
-    CategoryRow, CategoryState, MAX_CATEGORY_BODY_LEN, MAX_CATEGORY_DESCRIPTION_LEN,
-    MAX_CATEGORY_NAME_LEN, MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, category_by_id,
-    live_child_count,
+    CategoryQuestion, CategoryRow, CategoryState, MAX_CATEGORY_BODY_LEN,
+    MAX_CATEGORY_DESCRIPTION_LEN, MAX_CATEGORY_NAME_LEN, MAX_META_DESCRIPTION_LEN,
+    MAX_META_TITLE_LEN, MAX_PINNED_PRODUCTS, category_by_id, live_child_count,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
@@ -128,6 +130,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<CategoryQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let category = require_category(cx, &access).await?;
+    let gateway = catalog(&access)?;
     let labels = user_labels(cx, std::slice::from_ref(&category.created_by)).await?;
     let created_by = labels
         .get(&category.created_by)
@@ -189,6 +192,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         })
         .map(Choice::of)
         .collect();
+    // The products put first, by their addresses: what the form shows and
+    // takes. One deleted since is left out.
+    let mut pinned = Vec::with_capacity(category.pinned.len());
+    for id in &category.pinned {
+        let product = gateway
+            .load_product(id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        pinned.extend(product.map(|product| product.slug));
+    }
+    let pinned_text = pinned.join("\n");
+    let questions_text = questions_text(&category.questions);
     let slug = tenant.slug.clone();
     let editable = can_manage && !category.archived;
     let title = format!("{} · Categories · {}", category.name, tenant.name);
@@ -237,6 +252,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         term: "Below the products",
                         attrs: attributes! { data-category-body=(category.body.chars().count()) },
                         (if category.body.is_empty() { "—".to_owned() } else { format!("{} characters", category.body.chars().count()) })
+                    )
+                    fact(
+                        term: "Questions answered",
+                        attrs: attributes! { data-category-questions=(category.questions.len()) },
+                        (category.questions.len())
+                    )
+                    fact(
+                        term: "Shown first",
+                        attrs: attributes! { data-category-pinned=(pinned.len()) },
+                        (if pinned.is_empty() { "—".to_owned() } else { pinned.join(", ") })
                     )
                     fact(
                         term: "On its page",
@@ -320,9 +345,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             )
                         )
                         field(
-                            field_label(attrs: attributes! { for="category-body" }, "Text below the products")
+                            field_label(attrs: attributes! { for="category-body" }, "Buying guide, below the products")
+                            field_description(attrs: attributes! { id="category-body-hint" }, "A short guide to choosing among these products, in Markdown: ## Heading, **bold**, - item, [link](/c/other). HTML is shown as text.")
                             textarea(
-                                attrs: attributes! { id="category-body" name="body" rows="10" maxlength=(MAX_CATEGORY_BODY_LEN) },
+                                attrs: attributes! { id="category-body" name="body" rows="10" maxlength=(MAX_CATEGORY_BODY_LEN) aria-describedby="category-body-hint" },
                                 (&category.body)
                             )
                         )
@@ -350,6 +376,28 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                         <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save for search engines")</div>
                     </form>
+                    <form method="post" action=(href!(questions::questions, slug: slug.clone(), category_id: category.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
+                        field(
+                            field_label(attrs: attributes! { for="category-questions" }, "Questions and answers")
+                            field_description(attrs: attributes! { id="category-questions-hint" }, "What shoppers ask before buying here, shown below the guide. A question on one line, its answer on the lines after it, and an empty line before the next question.")
+                            textarea(
+                                attrs: attributes! { id="category-questions" name="questions" rows="10" aria-describedby="category-questions-hint" },
+                                (&questions_text)
+                            )
+                        )
+                        <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save questions")</div>
+                    </form>
+                    <form method="post" action=(href!(pin::pin, slug: slug.clone(), category_id: category.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
+                        field(
+                            field_label(attrs: attributes! { for="category-pinned" }, "Products shown first")
+                            field_description(attrs: attributes! { id="category-pinned-hint" }, "Up to " (MAX_PINNED_PRODUCTS) " products the category's page opens on, ahead of the others: one product address a line (the end of /p/…), in the order to show them. Only those published and filed here or below are shown.")
+                            textarea(
+                                attrs: attributes! { id="category-pinned" name="products" rows="4" aria-describedby="category-pinned-hint" class="font-mono text-xs" },
+                                (&pinned_text)
+                            )
+                        )
+                        <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save the first products")</div>
+                    </form>
                     <form method="post" action=(href!(menu::menu, slug: slug.clone(), category_id: category.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                         label(
                             checkbox(attrs: attributes! { name="in_menu" value="on" checked=(!category.hidden_from_menu) })
@@ -372,6 +420,51 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             }
         )
     })
+}
+
+/// The questions as the form writes them: a question on one line, its
+/// answer on the lines after it, an empty line between two.
+fn questions_text(questions: &[CategoryQuestion]) -> String {
+    questions
+        .iter()
+        .map(|asked| format!("{}\n{}", asked.question, asked.answer))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// What [`questions_text`] wrote, read back: blocks apart by empty lines,
+/// each a question then its answer. A block of one line is a question
+/// without an answer, which the catalog refuses.
+pub fn parse_questions(text: &str) -> Vec<CategoryQuestion> {
+    let text = text.replace("\r\n", "\n");
+    let mut questions = Vec::new();
+    let mut block: Vec<&str> = Vec::new();
+    for line in text.lines().chain([""]) {
+        if !line.trim().is_empty() {
+            block.push(line);
+            continue;
+        }
+        if let Some((question, answer)) = block.split_first() {
+            questions.push(CategoryQuestion {
+                question: question.trim().to_owned(),
+                answer: answer.join("\n"),
+            });
+        }
+        block.clear();
+    }
+    questions
+}
+
+#[derive(serde::Deserialize)]
+pub struct QuestionsForm {
+    #[serde(default)]
+    pub questions: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct PinForm {
+    #[serde(default)]
+    pub products: String,
 }
 
 /// The products link of a category page.
@@ -418,4 +511,32 @@ pub struct MenuForm {
     /// An unticked checkbox is not sent at all.
     #[serde(default)]
     pub in_menu: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn questions_read_back_as_they_were_written() {
+        let asked = |question: &str, answer: &str| CategoryQuestion {
+            question: question.to_owned(),
+            answer: answer.to_owned(),
+        };
+        let questions = vec![
+            asked("Which size?", "Measure the cat.\nAdd 10 cm."),
+            asked("Washable?", "Yes."),
+        ];
+        assert_eq!(parse_questions(&questions_text(&questions)), questions);
+        // As a browser posts it, with room around the blocks.
+        assert_eq!(
+            parse_questions(
+                "\r\n Which size? \r\nMeasure the cat.\r\nAdd 10 cm.\r\n\r\n\r\nWashable?\r\nYes.\r\n"
+            ),
+            questions
+        );
+        // A question alone has no answer: the catalog refuses it.
+        assert_eq!(parse_questions("Why?"), [asked("Why?", "")]);
+        assert!(parse_questions(" \n ").is_empty());
+    }
 }

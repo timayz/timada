@@ -425,6 +425,8 @@ pub enum ProductSlug {
 /// after its variant, and `Created` / `Renamed` / `Described` / `Archived`
 /// already belong to the product above.
 pub mod category {
+    use crate::value_object::CategoryQuestion;
+
     /// A node of the tenant's category tree: a product belongs to any number
     /// of them, a category has one parent or none. Its id is a ULID.
     #[evento::aggregate(name = "timada-catalog/Category")]
@@ -480,6 +482,20 @@ pub mod category {
             meta_title: String,
             meta_description: String,
             set_by: String,
+        },
+        /// The questions shoppers ask about it, each with its answer, as
+        /// its page lists them below the products: the list whole, in
+        /// order; empty takes them off.
+        QuestionsSet {
+            questions: Vec<CategoryQuestion>,
+            set_by: String,
+        },
+        /// The products its page shows first, in this order, ahead of
+        /// whatever order the rest follows: the list whole; empty leaves
+        /// the page to its order.
+        ProductsPinned {
+            product_ids: Vec<String>,
+            pinned_by: String,
         },
     }
 

@@ -2,7 +2,8 @@ mod common;
 
 use common::*;
 use timada_catalog::{
-    CatalogError, CreateCategory, MAX_CATEGORY_BODY_LEN, MAX_CATEGORY_DEPTH, SLUG_SUFFIX_LEN,
+    CatalogError, CategoryQuestion, CreateCategory, MAX_CATEGORY_BODY_LEN, MAX_CATEGORY_DEPTH,
+    MAX_CATEGORY_QUESTIONS, MAX_PINNED_PRODUCTS, SLUG_SUFFIX_LEN,
 };
 
 #[tokio::test]
@@ -388,4 +389,93 @@ async fn a_category_leaves_the_menu_and_comes_back() {
         .unwrap();
     let shown = cmd.load_category(&category.id).await.unwrap().unwrap();
     assert!(!shown.hidden_from_menu);
+}
+
+#[tokio::test]
+async fn a_category_answers_the_questions_it_is_given() {
+    let cmd = command().await;
+    let mats = create_category(&cmd, "Mats").await;
+    let asked = |question: &str, answer: &str| CategoryQuestion {
+        question: question.to_owned(),
+        answer: answer.to_owned(),
+    };
+    cmd.set_category_questions(
+        ALICE,
+        &mats.id,
+        &[
+            asked("  Which  size?\n", " Measure the cat.\r\nAdd 10 cm. "),
+            asked("Machine washable?", "Yes, at 30°."),
+        ],
+    )
+    .await
+    .unwrap();
+    let category = cmd.load_category(&mats.id).await.unwrap().unwrap();
+    assert_eq!(
+        category.questions,
+        [
+            asked("Which size?", "Measure the cat.\nAdd 10 cm."),
+            asked("Machine washable?", "Yes, at 30°."),
+        ]
+    );
+
+    // A question without an answer, or too many of them, is refused whole.
+    let empty = cmd
+        .set_category_questions(ALICE, &mats.id, &[asked("Why?", "  ")])
+        .await;
+    assert!(
+        matches!(empty, Err(CatalogError::InvalidCategoryQuestions)),
+        "{empty:?}"
+    );
+    let many = vec![asked("Q", "A"); MAX_CATEGORY_QUESTIONS + 1];
+    let refused = cmd.set_category_questions(ALICE, &mats.id, &many).await;
+    assert!(
+        matches!(refused, Err(CatalogError::InvalidCategoryQuestions)),
+        "{refused:?}"
+    );
+    cmd.set_category_questions(ALICE, &mats.id, &[])
+        .await
+        .unwrap();
+    let category = cmd.load_category(&mats.id).await.unwrap().unwrap();
+    assert!(category.questions.is_empty());
+}
+
+#[tokio::test]
+async fn a_category_puts_the_products_it_is_told_first() {
+    let cmd = command().await;
+    let mats = create_category(&cmd, "Mats").await;
+    let blue = create_product(&cmd, "Blue mat").await;
+    let pink = create_product(&cmd, "Pink mat").await;
+    cmd.pin_category_products(
+        ALICE,
+        &mats.id,
+        &[
+            pink.id.clone(),
+            blue.id.clone(),
+            pink.id.clone(),
+            " ".into(),
+        ],
+    )
+    .await
+    .unwrap();
+    let category = cmd.load_category(&mats.id).await.unwrap().unwrap();
+    assert_eq!(category.pinned, [pink.id.clone(), blue.id.clone()]);
+
+    let unknown = cmd
+        .pin_category_products(ALICE, &mats.id, &["never-was".into()])
+        .await;
+    assert!(
+        matches!(unknown, Err(CatalogError::NotFound)),
+        "{unknown:?}"
+    );
+    let many: Vec<String> = (0..=MAX_PINNED_PRODUCTS).map(|n| format!("p{n}")).collect();
+    let refused = cmd.pin_category_products(ALICE, &mats.id, &many).await;
+    assert!(
+        matches!(refused, Err(CatalogError::TooManyPinnedProducts)),
+        "{refused:?}"
+    );
+    cmd.pin_category_products(ALICE, &mats.id, &[])
+        .await
+        .unwrap();
+    let category = cmd.load_category(&mats.id).await.unwrap().unwrap();
+    assert!(category.pinned.is_empty());
 }
