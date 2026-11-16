@@ -8,18 +8,18 @@ use ulid::Ulid;
 
 use super::PendingReturn;
 use crate::aggregator::{
-    BillingAddressGiven, BillingAddressSet, BuyerIdentified, CheckedOut, CheckoutClaimed,
-    CheckoutRequested, Claimed, DiscountGranted, Discounted, LanguageGiven, LanguageSet,
-    NewsletterOptInSet, NewsletterOptedIn, PaymentCancelled, PaymentRefused, PaymentRequested,
-    PaymentReturnRefused, PaymentReturnRequested, PaymentReturned, Placed, Released,
-    ShippingCharged, ShippingGranted, ShippingMethodChosen, SourceGiven, SourceSet, TimeZoneGiven,
-    TimeZoneSet,
+    BillingAddressGiven, BillingAddressSet, BrowserGiven, BrowserSet, BuyerIdentified, CheckedOut,
+    CheckoutClaimed, CheckoutRequested, Claimed, DiscountGranted, Discounted, LanguageGiven,
+    LanguageSet, NewsletterOptInSet, NewsletterOptedIn, PaymentCancelled, PaymentRefused,
+    PaymentRequested, PaymentReturnRefused, PaymentReturnRequested, PaymentReturned, Placed,
+    Released, ShippingCharged, ShippingGranted, ShippingMethodChosen, SourceGiven, SourceSet,
+    TimeZoneGiven, TimeZoneSet,
 };
 use crate::error::OrderError;
 use crate::value_object::{
-    MAX_REASON_LEN, OrderLine, OrderSource, Payment, ShippingAddress, new_reference,
-    normalize_billing, normalize_buyer_vat_number, normalize_email, normalize_note,
-    normalize_shipping, normalize_source, order_id, order_reference_id,
+    Browser, MAX_REASON_LEN, OrderLine, OrderSource, Payment, ShippingAddress, new_reference,
+    normalize_billing, normalize_browser, normalize_buyer_vat_number, normalize_email,
+    normalize_note, normalize_shipping, normalize_source, order_id, order_reference_id,
 };
 
 use super::{
@@ -65,6 +65,10 @@ pub struct Checkout {
     /// and the last arrival. Tidied, never refused.
     #[serde(default)]
     pub source: Option<OrderSource>,
+    /// The shopper's browser, for the shop's advertising platforms: given
+    /// only when the shopper allowed advertising. Tidied, never refused.
+    #[serde(default)]
+    pub browser: Option<Browser>,
 }
 
 /// The order a payment made.
@@ -878,6 +882,13 @@ impl<E: Executor> super::Command<E> {
                 given_by: actor.to_owned(),
             });
         }
+        if let Some(browser) = normalize_browser(checkout.browser) {
+            write.event(&BrowserGiven {
+                request_id: request_id.clone(),
+                browser,
+                given_by: actor.to_owned(),
+            });
+        }
         write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(request_id)
     }
@@ -1341,6 +1352,12 @@ impl<E: Executor> super::Command<E> {
         if let Some(source) = &request.source {
             write.event(&SourceSet {
                 source: source.clone(),
+                set_by: actor.to_owned(),
+            });
+        }
+        if let Some(browser) = &request.browser {
+            write.event(&BrowserSet {
+                browser: browser.clone(),
                 set_by: actor.to_owned(),
             });
         }

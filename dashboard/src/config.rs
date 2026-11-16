@@ -34,6 +34,9 @@ pub struct Config {
     /// Invoices; every setting has a default.
     #[serde(default)]
     pub invoicing: InvoicingConfig,
+    /// The shops' advertising platforms; every setting has a default.
+    #[serde(default)]
+    pub advertising: AdvertisingConfig,
     /// Reviews; every setting has a default.
     #[serde(default)]
     pub reviews: ReviewsConfig,
@@ -782,6 +785,16 @@ pub struct InvoicingConfig {
     /// when unset. Tests point it at a stand-in.
     #[serde(default)]
     pub euro_rates_url: Option<String>,
+}
+
+/// The shops' advertising platforms.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct AdvertisingConfig {
+    /// Where the sales of the shops that gave a Conversions API token are
+    /// sent to Meta; Meta's own address when unset. Tests point it at a
+    /// stand-in.
+    #[serde(default)]
+    pub meta_api_url: Option<String>,
 }
 
 /// Card payments: each tenant connects its own Stripe account; this node

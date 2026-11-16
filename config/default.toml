@@ -152,6 +152,12 @@ dir = "data/shopper-keys"
 # # Where the Bank's reference rates are read; the Bank's own address when unset.
 # euro_rates_url = "https://www.ecb.europa.eu/stats/eurofxref"
 
+# The shops' advertising platforms. A shop that gave its Meta pixel a
+# Conversions API token has its sales told to Meta from here too.
+# [advertising]
+# # Where Meta is reached; Meta's own address when unset.
+# meta_api_url = "https://graph.facebook.com/v26.0"
+
 # Reviews. Some days after an order is fulfilled (each shop picks how many
 # on its Reviews page), its buyer gets a mail asking for a review.
 # [reviews]

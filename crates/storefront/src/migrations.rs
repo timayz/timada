@@ -214,6 +214,12 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             begin_checkout_label TEXT,
             enhanced_conversions INTEGER NOT NULL
         );
+        -- The shop's Meta pixel as the back office has it: one row, there
+        -- once it was first set; no id, no pixel.
+        CREATE TABLE storefront_meta_pixel (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            pixel_id TEXT
+        );
         -- The shown announcements, in the bar's order; a request keeps those
         -- whose window is open (Unix seconds, NULL for an open end).
         CREATE TABLE storefront_announcements (
@@ -267,6 +273,7 @@ pub const TABLES: &[&str] = &[
     "storefront_former_slugs",
     "storefront_redirects",
     "storefront_google_tag",
+    "storefront_meta_pixel",
 ];
 
 /// Applies the library's pending migrations to the local database (evento's

@@ -197,7 +197,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             nav: &nav,
-            events: &sale,
+            events: Some(&sale),
             <div class="wrap">
                 <h1>"Merci pour votre commande !"</h1>
                 <p>"Votre commande " <strong data-order-reference="">(&order.reference)</strong> " est enregistrée."</p>

@@ -169,9 +169,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             .map(|cents| (cents, currency.clone())),
     };
 
+    let events = crate::app::tag::product_events(cx, &product, shown.as_ref()).await?;
+
     Ok(view! {
         document(
             title: &seo.title,
+            events: Some(&events),
             description: Some(seo.description.as_str()).filter(|text| !text.is_empty()),
             canonical: Some(path.as_str()),
             image: card_image.as_deref(),

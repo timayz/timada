@@ -350,6 +350,7 @@ document.addEventListener("submit", async (event) => {
     if (!next) { location.assign(url); return; }
     // What the fetched page had to tell the shop's tag (an item added).
     window.timadaTag?.(page);
+    window.timadaPixel?.(page, true);
     if (!drawer.classList.contains("open")) opener = button || document.activeElement;
     swap(document.importNode(next, true));
   } catch {

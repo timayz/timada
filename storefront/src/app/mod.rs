@@ -36,10 +36,11 @@ pub mod tag;
 pub mod topbar;
 
 use timada_storefront::{
-    CategoryNode, ConsentMode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt,
-    SocialCard, Store, TAG_EVENTS_SCRIPT, TIME_ZONE_SCRIPT, absolute_url, consent_script,
-    google_tag_head, is_store_unavailable, json_ld, menu, organization_ld, product_image, products,
-    recent_reviews, tag_events_json, website_ld,
+    CategoryNode, ConsentMode, PIXEL_EVENTS_SCRIPT, Product, ProductQuery, ProductSort,
+    RouterBuilderStoreExt, SocialCard, Store, TAG_EVENTS_SCRIPT, TIME_ZONE_SCRIPT, absolute_url,
+    consent_script, google_tag_head, is_store_unavailable, json_ld, menu, meta_pixel_head,
+    organization_ld, page_view_event, pixel_add_to_cart_event, pixel_event_id, product_image,
+    products, recent_reviews, tag_events_json, website_ld,
 };
 use topcoat::{
     Result,
@@ -197,11 +198,11 @@ pub async fn document(
     /// at length.
     #[default]
     no_banner: bool,
-    /// What the page tells the shop's Google tag (the checkout opened, a
-    /// sale), as [`tag`] builds it; an item just added to the cart is told
-    /// by every page.
+    /// What the page tells the shop's Google tag and Meta pixel (the
+    /// product shown, the checkout opened, a sale), as [`tag`] builds it;
+    /// an item just added to the cart is told by every page.
     #[default]
-    events: &[serde_json::Value],
+    events: Option<&tag::Told>,
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
     // The page answering an outage asks the dashboard nothing more; any
@@ -250,7 +251,31 @@ pub async fn document(
         if let Some(added) = &added {
             told.extend(tag::added_events(tag, added));
         }
-        told.extend_from_slice(events);
+        if let Some(events) = events {
+            told.extend_from_slice(&events.tag);
+        }
+    }
+    // The shop's Meta pixel, for a visitor who allowed advertising: every
+    // page tells it it was seen, then what it shows. An item added is told
+    // apart, for the cart's script to send it alone from a page it fetched.
+    let pixel = timada_storefront::meta_pixel(cx).await?;
+    let pixel_head = pixel
+        .as_deref()
+        .and_then(|pixel_id| meta_pixel_head(pixel_id, consent));
+    let mut pixel_told = Vec::new();
+    let mut pixel_added = Vec::new();
+    if pixel_head.is_some() {
+        pixel_told.push(page_view_event(&pixel_event_id()));
+        if let Some(events) = events {
+            pixel_told.extend_from_slice(&events.pixel);
+        }
+        if let Some(added) = &added {
+            pixel_added.push(pixel_add_to_cart_event(
+                &added.currency,
+                &added.items,
+                &pixel_event_id(),
+            ));
+        }
     }
     let noindex = noindex || sitemap::is_private(original_uri(cx).path());
     let canonical = absolute_url(cx, canonical.unwrap_or(original_uri(cx).path()));
@@ -286,6 +311,9 @@ pub async fn document(
                 if let Some(head) = &tag_head {
                     <script async="" src=(&head.src) data-google-tag=""></script>
                     <script>(Unescaped::new_unchecked(head.script.clone()))</script>
+                }
+                if let Some(head) = &pixel_head {
+                    <script>(Unescaped::new_unchecked(head.clone()))</script>
                 }
                 <link rel="canonical" href=(&canonical)>
                 for tag in &card {
@@ -346,6 +374,11 @@ pub async fn document(
                     // Before the cart's script, which hands it the pages it fetches.
                     <script type="application/json" data-tag-events="">(Unescaped::new_unchecked(tag_events_json(&told)))</script>
                     <script>(Unescaped::new_unchecked(TAG_EVENTS_SCRIPT))</script>
+                }
+                if pixel_head.is_some() {
+                    <script type="application/json" data-pixel-events="">(Unescaped::new_unchecked(tag_events_json(&pixel_told)))</script>
+                    <script type="application/json" data-pixel-events="added">(Unescaped::new_unchecked(tag_events_json(&pixel_added)))</script>
+                    <script>(Unescaped::new_unchecked(PIXEL_EVENTS_SCRIPT))</script>
                 }
                 <main>(child)</main>
                 site_footer()

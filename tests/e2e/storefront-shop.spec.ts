@@ -12,6 +12,7 @@ import {
   placeOrder,
 } from "./shop";
 import { StorefrontApp, PNG, mintKey, publishProduct } from "./storefront";
+import { FakeMeta } from "./meta";
 import { FakeStripe, fakeStripeJs } from "./stripe";
 import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
 
@@ -1354,6 +1355,205 @@ test("the shop's Google tag waits for consent, then counts the cart, the checkou
       await expect(tag).toHaveCount(0, { timeout: 1000 });
     }).toPass({ timeout: 15_000 });
   } finally {
+    await stripe.stop();
+  }
+});
+
+test("the shop's Meta pixel waits for advertising to be allowed, and a sale is told from the server too", async ({
+  page,
+  request,
+}) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  const meta = new FakeMeta();
+  await meta.start();
+  try {
+    // A stand-in for Meta's script: the page's own calls are what is read.
+    let loads = 0;
+    await page.route("https://connect.facebook.net/**", (route) => {
+      loads += 1;
+      return route.fulfill({ contentType: "application/javascript", body: "" });
+    });
+    /// What the page told the pixel, in order.
+    const told = async (): Promise<unknown[][]> =>
+      page.evaluate(() =>
+        Array.from(
+          (window as unknown as { fbq?: { queue: ArrayLike<unknown>[] } }).fbq?.queue ?? [],
+        ).map((entry) => JSON.parse(JSON.stringify(Array.from(entry)))),
+      );
+    const events = async (name: string) =>
+      (await told()).filter((entry) => entry[0] === "track" && entry[1] === name);
+    const pixel = page.locator("script[data-meta-pixel]");
+    const PIXEL = "123456789012345";
+
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Pixel Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    await setLegalIdentity(page, slug);
+    const webhookUrl = await connectStripe(page, slug);
+
+    // The merchant sets the pixel and its token; an id that is not digits
+    // and a token that is not one are refused, and the token is never shown.
+    await page.goto(`/t/${slug}/meta-pixel`);
+    const form = page.locator("[data-meta-pixel]");
+    await expect(form).toHaveAttribute("data-meta-pixel", "none");
+    await form.getByLabel("Pixel ID").fill("12ab");
+    await form.getByRole("button", { name: "Save the pixel" }).click();
+    await expect(page.getByRole("alert").first()).toContainText("5 to 20 digits");
+    await form.getByLabel("Pixel ID").fill(PIXEL);
+    await form.getByLabel("Conversions API token").fill("not a token!");
+    await form.getByRole("button", { name: "Save the pixel" }).click();
+    await expect(page.getByRole("alert").first()).toContainText("does not look like");
+    await expect(form).toHaveAttribute("data-meta-pixel", "none");
+    await form.getByLabel("Pixel ID").fill(PIXEL);
+    await form.getByLabel("Conversions API token").fill("EAAe2eTOKEN");
+    await form.getByRole("button", { name: "Save the pixel" }).click();
+    await expect(page.getByRole("status")).toContainText("Pixel saved");
+    await expect(form).toHaveAttribute("data-meta-pixel", "token");
+    await expect(form.getByLabel("Pixel ID")).toHaveValue(PIXEL);
+    await expect(form.getByLabel("Conversions API token")).toHaveValue("");
+    await app.start(request, await mintKey(page, slug, true), 1);
+
+    // Nothing of Meta's is written before the visitor answers, nor for one
+    // who allows measuring only.
+    await page.goto(`${SHOP}/p/blue-mug`);
+    await expect(page.locator("[data-consent]")).toBeVisible();
+    await expect(pixel).toHaveCount(0);
+    expect(await told()).toEqual([]);
+    await page.goto(`${SHOP}/cookies`);
+    const choices = page.locator("[data-cookies]");
+    await choices.getByRole("checkbox", { name: /Mesure d'audience/ }).check();
+    await choices.getByRole("button", { name: "Enregistrer mes choix" }).click();
+    await page.goto(`${SHOP}/p/blue-mug`);
+    await expect(page.locator("[data-consent]")).toHaveCount(0);
+    await expect(pixel).toHaveCount(0);
+    expect(await told()).toEqual([]);
+    expect(loads).toBe(0);
+
+    // Advertising allowed: the pixel starts on every page, once the
+    // storefront has the merchant's settings, and hears of the page and of
+    // the product it shows.
+    await page.goto(`${SHOP}/cookies`);
+    await choices.getByRole("button", { name: "Tout accepter" }).click();
+    await expect(async () => {
+      await page.goto(`${SHOP}/p/blue-mug`);
+      await expect(pixel).toHaveCount(1, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    expect(loads).toBeGreaterThan(0);
+    const id = { eventID: expect.stringMatching(/^[0-9a-f]{32}$/) };
+    const mug = {
+      content_type: "product",
+      content_ids: [expect.any(String)],
+      contents: [{ id: expect.any(String), quantity: 1, item_price: 12.5 }],
+    };
+    expect(await told()).toEqual([
+      ["init", PIXEL],
+      ["track", "PageView", {}, id],
+      [
+        "track",
+        "ViewContent",
+        { ...mug, content_name: "Blue Mug", value: 12.5, currency: "EUR" },
+        id,
+      ],
+    ]);
+
+    // An item added from the product's page, which stays where it is: told
+    // once, and the page the cart's script fetched is not counted as seen.
+    await addToCart(page);
+    await expect
+      .poll(() => events("AddToCart"))
+      .toEqual([["track", "AddToCart", { ...mug, value: 12.5, currency: "EUR" }, id]]);
+    expect(await events("PageView")).toHaveLength(1);
+    expect(await events("ViewContent")).toHaveLength(1);
+    // The next page does not tell it again.
+    await page.goto(`${SHOP}/boutique`);
+    expect(await events("AddToCart")).toEqual([]);
+    expect(await events("PageView")).toHaveLength(1);
+
+    await page.goto(`${SHOP}/checkout`);
+    expect(await events("InitiateCheckout")).toEqual([
+      ["track", "InitiateCheckout", { ...mug, num_items: 1, value: 12.5, currency: "EUR" }, id],
+    ]);
+
+    // The sale, on the order's page, under the order's id; nothing was
+    // sent from the server before it.
+    expect(meta.received).toEqual([]);
+    await placeOrder(page, SHOP, true);
+    const orderUrl = await confirmPayment(page, request, SHOP, stripe, webhookUrl);
+    const orderId = orderUrl.split("/").pop()!;
+    const reference =
+      (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
+    expect(await events("Purchase")).toEqual([
+      [
+        "track",
+        "Purchase",
+        { ...mug, num_items: 1, value: 12.5, currency: "EUR", order_id: reference },
+        { eventID: orderId },
+      ],
+    ]);
+    // The dashboard tells Meta the same sale, under the same id, with the
+    // buyer hashed and the browser the checkout was made in.
+    const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+    await expect.poll(() => meta.received.length, { timeout: 15_000 }).toBe(1);
+    const sent = meta.received[0];
+    expect(sent.pixelId).toBe(PIXEL);
+    expect(sent.token).toBe("EAAe2eTOKEN");
+    expect(sent.event).toMatchObject({
+      event_name: "Purchase",
+      event_id: orderId,
+      action_source: "website",
+      user_data: {
+        em: [sha256("ada@example.org")],
+        fn: [sha256("ada")],
+        ln: [sha256("lovelace")],
+        ct: [sha256("paris")],
+        country: [sha256("fr")],
+        client_user_agent: await page.evaluate(() => navigator.userAgent),
+      },
+      custom_data: { currency: "EUR", value: 12.5, order_id: reference, num_items: 1 },
+    });
+    expect(sent.event.event_source_url).toContain("/checkout");
+    // Once per order: the page looked at again counts nothing.
+    await page.reload();
+    await expect(pixel).toHaveCount(1);
+    expect(await events("Purchase")).toEqual([]);
+
+    // A token Meta refuses: the next sale leaves its reason beside the
+    // token, for the merchant to read.
+    await page.goto(`/t/${slug}/meta-pixel`);
+    await expect(page.locator("[data-meta-refusal]")).toHaveCount(0);
+    await form.getByLabel("Conversions API token").fill("EAArefused");
+    await form.getByRole("button", { name: "Save the pixel" }).click();
+    await expect(page.getByRole("status")).toContainText("Pixel saved");
+    await page.goto(`${SHOP}/p/blue-mug`);
+    await addToCart(page);
+    await placeOrder(page, SHOP, false);
+    await confirmPayment(page, request, SHOP, stripe, webhookUrl);
+    await expect(async () => {
+      await page.goto(`/t/${slug}/meta-pixel`);
+      await expect(page.locator("[data-meta-refusal]")).toContainText(
+        "Invalid OAuth access token",
+        { timeout: 1000 },
+      );
+    }).toPass({ timeout: 15_000 });
+    expect(meta.received).toHaveLength(1);
+
+    // The merchant takes the token off, then the pixel: the storefront
+    // follows.
+    await form.getByRole("checkbox", { name: "Take the token off" }).check();
+    await form.getByRole("button", { name: "Save the pixel" }).click();
+    await expect(form).toHaveAttribute("data-meta-pixel", "pixel");
+    await expect(page.locator("[data-meta-refusal]")).toHaveCount(0);
+    await form.getByLabel("Pixel ID").fill("");
+    await form.getByRole("button", { name: "Save the pixel" }).click();
+    await expect(page.getByRole("status")).toContainText("No pixel");
+    await expect(async () => {
+      await page.goto(`${SHOP}/boutique`);
+      await expect(pixel).toHaveCount(0, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+  } finally {
+    await meta.stop();
     await stripe.stop();
   }
 });

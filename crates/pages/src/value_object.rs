@@ -240,3 +240,30 @@ pub fn normalize_conversion_label(label: Option<&str>) -> Result<Option<String>,
         Err(PageError::InvalidConversionLabel)
     }
 }
+
+/// The longest Meta pixel id.
+pub const MAX_META_PIXEL_ID_LEN: usize = 20;
+
+/// How long of Meta's refusal the pixel's stream keeps.
+pub const MAX_META_REASON_LEN: usize = 200;
+
+/// The stream of the shop's Meta pixel: one per tenant store.
+pub fn meta_pixel_id() -> String {
+    evento::hash_ids(vec!["meta-pixel"])
+}
+
+/// A Meta pixel id: 5 to [`MAX_META_PIXEL_ID_LEN`] digits (it is written
+/// into the storefront's scripts, so nothing else passes); nothing when
+/// left empty.
+pub fn normalize_meta_pixel_id(id: Option<&str>) -> Result<Option<String>, PageError> {
+    let Some(id) = given(id) else {
+        return Ok(None);
+    };
+    let valid =
+        (5..=MAX_META_PIXEL_ID_LEN).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit());
+    if valid {
+        Ok(Some(id.to_owned()))
+    } else {
+        Err(PageError::InvalidMetaPixelId)
+    }
+}
