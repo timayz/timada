@@ -10,9 +10,11 @@ mod catalog;
 mod migrations;
 mod orders;
 mod read_model;
+mod sales;
 
 pub use carts::*;
 pub use catalog::*;
 pub use migrations::*;
 pub use orders::*;
 pub use read_model::*;
+pub use sales::*;

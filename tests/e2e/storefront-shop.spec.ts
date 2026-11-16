@@ -1147,6 +1147,104 @@ test("an order keeps what brought the shopper, as far as they allowed it", async
   }
 });
 
+test("a sale keeps what it cost and shows in the sales report, by product and by source", async ({
+  page,
+  request,
+}) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Report Shop");
+    await createTenant(page, name);
+    const mugUrl = await publishProduct(page, slug, "Blue Mug", "12.50");
+    await setLegalIdentity(page, slug);
+    const webhookUrl = await connectStripe(page, slug);
+    await app.start(request, await mintKey(page, slug, true), 1);
+
+    // Nothing sold yet.
+    await page.goto(`/t/${slug}/orders`);
+    await page.getByRole("link", { name: "Sales report", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/t/${slug}/sales$`));
+    await expect(page.locator("[data-sales-empty]")).toBeVisible();
+
+    // The mug costs the shop 4.00.
+    await page.goto(`${mugUrl}?tab=margin`);
+    await page.getByLabel("Cost of one (EUR)").fill("4");
+    await page.getByRole("button", { name: "Record what it costs" }).click();
+    await expect(page.getByRole("status")).toContainText("Costs saved.");
+
+    // A newsletter brings a shopper who allows the shop to keep it, and buys.
+    await page.goto(`${SHOP}/p/blue-mug?utm_source=Lettre&utm_medium=email`);
+    await page
+      .locator("[data-consent]")
+      .getByRole("button", { name: "Tout accepter" })
+      .click();
+    await addToCart(page);
+    await placeOrder(page, SHOP, true);
+    await confirmPayment(page, request, SHOP, stripe, webhookUrl);
+    const reference =
+      (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
+    const row = page.locator(`[data-order="${reference}"]`);
+    await expect(async () => {
+      await page.goto(`/t/${slug}/orders`);
+      await expect(row).toHaveCount(1, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await row.getByRole("link", { name: reference }).click();
+
+    // The order says what it left: 12.50 less the 2.08 of VAT in it and
+    // the mug's 4.00 (the shop told no other cost).
+    const costs = page.locator("[data-order-costs]");
+    await expect(costs).toContainText("4.00 €");
+    await expect(costs.locator("[data-order-profit]")).toHaveAttribute("data-order-profit", "642");
+    await expect(costs.locator("[data-order-profit]")).toHaveText("6.42 €");
+
+    // And the report adds it up.
+    await page.goto(`/t/${slug}/sales`);
+    const totals = page.locator("[data-sales-totals=EUR]");
+    await expect(totals.locator("[data-sales-orders]")).toHaveAttribute("data-sales-orders", "1");
+    await expect(totals.locator("[data-sales-revenue]")).toHaveAttribute("data-sales-revenue", "1250");
+    await expect(totals.locator("[data-sales-profit]")).toHaveAttribute("data-sales-profit", "642");
+    const source = page.locator('[data-sales-source="lettre / email"]');
+    await expect(source).toContainText("12.50 €");
+    await expect(source).toContainText("6.42 €");
+    const seller = page.locator('[data-sales-product="Blue Mug"]');
+    await expect(seller.locator("[data-sales-quantity]")).toHaveText("1");
+    await expect(seller).toContainText("6.42 €");
+    await expect(page.locator('[data-sales-category=""]')).toContainText("In no category");
+
+    // The order as a file: one line for its one item, with what is the
+    // order's own, and its invoice's number and VAT once it is issued.
+    let csv = "";
+    await expect(async () => {
+      csv = await (await page.request.get(`/t/${slug}/orders/export`)).text();
+      expect(csv).toMatch(/,F[^,]*-\d{6},2\.08,/);
+    }).toPass({ timeout: 15_000 });
+    const lines = csv.trimEnd().split("\r\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[1].startsWith(`${reference},`)).toBe(true);
+    expect(lines[0]).toContain("reference,placed_at,status");
+    expect(lines[1]).toContain(",EUR,Blue Mug,,,1,12.50,12.50,standard,,0.00,,0.00,12.50,0.00,");
+    expect(lines[1]).toContain(",lettre / email,lettre / email,");
+    // A file of other days has none of it.
+    const other = await page.request.get(`/t/${slug}/orders/export?from=2020-01-01&to=2020-01-31`);
+    expect((await other.text()).trimEnd().split("\r\n")).toHaveLength(1);
+
+    // A period before the shop sold anything is empty; the last week is not.
+    await page.getByLabel("From", { exact: true }).fill("2020-01-01");
+    await page.getByLabel("To", { exact: true }).fill("2020-01-31");
+    await page.getByRole("button", { name: "Show these days" }).click();
+    await expect(page).toHaveURL(/from=2020-01-01&to=2020-01-31/);
+    await expect(page.locator("[data-sales-empty]")).toBeVisible();
+    await page.getByLabel("Period").selectOption("7");
+    await page.getByRole("button", { name: "Show", exact: true }).click();
+    await expect(page).toHaveURL(/days=7/);
+    await expect(totals.locator("[data-sales-orders]")).toHaveAttribute("data-sales-orders", "1");
+  } finally {
+    await stripe.stop();
+  }
+});
+
 test("the shop's Google tag waits for consent, then counts the cart, the checkout and the sale once", async ({
   page,
   request,

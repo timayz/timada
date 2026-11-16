@@ -9,6 +9,7 @@
 
 pub mod campaigns;
 pub mod erase;
+pub mod export;
 pub mod unsubscribe;
 
 use timada_newsletter::{
@@ -35,6 +36,7 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::db::Db;
+use crate::export::export_card;
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
     section_card, status_badge,
@@ -257,6 +259,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     previous: (page_number > 1).then(|| page_link(page_number - 1)),
                     next: (page_number < pages).then(|| page_link(page_number + 1)),
                 )
+            )
+            export_card(
+                action: href!(export::export, slug: slug.clone()).resolve(cx),
+                description: "The addresses that asked for the shop's news over some days, whatever became of them: the file says which are confirmed, and only those agreed to be written to.",
             )
         )
     })

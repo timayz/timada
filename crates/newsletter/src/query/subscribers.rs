@@ -76,3 +76,25 @@ pub async fn count_subscribers(
         .await?;
     Ok(count as u64)
 }
+
+/// The next `limit` subscribers of a tenant who last asked from `from`
+/// (Unix seconds, included) to `to` (excluded), whatever their status,
+/// after the subscriber `after`, in id order: what an export walks, a page
+/// at a time off the table's key.
+pub async fn subscribers_page(
+    db: &Db,
+    tenant_id: &str,
+    (from, to): (i64, i64),
+    after: Option<&str>,
+    limit: i64,
+) -> anyhow::Result<Vec<SubscriberRow>> {
+    db.fetch_all(
+        "SELECT tenant_id, id, email, language, source, status, requested_at, confirmed_at,
+            unsubscribed_at, updated_at, time_zone
+         FROM newsletter_subscribers
+         WHERE tenant_id = ?1 AND id > ?2 AND requested_at >= ?3 AND requested_at < ?4
+         ORDER BY id LIMIT ?5",
+        (tenant_id, after.unwrap_or(""), from, to, limit),
+    )
+    .await
+}

@@ -39,7 +39,7 @@ const PAGE: i64 = 200;
 
 /// What ends a feed half-way: a reader must not take the part it got for
 /// the whole.
-type Broken = Box<dyn std::error::Error + Send + Sync>;
+pub(crate) type Broken = Box<dyn std::error::Error + Send + Sync>;
 
 /// What a feed says of the shop beside its products, or `None` when the
 /// merchant has not said where the shop is: a feed with no link to a
@@ -245,7 +245,14 @@ fn pages_of(
 }
 
 /// The pages of a feed as they are written.
-struct Pages(mpsc::Receiver<Result<Bytes, Broken>>);
+pub(crate) struct Pages(mpsc::Receiver<Result<Bytes, Broken>>);
+
+impl Pages {
+    /// The body that gives what is sent on the other end of `pages`.
+    pub(crate) fn of(pages: mpsc::Receiver<Result<Bytes, Broken>>) -> Self {
+        Self(pages)
+    }
+}
 
 impl http_body::Body for Pages {
     type Data = Bytes;
