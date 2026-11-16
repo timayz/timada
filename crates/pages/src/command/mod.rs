@@ -10,6 +10,7 @@ mod article;
 mod article_slug_index;
 mod google_tag;
 mod meta_pixel;
+mod newsletter_popup;
 mod page;
 mod redirects;
 mod slug_index;
@@ -20,6 +21,7 @@ pub use announcements::*;
 pub use article::*;
 pub use google_tag::*;
 pub use meta_pixel::*;
+pub use newsletter_popup::*;
 pub use page::*;
 pub use redirects::*;
 

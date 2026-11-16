@@ -642,6 +642,30 @@ its day, summary and cover, a table of contents once it has two headings, and th
 products it names as the shop's own cards (a category shows its four newest under a
 link to it).
 
+## The newsletter's pop-up
+
+A merchant can have the storefront invite its visitors to the newsletter (under
+**Newsletter pop-up** in the back office): what the pop-up offers, a sentence under it,
+how many seconds a visitor is on a page before it opens, and whether it also opens as
+they leave. `newsletter_popup(cx)` gives it while it is shown:
+
+```rust
+if let Some(popup) = timada_storefront::newsletter_popup(cx).await? {
+    // popup.title, popup.text, popup.delay_secs, popup.on_leave
+}
+```
+
+The dialog, its form and who has seen it are the host's. The storefront writes a closed
+`<dialog>` into the pages a shopper reads (not the cart, the checkout or the account)
+with the footer's form in it, and a script opens it after the delay, or when the pointer
+leaves the page upwards. It opens once for a visitor and never for one who gave their
+address: the `newsletter` cookie says `seen` once it opened and `in` once the visitor
+signed up (from the pop-up, the footer, a confirmation link or their account), and a
+page carries no dialog for a visitor who has it. It waits while the cookie banner still
+asks its question, and never opens without JavaScript. The address is confirmed by mail
+as from anywhere else; what the pop-up promises (a code, a guide) is the merchant's to
+send, with an automation started by `subscriber.confirmed`.
+
 ## Announcements
 
 The short messages at the top of the shop ("-10% maintenant avec le code BIENVENUE10")

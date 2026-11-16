@@ -29,6 +29,7 @@ pub mod p;
 pub mod politique_de_confidentialite;
 pub mod politique_de_livraison;
 pub mod politique_de_remboursement;
+pub mod popup;
 pub mod qui_sommes_nous;
 pub mod reviews;
 pub mod search;
@@ -242,6 +243,12 @@ pub async fn document(
     let accounts = accounts_enabled(cx);
     let signed_in = accounts && !away && crate::shopper::signed_in(cx).await.is_some();
     let announcements = timada_storefront::announcements(cx).await?;
+    // The newsletter's pop-up, for a visitor it was never put to.
+    let invitation = if away {
+        None
+    } else {
+        popup::popup_for(cx).await?
+    };
     let consent = crate::shopper::consent(cx);
     // The shop's tag, unless the visitor's answer holds it back, and what
     // this page tells it. The note of an item added is taken either way: a
@@ -336,6 +343,9 @@ pub async fn document(
                 <style>(Unescaped::new_unchecked(DRAWER_CSS))</style>
                 <style>(Unescaped::new_unchecked(MENU_CSS))</style>
                 <style>(Unescaped::new_unchecked(SEARCH_CSS))</style>
+                if invitation.is_some() {
+                    <style>(Unescaped::new_unchecked(popup::POPUP_CSS))</style>
+                }
             </head>
             <body>
                 if consent.is_none() && !no_banner {
@@ -388,6 +398,9 @@ pub async fn document(
                 }
                 <main>(child)</main>
                 site_footer()
+                if let Some(invitation) = &invitation {
+                    popup::newsletter_dialog(popup: invitation)
+                }
                 if !no_drawer {
                     cart_drawer(cart: cart.as_ref(), unavailable: cart_unavailable)
                     <script>(Unescaped::new_unchecked(CART_SCRIPT))</script>

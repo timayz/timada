@@ -274,6 +274,18 @@ pub fn normalize_conversion_label(label: Option<&str>) -> Result<Option<String>,
     }
 }
 
+/// The longest title of the newsletter pop-up.
+pub const MAX_POPUP_TITLE_LEN: usize = 80;
+/// The longest text under it.
+pub const MAX_POPUP_TEXT_LEN: usize = 300;
+/// The longest a pop-up waits on a page before opening, in seconds.
+pub const MAX_POPUP_DELAY_SECS: u32 = 600;
+
+/// The stream of the shop's newsletter pop-up: one per tenant store.
+pub fn newsletter_popup_id() -> String {
+    evento::hash_ids(vec!["newsletter-popup"])
+}
+
 /// The longest Meta pixel id.
 pub const MAX_META_PIXEL_ID_LEN: usize = 20;
 

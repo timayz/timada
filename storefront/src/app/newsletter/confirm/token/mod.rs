@@ -45,6 +45,8 @@ pub async fn submit(cx: &Cx) -> Result<SeeOther> {
     let token = token(cx);
     let to = match confirm_subscription(cx, token).await? {
         Ok(Confirmation::Confirmed | Confirmation::AlreadyConfirmed) => {
+            // Confirmed on a device that may not be the one they signed up on.
+            crate::shopper::note_subscribed(cx);
             newsletter_url(cx, None, Some("confirmed"))
         }
         Err(refusal) => newsletter_url(cx, Some(refusal.code()), None),
