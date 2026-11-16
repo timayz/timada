@@ -7,6 +7,16 @@ fn some(text: &str) -> Option<String> {
     Some(text.to_owned())
 }
 
+/// How many events the tag's stream holds.
+async fn version(pages: &Pages) -> u16 {
+    pages
+        .load_google_tag()
+        .await
+        .unwrap()
+        .unwrap()
+        .aggregate_version
+}
+
 #[tokio::test]
 async fn the_tag_is_set_up_whole_and_taken_off_whole() {
     let pages = command().await;
@@ -23,6 +33,7 @@ async fn the_tag_is_set_up_whole_and_taken_off_whole() {
                 add_to_cart_label: some("  "),
                 begin_checkout_label: None,
                 enhanced_conversions: true,
+                profit_as_value: false,
             },
         )
         .await
@@ -122,6 +133,14 @@ async fn the_ids_and_labels_are_checked() {
             }),
             "google_ads_id_missing",
         ),
+        (
+            with(|s| {
+                s.ads_id = None;
+                s.analytics_id = some("G-ABC123DEF4");
+                s.profit_as_value = true;
+            }),
+            "google_ads_id_missing",
+        ),
     ] {
         let refused: PageError = pages
             .set_google_tag(ALICE, settings.clone())
@@ -130,4 +149,57 @@ async fn the_ids_and_labels_are_checked() {
         assert_eq!(refused.code(), Some(expected), "{settings:?}");
     }
     assert!(pages.load_google_tag().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn what_a_sale_is_worth_is_chosen_apart_from_the_tag() {
+    let pages = command().await;
+    let tag = GoogleTagSettings {
+        ads_id: some("AW-123456789"),
+        purchase_label: some("SaLe"),
+        ..Default::default()
+    };
+    pages.set_google_tag(ALICE, tag.clone()).await.unwrap();
+    assert!(!pages.google_tag().await.unwrap().profit_as_value);
+    let before = version(&pages).await;
+
+    // The profit chosen: one event, the tag as it was.
+    let valued = GoogleTagSettings {
+        profit_as_value: true,
+        ..tag.clone()
+    };
+    pages.set_google_tag(ALICE, valued.clone()).await.unwrap();
+    assert_eq!(version(&pages).await, before + 1);
+    let set = pages.google_tag().await.unwrap();
+    assert!(set.profit_as_value);
+    assert_eq!(set.purchase_label.as_deref(), Some("SaLe"));
+
+    // The tag changed: the choice stands.
+    pages
+        .set_google_tag(
+            ALICE,
+            GoogleTagSettings {
+                purchase_label: some("OtHeR"),
+                ..valued
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(version(&pages).await, before + 2);
+    let set = pages.google_tag().await.unwrap();
+    assert!(set.profit_as_value);
+    assert_eq!(set.purchase_label.as_deref(), Some("OtHeR"));
+
+    // Back to the total.
+    pages
+        .set_google_tag(
+            ALICE,
+            GoogleTagSettings {
+                purchase_label: some("OtHeR"),
+                ..tag
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!pages.google_tag().await.unwrap().profit_as_value);
 }

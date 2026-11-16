@@ -1186,12 +1186,35 @@ test("a sale keeps what it cost and shows in the sales report, by product and by
     await page.getByRole("button", { name: "Record what it costs" }).click();
     await expect(page.getByRole("status")).toContainText("Costs saved.");
 
+    // The shop bids on profit: a sale is worth to Google Ads what it left.
+    await page.route("https://www.googletagmanager.com/**", (route) =>
+      route.fulfill({ contentType: "application/javascript", body: "" }),
+    );
+    await page.goto(`/t/${slug}/google-tag`);
+    const tagForm = page.locator("[data-google-tag]");
+    await tagForm.getByLabel("Analytics measurement ID").fill("G-E2ETEST123");
+    await tagForm.getByRole("checkbox", { name: "Value a sale at its profit" }).check();
+    await tagForm.getByRole("button", { name: "Save the tag" }).click();
+    await expect(page.getByRole("alert").first()).toContainText("need the Google Ads conversion ID");
+    await tagForm.getByLabel("Analytics measurement ID").fill("G-E2ETEST123");
+    await tagForm.getByLabel("Google Ads conversion ID").fill("AW-123456789");
+    await tagForm.getByLabel("Label of the sale conversion").fill("SaLe_1");
+    await tagForm.getByRole("checkbox", { name: "Value a sale at its profit" }).check();
+    await tagForm.getByRole("button", { name: "Save the tag" }).click();
+    await expect(page.getByRole("status")).toContainText("Tag saved");
+    await expect(tagForm.getByRole("checkbox", { name: "Value a sale at its profit" })).toBeChecked();
+
     // A newsletter brings a shopper who allows the shop to keep it, and buys.
     await page.goto(`${SHOP}/p/blue-mug?utm_source=Lettre&utm_medium=email`);
     await page
       .locator("[data-consent]")
       .getByRole("button", { name: "Tout accepter" })
       .click();
+    // The storefront has the merchant's tag by now, or in a moment.
+    await expect(async () => {
+      await page.reload();
+      await expect(page.locator("script[data-google-tag]")).toHaveCount(1, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
     // The product's own button: the other mug, shown beside it, has one too.
     await page
       .locator("form")
@@ -1201,6 +1224,19 @@ test("a sale keeps what it cost and shows in the sales report, by product and by
     await expect(page.locator("[data-cart-drawer].open .drawer-panel")).toBeVisible();
     await placeOrder(page, SHOP, true);
     await confirmPayment(page, request, SHOP, stripe, webhookUrl);
+    // The order's page tells the sale: its total to Analytics, which
+    // reports revenue, and what it left (below) to Google Ads.
+    const sale = (
+      await page.evaluate(() =>
+        ((window as unknown as { dataLayer?: unknown[][] }).dataLayer ?? []).map(
+          (entry) => JSON.parse(JSON.stringify(Array.from(entry))),
+        ),
+      )
+    ).filter((entry: unknown[]) => entry[0] === "event");
+    expect(sale.map((entry: unknown[]) => [entry[1], (entry[2] as { value: number }).value])).toEqual([
+      ["purchase", 12.5],
+      ["conversion", 6.42],
+    ]);
     const reference =
       (await page.locator("[data-order-reference]").textContent())?.trim() ?? "";
     const row = page.locator(`[data-order="${reference}"]`);

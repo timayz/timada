@@ -14,8 +14,8 @@ use serde_json::Value;
 use timada_storefront::{
     Browser, CartView, GoogleTagSettings, OrderState, Product, TagItem, Variant,
     add_to_cart_events, begin_checkout_events, checkout_browser, google_tag,
-    initiate_checkout_event, meta_pixel, pixel_allowed, pixel_event_id, pixel_purchase_event,
-    purchase_events, view_content_event,
+    initiate_checkout_event, meta_pixel, meta_profit_as_value, pixel_allowed, pixel_event_id,
+    pixel_purchase_event, purchase_events, view_content_event,
 };
 use topcoat::{Result, context::Cx};
 
@@ -183,7 +183,8 @@ pub async fn sale_events(cx: &Cx, order: &OrderState) -> Result<Told> {
         told.tag = purchase_events(&tag, order, consent(cx));
     }
     if pixel_in_use(cx).await?.is_some() {
-        told.pixel.push(pixel_purchase_event(order));
+        told.pixel
+            .push(pixel_purchase_event(order, meta_profit_as_value(cx).await?));
     }
     Ok(told)
 }

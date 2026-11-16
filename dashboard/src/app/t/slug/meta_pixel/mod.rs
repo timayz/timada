@@ -62,6 +62,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let has_token = pixel
         .as_ref()
         .is_some_and(|pixel| pixel.token_sealed.is_some());
+    let profit_as_value = pixel.as_ref().is_some_and(|pixel| pixel.profit_as_value);
     let refusal = pixel.and_then(|pixel| pixel.refusal);
     // Without the operator's secret no token can be kept.
     let can_seal = context::<ConversionsSealing>(cx).0.is_some();
@@ -126,6 +127,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 "Take the token off"
                             </label>
                         }
+                        <div>
+                            <label class="flex items-center gap-2 text-sm font-medium">
+                                checkbox(attrs: attributes! {
+                                    name="profit_as_value" value="on" checked=(profit_as_value)
+                                    aria-describedby="meta-profit-hint"
+                                })
+                                "Value a sale at its profit"
+                            </label>
+                            <p id="meta-profit-hint" class="mt-1 text-sm text-muted-foreground">
+                                "A sale tells Meta what the order left you, not its total, from the browser and from the server alike, so its bidding aims at profit. It needs what your products cost you, on the Costs page: an order with a product that has no cost is sent with its total, and one that lost money with zero. The profit is written in the confirmation page of the order, where its buyer could read it."
+                            </p>
+                        </div>
                         if can_manage {
                             <div>button(attrs: attributes! { type="submit" }, "Save the pixel")</div>
                         }

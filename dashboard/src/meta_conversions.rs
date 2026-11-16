@@ -256,8 +256,10 @@ fn user_data(order: &OrderState, browser: &Browser) -> Value {
 
 /// The sale of `order` as a Conversions API event: what the storefront's
 /// pixel sends as `Purchase`, under the same event id (the order's), with
-/// the buyer for Meta to match.
-pub fn purchase_event(order: &OrderState, browser: &Browser) -> Value {
+/// the buyer for Meta to match. Its value is the sale's profit for a shop
+/// that bids on profit (`profit`), as the pixel's is, its total otherwise
+/// ([`OrderState::conversion_value_cents`]).
+pub fn purchase_event(order: &OrderState, browser: &Browser, profit: bool) -> Value {
     let amount = |cents: u64| json!(cents as f64 / 100.0);
     let id = |line: &timada_orders::OrderLine| {
         // The id of the line's item in the shop's feeds.
@@ -278,7 +280,7 @@ pub fn purchase_event(order: &OrderState, browser: &Browser) -> Value {
         "custom_data".into(),
         json!({
             "currency": order.currency,
-            "value": amount(order.total_cents),
+            "value": amount(order.conversion_value_cents(profit)),
             "order_id": order.reference,
             "content_type": "product",
             "content_ids": order.lines.iter().map(id).collect::<Vec<_>>(),
@@ -355,7 +357,7 @@ async fn tell(
     if age > MAX_EVENT_AGE_SECS {
         return Ok(());
     }
-    let event = purchase_event(&order, browser);
+    let event = purchase_event(&order, browser, pixel.profit_as_value);
     match conversions.meta.send(pixel_id, &token, &event).await {
         MetaAnswer::Taken => Ok(()),
         MetaAnswer::Refused(reason) => {
@@ -514,7 +516,7 @@ mod tests {
             TokenChange::Remove
         };
         timada_pages::Command::new(store.clone(), TENANT)
-            .set_meta_pixel("alice", Some(PIXEL), change)
+            .set_meta_pixel("alice", Some(PIXEL), change, false)
             .await
             .unwrap();
     }
@@ -565,6 +567,62 @@ mod tests {
             json!([{ "id": "variant-blue", "quantity": 2, "item_price": 12.5 }])
         );
         assert_eq!(custom["num_items"], 2);
+    }
+
+    #[tokio::test]
+    async fn a_shop_that_bids_on_profit_tells_what_the_sale_left() {
+        let store = store().await;
+        set_pixel(&store, true).await;
+        timada_pages::Command::new(store.clone(), TENANT)
+            .set_meta_pixel("alice", Some(PIXEL), TokenChange::Keep, true)
+            .await
+            .unwrap();
+        // Two mugs at 4.00 each, 4.98 of VAT: 29.90 leaves 16.92.
+        let keep = |order_id: &'static str, unit_cost: Option<u64>| {
+            let store = store.clone();
+            async move {
+                place(&store, order_id, Some(browser())).await;
+                let orders = timada_orders::Command::new(store.clone(), TENANT);
+                let order = orders.load_order(order_id).await.unwrap().unwrap();
+                evento::ProjectionAggregate::write(&order)
+                    .unwrap()
+                    .event(&timada_orders::aggregator::CostsKept {
+                        costs: timada_orders::OrderCosts {
+                            unit_costs: vec![unit_cost],
+                            vat_cents: 498,
+                            ..Default::default()
+                        },
+                        kept_by: "storefront".to_owned(),
+                    })
+                    .tenant(TENANT)
+                    .commit(&store)
+                    .await
+                    .unwrap();
+            }
+        };
+        keep(ORDER, Some(400)).await;
+        // A line with no cost: no profit to tell, the total goes.
+        keep("order-2", None).await;
+        let meta = FakeMeta::new();
+        saga(&meta, &store).run_once(&store).await.unwrap();
+
+        let values: Vec<(String, Value)> = meta
+            .sent()
+            .into_iter()
+            .map(|(_, _, event)| {
+                (
+                    event["event_id"].as_str().unwrap().to_owned(),
+                    event["custom_data"]["value"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            values,
+            [
+                (ORDER.to_owned(), json!(16.92)),
+                ("order-2".to_owned(), json!(29.9))
+            ]
+        );
     }
 
     #[tokio::test]

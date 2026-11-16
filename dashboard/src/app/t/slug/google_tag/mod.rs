@@ -127,6 +127,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 "A sale also tells Google Ads the buyer's e-mail address, phone and name, hashed, and their address, so it can match the sale to a click when cookies cannot. Only for a buyer who allowed advertising cookies. Turn it on in the conversion action too, and say so in your privacy policy."
                             </p>
                         </div>
+                        <div>
+                            <label class="flex items-center gap-2 text-sm font-medium">
+                                checkbox(attrs: attributes! {
+                                    name="profit_as_value" value="on" checked=(tag.profit_as_value)
+                                    aria-describedby="tag-profit-hint"
+                                })
+                                "Value a sale at its profit"
+                            </label>
+                            <p id="tag-profit-hint" class="mt-1 text-sm text-muted-foreground">
+                                "The sale conversion tells Google Ads what the order left you, not its total, so its bidding aims at profit. It needs what your products cost you, on the Costs page: an order with a product that has no cost is sent with its total, and one that lost money with zero. The profit is written in the confirmation page of the order, where its buyer could read it. Analytics is told the total either way."
+                            </p>
+                        </div>
                         if can_manage {
                             <div>button(attrs: attributes! { type="submit" }, "Save the tag")</div>
                         }
@@ -137,7 +149,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             section_card(
                 title: Some("What is sent"),
                 <ul class="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-                    <li><code>"purchase"</code>": the order's total as the shopper paid it, its currency, its lines and its number as the transaction."</li>
+                    <li><code>"purchase"</code>": the order's total as the shopper paid it, its currency, its lines and its number as the transaction. The Google Ads conversion carries the order's profit instead when you chose so above."</li>
                     <li><code>"add_to_cart"</code>" and "<code>"begin_checkout"</code>": the items and what they cost."</li>
                     <li>"Nothing before a visitor answers the cookie banner, unless the storefront runs Google's advanced consent mode, where the tag loads without cookies."</li>
                     <li>"Empty every field and save to take the tag off the storefront."</li>
