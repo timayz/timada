@@ -47,6 +47,7 @@ event timada-automations/Scenario::Published { version: u32, definition: String,
 event timada-automations/Scenario::Renamed { name: String, renamed_by: String }
 event timada-automations/Scenario::Resumed { resumed_by: String }
 event timada-automations/Scenario::Saved { definition: String, saved_by: String }
+event timada-catalog/BestSellers::Ranked { product_ids: Vec<String>, ranked_by: String }
 event timada-catalog/Category::Archived { archived_by: String }
 event timada-catalog/Category::BodyWritten { body: String, written_by: String }
 event timada-catalog/Category::Created { slug: String, name: String, parent_id: Option<String>, created_by: String }

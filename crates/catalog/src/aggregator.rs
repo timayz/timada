@@ -378,6 +378,21 @@ pub mod feed {
     }
 }
 
+/// The products a shop sold the most of lately, the best first: what a
+/// listing sorts by when asked for the best sellers. One stream per shop
+/// and calendar month, with the id
+/// [`best_sellers_id`](crate::best_sellers_id), so none grows for ever; the
+/// latest event of the latest month is the ranking. It names the products
+/// and their order, never how many were sold: a storefront's key reads it.
+#[evento::aggregate(name = "timada-catalog/BestSellers")]
+pub enum BestSellers {
+    /// The ranking whole, as the host worked it out from the shop's sales.
+    Ranked {
+        product_ids: Vec<String>,
+        ranked_by: String,
+    },
+}
+
 /// The delivery time of a product that gives none: one stream per tenant
 /// store, with the id [`delivery_default_id`](crate::delivery_default_id).
 #[evento::aggregate(name = "timada-catalog/DeliveryDefault")]

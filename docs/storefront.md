@@ -506,6 +506,15 @@ its own size however large the store is, and its total is the stored count. `in_
 directly under any of the ids, which is what related products use. An archived category
 is in none of this; the products that were in it stay on sale.
 
+`ProductSort::BestSelling` (`best_selling`) lists what sells best first: the dashboard
+ranks each shop's hundred best sellers from the units it sold over the last thirty days
+(`[best_sellers]`, every six hours), and the copy keeps each product's rank on the pages
+that list it, so the order is read off an index as the others are. The products not
+ranked follow, the newest first, which is the whole order of a shop that sold nothing
+yet. The ranking says which products and in what order, never how many were sold. The
+storefront lists a category this way unless the shopper picks another order; the whole
+catalogue stays newest first.
+
 `category_hub` gives what the merchant set for the category's page beside its listing:
 `guide_html`, the buying guide below the products (Markdown turned into cleaned HTML,
 as a page's); `questions`, what shoppers ask and the answers, in the merchant's order;

@@ -402,6 +402,9 @@ pub enum ProductSort {
     /// Best average first, the most reviewed first among equals; a product
     /// with no published review comes last.
     TopRated,
+    /// The shop's best sellers first, as the back office ranks them from
+    /// its sales; the others after them, most recently changed first.
+    BestSelling,
 }
 
 impl ProductSort {
@@ -412,6 +415,7 @@ impl ProductSort {
             Self::PriceAsc => "price_asc",
             Self::PriceDesc => "price_desc",
             Self::TopRated => "top_rated",
+            Self::BestSelling => "best_selling",
         }
     }
 
@@ -422,6 +426,7 @@ impl ProductSort {
             "price_asc" => Self::PriceAsc,
             "price_desc" => Self::PriceDesc,
             "top_rated" => Self::TopRated,
+            "best_selling" => Self::BestSelling,
             _ => Self::Newest,
         }
     }
@@ -677,6 +682,10 @@ impl ProductSort {
                 "cp.review_count = 0, cp.rating_x100 DESC, cp.review_count DESC, \
                  cp.product_id DESC",
             ),
+            Self::BestSelling => (
+                "storefront_category_products_best_selling",
+                "cp.sold_rank DESC, cp.updated_at DESC, cp.product_id DESC",
+            ),
         }
     }
 
@@ -695,6 +704,10 @@ impl ProductSort {
                 .cmp(&(b.review_count == 0))
                 .then(b.rating_x100.cmp(&a.rating_x100))
                 .then(b.review_count.cmp(&a.review_count)),
+            Self::BestSelling => b
+                .sold_rank
+                .cmp(&a.sold_rank)
+                .then(b.updated_at.cmp(&a.updated_at)),
         };
         by.then_with(|| b.id.cmp(&a.id))
     }
@@ -833,6 +846,9 @@ struct Found {
     max_amount_cents: Option<i64>,
     review_count: i64,
     rating_x100: i64,
+    /// Where the shop's best sellers rank it, the higher the better; 0 when
+    /// they do not.
+    sold_rank: i64,
     /// Its option rows, as `storefront_product_options` holds them: read
     /// only when the search narrows by options or counts their values.
     options: Vec<OptionRow>,
@@ -848,6 +864,7 @@ impl FromRow for Found {
             max_amount_cents: row.get("max_amount_cents")?,
             review_count: row.get("review_count")?,
             rating_x100: row.get("rating_x100")?,
+            sold_rank: row.get("sold_rank")?,
             options: distinct_option_rows(&options),
         })
     }
@@ -933,8 +950,16 @@ fn found_statement(
     let options = options || query.options_but(aside).next().is_some();
     statement.sql = format!(
         "SELECT p.id, p.updated_at, p.min_amount_cents, p.max_amount_cents, p.review_count,
-            p.rating_x100, {} AS options_json
+            p.rating_x100, {} AS sold_rank, {} AS options_json
          FROM storefront_products p WHERE {}",
+        // Looked up only for the order that reads it: the others are
+        // answered by the search's index alone.
+        if query.sort == ProductSort::BestSelling {
+            "coalesce((SELECT b.sold_rank FROM storefront_best_sellers b
+                       WHERE b.product_id = p.id), 0)"
+        } else {
+            "0"
+        },
         if options { "p.options_json" } else { "'[]'" },
         conditions.join(" AND ")
     );
@@ -1914,7 +1939,59 @@ mod sql {
         )
         .await
         .unwrap();
+        // Three of them sell, the oldest best.
+        crate::read_model::rank_best_sellers(&db, &owned(&["item3", "item6", "item0"]))
+            .await
+            .unwrap();
         db
+    }
+
+    #[tokio::test]
+    async fn the_best_sellers_come_first_then_the_newest() {
+        let db = varied().await;
+        let best = || ids(&db, ProductQuery::default().sort(ProductSort::BestSelling));
+        assert_eq!(
+            best().await.0,
+            owned(&[
+                "item3", "item6", "item0", "item4", "item2", "item1", "item5", "item7"
+            ])
+        );
+        // Ranked again: one leaves the ranking, one enters it, one moves.
+        crate::read_model::rank_best_sellers(&db, &owned(&["item7", "item3", "never-listed"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            best().await.0,
+            owned(&[
+                "item7", "item3", "item4", "item2", "item6", "item1", "item0", "item5"
+            ])
+        );
+        // A rank reaches a product's pages through the index on the
+        // product, never over every page's rows.
+        let plan: Vec<String> = db
+            .fetch_all::<(i64, i64, i64, String)>(
+                "EXPLAIN QUERY PLAN UPDATE storefront_category_products SET sold_rank = ?2
+                 WHERE product_id = ?1",
+                ("item3", 1),
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(_, _, _, detail)| detail)
+            .collect();
+        assert!(
+            plan.iter()
+                .any(|step| step.contains("storefront_category_products_product")),
+            "{plan:#?}"
+        );
+        // Nothing sold any more: the newest first, as without a ranking.
+        crate::read_model::rank_best_sellers(&db, &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            best().await,
+            ids(&db, ProductQuery::default().sort(ProductSort::Newest)).await
+        );
     }
 
     #[tokio::test]
@@ -1925,6 +2002,7 @@ mod sql {
             ProductSort::PriceAsc,
             ProductSort::PriceDesc,
             ProductSort::TopRated,
+            ProductSort::BestSelling,
         ] {
             let listed = ids(&db, ProductQuery::default().sort(sort)).await;
             assert_eq!(listed.1, 8);
@@ -2188,6 +2266,7 @@ mod sql {
             ProductSort::PriceAsc,
             ProductSort::PriceDesc,
             ProductSort::TopRated,
+            ProductSort::BestSelling,
         ] {
             let (index, _) = sort.order();
             for query in [ProductQuery::default(), narrowed.clone()] {

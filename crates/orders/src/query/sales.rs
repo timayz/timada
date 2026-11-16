@@ -225,6 +225,41 @@ pub const BEST_SELLERS: &str = "SELECT currency, product_id, max(name) AS name,
      GROUP BY currency, product_id
      ORDER BY sales_cents DESC, product_id LIMIT ?4";
 
+/// The next shop, after `after` in the order of their ids, that ever sold
+/// something (`""` starts from the first): one step of a walk over the
+/// shops with sales, a seek each, however many lines each one has.
+pub async fn next_shop_with_sales(db: &Db, after: &str) -> anyhow::Result<Option<String>> {
+    let next: Option<(String,)> = db.fetch_optional(NEXT_SHOP_WITH_SALES, (after,)).await?;
+    Ok(next.map(|(tenant_id,)| tenant_id))
+}
+
+/// See [`next_shop_with_sales`].
+pub const NEXT_SHOP_WITH_SALES: &str =
+    "SELECT tenant_id FROM orders_sale_lines INDEXED BY orders_sale_lines_placed
+     WHERE tenant_id > ?1 ORDER BY tenant_id LIMIT 1";
+
+/// The ids of the products a tenant sold the most units of since `from`
+/// (unix seconds), the best first, `limit` at most: what its best sellers
+/// are ranked from. Whatever the currency: a unit is a unit.
+pub async fn best_selling_products(
+    db: &Db,
+    tenant_id: &str,
+    from: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<String>> {
+    let rows: Vec<(String,)> = db
+        .fetch_all(BEST_SELLING_PRODUCTS, (tenant_id, from, limit))
+        .await?;
+    Ok(rows.into_iter().map(|(product_id,)| product_id).collect())
+}
+
+/// See [`best_selling_products`].
+pub const BEST_SELLING_PRODUCTS: &str =
+    "SELECT product_id FROM orders_sale_lines INDEXED BY orders_sale_lines_placed
+     WHERE tenant_id = ?1 AND placed_at >= ?2 AND counted = 1
+     GROUP BY product_id
+     ORDER BY sum(quantity) DESC, product_id LIMIT ?3";
+
 /// What the products of one category sold over a period, in one currency.
 #[derive(Debug, Clone, PartialEq, Eq, FromRow)]
 pub struct CategorySales {

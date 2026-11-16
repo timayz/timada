@@ -134,8 +134,11 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             max_amount_cents INTEGER,
             review_count INTEGER NOT NULL,
             rating_x100 INTEGER NOT NULL,
+            sold_rank INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (category_id, product_id)
         );
+        CREATE INDEX storefront_category_products_best_selling ON storefront_category_products
+            (category_id, sold_rank DESC, updated_at DESC, product_id DESC);
         CREATE INDEX storefront_category_products_newest ON storefront_category_products
             (category_id, updated_at DESC, product_id DESC);
         CREATE INDEX storefront_category_products_price_asc ON storefront_category_products
@@ -147,6 +150,14 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
              product_id DESC);
         CREATE INDEX storefront_category_products_product ON storefront_category_products
             (product_id, category_id);
+        -- The shop's best sellers as the back office ranked them: the
+        -- higher `sold_rank`, the better it sells; a product not ranked has
+        -- no row, and 0 on the pages that list it, where the rank is copied
+        -- for a page to be read in that order.
+        CREATE TABLE storefront_best_sellers (
+            product_id TEXT PRIMARY KEY,
+            sold_rank INTEGER NOT NULL
+        );
         -- How many products the whole shop's page lists, kept as they are
         -- listed and unlisted, as a category's row keeps its own count: one
         -- row, none before the first product is listed.
@@ -300,6 +311,7 @@ pub const TABLES: &[&str] = &[
     "storefront_product_categories",
     "storefront_category_products",
     "storefront_shop",
+    "storefront_best_sellers",
     "storefront_category_facets",
     "storefront_reviews",
     "storefront_stock",

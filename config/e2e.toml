@@ -70,6 +70,10 @@ newsletter_signups_per_key = 10000
 carts_per_ip = 1000
 carts_per_key = 10000
 
+# A sale reaches the shop's best sellers within the test that makes it.
+[best_sellers]
+check_secs = 2
+
 # AliExpress is the stand-in the spec starts (tests/e2e/aliexpress.ts); the
 # imported products are read again every few seconds, and at every payment. An
 # open order keeps the day's wait, so only its push reads it.

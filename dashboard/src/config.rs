@@ -53,6 +53,9 @@ pub struct Config {
     /// How long carts nobody touches are kept; every setting has a default.
     #[serde(default)]
     pub carts: CartsConfig,
+    /// How the shops' best sellers are ranked; every setting has a default.
+    #[serde(default)]
+    pub best_sellers: BestSellersConfig,
     /// How many invitations members may send; every setting has a default.
     #[serde(default)]
     pub invitations: InvitationsConfig,
@@ -591,6 +594,51 @@ impl CartsConfig {
     }
 }
 
+/// How the shops' best sellers are ranked (`best_sellers.rs`): what a
+/// storefront's listing sorts by when asked for what sells best.
+#[derive(Debug, Deserialize, Clone)]
+pub struct BestSellersConfig {
+    /// Days of sales a ranking counts, at least 1.
+    #[serde(default = "default_best_sellers_days")]
+    pub days: u64,
+    /// How often, in seconds, this node ranks the shops that fall to it.
+    #[serde(default = "default_best_sellers_check_secs")]
+    pub check_secs: u64,
+}
+
+impl Default for BestSellersConfig {
+    fn default() -> Self {
+        Self {
+            days: default_best_sellers_days(),
+            check_secs: default_best_sellers_check_secs(),
+        }
+    }
+}
+
+fn default_best_sellers_days() -> u64 {
+    30
+}
+
+fn default_best_sellers_check_secs() -> u64 {
+    6 * 60 * 60
+}
+
+impl BestSellersConfig {
+    /// How far back the sales count.
+    pub fn period(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.days.saturating_mul(24 * 60 * 60))
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.days == 0 {
+            return Err(ConfigError::Message(
+                "best_sellers.days must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// How many invitations may be mailed. Counted from what every node has
 /// recorded, so the limits hold across a cluster and across restarts.
 #[derive(Debug, Deserialize, Clone)]
@@ -995,6 +1043,7 @@ impl Config {
         config.media.validate()?;
         config.store.validate()?;
         config.carts.validate()?;
+        config.best_sellers.validate()?;
         config.invitations.validate()?;
         if let Some(store_api) = &config.store_api {
             store_api.validate()?;

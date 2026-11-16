@@ -190,8 +190,8 @@ by construction.
    read what the node applied before handing them the event (a write on a stale read
    is refused for its version, and the write it missed is applied here before the
    refusal, so the retry sees it); every timer (the payments sweeps, the hold
-   reminders, the idle carts, the review requests, the newsletter sends, the
-   automation runs, the AliExpress sync), which acts off read-model rows the node
+   reminders, the idle carts, the best sellers, the review requests, the newsletter
+   sends, the automation runs, the AliExpress sync), which acts off read-model rows the node
    derived from that file and writes only at the version it loaded, or a claim of its
    own, so the same refusal holds (the payments and AliExpress services hold no store
    of their own: a shop and its company are read from the store their caller reads,
@@ -1114,6 +1114,14 @@ CommonMark with tables, raw HTML shown as text, only the page's own pictures (se
 from the shop's media address), and the result cleaned by an allow-list sanitiser.
 The back office (`/t/{slug}/pages`, `pages:read` / `pages:manage`) writes a page beside
 that rendering in a sandboxed frame; the list is the `pages` read model.
+
+A shop's best sellers are ranked by the host, not by a subscription: every node, on a
+timer (`best_sellers.rs`, `[best_sellers]`), walks its own part of the shops that ever
+sold something, reads the products each sold the most units of over the period off the
+sales read model, and writes `BestSellers::Ranked` to the shop's catalog when the
+ranking moved. The stream is one per shop and calendar month, so none grows for ever,
+and it names products in order, never quantities: a storefront's key reads it, and
+copies each product's rank onto the pages that list it.
 
 An article of the blog is an `Article` stream beside it, with slugs of its own (an
 `ArticleSlug` index, so an article and a page may share one: they answer at two
