@@ -87,7 +87,10 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         CREATE INDEX storefront_product_options_value ON storefront_product_options
             (name_key, value_key, product_id);
         -- The counts are refreshed from the product rows, after the
-        -- category's own row is written.
+        -- category's own row is written. `body` is the guide below the
+        -- products, in Markdown; `questions_json` the questions the page
+        -- answers (`[{question, answer}]`) and `pinned_json` the ids of the
+        -- products it shows first, both in the merchant's order.
         CREATE TABLE storefront_categories (
             id TEXT PRIMARY KEY,
             slug TEXT NOT NULL,
@@ -102,7 +105,9 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             product_count INTEGER NOT NULL DEFAULT 0,
             subtree_count INTEGER NOT NULL DEFAULT 0,
             meta_title TEXT NOT NULL DEFAULT '',
-            meta_description TEXT NOT NULL DEFAULT ''
+            meta_description TEXT NOT NULL DEFAULT '',
+            questions_json TEXT NOT NULL DEFAULT '[]',
+            pinned_json TEXT NOT NULL DEFAULT '[]'
         );
         CREATE UNIQUE INDEX storefront_categories_slug ON storefront_categories (slug)
             WHERE archived = 0;

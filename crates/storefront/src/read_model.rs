@@ -907,13 +907,15 @@ async fn upsert_category(db: &Db, category: &CategoryState) -> anyhow::Result<()
                 tx,
                 "INSERT INTO storefront_categories (id, slug, name, description, parent_id,
                     position, archived, in_menu, updated_at, body, meta_title,
-                    meta_description)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                    meta_description, questions_json, pinned_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                  ON CONFLICT (id) DO UPDATE SET
                     slug = excluded.slug, name = excluded.name,
                     description = excluded.description, body = excluded.body,
                     meta_title = excluded.meta_title,
                     meta_description = excluded.meta_description,
+                    questions_json = excluded.questions_json,
+                    pinned_json = excluded.pinned_json,
                     parent_id = excluded.parent_id, position = excluded.position,
                     archived = excluded.archived, in_menu = excluded.in_menu,
                     updated_at = excluded.updated_at",
@@ -930,6 +932,17 @@ async fn upsert_category(db: &Db, category: &CategoryState) -> anyhow::Result<()
                     category.body.as_str(),
                     category.meta_title.as_str(),
                     category.meta_description.as_str(),
+                    serde_json::to_string(
+                        &category
+                            .questions
+                            .iter()
+                            .map(|asked| crate::query::CategoryQuestion {
+                                question: asked.question.clone(),
+                                answer: asked.answer.clone(),
+                            })
+                            .collect::<Vec<_>>(),
+                    )?,
+                    serde_json::to_string(&category.pinned)?,
                 ),
             )
             .await?;

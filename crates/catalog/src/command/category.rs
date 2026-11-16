@@ -4,14 +4,14 @@ use evento::{Executor, ProjectionAggregate};
 use ulid::Ulid;
 
 use crate::aggregator::category::{
-    Archived, BodyWritten, Created, Described, HiddenFromMenu, Moved, Positioned, Renamed, SeoSet,
-    ShownInMenu,
+    Archived, BodyWritten, Created, Described, HiddenFromMenu, Moved, Positioned, ProductsPinned,
+    QuestionsSet, Renamed, SeoSet, ShownInMenu,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
-    FALLBACK_CATEGORY_SLUG, MAX_CATEGORY_DEPTH, normalize_category_body,
-    normalize_category_description, normalize_category_name, normalize_seo, normalize_slug,
-    slugify_or, suffixed_slug,
+    CategoryQuestion, FALLBACK_CATEGORY_SLUG, MAX_CATEGORY_DEPTH, MAX_PINNED_PRODUCTS,
+    normalize_category_body, normalize_category_description, normalize_category_name,
+    normalize_category_questions, normalize_seo, normalize_slug, slugify_or, suffixed_slug,
 };
 
 use super::CategoryState;
@@ -202,6 +202,77 @@ impl<E: Executor> super::Command<E> {
                 meta_title,
                 meta_description,
                 set_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await?;
+        Ok(())
+    }
+
+    /// Replaces the questions the category's page answers, in the order
+    /// given; none takes them off. The same list is a no-op.
+    pub async fn set_category_questions(
+        &self,
+        actor: &str,
+        category_id: &str,
+        questions: &[CategoryQuestion],
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let questions = normalize_category_questions(questions)?;
+        let category = self.require_live_category(category_id).await?;
+        if category.questions == questions {
+            return Ok(());
+        }
+        category
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&QuestionsSet {
+                questions,
+                set_by: actor.to_owned(),
+            })
+            .tenant(&self.tenant)
+            .commit(&self.executor)
+            .await?;
+        Ok(())
+    }
+
+    /// Replaces the products the category's page shows first, in the order
+    /// given (one named twice counts once); none leaves the page to its
+    /// order. Each must be a product of the shop; whether the page lists it
+    /// (published, filed under the category or below) is the page's to
+    /// check when it shows them. The same list is a no-op.
+    pub async fn pin_category_products(
+        &self,
+        actor: &str,
+        category_id: &str,
+        product_ids: &[String],
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let mut pinned: Vec<String> = Vec::new();
+        for id in product_ids {
+            let id = id.trim();
+            if !id.is_empty() && !pinned.iter().any(|seen| seen == id) {
+                pinned.push(id.to_owned());
+            }
+        }
+        if pinned.len() > MAX_PINNED_PRODUCTS {
+            return Err(CatalogError::TooManyPinnedProducts);
+        }
+        let category = self.require_live_category(category_id).await?;
+        if category.pinned == pinned {
+            return Ok(());
+        }
+        for id in &pinned {
+            if self.load_product(id).await?.is_none() {
+                return Err(CatalogError::NotFound);
+            }
+        }
+        category
+            .write()?
+            .routing_key_opt(routing_key)
+            .event(&ProductsPinned {
+                product_ids: pinned,
+                pinned_by: actor.to_owned(),
             })
             .tenant(&self.tenant)
             .commit(&self.executor)

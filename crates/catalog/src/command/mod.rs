@@ -46,8 +46,9 @@ use crate::aggregator::category::{
     Archived as CategoryArchived, BodyWritten as CategoryBodyWritten,
     Claimed as CategorySlugClaimed, Created as CategoryCreated, Described as CategoryDescribed,
     HiddenFromMenu as CategoryHiddenFromMenu, Moved as CategoryMoved,
-    Positioned as CategoryPositioned, Released as CategorySlugReleased, Renamed as CategoryRenamed,
-    SeoSet as CategorySeoSet, ShownInMenu as CategoryShownInMenu,
+    Positioned as CategoryPositioned, ProductsPinned as CategoryProductsPinned,
+    QuestionsSet as CategoryQuestionsSet, Released as CategorySlugReleased,
+    Renamed as CategoryRenamed, SeoSet as CategorySeoSet, ShownInMenu as CategoryShownInMenu,
 };
 use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
@@ -1344,6 +1345,10 @@ pub struct CategoryState {
     pub archived: bool,
     /// Left out of the shop's menu, with its subtree.
     pub hidden_from_menu: bool,
+    /// The questions its page answers below the products, in order.
+    pub questions: Vec<crate::value_object::CategoryQuestion>,
+    /// The products its page shows first, in order, by id.
+    pub pinned: Vec<String>,
     pub created_by: String,
     /// Unix seconds of `Created`.
     pub created_at: u64,
@@ -1363,6 +1368,8 @@ pub fn category_projection<E: Executor>() -> Projection<E, CategoryState> {
         .handler(on_category_hidden_from_menu())
         .handler(on_category_shown_in_menu())
         .handler(on_category_seo_set())
+        .handler(on_category_questions_set())
+        .handler(on_category_products_pinned())
         .strict()
 }
 
@@ -1468,6 +1475,26 @@ async fn on_category_shown_in_menu(
     category: &mut CategoryState,
 ) -> anyhow::Result<()> {
     category.hidden_from_menu = false;
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_questions_set(
+    event: Event<CategoryQuestionsSet>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.questions = event.data.questions.to_owned();
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_products_pinned(
+    event: Event<CategoryProductsPinned>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.pinned = event.data.product_ids.to_owned();
     category.updated_at = event.timestamp;
     Ok(())
 }
