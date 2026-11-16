@@ -7,10 +7,11 @@
 //! read beside it. `catalog_feeds` says which tenant a feed's address
 //! belongs to. Both are written by the read-model subscription.
 //!
-//! [`write_google_items`] turns a product into the items of Merchant
-//! Center's XML: one per combination on sale, grouped by `item_group_id`,
-//! or one for a product sold as is. The rows know nothing of Google, so
-//! another reader (Meta, TikTok) is another writer over the same rows.
+//! [`write_feed_items`] turns a product into the items of the XML a
+//! [`FeedReader`] takes (Merchant Center's, which Meta's and TikTok's
+//! catalogues read too, each with its own wording): one per combination on
+//! sale, grouped by `item_group_id`, or one for a product sold as is. The
+//! rows know nothing of their readers.
 
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -18,6 +19,7 @@ use std::fmt::Write;
 use anyhow::Result;
 use timada_core::db::{Connection, Db, Json, execute, fetch_optional};
 use timada_core::format_amount;
+use timada_core::xml::xml_text as xml;
 
 use crate::command::ProductState;
 use crate::value_object::DeliveryDays;
@@ -201,6 +203,18 @@ pub async fn count_feed_products(db: &Db, tenant_id: &str) -> Result<i64> {
     Ok(row.map_or(0, |(n,)| n))
 }
 
+/// What the tenant's feed says of one product; `None` when no feed
+/// carries it. Without its stock, which this does not read.
+pub async fn feed_product(db: &Db, tenant_id: &str, id: &str) -> Result<Option<FeedProduct>> {
+    let row: Option<(Json<FeedProduct>,)> = db
+        .fetch_optional(
+            "SELECT item_json FROM catalog_feed_products WHERE tenant_id = ?1 AND id = ?2",
+            (tenant_id, id),
+        )
+        .await?;
+    Ok(row.map(|(json,)| json.0))
+}
+
 /// The next `limit` products of the tenant's feed after the product
 /// `after`, in id order, each with what it has none left of. A feed is read
 /// a page at a time, so a shop of any size is written without being held
@@ -240,9 +254,45 @@ const FEED_SOLD_OUT: &str = "SELECT product_id, variant_id FROM catalog_stock
     WHERE tenant_id = ?1 AND product_id > ?2 AND product_id <= ?3
       AND tracked = 1 AND on_hand = 0";
 
-/// The longest title and description Merchant Center takes.
-const GOOGLE_TITLE_CHARS: usize = 150;
-const GOOGLE_DESCRIPTION_CHARS: usize = 5000;
+/// Who reads a shop's products: each takes the same items, worded its way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedReader {
+    /// Google Merchant Center.
+    Google,
+    /// A Meta catalogue (Facebook and Instagram ads, retargeting).
+    Meta,
+    /// A TikTok catalogue.
+    Tiktok,
+}
+
+impl FeedReader {
+    /// The longest title it takes.
+    fn title_chars(self) -> usize {
+        match self {
+            Self::Google | Self::Tiktok => 150,
+            Self::Meta => 200,
+        }
+    }
+
+    /// The longest description it takes.
+    fn description_chars(self) -> usize {
+        match self {
+            Self::Google | Self::Tiktok => 5000,
+            Self::Meta => 9999,
+        }
+    }
+
+    /// How it words whether an item can be bought.
+    fn availability(self, sold_out: bool) -> &'static str {
+        match (self, sold_out) {
+            (Self::Google, false) => "in_stock",
+            (Self::Google, true) => "out_of_stock",
+            (Self::Meta | Self::Tiktok, false) => "in stock",
+            (Self::Meta | Self::Tiktok, true) => "out of stock",
+        }
+    }
+}
+
 /// How many pictures an item carries beside its first.
 const GOOGLE_MORE_IMAGES: usize = 10;
 /// How many delivery prices an item carries.
@@ -294,12 +344,27 @@ pub fn google_feed_head(shop: &FeedShop) -> String {
 /// What closes Merchant Center's XML after the last item.
 pub const GOOGLE_FEED_TAIL: &str = "</channel>\n</rss>\n";
 
-/// Writes the items of one product: one per combination on sale, or one
-/// for a product sold as is. `image_url` gives the address of a picture in
-/// the size a feed wants (the large rendition: Merchant Center refuses
-/// small ones).
+/// [`write_feed_items`] for Merchant Center.
 pub fn write_google_items(
     out: &mut String,
+    product: &FeedProduct,
+    shop: &FeedShop,
+    image_url: impl Fn(&str) -> String,
+) {
+    write_feed_items(out, FeedReader::Google, product, shop, image_url);
+}
+
+/// Writes the items of one product as `reader` takes them: one per
+/// combination on sale, or one for a product sold as is. `image_url` gives
+/// the address of a picture in the size a feed wants (the large rendition:
+/// Merchant Center refuses small ones).
+///
+/// An item's id is the variant's, or the product's when it is sold as is:
+/// the id the storefront's Google tag and Meta pixel name it by, so an ad
+/// platform matches what a visitor saw to its catalogue.
+pub fn write_feed_items(
+    out: &mut String,
+    reader: FeedReader,
     product: &FeedProduct,
     shop: &FeedShop,
     image_url: impl Fn(&str) -> String,
@@ -309,8 +374,9 @@ pub fn write_google_items(
         let Some(amount_cents) = product.amount_cents else {
             return;
         };
-        write_google_item(
+        write_item(
             out,
+            reader,
             product,
             shop,
             &image_url,
@@ -336,8 +402,9 @@ pub fn write_google_items(
         let stand_in = (product.brand.is_some() && variant.gtin.is_none())
             .then_some(variant.sku.as_deref())
             .flatten();
-        write_google_item(
+        write_item(
             out,
+            reader,
             product,
             shop,
             &image_url,
@@ -375,14 +442,20 @@ struct Item<'a> {
     sold_out: bool,
 }
 
-fn write_google_item(
+fn write_item(
     out: &mut String,
+    reader: FeedReader,
     product: &FeedProduct,
     shop: &FeedShop,
     image_url: &impl Fn(&str) -> String,
     item: &Item<'_>,
 ) {
     out.push_str("<item>\n");
+    // TikTok names an item's id `sku_id`; its reader of this XML is said to
+    // take `id` for it too, so both are written.
+    if reader == FeedReader::Tiktok {
+        tag(out, "sku_id", item.id);
+    }
     tag(out, "id", item.id);
     if item.grouped {
         tag(out, "item_group_id", &product.id);
@@ -391,7 +464,15 @@ fn write_google_item(
         Some(label) => format!("{} – {label}", product.name),
         None => product.name.clone(),
     };
-    text(out, "title", &title, GOOGLE_TITLE_CHARS, product.ai_title);
+    // Only Merchant Center has a way to say a machine wrote a text.
+    let says_ai = reader == FeedReader::Google;
+    text(
+        out,
+        "title",
+        &title,
+        reader.title_chars(),
+        says_ai && product.ai_title,
+    );
     // Merchant Center wants a description: a product without one gives its
     // name again.
     let (description, by_ai) = if product.description.trim().is_empty() {
@@ -403,8 +484,8 @@ fn write_google_item(
         out,
         "description",
         description,
-        GOOGLE_DESCRIPTION_CHARS,
-        by_ai,
+        reader.description_chars(),
+        says_ai && by_ai,
     );
     tag(out, "link", &item.link);
     // Its own picture first, then the product's others.
@@ -423,15 +504,7 @@ fn write_google_item(
             tag(out, "additional_image_link", &image_url(image));
         }
     }
-    tag(
-        out,
-        "availability",
-        if item.sold_out {
-            "out_of_stock"
-        } else {
-            "in_stock"
-        },
-    );
+    tag(out, "availability", reader.availability(item.sold_out));
     // A reduction: the price it is down from is the price, and what a
     // shopper pays the sale price.
     match item.compare_at_cents {
@@ -446,11 +519,18 @@ fn write_google_item(
         None => tag(out, "price", &money(item.amount_cents, &product.currency)),
     }
     tag(out, "condition", "new");
-    if let Some(brand) = &product.brand {
-        tag(out, "brand", brand);
+    match (&product.brand, reader) {
+        (Some(brand), _) => tag(out, "brand", brand),
+        (None, FeedReader::Google) => {}
+        // Meta and TikTok refuse an item without a brand: the shop sells it
+        // under its own name.
+        (None, FeedReader::Meta | FeedReader::Tiktok) => tag(out, "brand", &shop.name),
     }
     if product.no_identifier {
-        tag(out, "identifier_exists", "no");
+        // Merchant Center's own way to say there is no number to give.
+        if reader == FeedReader::Google {
+            tag(out, "identifier_exists", "no");
+        }
     } else {
         if let Some(gtin) = item.gtin {
             tag(out, "gtin", gtin);
@@ -479,26 +559,50 @@ fn write_google_item(
     let days = product
         .delivery_days
         .or(shop.delivery_days.map(|days| (days.min, days.max)));
-    for shipping in shop
+    let shippings = shop
         .shippings
         .iter()
         .filter(|shipping| shipping.currency == product.currency)
         .take(GOOGLE_SHIPPINGS)
-    {
-        let free = shipping
-            .free_above_cents
-            .is_some_and(|threshold| item.amount_cents >= threshold);
+        .map(|shipping| {
+            let free = shipping
+                .free_above_cents
+                .is_some_and(|threshold| item.amount_cents >= threshold);
+            (shipping, if free { 0 } else { shipping.price_cents })
+        });
+    match reader {
+        FeedReader::Google => {}
+        // Meta takes the prices as one text, `FR::Colissimo:4.90 EUR`, a
+        // comma between two.
+        FeedReader::Meta => {
+            let plain = |text: &str| text.replace([':', ','], " ");
+            let prices: Vec<String> = shippings
+                .map(|(shipping, cents)| {
+                    format!(
+                        "{}::{}:{}",
+                        shipping.country,
+                        plain(&shipping.service),
+                        money(cents, &shipping.currency)
+                    )
+                })
+                .collect();
+            if !prices.is_empty() {
+                tag(out, "shipping", &prices.join(","));
+            }
+            out.push_str("</item>\n");
+            return;
+        }
+        // TikTok's delivery prices are set on the catalogue itself.
+        FeedReader::Tiktok => {
+            out.push_str("</item>\n");
+            return;
+        }
+    }
+    for (shipping, cents) in shippings {
         out.push_str("<g:shipping>\n");
         tag(out, "country", &shipping.country);
         tag(out, "service", &shipping.service);
-        tag(
-            out,
-            "price",
-            &money(
-                if free { 0 } else { shipping.price_cents },
-                &shipping.currency,
-            ),
-        );
+        tag(out, "price", &money(cents, &shipping.currency));
         // The shop's delivery time runs from the order to the door: no
         // handling counted apart from it.
         if let Some((min, max)) = days {
@@ -536,25 +640,6 @@ fn text(out: &mut String, name: &str, value: &str, max: usize, by_ai: bool) {
     } else {
         tag(out, name, &value);
     }
-}
-
-/// Text as XML carries it. Characters XML 1.0 forbids (the control
-/// characters but tab and the line ends) are dropped: one of them makes the
-/// whole feed unreadable.
-fn xml(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\t' | '\n' | '\r' => out.push(c),
-            c if c.is_control() || matches!(c, '\u{FFFE}' | '\u{FFFF}') => {}
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -819,5 +904,61 @@ mod tests {
         });
         assert!(head.contains("<title>Tom &amp; Co</title>"));
         assert!(head.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
+    }
+
+    fn items_for(reader: FeedReader, product: &FeedProduct, shop: &FeedShop) -> String {
+        let mut out = String::new();
+        write_feed_items(&mut out, reader, product, shop, |id| {
+            format!("https://media.example/1200/{id}.webp")
+        });
+        out
+    }
+
+    #[test]
+    fn meta_reads_the_same_item_in_its_own_words() {
+        let mut product = mug();
+        product.ai_title = true;
+        product.no_identifier = true;
+        product.sold_out.insert(String::new());
+        let xml = items_for(FeedReader::Meta, &product, &shop());
+        assert!(xml.contains("<g:id>01MUG</g:id>"), "{xml}");
+        assert!(!xml.contains("sku_id"));
+        assert!(xml.contains("<g:availability>out of stock</g:availability>"));
+        // No structured title, no `identifier_exists`: Merchant Center's own.
+        assert!(xml.contains("<g:title>Blue Mug</g:title>"));
+        assert!(!xml.contains("structured_title"));
+        assert!(!xml.contains("identifier_exists"));
+        assert!(xml.contains("<g:price>12.50 EUR</g:price>"));
+        assert!(xml.contains("<g:shipping>FR::Colissimo:4.90 EUR</g:shipping>"));
+        assert!(!xml.contains("transit_time"));
+
+        // Free delivery above a threshold the item reaches, and a method's
+        // name that would break the text.
+        let mut shop = shop();
+        shop.shippings[0].free_above_cents = Some(1000);
+        shop.shippings[0].service = "Colissimo: 48h, suivi".into();
+        let xml = items_for(FeedReader::Meta, &mug(), &shop);
+        assert!(
+            xml.contains("<g:shipping>FR::Colissimo  48h  suivi:0.00 EUR</g:shipping>"),
+            "{xml}"
+        );
+    }
+
+    #[test]
+    fn tiktok_gets_its_id_and_a_brand_whatever_the_product_says() {
+        let mut product = mug();
+        product.brand = None;
+        let xml = items_for(FeedReader::Tiktok, &product, &shop());
+        assert!(xml.contains("<g:sku_id>01MUG</g:sku_id>"), "{xml}");
+        assert!(xml.contains("<g:id>01MUG</g:id>"));
+        assert!(xml.contains("<g:availability>in stock</g:availability>"));
+        // The shop's name stands in for a brand the product does not give.
+        assert!(xml.contains("<g:brand>Acme</g:brand>"));
+        assert!(!xml.contains("<g:shipping>"));
+        assert!(xml.ends_with("</item>\n"));
+        // Merchant Center takes an item without a brand as it is.
+        let xml = items_for(FeedReader::Google, &product, &shop());
+        assert!(!xml.contains("<g:brand>"));
+        assert!(xml.contains("<g:availability>in_stock</g:availability>"));
     }
 }

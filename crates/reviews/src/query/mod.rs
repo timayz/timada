@@ -4,10 +4,12 @@
 //! [`read_model_subscription`] keeps current from every tenant's streams into
 //! one database (every row carries the tenant id).
 
+mod feed;
 mod migrations;
 mod read_model;
 mod reviews;
 
+pub use feed::*;
 pub use migrations::*;
 pub use read_model::*;
 pub use reviews::*;

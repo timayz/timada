@@ -29,6 +29,7 @@ pub mod share;
 pub mod slug;
 pub mod sql;
 pub mod time;
+pub mod xml;
 
 use evento::WriteError;
 

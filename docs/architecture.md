@@ -531,9 +531,9 @@ The feed is written from the catalog's read model. `catalog_feed_products` holds
 row per product a feed carries (published, priced, and not taken out with
 `FeedListingSet`), as JSON with everything a feed says of it, hidden options and
 variants off sale already left out. Stock moves too often to be copied there: a page of
-rows reads `catalog_stock` over its own range of ids. `timada_catalog::write_google_items`
+rows reads `catalog_stock` over its own range of ids. `timada_catalog::write_feed_items`
 turns a row into Merchant Center's XML, one item per variant on sale grouped by
-`item_group_id`; the rows know nothing of Google, so another reader is another writer.
+`item_group_id`; the rows know nothing of their readers (`FeedReader`).
 The dashboard (`feed.rs`) adds what only it knows (the storefront's address, the
 delivery methods, where pictures are served from) and sends the XML 200 products at a
 time behind the response, so a large shop is never held in memory; a read that fails
@@ -554,6 +554,27 @@ breaks the response off instead of ending it early. What the feed does with the 
   threshold, with the delivery time (the product's, else the shop's) as transit days.
   A method that ships everywhere names no country, and a feed needs one: it is left to
   the account's delivery settings in Merchant Center.
+
+**The other readers.** The same token answers three more addresses, opened, moved and
+closed with the first:
+
+- `GET /feeds/{token}/meta`, for a Meta catalogue (catalogue ads, retargeting), and
+  `GET /feeds/{token}/tiktok`, for a TikTok catalogue: the same items in the same XML,
+  worded for their reader. `availability` reads `in stock` / `out of stock`; a product
+  without a brand gives the shop's name, since both refuse an item without one; the
+  structured titles and `identifier_exists` are Merchant Center's own and left out.
+  Meta takes the delivery prices as one text (`FR::Colissimo:4.90 EUR`); TikTok's are
+  set on the catalogue. TikTok names an item's id `sku_id`, written beside `id`.
+- `GET /feeds/{token}/google-reviews`: the shop's published reviews as Google's product
+  reviews feed (schema 2.4), so Shopping listings show their stars
+  (`timada_reviews::write_google_review`). Whole each time, read 200 reviews at a time
+  off the table's key; each review names its product's page, GTINs, part numbers, brand
+  and the ids of its items in the shopping feed. A review of a product the shopping
+  feed does not carry is left out.
+
+An item's id is the variant's, or the product's when it is sold as is. The storefront's
+Google tag and Meta pixel, and the sale the dashboard sends to Meta, name what was seen
+and bought by the same ids, so an ad platform matches them to its catalogue.
 
 A product leaves the catalog one of two ways. `Archived` is final and keeps it on
 record: no more edits, its slug and codes free again, its row still listed as
