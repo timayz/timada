@@ -5,9 +5,11 @@
 
 pub mod category_id;
 pub mod create;
+pub mod filters;
 
 use timada_catalog::{
-    CatalogError, CategoryRow, MAX_CATEGORY_NAME_LEN, categories_of_tenant, tree_of,
+    CatalogError, CategoryRow, MAX_CATEGORY_NAME_LEN, MAX_LISTING_FILTERS, categories_of_tenant,
+    tree_of,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
@@ -20,13 +22,14 @@ use topcoat::{
 use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::app::auth::Flash;
 use crate::components::badge::{BadgeVariant, badge};
-use crate::components::button::button;
-use crate::components::field::{field, field_label};
+use crate::components::button::{ButtonVariant, button};
+use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
 use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
+use crate::components::textarea::textarea;
 use crate::db::Db;
 use crate::ui::{LINK, Shell, document, empty_row, notice, page_header, section_card};
 
@@ -129,6 +132,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let can_manage = access.can(cx, PERMISSION_PRODUCTS_MANAGE).await?;
     let query = query_params::<CategoriesQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
+    // The options the listings are narrowed by, read from their stream
+    // (so a change shows at once); none yet leaves the storefront's own.
+    let filters = super::products::catalog(&access)?
+        .load_listing_filters()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let filters_set = filters.is_some();
+    let filters_text = filters.unwrap_or_default().join("\n");
     let TenantAccess { tenant, .. } = access;
     let pool = context::<Db>(cx);
     let rows = rows_of(pool, &tenant.id).await?;
@@ -220,6 +231,31 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                         <div>
                             button(attrs: attributes! { type="submit" }, "Create category")
+                        </div>
+                    </form>
+                )
+                section_card(
+                    title: Some("Filters"),
+                    description: Some("What shoppers narrow a category's products by, beside the price: options of your products, such as a size or a colour. Each shows the values the listed products come in."),
+                    <form method="post" action=(href!(filters::filters, slug: slug.clone())) class="flex max-w-xl flex-col gap-4" data-listing-filters=(if filters_set { "set" } else { "unset" })>
+                        field(
+                            field_label(attrs: attributes! { for="listing-filters" }, "Options shoppers filter by")
+                            field_description(
+                                attrs: attributes! { id="listing-filters-hint" },
+                                "One option a line, written as on your products (Couleur, Taille), in the order to show them; " (MAX_LISTING_FILTERS) " at most. "
+                                if filters_set {
+                                    "Empty offers the price alone."
+                                } else {
+                                    "Not set yet: the storefront offers its own choice."
+                                }
+                            )
+                            textarea(
+                                attrs: attributes! { id="listing-filters" name="options" rows="4" aria-describedby="listing-filters-hint" },
+                                (&filters_text)
+                            )
+                        )
+                        <div>
+                            button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, "Save filters")
                         </div>
                     </form>
                 )

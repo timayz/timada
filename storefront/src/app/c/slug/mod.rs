@@ -17,7 +17,7 @@ use topcoat::{
 use crate::app::{
     boutique::PER_PAGE,
     catalog_grid, document,
-    filters::{COLOUR, Filters, Panel, filter_fields, filter_panel},
+    filters::{Filters, Panel, filter_fields, filter_panel, shop_filters},
 };
 
 module_param!(pub slug);
@@ -28,7 +28,6 @@ struct CategoryQuery {
     page: Option<u32>,
     min_price: Option<u32>,
     max_price: Option<u32>,
-    couleur: Option<String>,
 }
 
 /// A link into the listing. The default sort and the first page are left
@@ -43,8 +42,6 @@ struct CategoryLink<'a> {
     min_price: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_price: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    couleur: Option<&'a str>,
 }
 
 /// How a category lists its products until a shopper asks otherwise: what
@@ -79,10 +76,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .as_deref()
         .map(ProductSort::parse)
         .unwrap_or(DEFAULT_SORT);
-    let filters = Filters::new(query.min_price, query.max_price, query.couleur.clone());
+    let offered = shop_filters(cx).await?;
+    let filters = Filters::read(cx, query.min_price, query.max_price, &offered);
     // The products of this category and of everything below it, which is
     // what a shopper expects from a top-level entry.
-    let mut wanted = filters.apply(
+    let wanted = filters.apply(
         ProductQuery::default()
             .in_category(category.id.clone())
             .sort(sort)
@@ -95,31 +93,39 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // The plain listing opens on the products the merchant put first, and
     // lists the others after them: its first page is longer by those.
     let pinned = if narrowed { Vec::new() } else { hub.pinned };
+    let mut listed = wanted.clone();
     for product in &pinned {
-        wanted = wanted.exclude(product.id.clone());
+        listed = listed.exclude(product.id.clone());
     }
-    let mut page = products(cx, &wanted).await?;
+    let mut page = products(cx, &listed).await?;
     let total = page.total + pinned.len() as i64;
     if page.page == 1 {
         page.items.splice(0..0, pinned);
     }
-    let colours = option_values(cx, &wanted, COLOUR).await?;
+    // The values each filter offers, counted over the whole listing: the
+    // products put first are of it.
+    let mut values = Vec::with_capacity(offered.len());
+    for filter in offered {
+        let found = option_values(cx, &wanted, &filter.name).await?;
+        values.push((filter, found));
+    }
     let link = {
         let sort = (sort != DEFAULT_SORT).then(|| sort.as_str());
         let slug = category.slug.clone();
         move |filters: &Filters, number: u32| {
-            href!(index, slug: slug.clone())
-                .query(CategoryLink {
-                    sort,
-                    page: (number > 1).then_some(number),
-                    min_price: filters.min_price,
-                    max_price: filters.max_price,
-                    couleur: filters.couleur.as_deref(),
-                })
-                .resolve(cx)
+            filters.onto(
+                href!(index, slug: slug.clone())
+                    .query(CategoryLink {
+                        sort,
+                        page: (number > 1).then_some(number),
+                        min_price: filters.min_price,
+                        max_price: filters.max_price,
+                    })
+                    .resolve(cx),
+            )
         }
     };
-    let panel = Panel::build(&filters, &colours, |filters| link(filters, 1));
+    let panel = Panel::build(&filters, &values, |filters| link(filters, 1));
     let sort_label = SORTS
         .iter()
         .find(|(candidate, _)| *candidate == sort)

@@ -43,13 +43,7 @@ pub const PRIVATE_PATHS: &[&str] = &[
 /// A listing searched, narrowed by a filter or sorted is the same products
 /// again: crawlers stay out of it too. A page further down a listing
 /// (`page=`) is not: it has products of its own.
-const FILTERED: &[&str] = &[
-    "/*?*q=",
-    "/*?*sort=",
-    "/*?*min_price=",
-    "/*?*max_price=",
-    "/*?*couleur=",
-];
+const FILTERED: &[&str] = &["/*?*q=", "/*?*sort=", "/*?*min_price=", "/*?*max_price="];
 
 /// How long a crawler may keep a file before asking again.
 const CACHE: &str = "public, max-age=3600";
@@ -143,7 +137,18 @@ pub async fn products(cx: &Cx) -> Result<impl IntoResponse> {
 
 #[route(GET "/robots.txt")]
 pub async fn robots(cx: &Cx) -> Result<impl IntoResponse> {
-    let disallow: Vec<&str> = PRIVATE_PATHS.iter().chain(FILTERED).copied().collect();
+    // And out of each option the shop's listings are narrowed by.
+    let options: Vec<String> = crate::app::filters::shop_filters(cx)
+        .await?
+        .iter()
+        .map(|filter| format!("/*?*{}=", filter.key))
+        .collect();
+    let disallow: Vec<&str> = PRIVATE_PATHS
+        .iter()
+        .chain(FILTERED)
+        .copied()
+        .chain(options.iter().map(String::as_str))
+        .collect();
     let sitemap = absolute_url(cx, &href!(index).resolve(cx));
     Ok((
         [

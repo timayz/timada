@@ -9,7 +9,8 @@ use crate::money::MoneyFormat;
 use crate::query::{
     Category, CategoryHub, CategoryNode, FacetValue, Product, ProductPage, ProductQuery, Seo,
     category_ancestors, menu_of, published_categories, published_category_by_slug,
-    published_category_hub, published_option_values, published_product_by_slug, published_products,
+    published_category_hub, published_listing_filters, published_option_values,
+    published_product_by_slug, published_products,
 };
 use crate::store::Store;
 
@@ -120,6 +121,16 @@ pub async fn category_hub(cx: &Cx, category_id: &str) -> Result<CategoryHub> {
         product.fill_urls(store.media_url());
     }
     Ok(hub)
+}
+
+/// The options the shop's listings are narrowed by, in the merchant's
+/// order; `None` while the shop never set them. Each is an option's name:
+/// [`option_values`] gives the values a listing offers for it, and
+/// [`ProductQuery::with_option`] narrows by one.
+pub async fn listing_filters(cx: &Cx) -> Result<Option<Vec<String>>> {
+    published_listing_filters(store(cx).db())
+        .await
+        .map_err(Error::from_anyhow)
 }
 
 /// What search engines show for a category's page: the title and the
