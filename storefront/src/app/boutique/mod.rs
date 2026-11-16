@@ -1,5 +1,5 @@
 //! The whole catalogue at `/boutique`, newest first, searched with `?q=` and
-//! narrowed by the price and colour filters.
+//! narrowed by the price band and the shop's filters.
 
 use timada_storefront::{ProductQuery, ProductSort, menu, option_values, products};
 use topcoat::{
@@ -11,7 +11,7 @@ use topcoat::{
 
 use crate::app::{
     catalog_grid, document,
-    filters::{COLOUR, Filters, Panel, filter_panel},
+    filters::{Filters, Panel, filter_panel, shop_filters},
 };
 
 /// A listing shows this many at once.
@@ -23,7 +23,6 @@ struct CatalogQuery {
     page: Option<u32>,
     min_price: Option<u32>,
     max_price: Option<u32>,
-    couleur: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -37,8 +36,6 @@ struct CatalogLink<'a> {
     min_price: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_price: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    couleur: Option<&'a str>,
 }
 
 #[page]
@@ -57,23 +54,29 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     if let Some(q) = &q {
         wanted = wanted.search(q.as_str());
     }
-    let filters = Filters::new(query.min_price, query.max_price, query.couleur.clone());
+    let offered = shop_filters(cx).await?;
+    let filters = Filters::read(cx, query.min_price, query.max_price, &offered);
     let wanted = filters.apply(wanted);
     let page = products(cx, &wanted).await?;
-    let colours = option_values(cx, &wanted, COLOUR).await?;
+    let mut values = Vec::with_capacity(offered.len());
+    for filter in offered {
+        let found = option_values(cx, &wanted, &filter.name).await?;
+        values.push((filter, found));
+    }
     let nav = menu(cx).await?;
     let link = move |filters: &Filters, number: u32| {
-        href!(index)
-            .query(CatalogLink {
-                q: wanted.q.as_deref(),
-                page: (number > 1).then_some(number),
-                min_price: filters.min_price,
-                max_price: filters.max_price,
-                couleur: filters.couleur.as_deref(),
-            })
-            .resolve(cx)
+        filters.onto(
+            href!(index)
+                .query(CatalogLink {
+                    q: wanted.q.as_deref(),
+                    page: (number > 1).then_some(number),
+                    min_price: filters.min_price,
+                    max_price: filters.max_price,
+                })
+                .resolve(cx),
+        )
     };
-    let panel = Panel::build(&filters, &colours, |filters| link(filters, 1));
+    let panel = Panel::build(&filters, &values, |filters| link(filters, 1));
     let title = match &q {
         Some(q) => format!("Résultats pour « {q} »"),
         None => "Nos produits".to_owned(),

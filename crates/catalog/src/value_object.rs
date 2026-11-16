@@ -402,6 +402,14 @@ pub fn best_sellers_id(at: u64) -> String {
     evento::hash_ids(vec!["best-sellers", &format!("{year}-{month:02}")])
 }
 
+/// How many options a shop's listings are narrowed by.
+pub const MAX_LISTING_FILTERS: usize = 8;
+
+/// The stream of the shop's listing filters: one per tenant store.
+pub fn listing_filters_id() -> String {
+    evento::hash_ids(vec!["listing-filters"])
+}
+
 /// The stream of the shop's default delivery time: one per tenant store.
 pub fn delivery_default_id() -> String {
     evento::hash_ids(vec!["delivery-default"])

@@ -65,6 +65,7 @@ event timada-catalog/CategorySlug::Released unit
 event timada-catalog/DeliveryDefault::DefaultDeliveryDaysSet { days: Option<DeliveryDays>, set_by: String }
 event timada-catalog/Feed::Closed { closed_by: String }
 event timada-catalog/Feed::Opened { token: String, opened_by: String }
+event timada-catalog/ListingFilters::FiltersSet { names: Vec<String>, set_by: String }
 event timada-catalog/Product::AiWritingDeclared { title: bool, description: bool, declared_by: String }
 event timada-catalog/Product::Archived { archived_by: String }
 event timada-catalog/Product::AttributeRemoved { name: String, removed_by: String }

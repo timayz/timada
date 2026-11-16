@@ -39,11 +39,11 @@ use evento::{
 };
 use timada_catalog::aggregator::category::Category;
 use timada_catalog::aggregator::stock::StockItem;
-use timada_catalog::aggregator::{BestSellers, DeliveryDefault, Product};
+use timada_catalog::aggregator::{BestSellers, DeliveryDefault, ListingFilters, Product};
 use timada_catalog::{
     CategoryLink, CategoryState, ProductState, StockState, StockSummary, best_sellers_projection,
-    category_counts, category_projection, delivery_default_projection, product_projection,
-    stock_projection,
+    category_counts, category_projection, delivery_default_projection, listing_filters_projection,
+    product_projection, stock_projection,
 };
 use timada_core::FormerSlug;
 use timada_core::db::{
@@ -78,6 +78,7 @@ pub fn catalog_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(crate::terms::on_return_policy_event())
         .handler(on_delivery_default_event())
         .handler(on_best_sellers_event())
+        .handler(on_listing_filters_event())
         .any_routing_key()
 }
 
@@ -1098,6 +1099,29 @@ async fn on_best_sellers_event<E: Executor>(
     };
     rank_best_sellers(&db, &state.product_ids).await?;
     reflected.note(&event, state.aggregate_version);
+    Ok(())
+}
+
+/// Takes the options the shop's listings are narrowed by.
+#[evento::subscription_all]
+async fn on_listing_filters_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<ListingFilters>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(state) = listing_filters_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    db.execute(
+        "INSERT INTO storefront_listing_filters (id, names_json) VALUES (1, ?1)
+         ON CONFLICT (id) DO UPDATE SET names_json = excluded.names_json",
+        (serde_json::to_string(&state.names)?,),
+    )
+    .await?;
     Ok(())
 }
 

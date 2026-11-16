@@ -1431,6 +1431,16 @@ pub async fn published_category_by_slug(db: &Db, slug: &str) -> anyhow::Result<O
     .await
 }
 
+/// The options the shop's listings are narrowed by ("Couleur", "Taille"),
+/// in the order the merchant set; `None` while the shop never set them,
+/// which leaves the choice to the host.
+pub async fn published_listing_filters(db: &Db) -> anyhow::Result<Option<Vec<String>>> {
+    let row: Option<(String,)> = db
+        .fetch_optional("SELECT names_json FROM storefront_listing_filters", ())
+        .await?;
+    Ok(row.map(|(names,)| serde_json::from_str(&names).unwrap_or_default()))
+}
+
 /// A question shoppers ask about a category, and the answer its page
 /// gives.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
