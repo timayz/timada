@@ -1,15 +1,17 @@
 //! A category and the products in it, sub-categories included, narrowed by
-//! the price and colour filters.
+//! the price and colour filters. Its plain listing opens on the products
+//! the merchant put first, and its first page ends on the buying guide and
+//! the questions the merchant answered.
 
 use timada_storefront::{
-    ProductQuery, ProductSort, absolute_url, breadcrumb_ld, categories, category_body,
+    ProductQuery, ProductSort, absolute_url, breadcrumb_ld, categories, category_hub,
     category_path, category_seo, menu_of, option_values, products, require_category_in,
 };
 use topcoat::{
     Result,
     context::Cx,
     router::{href, module_param, page, query_params},
-    view::{View, view},
+    view::{Unescaped, View, view},
 };
 
 use crate::app::{
@@ -65,12 +67,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let crumbs = category_path(&tree, &category);
     let seo = category_seo(cx, &category).await?;
     let query = query_params::<CategoryQuery>(cx)?;
-    // The longer text about the category, on its first page only.
-    let body = if query.page.unwrap_or(1) <= 1 {
-        category_body(cx, &category.id).await?
-    } else {
-        String::new()
-    };
+    let hub = category_hub(cx, &category.id).await?;
     let sort = query
         .sort
         .as_deref()
@@ -79,14 +76,27 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let filters = Filters::new(query.min_price, query.max_price, query.couleur.clone());
     // The products of this category and of everything below it, which is
     // what a shopper expects from a top-level entry.
-    let wanted = filters.apply(
+    let mut wanted = filters.apply(
         ProductQuery::default()
             .in_category(category.id.clone())
             .sort(sort)
             .per_page(PER_PAGE)
             .page(query.page.unwrap_or(1)),
     );
-    let page = products(cx, &wanted).await?;
+    // Filtered or sorted another way, it shows the category's products
+    // again.
+    let narrowed = filters.is_active() || sort != ProductSort::default();
+    // The plain listing opens on the products the merchant put first, and
+    // lists the others after them: its first page is longer by those.
+    let pinned = if narrowed { Vec::new() } else { hub.pinned };
+    for product in &pinned {
+        wanted = wanted.exclude(product.id.clone());
+    }
+    let mut page = products(cx, &wanted).await?;
+    let total = page.total + pinned.len() as i64;
+    if page.page == 1 {
+        page.items.splice(0..0, pinned);
+    }
     let colours = option_values(cx, &wanted, COLOUR).await?;
     let link = {
         let sort = (sort != ProductSort::default()).then(|| sort.as_str());
@@ -110,9 +120,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map(|(_, label)| *label)
         .unwrap_or_default();
 
-    // Filtered or sorted another way, it shows the category's products
-    // again.
-    let narrowed = filters.is_active() || sort != ProductSort::default();
     // Search engines keep the plain listing for those, and each page of it
     // for itself.
     let canonical = if narrowed {
@@ -174,8 +181,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 }
                 filter_panel(panel: &panel)
                 <div class="listing-head">
-                    <p data-results=(page.total)>
-                        (page.total) (if page.total == 1 { " résultat affiché" } else { " résultats affichés" })
+                    <p data-results=(total)>
+                        (total) (if total == 1 { " résultat affiché" } else { " résultats affichés" })
                         " · " (sort_label)
                     </p>
                     <form class="sort" method="get">
@@ -207,9 +214,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         if page.has_next() { <a href=(link(&filters, page.page + 1))>"Suivant →"</a> }
                     </nav>
                 }
-                if page.page == 1 && !body.is_empty() {
+                if page.page == 1 && !hub.guide_html.is_empty() {
+                    // Cleaned by the library: no script, no attribute it did
+                    // not allow, no picture from elsewhere.
                     <section class="category-body" data-category-body="">
-                        <p class="description">(&body)</p>
+                        (Unescaped::new_unchecked(hub.guide_html.clone()))
+                    </section>
+                }
+                if page.page == 1 && !hub.questions.is_empty() {
+                    <section class="category-questions" aria-labelledby="questions-title" data-category-questions="">
+                        <h2 id="questions-title">"Questions fréquentes"</h2>
+                        for asked in &hub.questions {
+                            <details>
+                                <summary>(&asked.question)</summary>
+                                <p>(&asked.answer)</p>
+                            </details>
+                        }
                     </section>
                 }
             </div>

@@ -480,7 +480,7 @@ the product or the page is.
 ## Browsing the categories
 
 ```rust
-use timada_storefront::{categories, category_body, category_path, find_category,
+use timada_storefront::{categories, category_hub, category_path, find_category,
     product_categories, related_products, require_category, require_category_in,
     search_categories};
 
@@ -488,7 +488,7 @@ let menu = categories(cx).await?;                     // live categories as tree
 let node = require_category_in(&menu, slug)?;         // 404 when archived or unknown, no query
 let category = require_category(cx, slug).await?;     // the same without a menu at hand
 let crumbs = category_path(&menu, &category);         // its ancestors, read off the menu
-let body = category_body(cx, &category.id).await?;    // the text below its products, or ""
+let hub = category_hub(cx, &category.id).await?;      // guide, questions, products put first
 let node = find_category(&menu, &category.slug);      // its node, with children and count
 let hits = search_categories(&menu, "lit", 3);     // names containing it, accents aside
 let also = related_products(cx, &product, 4).await?;  // same category, never itself
@@ -505,6 +505,27 @@ of `in_category` with no search is read off an index in the order asked for, cos
 its own size however large the store is, and its total is the stored count. `in_categories` is the narrower filter: products filed
 directly under any of the ids, which is what related products use. An archived category
 is in none of this; the products that were in it stay on sale.
+
+`category_hub` gives what the merchant set for the category's page beside its listing:
+`guide_html`, the buying guide below the products (Markdown turned into cleaned HTML,
+as a page's); `questions`, what shoppers ask and the answers, in the merchant's order;
+and `pinned`, the products the page shows first. Of the products the merchant picked
+(eight at most) it gives those the page lists (published, and filed under the category
+or below it), in the merchant's order. The host shows them ahead of the listing and
+leaves them out of it:
+
+```rust
+let mut wanted = ProductQuery::default().in_category(category.id.clone());
+for product in &hub.pinned {
+    wanted = wanted.exclude(product.id.clone());   // every page, so none comes twice
+}
+let page = products(cx, &wanted).await?;           // page.total leaves them out too
+```
+
+The storefront does so on the plain listing only: sorted another way or filtered, the
+order is the shopper's. It shows the guide and the questions on a category's first
+page, each question opening on its answer (`<details>`), with no `FAQPage` data:
+search engines stopped showing it.
 
 ## The shop's own pages
 

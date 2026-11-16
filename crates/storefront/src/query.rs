@@ -1406,17 +1406,78 @@ pub async fn published_category_by_slug(db: &Db, slug: &str) -> anyhow::Result<O
     .await
 }
 
-/// The text a live category's page shows below its products, empty when
-/// it has none. Apart from [`Category`], so the trees every page loads do
-/// not carry it.
-pub async fn published_category_body(db: &Db, category_id: &str) -> anyhow::Result<String> {
-    let body: Option<(String,)> = db
+/// A question shoppers ask about a category, and the answer its page
+/// gives.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct CategoryQuestion {
+    pub question: String,
+    /// Plain text; its line breaks are the merchant's.
+    pub answer: String,
+}
+
+/// What a live category's page shows beside its listing, as the merchant
+/// set it. Apart from [`Category`], so the trees every page loads do not
+/// carry it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CategoryHub {
+    /// The buying guide below the products, as HTML, cleaned: safe to
+    /// write into the page unescaped. Empty when there is none.
+    pub guide_html: String,
+    /// The questions the page answers, in the merchant's order.
+    pub questions: Vec<CategoryQuestion>,
+    /// The products the page shows first, in the merchant's order: those
+    /// of the ones picked that the page lists (published, and filed under
+    /// the category or below it).
+    pub pinned: Vec<Product>,
+}
+
+/// What a live category's page shows beside its listing; all of it empty
+/// for a category archived or unknown. `media_url` is where the shop's
+/// pictures are served from, for the guide's.
+pub async fn published_category_hub(
+    db: &Db,
+    category_id: &str,
+    media_url: Option<&str>,
+) -> anyhow::Result<CategoryHub> {
+    let row: Option<(String, String, String)> = db
         .fetch_optional(
-            "SELECT body FROM storefront_categories WHERE id = ?1 AND archived = 0",
+            "SELECT body, questions_json, pinned_json FROM storefront_categories
+             WHERE id = ?1 AND archived = 0",
             (category_id,),
         )
         .await?;
-    Ok(body.map(|(body,)| body).unwrap_or_default())
+    let Some((body, questions, pinned)) = row else {
+        return Ok(CategoryHub::default());
+    };
+    let pinned: Vec<String> = serde_json::from_str(&pinned).unwrap_or_default();
+    let mut products = Vec::with_capacity(pinned.len());
+    // Each looked up on its own, through the index on the product: a
+    // handful at most, in the merchant's order.
+    for id in &pinned {
+        let product: Option<Product> = db
+            .fetch_optional(
+                concat!(
+                    "SELECT ",
+                    product_columns!(),
+                    " FROM storefront_category_products cp
+                         INDEXED BY storefront_category_products_product
+                     JOIN storefront_products p ON p.id = cp.product_id
+                     WHERE cp.product_id = ?1 AND cp.category_id = ?2"
+                ),
+                (id.as_str(), category_id),
+            )
+            .await?;
+        products.extend(product);
+    }
+    Ok(CategoryHub {
+        guide_html: if body.trim().is_empty() {
+            String::new()
+        } else {
+            timada_pages::render_markdown(&body, media_url.unwrap_or_default())
+        },
+        questions: serde_json::from_str(&questions).unwrap_or_default(),
+        pinned: products,
+    })
 }
 
 /// What search engines show for a product's or a category's page: the
@@ -1739,6 +1800,55 @@ mod sql {
         .await
         .unwrap();
         db
+    }
+
+    #[tokio::test]
+    async fn a_category_gives_its_guide_its_questions_and_what_it_puts_first() {
+        let db = catalog().await;
+        assert_eq!(
+            published_category_hub(&db, "cat", None).await.unwrap(),
+            CategoryHub::default()
+        );
+        // Picked: a product the page lists, one it does not (published, but
+        // filed elsewhere), a draft and one nobody knows.
+        db.execute(
+            "UPDATE storefront_categories SET body = ?1, questions_json = ?2, pinned_json = ?3
+             WHERE id = 'cat'",
+            (
+                "## Bien choisir\n\nSelon la *taille*.\n\n<script>x</script>",
+                r#"[{"question":"Lavable ?","answer":"Oui, à 30°."}]"#,
+                r#"["basket","service","draft","never-was","collar"]"#,
+            ),
+        )
+        .await
+        .unwrap();
+        let hub = published_category_hub(&db, "cat", None).await.unwrap();
+        assert!(hub.guide_html.contains("<h2>Bien choisir</h2>"), "{hub:?}");
+        assert!(hub.guide_html.contains("<em>taille</em>"), "{hub:?}");
+        assert!(!hub.guide_html.contains("<script"), "{hub:?}");
+        assert_eq!(
+            hub.questions,
+            [CategoryQuestion {
+                question: "Lavable ?".into(),
+                answer: "Oui, à 30°.".into()
+            }]
+        );
+        let pinned: Vec<&str> = hub.pinned.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(pinned, ["basket", "collar"]);
+        // The listing after them leaves them out, and counts what is left.
+        let rest = ProductQuery::default()
+            .in_category("cat")
+            .exclude("basket")
+            .exclude("collar");
+        assert_eq!(ids(&db, rest).await, (Vec::new(), 0));
+
+        db.execute("UPDATE storefront_categories SET archived = 1", ())
+            .await
+            .unwrap();
+        assert_eq!(
+            published_category_hub(&db, "cat", None).await.unwrap(),
+            CategoryHub::default()
+        );
     }
 
     async fn ids(db: &Db, query: ProductQuery) -> (Vec<String>, i64) {

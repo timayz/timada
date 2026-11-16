@@ -137,7 +137,7 @@ test("the storefront shows the catalogue in French", async ({
   await createCategory(page, slug, "Couchage");
   // The longer text the shop shows below a category's products.
   await page
-    .getByLabel("Text below the products")
+    .getByLabel("Buying guide, below the products")
     .fill("Comment choisir un couchage pour chat ?");
   await page.getByRole("button", { name: "Save description" }).click();
   await expect(page.getByRole("status")).toContainText("Description saved.");
@@ -1253,6 +1253,92 @@ test("an address that moved answers with a redirect for good", async ({
   await row.getByRole("button", { name: "Delete the redirect from /products/blue-mug" }).click();
   await expect(page.getByRole("status")).toContainText("Redirect deleted.");
   await leads("/products/blue-mug", null);
+});
+
+test("a category opens on the products put first, then its guide and the questions it answers", async ({
+  page,
+  request,
+}) => {
+  await registerWithEmail(page, uniqueEmail("storefront-hub"));
+  const { name, slug } = uniqueTenant("Storefront Hub");
+  await createTenant(page, name);
+  await createCategory(page, slug, "Tapis");
+  const category = page.url().split("?")[0];
+  // Published in this order: the newest, the last, heads the listing.
+  await publishProduct(page, slug, "Tapis bleu", "19.90", "Tapis");
+  await publishProduct(page, slug, "Tapis rose", "24.90", "Tapis");
+  await publishProduct(page, slug, "Tapis gris", "29.90", "Tapis");
+  await publishProduct(page, slug, "Gamelle", "9.90");
+  await app.start(request, await mintKey(page, slug, false), 4);
+
+  const listed = async () =>
+    page.locator("ul.catalog > li[data-product]").evaluateAll((cards) =>
+      cards.map((card) => card.getAttribute("data-product")),
+    );
+  await page.goto(`${app.url}/c/tapis`);
+  expect(await listed()).toEqual(["tapis-gris", "tapis-rose", "tapis-bleu"]);
+  await expect(page.locator("[data-category-body]")).toHaveCount(0);
+  await expect(page.locator("[data-category-questions]")).toHaveCount(0);
+
+  // The merchant writes the guide and the questions, and puts two products
+  // first: one of the category's, one filed elsewhere.
+  await page.goto(category);
+  await page
+    .getByLabel("Buying guide, below the products")
+    .fill("## Bien choisir son tapis\n\nSelon la **taille** du chat.\n\n<script>alert(1)</script>");
+  await page.getByRole("button", { name: "Save description" }).click();
+  await expect(page.getByRole("status")).toContainText("Description saved.");
+  await page
+    .getByLabel("Questions and answers")
+    .fill("Quelle taille choisir ?\nMesurez votre chat.\nAjoutez 10 cm.\n\nLavable en machine ?\nOui, à 30°.");
+  await page.getByRole("button", { name: "Save questions" }).click();
+  await expect(page.getByRole("status")).toContainText("Questions saved.");
+  await expect(page.locator("[data-category-questions]")).toHaveAttribute("data-category-questions", "2");
+  await expect(page.getByLabel("Questions and answers")).toHaveValue(
+    "Quelle taille choisir ?\nMesurez votre chat.\nAjoutez 10 cm.\n\nLavable en machine ?\nOui, à 30°.",
+  );
+  // A question without its answer is refused, as is a product nobody sells.
+  await page.getByLabel("Questions and answers").fill("Pourquoi ?");
+  await page.getByRole("button", { name: "Save questions" }).click();
+  await expect(page.getByRole("alert")).toContainText("A category answers at most 20 questions");
+  await page.getByLabel("Products shown first").fill("never-was");
+  await page.getByRole("button", { name: "Save the first products" }).click();
+  await expect(page.getByRole("alert")).toContainText("This product does not exist.");
+  await page.getByLabel("Products shown first").fill("tapis-bleu\n/p/gamelle\n");
+  await page.getByRole("button", { name: "Save the first products" }).click();
+  await expect(page.getByRole("status")).toContainText("First products saved.");
+  await expect(page.locator("[data-category-pinned]")).toHaveText("tapis-bleu, gamelle");
+
+  // The page opens on the one it lists; the one filed elsewhere is not
+  // shown here.
+  await expect(async () => {
+    await page.goto(`${app.url}/c/tapis`);
+    expect(await listed()).toEqual(["tapis-bleu", "tapis-gris", "tapis-rose"]);
+  }).toPass({ timeout: 15_000 });
+  await expect(page.locator("[data-results]")).toHaveAttribute("data-results", "3");
+  // Sorted another way, the order is the shopper's.
+  await page.goto(`${app.url}/c/tapis?sort=price_desc`);
+  expect(await listed()).toEqual(["tapis-gris", "tapis-rose", "tapis-bleu"]);
+  await expect(page.locator("[data-results]")).toHaveAttribute("data-results", "3");
+
+  // Below the products: the guide as the merchant wrote it, then each
+  // question, opening on its answer.
+  await page.goto(`${app.url}/c/tapis`);
+  const guide = page.locator("[data-category-body]");
+  await expect(guide.locator("h2")).toHaveText("Bien choisir son tapis");
+  await expect(guide.locator("strong")).toHaveText("taille");
+  await expect(guide.locator("script")).toHaveCount(0);
+  await expect(guide).toContainText("<script>alert(1)</script>");
+  const questions = page.locator("[data-category-questions]");
+  await expect(questions.getByRole("heading", { level: 2 })).toHaveText("Questions fréquentes");
+  await expect(questions.locator("summary")).toHaveText(["Quelle taille choisir ?", "Lavable en machine ?"]);
+  const answer = questions.locator("details").first().locator("p");
+  await expect(answer).toBeHidden();
+  await questions.locator("summary").first().click();
+  await expect(answer).toHaveText("Mesurez votre chat.\nAjoutez 10 cm.");
+  // No FAQ markup: search engines stopped showing it.
+  const data = await page.locator('script[type="application/ld+json"]').allTextContents();
+  expect(data.join("")).not.toContain("FAQPage");
 });
 
 test("the blog lists the merchant's articles, each with its contents and the products it shows", async ({

@@ -41,6 +41,12 @@ pub const MAX_CATEGORY_NAME_LEN: usize = 80;
 pub const MAX_CATEGORY_DESCRIPTION_LEN: usize = 2000;
 /// The longest text below a category's products.
 pub const MAX_CATEGORY_BODY_LEN: usize = 20_000;
+/// How many questions a category's page answers.
+pub const MAX_CATEGORY_QUESTIONS: usize = 20;
+pub const MAX_CATEGORY_QUESTION_LEN: usize = 200;
+pub const MAX_CATEGORY_ANSWER_LEN: usize = 1500;
+/// How many products a category's page shows first: its first row or two.
+pub const MAX_PINNED_PRODUCTS: usize = 8;
 /// How deep the category tree goes: a top-level category is at depth 1, so
 /// `Bedding > Mats > Cooling mats` is the most.
 pub const MAX_CATEGORY_DEPTH: usize = 3;
@@ -633,6 +639,43 @@ pub fn normalize_category_body(body: &str) -> Result<String, CatalogError> {
         return Err(CatalogError::InvalidDescription);
     }
     Ok(body.to_owned())
+}
+
+/// A question shoppers ask about a category, and the answer its page
+/// gives.
+#[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct CategoryQuestion {
+    pub question: String,
+    /// Plain text; its line breaks are kept.
+    pub answer: String,
+}
+
+/// Trims each question and its answer and checks them: at most
+/// [`MAX_CATEGORY_QUESTIONS`], a question of 1 to
+/// [`MAX_CATEGORY_QUESTION_LEN`] characters on one line, an answer of 1 to
+/// [`MAX_CATEGORY_ANSWER_LEN`].
+pub fn normalize_category_questions(
+    questions: &[CategoryQuestion],
+) -> Result<Vec<CategoryQuestion>, CatalogError> {
+    if questions.len() > MAX_CATEGORY_QUESTIONS {
+        return Err(CatalogError::InvalidCategoryQuestions);
+    }
+    questions
+        .iter()
+        .map(|asked| {
+            let question = asked
+                .question
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let answer = asked.answer.replace("\r\n", "\n").trim().to_owned();
+            let valid = (1..=MAX_CATEGORY_QUESTION_LEN).contains(&question.chars().count())
+                && (1..=MAX_CATEGORY_ANSWER_LEN).contains(&answer.chars().count());
+            valid
+                .then_some(CategoryQuestion { question, answer })
+                .ok_or(CatalogError::InvalidCategoryQuestions)
+        })
+        .collect()
 }
 
 /// Trims a display name and checks it is 1 to 120 characters.
