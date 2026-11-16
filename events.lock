@@ -318,11 +318,13 @@ event timada-pages/Article::SeoSet { meta_title: String, meta_description: Strin
 event timada-pages/Article::Unpublished { unpublished_by: String }
 event timada-pages/ArticleSlug::Claimed { article_id: String, article_version: u16 }
 event timada-pages/ArticleSlug::Released unit
+event timada-pages/GoogleTag::GoogleSaleValueSet { profit: bool, set_by: String }
 event timada-pages/GoogleTag::GoogleTagSet { analytics_id: Option<String>, ads_id: Option<String>, purchase_label: Option<String>, add_to_cart_label: Option<String>, begin_checkout_label: Option<String>, enhanced_conversions: bool, set_by: String }
 event timada-pages/MetaPixel::ConversionRefused { order_id: String, reason: String, refused_by: String }
 event timada-pages/MetaPixel::ConversionsTokenRemoved { removed_by: String }
 event timada-pages/MetaPixel::ConversionsTokenSet { token_sealed: Vec<u8>, set_by: String }
 event timada-pages/MetaPixel::MetaPixelSet { pixel_id: Option<String>, set_by: String }
+event timada-pages/MetaPixel::MetaSaleValueSet { profit: bool, set_by: String }
 event timada-pages/NewsletterPopup::PopupSet { shown: bool, title: String, text: String, delay_secs: u32, on_leave: bool, set_by: String }
 event timada-pages/Page::Created { slug: String, title: String, body: String, created_by: String }
 event timada-pages/Page::Deleted { deleted_by: String }

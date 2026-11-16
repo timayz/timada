@@ -18,6 +18,7 @@ use topcoat::{
 use super::super::super::carts::{Answer, deliver};
 use super::super::super::{store, storefront};
 use super::order_id;
+use crate::cluster::LocalReads;
 use crate::payments::Payments;
 use crate::payments::settle::settle_cancellation;
 use crate::store_carts;
@@ -43,5 +44,5 @@ pub async fn cancel(cx: &Cx) -> Result<Answer> {
             .await
             .map_err(topcoat::Error::from_anyhow)?;
     }
-    deliver(store_carts::order(&orders, order_id).await)
+    deliver(store_carts::order(&orders, context::<LocalReads>(cx), order_id).await)
 }

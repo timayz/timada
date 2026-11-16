@@ -254,13 +254,17 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             purchase_label TEXT,
             add_to_cart_label TEXT,
             begin_checkout_label TEXT,
-            enhanced_conversions INTEGER NOT NULL
+            enhanced_conversions INTEGER NOT NULL,
+            -- 1: a sale is worth its profit to Google Ads, not its total.
+            profit_as_value INTEGER NOT NULL
         );
         -- The shop's Meta pixel as the back office has it: one row, there
         -- once it was first set; no id, no pixel.
         CREATE TABLE storefront_meta_pixel (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            pixel_id TEXT
+            pixel_id TEXT,
+            -- 1: a sale is worth its profit to Meta, not its total.
+            profit_as_value INTEGER NOT NULL
         );
         -- The pop-up that invites a visitor to the newsletter: one row
         -- while the merchant has it shown.

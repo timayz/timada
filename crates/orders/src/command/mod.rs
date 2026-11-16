@@ -1057,6 +1057,13 @@ pub struct OrderState {
     /// goods cost it. The shop's business, told to no storefront.
     #[serde(skip)]
     pub costs: Option<OrderCosts>,
+    /// What the sale left the shop ([`profit_cents`](Self::profit_cents)),
+    /// as the store API tells it to the storefront of a shop that sends an
+    /// ad platform its profit as the value of a sale: the one fact of the
+    /// costs that travels, and to no other shop's storefront. Written by
+    /// no event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversion_profit_cents: Option<i64>,
     /// What went back to the shopper, in minor units, all refunds together.
     pub refunded_cents: u64,
     /// The provider's ids of those refunds.
@@ -1165,6 +1172,19 @@ impl OrderState {
         self.costs
             .as_ref()?
             .profit_cents(&self.lines, self.total_cents)
+    }
+
+    /// What the sale is worth to an ad platform, in minor units: its
+    /// profit for a shop that bids on profit (`profit`), its total
+    /// otherwise, and for a sale whose profit is not known (a line with no
+    /// cost), so that no sale goes uncounted. A sale that lost money is
+    /// worth nothing: the platforms take no negative value.
+    pub fn conversion_value_cents(&self, profit: bool) -> u64 {
+        let left = self.conversion_profit_cents.or_else(|| self.profit_cents());
+        match left {
+            Some(left) if profit => left.max(0) as u64,
+            _ => self.total_cents,
+        }
     }
 
     /// What was taken and not given back yet: nothing while the payment is

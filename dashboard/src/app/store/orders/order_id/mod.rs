@@ -10,11 +10,12 @@ pub mod parcels;
 
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, context},
     router::{module_param, route},
 };
 
 use super::super::carts::{Answer, deliver, gateway};
+use crate::cluster::LocalReads;
 use crate::store_carts;
 
 module_param!(pub order_id);
@@ -25,5 +26,5 @@ pub async fn index(cx: &Cx) -> Result<Answer> {
         Ok(orders) => orders,
         Err(answer) => return Ok(answer),
     };
-    deliver(store_carts::order(&orders, order_id(cx)).await)
+    deliver(store_carts::order(&orders, context::<LocalReads>(cx), order_id(cx)).await)
 }
