@@ -327,6 +327,58 @@ shopper back is not what brought them), and has the banner's form carry the addr
 sat on and the site the visitor came from: a visitor who lands from an ad and only then
 accepts is still counted.
 
+### The Google tag
+
+The merchant sets the shop's Google tag up in the back office, under Google tag: the
+Analytics measurement id (`G-…`), the Google Ads conversion id (`AW-…`), the labels of
+the conversions (a sale, an item added to the cart, a checkout begun) and whether a
+sale carries the buyer's details (Enhanced Conversions). The catalog subscription
+copies it, and the library gives what a page writes:
+
+```rust
+use timada_storefront::{TAG_EVENTS_SCRIPT, google_tag, google_tag_head, purchase_events,
+    tag_events_json};
+
+let tag = google_tag(cx).await?;                                  // None: no tag set up
+// in the <head>, after consent_script:
+if let Some(head) = tag.as_ref().and_then(|tag| google_tag_head(tag, mode, answer)) {
+    // <script async src={head.src}></script><script>{head.script}</script>
+    let events = purchase_events(tag.as_ref().unwrap(), &order, answer);
+    // <script type="application/json" data-tag-events>{tag_events_json(&events)}</script>
+    // <script>{TAG_EVENTS_SCRIPT}</script>
+}
+```
+
+`google_tag_head` is `None` while the visitor's answer holds the tag back in the shop's
+consent mode: nothing of Google's is written then. `purchase_events`,
+`add_to_cart_events` and `begin_checkout_events` give the events as the arguments of
+one `gtag(…)` call each: the Analytics event (`send_to` the measurement id) when the shop
+has one, and the Google Ads `conversion` (`send_to` `AW-…/label`) when it has a label
+for it. A sale carries the order's total as its value, its currency, its lines, any
+shipping and coupon, and the order's id as `transaction_id`, so Google drops a repeat.
+With Enhanced Conversions on and advertising allowed, `user_data` goes first: the
+e-mail address, the phone and the name hashed (hex SHA-256 of the normalized value),
+the street, city, postal code and country as they are.
+
+The events are written as data and sent by `TAG_EVENTS_SCRIPT`, which also leaves
+`timadaTag(document)` for a script that fetched another page to show a part of it: the
+cart drawer's hands it the page it fetched, so an item added without leaving the page
+is counted too.
+
+The storefront's layout writes the tag on every page (`tag.rs`). Three events go
+through it:
+
+- `add_to_cart`: the form's handler notes the item in a cookie, and the page the shopper
+  lands on next tells it, once;
+- `begin_checkout`: the checkout's page, each time it opens;
+- `purchase`: the order's page on its first showing after the payment, and only then
+  (the return from the payment notes the order in a cookie the page takes). A visitor
+  who refused the cookies is not counted later either.
+
+Only a fake of Google's script stands in the browser suite: whether Google Ads receives
+and attributes a conversion is checked in Google's own tools (Tag Assistant, the
+conversion action's diagnostics), with a real tag on a real shop.
+
 ### An address that moved
 
 A product renamed in the back office moves to the slug of its new name, and a page can
@@ -938,7 +990,8 @@ The browser suite boots it with a key minted in the dashboard on a small catalog
 made there: `tests/e2e/storefront.spec.ts` walks the home, a category, a product, the
 cart, the search and a shop page, answers the cookie banner, and stops the process; `storefront-shop.spec.ts` checks
 the catalogue follows live, then fills a cart, checks out, pays, and uses stock, discount
-codes, delivery methods and checkout offers, and checks an order keeps what brought
-its shopper only as far as they allowed; `storefront-accounts.spec.ts` reviews what
+codes, delivery methods and checkout offers, checks an order keeps what brought
+its shopper only as far as they allowed, and that the Google tag waits for consent and
+counts the cart, the checkout and the sale once; `storefront-accounts.spec.ts` reviews what
 it bought, is invoiced at the VAT of where the goods go, and signs a returning shopper in
 on a second browser.

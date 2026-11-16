@@ -32,12 +32,14 @@ pub mod reviews;
 pub mod search;
 pub mod sitemap;
 pub mod support_client;
+pub mod tag;
 pub mod topbar;
 
 use timada_storefront::{
     CategoryNode, ConsentMode, Product, ProductQuery, ProductSort, RouterBuilderStoreExt,
-    SocialCard, Store, TIME_ZONE_SCRIPT, absolute_url, consent_script, is_store_unavailable,
-    json_ld, menu, organization_ld, product_image, products, recent_reviews, website_ld,
+    SocialCard, Store, TAG_EVENTS_SCRIPT, TIME_ZONE_SCRIPT, absolute_url, consent_script,
+    google_tag_head, is_store_unavailable, json_ld, menu, organization_ld, product_image, products,
+    recent_reviews, tag_events_json, website_ld,
 };
 use topcoat::{
     Result,
@@ -195,6 +197,11 @@ pub async fn document(
     /// at length.
     #[default]
     no_banner: bool,
+    /// What the page tells the shop's Google tag (the checkout opened, a
+    /// sale), as [`tag`] builds it; an item just added to the cart is told
+    /// by every page.
+    #[default]
+    events: &[serde_json::Value],
     #[default] child: Child<'_>,
 ) -> Result<impl View> {
     // The page answering an outage asks the dashboard nothing more; any
@@ -230,6 +237,21 @@ pub async fn document(
     let signed_in = accounts && !away && crate::shopper::signed_in(cx).await.is_some();
     let announcements = timada_storefront::announcements(cx).await?;
     let consent = crate::shopper::consent(cx);
+    // The shop's tag, unless the visitor's answer holds it back, and what
+    // this page tells it. The note of an item added is taken either way: a
+    // page without the tag tells nobody, now or later.
+    let tag = timada_storefront::google_tag(cx).await?;
+    let tag_head = tag
+        .as_ref()
+        .and_then(|tag| google_tag_head(tag, CONSENT_MODE, consent));
+    let added = crate::shopper::take_added(cx);
+    let mut told = Vec::new();
+    if let (Some(tag), Some(_)) = (&tag, &tag_head) {
+        if let Some(added) = &added {
+            told.extend(tag::added_events(tag, added));
+        }
+        told.extend_from_slice(events);
+    }
     let noindex = noindex || sitemap::is_private(original_uri(cx).path());
     let canonical = absolute_url(cx, canonical.unwrap_or(original_uri(cx).path()));
     let card = SocialCard {
@@ -261,6 +283,10 @@ pub async fn document(
                 }
                 // Before any tag: Google's start from what the visitor allowed.
                 <script>(Unescaped::new_unchecked(consent_script(CONSENT_MODE, consent)))</script>
+                if let Some(head) = &tag_head {
+                    <script async="" src=(&head.src) data-google-tag=""></script>
+                    <script>(Unescaped::new_unchecked(head.script.clone()))</script>
+                }
                 <link rel="canonical" href=(&canonical)>
                 for tag in &card {
                     if tag.property {
@@ -316,6 +342,11 @@ pub async fn document(
                 }
                 <script>(Unescaped::new_unchecked(SEARCH_SCRIPT))</script>
                 <script>(Unescaped::new_unchecked(TIME_ZONE_SCRIPT))</script>
+                if tag_head.is_some() {
+                    // Before the cart's script, which hands it the pages it fetches.
+                    <script type="application/json" data-tag-events="">(Unescaped::new_unchecked(tag_events_json(&told)))</script>
+                    <script>(Unescaped::new_unchecked(TAG_EVENTS_SCRIPT))</script>
+                }
                 <main>(child)</main>
                 site_footer()
                 if !no_drawer {

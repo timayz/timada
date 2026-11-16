@@ -13,6 +13,7 @@ use timada_storefront::{
 };
 
 use crate::app::checkout::countries;
+use crate::app::tag::Added;
 use topcoat::{
     context::{Cx, memoize},
     cookie::{
@@ -124,6 +125,55 @@ pub fn keep_source_within(cx: &Cx, consent: Consent) -> topcoat::Result<()> {
         None => source_store(cx).remove(),
     }
     Ok(())
+}
+
+/// How long a note for the next page (an item added, a sale to count)
+/// waits for that page.
+const NOTE_MAX_AGE_MINUTES: i64 = 30;
+
+fn note_jar(cx: &Cx) -> impl Cookies + '_ {
+    jar(cx).default_max_age(time::Duration::minutes(NOTE_MAX_AGE_MINUTES))
+}
+
+fn added_store(cx: &Cx) -> UnparsedCookieStore<Added, impl Cookies + '_> {
+    cookie_store(note_jar(cx), "added")
+}
+
+/// Notes what went into the cart, for the next page to tell the shop's tag.
+pub fn remember_added(cx: &Cx, added: Added) -> topcoat::Result<()> {
+    added_store(cx).set(added).commit()?;
+    Ok(())
+}
+
+/// What was noted as added, once: the note is gone with it.
+pub fn take_added(cx: &Cx) -> Option<Added> {
+    let added = added_store(cx).parse().ok().flatten()?.get();
+    added_store(cx).remove();
+    Some(added)
+}
+
+fn purchase_store(cx: &Cx) -> UnparsedCookieStore<String, impl Cookies + '_> {
+    cookie_store(note_jar(cx), "purchase")
+}
+
+/// Notes that this order was just paid for: its page counts the sale on
+/// its next showing, and only then.
+pub fn remember_purchase(cx: &Cx, order_id: &str) -> topcoat::Result<()> {
+    purchase_store(cx).set(order_id.to_owned()).commit()?;
+    Ok(())
+}
+
+/// Whether this order's sale is still to count, once: the note is gone
+/// with the answer.
+pub fn take_purchase(cx: &Cx, order_id: &str) -> bool {
+    let Some(noted) = purchase_store(cx).parse().ok().flatten().map(|s| s.get()) else {
+        return false;
+    };
+    if noted != order_id {
+        return false;
+    }
+    purchase_store(cx).remove();
+    true
 }
 
 fn cart_store(cx: &Cx) -> UnparsedCookieStore<String, impl Cookies + '_> {

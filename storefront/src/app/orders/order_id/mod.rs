@@ -125,6 +125,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     }
     let query = query_params::<OrderQuery>(cx)?;
     let nav = menu(cx).await?;
+    // The sale, for the shop's tag, on the first showing after the payment.
+    let sale = crate::app::tag::sale_events(cx, &order).await?;
     let documents = order_documents(cx, order_id).await?;
     // Where the parcels are, once the shop's supplier has told.
     let parcels = if order.status == OrderStatus::Fulfilled {
@@ -195,6 +197,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             nav: &nav,
+            events: &sale,
             <div class="wrap">
                 <h1>"Merci pour votre commande !"</h1>
                 <p>"Votre commande " <strong data-order-reference="">(&order.reference)</strong> " est enregistrée."</p>

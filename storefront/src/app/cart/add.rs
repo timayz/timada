@@ -72,6 +72,11 @@ pub async fn add(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Result<S
             if current.as_deref() != Some(cart_id.as_str()) {
                 set_cart_id(cx, &cart_id)?;
             }
+            // The page the shopper lands on tells the shop's tag.
+            let added = variant_id
+                .as_deref()
+                .and_then(|id| product.variants.iter().find(|variant| variant.id == id));
+            crate::app::tag::note_added(cx, &product, added, quantity).await?;
             if !back.is_empty() {
                 let offer = field("offer");
                 let ended = !offer.is_empty()
