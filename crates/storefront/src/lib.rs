@@ -51,6 +51,7 @@ mod sitemap;
 mod source;
 mod store;
 mod support;
+mod terms;
 
 pub use announcements::*;
 pub use automations::*;
@@ -80,6 +81,7 @@ pub use sitemap::*;
 pub use source::*;
 pub use store::*;
 pub use support::*;
+pub use terms::*;
 /// How long delivery takes, as [`Product`] and [`CartView`] carry it.
 pub use timada_catalog::DeliveryDays;
 pub use timada_core::Rendition;

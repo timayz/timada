@@ -555,6 +555,13 @@ breaks the response off instead of ending it early. What the feed does with the 
   A method that ships everywhere names no country, and a feed needs one: it is left to
   the account's delivery settings in Merchant Center.
 
+The storefront writes the same delivery prices, and the shop's return terms, on its
+offers' structured data (`shippingDetails`, `hasMerchantReturnPolicy`). The return
+terms are `timada-orders/ReturnPolicy`, one stream per tenant store: a window in days
+and who pays for the way back, set under Shipping in the back office. Its storefront
+copies both streams (`storefront_shipping_methods`, `storefront_return_policy`); see
+`docs/storefront.md`.
+
 **The other readers.** The same token answers three more addresses, opened, moved and
 closed with the first:
 

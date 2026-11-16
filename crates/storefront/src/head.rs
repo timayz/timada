@@ -14,6 +14,7 @@ use timada_core::civil::format_date;
 
 use crate::query::{Product, Variant};
 use crate::reviews::Review;
+use crate::terms::OfferTerms;
 
 /// One `<meta>` of a shared link's card. Open Graph's are named by a
 /// `property` attribute, Twitter's by `name`.
@@ -124,6 +125,9 @@ pub struct ProductPageLd<'a> {
     /// The published reviews this page shows. Only the shop's own, shown
     /// here: a search engine checks the markup against the page.
     pub reviews: &'a [Review],
+    /// What the shop says of delivery and returns
+    /// ([`offer_terms`](crate::offer_terms)), written on every offer.
+    pub terms: &'a OfferTerms,
 }
 
 /// A product's page as schema.org data: a `Product` with its offer, or a
@@ -163,6 +167,7 @@ pub fn product_ld(
                     product.compare_at_cents,
                     currency,
                     !product.is_sold_out(None),
+                    &Delivery::of(product, page.terms),
                 ),
             );
         }
@@ -181,7 +186,7 @@ pub fn product_ld(
         let variants: Vec<Value> = product
             .variants
             .iter()
-            .map(|variant| variant_ld(product, variant, &variant_url(variant)))
+            .map(|variant| variant_ld(product, variant, &variant_url(variant), page.terms))
             .collect();
         ld.insert("hasVariant".into(), json!(variants));
     }
@@ -217,7 +222,7 @@ fn identifiers(ld: &mut Map<String, Value>, gtin: Option<&str>, mpn: Option<&str
 /// with its own code, numbers, picture and offer. What it takes for an
 /// option search engines know (a colour, a size) goes under that name, the
 /// rest as free properties.
-fn variant_ld(product: &Product, variant: &Variant, url: &str) -> Value {
+fn variant_ld(product: &Product, variant: &Variant, url: &str, terms: &OfferTerms) -> Value {
     let label = product.variant_label(variant);
     let mut ld = Map::new();
     ld.insert("@type".into(), json!("Product"));
@@ -274,14 +279,118 @@ fn variant_ld(product: &Product, variant: &Variant, url: &str) -> Value {
             variant.compare_at_cents,
             &variant.currency,
             !product.is_sold_out(Some(&variant.id)),
+            &Delivery::of(product, terms),
         ),
     );
     Value::Object(ld)
 }
 
-/// What a shopper pays, and the price it is down from when the page
-/// strikes one through.
-fn offer(url: &str, cents: i64, compare_at: Option<i64>, currency: &str, in_stock: bool) -> Value {
+/// What an offer says of delivery and returns: the shop's terms, and how
+/// long the product takes to arrive.
+struct Delivery<'a> {
+    terms: &'a OfferTerms,
+    /// The product's delivery time, or the shop's default, in days.
+    days: Option<(u16, u16)>,
+}
+
+impl<'a> Delivery<'a> {
+    fn of(product: &Product, terms: &'a OfferTerms) -> Self {
+        Self {
+            terms,
+            days: product.delivery_days.map(|days| (days.min, days.max)),
+        }
+    }
+
+    /// One `OfferShippingDetails` per shipping method priced in `currency`
+    /// that names its countries: what it costs for goods worth `cents`
+    /// (nothing from its free threshold), where it goes, and how long it
+    /// takes when the shop says. A method that ships everywhere names no
+    /// country, and search engines want one: it is left out.
+    fn shipping_details(&self, cents: i64, currency: &str) -> Vec<Value> {
+        self.terms
+            .shipping
+            .iter()
+            .filter(|method| method.currency == currency && !method.countries.is_empty())
+            .map(|method| {
+                let rate = method.price_for(cents.max(0) as u64);
+                let mut details = json!({
+                    "@type": "OfferShippingDetails",
+                    "shippingRate": {
+                        "@type": "MonetaryAmount",
+                        "value": decimal(rate as i64),
+                        "currency": currency,
+                    },
+                    "shippingDestination": method
+                        .countries
+                        .iter()
+                        .map(|country| json!({ "@type": "DefinedRegion", "addressCountry": country }))
+                        .collect::<Vec<_>>(),
+                });
+                // The shop's delivery time runs from the order to the
+                // door: no handling counted apart from it.
+                if let Some((min, max)) = self.days {
+                    details["deliveryTime"] = json!({
+                        "@type": "ShippingDeliveryTime",
+                        "handlingTime": {
+                            "@type": "QuantitativeValue",
+                            "minValue": 0,
+                            "maxValue": 0,
+                            "unitCode": "DAY",
+                        },
+                        "transitTime": {
+                            "@type": "QuantitativeValue",
+                            "minValue": min,
+                            "maxValue": max,
+                            "unitCode": "DAY",
+                        },
+                    });
+                }
+                details
+            })
+            .collect()
+    }
+
+    /// The shop's return terms as a `MerchantReturnPolicy`, for the
+    /// countries its shipping methods name (a policy must say where it
+    /// holds): `None` when the shop states no terms or names no country.
+    fn return_policy(&self) -> Option<Value> {
+        let terms = self.terms.returns?;
+        let mut countries: Vec<&str> = self
+            .terms
+            .shipping
+            .iter()
+            .flat_map(|method| method.countries.iter().map(String::as_str))
+            .collect();
+        countries.sort_unstable();
+        countries.dedup();
+        if countries.is_empty() {
+            return None;
+        }
+        Some(json!({
+            "@type": "MerchantReturnPolicy",
+            "applicableCountry": countries,
+            "returnPolicyCategory": "https://schema.org/MerchantReturnFiniteReturnWindow",
+            "merchantReturnDays": terms.days,
+            "returnMethod": "https://schema.org/ReturnByMail",
+            "returnFees": if terms.free {
+                "https://schema.org/FreeReturn"
+            } else {
+                "https://schema.org/ReturnFeesCustomerResponsibility"
+            },
+        }))
+    }
+}
+
+/// What a shopper pays, the price it is down from when the page strikes
+/// one through, and what the shop says of delivery and returns.
+fn offer(
+    url: &str,
+    cents: i64,
+    compare_at: Option<i64>,
+    currency: &str,
+    in_stock: bool,
+    delivery: &Delivery<'_>,
+) -> Value {
     let mut offer = json!({
         "@type": "Offer",
         "url": url,
@@ -301,6 +410,13 @@ fn offer(url: &str, cents: i64, compare_at: Option<i64>, currency: &str, in_stoc
             "price": decimal(compare_at),
             "priceCurrency": currency,
         });
+    }
+    let shipping = delivery.shipping_details(cents, currency);
+    if !shipping.is_empty() {
+        offer["shippingDetails"] = json!(shipping);
+    }
+    if let Some(policy) = delivery.return_policy() {
+        offer["hasMerchantReturnPolicy"] = policy;
     }
     offer
 }
@@ -379,6 +495,7 @@ mod tests {
 
     use super::*;
     use crate::query::{Image, ProductOption, Selection};
+    use crate::terms::{ReturnTerms, ShippingMethod};
 
     fn image(id: &str) -> Image {
         Image {
@@ -420,12 +537,144 @@ mod tests {
         }
     }
 
+    /// A shop that says nothing of delivery nor returns.
+    static NO_TERMS: OfferTerms = OfferTerms {
+        shipping: Vec::new(),
+        returns: None,
+    };
+
     fn page<'a>(reviews: &'a [Review]) -> ProductPageLd<'a> {
         ProductPageLd {
             url: "https://shop.example/p/mug",
             description: "Holds tea.",
             reviews,
+            terms: &NO_TERMS,
         }
+    }
+
+    fn method(name: &str, countries: &[&str], free_above_cents: Option<u64>) -> ShippingMethod {
+        ShippingMethod {
+            id: name.to_owned(),
+            name: name.to_owned(),
+            price_cents: 490,
+            currency: "EUR".into(),
+            countries: countries.iter().map(|c| c.to_string()).collect(),
+            free_above_cents,
+        }
+    }
+
+    #[test]
+    fn an_offer_says_what_delivery_costs_and_how_returns_go() {
+        let terms = OfferTerms {
+            shipping: vec![
+                method("Colissimo", &["FR", "BE"], Some(5000)),
+                // Free from a threshold the mug reaches.
+                method("Relais", &["FR"], Some(1500)),
+                // Ships everywhere: no country to name, left out.
+                method("Monde", &[], None),
+                // Priced in another currency than the offer.
+                ShippingMethod {
+                    currency: "USD".into(),
+                    ..method("US Mail", &["US"], None)
+                },
+            ],
+            returns: Some(ReturnTerms {
+                days: 30,
+                free: false,
+            }),
+        };
+        let mut mug = product();
+        mug.delivery_days = Some(timada_catalog::DeliveryDays { min: 2, max: 4 });
+        let ld = product_ld(
+            &mug,
+            &ProductPageLd {
+                terms: &terms,
+                ..page(&[])
+            },
+            |_| unreachable!(),
+        );
+        let time = json!({
+            "@type": "ShippingDeliveryTime",
+            "handlingTime": {
+                "@type": "QuantitativeValue", "minValue": 0, "maxValue": 0, "unitCode": "DAY",
+            },
+            "transitTime": {
+                "@type": "QuantitativeValue", "minValue": 2, "maxValue": 4, "unitCode": "DAY",
+            },
+        });
+        assert_eq!(
+            ld["offers"]["shippingDetails"],
+            json!([
+                {
+                    "@type": "OfferShippingDetails",
+                    "shippingRate": { "@type": "MonetaryAmount", "value": "4.90", "currency": "EUR" },
+                    "shippingDestination": [
+                        { "@type": "DefinedRegion", "addressCountry": "FR" },
+                        { "@type": "DefinedRegion", "addressCountry": "BE" },
+                    ],
+                    "deliveryTime": time,
+                },
+                {
+                    "@type": "OfferShippingDetails",
+                    "shippingRate": { "@type": "MonetaryAmount", "value": "0.00", "currency": "EUR" },
+                    "shippingDestination": [{ "@type": "DefinedRegion", "addressCountry": "FR" }],
+                    "deliveryTime": time,
+                },
+            ])
+        );
+        assert_eq!(
+            ld["offers"]["hasMerchantReturnPolicy"],
+            json!({
+                "@type": "MerchantReturnPolicy",
+                "applicableCountry": ["BE", "FR", "US"],
+                "returnPolicyCategory": "https://schema.org/MerchantReturnFiniteReturnWindow",
+                "merchantReturnDays": 30,
+                "returnMethod": "https://schema.org/ReturnByMail",
+                "returnFees": "https://schema.org/ReturnFeesCustomerResponsibility",
+            })
+        );
+
+        // No delivery time said: none written. Free returns say so. A shop
+        // whose methods name no country has nowhere to state its returns.
+        mug.delivery_days = None;
+        let free = OfferTerms {
+            shipping: vec![method("Colissimo", &["FR"], None)],
+            returns: Some(ReturnTerms {
+                days: 14,
+                free: true,
+            }),
+        };
+        let ld = product_ld(
+            &mug,
+            &ProductPageLd {
+                terms: &free,
+                ..page(&[])
+            },
+            |_| unreachable!(),
+        );
+        assert!(
+            ld["offers"]["shippingDetails"][0]
+                .get("deliveryTime")
+                .is_none()
+        );
+        assert_eq!(
+            ld["offers"]["hasMerchantReturnPolicy"]["returnFees"],
+            "https://schema.org/FreeReturn"
+        );
+        let nowhere = OfferTerms {
+            shipping: vec![method("Monde", &[], None)],
+            returns: free.returns,
+        };
+        let ld = product_ld(
+            &mug,
+            &ProductPageLd {
+                terms: &nowhere,
+                ..page(&[])
+            },
+            |_| unreachable!(),
+        );
+        assert!(ld["offers"].get("shippingDetails").is_none());
+        assert!(ld["offers"].get("hasMerchantReturnPolicy").is_none());
     }
 
     #[test]

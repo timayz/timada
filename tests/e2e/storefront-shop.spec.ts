@@ -1590,7 +1590,50 @@ test("a shopper picks a delivery method that ships to their country, and pays fo
     await expect(page.getByRole("status")).toContainText(
       "Shipping method added.",
     );
+    // Thirty days to send goods back, at the shop's cost.
+    await page.getByLabel("Return window, in days").fill("30");
+    await page
+      .getByRole("checkbox", { name: "The shop pays for sending goods back" })
+      .check();
+    await page.getByRole("button", { name: "Set return terms" }).click();
+    await expect(page.getByRole("status")).toContainText("Return terms set.");
+    await expect(page.locator("[data-return-terms]")).toHaveAttribute(
+      "data-return-terms",
+      "30",
+    );
     await app.start(request, await mintKey(page, slug, true), 1);
+
+    // The product's page tells search engines what delivery costs, where
+    // to, and how returns go, once the storefront has the shop's terms.
+    await expect(async () => {
+      await page.goto(`${SHOP}/p/blue-mug`);
+      const [product] = (
+        await page.locator('script[type="application/ld+json"]').allTextContents()
+      ).map((text) => JSON.parse(text));
+      expect(product.offers.shippingDetails).toEqual([
+        {
+          "@type": "OfferShippingDetails",
+          shippingRate: { "@type": "MonetaryAmount", value: "4.90", currency: "EUR" },
+          shippingDestination: [
+            { "@type": "DefinedRegion", addressCountry: "BE" },
+            { "@type": "DefinedRegion", addressCountry: "FR" },
+          ],
+        },
+        {
+          "@type": "OfferShippingDetails",
+          shippingRate: { "@type": "MonetaryAmount", value: "6.90", currency: "EUR" },
+          shippingDestination: [{ "@type": "DefinedRegion", addressCountry: "FR" }],
+        },
+      ]);
+      expect(product.offers.hasMerchantReturnPolicy).toEqual({
+        "@type": "MerchantReturnPolicy",
+        applicableCountry: ["BE", "FR"],
+        returnPolicyCategory: "https://schema.org/MerchantReturnFiniteReturnWindow",
+        merchantReturnDays: 30,
+        returnMethod: "https://schema.org/ReturnByMail",
+        returnFees: "https://schema.org/FreeReturn",
+      });
+    }).toPass({ timeout: 15_000 });
 
     // Two mugs: the first method is picked, its price on top.
     await page.goto(`${SHOP}/p/blue-mug`);

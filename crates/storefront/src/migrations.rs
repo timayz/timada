@@ -220,6 +220,18 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             id INTEGER PRIMARY KEY CHECK (id = 1),
             pixel_id TEXT
         );
+        -- The shop's shipping methods as the back office has them, for
+        -- what the offers say of delivery: one row, a JSON list.
+        CREATE TABLE storefront_shipping_methods (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            methods_json TEXT NOT NULL
+        );
+        -- The shop's return terms: one row while it states some.
+        CREATE TABLE storefront_return_policy (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            days INTEGER NOT NULL,
+            free INTEGER NOT NULL
+        );
         -- The shown announcements, in the bar's order; a request keeps those
         -- whose window is open (Unix seconds, NULL for an open end).
         CREATE TABLE storefront_announcements (
@@ -274,6 +286,8 @@ pub const TABLES: &[&str] = &[
     "storefront_redirects",
     "storefront_google_tag",
     "storefront_meta_pixel",
+    "storefront_shipping_methods",
+    "storefront_return_policy",
 ];
 
 /// Applies the library's pending migrations to the local database (evento's

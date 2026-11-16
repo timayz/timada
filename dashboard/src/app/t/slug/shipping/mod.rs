@@ -6,13 +6,14 @@
 pub mod add;
 pub mod delivery_days;
 pub mod method_id;
+pub mod returns;
 
 use std::collections::HashMap;
 
 use serde::Deserialize;
 use timada_catalog::{CURRENCIES, MAX_DELIVERY_DAYS, format_money, parse_amount};
 use timada_orders::{
-    Command, MAX_SHIPPING_NAME_LEN, NewShippingMethod, OrderError, ShippingMethod,
+    Command, MAX_RETURN_DAYS, MAX_SHIPPING_NAME_LEN, NewShippingMethod, OrderError, ShippingMethod,
 };
 use timada_tenancy::PERMISSION_SHIPPING_MANAGE;
 use topcoat::{
@@ -195,6 +196,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .load_default_delivery_days()
         .await
         .map_err(topcoat::Error::from_anyhow)?;
+    let return_terms = orders(&access)?
+        .return_policy()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let title = format!("Shipping · {}", tenant.name);
@@ -254,6 +259,29 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </fieldset>
                     <div>
                         button(attrs: attributes! { type="submit" }, "Set default delivery time")
+                    </div>
+                </form>
+            )
+
+            section_card(
+                title: Some("Returns"),
+                description: Some("What search engines show of your returns beside your prices: for how long a buyer may send goods back, and who pays for it. Your returns page says the rest. They are stated for the countries your shipping methods name, with what each method costs."),
+                <form method="post" action=(href!(returns::returns, slug: slug.clone())) class="flex max-w-xl flex-col gap-4" data-return-terms=(return_terms.map(|terms| terms.days.to_string()).unwrap_or_default())>
+                    field(
+                        field_label(attrs: attributes! { for="return-days" }, "Return window, in days")
+                        input(attrs: attributes! {
+                            id="return-days" name="days" type="number" min="1" max=(MAX_RETURN_DAYS) inputmode="numeric" class="w-24"
+                            value=(return_terms.map(|terms| terms.days.to_string()).unwrap_or_default())
+                            aria-describedby="return-days-hint"
+                        })
+                        <p id="return-days-hint" class="text-sm text-muted-foreground">"Counted from the delivery. Leave empty to state nothing."</p>
+                    )
+                    <label class="flex items-center gap-2 text-sm font-medium">
+                        checkbox(attrs: attributes! { name="free" value="on" checked=(return_terms.is_some_and(|terms| terms.free)) })
+                        "The shop pays for sending goods back"
+                    </label>
+                    <div>
+                        button(attrs: attributes! { type="submit" }, "Set return terms")
                     </div>
                 </form>
             )

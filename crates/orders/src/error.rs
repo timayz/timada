@@ -110,6 +110,8 @@ pub enum OrderError {
     InvalidShippingCountries,
     #[error("a shop offers at most twenty shipping methods")]
     TooManyShippingMethods,
+    #[error("a return window is 1 to 365 days")]
+    InvalidReturnDays,
     #[error("shipping method not found")]
     ShippingMethodNotFound,
     #[error("pick a shipping method that ships to this country")]
@@ -224,6 +226,7 @@ impl OrderError {
             Self::InvalidShippingPrice => "invalid_amount",
             Self::InvalidShippingCountries => "invalid_shipping_countries",
             Self::TooManyShippingMethods => "too_many_shipping_methods",
+            Self::InvalidReturnDays => "invalid_return_days",
             Self::ShippingMethodNotFound => "shipping_method_not_found",
             Self::ShippingUnavailable => "shipping_unavailable",
             Self::Write(err) => return timada_core::write_refusal(err),
