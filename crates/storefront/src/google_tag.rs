@@ -154,8 +154,9 @@ pub fn google_tag_head(
 /// One thing sold, as an event lists it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TagItem {
-    /// The variant's SKU when it has one, else the product's id: what the
-    /// shopping feed calls it too.
+    /// The variant's id, or the product's when it is sold as is: the id of
+    /// its item in the shop's feeds, so an ad platform matches what a
+    /// visitor saw to its catalogue.
     pub id: String,
     pub name: String,
     /// The variant's values (`Beige / Large`).
@@ -292,7 +293,10 @@ pub fn order_items(order: &OrderState) -> Vec<TagItem> {
         .lines
         .iter()
         .map(|line| TagItem {
-            id: line.sku.clone().unwrap_or_else(|| line.product_id.clone()),
+            id: line
+                .variant_id
+                .clone()
+                .unwrap_or_else(|| line.product_id.clone()),
             name: line.name.clone(),
             variant: line.variant_label.clone(),
             unit_cents: line.unit_amount_cents,

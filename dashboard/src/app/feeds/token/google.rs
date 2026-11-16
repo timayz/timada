@@ -4,10 +4,9 @@
 //!
 //! Answers 404 for an address no open feed has, for a suspended shop, and
 //! for a shop that has not said where its storefront is.
-
 use std::sync::Arc;
 
-use timada_catalog::feed_tenant;
+use timada_catalog::{FeedReader, feed_tenant};
 use topcoat::{
     Result,
     context::{Cx, context},
@@ -23,7 +22,7 @@ use super::token;
 use crate::app::tenants::tenancy;
 use crate::cluster::Executor;
 use crate::db::Db;
-use crate::feed::{google_feed, shop_of};
+use crate::feed::{products_feed, shop_of};
 use crate::media::Media;
 
 #[route(GET)]
@@ -51,6 +50,6 @@ pub async fn google(cx: &Cx) -> Result<impl IntoResponse> {
             // catalog: nothing between the shop and its reader keeps it.
             (CACHE_CONTROL, "private, no-store"),
         ],
-        google_feed(db.clone(), media, tenant.id, shop),
+        products_feed(FeedReader::Google, db.clone(), media, tenant.id, shop),
     ))
 }

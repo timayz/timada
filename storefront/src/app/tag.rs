@@ -78,9 +78,7 @@ fn item_of(product: &Product, variant: Option<&Variant>, quantity: u32) -> (TagI
         ),
     };
     let item = TagItem {
-        id: variant
-            .and_then(|variant| variant.sku.clone())
-            .unwrap_or_else(|| product.id.clone()),
+        id: variant.map_or_else(|| product.id.clone(), |variant| variant.id.clone()),
         name: product.name.clone(),
         variant: variant.map(|variant| {
             variant
@@ -148,7 +146,10 @@ pub async fn checkout_events(cx: &Cx, cart: &CartView) -> Result<Told> {
         .lines
         .iter()
         .map(|line| TagItem {
-            id: line.sku.clone().unwrap_or_else(|| line.product_id.clone()),
+            id: line
+                .variant_id
+                .clone()
+                .unwrap_or_else(|| line.product_id.clone()),
             name: line.name.clone(),
             variant: line.variant_label.clone(),
             unit_cents: line.unit_amount_cents.unwrap_or_default(),
