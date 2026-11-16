@@ -20,9 +20,10 @@ use evento::{
 use timada_core::db::{Db, Value, execute, params_from_iter, tenant_search_key};
 use timada_core::{MailStatus, Sending};
 
-use crate::aggregator::{Cart, Order, OrderMail};
+use crate::aggregator::{Cart, ExportSchedule, Order, OrderMail};
 use crate::command::{
-    CartState, OrderState, cart_projection, order_mail_projection, order_projection,
+    CartState, OrderState, cart_projection, export_schedule_projection, order_mail_projection,
+    order_projection,
 };
 use crate::query::{OPEN_CARTS, ORDERS, OrderRecord};
 
@@ -38,7 +39,46 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(on_cart_event())
         .handler(on_order_event())
         .handler(on_order_mail_event())
+        .handler(on_export_schedule_event())
         .any_routing_key()
+}
+
+/// Keeps when each scheduled export is next looked at
+/// (`orders_export_schedules`): the row follows the stream, and leaves once
+/// the schedule is taken off.
+#[evento::subscription_all]
+async fn on_export_schedule_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<ExportSchedule>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(schedule) = export_schedule_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    match schedule.due_at {
+        Some(due_at) => {
+            db.execute(
+                "INSERT INTO orders_export_schedules (tenant_id, what, due_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT (tenant_id, what) DO UPDATE SET due_at = excluded.due_at",
+                (event.tenant.as_str(), schedule.what.as_str(), due_at as i64),
+            )
+            .await?;
+        }
+        None => {
+            db.execute(
+                "DELETE FROM orders_export_schedules WHERE tenant_id = ?1 AND what = ?2",
+                (event.tenant.as_str(), schedule.what.as_str()),
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 #[evento::subscription_all]

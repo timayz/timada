@@ -341,6 +341,26 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     )
     .start(payments_every);
 
+    // The exports an owner scheduled go out once their day, week or month
+    // has ended on the shop's clock, each node sending its own part of the
+    // shops'.
+    let live = cluster.clone();
+    let scheduled_exports = crate::scheduled_exports::ScheduledExports::new(
+        db.clone(),
+        local.0.clone(),
+        Arc::new(move || {
+            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, cluster::Among::All);
+            timada_core::Share { index, of }
+        }),
+        crate::scheduled_exports::Outbox::new(
+            background_mail.clone(),
+            config.mail.allow_private_hosts,
+        )?,
+        crate::seal::webhook_keys(&config),
+        url.clone(),
+    )
+    .start(crate::scheduled_exports::SWEEP_EVERY);
+
     // A cart nobody touched for `[carts] idle_days` is dropped, each node
     // dropping its own part of them.
     let live = cluster.clone();
@@ -474,6 +494,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     pending_payments.abort();
     unanswered_checkouts.abort();
     hold_reminders.abort();
+    scheduled_exports.abort();
     idle_carts.abort();
     best_sellers.abort();
     newsletter_sends.abort();

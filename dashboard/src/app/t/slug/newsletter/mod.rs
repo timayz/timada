@@ -36,7 +36,7 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::db::Db;
-use crate::export::export_card;
+use crate::export::{export_card, schedule_card, schedule_view};
 use crate::ui::{
     LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
     section_card, status_badge,
@@ -139,6 +139,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     };
     let page_number = query.page.unwrap_or(1).max(1);
     let nav = TenantNav::of(cx, &access).await?;
+    let schedule = schedule_view(cx, &access, timada_orders::ExportKind::Newsletter).await?;
     let can_manage = access.can(cx, PERMISSION_NEWSLETTER_MANAGE).await?;
     let TenantAccess { tenant, .. } = access;
     let pool = context::<Db>(cx);
@@ -263,6 +264,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             export_card(
                 action: href!(export::export, slug: slug.clone()).resolve(cx),
                 description: "The addresses that asked for the shop's news over some days, whatever became of them: the file says which are confirmed, and only those agreed to be written to.",
+            )
+            schedule_card(
+                action: href!(super::export_schedule::export_schedule, slug: slug.clone()).resolve(cx),
+                schedule: &schedule,
             )
         )
     })

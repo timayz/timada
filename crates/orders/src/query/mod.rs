@@ -7,6 +7,7 @@
 
 mod carts;
 mod catalog;
+mod exports;
 mod migrations;
 mod orders;
 mod read_model;
@@ -14,6 +15,7 @@ mod sales;
 
 pub use carts::*;
 pub use catalog::*;
+pub use exports::*;
 pub use migrations::*;
 pub use orders::*;
 pub use read_model::*;
