@@ -323,6 +323,7 @@ event timada-pages/MetaPixel::ConversionRefused { order_id: String, reason: Stri
 event timada-pages/MetaPixel::ConversionsTokenRemoved { removed_by: String }
 event timada-pages/MetaPixel::ConversionsTokenSet { token_sealed: Vec<u8>, set_by: String }
 event timada-pages/MetaPixel::MetaPixelSet { pixel_id: Option<String>, set_by: String }
+event timada-pages/NewsletterPopup::PopupSet { shown: bool, title: String, text: String, delay_secs: u32, on_leave: bool, set_by: String }
 event timada-pages/Page::Created { slug: String, title: String, body: String, created_by: String }
 event timada-pages/Page::Deleted { deleted_by: String }
 event timada-pages/Page::Edited { title: String, body: String, edited_by: String }

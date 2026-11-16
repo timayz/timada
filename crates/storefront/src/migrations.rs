@@ -262,6 +262,15 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             id INTEGER PRIMARY KEY CHECK (id = 1),
             pixel_id TEXT
         );
+        -- The pop-up that invites a visitor to the newsletter: one row
+        -- while the merchant has it shown.
+        CREATE TABLE storefront_newsletter_popup (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            title TEXT NOT NULL,
+            text TEXT NOT NULL,
+            delay_secs INTEGER NOT NULL,
+            on_leave INTEGER NOT NULL
+        );
         -- The shop's shipping methods as the back office has them, for
         -- what the offers say of delivery: one row, a JSON list.
         CREATE TABLE storefront_shipping_methods (
@@ -331,6 +340,7 @@ pub const TABLES: &[&str] = &[
     "storefront_redirects",
     "storefront_google_tag",
     "storefront_meta_pixel",
+    "storefront_newsletter_popup",
     "storefront_shipping_methods",
     "storefront_return_policy",
 ];

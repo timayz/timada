@@ -1420,6 +1420,104 @@ test("a listing is narrowed by the options the merchant marks as filters", async
   await expect(page.locator("[data-results]")).toHaveAttribute("data-results", "3");
 });
 
+test("the newsletter's pop-up opens once for a visitor, and never for one who signed up", async ({
+  page,
+  request,
+  browser,
+}) => {
+  await registerWithEmail(page, uniqueEmail("storefront-popup"));
+  const { name, slug } = uniqueTenant("Storefront Popup");
+  await createTenant(page, name);
+  await publishProduct(page, slug, "Tapis bleu", "19.90");
+  await app.start(request, await mintKey(page, slug, true), 1);
+  // Where the link a sign-up is mailed leads.
+  await page.goto(`/t/${slug}/api-keys`);
+  await page.getByLabel("Where shoppers find the shop").fill(app.url);
+  await page.getByRole("button", { name: "Save address" }).click();
+  await expect(page.getByRole("status")).toContainText("Storefront address saved.");
+
+  // Nothing set: no page carries a pop-up.
+  await page.goto(`${app.url}/`);
+  await expect(page.locator("[data-newsletter-popup]")).toHaveCount(0);
+
+  // The merchant sets one. Shown, it needs what it offers.
+  await page.goto(`/t/${slug}/newsletter-popup`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Newsletter pop-up");
+  await expect(page.locator("form[data-newsletter-popup]")).toHaveAttribute("data-newsletter-popup", "off");
+  await page.getByLabel("Show the pop-up on the storefront").check();
+  await page.getByLabel("Opens after (seconds on a page)").fill("1");
+  await page.getByRole("button", { name: "Save the pop-up" }).click();
+  await expect(page.getByRole("alert")).toContainText("A pop-up shown needs what it offers");
+  await page.getByLabel("Show the pop-up on the storefront").check();
+  await page.getByLabel("What it offers").fill("-10 % sur votre première commande");
+  await page.getByLabel("A sentence under it (optional)").fill("Le code arrive par e-mail.");
+  await page.getByLabel("Opens after (seconds on a page)").fill("1");
+  await page.getByRole("button", { name: "Save the pop-up" }).click();
+  await expect(page.getByRole("status")).toContainText("the storefront shows it in a moment");
+  await expect(page.locator("form[data-newsletter-popup]")).toHaveAttribute("data-newsletter-popup", "shown");
+
+  // The storefront carries it, closed while the cookie banner still asks.
+  const popup = page.locator("dialog[data-newsletter-popup]");
+  await expect(async () => {
+    await page.goto(`${app.url}/`);
+    await expect(popup).toHaveCount(1, { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(page.locator("[data-consent]")).toBeVisible();
+  await page.waitForTimeout(1500);
+  await expect(popup).toBeHidden();
+  // The banner answered, it opens after its delay.
+  await page.locator("[data-consent]").getByRole("button", { name: "Tout refuser" }).click();
+  await expect(popup).toBeVisible();
+  await expect(popup.getByRole("heading", { level: 2 })).toHaveText("-10 % sur votre première commande");
+  await expect(popup).toContainText("Le code arrive par e-mail.");
+  // Closed, it does not come back: no page carries it for this visitor.
+  await popup.getByRole("button", { name: "Fermer" }).click();
+  await expect(popup).toBeHidden();
+  await page.goto(`${app.url}/boutique`);
+  await expect(popup).toHaveCount(0);
+
+  // Another visitor signs up from it: the address is mailed its link, as
+  // from the footer, and the pop-up is over for them too.
+  const other = await browser.newContext();
+  try {
+    const visitor = await other.newPage();
+    // Not where a shopper is busy buying.
+    await visitor.goto(`${app.url}/cart`);
+    await expect(visitor.locator("dialog[data-newsletter-popup]")).toHaveCount(0);
+    await visitor.goto(`${app.url}/p/tapis-bleu`);
+    await visitor.locator("[data-consent]").getByRole("button", { name: "Tout refuser" }).click();
+    const theirs = visitor.locator("dialog[data-newsletter-popup]");
+    await expect(theirs).toBeVisible();
+    const email = uniqueEmail("popup-reader");
+    await theirs.getByLabel("Votre e-mail").fill(email);
+    await theirs.getByRole("button", { name: "S'inscrire" }).click();
+    await expect(visitor).toHaveURL(`${app.url}/newsletter?done=sent`);
+    await expect
+      .poll(() => mailCountOf(request, email, "Confirm your subscription to"), { timeout: 15_000 })
+      .toBe(1);
+    await visitor.goto(`${app.url}/`);
+    await expect(theirs).toHaveCount(0);
+  } finally {
+    await other.close();
+  }
+
+  // Taken off, a new visitor's pages carry none.
+  await page.goto(`/t/${slug}/newsletter-popup`);
+  await page.getByLabel("Show the pop-up on the storefront").uncheck();
+  await page.getByRole("button", { name: "Save the pop-up" }).click();
+  await expect(page.getByRole("status")).toContainText("the storefront does not show it");
+  const third = await browser.newContext();
+  try {
+    const visitor = await third.newPage();
+    await expect(async () => {
+      await visitor.goto(`${app.url}/`);
+      await expect(visitor.locator("dialog[data-newsletter-popup]")).toHaveCount(0, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+  } finally {
+    await third.close();
+  }
+});
+
 test("the blog lists the merchant's articles, each with its contents and the products it shows", async ({
   page,
   request,

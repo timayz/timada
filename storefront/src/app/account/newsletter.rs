@@ -31,10 +31,15 @@ pub async fn newsletter(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> R
     };
     let subscribed = form.get("subscribed").is_some_and(|value| value == "true");
     match set_shopper_newsletter(cx, &token, subscribed).await? {
-        Ok(()) => Ok(see_other(account_done_url(
-            cx,
-            if subscribed { SUBSCRIBED } else { UNSUBSCRIBED },
-        ))),
+        Ok(()) => {
+            if subscribed {
+                crate::shopper::note_subscribed(cx);
+            }
+            Ok(see_other(account_done_url(
+                cx,
+                if subscribed { SUBSCRIBED } else { UNSUBSCRIBED },
+            )))
+        }
         Err(refusal) => {
             if refusal.is_signed_out() {
                 forget_shopper(cx);

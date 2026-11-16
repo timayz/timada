@@ -2,8 +2,8 @@ use evento::WriteError;
 
 use crate::value_object::{
     MAX_ANNOUNCEMENT_LEN, MAX_ANNOUNCEMENTS, MAX_BODY_LEN, MAX_IMAGES_PER_PAGE,
-    MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_REDIRECT_PATH_LEN, MAX_REDIRECTS,
-    MAX_SUMMARY_LEN, MAX_TITLE_LEN,
+    MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_POPUP_DELAY_SECS, MAX_POPUP_TEXT_LEN,
+    MAX_POPUP_TITLE_LEN, MAX_REDIRECT_PATH_LEN, MAX_REDIRECTS, MAX_SUMMARY_LEN, MAX_TITLE_LEN,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -70,6 +70,10 @@ pub enum PageError {
     InvalidMetaPixelId,
     #[error("the Conversions API token needs the pixel it belongs to")]
     MetaPixelMissing,
+    #[error(
+        "a pop-up shown has a title of 1 to {MAX_POPUP_TITLE_LEN} characters, a text of at most {MAX_POPUP_TEXT_LEN} and opens within {MAX_POPUP_DELAY_SECS} seconds"
+    )]
+    InvalidPopup,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -120,6 +124,7 @@ impl PageError {
             Self::GoogleAdsIdMissing => "google_ads_id_missing",
             Self::InvalidMetaPixelId => "meta_pixel_invalid_id",
             Self::MetaPixelMissing => "meta_pixel_missing",
+            Self::InvalidPopup => "newsletter_popup_invalid",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })

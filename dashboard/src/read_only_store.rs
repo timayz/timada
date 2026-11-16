@@ -63,6 +63,7 @@ pub fn catalog_reads() -> Vec<&'static str> {
         timada_pages::aggregator::Redirects::aggregate_type(),
         timada_pages::aggregator::GoogleTag::aggregate_type(),
         timada_pages::aggregator::MetaPixel::aggregate_type(),
+        timada_pages::aggregator::NewsletterPopup::aggregate_type(),
         timada_orders::aggregator::ShippingMethods::aggregate_type(),
         timada_orders::aggregator::ReturnPolicy::aggregate_type(),
     ]

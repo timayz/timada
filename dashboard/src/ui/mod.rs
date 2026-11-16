@@ -286,6 +286,9 @@ pub fn describe_error(code: &str) -> &'static str {
         "meta_pixel_missing" => {
             "A Conversions API token needs the ID of the pixel it was made for."
         }
+        "newsletter_popup_invalid" => {
+            "A pop-up shown needs what it offers, in at most 80 characters; the sentence under it is at most 300, and it opens within 600 seconds."
+        }
         "meta_token_invalid" => {
             "This does not look like a Conversions API token: paste the access token as Events Manager generated it."
         }
