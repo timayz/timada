@@ -131,6 +131,7 @@ pub fn checkout() -> Checkout {
         newsletter: false,
         time_zone: None,
         source: None,
+        browser: None,
     }
 }
 

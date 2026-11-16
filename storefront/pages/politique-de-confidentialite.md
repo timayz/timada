@@ -13,6 +13,6 @@ Le paiement est traité par un prestataire de paiement : la boutique ne voit jam
 Les cookies nécessaires au fonctionnement de la boutique (panier, commande, connexion) sont toujours déposés. Avec votre accord seulement, donné ou retiré à tout moment sur la page [Gestion des cookies](/cookies) :
 
 - **Mesure d'audience** : la boutique retient la campagne ou le site qui vous a amené, et Google Analytics mesure les pages vues ;
-- **Publicité** : la boutique retient l'identifiant du clic sur une annonce, et Google Ads est informé de vos achats pour mesurer l'efficacité des annonces. Votre adresse e-mail, votre téléphone et votre nom peuvent lui être transmis sous forme hachée, avec votre adresse, pour rattacher l'achat au clic.
+- **Publicité** : la boutique retient l'identifiant du clic sur une annonce, et Google Ads est informé de vos achats pour mesurer l'efficacité des annonces. Votre adresse e-mail, votre téléphone et votre nom peuvent lui être transmis sous forme hachée, avec votre adresse, pour rattacher l'achat au clic. Si la boutique utilise le pixel Meta, Meta (Facebook, Instagram) est informé des pages vues, des ajouts au panier et de vos achats ; l'achat lui est aussi transmis par nos serveurs, avec votre adresse e-mail, votre téléphone, votre nom, votre ville, votre code postal et votre pays sous forme hachée, ainsi que les identifiants que Meta a déposés dans votre navigateur.
 
 Sans votre accord, aucune de ces informations n'est conservée ni transmise.

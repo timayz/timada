@@ -191,6 +191,12 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             config.invoicing.vies_url.clone(),
         )),
         euro_rates,
+        conversions: Arc::new(crate::meta_conversions::Conversions::new(
+            crate::seal::meta_sealer(&config),
+            Arc::new(crate::meta_conversions::MetaClient::new(
+                config.advertising.meta_api_url.clone(),
+            )),
+        )),
     });
     let planned = planned(&config.server);
     let copied = cluster.health().joined_at_start;
@@ -485,6 +491,8 @@ pub struct Deps {
     pub place: cluster::ShareOf,
     pub vies: Arc<dyn crate::vies::Vies>,
     pub euro_rates: Arc<dyn crate::ecb::EuroRates>,
+    /// What tells Meta of the sales of the shops that gave a token.
+    pub conversions: Arc<crate::meta_conversions::Conversions>,
 }
 
 /// Builds one subscription from the parts.
@@ -736,6 +744,11 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     }),
     ("message notices", Kind::Sharded, |d| {
         crate::message_notifications::subscription(d.mailroom.clone())
+    }),
+    // The sales told to Meta from the server, for the shops that gave a
+    // Conversions API token and the shoppers who allowed advertising.
+    ("meta conversions", Kind::Sharded, |d| {
+        crate::meta_conversions::subscription(d.conversions.clone(), d.store.clone())
     }),
 ];
 

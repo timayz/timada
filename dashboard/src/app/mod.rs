@@ -64,6 +64,11 @@ pub struct OptOutLinks(pub Option<crate::seal::OptOutKey>);
 #[derive(Clone, Debug)]
 pub struct WebhookSealing(pub Option<crate::seal::WebhookKeys>, pub bool);
 
+/// What seals a shop's Conversions API token, when the operator gave a
+/// secret ([`crate::seal::meta_sealer`]).
+#[derive(Clone, Debug)]
+pub struct ConversionsSealing(pub Option<crate::seal::Sealer>);
+
 /// Everything the pages reach through the app context.
 pub struct Services {
     pub executor: Executor,
@@ -216,6 +221,9 @@ pub fn router(services: Services) -> Router {
             crate::seal::webhook_keys(&config),
             config.mail.allow_private_hosts,
         ))
+        // Seals the shops' Conversions API tokens; none without
+        // `secrets.key`.
+        .with(ConversionsSealing(crate::seal::meta_sealer(&config)))
         .with(config)
         .assets(assets)
         .layer(RuntimeLayer::new())

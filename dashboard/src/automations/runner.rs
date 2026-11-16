@@ -1621,6 +1621,7 @@ mod tests {
                     newsletter: false,
                     time_zone: None,
                     source: None,
+                    browser: None,
                 },
             )
             .await

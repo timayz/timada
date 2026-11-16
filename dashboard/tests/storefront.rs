@@ -2006,6 +2006,7 @@ async fn a_store_with_a_checkout_key_sells() {
         newsletter: false,
         time_zone: None,
         source: None,
+        browser: None,
     };
     let merchant = timada_orders::Command::new(catalog.executor().clone(), catalog.tenant());
     let asking = tokio::spawn({
