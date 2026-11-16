@@ -22,7 +22,7 @@ use crate::app::checkout::checkout_url;
 use crate::app::document;
 use crate::shopper::{
     checkout_draft, forget_cart, forget_payment, payment_in_progress, remember_order,
-    save_checkout_draft,
+    remember_purchase, save_checkout_draft,
 };
 
 /// Looks again in two seconds.
@@ -52,6 +52,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     });
     if let Some(order) = order {
         remember_order(cx, &order.id)?;
+        // Its page counts the sale for the shop's tag, this once.
+        remember_purchase(cx, &order.id)?;
         forget_cart(cx);
         forget_payment(cx);
         // The address stays for the next order; the note was for this one.

@@ -51,6 +51,12 @@ pub enum PageError {
     TooManyRedirects,
     #[error("redirect not found")]
     RedirectNotFound,
+    #[error("a Google tag id is G-… or GT-… for Analytics and AW-… for Google Ads")]
+    InvalidGoogleTagId,
+    #[error("a conversion label is letters, digits, dashes and underscores")]
+    InvalidConversionLabel,
+    #[error("conversion labels and enhanced conversions need the Google Ads id")]
+    GoogleAdsIdMissing,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -92,6 +98,9 @@ impl PageError {
             Self::RedirectChain => "redirect_chain",
             Self::TooManyRedirects => "too_many_redirects",
             Self::RedirectNotFound => "redirect_not_found",
+            Self::InvalidGoogleTagId => "google_tag_invalid_id",
+            Self::InvalidConversionLabel => "google_tag_invalid_label",
+            Self::GoogleAdsIdMissing => "google_ads_id_missing",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })

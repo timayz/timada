@@ -134,3 +134,24 @@ pub enum Redirects {
         removed_by: String,
     },
 }
+
+/// How the storefront's Google tag is set up: one stream per shop, with the
+/// id [`google_tag_id`](crate::google_tag_id). The storefront writes the tag
+/// into its pages from it, and holds it back as the visitor's answer to the
+/// cookie banner says.
+#[evento::aggregate(name = "timada-pages/GoogleTag")]
+pub enum GoogleTag {
+    /// The settings whole, as they stand from now on; all of them empty
+    /// takes the tag off the storefront.
+    GoogleTagSet {
+        /// `G-…` or `GT-…`.
+        analytics_id: Option<String>,
+        /// `AW-…`.
+        ads_id: Option<String>,
+        purchase_label: Option<String>,
+        add_to_cart_label: Option<String>,
+        begin_checkout_label: Option<String>,
+        enhanced_conversions: bool,
+        set_by: String,
+    },
+}

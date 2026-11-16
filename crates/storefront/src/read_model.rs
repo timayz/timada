@@ -70,6 +70,7 @@ pub fn catalog_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(crate::pages::on_page_event())
         .handler(crate::announcements::on_announcements_event())
         .handler(crate::redirects::on_redirects_event())
+        .handler(crate::google_tag::on_google_tag_event())
         .handler(on_delivery_default_event())
         .any_routing_key()
 }

@@ -290,6 +290,7 @@ event timada-pages/Announcements::AnnouncementHidden { announcement_id: String, 
 event timada-pages/Announcements::AnnouncementMoved { announcement_id: String, position: u32, moved_by: String }
 event timada-pages/Announcements::AnnouncementRemoved { announcement_id: String, removed_by: String }
 event timada-pages/Announcements::AnnouncementShown { announcement_id: String, shown_by: String }
+event timada-pages/GoogleTag::GoogleTagSet { analytics_id: Option<String>, ads_id: Option<String>, purchase_label: Option<String>, add_to_cart_label: Option<String>, begin_checkout_label: Option<String>, enhanced_conversions: bool, set_by: String }
 event timada-pages/Page::Created { slug: String, title: String, body: String, created_by: String }
 event timada-pages/Page::Deleted { deleted_by: String }
 event timada-pages/Page::Edited { title: String, body: String, edited_by: String }

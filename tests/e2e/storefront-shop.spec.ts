@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
 import { mailCountOf, mailTo, registerWithEmail, uniqueEmail } from "./email";
 import { productTab } from "./forms";
 import {
@@ -1140,6 +1141,218 @@ test("an order keeps what brought the shopper, as far as they allowed it", async
     await expect(source).toHaveAttribute("data-order-source", "google / cpc");
     await expect(source).not.toContainText("Cj0KCQthird");
     await expect(source.locator("[data-order-source-click=first]")).toHaveCount(0);
+  } finally {
+    await stripe.stop();
+  }
+});
+
+test("the shop's Google tag waits for consent, then counts the cart, the checkout and the sale once", async ({
+  page,
+  request,
+}) => {
+  const stripe = new FakeStripe();
+  await stripe.start();
+  try {
+    // A stand-in for Google's script: the page's own calls are what is read.
+    let loads = 0;
+    await page.route("https://www.googletagmanager.com/**", (route) => {
+      loads += 1;
+      return route.fulfill({ contentType: "application/javascript", body: "" });
+    });
+    /// What the page told the tag, in order, without the consent calls.
+    const told = async () =>
+      (
+        await page.evaluate(() =>
+          ((window as unknown as { dataLayer?: unknown[][] }).dataLayer ?? []).map(
+            (entry) => JSON.parse(JSON.stringify(Array.from(entry))),
+          ),
+        )
+      ).filter((entry: unknown[]) => entry[0] !== "consent" && entry[0] !== "js");
+    const events = async (name: string) =>
+      (await told()).filter((entry: unknown[]) => entry[0] === "event" && entry[1] === name);
+    const tag = page.locator("script[data-google-tag]");
+
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    const { name, slug } = uniqueTenant("Tag Shop");
+    await createTenant(page, name);
+    await publishProduct(page, slug, "Blue Mug", "12.50");
+    await setLegalIdentity(page, slug);
+    const webhookUrl = await connectStripe(page, slug);
+
+    // The merchant sets the tag up; an id that is not one is refused, and a
+    // label needs the Google Ads id it belongs to.
+    await page.goto(`/t/${slug}/google-tag`);
+    const form = page.locator("[data-google-tag]");
+    await expect(form).toHaveAttribute("data-google-tag", "none");
+    await form.getByLabel("Analytics measurement ID").fill("UA-12345-1");
+    await form.getByRole("button", { name: "Save the tag" }).click();
+    await expect(page.getByRole("alert").first()).toContainText("An Analytics ID reads G-XXXXXXXXXX");
+    await form.getByLabel("Analytics measurement ID").fill("g-e2etest123");
+    await form.getByLabel("Label of the sale conversion").fill("SaLe_1");
+    await form.getByRole("button", { name: "Save the tag" }).click();
+    await expect(page.getByRole("alert").first()).toContainText("need the Google Ads conversion ID");
+    await form.getByLabel("Analytics measurement ID").fill("g-e2etest123");
+    await form.getByLabel("Google Ads conversion ID").fill("AW-123456789");
+    await form.getByLabel("Label of the sale conversion").fill("AW-123456789/SaLe_1");
+    await form.getByLabel("Label of the checkout conversion").fill("ChEcK");
+    await form.getByRole("checkbox", { name: "Enhanced conversions" }).check();
+    await form.getByRole("button", { name: "Save the tag" }).click();
+    await expect(page.getByRole("status")).toContainText("Tag saved");
+    await expect(form).toHaveAttribute("data-google-tag", "set");
+    await expect(form.getByLabel("Analytics measurement ID")).toHaveValue("G-E2ETEST123");
+    await expect(form.getByLabel("Label of the sale conversion")).toHaveValue("SaLe_1");
+    await app.start(request, await mintKey(page, slug, true), 1);
+
+    // Nothing of Google's loads before the visitor answers, nor after a
+    // refusal.
+    await page.goto(`${SHOP}/p/blue-mug`);
+    await expect(page.locator("[data-consent]")).toBeVisible();
+    await expect(tag).toHaveCount(0);
+    expect(await told()).toEqual([]);
+    await page
+      .locator("[data-consent]")
+      .getByRole("button", { name: "Tout refuser" })
+      .click();
+    await expect(page.locator("[data-consent]")).toHaveCount(0);
+    await expect(tag).toHaveCount(0);
+    await addToCart(page);
+    expect(await told()).toEqual([]);
+    expect(loads).toBe(0);
+
+    // Accepted: the tag loads on every page, once the storefront has the
+    // merchant's settings, configured for both products.
+    await page.goto(`${SHOP}/cookies`);
+    await page
+      .locator("[data-cookies]")
+      .getByRole("button", { name: "Tout accepter" })
+      .click();
+    await expect(async () => {
+      await page.goto(`${SHOP}/p/blue-mug`);
+      await expect(tag).toHaveCount(1, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(tag).toHaveAttribute(
+      "src",
+      "https://www.googletagmanager.com/gtag/js?id=G-E2ETEST123",
+    );
+    expect(loads).toBeGreaterThan(0);
+    expect(await told()).toEqual([
+      ["config", "G-E2ETEST123"],
+      ["config", "AW-123456789", { allow_enhanced_conversions: true }],
+    ]);
+
+    // An item added from the product's page, which stays where it is: told
+    // to Analytics, and to no conversion, since none has a label for it.
+    await addToCart(page);
+    const item = {
+      item_id: expect.any(String),
+      item_name: "Blue Mug",
+      price: 12.5,
+      quantity: 1,
+    };
+    await expect.poll(() => events("add_to_cart")).toEqual([
+      [
+        "event",
+        "add_to_cart",
+        { currency: "EUR", value: 12.5, items: [item], send_to: "G-E2ETEST123" },
+      ],
+    ]);
+    expect(await events("conversion")).toEqual([]);
+    // The next page does not tell it again.
+    await page.goto(`${SHOP}/boutique`);
+    expect(await events("add_to_cart")).toEqual([]);
+    // Added from a listing's card, which loads the page again: told there.
+    await page
+      .locator("[data-product=blue-mug]")
+      .getByRole("button", { name: "Ajouter au panier" })
+      .click();
+    await expect(page.locator("[data-cart-drawer].open .drawer-panel")).toBeVisible();
+    await expect.poll(async () => (await events("add_to_cart")).length).toBe(1);
+
+    // The checkout opening is a secondary conversion, with its label; the
+    // cart holds three mugs, the one added before the tag loaded too.
+    await page.goto(`${SHOP}/checkout`);
+    expect(await events("begin_checkout")).toEqual([
+      [
+        "event",
+        "begin_checkout",
+        {
+          currency: "EUR",
+          value: 37.5,
+          items: [{ ...item, quantity: 3 }],
+          send_to: "G-E2ETEST123",
+        },
+      ],
+    ]);
+    expect(await events("conversion")).toEqual([
+      ["event", "conversion", { send_to: "AW-123456789/ChEcK", value: 37.5, currency: "EUR" }],
+    ]);
+
+    // The sale, on the order's page: the buyer's details hashed first, then
+    // the purchase with the order as its transaction, and the conversion.
+    await placeOrder(page, SHOP, true);
+    const orderUrl = await confirmPayment(page, request, SHOP, stripe, webhookUrl);
+    const orderId = orderUrl.split("/").pop()!;
+    const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
+    const sale = await told();
+    expect(sale).toEqual([
+      ["config", "G-E2ETEST123"],
+      ["config", "AW-123456789", { allow_enhanced_conversions: true }],
+      [
+        "set",
+        "user_data",
+        {
+          sha256_email_address: sha256("ada@example.org"),
+          sha256_phone_number: expect.stringMatching(/^[0-9a-f]{64}$/),
+          address: {
+            sha256_first_name: sha256("ada"),
+            sha256_last_name: sha256("lovelace"),
+            street: "1 rue de la Paix",
+            city: "Paris",
+            postal_code: expect.any(String),
+            country: "FR",
+          },
+        },
+      ],
+      [
+        "event",
+        "purchase",
+        {
+          transaction_id: orderId,
+          value: 37.5,
+          currency: "EUR",
+          items: [{ ...item, quantity: 3 }],
+          send_to: "G-E2ETEST123",
+        },
+      ],
+      [
+        "event",
+        "conversion",
+        { send_to: "AW-123456789/SaLe_1", value: 37.5, currency: "EUR", transaction_id: orderId },
+      ],
+    ]);
+    // Once per order: the page looked at again counts nothing.
+    await page.reload();
+    await expect(tag).toHaveCount(1);
+    expect(await events("purchase")).toEqual([]);
+    expect(await events("conversion")).toEqual([]);
+
+    // The merchant takes the tag off: the storefront follows.
+    await page.goto(`/t/${slug}/google-tag`);
+    for (const label of [
+      "Analytics measurement ID",
+      "Google Ads conversion ID",
+      "Label of the sale conversion",
+      "Label of the checkout conversion",
+    ]) {
+      await form.getByLabel(label).fill("");
+    }
+    await form.getByRole("checkbox", { name: "Enhanced conversions" }).uncheck();
+    await form.getByRole("button", { name: "Save the tag" }).click();
+    await expect(page.getByRole("status")).toContainText("No tag");
+    await expect(async () => {
+      await page.goto(`${SHOP}/boutique`);
+      await expect(tag).toHaveCount(0, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
   } finally {
     await stripe.stop();
   }

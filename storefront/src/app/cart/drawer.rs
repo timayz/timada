@@ -348,6 +348,8 @@ document.addEventListener("submit", async (event) => {
     const page = new DOMParser().parseFromString(await response.text(), "text/html");
     const next = page.querySelector("[data-cart-drawer]");
     if (!next) { location.assign(url); return; }
+    // What the fetched page had to tell the shop's tag (an item added).
+    window.timadaTag?.(page);
     if (!drawer.classList.contains("open")) opener = button || document.activeElement;
     swap(document.importNode(next, true));
   } catch {

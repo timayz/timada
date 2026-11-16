@@ -246,6 +246,15 @@ pub fn describe_error(code: &str) -> &'static str {
         }
         "too_many_redirects" => "A shop keeps at most 500 redirects.",
         "redirect_not_found" => "This redirect does not exist.",
+        "google_tag_invalid_id" => {
+            "An Analytics ID reads G-XXXXXXXXXX (or GT-…) and a Google Ads ID AW-123456789."
+        }
+        "google_tag_invalid_label" => {
+            "A conversion label holds letters, digits, dashes and underscores only."
+        }
+        "google_ads_id_missing" => {
+            "Conversion labels and enhanced conversions need the Google Ads conversion ID."
+        }
         "campaign_sent" => "This campaign was sent already: it can no longer be changed.",
         "campaign_invalid_schedule" => {
             "This schedule does not hold together: pick at least one day (every week), a day 1 to 28 (every month), an end time after the start time, and dates from today on."
