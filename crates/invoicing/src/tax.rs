@@ -491,9 +491,101 @@ pub fn decide(
     }
 }
 
+/// The VAT in the price of a kind of goods sold at home, in basis points:
+/// France's rate for it, or none for a seller exempt of VAT. What a margin
+/// is worked out with before any sale says where it goes.
+pub fn home_rate_bps(profile: TaxProfile, category: &str) -> u32 {
+    if profile.vat_registered {
+        rate_bps(SELLER_COUNTRY, category)
+    } else {
+        0
+    }
+}
+
+/// The VAT a sale is expected to carry before it is invoiced: its lines
+/// `(tax category, price VAT included)` taxed as [`decide`] would a first
+/// sale of the year, the buyer's VAT number taken at its word, and that
+/// tax carried over to `total_cents`, what is charged once a discount came
+/// off the lines and shipping was added (an invoice spreads both over the
+/// lines' rates). The invoice says what the sale carried; this is known
+/// when the payment is asked for, and is what a margin is told with
+/// meanwhile.
+pub fn expected_vat_cents(
+    profile: TaxProfile,
+    destination: &Destination,
+    lines: &[(&str, u64)],
+    currency: &str,
+    total_cents: u64,
+) -> u64 {
+    let decision = decide(
+        profile,
+        destination,
+        lines,
+        currency,
+        None,
+        DistanceSales::default(),
+    );
+    let goods: u64 = lines.iter().map(|(_, amount)| amount).sum();
+    if goods == 0 {
+        return 0;
+    }
+    let vat: u64 = vat_breakdown(
+        lines
+            .iter()
+            .zip(&decision.rates)
+            .filter_map(|((_, amount), rate)| rate.map(|rate| (rate, *amount))),
+    )
+    .iter()
+    .map(|subtotal| subtotal.vat_cents)
+    .sum();
+    let carried =
+        (u128::from(vat) * u128::from(total_cents) + u128::from(goods) / 2) / u128::from(goods);
+    carried as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sale_s_expected_vat_follows_what_is_charged() {
+        let lines = [("standard", 6_000), ("books", 2_110)];
+        // 10.00 at 20 % and 1.10 at 5.5 %.
+        assert_eq!(
+            expected_vat_cents(REGISTERED, &to("FR", "75001"), &lines, "EUR", 8_110),
+            1_110
+        );
+        // Half off the goods halves their tax; shipping carries its share.
+        assert_eq!(
+            expected_vat_cents(REGISTERED, &to("FR", "75001"), &lines, "EUR", 4_055),
+            555
+        );
+        assert_eq!(
+            expected_vat_cents(REGISTERED, &to("FR", "75001"), &lines, "EUR", 8_110 + 811),
+            1_221
+        );
+        // None where none applies: an exempt seller, goods leaving the EU.
+        assert_eq!(
+            expected_vat_cents(
+                TaxProfile::default(),
+                &to("FR", "75001"),
+                &lines,
+                "EUR",
+                8_110
+            ),
+            0
+        );
+        assert_eq!(
+            expected_vat_cents(REGISTERED, &to("US", "10001"), &lines, "EUR", 8_110),
+            0
+        );
+        assert_eq!(
+            expected_vat_cents(REGISTERED, &to("FR", "75001"), &[], "EUR", 0),
+            0
+        );
+        assert_eq!(home_rate_bps(REGISTERED, "standard"), 2_000);
+        assert_eq!(home_rate_bps(TaxProfile::default(), "standard"), 0);
+    }
 
     /// The rate levels the `world-tax` table has.
     const LEVELS: [&str; 5] = [

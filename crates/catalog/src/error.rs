@@ -45,6 +45,14 @@ pub enum CatalogError {
     CompareAtAboveEarlier,
     #[error("the amount must be a positive number with at most two decimals")]
     InvalidAmount,
+    #[error("a product sold through its combinations is costed on each of them")]
+    CostOnVariants,
+    #[error("a payment provider keeps between 0 and 100 % of a payment")]
+    InvalidFee,
+    #[error(
+        "a high margin starts above a medium one, both under 100 %, and a feed has labels 0 to 4"
+    )]
+    InvalidMarginTiers,
     #[error("unknown currency")]
     InvalidCurrency,
     #[error("product not found")]
@@ -180,6 +188,9 @@ impl CatalogError {
             Self::NoEarlierPrice => "no_earlier_price",
             Self::CompareAtAboveEarlier => "compare_at_above_earlier",
             Self::InvalidAmount => "invalid_amount",
+            Self::CostOnVariants => "cost_on_variants",
+            Self::InvalidFee => "invalid_fee",
+            Self::InvalidMarginTiers => "invalid_margin_tiers",
             Self::InvalidCurrency => "invalid_currency",
             Self::NotFound => "product_not_found",
             Self::Archived => "product_archived",

@@ -640,6 +640,56 @@ moves while the thing stays counted and neither runs out nor comes back writes i
 own number without loading the product (#472): the product is replayed only when the
 summary may change.
 
+## Costs and margins
+
+What a sale leaves is worked out from three things the merchant says, none of which a
+shopper or a storefront is ever told:
+
+- **What a thing costs the shop.** `timada-catalog/ProductCost`, one stream per
+  product (deterministic id from the product's): the cost of one of a product sold as
+  is, the cost of one of each variant, and what sending and importing one cost when
+  they are not the shop's usual. It is not the product's own stream on purpose: a
+  storefront's key reads `Product` (`read_only_store.rs`), and what a shop pays its
+  supplier is not a storefront's to read; and a supplier whose cost moves every week
+  fills this stream, not the product's 65 535 versions. A cost is set on the product's
+  **Cost & margin** tab, on the ticked rows of the products list, or by AliExpress:
+  an import, an added combination and every read that finds another cost write it
+  (`cost_linked` in `crates/aliexpress/src/apply.rs`), a cost within the price
+  tolerance of the catalog's being left alone. A cost typed by hand on a linked
+  product lasts until the supplier's next move.
+- **What a sale costs beyond the goods.** `timada-catalog/SaleCosts`, one stream per
+  shop (the **Costs** page): sending a parcel, the border's charge for each kind of
+  item, the fixed costs a sale carries, and the payment provider's share and fee, in
+  one currency. The same stream says how margins are graded (`MarginTiers`: from which
+  share of the price a margin is medium and high) and which of the feed's five labels
+  carries the tier.
+- **The VAT in a price**, which the catalog does not know: whoever asks gives the rate
+  (`timada_invoicing::tax::home_rate_bps`, France's for the product's kind of goods, or
+  none for an exempt seller).
+
+`timada_catalog::Margin` is the arithmetic, in one place: price, less VAT, cost,
+sending, border, fixed costs and payment fee; the break-even return on ad spend is the
+price over the margin. The product tab shows it for each thing the product sells, at
+its price or at one the merchant asks about (`?what_if=`). A feed writes the tier
+(`loss`, `low`, `medium`, `high`) in the label the shop gave to it, for every item
+whose cost is known, in place of the product's own label there: the costs are read
+beside each page of feed rows (`catalog_product_costs`, kept by the catalog's
+read-model subscription), like the stock.
+
+An order keeps what its sale cost. When a payment is priced (`pending_payment`) the
+orders read each line's cost stream and the shop's sale costs and reckon
+`OrderCosts`: the unit cost of each line, sending (once for everything sent the shop's
+usual way, once more for each product sent its own), the border (once a product), the
+fixed costs and the payment fee on the total. The dashboard adds the VAT the sale is
+expected to carry (`expected_vat_cents`: the lines taxed as a first sale of the year
+would be, carried over to the total), since the orders know no tax and the invoice
+comes later. It is written with the payment (`Cart::CostsReckoned`) and copied to the
+order (`Order::CostsKept`), so costs that move afterwards change nothing an order
+says. Nothing is kept for a sale none of whose goods has a cost, nor when the shop's
+costs are in another currency than the sale. `OrderState::profit_cents` is the total
+less all of it, known only when every line had a cost; the order's page shows it.
+Both fields are `#[serde(skip)]` on what the store API answers a storefront.
+
 ## Product pictures
 
 The event store records what a picture is, never its bytes. The upload itself is not

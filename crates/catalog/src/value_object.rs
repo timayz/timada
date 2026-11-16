@@ -127,6 +127,15 @@ pub struct VariantPrice {
     pub amount_cents: u64,
 }
 
+/// What the shop pays for one of a combination, among those set at once
+/// ([`ProductCost::VariantCostsSet`](crate::aggregator::ProductCost)); `None`
+/// when it is not known.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct VariantCost {
+    pub variant_id: String,
+    pub amount_cents: Option<u64>,
+}
+
 /// The index stream of a stock code.
 pub fn product_sku_id(sku: &str) -> String {
     evento::hash_ids(vec!["product-sku", &sku_key(sku)])
@@ -364,6 +373,16 @@ pub fn new_feed_token() -> String {
             let _ = write!(token, "{byte:02x}");
             token
         })
+}
+
+/// The stream of what the shop pays for the things a product sells.
+pub fn product_cost_id(product_id: &str) -> String {
+    evento::hash_ids(vec!["product-cost", product_id])
+}
+
+/// The stream of what a sale costs the shop: one per tenant store.
+pub fn sale_costs_id() -> String {
+    evento::hash_ids(vec!["sale-costs"])
 }
 
 /// The stream of the shop's default delivery time: one per tenant store.

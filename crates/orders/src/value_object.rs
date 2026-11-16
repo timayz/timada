@@ -297,6 +297,121 @@ pub struct OrderLine {
     pub delivery_days: Option<timada_catalog::DeliveryDays>,
 }
 
+/// What a sale cost the shop, as it stood when the payment was asked for:
+/// what the order keeps, so that what it left can be told later whatever
+/// the products cost by then. Nothing a shopper or a storefront is ever
+/// told. Frozen in `events.lock`: the fields never change.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    bitcode::Encode,
+    bitcode::Decode,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub struct OrderCosts {
+    /// What the shop paid for one of each line, in the lines' order; `None`
+    /// for a line whose cost it had not said.
+    pub unit_costs: Vec<Option<u64>>,
+    /// What sending the goods cost: once for all those sent the shop's
+    /// usual way, and once more for each product sent its own.
+    pub shipping_cents: u64,
+    /// What the border charged, once a product.
+    pub import_cents: u64,
+    /// The share of the shop's fixed costs the sale carries.
+    pub fixed_cents: u64,
+    /// What the payment provider keeps of the total.
+    pub payment_fee_cents: u64,
+    /// The VAT the sale was expected to carry when it was made, by the
+    /// rate of each line where it goes. The invoice says what it carried:
+    /// this one is there before any invoice is.
+    pub vat_cents: u64,
+}
+
+impl OrderCosts {
+    /// What a cart priced as `lines` for `total_cents` in `currency` costs
+    /// the shop: `unit_costs` says what it pays for a line's product
+    /// ([`UnitCosts`](timada_catalog::UnitCosts)), `shop` what a sale costs
+    /// it beyond the goods. `None` when it said the cost of none of the
+    /// lines (nothing worth keeping), or when its sale costs are in another
+    /// currency (nothing true can be said). The VAT is left at nothing:
+    /// whoever knows the tax fills it in.
+    pub fn reckon(
+        lines: &[OrderLine],
+        unit_costs: impl Fn(&OrderLine) -> timada_catalog::UnitCosts,
+        shop: Option<&timada_catalog::ShopCosts>,
+        currency: &str,
+        total_cents: u64,
+    ) -> Option<Self> {
+        let units: Vec<timada_catalog::UnitCosts> = lines.iter().map(unit_costs).collect();
+        if units.iter().all(|unit| unit.cost_cents.is_none())
+            || shop.is_some_and(|shop| shop.currency != currency)
+        {
+            return None;
+        }
+        // The border and the carrier charge by product, however many of it
+        // and however many lines an offer split it into.
+        let mut products: Vec<(&str, timada_catalog::UnitCosts)> = Vec::new();
+        for (line, unit) in lines.iter().zip(&units) {
+            if !products.iter().any(|(id, _)| *id == line.product_id) {
+                products.push((&line.product_id, *unit));
+            }
+        }
+        let usual_shipping = shop.map_or(0, |shop| shop.shipping_cents);
+        let usual_import = shop.map_or(0, |shop| shop.import_cents);
+        let sent_apart: u64 = products
+            .iter()
+            .filter_map(|(_, unit)| unit.shipping_cents)
+            .sum();
+        let sent_together = products
+            .iter()
+            .any(|(_, unit)| unit.shipping_cents.is_none());
+        Some(Self {
+            unit_costs: units.iter().map(|unit| unit.cost_cents).collect(),
+            shipping_cents: sent_apart + if sent_together { usual_shipping } else { 0 },
+            import_cents: products
+                .iter()
+                .map(|(_, unit)| unit.import_cents.unwrap_or(usual_import))
+                .sum(),
+            fixed_cents: shop.map_or(0, |shop| shop.fixed_cents),
+            payment_fee_cents: shop.map_or(0, |shop| shop.payment_fee(total_cents)),
+            vat_cents: 0,
+        })
+    }
+
+    /// What the shop paid for the goods of `lines`; `None` when it had not
+    /// said the cost of one of them.
+    pub fn goods_cents(&self, lines: &[OrderLine]) -> Option<u64> {
+        if self.unit_costs.len() != lines.len() {
+            return None;
+        }
+        lines
+            .iter()
+            .zip(&self.unit_costs)
+            .map(|(line, cost)| Some((*cost)? * u64::from(line.quantity)))
+            .sum()
+    }
+
+    /// Everything the sale cost beyond the goods, VAT included.
+    pub fn other_cents(&self) -> u64 {
+        self.shipping_cents
+            + self.import_cents
+            + self.fixed_cents
+            + self.payment_fee_cents
+            + self.vat_cents
+    }
+
+    /// What an order of `lines` paid `total_cents` left; negative when it
+    /// lost money, `None` when the cost of one of its lines is not known.
+    pub fn profit_cents(&self, lines: &[OrderLine], total_cents: u64) -> Option<i64> {
+        let goods = self.goods_cents(lines)?;
+        Some(total_cents as i64 - goods as i64 - self.other_cents() as i64)
+    }
+}
+
 /// The payment of an order: held on the shopper's card, then taken. Frozen
 /// in `events.lock`: the fields never change.
 #[derive(

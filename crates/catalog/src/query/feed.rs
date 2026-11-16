@@ -13,7 +13,7 @@
 //! sale, grouped by `item_group_id`, or one for a product sold as is. The
 //! rows know nothing of their readers.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 use anyhow::Result;
@@ -22,6 +22,7 @@ use timada_core::format_amount;
 use timada_core::xml::xml_text as xml;
 
 use crate::command::ProductState;
+use crate::margin::{Margin, MarginTiers, ProductCosts, ShopCosts};
 use crate::value_object::DeliveryDays;
 
 /// A product as a feed carries it: one row of `catalog_feed_products`.
@@ -55,6 +56,14 @@ pub struct FeedProduct {
     pub variants: Vec<FeedVariant>,
     /// Its own delivery time; `None` is the shop's default.
     pub delivery_days: Option<(u16, u16)>,
+    /// What kind of goods it is for VAT.
+    #[serde(default)]
+    pub tax_category: String,
+    /// What the shop pays for the things it sells. No feed says it: the
+    /// margin tier of a label is worked out from it ([`FeedMargin`]). Read
+    /// from the cost rows, not kept in the product's.
+    #[serde(skip)]
+    pub costs: ProductCosts,
     /// The things of it the shop counts and has none left of: a variant's
     /// id, or `""` for a product sold as is. Read from the stock rows, not
     /// kept in the product's.
@@ -131,6 +140,8 @@ impl FeedProduct {
                 })
                 .collect(),
             delivery_days: product.delivery_days.map(|days| (days.min, days.max)),
+            tax_category: product.tax_category().to_owned(),
+            costs: ProductCosts::default(),
             sold_out: BTreeSet::new(),
         })
     }
@@ -241,7 +252,61 @@ pub async fn feed_products(
             product.sold_out.insert(variant_id);
         }
     }
+    // And what the shop pays for them, over the same range.
+    let costs: Vec<(String, Json<ProductCosts>)> = db
+        .fetch_all(FEED_COSTS, (tenant_id, after, last.as_str()))
+        .await?;
+    for (product_id, costs) in costs {
+        if let Some(product) = products.iter_mut().find(|p| p.id == product_id) {
+            product.costs = costs.0;
+        }
+    }
     Ok(products)
+}
+
+/// What the shop pays for the things a page's products sell, read off the
+/// cost rows' key over the page's range of ids.
+const FEED_COSTS: &str = "SELECT product_id, costs_json FROM catalog_product_costs
+    WHERE tenant_id = ?1 AND product_id > ?2 AND product_id <= ?3";
+
+/// Writes what the shop pays for the things a product sells, or drops the
+/// row when it says nothing any more.
+pub(crate) async fn settle_product_costs(
+    db: &Db,
+    tenant_id: &str,
+    product_id: &str,
+    costs: &ProductCosts,
+) -> Result<()> {
+    if costs.is_empty() {
+        db.execute(
+            "DELETE FROM catalog_product_costs WHERE tenant_id = ?1 AND product_id = ?2",
+            (tenant_id, product_id),
+        )
+        .await?;
+        return Ok(());
+    }
+    let json = Json(costs).to_text()?;
+    db.execute(
+        "INSERT INTO catalog_product_costs (tenant_id, product_id, costs_json)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT (tenant_id, product_id) DO UPDATE SET costs_json = excluded.costs_json",
+        (tenant_id, product_id, json.as_str()),
+    )
+    .await?;
+    Ok(())
+}
+
+/// What the read model has of the costs of one product; nothing said is
+/// the default.
+pub async fn product_costs(db: &Db, tenant_id: &str, product_id: &str) -> Result<ProductCosts> {
+    let row: Option<(Json<ProductCosts>,)> = db
+        .fetch_optional(
+            "SELECT costs_json FROM catalog_product_costs
+             WHERE tenant_id = ?1 AND product_id = ?2",
+            (tenant_id, product_id),
+        )
+        .await?;
+    Ok(row.map(|(json,)| json.0).unwrap_or_default())
 }
 
 /// A page of a tenant's feed, read off the table's key in its order.
@@ -327,6 +392,51 @@ pub struct FeedShop {
     pub shippings: Vec<FeedShipping>,
     /// The delivery time of a product that gives none.
     pub delivery_days: Option<DeliveryDays>,
+    /// How one of the labels grades what each item leaves, in a shop that
+    /// asked for it.
+    pub margin: Option<FeedMargin>,
+}
+
+/// What a feed's writer grades an item's margin with: the label that says
+/// the tier in place of the merchant's own, the shop's costs of a sale, and
+/// the VAT in a price.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FeedMargin {
+    /// Which label carries the tier, from 0.
+    pub label: usize,
+    pub tiers: MarginTiers,
+    pub costs: Option<ShopCosts>,
+    /// The VAT rate of each kind of goods where the shop sells, in basis
+    /// points; a kind it does not list carries none.
+    pub vat_bps: BTreeMap<String, u32>,
+}
+
+impl FeedMargin {
+    /// The tier of one of `product` (`variant_id` `None`) or of one of its
+    /// variants, sold at `amount_cents`; `None` when its cost is not
+    /// known.
+    fn tier(
+        &self,
+        product: &FeedProduct,
+        variant_id: Option<&str>,
+        amount_cents: u64,
+    ) -> Option<&'static str> {
+        // A row written before it said its kind of goods is standard ones.
+        let category = if product.tax_category.is_empty() {
+            crate::TAX_CATEGORY_STANDARD
+        } else {
+            &product.tax_category
+        };
+        let vat_bps = self.vat_bps.get(category).copied().unwrap_or(0);
+        let margin = Margin::of(
+            amount_cents,
+            &product.currency,
+            vat_bps,
+            product.costs.unit_costs(variant_id),
+            self.costs.as_ref(),
+        )?;
+        Some(self.tiers.tier(&margin).as_str())
+    }
 }
 
 /// The opening of Merchant Center's XML, up to the first item.
@@ -552,6 +662,15 @@ fn write_item(
         tag(out, kind, value);
     }
     for (n, label) in product.labels.iter().enumerate() {
+        // The label a shop gave to its margins says the item's tier, and
+        // nothing where its cost is not known: never the merchant's own
+        // label, which a campaign would take for a tier.
+        let label = match &shop.margin {
+            Some(margin) if margin.label == n => margin
+                .tier(product, item.grouped.then_some(item.id), item.amount_cents)
+                .unwrap_or(""),
+            _ => label,
+        };
         if !label.is_empty() {
             tag(out, &format!("custom_label_{n}"), label);
         }
@@ -668,7 +787,23 @@ mod tests {
             compare_at_cents: None,
             variants: Vec::new(),
             delivery_days: None,
+            tax_category: "standard".into(),
+            costs: ProductCosts::default(),
             sold_out: BTreeSet::new(),
+        }
+    }
+
+    fn variant(id: &str, amount_cents: u64) -> FeedVariant {
+        FeedVariant {
+            id: id.into(),
+            label: None,
+            amount_cents,
+            compare_at_cents: None,
+            sku: None,
+            gtin: None,
+            mpn: None,
+            image_id: None,
+            kinds: Vec::new(),
         }
     }
 
@@ -684,6 +819,7 @@ mod tests {
                 free_above_cents: Some(5000),
             }],
             delivery_days: Some(DeliveryDays { min: 2, max: 4 }),
+            margin: None,
         }
     }
 
@@ -960,5 +1096,68 @@ mod tests {
         let xml = items_for(FeedReader::Google, &product, &shop());
         assert!(!xml.contains("<g:brand>"));
         assert!(xml.contains("<g:availability>in_stock</g:availability>"));
+    }
+
+    /// A shop that gave a label to its margins has it say each item's
+    /// tier, worked out from the item's own price and cost; an item whose
+    /// cost is not known says nothing there, not even the merchant's label.
+    #[test]
+    fn a_label_given_to_the_margins_says_each_item_s_tier() {
+        let mut shop = shop();
+        shop.margin = Some(FeedMargin {
+            label: 0,
+            tiers: MarginTiers::default(),
+            costs: Some(ShopCosts {
+                currency: "EUR".into(),
+                shipping_cents: 100,
+                ..ShopCosts::default()
+            }),
+            vat_bps: BTreeMap::from([("standard".to_owned(), 2_000)]),
+        });
+        let mut product = mug();
+        // 12.50 with 2.08 of VAT, bought at 4.00 and sent for 1.00: 5.42
+        // left, more than two fifths of the price.
+        product.costs.cost_cents = Some(400);
+        let out = items(&product, &shop);
+        assert!(
+            out.contains("<g:custom_label_0>high</g:custom_label_0>"),
+            "{out}"
+        );
+        assert!(
+            out.contains("<g:custom_label_2>eu</g:custom_label_2>"),
+            "{out}"
+        );
+
+        product.costs.cost_cents = Some(1_100);
+        let out = items(&product, &shop);
+        assert!(
+            out.contains("<g:custom_label_0>loss</g:custom_label_0>"),
+            "{out}"
+        );
+
+        product.costs.cost_cents = None;
+        let out = items(&product, &shop);
+        assert!(!out.contains("custom_label_0"), "{out}");
+
+        // Each variant by its own cost: one the shop said nothing of says
+        // nothing.
+        product.variants = vec![variant("01BEIGE", 1250), variant("01BLUE", 1250)];
+        product.costs.variants.insert("01BEIGE".into(), 400);
+        let out = items(&product, &shop);
+        let (beige, blue) = out.split_once("<g:id>01BLUE</g:id>").unwrap();
+        assert!(
+            beige.contains("<g:custom_label_0>high</g:custom_label_0>"),
+            "{out}"
+        );
+        assert!(!blue.contains("custom_label_0"), "{out}");
+        product.variants.clear();
+
+        // Without it the label is the merchant's.
+        shop.margin = None;
+        let out = items(&product, &shop);
+        assert!(
+            out.contains("<g:custom_label_0>high margin</g:custom_label_0>"),
+            "{out}"
+        );
     }
 }

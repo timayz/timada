@@ -37,7 +37,10 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         // feed says of each product it carries (published, priced, not
         // taken out of the feed), as JSON a feed is written from a page of
         // rows at a time; `catalog_feeds` is which tenant's feed answers at
-        // an address, one row per open feed.
+        // an address, one row per open feed. `catalog_product_costs` is
+        // what the shop pays for the things a product sells, one row per
+        // product it said something of, as JSON: a feed grades its margins
+        // from it, and no page shown to a shopper reads it.
         "CREATE TABLE catalog_products (
             tenant_id TEXT NOT NULL,
             id TEXT NOT NULL,
@@ -79,6 +82,12 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             id TEXT NOT NULL,
             item_json TEXT NOT NULL,
             PRIMARY KEY (tenant_id, id)
+        );
+        CREATE TABLE catalog_product_costs (
+            tenant_id TEXT NOT NULL,
+            product_id TEXT NOT NULL,
+            costs_json TEXT NOT NULL,
+            PRIMARY KEY (tenant_id, product_id)
         );
         CREATE TABLE catalog_feeds (
             token TEXT PRIMARY KEY,
@@ -153,6 +162,7 @@ pub const TABLES: &[&str] = &[
     "catalog_products",
     "catalog_variants",
     "catalog_feed_products",
+    "catalog_product_costs",
     "catalog_feeds",
     "catalog_delivery_default",
     "catalog_categories",

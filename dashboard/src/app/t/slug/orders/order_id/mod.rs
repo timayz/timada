@@ -12,6 +12,7 @@
 pub mod aliexpress;
 pub mod cancel;
 pub mod capture;
+pub mod costs;
 pub mod fulfil;
 pub mod invoice;
 pub mod not_on_aliexpress;
@@ -19,6 +20,7 @@ pub mod settle_outside;
 
 use std::sync::Arc;
 
+use costs::order_costs;
 use timada_aliexpress::forward_of_order;
 use timada_aliexpress::{ForwardState, ForwardStatus};
 use timada_catalog::format_money;
@@ -592,6 +594,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         )
                     )
                 }
+                order_costs(order: &order)
                 if let Some(note) = &order.note {
                     card(
                         card_header(<h2 class="text-base font-semibold">"Note from the customer"</h2>)

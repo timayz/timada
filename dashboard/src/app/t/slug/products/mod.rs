@@ -3,6 +3,7 @@
 //! comes from the shared read model (a moment behind), a product's own page
 //! reads its stream.
 
+pub mod cost;
 pub mod create;
 pub mod label;
 pub mod product_id;
@@ -333,6 +334,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             })
                         )
                         button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-9" }, "Label the ticked products")
+                        // The same ticks, sent to another address by its own button.
+                        field(
+                            attrs: attributes! { class="sm:ml-6" },
+                            field_label(attrs: attributes! { for="cost-products-value" }, "What one of each costs the shop")
+                            input(attrs: attributes! {
+                                id="cost-products-value" name="cost" type="text" inputmode="decimal" class="w-40" placeholder="Empty forgets it"
+                            })
+                        )
+                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-9" formaction=(href!(cost::cost, slug: slug.clone())) }, "Cost the ticked products")
                     </form>
                     <script>(Unescaped::new_unchecked(SELECT_ALL_SCRIPT))</script>
                 }

@@ -7672,7 +7672,6 @@ dependencies = [
  "evento",
  "rand 0.9.5",
  "serde",
- "serde_json",
  "thiserror 2.0.21",
  "timada-core",
  "tokio",

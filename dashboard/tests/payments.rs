@@ -1013,6 +1013,63 @@ async fn a_paid_cart_becomes_one_order() {
     h.finish().await;
 }
 
+/// A shop that said what its goods and its sales cost: the order keeps
+/// them as they stood when its payment was asked for, with the VAT the
+/// sale was expected to carry, and tells what it left.
+#[tokio::test]
+async fn an_order_keeps_what_its_sale_cost_with_the_vat_expected() {
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let (cart_id, mug) = h.cart(&acme).await;
+    let catalog = timada_catalog::Command::new(h.store(&acme), &acme.id);
+    catalog.set_cost("alice", &mug, Some(400)).await.unwrap();
+    catalog
+        .set_sale_costs(
+            "alice",
+            timada_catalog::ShopCosts {
+                currency: "EUR".into(),
+                shipping_cents: 300,
+                import_cents: 0,
+                fixed_cents: 50,
+                payment_fee_bps: 150,
+                payment_fee_cents: 25,
+            },
+        )
+        .await
+        .unwrap();
+
+    let PaymentAnswer::Requested(payment) = h.ask(&acme, &cart_id, Some(2500)).await else {
+        panic!("a payment is opened");
+    };
+    // What the answer a storefront reads says of it: nothing.
+    assert!(!serde_json::to_string(&payment).unwrap().contains("cost"));
+    // The cost moves before the payment lands: the order keeps what it was.
+    catalog.set_cost("alice", &mug, Some(900)).await.unwrap();
+    h.stripe.authorize(&payment.payment_id);
+    let body = authorized(&payment.payment_id);
+    let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
+        panic!("the order is placed");
+    };
+    let orders = timada_orders::Command::new(h.store(&acme), &acme.id);
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    let costs = order.costs.clone().expect("the sale's costs");
+    assert_eq!(costs.unit_costs, vec![Some(400)]);
+    assert_eq!(costs.shipping_cents, 300);
+    assert_eq!(costs.fixed_cents, 50);
+    // 1.5 % of 25.00, rounded, and 0.25.
+    assert_eq!(costs.payment_fee_cents, 38 + 25);
+    // Sold in France by a seller who charges VAT: 20 % in the price, what
+    // the invoice will say.
+    assert_eq!(costs.vat_cents, 417);
+    assert_eq!(
+        order.profit_cents(),
+        Some(2500 - 2 * 400 - 300 - 50 - 63 - 417)
+    );
+    assert!(!serde_json::to_string(&order).unwrap().contains("cost"));
+    h.finish().await;
+}
+
 /// Waits for what a subscription writes; generously, for a loaded machine.
 async fn eventually<T>(mut probe: impl AsyncFnMut() -> Option<T>) -> T {
     tokio::time::timeout(Duration::from_secs(30), async {
