@@ -9,7 +9,7 @@ use topcoat::{
 };
 
 use crate::components::card::{card, card_content, card_header};
-use crate::ui::{fact, facts};
+use crate::ui::{fact, facts, signed_money};
 
 /// The card of an order's costs and what it left; nothing for an order
 /// sold before the shop said what any of its goods cost.
@@ -30,14 +30,7 @@ pub async fn order_costs(cx: &Cx, order: &OrderState) -> Result<impl View> {
         ]
     });
     let profit = order.profit_cents();
-    let profit_label = profit.map(|cents| {
-        let amount = money(cents.unsigned_abs());
-        if cents < 0 {
-            format!("-{amount}")
-        } else {
-            amount
-        }
-    });
+    let profit_label = profit.map(|cents| signed_money(cents, &order.currency));
     Ok(view! {
         if let Some(rows) = &rows {
             card(
