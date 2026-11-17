@@ -236,13 +236,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 )
                 section_card(
                     title: Some("Filters"),
-                    description: Some("What shoppers narrow a category's products by, beside the price: options of your products, such as a size or a colour. Each shows the values the listed products come in."),
+                    description: Some("What shoppers narrow a category's products by, beside the price: options of your products, such as a size or a colour, or facts of their tables, such as a material. Each shows the values the listed products come in."),
                     <form method="post" action=(href!(filters::filters, slug: slug.clone())) class="flex max-w-xl flex-col gap-4" data-listing-filters=(if filters_set { "set" } else { "unset" })>
                         field(
-                            field_label(attrs: attributes! { for="listing-filters" }, "Options shoppers filter by")
+                            field_label(attrs: attributes! { for="listing-filters" }, "Options and facts shoppers filter by")
                             field_description(
                                 attrs: attributes! { id="listing-filters-hint" },
-                                "One option a line, written as on your products (Couleur, Taille), in the order to show them; " (MAX_LISTING_FILTERS) " at most. "
+                                "One a line, written as on your products (Couleur, Taille, Matière), in the order to show them; " (MAX_LISTING_FILTERS) " at most. "
                                 if filters_set {
                                     "Empty offers the price alone."
                                 } else {
