@@ -626,9 +626,19 @@ fn saved_url(cx: &Cx, address: Option<&str>, billing: Option<&str>) -> String {
     href!(index).query(Link { address, billing }).resolve(cx)
 }
 
-/// `dont 9,97€ VAT FR 20%`: the amount as the shop writes it.
+/// `dont 9,97€ TVA FR 20 %`, `incl. €9.97 VAT FR 20%`: the amount and the
+/// rate as the visitor's language writes them.
 fn vat_text(cx: &Cx, estimate: &VatEstimate) -> String {
-    t!(checkout_vat_included, amount: estimate.amount(), label: estimate.label())
+    let language = crate::app::lang::spoken(cx);
+    let label = match estimate.rate_bps {
+        Some(rate) => t!(
+            checkout_vat_label,
+            country: &estimate.country,
+            rate: crate::app::write_rate(&language, rate)
+        ),
+        None => t!(checkout_vat_label_rates, country: &estimate.country),
+    };
+    t!(checkout_vat_included, amount: estimate.amount(), label: label.resolve(cx))
         .resolve(cx)
         .into_owned()
 }

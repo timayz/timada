@@ -1890,17 +1890,25 @@ test("the shop is read under an address of its own in each of its languages", as
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Your cart");
   await expect(page.locator("main")).toContainText("Arbre à chat");
+  // An amount is written as English reads it, by the page and by the
+  // library's totals alike.
+  await expect(page.locator("main")).toContainText("€49.90");
+  await expect(page.locator("main")).not.toContainText("49,90€");
   // A refusal, the checkout and the countries it names, in English.
   await page.goto(`${SHOP}/en/cart?error=out_of_stock`);
   await expect(page.getByRole("alert")).toHaveText("Sorry, there are not enough left.");
   await page.goto(`${SHOP}/en/checkout`);
   await expect(page.getByLabel("Country", { exact: true }).locator("option[value=DE]")).toHaveText("Germany");
+  await expect(page.locator("[data-checkout-total]")).toHaveText("€49.90");
+  await expect(page.locator("[data-checkout-vat]")).toHaveText("(incl. €8.32 VAT FR 20%)");
   // The same pages in French say it in French.
   await page.goto(`${SHOP}/cart?error=out_of_stock`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Votre panier");
   await expect(page.getByRole("alert")).toHaveText("Désolé, il n'en reste pas assez.");
   await page.goto(`${SHOP}/checkout`);
   await expect(page.getByLabel("Pays", { exact: true }).locator("option[value=DE]")).toHaveText("Allemagne");
+  await expect(page.locator("[data-checkout-total]")).toHaveText("49,90€");
+  await expect(page.locator("[data-checkout-vat]")).toHaveText("(dont 8,32€ TVA FR 20 %)");
 
   // The footer switches to the same page in French, which has no prefix.
   await page.goto(`${SHOP}/en/p/arbre-a-chat`);

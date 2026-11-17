@@ -253,14 +253,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </tbody>
                 </table>
                 if let Some(discount) = &order.discount {
-                    <p data-order-discount=(&discount.code)>(t!(order_discount_before)) " " <code>(&discount.code)</code> (t!(order_discount_after, amount: money(discount.amount_cents as i64, &currency)))</p>
+                    <p data-order-discount=(&discount.code)>(t!(order_discount_before)) " " <code>(&discount.code)</code> (t!(order_discount_after, amount: money(discount.amount_cents as i64, &currency).resolve(cx)))</p>
                 }
                 if let Some(shipping) = &order.shipping_charge {
                     <p data-order-shipping=(&shipping.name)>
                         if shipping.amount_cents == 0 {
                             (t!(order_shipping, name: &shipping.name, amount: t!(order_shipping_free).resolve(cx)))
                         } else {
-                            (t!(order_shipping, name: &shipping.name, amount: money(shipping.amount_cents as i64, &currency)))
+                            (t!(order_shipping, name: &shipping.name, amount: money(shipping.amount_cents as i64, &currency).resolve(cx)))
                         }
                     </p>
                 }

@@ -128,7 +128,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     }
                                     <span class="search-text">
                                         <span class="search-name">(&product.name)</span>
-                                        <span class="search-price" data-price="">(price_line(product))</span>
+                                        <span class="search-price" data-price="">(price_line(cx, product))</span>
                                     </span>
                                 </a>
                             </li>
