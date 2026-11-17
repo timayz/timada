@@ -4,7 +4,7 @@ use timada_core::claim::claim_is_fresh;
 
 use crate::aggregator::category::{Claimed, Released};
 use crate::error::CatalogError;
-use crate::value_object::category_slug_id;
+use crate::value_object::{TranslationKind, category_slug_id};
 
 use super::{CLAIM_ATTEMPTS, CategorySlugState, Command};
 
@@ -12,8 +12,30 @@ impl<E: Executor> Command<E> {
     /// Points a normalized slug at `category_id`. The entry is created, or
     /// taken over when it is free, already the category's, or held by a
     /// category that let go of it. Fails when another category holds it, or
-    /// wins the race for it.
+    /// wins the race for it, and when another category's translation goes
+    /// by it in any language, looked at before the claim and after it (see
+    /// [`claim_slug`](Self::claim_slug)).
     pub(crate) async fn claim_category_slug(
+        &self,
+        slug: &str,
+        category_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let translated =
+            || self.translation_slug_of_another(TranslationKind::Category, slug, category_id);
+        if translated().await? {
+            return Err(CatalogError::SlugTaken);
+        }
+        self.take_category_slug(slug, category_id, routing_key)
+            .await?;
+        if translated().await? {
+            return Err(CatalogError::SlugTaken);
+        }
+        Ok(())
+    }
+
+    /// Writes the entry of a slug for `category_id`.
+    async fn take_category_slug(
         &self,
         slug: &str,
         category_id: &str,
@@ -63,7 +85,10 @@ impl<E: Executor> Command<E> {
     /// Whether the category an entry names has let go of the slug: archived,
     /// or never written once the claim is no longer fresh. A category keeps
     /// its slug for life.
-    async fn category_slug_let_go(&self, index: &CategorySlugState) -> anyhow::Result<bool> {
+    pub(crate) async fn category_slug_let_go(
+        &self,
+        index: &CategorySlugState,
+    ) -> anyhow::Result<bool> {
         Ok(match self.load_category(&index.category_id).await? {
             Some(category) => category.archived,
             None => !claim_is_fresh(index.claimed_at, timada_core::unix_now()),

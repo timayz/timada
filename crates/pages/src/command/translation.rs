@@ -5,12 +5,12 @@ use timada_core::claim::claim_is_fresh;
 use timada_core::{FormerSlug, leave_slug};
 
 use crate::aggregator::translation::{
-    Claimed, Dropped, SeoSet, Translation, TranslationSlug, Written,
+    Claimed, Dropped, Noted, SeoSet, SlugLanguages, Translation, TranslationSlug, Written,
 };
 use crate::error::PageError;
 use crate::value_object::{
     TextKind, article_slug, normalize_body, normalize_seo, normalize_slug, normalize_summary,
-    normalize_title, text_translation_id, text_translation_slug_id,
+    normalize_title, slug_languages_id, text_translation_id, text_translation_slug_id,
 };
 
 use super::slug_index::CLAIM_ATTEMPTS;
@@ -159,6 +159,33 @@ async fn on_slug_claimed(
     Ok(())
 }
 
+/// The languages an article slug has a translation entry in.
+#[evento::projection(id = id, name = "timada-pages/SlugLanguagesState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct SlugLanguagesState {
+    pub id: String,
+    pub languages: Vec<String>,
+}
+
+pub fn slug_languages_projection<E: Executor>() -> Projection<E, SlugLanguagesState> {
+    Projection::new::<SlugLanguages>()
+        .handler(on_language_noted())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_language_noted(
+    event: Event<Noted>,
+    state: &mut SlugLanguagesState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    if !state.languages.contains(&event.data.language) {
+        state.languages.push(event.data.language.to_owned());
+    }
+    Ok(())
+}
+
 impl<E: Executor> Command<E> {
     /// What the text says in `language`; `None` when it has no translation
     /// there, or dropped it.
@@ -234,12 +261,115 @@ impl<E: Executor> Command<E> {
         Ok(translation.aggregate_version()? > index.version || stale)
     }
 
+    /// Whether another article goes by `slug` in the main language, or has
+    /// claimed it and may yet. Its address in a language it has no
+    /// translation in is that slug under the language's prefix, which a
+    /// translation must not take.
+    async fn main_slug_of_another_article(
+        &self,
+        slug: &str,
+        article_id: &str,
+    ) -> anyhow::Result<bool> {
+        Ok(match self.load_article_slug_index(slug).await? {
+            Some(index) if index.article_id != article_id => {
+                !self.article_slug_let_go(slug, &index).await?
+            }
+            _ => false,
+        })
+    }
+
+    /// Whether a translation of another article goes by `slug`, in any
+    /// language, or has claimed it and may yet. Under that language's
+    /// prefix the slug is the translation's address, so an article taking
+    /// it as its main slug would have none there.
+    pub(crate) async fn translation_slug_of_another_article(
+        &self,
+        slug: &str,
+        article_id: &str,
+    ) -> anyhow::Result<bool> {
+        let Some(noted) = slug_languages_projection()
+            .load(slug_languages_id(slug))
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await?
+        else {
+            return Ok(false);
+        };
+        for language in &noted.languages {
+            let Some(index) = text_translation_slug_projection()
+                .load(text_translation_slug_id(language, slug))
+                .tenant(&self.tenant)
+                .execute(&self.executor)
+                .await?
+            else {
+                continue;
+            };
+            if index.subject_id != article_id
+                && !self
+                    .article_translation_slug_let_go(language, slug, &index)
+                    .await?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Notes that `slug` is about to have an entry in `language`, for the
+    /// claim of a main slug to find it. Noted once: a language already
+    /// there, or noted by another writer meanwhile, is left as it is.
+    async fn note_slug_language(
+        &self,
+        language: &str,
+        slug: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), PageError> {
+        let id = slug_languages_id(slug);
+        let noted = Noted {
+            language: language.to_owned(),
+        };
+        for _ in 0..CLAIM_ATTEMPTS {
+            let state = slug_languages_projection()
+                .load(&id)
+                .tenant(&self.tenant)
+                .execute(&self.executor)
+                .await?;
+            let mut write = match &state {
+                Some(state) if state.languages.iter().any(|known| known == language) => {
+                    return Ok(());
+                }
+                Some(state) => state.write()?,
+                None => {
+                    let mut write = evento::append(&id);
+                    write.original_version(0);
+                    write
+                }
+            };
+            let written = write
+                .routing_key_opt(routing_key.clone())
+                .event(&noted)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) => continue,
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(WriteError::InvalidOriginalVersion.into())
+    }
+
     /// Points a normalized slug of `language` at the article, at the
     /// version of its translation the next write is made at. The entry is
     /// created, or taken over when it is already the article's or held by
     /// one that let go of it. Fails when another article holds it, in this
     /// language or as its main slug (its address in every language it is
-    /// not translated into), or wins the race for it.
+    /// not translated into), or wins the race for it. The main slug is
+    /// looked at before the claim and after it: the claim of a main slug
+    /// does the same with the translations, so of two racing for one slug
+    /// at least one sees the other. A claim refused that late stays, as
+    /// one whose write failed does.
     async fn claim_article_translation_slug(
         &self,
         language: &str,
@@ -248,13 +378,28 @@ impl<E: Executor> Command<E> {
         version: u16,
         routing_key: Option<String>,
     ) -> Result<(), PageError> {
-        if self
-            .load_article_by_slug(slug)
-            .await?
-            .is_some_and(|article| article.id != article_id)
-        {
+        if self.main_slug_of_another_article(slug, article_id).await? {
             return Err(PageError::ArticleSlugTaken);
         }
+        self.note_slug_language(language, slug, routing_key.clone())
+            .await?;
+        self.take_article_translation_slug(language, slug, article_id, version, routing_key)
+            .await?;
+        if self.main_slug_of_another_article(slug, article_id).await? {
+            return Err(PageError::ArticleSlugTaken);
+        }
+        Ok(())
+    }
+
+    /// Writes the entry of a slug in `language` for the article.
+    async fn take_article_translation_slug(
+        &self,
+        language: &str,
+        slug: &str,
+        article_id: &str,
+        version: u16,
+        routing_key: Option<String>,
+    ) -> Result<(), PageError> {
         let claimed = Claimed {
             subject_id: article_id.to_owned(),
             version,

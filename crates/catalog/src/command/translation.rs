@@ -6,15 +6,15 @@ use timada_core::languages::is_language;
 use timada_core::{FormerSlug, leave_slug};
 
 use crate::aggregator::translation::{
-    BodyWritten, Claimed, Described, Dropped, Named, QuestionsSet, SeoSet, Translation,
-    TranslationSlug,
+    BodyWritten, Claimed, Described, Dropped, Named, Noted, QuestionsSet, SeoSet, SlugLanguages,
+    Translation, TranslationSlug,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
     CategoryQuestion, FALLBACK_CATEGORY_SLUG, TranslationKind, normalize_category_body,
     normalize_category_description, normalize_category_name, normalize_category_questions,
-    normalize_description, normalize_name, normalize_seo, normalize_slug, slugify, slugify_or,
-    suffixed_slug, translation_id, translation_slug_id,
+    normalize_description, normalize_name, normalize_seo, normalize_slug, slug_languages_id,
+    slugify, slugify_or, suffixed_slug, translation_id, translation_slug_id,
 };
 
 use super::{CLAIM_ATTEMPTS, Command};
@@ -192,6 +192,33 @@ async fn on_slug_claimed(
     Ok(())
 }
 
+/// The languages a slug has a translation entry in.
+#[evento::projection(id = id, name = "timada-catalog/SlugLanguagesState")]
+#[evento::snapshot(none)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct SlugLanguagesState {
+    pub id: String,
+    pub languages: Vec<String>,
+}
+
+pub fn slug_languages_projection<E: Executor>() -> Projection<E, SlugLanguagesState> {
+    Projection::new::<SlugLanguages>()
+        .handler(on_language_noted())
+        .strict()
+}
+
+#[evento::handler]
+async fn on_language_noted(
+    event: Event<Noted>,
+    state: &mut SlugLanguagesState,
+) -> anyhow::Result<()> {
+    state.id = event.aggregate_id.to_owned();
+    if !state.languages.contains(&event.data.language) {
+        state.languages.push(event.data.language.to_owned());
+    }
+    Ok(())
+}
+
 /// A language code from the list, lowercased; `InvalidLanguage` for any
 /// other.
 fn normalize_language(code: &str) -> Result<String, CatalogError> {
@@ -282,8 +309,9 @@ impl<E: Executor> Command<E> {
     }
 
     /// Whether another thing of the kind goes by `slug` in the main
-    /// language. Its address in a language it has no translation in is that
-    /// slug under the language's prefix, which a translation must not take.
+    /// language, or has claimed it and may yet. Its address in a language
+    /// it has no translation in is that slug under the language's prefix,
+    /// which a translation must not take.
     async fn main_slug_of_another(
         &self,
         kind: TranslationKind,
@@ -291,15 +319,98 @@ impl<E: Executor> Command<E> {
         subject_id: &str,
     ) -> anyhow::Result<bool> {
         Ok(match kind {
-            TranslationKind::Product => self
-                .load_product_by_slug(slug)
-                .await?
-                .is_some_and(|product| product.id != subject_id),
-            TranslationKind::Category => self
-                .load_category_by_slug(slug)
-                .await?
-                .is_some_and(|category| category.id != subject_id),
+            TranslationKind::Product => match self.load_slug_index(slug).await? {
+                Some(index) if index.product_id != subject_id => {
+                    !self.slug_let_go(slug, &index).await?
+                }
+                _ => false,
+            },
+            TranslationKind::Category => match self.load_category_slug_index(slug).await? {
+                Some(index) if index.category_id != subject_id => {
+                    !self.category_slug_let_go(&index).await?
+                }
+                _ => false,
+            },
         })
+    }
+
+    /// Whether a translation of another thing of the kind goes by `slug`,
+    /// in any language, or has claimed it and may yet. Under that
+    /// language's prefix the slug is the translation's address, so a thing
+    /// taking it as its main slug would have none there.
+    pub(crate) async fn translation_slug_of_another(
+        &self,
+        kind: TranslationKind,
+        slug: &str,
+        subject_id: &str,
+    ) -> anyhow::Result<bool> {
+        let Some(noted) = slug_languages_projection()
+            .load(slug_languages_id(kind, slug))
+            .tenant(&self.tenant)
+            .execute(&self.executor)
+            .await?
+        else {
+            return Ok(false);
+        };
+        for language in &noted.languages {
+            let Some(index) = self.load_translation_slug(kind, language, slug).await? else {
+                continue;
+            };
+            if index.subject_id != subject_id
+                && !self
+                    .translation_slug_let_go(kind, language, slug, &index)
+                    .await?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Notes that `slug` is about to have an entry in `language`, for the
+    /// claim of a main slug to find it. Noted once: a language already
+    /// there, or noted by another writer meanwhile, is left as it is.
+    async fn note_slug_language(
+        &self,
+        kind: TranslationKind,
+        language: &str,
+        slug: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let id = slug_languages_id(kind, slug);
+        let noted = Noted {
+            language: language.to_owned(),
+        };
+        for _ in 0..CLAIM_ATTEMPTS {
+            let state = slug_languages_projection()
+                .load(&id)
+                .tenant(&self.tenant)
+                .execute(&self.executor)
+                .await?;
+            let mut write = match &state {
+                Some(state) if state.languages.iter().any(|known| known == language) => {
+                    return Ok(());
+                }
+                Some(state) => state.write()?,
+                None => {
+                    let mut write = evento::append(&id);
+                    write.original_version(0);
+                    write
+                }
+            };
+            let written = write
+                .routing_key_opt(routing_key.clone())
+                .event(&noted)
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) => continue,
+                Err(err) => return Err(err.into()),
+            }
+        }
+        Err(WriteError::InvalidOriginalVersion.into())
     }
 
     /// Whether the thing an entry names has let go of the slug in
@@ -333,7 +444,11 @@ impl<E: Executor> Command<E> {
     /// of its translation the next write is made at. The entry is created,
     /// or taken over when it is already the thing's or held by one that
     /// let go of it. Fails when another thing holds it, in this language or
-    /// as its main slug, or wins the race for it.
+    /// as its main slug, or wins the race for it. The main slug is looked
+    /// at before the claim and after it: the claim of a main slug does the
+    /// same with the translations, so of two racing for one slug at least
+    /// one sees the other. A claim refused that late stays, as one whose
+    /// write failed does.
     async fn claim_translation_slug(
         &self,
         kind: TranslationKind,
@@ -346,6 +461,26 @@ impl<E: Executor> Command<E> {
         if self.main_slug_of_another(kind, slug, subject_id).await? {
             return Err(CatalogError::SlugTaken);
         }
+        self.note_slug_language(kind, language, slug, routing_key.clone())
+            .await?;
+        self.take_translation_slug(kind, language, slug, subject_id, version, routing_key)
+            .await?;
+        if self.main_slug_of_another(kind, slug, subject_id).await? {
+            return Err(CatalogError::SlugTaken);
+        }
+        Ok(())
+    }
+
+    /// Writes the entry of a slug in `language` for the thing.
+    async fn take_translation_slug(
+        &self,
+        kind: TranslationKind,
+        language: &str,
+        slug: &str,
+        subject_id: &str,
+        version: u16,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
         let claimed = Claimed {
             subject_id: subject_id.to_owned(),
             version,

@@ -4,7 +4,7 @@ use timada_core::claim::claim_is_fresh;
 
 use crate::aggregator::{Claimed, Released};
 use crate::error::CatalogError;
-use crate::value_object::{product_slug_id, suffixed_slug};
+use crate::value_object::{TranslationKind, product_slug_id, suffixed_slug};
 
 use super::{CLAIM_ATTEMPTS, Command, ProductSlugState};
 
@@ -42,8 +42,35 @@ impl<E: Executor> Command<E> {
     /// over when it is free, already the product's (the claim is renewed,
     /// so a release of what the product gave up earlier leaves it alone),
     /// or held by a product that let go of it. Fails when another product
-    /// holds it, or wins the race for it.
+    /// holds it, or wins the race for it, and when another product's
+    /// translation goes by it in any language: under that language's
+    /// prefix the address is the translation's, and this product would
+    /// have none there. The translations are looked at before the claim
+    /// and after it, as a translation's claim does with the main slugs, so
+    /// of two racing for one slug at least one sees the other. A claim
+    /// refused that late stays, as one whose write failed does.
     pub(crate) async fn claim_slug(
+        &self,
+        slug: &str,
+        product_id: &str,
+        product_version: u16,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let translated =
+            || self.translation_slug_of_another(TranslationKind::Product, slug, product_id);
+        if translated().await? {
+            return Err(CatalogError::SlugTaken);
+        }
+        self.take_slug(slug, product_id, product_version, routing_key)
+            .await?;
+        if translated().await? {
+            return Err(CatalogError::SlugTaken);
+        }
+        Ok(())
+    }
+
+    /// Writes the entry of a slug for `product_id`.
+    async fn take_slug(
         &self,
         slug: &str,
         product_id: &str,
@@ -95,7 +122,11 @@ impl<E: Executor> Command<E> {
     /// Whether the product an entry names has let go of the slug: archived
     /// or deleted, written past its claim without taking the slug, or never
     /// written at all once the claim is no longer fresh.
-    async fn slug_let_go(&self, slug: &str, index: &ProductSlugState) -> anyhow::Result<bool> {
+    pub(crate) async fn slug_let_go(
+        &self,
+        slug: &str,
+        index: &ProductSlugState,
+    ) -> anyhow::Result<bool> {
         let Some(product) = self.load_product_any(&index.product_id).await? else {
             return Ok(!claim_is_fresh(index.claimed_at, timada_core::unix_now()));
         };
