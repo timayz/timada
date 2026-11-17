@@ -3490,6 +3490,104 @@ async fn a_store_carries_what_a_product_and_a_category_say_in_other_languages() 
 }
 
 #[tokio::test]
+async fn a_store_carries_what_a_page_and_an_article_say_in_other_languages() {
+    use timada_pages::{TextKind, TextTranslation};
+    use timada_storefront::{text_translation_of, translated_article_slug};
+
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let pages = h.pages(&acme);
+    let terms = pages
+        .create_page(
+            "alice",
+            timada_pages::CreatePage {
+                slug: "conditions".into(),
+                title: "Conditions de vente".into(),
+                body: "Les ventes sont fermes.".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let guide = pages
+        .create_article(
+            "alice",
+            timada_pages::CreateArticle {
+                slug: String::new(),
+                title: "Choisir sa taille".into(),
+                summary: String::new(),
+                body: "Du S au XL.".into(),
+            },
+        )
+        .await
+        .unwrap();
+    pages
+        .translate_text(
+            "alice",
+            TextKind::Page,
+            &terms,
+            "en",
+            TextTranslation {
+                title: "Terms of sale".into(),
+                body: "Sales are final.".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    pages
+        .translate_text(
+            "alice",
+            TextKind::Article,
+            &guide,
+            "en",
+            TextTranslation {
+                title: "Choosing a size".into(),
+                summary: "In two minutes.".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
+    let english = async |kind, id: &str| text_translation_of(&db, kind, id, "en").await.unwrap();
+    eventually("the translations reach the local copy", async || {
+        english(TextKind::Page, &terms).await.is_some()
+            && english(TextKind::Article, &guide).await.is_some()
+    })
+    .await;
+    let page = english(TextKind::Page, &terms).await.unwrap();
+    assert_eq!(page.title, "Terms of sale");
+    assert_eq!(page.body, "Sales are final.");
+    assert_eq!(page.slug, "");
+    let article = english(TextKind::Article, &guide).await.unwrap();
+    assert_eq!(article.slug, "choosing-a-size");
+    assert_eq!(article.summary, "In two minutes.");
+    assert_eq!(article.body, "");
+    assert_eq!(
+        translated_article_slug(&db, "en", "choosing-a-size")
+            .await
+            .unwrap(),
+        Some(guide.clone())
+    );
+    // A page holds no slug, whatever is asked.
+    assert_eq!(translated_article_slug(&db, "en", "").await.unwrap(), None);
+
+    pages
+        .drop_text_translation("alice", TextKind::Page, &terms, "en")
+        .await
+        .unwrap();
+    eventually("a dropped translation leaves the copy", async || {
+        english(TextKind::Page, &terms).await.is_none()
+    })
+    .await;
+
+    store.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_product_shows_its_own_delivery_time_else_the_shops_default() {
     let h = harness(None).await;
     let acme = h.create("acme").await;

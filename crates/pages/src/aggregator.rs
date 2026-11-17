@@ -238,6 +238,59 @@ pub enum Languages {
     },
 }
 
+/// The translations' events, in their own module: the macro names an event
+/// struct after its variant, and `SeoSet` and `Claimed` already belong to
+/// the page above.
+pub mod translation {
+    /// What a page or an article says in one more language of the shop: one
+    /// stream per text and language, with the deterministic id
+    /// [`text_translation_id`](crate::text_translation_id). The text's own
+    /// stream keeps the shop's main language, its pictures and whether it
+    /// is published; what a translation leaves empty is read in the main
+    /// language.
+    #[evento::aggregate(name = "timada-pages/Translation")]
+    pub enum Translation {
+        /// The text in `language`, whole. `kind` is `page` or `article`,
+        /// `subject_id` its id. `slug` is what an article's address goes by
+        /// in this language, which [`TranslationSlug`] holds from then on;
+        /// a page has none (the storefront decides where its pages are),
+        /// and no `summary`. The body may name the pictures of the text it
+        /// translates.
+        Written {
+            kind: String,
+            subject_id: String,
+            language: String,
+            title: String,
+            slug: String,
+            summary: String,
+            body: String,
+            written_by: String,
+        },
+        /// What search engines show for it in this language; empty falls
+        /// back to the translated title and text.
+        SeoSet {
+            meta_title: String,
+            meta_description: String,
+            set_by: String,
+        },
+        /// The translation is gone, whole: the text is read in the main
+        /// language again, and its slug in this one is free.
+        Dropped { dropped_by: String },
+    }
+
+    /// The index `(language, slug) → article`: one stream per slug of a
+    /// language, with the deterministic id
+    /// [`text_translation_slug_id`](crate::text_translation_slug_id).
+    #[evento::aggregate(name = "timada-pages/TranslationSlug")]
+    pub enum TranslationSlug {
+        /// `version` is the version of the translation the claim was made
+        /// at: the translation's next write moves it to the slug or fails,
+        /// so a translation past it has used the claim or never will. No
+        /// release: a slug whose holder let go of it is taken over at once.
+        Claimed { subject_id: String, version: u16 },
+    }
+}
+
 /// The blog's events, in their own module: the macro names an event struct
 /// after its variant, and `Created`, `Edited`, `Renamed`… already belong to
 /// the page above.

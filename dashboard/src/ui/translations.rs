@@ -1,4 +1,4 @@
-//! The forms a product or a category is worded with in the shop's other
+//! The forms a product, a category, a page or an article is worded with in the shop's other
 //! languages: one card a language, each field showing the main language's
 //! wording where it is left empty, which is what a visitor then reads.
 
@@ -7,6 +7,7 @@ use timada_catalog::{
     MAX_SLUG_LEN, TranslationState, TranslationText,
 };
 use timada_core::languages::language_name;
+use timada_pages::{TextTranslation, TextTranslationState};
 use topcoat::{
     Result,
     context::Cx,
@@ -125,6 +126,186 @@ impl TranslationForm {
 #[derive(serde::Deserialize)]
 pub struct TranslationLanguageForm {
     pub language: String,
+}
+
+/// What a page or an article says in the shop's main language, for the
+/// fields to show where a translation says nothing.
+pub struct MainText {
+    pub title: String,
+    pub body: String,
+    pub meta_title: String,
+    pub meta_description: String,
+    /// An article's summary; `None` for a page, which has none and no
+    /// address of its own either.
+    pub summary: Option<String>,
+}
+
+/// One language a page or an article is worded in, or may be.
+pub struct TextCard {
+    pub language: String,
+    pub title: String,
+    pub slug: String,
+    pub summary: String,
+    pub body: String,
+    pub meta_title: String,
+    pub meta_description: String,
+    /// Whether the text has a translation in this language.
+    pub set: bool,
+}
+
+/// The cards of `languages`, each with the translation among
+/// `translations` in it.
+pub fn text_cards_of(languages: &[String], translations: &[TextTranslationState]) -> Vec<TextCard> {
+    languages
+        .iter()
+        .map(|language| {
+            let translation = translations.iter().find(|t| &t.language == language);
+            let text = |part: fn(&TextTranslationState) -> &str| {
+                translation.map(part).unwrap_or_default().to_owned()
+            };
+            TextCard {
+                language: language.clone(),
+                title: text(|t| &t.title),
+                slug: text(|t| &t.slug),
+                summary: text(|t| &t.summary),
+                body: text(|t| &t.body),
+                meta_title: text(|t| &t.meta_title),
+                meta_description: text(|t| &t.meta_description),
+                set: translation.is_some(),
+            }
+        })
+        .collect()
+}
+
+/// A text card's form as it is posted.
+#[derive(serde::Deserialize)]
+pub struct TextTranslationForm {
+    pub language: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub meta_title: String,
+    #[serde(default)]
+    pub meta_description: String,
+}
+
+impl TextTranslationForm {
+    /// What the form words, for the pages context.
+    pub fn text(&self) -> TextTranslation {
+        TextTranslation {
+            title: self.title.clone(),
+            slug: Some(self.slug.clone()),
+            summary: self.summary.clone(),
+            body: self.body.clone(),
+            meta_title: self.meta_title.clone(),
+            meta_description: self.meta_description.clone(),
+        }
+    }
+}
+
+/// One card a language, with the form that words a page or an article in
+/// it (posted to `save`) and, once it is worded, the button that drops the
+/// wording (posted to `remove`).
+#[component]
+pub async fn text_translation_cards(
+    cx: &Cx,
+    editable: bool,
+    save: &str,
+    remove: &str,
+    main: &MainText,
+    cards: &[TextCard],
+) -> Result<impl View> {
+    Ok(view! {
+        for card in cards {
+            section_card(
+                title: Some(language_name(&card.language).unwrap_or(&card.language)),
+                description: Some(if card.set {
+                    "What is left empty is read in the main language."
+                } else {
+                    "Not translated yet: visitors in this language read the main wording."
+                }),
+                attrs: attributes! { data-translation=(&card.language) data-translation-state=(if card.set { "set" } else { "none" }) },
+                <form method="post" action=(save) class="flex max-w-3xl flex-col gap-4">
+                    <input type="hidden" name="language" value=(&card.language) />
+                    <fieldset disabled=(!editable) class="contents">
+                        field(
+                            field_label(attrs: attributes! { for=(format!("tr-{}-title", card.language)) }, "Translated title")
+                            input(attrs: attributes! {
+                                id=(format!("tr-{}-title", card.language)) name="title" type="text" required=""
+                                maxlength=(timada_pages::MAX_TITLE_LEN) value=(&card.title) placeholder=(&main.title) lang=(&card.language)
+                            })
+                        )
+                        if let Some(summary) = &main.summary {
+                            field(
+                                field_label(attrs: attributes! { for=(format!("tr-{}-slug", card.language)) }, "Address in this language")
+                                field_description(attrs: attributes! { id=(format!("tr-{}-slug-hint", card.language)) }, "The last part of its address under " <code>(format!("/{}/blog/", card.language))</code> ". Leave empty to make it from the title; changing it later redirects the old address.")
+                                input(attrs: attributes! {
+                                    id=(format!("tr-{}-slug", card.language)) name="slug" type="text"
+                                    maxlength=(MAX_SLUG_LEN) value=(&card.slug)
+                                    aria-describedby=(format!("tr-{}-slug-hint", card.language)) autocomplete="off"
+                                })
+                            )
+                            field(
+                                field_label(attrs: attributes! { for=(format!("tr-{}-summary", card.language)) }, "Translated summary")
+                                textarea(
+                                    attrs: attributes! {
+                                        id=(format!("tr-{}-summary", card.language)) name="summary" rows="2"
+                                        maxlength=(timada_pages::MAX_SUMMARY_LEN) placeholder=(summary) lang=(&card.language)
+                                    },
+                                    (&card.summary)
+                                )
+                            )
+                        }
+                        field(
+                            field_label(attrs: attributes! { for=(format!("tr-{}-body", card.language)) }, "Translated content (Markdown)")
+                            field_description(attrs: attributes! { id=(format!("tr-{}-body-hint", card.language)) }, "Written as the main one is; it may show the same pictures, by the same file names.")
+                            textarea(
+                                attrs: attributes! {
+                                    id=(format!("tr-{}-body", card.language)) name="body" rows="16"
+                                    maxlength=(timada_pages::MAX_BODY_LEN) placeholder=(&main.body) lang=(&card.language)
+                                    spellcheck="true" class="font-mono text-xs"
+                                    aria-describedby=(format!("tr-{}-body-hint", card.language))
+                                },
+                                (&card.body)
+                            )
+                        )
+                        field(
+                            field_label(attrs: attributes! { for=(format!("tr-{}-meta-title", card.language)) }, "Translated title for search engines")
+                            input(attrs: attributes! {
+                                id=(format!("tr-{}-meta-title", card.language)) name="meta_title" type="text"
+                                maxlength=(MAX_META_TITLE_LEN) value=(&card.meta_title) placeholder=(&main.meta_title) lang=(&card.language)
+                            })
+                        )
+                        field(
+                            field_label(attrs: attributes! { for=(format!("tr-{}-meta-description", card.language)) }, "Translated description for search engines")
+                            textarea(
+                                attrs: attributes! {
+                                    id=(format!("tr-{}-meta-description", card.language)) name="meta_description" rows="3"
+                                    maxlength=(MAX_META_DESCRIPTION_LEN) placeholder=(&main.meta_description) lang=(&card.language)
+                                },
+                                (&card.meta_description)
+                            )
+                        )
+                        if editable {
+                            <div>button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save translation")</div>
+                        }
+                    </fieldset>
+                </form>
+                if editable && card.set {
+                    <form method="post" action=(remove) class="mt-4">
+                        <input type="hidden" name="language" value=(&card.language) />
+                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Remove translation")
+                    </form>
+                }
+            )
+        }
+    })
 }
 
 /// The questions as the one textarea shows them: a question on a line, its

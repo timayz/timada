@@ -301,6 +301,22 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         );
         CREATE INDEX storefront_translations_slug
             ON storefront_translations (kind, language, slug);
+        -- The same for a page or an article (`kind`): `slug` is an
+        -- article's in that language, empty for a page.
+        CREATE TABLE storefront_text_translations (
+            kind TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            language TEXT NOT NULL,
+            title TEXT NOT NULL,
+            slug TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            body TEXT NOT NULL,
+            meta_title TEXT NOT NULL,
+            meta_description TEXT NOT NULL,
+            PRIMARY KEY (kind, subject_id, language)
+        );
+        CREATE INDEX storefront_text_translations_slug
+            ON storefront_text_translations (kind, language, slug);
         -- The shop's shipping methods as the back office has them, for
         -- what the offers say of delivery: one row, a JSON list.
         CREATE TABLE storefront_shipping_methods (
@@ -373,6 +389,7 @@ pub const TABLES: &[&str] = &[
     "storefront_newsletter_popup",
     "storefront_languages",
     "storefront_translations",
+    "storefront_text_translations",
     "storefront_shipping_methods",
     "storefront_return_policy",
 ];
