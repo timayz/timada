@@ -16,8 +16,40 @@ impl<E: Executor> Command<E> {
     /// next write is made at. The entry is created, or taken over when it is
     /// free, already the article's (the claim is renewed, so a release of what
     /// the article gave up earlier leaves it alone), or held by an article that let
-    /// go of it. Fails when another article holds it, or wins the race for it.
+    /// go of it. Fails when another article holds it, or wins the race for it,
+    /// and when another article's translation goes by it in any language:
+    /// under that language's prefix the address is the translation's, and
+    /// this article would have none there. The translations are looked at
+    /// before the claim and after it, as a translation's claim does with
+    /// the main slugs, so of two racing for one slug at least one sees the
+    /// other. A claim refused that late stays, as one whose write failed
+    /// does.
     pub(crate) async fn claim_article_slug(
+        &self,
+        slug: &str,
+        article_id: &str,
+        article_version: u16,
+        routing_key: Option<String>,
+    ) -> Result<(), PageError> {
+        if self
+            .translation_slug_of_another_article(slug, article_id)
+            .await?
+        {
+            return Err(PageError::ArticleSlugTaken);
+        }
+        self.take_article_slug(slug, article_id, article_version, routing_key)
+            .await?;
+        if self
+            .translation_slug_of_another_article(slug, article_id)
+            .await?
+        {
+            return Err(PageError::ArticleSlugTaken);
+        }
+        Ok(())
+    }
+
+    /// Writes the entry of a slug for `article_id`.
+    async fn take_article_slug(
         &self,
         slug: &str,
         article_id: &str,
@@ -69,7 +101,7 @@ impl<E: Executor> Command<E> {
     /// Whether the article an entry names has let go of the slug: deleted,
     /// written past its claim without taking the slug, or never written at
     /// all once the claim is no longer fresh.
-    async fn article_slug_let_go(
+    pub(crate) async fn article_slug_let_go(
         &self,
         slug: &str,
         index: &ArticleSlugState,

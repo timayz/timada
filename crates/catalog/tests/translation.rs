@@ -2,7 +2,9 @@ mod common;
 
 use common::*;
 use evento::ProjectionAggregate;
-use timada_catalog::{CatalogError, CategoryQuestion, TranslationKind, TranslationText};
+use timada_catalog::{
+    CatalogError, CategoryQuestion, CreateCategory, CreateProduct, TranslationKind, TranslationText,
+};
 
 const PRODUCT: TranslationKind = TranslationKind::Product;
 const CATEGORY: TranslationKind = TranslationKind::Category;
@@ -386,4 +388,125 @@ async fn what_cannot_be_worded_is_refused() {
             .unwrap(),
         None
     );
+}
+
+/// Under `/en` a translation's slug is its thing's address: a main slug
+/// landing on it would leave the other thing without one there (#649).
+#[tokio::test]
+async fn a_main_slug_never_lands_on_another_things_translation() {
+    let cmd = command().await;
+    let tree = create_product(&cmd, "Arbre à chat").await;
+    cmd.translate(ALICE, PRODUCT, &tree.id, "en", named("Cat Tree"))
+        .await
+        .unwrap();
+
+    // Asked for, the slug is refused; given by a name, it gets a suffix,
+    // at a creation and at a rename alike.
+    let taken = cmd
+        .create_product(
+            ALICE,
+            CreateProduct {
+                slug: Some("cat-tree".to_owned()),
+                ..create("Cat Tree")
+            },
+        )
+        .await;
+    assert!(matches!(taken, Err(CatalogError::SlugTaken)), "{taken:?}");
+    let namesake = create_product(&cmd, "Cat Tree").await;
+    assert!(namesake.slug.starts_with("cat-tree-"), "{}", namesake.slug);
+    let post = create_product(&cmd, "Griffoir").await;
+    cmd.rename_product(ALICE, &post.id, "Cat tree")
+        .await
+        .unwrap();
+    let post = cmd.load_product(&post.id).await.unwrap().unwrap();
+    assert!(post.slug.starts_with("cat-tree-"), "{}", post.slug);
+
+    // A category's translation guards the categories' slugs, not the
+    // products'.
+    let cats = create_category(&cmd, "Chats").await;
+    cmd.translate(ALICE, CATEGORY, &cats.id, "de", at("Katzen", "katzen"))
+        .await
+        .unwrap();
+    let taken = cmd
+        .create_category(
+            ALICE,
+            CreateCategory {
+                slug: Some("katzen".to_owned()),
+                ..new_category("Katzen")
+            },
+        )
+        .await;
+    assert!(matches!(taken, Err(CatalogError::SlugTaken)), "{taken:?}");
+    let namesake = create_category(&cmd, "Katzen").await;
+    assert!(namesake.slug.starts_with("katzen-"), "{}", namesake.slug);
+    cmd.create_product(
+        ALICE,
+        CreateProduct {
+            slug: Some("katzen".to_owned()),
+            ..create("Katzen")
+        },
+    )
+    .await
+    .unwrap();
+
+    // A translation that moved to another slug, was dropped, or whose
+    // product is archived no longer holds anything.
+    let bowl = create_product(&cmd, "Gamelle").await;
+    cmd.translate(ALICE, PRODUCT, &bowl.id, "en", named("Bowl"))
+        .await
+        .unwrap();
+    cmd.translate(
+        ALICE,
+        PRODUCT,
+        &tree.id,
+        "en",
+        at("Cat Tree", "big-cat-tree"),
+    )
+    .await
+    .unwrap();
+    cmd.rename_product(ALICE, &bowl.id, "Cat Tree")
+        .await
+        .unwrap();
+    let renamed = cmd.load_product(&bowl.id).await.unwrap().unwrap();
+    assert_eq!(renamed.slug, "cat-tree");
+
+    cmd.drop_translation(ALICE, PRODUCT, &tree.id, "en")
+        .await
+        .unwrap();
+    cmd.create_product(
+        ALICE,
+        CreateProduct {
+            slug: Some("big-cat-tree".to_owned()),
+            ..create("Big Cat Tree")
+        },
+    )
+    .await
+    .unwrap();
+
+    cmd.archive_product(ALICE, &bowl.id).await.unwrap();
+    cmd.create_product(
+        ALICE,
+        CreateProduct {
+            slug: Some("bowl".to_owned()),
+            ..create("Bowl")
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// The thing itself may take, as its main slug, the one its own
+/// translation goes by.
+#[tokio::test]
+async fn a_thing_may_go_by_its_own_translations_slug() {
+    let cmd = command().await;
+    let tree = create_product(&cmd, "Arbre à chat").await;
+    cmd.translate(ALICE, PRODUCT, &tree.id, "en", named("Cat Tree"))
+        .await
+        .unwrap();
+    cmd.rename_product(ALICE, &tree.id, "Cat Tree")
+        .await
+        .unwrap();
+    let tree = cmd.load_product(&tree.id).await.unwrap().unwrap();
+    assert_eq!(tree.slug, "cat-tree");
 }

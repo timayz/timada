@@ -670,6 +670,11 @@ pub fn translation_slug_id(kind: TranslationKind, language: &str, slug: &str) ->
     evento::hash_ids(vec!["translation-slug", kind.as_str(), language, slug])
 }
 
+/// The stream of the languages a slug has a translation entry in.
+pub fn slug_languages_id(kind: TranslationKind, slug: &str) -> String {
+    evento::hash_ids(vec!["slug-languages", kind.as_str(), slug])
+}
+
 /// Trims a category name and checks it is 1 to 80 characters.
 pub fn normalize_category_name(name: &str) -> Result<String, CatalogError> {
     let name = name.trim();

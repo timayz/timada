@@ -289,6 +289,18 @@ pub mod translation {
         /// release: a slug whose holder let go of it is taken over at once.
         Claimed { subject_id: String, version: u16 },
     }
+
+    /// The languages an article slug has an entry of [`TranslationSlug`]
+    /// in: one stream per slug, with the deterministic id
+    /// [`slug_languages_id`](crate::slug_languages_id). The claim of a main
+    /// slug reads it to find the translations that may hold the slug, in
+    /// one read whatever the number of languages. A language is noted
+    /// before its entry is claimed, once, and never taken back: an entry
+    /// nobody holds any more is what its reader finds out.
+    #[evento::aggregate(name = "timada-pages/SlugLanguages")]
+    pub enum SlugLanguages {
+        Noted { language: String },
+    }
 }
 
 /// The blog's events, in their own module: the macro names an event struct

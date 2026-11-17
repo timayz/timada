@@ -330,6 +330,11 @@ pub fn text_translation_slug_id(language: &str, slug: &str) -> String {
     evento::hash_ids(vec!["translation-slug", "article", language, slug])
 }
 
+/// The stream of the languages an article slug has a translation entry in.
+pub fn slug_languages_id(slug: &str) -> String {
+    evento::hash_ids(vec!["slug-languages", "article", slug])
+}
+
 /// The longest Meta pixel id.
 pub const MAX_META_PIXEL_ID_LEN: usize = 20;
 
