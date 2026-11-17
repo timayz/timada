@@ -10,11 +10,12 @@ pub mod position;
 pub mod questions;
 pub mod rename;
 pub mod seo;
+pub mod translations;
 
 use timada_catalog::{
-    CategoryQuestion, CategoryRow, CategoryState, MAX_CATEGORY_BODY_LEN,
-    MAX_CATEGORY_DESCRIPTION_LEN, MAX_CATEGORY_NAME_LEN, MAX_META_DESCRIPTION_LEN,
-    MAX_META_TITLE_LEN, MAX_PINNED_PRODUCTS, category_by_id, live_child_count,
+    CategoryRow, CategoryState, MAX_CATEGORY_BODY_LEN, MAX_CATEGORY_DESCRIPTION_LEN,
+    MAX_CATEGORY_NAME_LEN, MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_PINNED_PRODUCTS,
+    category_by_id, live_child_count,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
@@ -46,6 +47,7 @@ use crate::components::label::label;
 use crate::components::select::select;
 use crate::components::textarea::textarea;
 use crate::db::Db;
+use crate::ui::translations::{parse_questions, questions_text};
 use crate::ui::{
     LINK, Shell, document, fact, facts, format_time, notice, page_header, section_card,
 };
@@ -136,6 +138,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .get(&category.created_by)
         .cloned()
         .unwrap_or_else(|| category.created_by.clone());
+    // A shop read in one language has nothing to translate into.
+    let translated = crate::app::t::slug::announcements::pages(&access)?
+        .languages()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .is_some_and(|languages| !languages.others.is_empty());
     let TenantAccess { tenant, .. } = access;
     let pool = context::<Db>(cx);
     // The whole tree: it carries the counts, and it says where this category
@@ -229,6 +237,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 h1_attrs: attributes! { data-category-id=(&category.id) },
                 if category.archived {
                     badge(variant: BadgeVariant::Secondary, attrs: attributes! { data-category-archived="" }, "Archived")
+                }
+                if translated {
+                    <a class=(LINK) href=(href!(translations::index, slug: slug.clone(), category_id: category.id.clone())) data-category-translations="">"Translations"</a>
                 }
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
@@ -422,39 +433,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     })
 }
 
-/// The questions as the form writes them: a question on one line, its
-/// answer on the lines after it, an empty line between two.
-fn questions_text(questions: &[CategoryQuestion]) -> String {
-    questions
-        .iter()
-        .map(|asked| format!("{}\n{}", asked.question, asked.answer))
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-/// What [`questions_text`] wrote, read back: blocks apart by empty lines,
-/// each a question then its answer. A block of one line is a question
-/// without an answer, which the catalog refuses.
-pub fn parse_questions(text: &str) -> Vec<CategoryQuestion> {
-    let text = text.replace("\r\n", "\n");
-    let mut questions = Vec::new();
-    let mut block: Vec<&str> = Vec::new();
-    for line in text.lines().chain([""]) {
-        if !line.trim().is_empty() {
-            block.push(line);
-            continue;
-        }
-        if let Some((question, answer)) = block.split_first() {
-            questions.push(CategoryQuestion {
-                question: question.trim().to_owned(),
-                answer: answer.join("\n"),
-            });
-        }
-        block.clear();
-    }
-    questions
-}
-
 #[derive(serde::Deserialize)]
 pub struct QuestionsForm {
     #[serde(default)]
@@ -511,32 +489,4 @@ pub struct MenuForm {
     /// An unticked checkbox is not sent at all.
     #[serde(default)]
     pub in_menu: Option<String>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn questions_read_back_as_they_were_written() {
-        let asked = |question: &str, answer: &str| CategoryQuestion {
-            question: question.to_owned(),
-            answer: answer.to_owned(),
-        };
-        let questions = vec![
-            asked("Which size?", "Measure the cat.\nAdd 10 cm."),
-            asked("Washable?", "Yes."),
-        ];
-        assert_eq!(parse_questions(&questions_text(&questions)), questions);
-        // As a browser posts it, with room around the blocks.
-        assert_eq!(
-            parse_questions(
-                "\r\n Which size? \r\nMeasure the cat.\r\nAdd 10 cm.\r\n\r\n\r\nWashable?\r\nYes.\r\n"
-            ),
-            questions
-        );
-        // A question alone has no answer: the catalog refuses it.
-        assert_eq!(parse_questions("Why?"), [asked("Why?", "")]);
-        assert!(parse_questions(" \n ").is_empty());
-    }
 }
