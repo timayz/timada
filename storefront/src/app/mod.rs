@@ -56,7 +56,7 @@ use topcoat::{
         RouterBuilderDiscoverExt, TrustedProxies, href, module_router, page,
         request::{method, original_uri},
     },
-    view::{Child, Unescaped, View, attributes, view},
+    view::{Child, NodeViewParts, PartsWriter, Unescaped, View, attributes, view},
 };
 
 use crate::shopper::accounts_enabled;
@@ -129,21 +129,69 @@ fn remember_source<'a>(cx: &'a Cx, body: Body, next: Next<'a>) -> LayerFuture<'a
     })
 }
 
-/// `19,90€`, as the shop writes its prices (`12,50 USD` for another
-/// currency).
-pub fn money(cents: i64, currency: &str) -> String {
-    let cents = cents.max(0);
+/// An amount as a reader of `language` expects it: `1 234,50€` in French
+/// (`12,50 USD` for another currency), `€1,234.50` in English
+/// (`12.50 USD`), which every other language is written as until it has a
+/// way of its own.
+pub fn write_money(language: &str, cents: u64, currency: &str) -> String {
+    let french = language == "fr";
     let whole = (cents / 100).to_string();
     let mut grouped = String::new();
     for (i, digit) in whole.chars().enumerate() {
         if i > 0 && (whole.len() - i).is_multiple_of(3) {
-            grouped.push('\u{a0}');
+            grouped.push(if french { '\u{a0}' } else { ',' });
         }
         grouped.push(digit);
     }
-    match currency {
-        "EUR" => format!("{grouped},{:02}€", cents % 100),
-        other => format!("{grouped},{:02}\u{a0}{other}", cents % 100),
+    let cents = cents % 100;
+    match (french, currency) {
+        (true, "EUR") => format!("{grouped},{cents:02}€"),
+        (true, other) => format!("{grouped},{cents:02}\u{a0}{other}"),
+        (false, "EUR") => format!("€{grouped}.{cents:02}"),
+        (false, other) => format!("{grouped}.{cents:02}\u{a0}{other}"),
+    }
+}
+
+/// A rate in basis points as a reader of `language` expects it: `20`,
+/// `5,5` in French, `5.5` in English.
+pub fn write_rate(language: &str, rate_bps: u32) -> String {
+    let rate = format!("{:.2}", f64::from(rate_bps) / 100.0);
+    let rate = rate.trim_end_matches('0').trim_end_matches('.');
+    if language == "fr" {
+        rate.replace('.', ",")
+    } else {
+        rate.to_owned()
+    }
+}
+
+/// `19,90€` or `€19.90`: an amount as the shop writes its prices in the
+/// language of the request, which [`Localized`](lang::Localized) carries
+/// as the library's `MoneyFormat`, so a page's own prices and the
+/// library's totals read alike. A view shows it as is; anywhere else,
+/// [`Money::resolve`] reads it.
+pub fn money(cents: i64, currency: &str) -> Money<'_> {
+    Money {
+        cents: cents.max(0) as u64,
+        currency,
+    }
+}
+
+/// An amount, written in the visitor's language when it is shown.
+#[derive(Clone, Copy)]
+pub struct Money<'a> {
+    cents: u64,
+    currency: &'a str,
+}
+
+impl Money<'_> {
+    pub fn resolve(&self, cx: &Cx) -> String {
+        timada_storefront::money(cx).format(self.cents, self.currency)
+    }
+}
+
+impl NodeViewParts for Money<'_> {
+    fn into_view_parts(self, cx: &Cx, parts: &mut PartsWriter<'_>) {
+        parts.push_string(self.resolve(cx));
     }
 }
 
@@ -157,14 +205,14 @@ pub fn delivery_days(days: timada_storefront::DeliveryDays) -> Worded<'static> {
 }
 
 /// A product's price line: `19,90€`, or `19,90€ – 29,90€` across its variants.
-pub fn price_line(product: &Product) -> String {
+pub fn price_line(cx: &Cx, product: &Product) -> String {
     match product.price_range() {
         Some(range) if range.varies() => format!(
             "{} – {}",
-            money(range.min_cents, &range.currency),
-            money(range.max_cents, &range.currency)
+            money(range.min_cents, &range.currency).resolve(cx),
+            money(range.max_cents, &range.currency).resolve(cx)
         ),
-        Some(range) => money(range.max_cents, &range.currency),
+        Some(range) => money(range.max_cents, &range.currency).resolve(cx),
         None => String::new(),
     }
 }
@@ -248,8 +296,9 @@ pub async fn document(
                 cart.subtotal_cents as i64,
                 cart.currency.as_deref().unwrap_or("EUR"),
             )
+            .resolve(cx)
         })
-        .unwrap_or_else(|| money(0, "EUR"));
+        .unwrap_or_else(|| money(0, "EUR").resolve(cx));
     let accounts = accounts_enabled(cx);
     let signed_in = accounts && !away && crate::shopper::signed_in(cx).await.is_some();
     let announcements = timada_storefront::announcements(cx).await?;
@@ -540,7 +589,7 @@ pub async fn product_card(cx: &Cx, product: &Product) -> Result<impl View> {
                             <s class="was" data-compare-at=""><span class="unseen">(t!(price_former)) " "</span>(money(was, currency))</s>
                         }
                     }
-                    <span data-price="">(price_line(product))</span>
+                    <span data-price="">(price_line(cx, product))</span>
                 </p>
                 if let (Some(rating), Some(whole)) = (product.rating(), product.rating_stars()) {
                     <p class="card-rating" data-rating=(format!("{rating:.1}"))>
@@ -840,5 +889,33 @@ pub fn say(code: &str) -> Worded<'static> {
         "writes_paused" => t!(error_writes_paused),
         "write_not_taken" => t!(error_write_not_taken),
         _ => t!(error_unknown),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{write_money, write_rate};
+
+    #[test]
+    fn an_amount_is_written_as_its_reader_expects() {
+        assert_eq!(write_money("fr", 1250, "EUR"), "12,50€");
+        assert_eq!(
+            write_money("fr", 123_456_705, "EUR"),
+            "1\u{a0}234\u{a0}567,05€"
+        );
+        assert_eq!(write_money("fr", 5, "USD"), "0,05\u{a0}USD");
+        assert_eq!(write_money("en", 1250, "EUR"), "€12.50");
+        assert_eq!(write_money("en", 123_456_705, "EUR"), "€1,234,567.05");
+        assert_eq!(write_money("en", 5, "USD"), "0.05\u{a0}USD");
+        // A language with no way of its own yet reads as English does.
+        assert_eq!(write_money("de", 1250, "EUR"), "€12.50");
+    }
+
+    #[test]
+    fn a_rate_drops_the_decimals_it_does_not_need() {
+        assert_eq!(write_rate("fr", 2000), "20");
+        assert_eq!(write_rate("fr", 550), "5,5");
+        assert_eq!(write_rate("en", 550), "5.5");
+        assert_eq!(write_rate("en", 2125), "21.25");
     }
 }

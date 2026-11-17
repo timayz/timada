@@ -242,7 +242,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         <s class="was" data-compare-at=""><span class="unseen">(t!(price_former)) " "</span>(money(was, currency))</s>
                                     }
                                 }
-                                <span data-price="">(price_line(&product))</span>
+                                <span data-price="">(price_line(cx, &product))</span>
                             }
                         </p>
                         if let (Some(rating), Some(average), Some(whole)) = (product.rating(), average, product.rating_stars()) {

@@ -14,9 +14,10 @@
 //! ([`shop_languages`]); this storefront serves those it has words for
 //! ([`SPOKEN`]) and leaves the others out.
 
-use timada_storefront::{ReadIn, absolute_url, shop_languages};
+use crate::app::words::t;
+use timada_storefront::{MoneyFormat, ReadIn, absolute_url, shop_languages};
 use topcoat::{
-    context::{Cx, memoize},
+    context::{Cx, context, memoize, try_context},
     l10n::{Locale, locale, try_locale},
     router::{
         Body, HeaderValue, Layer, LayerFuture, Method, Next, Path,
@@ -305,6 +306,21 @@ fn wording(language: &str) -> Locale {
     language.parse().unwrap_or(locale!("fr"))
 }
 
+/// How an amount is written for a visitor reading `language`, by the pages
+/// and by the library's totals alike (cart, checkout, orders, shipping,
+/// offers), with the catalogue's word for shipping that costs nothing.
+/// `cx` already carries the language's catalogue.
+fn amounts(cx: &Cx, language: &str) -> MoneyFormat {
+    let language = language.to_owned();
+    MoneyFormat::new(move |cents, currency| super::write_money(&language, cents, currency))
+        .free(t!(checkout_shipping_free).resolve(cx))
+}
+
+/// The code of the language the pages word this request in.
+pub fn spoken(cx: &Cx) -> String {
+    try_locale(cx).map_or_else(|| BASE.to_owned(), |locale| locale.to_string())
+}
+
 /// Wraps every request; register it on the router with no path.
 pub struct Localized;
 
@@ -329,6 +345,14 @@ impl Layer for Localized {
                 worded = cx.with(wording(language));
                 &worded
             };
+            // And how they, and the library, write an amount.
+            let priced;
+            let cx = if try_context::<MoneyFormat>(cx).is_some() {
+                cx
+            } else {
+                priced = cx.with(amounts(cx, language));
+                &priced
+            };
             if languages.plain() {
                 return next.run(cx, body).await;
             }
@@ -344,7 +368,9 @@ impl Layer for Localized {
                     let sent = rewrite(internal, body);
                     // What the library's readers word the catalogue in:
                     // the main language needs no saying.
-                    let sent = sent.with(wording(language));
+                    let sent = sent
+                        .with(wording(language))
+                        .with(context::<MoneyFormat>(cx).clone());
                     return Err(if language == languages.main {
                         sent.into()
                     } else {

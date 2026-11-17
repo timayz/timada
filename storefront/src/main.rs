@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
-use timada_storefront::{MoneyFormat, Store, StoreConfig, StoreDb, StoreTls};
+use timada_storefront::{Store, StoreConfig, StoreDb, StoreTls};
 use topcoat::cookie::Key;
 use topcoat::router::{IpNet, RouterService};
 
@@ -196,11 +196,9 @@ async fn serve(db: StoreDb, args: ServeArgs) -> anyhow::Result<()> {
         anyhow::bail!("STORE_ADDR is not host:port: {:?}", args.store_addr);
     };
     let store_host = store_host.trim_matches(['[', ']']).to_owned();
-    // Every total the library writes (cart, checkout, orders, shipping, offers)
-    // looks like the prices on the shop's own pages.
-    let mut config = StoreConfig::new(args.store_addr, args.store_token).money(
-        MoneyFormat::new(|cents, currency| app::money(cents as i64, currency)).free("Offerte"),
-    );
+    // How an amount is written is each request's: its language decides
+    // (`Localized`).
+    let mut config = StoreConfig::new(args.store_addr, args.store_token);
     if let Some(ca) = args.store_tls_ca {
         let server_name = args.store_tls_server_name.unwrap_or(store_host);
         config = config.tls(StoreTls::from_ca_pem(&ca, &server_name)?);

@@ -70,7 +70,7 @@ pub use timada_orders::{
     OrderStatus, PAYMENTS_UNAVAILABLE, ParcelState, PaymentSetup, ReturnedPayment, ShippingAddress,
 };
 
-use crate::context::store;
+use crate::context::{money, store};
 use crate::error::{gateway_down, into_error, reach, reach_body, store_away};
 use crate::money::MoneyFormat;
 use crate::query::{Product, published_products_by_ids};
@@ -102,6 +102,12 @@ pub struct PaymentSession {
 }
 
 impl PaymentSession {
+    /// The same session, its amounts written with `money`.
+    pub fn written_with(mut self, money: &MoneyFormat) -> Self {
+        self.money = money.clone();
+        self
+    }
+
     /// The total as a person reads it (`24.00 €`, or as the host writes
     /// prices).
     pub fn total(&self) -> String {
@@ -261,6 +267,20 @@ pub struct CartView {
 }
 
 impl CartView {
+    /// The same cart, every amount of it written with `money`: its
+    /// totals, its offers, its shipping options and the VAT estimate made
+    /// from it.
+    pub fn written_with(mut self, money: &MoneyFormat) -> Self {
+        for offer in &mut self.offers {
+            offer.money = money.clone();
+        }
+        for option in &mut self.shipping_options {
+            option.money = money.clone();
+        }
+        self.money = money.clone();
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
         self.lines.is_empty() && self.unavailable.is_empty()
     }
@@ -452,7 +472,9 @@ impl VatEstimate {
         self.money.format(self.vat_cents, &self.currency)
     }
 
-    /// `VAT FR 20%`, or `VAT FR` over several rates.
+    /// `VAT FR 20%`, or `VAT FR` over several rates: the English wording.
+    /// A host that speaks another language words the label itself, from
+    /// [`country`](Self::country) and [`rate_bps`](Self::rate_bps).
     pub fn label(&self) -> String {
         match self.rate_bps {
             Some(rate) if rate % 100 == 0 => format!("VAT {} {}%", self.country, rate / 100),
@@ -1018,7 +1040,8 @@ fn picture(product: &Product, variant_id: Option<&str>) -> Option<String> {
 
 /// The cart, priced, or `None` for an id the store does not know.
 pub async fn cart(cx: &Cx, cart_id: &str) -> Result<Option<CartView>> {
-    store(cx).cart(cart_id).await.map_err(into_error)
+    let cart = store(cx).cart(cart_id).await.map_err(into_error)?;
+    Ok(cart.map(|cart| cart.written_with(money(cx))))
 }
 
 /// Adds `quantity` of a product (one variant of it, when it sells variants)
@@ -1093,10 +1116,11 @@ pub async fn start_payment(
     cart_id: &str,
     checkout: Checkout,
 ) -> Result<Refusable<PaymentSession>> {
-    store(cx)
+    let session = store(cx)
         .start_payment(cart_id, checkout)
         .await
-        .map_err(into_error)
+        .map_err(into_error)?;
+    Ok(session.map(|session| session.written_with(money(cx))))
 }
 
 /// The open payment of a request [`start_payment`] made, for a page shown
@@ -1107,10 +1131,11 @@ pub async fn payment_session(
     cart_id: &str,
     request_id: &str,
 ) -> Result<Option<PaymentSession>> {
-    store(cx)
+    let session = store(cx)
         .payment_session(cart_id, request_id)
         .await
-        .map_err(into_error)
+        .map_err(into_error)?;
+    Ok(session.map(|session| session.written_with(money(cx))))
 }
 
 /// The order the cart became, once the shopper confirmed its payment (the

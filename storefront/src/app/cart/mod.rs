@@ -135,7 +135,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                             <div><small>(label)</small></div>
                                         }
                                         if let Some(offer) = &line.offer {
-                                            <div><small class="offer-note" data-line-offer=(&offer.offer_id)>(t!(cart_line_offer, price: money(offer.unit_amount_cents as i64, &currency)))</small></div>
+                                            <div><small class="offer-note" data-line-offer=(&offer.offer_id)>(t!(cart_line_offer, price: money(offer.unit_amount_cents as i64, &currency).resolve(cx)))</small></div>
                                         }
                                         if let Some(days) = line.delivery_days {
                                             <div><small class="delivery-note" data-line-delivery=(delivery_days(days))>(t!(cart_line_delivery, days: delivery_days(days).resolve(cx)))</small></div>
@@ -269,7 +269,7 @@ pub async fn summary_line(
                 }
                 if let Some(label) = &line.variant_label { <small class="variant">(label)</small> }
                 if let Some(offer) = &line.offer {
-                    <small class="offer-note" data-line-offer=(&offer.offer_id)>(t!(cart_line_offer, price: money(offer.unit_amount_cents as i64, currency)))</small>
+                    <small class="offer-note" data-line-offer=(&offer.offer_id)>(t!(cart_line_offer, price: money(offer.unit_amount_cents as i64, currency).resolve(cx)))</small>
                 }
                 if let Some(days) = line.delivery_days {
                     <small class="delivery-note" data-line-delivery=(delivery_days(days))>(t!(cart_line_delivery, days: delivery_days(days).resolve(cx)))</small>
