@@ -1,7 +1,8 @@
 //! The filters of a listing, under "Afficher les filtres": a price band among seven fixed ones ("Filtrer par tarif")
 //! and, for each option the merchant marked as a filter in the back office
-//! ("Couleur", "Taille"; the colour alone until they choose), a value
-//! among those the listed products come in, each a link. A band keeps the
+//! ("Couleur", "Taille"; the colour alone until they choose) or fact of
+//! the products' tables ("Matière"), a value among those the listed
+//! products come in, each a link. A band keeps the
 //! products a shopper could pay that much for (their range overlaps it).
 //! All travel in the query string: `min_price` and `max_price` in whole
 //! euros, an option under its folded name with a folded value

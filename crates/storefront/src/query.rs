@@ -10,7 +10,9 @@ use timada_core::{Picture, Rendition};
 
 use crate::money::MoneyFormat;
 use crate::pages::{DESCRIPTION_CHARS, excerpt};
-use crate::read_model::{OptionRow, WHOLE_SHOP, distinct_option_rows};
+use crate::read_model::{
+    OptionRow, WHOLE_SHOP, add_fact_rows, distinct_option_rows, filter_keys_of,
+};
 
 /// A picture of a product, in the two sizes the store keeps it
 /// ([`timada_core::Rendition`]): the page rendition (`url`, `width`,
@@ -852,6 +854,9 @@ struct Found {
     /// Its option rows, as `storefront_product_options` holds them: read
     /// only when the search narrows by options or counts their values.
     options: Vec<OptionRow>,
+    /// The facts of its table, read with the options: those the shop
+    /// filters by join the rows ([`found`]).
+    attributes: Vec<Attribute>,
 }
 
 impl FromRow for Found {
@@ -866,6 +871,7 @@ impl FromRow for Found {
             rating_x100: row.get("rating_x100")?,
             sold_rank: row.get("sold_rank")?,
             options: distinct_option_rows(&options),
+            attributes: row.get::<Json<_>>("attributes_json")?.0,
         })
     }
 }
@@ -890,7 +896,8 @@ impl Found {
 /// side, seconds for a common word. So the statement reads the band off the
 /// product rows as well, and the rest is worked out here: the category's
 /// page (its rows' ids), the products left out, and the options, from the
-/// options a row shows, folded as the option rows are.
+/// options a row shows and the facts the shop filters by, folded as the
+/// option rows are.
 async fn found(
     db: &Db,
     query: &ProductQuery,
@@ -901,6 +908,15 @@ async fn found(
     let mut found: Vec<Found> = found_statement(query, search, aside, options)
         .fetch_all(db)
         .await?;
+    if found.iter().any(|product| !product.attributes.is_empty()) {
+        let names: Option<(String,)> = db
+            .fetch_optional("SELECT names_json FROM storefront_listing_filters", ())
+            .await?;
+        let filters = filter_keys_of(names.as_ref().map(|(names,)| names.as_str()))?;
+        for product in &mut found {
+            add_fact_rows(&mut product.options, &product.attributes, &filters);
+        }
+    }
     if let Some(category) = query.category.as_deref() {
         let listed: HashSet<String> = db
             .fetch_all::<(String,)>(
@@ -921,8 +937,8 @@ async fn found(
 
 /// What [`found`] asks the full-text index (or the rows, for a pattern):
 /// the published products matching, within the band, with their option rows
-/// when `options` asks for them or the query narrows by options other than
-/// `aside`.
+/// and their facts when `options` asks for them or the query narrows by
+/// options other than `aside`.
 fn found_statement(
     query: &ProductQuery,
     search: &Search,
@@ -950,7 +966,7 @@ fn found_statement(
     let options = options || query.options_but(aside).next().is_some();
     statement.sql = format!(
         "SELECT p.id, p.updated_at, p.min_amount_cents, p.max_amount_cents, p.review_count,
-            p.rating_x100, {} AS sold_rank, {} AS options_json
+            p.rating_x100, {} AS sold_rank, {} AS options_json, {} AS attributes_json
          FROM storefront_products p WHERE {}",
         // Looked up only for the order that reads it: the others are
         // answered by the search's index alone.
@@ -961,6 +977,7 @@ fn found_statement(
             "0"
         },
         if options { "p.options_json" } else { "'[]'" },
+        if options { "p.attributes_json" } else { "'[]'" },
         conditions.join(" AND ")
     );
     statement
@@ -2524,6 +2541,42 @@ mod sql {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn a_search_is_narrowed_by_a_fact_the_shop_filters_by() {
+        let db = catalog().await;
+        db.execute(
+            "UPDATE storefront_products SET attributes_json = ?1 WHERE id = 'basket'",
+            (r#"[{"name":"Matière","value":"Osier"},{"name":"Poids","value":"2 kg"}]"#,),
+        )
+        .await
+        .unwrap();
+        let baskets = ProductQuery::default().search("bask");
+        let wicker = baskets.clone().with_option("Matière", "osier");
+        async fn materials(db: &Db, query: &ProductQuery) -> Vec<(String, i64)> {
+            published_option_values(db, query, "Matière")
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|value| (value.key, value.count))
+                .collect()
+        }
+        // Not on the shop's list: a fact of the table, nothing more.
+        assert!(materials(&db, &baskets).await.is_empty());
+        assert_eq!(published_products(&db, &wicker).await.unwrap().total, 0);
+
+        db.execute(
+            "INSERT INTO storefront_listing_filters (id, names_json) VALUES (1, ?1)",
+            (r#"["Couleur","matière"]"#,),
+        )
+        .await
+        .unwrap();
+        assert_eq!(materials(&db, &baskets).await, [("osier".into(), 1)]);
+        assert_eq!(published_products(&db, &wicker).await.unwrap().total, 1);
+        // The weight is not on the list.
+        let heavy = baskets.with_option("Poids", "2 kg");
+        assert_eq!(published_products(&db, &heavy).await.unwrap().total, 0);
     }
 }
 

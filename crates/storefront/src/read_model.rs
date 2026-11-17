@@ -28,6 +28,9 @@
 //! And the shop's pages: a published one is copied, one unpublished or
 //! deleted leaves. And its announcements: the shown ones are copied whole.
 //! And its default delivery time, written into every product giving none.
+//! And the options its listings are narrowed by: a name on that list no
+//! option has is looked for among a product's facts, and a list that changes
+//! files every product again ([`refile_facts`]).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -595,6 +598,7 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
             let slug_search = search_key(&product.slug);
             let name_search = search_key(&product.name);
             let options_json = options_json(product)?;
+            let attributes_json = attributes_json(product)?;
             // Twenty-six values: more than a tuple of parameters holds. The
             // same numbering serves the insert and the update, the two
             // search keys last so the update can leave them off.
@@ -613,7 +617,7 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                 Value::from(images_json(product)?),
                 Value::from(options_json.as_str()),
                 Value::from(variants_json(product)?),
-                Value::from(attributes_json(product)?),
+                Value::from(attributes_json.as_str()),
                 Value::from(product.price_range().map(|(min, _, _)| min as i64)),
                 Value::from(product.price_range().map(|(_, max, _)| max as i64)),
                 Value::from(product.delivery_days.map(|days| i64::from(days.min))),
@@ -650,32 +654,15 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                     .await?;
                 }
             }
-            // The option rows, as the table keeps them.
+            // The option rows, as the table keeps them, with the facts the
+            // shop's filters name.
             let options: Vec<crate::ProductOption> = serde_json::from_str(&options_json)?;
-            let mut wanted = distinct_option_rows(&options);
+            let attributes: Vec<crate::Attribute> = serde_json::from_str(&attributes_json)?;
+            let mut wanted = facet_rows(&options, &attributes, &filter_keys(tx).await?);
             wanted.sort();
             let were = options_of(tx, &product.id).await?;
             if were != wanted {
-                execute(
-                    tx,
-                    "DELETE FROM storefront_product_options WHERE product_id = ?1",
-                    (product.id.as_str(),),
-                )
-                .await?;
-                for row in &wanted {
-                    execute(
-                        tx,
-                        INSERT_OPTION,
-                        (
-                            product.id.as_str(),
-                            row.name_key.as_str(),
-                            row.value_key.as_str(),
-                            row.name.as_str(),
-                            row.value.as_str(),
-                        ),
-                    )
-                    .await?;
-                }
+                write_option_rows(tx, &product.id, &wanted).await?;
             }
             if !was_in.iter().eq(product.categories.iter()) {
                 execute(
@@ -768,8 +755,8 @@ const PRODUCT_UPDATE_SEARCHED: &str = "UPDATE storefront_products SET
  WHERE id = ?1";
 
 /// One row of `storefront_product_options`: a value an option of the product
-/// takes, with the keys a filter compares. Ordered by its keys first, as the
-/// table is.
+/// takes, or the value of a fact the shop filters by, with the keys a filter
+/// compares. Ordered by its keys first, as the table is.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromRow)]
 pub(crate) struct OptionRow {
     pub name_key: String,
@@ -815,6 +802,104 @@ pub(crate) fn distinct_option_rows(options: &[crate::ProductOption]) -> Vec<Opti
         }
     }
     rows
+}
+
+/// What a fact's value may be as long as to be a value a listing is
+/// narrowed by: as long as an option's. A longer one is a sentence of the
+/// product's table, not something to filter by.
+const MAX_FACT_VALUE_LEN: usize = timada_catalog::MAX_OPTION_NAME_LEN;
+
+/// Adds to a product's option rows one per fact of its table that the
+/// shop's filters name (`filters`, as [`filter_keys`] gives them): "Matière:
+/// Coton" narrows a listing as an option's value would (#631). The facts
+/// nobody filters by (a weight, a reference) have no row: there are up to
+/// thirty a product, and each row is counted on every page that lists it. A
+/// name that is an option of this product too keeps the option's values,
+/// with the fact's beside them; a value folding to nothing, or too long
+/// ([`MAX_FACT_VALUE_LEN`]), is left out.
+pub(crate) fn add_fact_rows(
+    rows: &mut Vec<OptionRow>,
+    attributes: &[crate::Attribute],
+    filters: &[String],
+) {
+    for attribute in attributes {
+        let row = OptionRow {
+            name_key: crate::facet_key(&attribute.name),
+            value_key: crate::facet_key(&attribute.value),
+            name: attribute.name.clone(),
+            value: attribute.value.clone(),
+        };
+        if row.value_key.is_empty()
+            || !filters.contains(&row.name_key)
+            || attribute.value.chars().count() > MAX_FACT_VALUE_LEN
+            || rows.iter().any(|kept| kept.same_value(&row))
+        {
+            continue;
+        }
+        rows.push(row);
+    }
+}
+
+/// The rows a product is filtered by: [`distinct_option_rows`], then
+/// [`add_fact_rows`].
+pub(crate) fn facet_rows(
+    options: &[crate::ProductOption],
+    attributes: &[crate::Attribute],
+    filters: &[String],
+) -> Vec<OptionRow> {
+    let mut rows = distinct_option_rows(options);
+    add_fact_rows(&mut rows, attributes, filters);
+    rows
+}
+
+/// The names of the shop's filters as a row's `name_key` has them
+/// ([`facet_key`](crate::facet_key)); none while the shop never set them.
+pub(crate) fn filter_keys_of(names_json: Option<&str>) -> anyhow::Result<Vec<String>> {
+    let names: Vec<String> = names_json
+        .map(serde_json::from_str)
+        .transpose()?
+        .unwrap_or_default();
+    Ok(names.iter().map(|name| crate::facet_key(name)).collect())
+}
+
+/// [`filter_keys_of`] the list the copy holds.
+async fn filter_keys(conn: &Connection) -> anyhow::Result<Vec<String>> {
+    let row: Option<(String,)> = fetch_optional(
+        conn,
+        "SELECT names_json FROM storefront_listing_filters",
+        (),
+    )
+    .await?;
+    filter_keys_of(row.as_ref().map(|(names,)| names.as_str()))
+}
+
+/// Makes a product's option rows `wanted`.
+async fn write_option_rows(
+    conn: &Connection,
+    product_id: &str,
+    wanted: &[OptionRow],
+) -> anyhow::Result<()> {
+    execute(
+        conn,
+        "DELETE FROM storefront_product_options WHERE product_id = ?1",
+        (product_id,),
+    )
+    .await?;
+    for row in wanted {
+        execute(
+            conn,
+            INSERT_OPTION,
+            (
+                product_id,
+                row.name_key.as_str(),
+                row.value_key.as_str(),
+                row.name.as_str(),
+                row.value.as_str(),
+            ),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// The gallery as the local rows carry it.
@@ -1103,12 +1188,19 @@ async fn on_best_sellers_event<E: Executor>(
     Ok(())
 }
 
-/// Takes the options the shop's listings are narrowed by.
+/// Takes the options the shop's listings are narrowed by, then files again
+/// the products whose facts the list starts or stops naming
+/// ([`refile_facts`]). The list is written first: a product filed meanwhile
+/// already goes by it.
 #[evento::subscription_all]
 async fn on_listing_filters_event<E: Executor>(
     context: &Context<'_, E>,
     event: RawEvent<ListingFilters>,
 ) -> anyhow::Result<()> {
+    let reflected: Reflected = context.extract();
+    if reflected.covers(&event) {
+        return Ok(());
+    }
     let db: Db = context.extract();
     let Some(state) = listing_filters_projection()
         .load(&event.aggregate_id)
@@ -1123,8 +1215,105 @@ async fn on_listing_filters_event<E: Executor>(
         (serde_json::to_string(&state.names)?,),
     )
     .await?;
+    refile_facts(&db).await?;
+    reflected.note(&event, state.aggregate_version);
     Ok(())
 }
+
+/// How many products [`refile_facts`] looks at in one transaction.
+const REFILE_BATCH: i64 = 200;
+
+/// Makes every product's option rows what the shop's filters now call for,
+/// after the list changed: a fact newly named gains its row, one no longer
+/// named loses it, and the pages that list the product count the value or
+/// stop counting it ([`file_product`]).
+///
+/// The copy is walked in id order, [`REFILE_BATCH`] products a transaction
+/// (#631), rather than in one: a pass over a large shop would hold every
+/// page's counts, and whatever else the subscription writes, for its whole
+/// length. Each transaction leaves the counts true to the rows; until the
+/// last one, a filter shows the products reached so far. A product whose
+/// rows already agree costs its read alone, so a list reordered, or a pass
+/// run again after a stop half-way, writes nothing it has written.
+async fn refile_facts(db: &Db) -> anyhow::Result<()> {
+    let mut after = String::new();
+    while let Some(last) = db
+        .write(after.as_str(), |tx, after| {
+            Box::pin(refile_facts_after(tx, after))
+        })
+        .await?
+    {
+        after = last;
+    }
+    Ok(())
+}
+
+/// One transaction of [`refile_facts`]: the products after id `after`.
+/// Returns the last it looked at, none once the copy is walked.
+async fn refile_facts_after(conn: &Connection, after: &str) -> anyhow::Result<Option<String>> {
+    let products: Vec<(String, bool, String, String)> = fetch_all(
+        conn,
+        "SELECT id, status = 'published', options_json, attributes_json
+         FROM storefront_products WHERE id > ?1 ORDER BY id LIMIT ?2",
+        (after, REFILE_BATCH),
+    )
+    .await?;
+    let Some(last) = products.last().map(|(id, ..)| id.clone()) else {
+        return Ok(None);
+    };
+    let filters = filter_keys(conn).await?;
+    // Their rows in one read, in the order [`options_of`] gives them.
+    let mut were: HashMap<String, Vec<OptionRow>> = HashMap::new();
+    for (product_id, name_key, value_key, name, value) in
+        fetch_all::<(String, String, String, String, String)>(
+            conn,
+            REFILE_ROWS,
+            (after, last.as_str()),
+        )
+        .await?
+    {
+        were.entry(product_id).or_default().push(OptionRow {
+            name_key,
+            value_key,
+            name,
+            value,
+        });
+    }
+    for (id, counted, options_json, attributes_json) in &products {
+        let options: Vec<crate::ProductOption> = serde_json::from_str(options_json)?;
+        let attributes: Vec<crate::Attribute> = serde_json::from_str(attributes_json)?;
+        let mut wanted = facet_rows(&options, &attributes, &filters);
+        wanted.sort();
+        let had = were.remove(id).unwrap_or_default();
+        if had == wanted {
+            continue;
+        }
+        write_option_rows(conn, id, &wanted).await?;
+        let filed = memberships_of(conn, id).await?;
+        let categories: Vec<&str> = filed.iter().map(String::as_str).collect();
+        file_product(
+            conn,
+            id,
+            &Filing {
+                counted: *counted,
+                categories: categories.clone(),
+                options: &had,
+            },
+            &Filing {
+                counted: *counted,
+                categories,
+                options: &wanted,
+            },
+        )
+        .await?;
+    }
+    Ok(Some(last))
+}
+
+/// The option rows of the products after id `?1` up to `?2`, in key order.
+const REFILE_ROWS: &str = "SELECT product_id, name_key, value_key, name, value
+ FROM storefront_product_options WHERE product_id > ?1 AND product_id <= ?2
+ ORDER BY product_id, name_key, value_key";
 
 /// Makes the best sellers of the copy what `ranked` says, the best first,
 /// touching only the products whose rank moved: the ranking's own rows,
@@ -2115,6 +2304,194 @@ mod tests {
             counts(&db).await,
             [row("mats", 0, 1), row("toys", 1, 2), row("travel", 1, 1)]
         );
+    }
+
+    /// Writes the facts of a product's table on its row, as the
+    /// subscription does.
+    async fn facts(db: &Db, id: &str, facts: &[(&str, &str)]) {
+        let facts: Vec<crate::Attribute> = facts
+            .iter()
+            .map(|(name, value)| crate::Attribute {
+                name: (*name).to_owned(),
+                value: (*value).to_owned(),
+            })
+            .collect();
+        db.execute(
+            "UPDATE storefront_products SET attributes_json = ?2 WHERE id = ?1",
+            (id, serde_json::to_string(&facts).unwrap()),
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Sets the shop's filters and files the products again, then checks a
+    /// full recount has nothing left to write.
+    async fn filter_by(db: &Db, names: &[&str]) {
+        db.execute(
+            "INSERT INTO storefront_listing_filters (id, names_json) VALUES (1, ?1)
+             ON CONFLICT (id) DO UPDATE SET names_json = excluded.names_json",
+            (serde_json::to_string(names).unwrap(),),
+        )
+        .await
+        .unwrap();
+        refile_facts(db).await.unwrap();
+        db.write(&(), |tx, ()| {
+            Box::pin(async move {
+                assert_eq!(
+                    refresh_category_counts(tx).await?,
+                    0,
+                    "the pass left the counts short of a full recount"
+                );
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn a_fact_is_a_row_when_the_shop_filters_by_its_name() {
+        let fact = |name: &str, value: &str| crate::Attribute {
+            name: name.to_owned(),
+            value: value.to_owned(),
+        };
+        let options = [crate::ProductOption {
+            id: "o1".to_owned(),
+            name: "Couleur".to_owned(),
+            values: vec!["Rose".to_owned()],
+            label: None,
+            value_labels: Default::default(),
+            kind: None,
+        }];
+        let attributes = [
+            fact("Matière", "Coton bio"),
+            fact("Poids", "2 kg"),
+            fact("couleur", "rose"),
+            fact("COULEUR", "Bleu"),
+            fact("Entretien", &"x".repeat(MAX_FACT_VALUE_LEN + 1)),
+            fact("Marque", " "),
+        ];
+        let filters =
+            filter_keys_of(Some(r#"["Couleur","matiere","Entretien","Marque"]"#)).unwrap();
+        let pairs = |rows: Vec<OptionRow>| -> Vec<String> {
+            rows.into_iter()
+                .map(|row| format!("{}={}", row.name_key, row.value_key))
+                .collect()
+        };
+        // The option's value stands, the fact of the same name adds its own;
+        // the weight is not on the list, the care note is a sentence.
+        assert_eq!(
+            pairs(facet_rows(&options, &attributes, &filters)),
+            ["couleur=rose", "matiere=coton-bio", "couleur=bleu"]
+        );
+        // A shop that never chose filters by no fact.
+        assert_eq!(
+            pairs(facet_rows(
+                &options,
+                &attributes,
+                &filter_keys_of(None).unwrap()
+            )),
+            ["couleur=rose"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_list_that_changes_files_the_facts_it_names_and_drops_the_others() {
+        let db = tree().await;
+        let rose: &[(&str, &str)] = &[("Couleur", "Rose")];
+        product(&db, "p1", "published", &["travel"]).await;
+        file_with(&db, "p1", (false, &[], &[]), (true, &["travel"], rose)).await;
+        // The option its row shows, which the pass reads the rows from.
+        db.execute(
+            "UPDATE storefront_products SET options_json = ?1 WHERE id = 'p1'",
+            (r#"[{"id":"o1","name":"Couleur","values":["Rose"]}]"#,),
+        )
+        .await
+        .unwrap();
+        facts(&db, "p1", &[("Matière", "Coton"), ("Poids", "2 kg")]).await;
+        product(&db, "p2", "published", &["toys"]).await;
+        file(&db, "p2", None, Some((true, &["toys"]))).await;
+        facts(&db, "p2", &[("matière", "coton"), ("Couleur", "Bleu")]).await;
+        product(&db, "p3", "draft", &["toys"]).await;
+        file(&db, "p3", None, Some((false, &["toys"]))).await;
+        facts(&db, "p3", &[("Matière", "Lin")]).await;
+
+        // Never set: the options alone.
+        refile_facts(&db).await.unwrap();
+        assert_eq!(facets(&db, WHOLE_SHOP).await, ["rose: 1"]);
+
+        // A fact on one product and an option on another are one filter;
+        // a draft's fact is counted nowhere.
+        filter_by(&db, &["Matière", "Couleur"]).await;
+        assert_eq!(
+            facets(&db, WHOLE_SHOP).await,
+            ["bleu: 1", "rose: 1", "coton: 2"]
+        );
+        assert_eq!(facets(&db, "toys").await, ["bleu: 1", "coton: 1"]);
+        assert_eq!(facets(&db, "bedding").await, ["rose: 1", "coton: 1"]);
+        // Again, or in another order: nothing moves.
+        filter_by(&db, &["Couleur", "Matière"]).await;
+        assert_eq!(
+            facets(&db, WHOLE_SHOP).await,
+            ["bleu: 1", "rose: 1", "coton: 2"]
+        );
+
+        // A name taken off the list: its facts leave, an option stays.
+        filter_by(&db, &["Couleur"]).await;
+        assert_eq!(facets(&db, WHOLE_SHOP).await, ["bleu: 1", "rose: 1"]);
+        filter_by(&db, &[]).await;
+        assert_eq!(facets(&db, WHOLE_SHOP).await, ["rose: 1"]);
+        assert!(facets(&db, "toys").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_pass_walks_a_copy_larger_than_one_transaction() {
+        let db = tree().await;
+        let many = REFILE_BATCH * 2 + 1;
+        for n in 0..many {
+            let id = format!("p{n:04}");
+            product(&db, &id, "published", &["toys"]).await;
+            facts(
+                &db,
+                &id,
+                &[("Matière", if n % 2 == 0 { "Coton" } else { "Lin" })],
+            )
+            .await;
+        }
+        db.write(&(), |tx, ()| {
+            Box::pin(async move {
+                refresh_category_counts(tx).await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        filter_by(&db, &["Matière"]).await;
+        assert_eq!(
+            facets(&db, "toys").await,
+            [
+                format!("coton: {}", REFILE_BATCH + 1),
+                format!("lin: {REFILE_BATCH}")
+            ]
+        );
+        // Both statements of a pass read their own range, not the table.
+        for (statement, params) in [
+            (
+                "SELECT id, status = 'published', options_json, attributes_json
+                 FROM storefront_products WHERE id > ?1 ORDER BY id LIMIT 200",
+                vec!["p0100"],
+            ),
+            (REFILE_ROWS, vec!["p0100", "p0300"]),
+        ] {
+            let plan: Vec<(i64, i64, i64, String)> = db
+                .fetch_all(&format!("EXPLAIN QUERY PLAN {statement}"), params)
+                .await
+                .unwrap();
+            assert!(
+                plan.iter().all(|(_, _, _, step)| !step.contains("SCAN")),
+                "{statement}: {plan:?}"
+            );
+        }
     }
 
     #[test]

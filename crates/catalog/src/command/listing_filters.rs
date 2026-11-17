@@ -34,8 +34,8 @@ async fn on_filters_set(
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Sets the options the shop's listings are narrowed by, in the order
-    /// given: each named as the products name it, one named twice (case
-    /// aside) counting once, [`MAX_LISTING_FILTERS`] at most. None offers
+    /// given: each named as the products name it, an option or a fact of
+    /// their tables, one named twice (case aside) counting once, [`MAX_LISTING_FILTERS`] at most. None offers
     /// no such filter. The same list is a no-op.
     pub async fn set_listing_filters(
         &self,
