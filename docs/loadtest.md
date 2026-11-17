@@ -75,6 +75,12 @@ Then the slowest routes, the journey's counters (`cart.refused.*`,
 `checkout.refused.*`, `webhook.retry`, ...) and the anomalies, each with
 samples. The whole of it is in `data/load/report.json`, the logs beside it.
 
+No figure of a run is kept in this document: a run prints its own, for the
+build and the evento pin it ran on (`Cargo.lock`). The runs behind #285 to
+#289 predate evento `b03d06d` and `11a31fd`, which changed what a write costs
+(`docs/sizing.md`, measured on three nodes without the shoppers); run it again
+before quoting a rate.
+
 An anomaly is something that should not happen whatever the load, and makes
 the run exit with 2:
 
