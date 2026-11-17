@@ -12,6 +12,7 @@ pub mod publish;
 pub mod remove_image;
 pub mod rename;
 pub mod seo;
+pub mod translations;
 pub mod unpublish;
 pub mod upload;
 
@@ -124,6 +125,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = TenantNav::of(cx, &access).await?;
     let media_url = context::<Arc<Media>>(cx).tenant_url(&access.tenant.id);
     let preview = preview_document(&page.title, &render_markdown(&page.body, &media_url));
+    // A shop read in one language has nothing to translate into.
+    let translated = pages(&access)?
+        .languages()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .is_some_and(|languages| !languages.others.is_empty());
     let tenant = access.tenant;
     let slug = tenant.slug.clone();
     let title = format!("{} · Pages · {}", page.title, tenant.name);
@@ -138,6 +145,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 subtitle: Some("Written in Markdown; the storefront shows it once it is published."),
                 status_badge(tone: tone, attrs: attributes! { data-page-status=(status) }, (status))
                 <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(back)>"Back to Pages"</a>
+                if translated {
+                    <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(translations::index, slug: slug.clone(), page_id: page.id.clone())) data-translations-link="">"Translations"</a>
+                }
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())
             page_screen(

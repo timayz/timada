@@ -15,6 +15,7 @@ mod newsletter_popup;
 mod page;
 mod redirects;
 mod slug_index;
+mod translation;
 
 use std::ops::Deref;
 
@@ -26,6 +27,7 @@ pub use meta_pixel::*;
 pub use newsletter_popup::*;
 pub use page::*;
 pub use redirects::*;
+pub use translation::*;
 
 use evento::{Executor, Projection, metadata::Event};
 

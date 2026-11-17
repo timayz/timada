@@ -294,6 +294,42 @@ pub fn languages_id() -> String {
     evento::hash_ids(vec!["languages"])
 }
 
+/// What a translation words: one of the shop's pages or an article of its
+/// blog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TextKind {
+    Page,
+    Article,
+}
+
+impl TextKind {
+    /// The name the events and the index ids carry.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Page => "page",
+            Self::Article => "article",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "page" => Some(Self::Page),
+            "article" => Some(Self::Article),
+            _ => None,
+        }
+    }
+}
+
+/// The stream of what a page or an article says in `language`.
+pub fn text_translation_id(kind: TextKind, subject_id: &str, language: &str) -> String {
+    evento::hash_ids(vec!["translation", kind.as_str(), subject_id, language])
+}
+
+/// The index stream of an article's slug in `language`.
+pub fn text_translation_slug_id(language: &str, slug: &str) -> String {
+    evento::hash_ids(vec!["translation-slug", "article", language, slug])
+}
+
 /// The longest Meta pixel id.
 pub const MAX_META_PIXEL_ID_LEN: usize = 20;
 

@@ -114,3 +114,56 @@ test("an owner words a product and a category in another language", async ({ pag
   await expect(cats.getByLabel("Translated questions")).toHaveValue("Welche Größe?\nMessen Sie Ihre Katze.");
   await expect(page.locator("[data-translation=en]")).toHaveAttribute("data-translation-state", "none");
 });
+
+test("an owner words a page and an article in another language", async ({ page }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name, slug } = uniqueTenant("Texts Shop");
+  await createTenant(page, name);
+  await page.goto(`/t/${slug}/languages`);
+  const languages = page.locator("form[data-shop-languages]");
+  await languages.getByLabel("Main language").selectOption("fr");
+  await languages.getByRole("checkbox", { name: "English" }).check();
+  await languages.getByRole("button", { name: "Save the languages" }).click();
+  await expect(page.getByRole("status")).toContainText("Languages saved");
+
+  // A page: a title and a text, no address of its own.
+  await page.goto(`/t/${slug}/pages`);
+  await page.getByRole("link", { name: "New page" }).click();
+  await page.locator("#page-title").fill("Mentions légales");
+  await page.locator("#page-body").fill("Le site est édité par Acme.");
+  await page.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  await page.locator("[data-translations-link]").click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Translations of Mentions légales");
+  const english = page.locator("[data-translation=en]");
+  await expect(english).toHaveAttribute("data-translation-state", "none");
+  await expect(english.getByLabel("Address in this language")).toHaveCount(0);
+  await expect(english.getByLabel("Translated title", { exact: true })).toHaveAttribute("placeholder", "Mentions légales");
+  await english.getByLabel("Translated title", { exact: true }).fill("Legal notice");
+  await english.getByLabel("Translated content (Markdown)").fill("The site is published by Acme.");
+  await english.getByRole("button", { name: "Save translation" }).click();
+  await expect(page.getByRole("status")).toContainText("Translation saved");
+  await expect(english).toHaveAttribute("data-translation-state", "set");
+  await expect(english.getByLabel("Translated content (Markdown)")).toHaveValue("The site is published by Acme.");
+  await english.getByRole("button", { name: "Remove translation" }).click();
+  await expect(page.getByRole("status")).toContainText("Translation removed");
+  await expect(english).toHaveAttribute("data-translation-state", "none");
+
+  // An article has its address and its summary there too.
+  await page.goto(`/t/${slug}/articles`);
+  await page.getByRole("link", { name: "New article" }).click();
+  await page.locator("#article-title").fill("Choisir sa taille");
+  await page.locator("#article-body").fill("Du S au XL.");
+  await page.getByRole("button", { name: "Save draft" }).click();
+  await expect(page.getByRole("status")).toContainText("Draft saved.");
+  await page.locator("[data-translations-link]").click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Translations of Choisir sa taille");
+  await english.getByLabel("Translated title", { exact: true }).fill("Choosing a size");
+  await english.getByLabel("Translated summary").fill("In two minutes.");
+  await english.getByRole("button", { name: "Save translation" }).click();
+  await expect(page.getByRole("status")).toContainText("Translation saved");
+  await expect(english.getByLabel("Address in this language")).toHaveValue("choosing-a-size");
+  await expect(english.getByLabel("Translated summary")).toHaveValue("In two minutes.");
+  await page.getByRole("link", { name: "Back to the article" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Choisir sa taille");
+});
