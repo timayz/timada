@@ -1,4 +1,4 @@
-.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate stripe.listen aliexpress.tunnel e2e e2e.cluster loadtest lint fmt-check fmt test machete check
+.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate stripe.listen aliexpress.tunnel e2e e2e.cluster loadtest limits lint fmt-check fmt test machete check
 
 # What `make seed` writes and `make storefront` reads: the key and the addresses
 # of the seeded shop. Git ignores it.
@@ -141,6 +141,11 @@ e2e.cluster:
 #   make loadtest ARGS="soak --rate 5 --secs 1800"
 loadtest:
 	scripts/loadtest.sh $(ARGS)
+
+# What the rate limits cost: a flood of sign-ins on one node, alone and as
+# one of three (docs/sizing.md has the figures).
+limits:
+	scripts/limits.sh
 
 # Run Clippy linter for code quality
 lint:
