@@ -341,13 +341,16 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         -- The slugs a product, a page or an article (`kind`) went by before a rename,
         -- and when it left each: what an old address is redirected from. An
         -- archived product's last slug is here too, its row no longer
-        -- answering to it.
+        -- answering to it. `language` is empty for the slugs of the main
+        -- language, and a language's code for the ones a translation of a
+        -- product, a category or an article went by there.
         CREATE TABLE storefront_former_slugs (
             kind TEXT NOT NULL,
+            language TEXT NOT NULL,
             slug TEXT NOT NULL,
             id TEXT NOT NULL,
             left_at INTEGER NOT NULL,
-            PRIMARY KEY (kind, slug, id)
+            PRIMARY KEY (kind, language, slug, id)
         );
         CREATE INDEX storefront_former_slugs_of ON storefront_former_slugs (kind, id);
         -- The merchant's own redirects: an old path and where it sends.

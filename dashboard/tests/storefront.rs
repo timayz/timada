@@ -3587,6 +3587,155 @@ async fn a_store_carries_what_a_page_and_an_article_say_in_other_languages() {
     store.shutdown().await;
 }
 
+/// A translation's address that moved answers from where it went, in its
+/// language (#647).
+#[tokio::test]
+async fn an_old_address_of_a_translation_leads_to_where_it_went() {
+    use timada_catalog::{TranslationKind, TranslationText};
+    use timada_pages::{TextKind, TextTranslation};
+    use timada_storefront::{
+        moved_article_slug_in, moved_category_slug_in, moved_product_slug_in, translation_of,
+    };
+
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme);
+    let pages = h.pages(&acme);
+    let cats = catalog
+        .create_category(
+            "alice",
+            timada_catalog::CreateCategory {
+                name: "Chats".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let tree = stock(&catalog, "Arbre à chat", 4900, &[&cats.id]).await;
+    let guide = pages
+        .create_article(
+            "alice",
+            timada_pages::CreateArticle {
+                slug: String::new(),
+                title: "Choisir sa taille".into(),
+                summary: String::new(),
+                body: "Du S au XL.".into(),
+            },
+        )
+        .await
+        .unwrap();
+    pages.publish_article("alice", &guide).await.unwrap();
+
+    let word = async |kind, id: &str, name: &str, slug: &str| {
+        catalog
+            .translate(
+                "alice",
+                kind,
+                id,
+                "en",
+                TranslationText {
+                    name: name.into(),
+                    slug: Some(slug.into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    };
+    let title = async |slug: &str| {
+        pages
+            .translate_text(
+                "alice",
+                TextKind::Article,
+                &guide,
+                "en",
+                TextTranslation {
+                    title: "Choosing a size".into(),
+                    slug: Some(slug.into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    };
+    word(TranslationKind::Product, &tree, "Cat Tree", "cat-tree").await;
+    word(TranslationKind::Category, &cats.id, "Cats", "cats").await;
+    title("choosing-a-size").await;
+    // Each moves to another address in English.
+    word(TranslationKind::Product, &tree, "Cat Tree", "big-cat-tree").await;
+    word(TranslationKind::Category, &cats.id, "Cats", "felines").await;
+    title("size-guide").await;
+
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
+    let product = async |slug: &str| moved_product_slug_in(&db, "en", slug).await.unwrap();
+    eventually("the old addresses lead to the new ones", async || {
+        product("cat-tree").await == Some(MovedProduct::Product("big-cat-tree".into()))
+            && moved_category_slug_in(&db, "en", "cats")
+                .await
+                .unwrap()
+                .as_deref()
+                == Some("felines")
+            && moved_article_slug_in(&db, "en", "choosing-a-size")
+                .await
+                .unwrap()
+                .as_deref()
+                == Some("size-guide")
+    })
+    .await;
+    // In English alone: the main language and the others never went by it.
+    assert_eq!(moved_product_slug(&db, "cat-tree").await.unwrap(), None);
+    assert_eq!(
+        moved_product_slug_in(&db, "de", "cat-tree").await.unwrap(),
+        None
+    );
+    // Where it is now is no old address.
+    assert_eq!(product("big-cat-tree").await, None);
+
+    // A slug left in the main language leads to the English address too.
+    catalog
+        .rename_product("alice", &tree, "Grand arbre")
+        .await
+        .unwrap();
+    eventually(
+        "the main slug it left leads to its English address",
+        async || {
+            product("arbre-a-chat").await == Some(MovedProduct::Product("big-cat-tree".into()))
+        },
+    )
+    .await;
+
+    // A dropped translation: every address it had leads to the main slug.
+    catalog
+        .drop_translation("alice", TranslationKind::Product, &tree, "en")
+        .await
+        .unwrap();
+    eventually(
+        "a dropped translation's addresses lead to the main slug",
+        async || {
+            translation_of(&db, TranslationKind::Product, &tree, "en")
+                .await
+                .unwrap()
+                .is_none()
+                && product("big-cat-tree").await
+                    == Some(MovedProduct::Product("grand-arbre".into()))
+                && product("cat-tree").await == Some(MovedProduct::Product("grand-arbre".into()))
+        },
+    )
+    .await;
+
+    // Archived, it leads to its category, at the category's English address.
+    catalog.archive_product("alice", &tree).await.unwrap();
+    eventually(
+        "an archived product leads to its category in English",
+        async || product("big-cat-tree").await == Some(MovedProduct::Category("felines".into())),
+    )
+    .await;
+
+    store.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_product_shows_its_own_delivery_time_else_the_shops_default() {
     let h = harness(None).await;

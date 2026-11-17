@@ -21,7 +21,7 @@ use topcoat_router::error::not_found;
 use crate::context::store;
 use crate::pages::{DESCRIPTION_CHARS, excerpt};
 use crate::query::Image;
-use crate::redirects::{ARTICLE, write_former_slugs};
+use crate::redirects::{ARTICLE, MAIN, write_former_slugs};
 
 /// How long the summary of an article that has none is: the start of its
 /// text.
@@ -323,7 +323,7 @@ async fn upsert_article(db: &Db, article: &ArticleState) -> anyhow::Result<()> {
                 )
                 .await?;
                 // An article nobody reads is not redirected to.
-                return write_former_slugs(tx, ARTICLE, &article.id, &[]).await;
+                return write_former_slugs(tx, ARTICLE, MAIN, &article.id, &[]).await;
             }
             let cover = article.cover_image().map(|image| Image {
                 id: image.id.clone(),
@@ -368,7 +368,7 @@ async fn upsert_article(db: &Db, article: &ArticleState) -> anyhow::Result<()> {
             )
             .await?;
             // The slugs it left: where an old address is redirected from.
-            write_former_slugs(tx, ARTICLE, &article.id, &article.former_slugs).await
+            write_former_slugs(tx, ARTICLE, MAIN, &article.id, &article.former_slugs).await
         })
     })
     .await

@@ -19,6 +19,7 @@ use timada_pages::aggregator::translation::Translation as TextStream;
 use timada_pages::text_translation_projection;
 
 use crate::query::CategoryQuestion;
+use crate::redirects::write_former_slugs;
 
 /// What a product or a category says in one language. Each part is as the
 /// merchant wrote it, empty where the main language's stands.
@@ -102,8 +103,8 @@ pub async fn translated_slug(
     Ok(row.map(|(id,)| id))
 }
 
-/// Copies a translation as it stands, and drops the row of one that was
-/// dropped.
+/// Copies a translation as it stands, with the slugs it left, and drops
+/// the row of one that was dropped.
 #[evento::subscription_all]
 pub(crate) async fn on_translation_event<E: Executor>(
     context: &Context<'_, E>,
@@ -117,6 +118,21 @@ pub(crate) async fn on_translation_event<E: Executor>(
     else {
         return Ok(());
     };
+    // The slugs it left in this language, a dropped one's last among
+    // them: where an old address there is redirected from.
+    db.write(&state, |tx, state| {
+        Box::pin(async move {
+            write_former_slugs(
+                tx,
+                &state.kind,
+                &state.language,
+                &state.subject_id,
+                &state.former_slugs,
+            )
+            .await
+        })
+    })
+    .await?;
     if state.dropped {
         db.execute(
             "DELETE FROM storefront_translations
@@ -232,6 +248,23 @@ pub(crate) async fn on_text_translation_event<E: Executor>(
     else {
         return Ok(());
     };
+    // A page has no slug of its own in a language; an article does, and
+    // leaves it as a product does.
+    if state.kind == TextKind::Article.as_str() {
+        db.write(&state, |tx, state| {
+            Box::pin(async move {
+                write_former_slugs(
+                    tx,
+                    &state.kind,
+                    &state.language,
+                    &state.subject_id,
+                    &state.former_slugs,
+                )
+                .await
+            })
+        })
+        .await?;
+    }
     if state.dropped {
         db.execute(
             "DELETE FROM storefront_text_translations
