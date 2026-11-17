@@ -2,7 +2,7 @@ mod common;
 
 use common::*;
 use evento::ProjectionAggregate;
-use timada_pages::{PageError, TextKind, TextTranslation};
+use timada_pages::{CreateArticle, PageError, TextKind, TextTranslation};
 
 const PAGE: TextKind = TextKind::Page;
 const ARTICLE: TextKind = TextKind::Article;
@@ -358,4 +358,81 @@ async fn what_cannot_be_worded_is_refused() {
         .translate_text(ALICE, PAGE, &terms, "en", titled("Terms"))
         .await;
     assert!(matches!(deleted, Err(PageError::NotFound)), "{deleted:?}");
+}
+
+/// Under `/en` a translation's slug is its article's address: a main slug
+/// landing on it would leave the other article without one there (#649).
+#[tokio::test]
+async fn a_main_slug_never_lands_on_another_articles_translation() {
+    let pages = command().await;
+    let guide = pages
+        .create_article(ALICE, article_draft("Choisir sa taille"))
+        .await
+        .unwrap();
+    let care = pages
+        .create_article(ALICE, article_draft("Entretien"))
+        .await
+        .unwrap();
+    pages
+        .translate_text(ALICE, ARTICLE, &guide, "en", at("Choosing a size", "sizes"))
+        .await
+        .unwrap();
+
+    // At a creation and at a rename alike.
+    let taken = pages
+        .create_article(
+            ALICE,
+            CreateArticle {
+                slug: "sizes".to_owned(),
+                ..article_draft("Sizes")
+            },
+        )
+        .await;
+    assert!(
+        matches!(taken, Err(PageError::ArticleSlugTaken)),
+        "{taken:?}"
+    );
+    let taken = pages.rename_article(ALICE, &care, "sizes").await;
+    assert!(
+        matches!(taken, Err(PageError::ArticleSlugTaken)),
+        "{taken:?}"
+    );
+    // The refusal left nothing behind: the article keeps its address.
+    let kept = pages.load_article(&care).await.unwrap().unwrap();
+    assert_eq!(kept.slug, "entretien");
+
+    // The article itself may go by the slug its own translation holds.
+    pages.rename_article(ALICE, &guide, "sizes").await.unwrap();
+    pages
+        .rename_article(ALICE, &guide, "choisir-sa-taille")
+        .await
+        .unwrap();
+
+    // A translation that moved to another slug, or was dropped, no longer
+    // holds anything.
+    pages
+        .translate_text(
+            ALICE,
+            ARTICLE,
+            &guide,
+            "en",
+            at("Choosing a size", "size-guide"),
+        )
+        .await
+        .unwrap();
+    pages.rename_article(ALICE, &care, "sizes").await.unwrap();
+    pages
+        .drop_text_translation(ALICE, ARTICLE, &guide, "en")
+        .await
+        .unwrap();
+    pages
+        .create_article(
+            ALICE,
+            CreateArticle {
+                slug: "size-guide".to_owned(),
+                ..article_draft("Size guide")
+            },
+        )
+        .await
+        .unwrap();
 }

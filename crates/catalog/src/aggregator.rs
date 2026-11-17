@@ -603,6 +603,18 @@ pub mod translation {
         /// once.
         Claimed { subject_id: String, version: u16 },
     }
+
+    /// The languages a slug has an entry of [`TranslationSlug`] in: one
+    /// stream per kind and slug, with the deterministic id
+    /// [`slug_languages_id`](crate::slug_languages_id). The claim of a main
+    /// slug reads it to find the translations that may hold the slug, in
+    /// one read whatever the number of languages. A language is noted
+    /// before its entry is claimed, once, and never taken back: an entry
+    /// nobody holds any more is what its reader finds out.
+    #[evento::aggregate(name = "timada-catalog/SlugLanguages")]
+    pub enum SlugLanguages {
+        Noted { language: String },
+    }
 }
 
 /// The stock events, in their own module: the macro names an event struct
