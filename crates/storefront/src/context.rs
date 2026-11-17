@@ -46,7 +46,19 @@ pub async fn products(cx: &Cx, query: &ProductQuery) -> Result<ProductPage> {
     for product in &mut page.items {
         product.fill_urls(store.media_url());
     }
+    in_language(cx, &mut page.items).await?;
     Ok(page)
+}
+
+/// Words `products` in the language the request is read in, when it is not
+/// the main one.
+async fn in_language(cx: &Cx, products: &mut [Product]) -> Result<()> {
+    match crate::read_in(cx) {
+        Some(language) => crate::read_in::products_in(store(cx).db(), language, products)
+            .await
+            .map_err(Error::from_anyhow),
+        None => Ok(()),
+    }
 }
 
 /// The values `option` takes across the products `query` lists, each with
@@ -59,15 +71,57 @@ pub async fn option_values(cx: &Cx, query: &ProductQuery, option: &str) -> Resul
 }
 
 /// A published product by slug, if any.
+///
+/// A request read in another language ([`read_in`](crate::read_in)) finds
+/// it by its slug in that language, and by its main slug when it has no
+/// translation there; the product comes back worded in the language, under
+/// the slug it goes by there, which a page compares with the one asked.
 pub async fn product_by_slug(cx: &Cx, slug: &str) -> Result<Option<Product>> {
     let store = store(cx);
-    let mut product = published_product_by_slug(store.db(), slug)
-        .await
-        .map_err(Error::from_anyhow)?;
+    let db = store.db();
+    let mut product = None;
+    if let Some(language) = crate::read_in(cx)
+        && let Some(id) =
+            crate::translated_slug(db, crate::TranslationKind::Product, language, slug)
+                .await
+                .map_err(Error::from_anyhow)?
+    {
+        product = crate::query::published_products_by_ids(db, &[id.as_str()])
+            .await
+            .map_err(Error::from_anyhow)?
+            .pop();
+    }
+    if product.is_none() {
+        product = published_product_by_slug(db, slug)
+            .await
+            .map_err(Error::from_anyhow)?;
+    }
     if let Some(product) = &mut product {
         product.fill_urls(store.media_url());
+        in_language(cx, std::slice::from_mut(product)).await?;
     }
     Ok(product)
+}
+
+/// The slugs a product goes by, in the main language and in each it is
+/// translated into: what a page names its other languages' addresses from.
+pub async fn product_slugs(cx: &Cx, product_id: &str) -> Result<crate::Slugs> {
+    Ok(
+        crate::read_in::slugs_of(store(cx).db(), "product", product_id)
+            .await
+            .map_err(Error::from_anyhow)?
+            .unwrap_or_default(),
+    )
+}
+
+/// The same for a category.
+pub async fn category_slugs(cx: &Cx, category_id: &str) -> Result<crate::Slugs> {
+    Ok(
+        crate::read_in::slugs_of(store(cx).db(), "category", category_id)
+            .await
+            .map_err(Error::from_anyhow)?
+            .unwrap_or_default(),
+    )
 }
 
 /// A published product by slug, or 404.
@@ -89,10 +143,18 @@ pub async fn category_products(
 
 /// The live categories as trees, each with how many published products are in
 /// it and below it: what a navigation menu is built from.
+///
+/// A request read in another language ([`read_in`](crate::read_in)) gets
+/// them named in it, under the slugs they go by there.
 pub async fn categories(cx: &Cx) -> Result<Vec<CategoryNode>> {
-    published_categories(store(cx).db())
-        .await
-        .map_err(Error::from_anyhow)
+    let db = store(cx).db();
+    let mut nodes = published_categories(db).await.map_err(Error::from_anyhow)?;
+    if let Some(language) = crate::read_in(cx) {
+        crate::read_in::categories_in(db, language, &mut nodes)
+            .await
+            .map_err(Error::from_anyhow)?;
+    }
+    Ok(nodes)
 }
 
 /// The trees a menu shows: [`categories`] without the ones the merchant hid
@@ -103,10 +165,33 @@ pub async fn menu(cx: &Cx) -> Result<Vec<CategoryNode>> {
 }
 
 /// A live category by slug, if any.
+///
+/// A request read in another language finds it as
+/// [`product_by_slug`] finds a product.
 pub async fn category_by_slug(cx: &Cx, slug: &str) -> Result<Option<Category>> {
-    published_category_by_slug(store(cx).db(), slug)
-        .await
-        .map_err(Error::from_anyhow)
+    let db = store(cx).db();
+    let Some(language) = crate::read_in(cx) else {
+        return published_category_by_slug(db, slug)
+            .await
+            .map_err(Error::from_anyhow);
+    };
+    let found = async {
+        let mut category =
+            match crate::translated_slug(db, crate::TranslationKind::Category, language, slug)
+                .await?
+            {
+                Some(id) => crate::query::published_category_by_id(db, &id).await?,
+                None => None,
+            };
+        if category.is_none() {
+            category = published_category_by_slug(db, slug).await?;
+        }
+        if let Some(category) = &mut category {
+            crate::read_in::category_in(db, language, category).await?;
+        }
+        anyhow::Ok(category)
+    };
+    found.await.map_err(Error::from_anyhow)
 }
 
 /// What a live category's page shows beside its listing: its buying guide,
@@ -119,6 +204,17 @@ pub async fn category_hub(cx: &Cx, category_id: &str) -> Result<CategoryHub> {
         .map_err(Error::from_anyhow)?;
     for product in &mut hub.pinned {
         product.fill_urls(store.media_url());
+    }
+    if let Some(language) = crate::read_in(cx) {
+        crate::read_in::hub_in(
+            store.db(),
+            language,
+            category_id,
+            store.media_url(),
+            &mut hub,
+        )
+        .await
+        .map_err(Error::from_anyhow)?;
     }
     Ok(hub)
 }
@@ -136,6 +232,20 @@ pub async fn listing_filters(cx: &Cx) -> Result<Option<Vec<String>>> {
 /// What search engines show for a category's page: the title and the
 /// description the merchant wrote for them, else its name and description.
 pub async fn category_seo(cx: &Cx, category: &Category) -> Result<Seo> {
+    if let Some(language) = crate::read_in(cx)
+        && let Some(seo) = crate::read_in::seo_in(
+            store(cx).db(),
+            language,
+            crate::TranslationKind::Category,
+            &category.id,
+            &category.name,
+            &category.description,
+        )
+        .await
+        .map_err(Error::from_anyhow)?
+    {
+        return Ok(seo);
+    }
     crate::query::published_category_seo(store(cx).db(), category)
         .await
         .map_err(Error::from_anyhow)
@@ -145,6 +255,20 @@ pub async fn category_seo(cx: &Cx, category: &Category) -> Result<Seo> {
 /// description the merchant wrote for them, else its name and the start of
 /// its description.
 pub async fn product_seo(cx: &Cx, product: &Product) -> Result<Seo> {
+    if let Some(language) = crate::read_in(cx)
+        && let Some(seo) = crate::read_in::seo_in(
+            store(cx).db(),
+            language,
+            crate::TranslationKind::Product,
+            &product.id,
+            &product.name,
+            &product.description,
+        )
+        .await
+        .map_err(Error::from_anyhow)?
+    {
+        return Ok(seo);
+    }
     crate::query::published_product_seo(store(cx).db(), product)
         .await
         .map_err(Error::from_anyhow)
@@ -172,9 +296,18 @@ pub fn category_path(menu: &[CategoryNode], category: &Category) -> Vec<Category
 /// The live categories a product is filed under, in tree order: the first is
 /// what a breadcrumb usually shows.
 pub async fn product_categories(cx: &Cx, product: &Product) -> Result<Vec<Category>> {
-    crate::query::published_product_categories(store(cx).db(), &product.id)
+    let db = store(cx).db();
+    let mut filed = crate::query::published_product_categories(db, &product.id)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(Error::from_anyhow)?;
+    if let Some(language) = crate::read_in(cx) {
+        for category in &mut filed {
+            crate::read_in::category_in(db, language, category)
+                .await
+                .map_err(Error::from_anyhow)?;
+        }
+    }
+    Ok(filed)
 }
 
 /// Published products sharing a category with this one, newest first, at most
@@ -187,6 +320,7 @@ pub async fn related_products(cx: &Cx, product: &Product, limit: u32) -> Result<
     for product in &mut related {
         product.fill_urls(store.media_url());
     }
+    in_language(cx, &mut related).await?;
     Ok(related)
 }
 
@@ -211,5 +345,6 @@ pub async fn cart_recommendations(
     for product in &mut offered {
         product.fill_urls(store.media_url());
     }
+    in_language(cx, &mut offered).await?;
     Ok(offered)
 }

@@ -3,13 +3,13 @@
 
 use timada_storefront::{
     ProductPageLd, breadcrumb_ld, categories, category_path, menu_of, offer_terms,
-    product_categories, product_image, product_ld, product_seo, related_products, require_product,
-    reviews_of, stars,
+    product_categories, product_image, product_ld, product_seo, product_slugs, related_products,
+    require_product, reviews_of, stars,
 };
 use topcoat::{
     Result,
     context::Cx,
-    router::{href, module_param, page, query_params},
+    router::{error::redirect_permanent, href, module_param, page, query_params},
     view::{View, attributes, view},
 };
 
@@ -47,6 +47,14 @@ const RELATED: u32 = 4;
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<ProductPageQuery>(cx)?;
     let product = require_product(cx, slug(cx)).await?;
+    // One address a language: asked by another slug of its own (the main
+    // one, where it is translated), it moves to the one it goes by here.
+    if product.slug != slug(cx) {
+        return Err(
+            redirect_permanent(href!(index, slug: product.slug.clone()).resolve(cx)).into(),
+        );
+    }
+    let slugs = product_slugs(cx, &product.id).await?;
     let seo = product_seo(cx, &product).await?;
     let reviews = reviews_of(cx, &product, query.reviews.unwrap_or(1)).await?;
     let slug = product.slug.clone();
@@ -125,6 +133,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // page of reviews is open, and what this page shows as data.
     let path = href!(index, slug: product.slug.clone()).resolve(cx);
     let speaking = crate::app::lang::speaking(cx).await;
+    let elsewhere = speaking.elsewhere(&path, |language| {
+        href!(index, slug: slugs.in_language(language).to_owned()).resolve(cx)
+    });
     let canonical = speaking.absolute(cx, &path);
     let home = speaking.absolute(cx, &href!(crate::app::index).resolve(cx));
     let trail: Vec<(String, String)> = crumbs
@@ -181,6 +192,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             events: Some(&events),
             description: Some(seo.description.as_str()).filter(|text| !text.is_empty()),
             canonical: Some(path.as_str()),
+            elsewhere: &elsewhere,
             image: card_image.as_deref(),
             price: card_price.as_ref().map(|(cents, currency)| (*cents, currency.as_str())),
             structured: &structured,

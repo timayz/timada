@@ -129,11 +129,21 @@ pub async fn search_published_pages(
 }
 
 /// A published page by slug, if any.
+///
+/// A request read in another language ([`read_in`](crate::read_in)) gets
+/// the page worded in it, where it has a translation. `slug` is the page's
+/// own in every language: where a page is is the host's choice.
 pub async fn page(cx: &Cx, slug: &str) -> Result<Option<PublicPage>> {
     let store = store(cx);
-    published_page(store.db(), slug, store.media_url())
+    let mut page = published_page(store.db(), slug, store.media_url())
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(Error::from_anyhow)?;
+    if let (Some(language), Some(page)) = (crate::read_in(cx), &mut page) {
+        crate::read_in::page_in(store.db(), language, store.media_url(), page)
+            .await
+            .map_err(Error::from_anyhow)?;
+    }
+    Ok(page)
 }
 
 /// A published page by slug, or 404.

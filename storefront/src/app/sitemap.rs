@@ -75,46 +75,57 @@ fn xml(sitemap: String) -> impl IntoResponse {
 
 #[route(GET "/sitemap.xml")]
 pub async fn index(cx: &Cx) -> Result<impl IntoResponse> {
-    let mut index = SitemapIndex::new().sitemap(&absolute_url(cx, &href!(pages).resolve(cx)));
+    // The files of each language, which list its own addresses.
+    let speaking = crate::app::lang::speaking(cx).await;
+    let mut index = SitemapIndex::new();
+    for file in speaking.in_each(cx, &href!(pages).resolve(cx)) {
+        index = index.sitemap(&file);
+    }
     for part in 1..=sitemap_parts(cx).await? {
         let file = href!(products).query(ProductsLink { part }).resolve(cx);
-        index = index.sitemap(&absolute_url(cx, &file));
+        for file in speaking.in_each(cx, &file) {
+            index = index.sitemap(&file);
+        }
     }
     Ok(xml(index.xml()))
 }
 
 #[route(GET "/sitemap-pages.xml")]
 pub async fn pages(cx: &Cx) -> Result<impl IntoResponse> {
+    let speaking = crate::app::lang::speaking(cx).await;
     let mut sitemap = Sitemap::new()
         .url(
-            &absolute_url(cx, &href!(crate::app::index).resolve(cx)),
+            &speaking.absolute(cx, &href!(crate::app::index).resolve(cx)),
             None,
         )
-        .url(&absolute_url(cx, &href!(boutique::index).resolve(cx)), None)
         .url(
-            &absolute_url(cx, &href!(support_client::index).resolve(cx)),
+            &speaking.absolute(cx, &href!(boutique::index).resolve(cx)),
+            None,
+        )
+        .url(
+            &speaking.absolute(cx, &href!(support_client::index).resolve(cx)),
             None,
         );
     for category in sitemap_categories(cx).await? {
         let path = href!(c::slug::index, c::slug::slug: category.slug.clone()).resolve(cx);
-        sitemap = sitemap.url(&absolute_url(cx, &path), Some(category.updated_at));
+        sitemap = sitemap.url(&speaking.absolute(cx, &path), Some(category.updated_at));
     }
     // Only the pages the shop has an address for, and whose text is
     // published.
     for page in sitemap_pages(cx).await? {
         if let Some(path) = own_page::url(cx, &page.slug) {
-            sitemap = sitemap.url(&absolute_url(cx, &path), Some(page.updated_at));
+            sitemap = sitemap.url(&speaking.absolute(cx, &path), Some(page.updated_at));
         }
     }
     // The blog once it has something to read, then each article.
     let articles = sitemap_articles(cx).await?;
     if let Some(latest) = articles.iter().map(|article| article.updated_at).max() {
         let path = href!(blog::index).resolve(cx);
-        sitemap = sitemap.url(&absolute_url(cx, &path), Some(latest));
+        sitemap = sitemap.url(&speaking.absolute(cx, &path), Some(latest));
     }
     for article in articles {
         let path = href!(blog::slug::index, blog::slug::slug: article.slug.clone()).resolve(cx);
-        sitemap = sitemap.url(&absolute_url(cx, &path), Some(article.updated_at));
+        sitemap = sitemap.url(&speaking.absolute(cx, &path), Some(article.updated_at));
     }
     Ok(xml(sitemap.xml()))
 }
@@ -122,6 +133,7 @@ pub async fn pages(cx: &Cx) -> Result<impl IntoResponse> {
 #[route(GET "/sitemap-products.xml")]
 pub async fn products(cx: &Cx) -> Result<impl IntoResponse> {
     let part = query_params::<ProductsQuery>(cx)?.part.unwrap_or(1);
+    let speaking = crate::app::lang::speaking(cx).await;
     let entries = sitemap_products(cx, part).await?;
     // A file past the last is not an empty sitemap: there is no such file.
     if entries.is_empty() && part != 1 {
@@ -130,7 +142,7 @@ pub async fn products(cx: &Cx) -> Result<impl IntoResponse> {
     let mut sitemap = Sitemap::new();
     for product in entries {
         let path = href!(p::slug::index, p::slug::slug: product.slug.clone()).resolve(cx);
-        sitemap = sitemap.url(&absolute_url(cx, &path), Some(product.updated_at));
+        sitemap = sitemap.url(&speaking.absolute(cx, &path), Some(product.updated_at));
     }
     Ok(xml(sitemap.xml()))
 }
