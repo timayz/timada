@@ -8,6 +8,7 @@ commands on one node over a store opened as `serve` opens it:
 cargo test -p timada-dashboard --test sizing -- --ignored --nocapture
 SIZING_COMMANDS=1000000 SIZING_DIR=/mnt/data/sizing cargo test ... # on the disk to measure
 SIZING_SUBSCRIPTIONS=47 cargo test ...                             # with idle subscriptions
+SIZING_NODES=3 cargo test ...                                      # on a cluster of three
 ```
 
 Each command writes two small events (a product's and its slug's claim), about
@@ -16,8 +17,9 @@ Each command writes two small events (a product's and its slug's claim), about
 20 writers, one node without peers. The disk figures are from evento alpha
 `a8fc4c6`; the writes, the logs and the subscriptions were measured again on
 `b03d06d` and on `11a31fd`, which each changed them (200,000 events on the
-memory filesystem, 40,000 on the disk). A cluster adds the replicas' journaling and the network to every write;
-these are the floor.
+memory filesystem, 40,000 on the disk). A cluster adds the replicas'
+journaling and the network to every write: these are the floor, and
+[Three nodes](#three-nodes) has what the two other nodes add.
 
 ## Disk
 
@@ -117,6 +119,105 @@ The figures below are from `b03d06d`, when they cost over a core.
 - On `b03d06d` that was one core per node under load, and again per extra
   region served; on `11a31fd` count a tenth of one.
 
+## Three nodes
+
+The same commands on a cluster of three (#603, `SIZING_NODES=3`): the three
+nodes are three processes on the same 12-core machine, the 20 writers all on
+node 0, every write journaled by the three. Runs of 2026-11-16 on evento
+`11a31fd`, the dev profile, 200,000 events on the memory filesystem and
+40,000 on the disk, with the one-node runs of the same day beside them.
+
+| Where the stores are | Nodes | Commands/s | p50 | p99 | Longest |
+|---|---|---|---|---|---|
+| Memory filesystem | one | 1,133 | 12 ms | 37 ms | 292 ms |
+| Memory filesystem | three | 562 to 574 (four runs) | 35 ms | 96 to 118 ms | 256 to 288 ms |
+| NVMe, ext4 | one | 291, 300 | 49 ms | 0.16 s | 1.9 s, 2.6 s |
+| NVMe, ext4, the three on the one disk | three | 77, 80 | 0.21 s | 1.7 s | 7.3 s, 8.2 s |
+
+| Memory filesystem | Processor per command | Cores busy | Write-ahead log, peak | Commit log, peak |
+|---|---|---|---|---|
+| One node | 2.2 ms | 2.5 | 5.1 MiB | 0.7 MiB |
+| Three: the node that takes the writes | 3.1 ms | 1.7 to 1.8 | 1.4 to 3.6 MiB | 0.5 MiB |
+| Three: each of the two others | 1.8 ms | 1.0 | 1.3 to 3.6 MiB | 0.5 to 0.6 MiB |
+
+- **Half the commands a second, three times the wait and three times the
+  processor.** With syncs free, a command takes 35 ms instead of 12 and costs
+  6.6 ms of processor over the three nodes instead of 2.2: 3.1 ms where it is
+  taken, 1.8 ms on each node that only journals and applies it. A node that
+  takes no writes itself is busy at 60 % of the one that takes them all.
+- **The throughput does not fall as the stores grow**: 574 commands a second
+  to 200,000 events, 549 to a million, 537 to two million, the processor per
+  command the same throughout.
+- **Every node holds the same store and the same logs.** 951 to 975 bytes per
+  event on each of the three, as on one node; the two logs peak no higher
+  than on one node, on the node written to and on the others alike.
+- **On a disk the syncs add up.** The three nodes of these runs share one
+  NVMe disk, so every write waits for three journals synced on it: 80
+  commands a second against 300 for one node, every command over 100 ms and
+  2 % over a second (one node: 7 % and 0.3 %). Three machines with a disk
+  each sync side by side, not one behind the other: this row is the worst
+  case, not what they will do, and the one to expect lies between the two
+  rows. The processor per command is the same as on the memory filesystem
+  (3.6 ms and 2.0 ms).
+- **About one command in 500,000 took 5 s** with nothing wrong on any node
+  (two of 100,000 in one run, four of a million in another, none in five
+  other runs; none failed). Five seconds is how long evento waits for the
+  answers to a write before it gives up on them; what was waited for is not
+  known yet (timayz/evento#549).
+
+### The 47 subscriptions on every node
+
+| Three nodes | Commands/s | The node written to | Each other node |
+|---|---|---|---|
+| No subscription | 564 | 3.1 ms, 1.7 cores | 1.8 ms, 1.0 core |
+| 47 idle subscriptions on each | 526 | 3.4 ms, 1.8 cores | 2.1 to 2.2 ms, 1.1 cores |
+
+Subscriptions that follow none of the writes cost a node the same whether
+the writes are its own or arrive from another node: 0.3 to 0.4 ms of
+processor per command, a tenth of a core at this rate, on each of the three.
+(One node, the same day: 1,133 commands a second without them, 1,114 with,
+2.2 and 2.35 ms.)
+
+### A copy while the cluster serves
+
+Forty copies of one node's store (`snapshot save`, `SIZING_COPY=40`, taken on
+the node `SIZING_COPY_ON` names) during a run of 100,000 commands, each copy
+opened and read afterwards:
+
+| Copies taken on | Commands/s | p99 | The node written to | Each other node | Longest copy |
+|---|---|---|---|---|---|
+| none | 564 | 113 ms | 3.1 ms | 1.8 ms | |
+| node 0, the one written to | 564 | 112 ms | 3.15 ms | 1.8 ms | 0.11 s for 180 MiB |
+| node 1 | 562 | 118 ms | 3.1 ms | 1.8 ms | 0.11 s for 180 MiB |
+
+A copy costs the cluster nothing that these runs can show, wherever it is
+taken: the same throughput, the same wait, the same processor on the node
+copied and on the two others, and logs that peak no higher (the copy holds
+the checkpoints of its own node alone, for a tenth of a second here; a copy
+that lasts longer leaves that node's commit log to fold in, as above, while
+the two others keep checkpointing).
+
+### A new cluster over one node's copy
+
+`snapshot restore --from-one-node` (#597) puts one node's copy under every
+node, and they begin a new cluster over it (`SIZING_FOUND=1`): each node reads
+every event once before it serves. From the three started at once to the
+three taking writes, on the memory filesystem:
+
+| Events in the copy | Store file | The file put back, per node | Until the three take writes |
+|---|---|---|---|
+| 200,004 | 184 MiB | 0.1 s | 1.8 s |
+| 1,000,004 | 908 MiB | 0.6 s | 7.6 s |
+| 2,000,004 | 1,814 MiB | 1.0 s | 16.2 s |
+
+- **Count 8 s per million events**, 9 s per GiB of store, in step with the
+  size; 20 to 30 million events are three to four minutes. The three nodes
+  are ready within a few hundredths of a second of each other, and the first
+  write after it takes what any write takes (5 to 8 ms alone).
+- On the disk, 40,004 events (37 MiB) took 0.4 s; a store larger than the
+  machine's memory will be read at the disk's pace, which these runs do not
+  show.
+
 ## The limits held across the nodes
 
 The sign-in, code, contact, newsletter and cart limits are held for the whole
@@ -161,11 +262,11 @@ on the same 12-core machine.
 
 ## Not measured
 
-- The same on three nodes, and under the mix of a real shop (the load test,
-  `docs/loadtest.md`, has the shoppers; its figures predate these).
+- Three nodes on three machines, each with its own disk and a network
+  between them: every three-node figure above is from one machine.
+- The mix of a real shop on this pin. The load test (`docs/loadtest.md`) has
+  the shoppers and prints its own figures; none are kept in a document, and
+  the last runs noted (#285 to #289) predate evento `b03d06d` and `11a31fd`.
 - The storefront connections: the store API tells every connection of every
   write, whatever its shop, before `b03d06d`; a connection that serves one
   shop is now told of that shop's writes alone.
-- How long a node takes to begin a new cluster over a copy put back
-  (`snapshot restore --from-one-node`, #597): it reads every event once before
-  it serves.
