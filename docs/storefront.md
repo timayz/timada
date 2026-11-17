@@ -1221,6 +1221,42 @@ the old tenant's products. `make reset` removes the copy and the settings with t
 - **Your language:** the text and the addresses (`/boutique`, `/support-client`, …) are
   French and in the code, like the `12,50€` of `money`.
 
+### An address per language
+
+A shop read in more than one language (see "Languages") has each at addresses of its
+own: the main one without a prefix, the others under theirs, and a language that is not
+French names the pages its own way.
+
+| French (main) | English |
+| --- | --- |
+| `/` | `/en` |
+| `/boutique` | `/en/shop` |
+| `/p/arbre-a-chat` | `/en/p/arbre-a-chat` |
+| `/mentions-legales` | `/en/legal-notice` |
+
+`storefront/src/app/lang.rs` holds it all. The pages stay routed at their French
+addresses; the `Localized` layer sends `/en/shop` to `/boutique` inside the router (the
+visitor's address stays in `original_uri`), and turns every root-relative `href`, form
+`action` and redirect of the answer back into the visitor's language, the links a
+merchant wrote in a page or an announcement among them. So a page is written once, with
+plain `href!`s. What is no link of a page is turned by hand, with `lang::speaking(cx)`:
+an address in the data for a search engine (`speaking.absolute(cx, path)`), or in an
+answer a script follows (`speaking.path(path)`).
+
+- `SPOKEN` lists the languages the storefront has words for; a language the merchant
+  chose that is not there has no address.
+- `ENGLISH_ROUTES` names the pages in English; add a table like it for another
+  language, in `routes`.
+- A page has one address a language: `/en/boutique` answers with a permanent redirect
+  to `/en/shop`. What has one address for all (`/robots.txt`, the sitemaps,
+  `/store/…`) keeps it.
+- `document` writes `<html lang>`, the canonical address in the page's language, and a
+  `<link rel="alternate" hreflang>` per language with `x-default` on the main one; the
+  footer links to the same page in each. A link that carries `hreflang` is left as
+  written, which is how those reach another language.
+- No visitor is redirected on their browser's language: a search engine's crawler
+  sends none.
+
 ### Settings
 
 `storefront --help` and `storefront serve --help` list them; each is a flag or the

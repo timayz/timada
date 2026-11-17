@@ -4,8 +4,8 @@
 //! the questions the merchant answered.
 
 use timada_storefront::{
-    ProductQuery, ProductSort, absolute_url, breadcrumb_ld, categories, category_hub,
-    category_path, category_seo, menu_of, option_values, products, require_category_in,
+    ProductQuery, ProductSort, breadcrumb_ld, categories, category_hub, category_path,
+    category_seo, menu_of, option_values, products, require_category_in,
 };
 use topcoat::{
     Result,
@@ -139,13 +139,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         link(&Filters::default(), page.page)
     };
-    let home = absolute_url(cx, &href!(crate::app::index).resolve(cx));
+    let speaking = crate::app::lang::speaking(cx).await;
+    let home = speaking.absolute(cx, &href!(crate::app::index).resolve(cx));
     let trail: Vec<(String, String)> = crumbs
         .iter()
         .chain([&category])
         .map(|crumb| {
             let path = href!(index, slug: crumb.slug.clone()).resolve(cx);
-            (crumb.name.clone(), absolute_url(cx, &path))
+            (crumb.name.clone(), speaking.absolute(cx, &path))
         })
         .collect();
     let structured = [breadcrumb_ld(

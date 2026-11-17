@@ -14,7 +14,7 @@ use topcoat::{
         Body, Layer, LayerFuture, Method, Next, Path,
         error::{NotFoundError, redirect_permanent},
         href,
-        request::{method, original_uri},
+        request::method,
     },
 };
 
@@ -51,7 +51,11 @@ impl Layer for MovedAddress {
 
 /// Where the address of the request went, if anywhere.
 async fn moved_to(cx: &Cx) -> Result<Option<String>> {
-    let path = original_uri(cx).path();
+    // The French path: a redirect, a former slug and a page's own address
+    // are kept in it, and the answer is turned to the visitor's language
+    // on its way out.
+    let path = crate::app::lang::speaking(cx).await.internal;
+    let path = path.as_str();
     if let Some(to) = redirect_for(cx, path).await? {
         return Ok(Some(to));
     }

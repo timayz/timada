@@ -1820,3 +1820,79 @@ test("the storefront stops cleanly when told to", async ({ page, request }) => {
   expect(Date.now() - asked).toBeLessThan(10_000);
   await expect(request.get(`${app.url}/store/status`)).rejects.toThrow();
 });
+
+test("the shop is read under an address of its own in each of its languages", async ({
+  page,
+  request,
+}) => {
+  const SHOP = app.url;
+  await registerWithEmail(page, uniqueEmail("merchant"));
+  const { name, slug } = uniqueTenant("Polyglot Shop");
+  await createTenant(page, name);
+  await publishProduct(page, slug, "Arbre à chat", "49.90");
+  // French, English, and a language this storefront has no words for.
+  await page.goto(`/t/${slug}/languages`);
+  const languages = page.locator("form[data-shop-languages]");
+  await languages.getByLabel("Main language").selectOption("fr");
+  await languages.getByRole("checkbox", { name: "English" }).check();
+  await languages.getByRole("checkbox", { name: "German" }).check();
+  await languages.getByRole("button", { name: "Save the languages" }).click();
+  await expect(page.getByRole("status")).toContainText("Languages saved");
+  const key = await mintKey(page, slug, true);
+  await app.start(request, key, 1);
+  await expect(async () => {
+    expect((await request.get(`${SHOP}/en`)).status()).toBe(200);
+  }).toPass({ timeout: 15_000 });
+
+  // The home in English: its language, and the same page in each language
+  // for search engines.
+  await page.goto(`${SHOP}/en`);
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", `${SHOP}/en`);
+  await expect(page.locator('link[rel="alternate"][hreflang="fr"]')).toHaveAttribute("href", `${SHOP}/`);
+  await expect(page.locator('link[rel="alternate"][hreflang="en"]')).toHaveAttribute("href", `${SHOP}/en`);
+  await expect(page.locator('link[rel="alternate"][hreflang="x-default"]')).toHaveAttribute("href", `${SHOP}/`);
+  await expect(page.locator('link[rel="alternate"][hreflang="de"]')).toHaveCount(0);
+  // Every link stays in the language, the pages named as it names them.
+  const footer = page.locator("footer.sitefooter");
+  await expect(footer.locator('a[href="/en/shop"]')).toHaveCount(1);
+  await expect(footer.locator('a[href="/en/legal-notice"]')).toHaveCount(1);
+  await expect(footer.locator('a[href="/en/support"]')).toHaveCount(1);
+  await expect(page.locator('a[href="/boutique"]')).toHaveCount(0);
+
+  // A page has one address a language: the French name moves to the
+  // English one.
+  await page.goto(`${SHOP}/en/boutique?page=1`);
+  await expect(page).toHaveURL(`${SHOP}/en/shop?page=1`);
+  await page.goto(`${SHOP}/en/shop`);
+  const card = page.locator("[data-product=arbre-a-chat]");
+  await card.getByRole("link", { name: "Arbre à chat" }).first().click();
+  await expect(page).toHaveURL(`${SHOP}/en/p/arbre-a-chat`);
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", `${SHOP}/en/p/arbre-a-chat`);
+
+  // A form posts and comes back in the language.
+  await addToCart(page);
+  await expect(page).toHaveURL(new RegExp(`^${SHOP}/en/p/arbre-a-chat`));
+  await page.goto(`${SHOP}/en/cart`);
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  await expect(page.locator("main")).toContainText("Arbre à chat");
+
+  // The footer switches to the same page in French, which has no prefix.
+  await page.goto(`${SHOP}/en/p/arbre-a-chat`);
+  const switcher = page.locator("[data-languages]");
+  await expect(switcher.getByRole("link", { name: "English" })).toHaveAttribute("aria-current", "true");
+  await switcher.getByRole("link", { name: "Français" }).click();
+  await expect(page).toHaveURL(`${SHOP}/p/arbre-a-chat`);
+  await expect(page.locator("html")).toHaveAttribute("lang", "fr");
+  await expect(page.locator("footer.sitefooter").locator('a[href="/boutique"]')).toHaveCount(1);
+
+  // No address for a language the storefront has no words for, nor for an
+  // English name outside English.
+  expect((await request.get(`${SHOP}/de`)).status()).toBe(404);
+  expect((await request.get(`${SHOP}/shop`)).status()).toBe(404);
+  expect((await request.get(`${SHOP}/en/p/nothing-here`)).status()).toBe(404);
+  // What has one address keeps it.
+  expect((await request.get(`${SHOP}/robots.txt`)).status()).toBe(200);
+  expect((await request.get(`${SHOP}/en/robots.txt`)).url()).toBe(`${SHOP}/robots.txt`);
+});
