@@ -44,7 +44,7 @@ use ulid::Ulid;
 /// The aggregate types a key holding `store:read` alone reads: what a page
 /// that shows the catalog loads (`crates/storefront`'s catalog subscription
 /// and the product, stock, delivery time, review, page, article, announcement,
-/// redirect, Google tag and Meta pixel views, and what its offers say of
+/// redirect, language, Google tag and Meta pixel views, and what its offers say of
 /// delivery and returns). The pixel's stream holds its
 /// Conversions API token, sealed under the operator's secret.
 pub fn catalog_reads() -> Vec<&'static str> {
@@ -64,6 +64,7 @@ pub fn catalog_reads() -> Vec<&'static str> {
         timada_pages::aggregator::GoogleTag::aggregate_type(),
         timada_pages::aggregator::MetaPixel::aggregate_type(),
         timada_pages::aggregator::NewsletterPopup::aggregate_type(),
+        timada_pages::aggregator::Languages::aggregate_type(),
         timada_orders::aggregator::ShippingMethods::aggregate_type(),
         timada_orders::aggregator::ReturnPolicy::aggregate_type(),
     ]

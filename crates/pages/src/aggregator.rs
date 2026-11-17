@@ -221,6 +221,23 @@ pub enum NewsletterPopup {
     },
 }
 
+/// The languages a shop's storefront is read in: one stream per shop, with
+/// the id [`languages_id`](crate::languages_id). What a product, a category,
+/// a page or an article says on its own stream is in the `main` one; each of
+/// the `others` has its translations beside it, and falls back to the main
+/// wording where it has none. A shop that never set them is read in its
+/// storefront's own language and no other.
+#[evento::aggregate(name = "timada-pages/Languages")]
+pub enum Languages {
+    /// The languages whole, as ISO 639-1 codes: `others` never names
+    /// `main`, nor a language twice.
+    LanguagesSet {
+        main: String,
+        others: Vec<String>,
+        set_by: String,
+    },
+}
+
 /// The blog's events, in their own module: the macro names an event struct
 /// after its variant, and `Created`, `Edited`, `Renamed`… already belong to
 /// the page above.

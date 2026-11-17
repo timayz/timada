@@ -672,6 +672,24 @@ asks its question, and never opens without JavaScript. The address is confirmed 
 as from anywhere else; what the pop-up promises (a code, a guide) is the merchant's to
 send, with an automation started by `subscriber.confirmed`.
 
+## Languages
+
+A merchant says which languages the storefront is read in (under **Languages** in the
+back office): the main one, which the products, the categories, the pages and the
+articles are written in on their own streams, and up to ten others they are translated
+into. `shop_languages(cx)` gives them, `None` while the shop never set them:
+
+```rust
+if let Some(languages) = timada_storefront::shop_languages(cx).await? {
+    // languages.main ("fr"), languages.others (["en", "de"]), languages.has("de")
+}
+```
+
+The codes are ISO 639-1, from the one list every context shares
+(`timada_core::languages::LANGUAGES`). A language taken off keeps its translations in
+the store, out of use, for the day it comes back. Which address shows which language is
+the host's.
+
 ## Announcements
 
 The short messages at the top of the shop ("-10% maintenant avec le code BIENVENUE10")

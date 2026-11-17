@@ -2,8 +2,9 @@ use evento::WriteError;
 
 use crate::value_object::{
     MAX_ANNOUNCEMENT_LEN, MAX_ANNOUNCEMENTS, MAX_BODY_LEN, MAX_IMAGES_PER_PAGE,
-    MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_POPUP_DELAY_SECS, MAX_POPUP_TEXT_LEN,
-    MAX_POPUP_TITLE_LEN, MAX_REDIRECT_PATH_LEN, MAX_REDIRECTS, MAX_SUMMARY_LEN, MAX_TITLE_LEN,
+    MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN, MAX_OTHER_LANGUAGES, MAX_POPUP_DELAY_SECS,
+    MAX_POPUP_TEXT_LEN, MAX_POPUP_TITLE_LEN, MAX_REDIRECT_PATH_LEN, MAX_REDIRECTS, MAX_SUMMARY_LEN,
+    MAX_TITLE_LEN,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -74,6 +75,10 @@ pub enum PageError {
         "a pop-up shown has a title of 1 to {MAX_POPUP_TITLE_LEN} characters, a text of at most {MAX_POPUP_TEXT_LEN} and opens within {MAX_POPUP_DELAY_SECS} seconds"
     )]
     InvalidPopup,
+    #[error("a language is one of the list")]
+    InvalidLanguage,
+    #[error("a storefront is read in at most {MAX_OTHER_LANGUAGES} languages beside its main one")]
+    TooManyLanguages,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -125,6 +130,8 @@ impl PageError {
             Self::InvalidMetaPixelId => "meta_pixel_invalid_id",
             Self::MetaPixelMissing => "meta_pixel_missing",
             Self::InvalidPopup => "newsletter_popup_invalid",
+            Self::InvalidLanguage => "language_invalid",
+            Self::TooManyLanguages => "too_many_languages",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })
