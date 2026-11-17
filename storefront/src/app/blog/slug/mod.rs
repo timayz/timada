@@ -3,9 +3,8 @@
 //! and categories it shows in between, drawn as the shop's own cards.
 
 use timada_storefront::{
-    ArticleBlock, ArticleLd, Category, Product, ProductQuery, absolute_url, article_ld,
-    breadcrumb_ld, category_by_slug, menu, product_by_slug, product_image, products,
-    require_article,
+    ArticleBlock, ArticleLd, Category, Product, ProductQuery, article_ld, breadcrumb_ld,
+    category_by_slug, menu, product_by_slug, product_image, products, require_article,
 };
 use topcoat::{
     Result,
@@ -79,9 +78,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = menu(cx).await?;
     let blocks = shown(cx, std::mem::take(&mut article.blocks)).await?;
     let path = href!(index, slug: article.slug.clone()).resolve(cx);
-    let url = absolute_url(cx, &path);
-    let home = absolute_url(cx, &href!(crate::app::index).resolve(cx));
-    let blog = absolute_url(cx, &href!(super::index).resolve(cx));
+    let speaking = crate::app::lang::speaking(cx).await;
+    let url = speaking.absolute(cx, &path);
+    let home = speaking.absolute(cx, &href!(crate::app::index).resolve(cx));
+    let blog = speaking.absolute(cx, &href!(super::index).resolve(cx));
     let image = article.cover.as_ref().map(|cover| cover.url.clone());
     let structured = [
         article_ld(&ArticleLd {

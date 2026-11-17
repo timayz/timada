@@ -371,3 +371,7 @@ form.sign-in label { display: block; margin-top: .75rem; }
 form.sign-in input { padding: .6rem; width: 100%; max-width: 20rem; border: 1px solid; }
 table.history { border-collapse: collapse; width: 100%; }
 table.history th, table.history td { border-bottom: 1px solid; padding: .5rem; text-align: left; }
+
+/* The page in the shop's other languages. */
+.languages ul { display: flex; flex-wrap: wrap; gap: 1rem; justify-content: center; list-style: none; margin: 0; padding: 0; }
+.languages a[aria-current] { font-weight: 700; }
