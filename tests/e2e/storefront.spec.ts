@@ -1896,3 +1896,119 @@ test("the shop is read under an address of its own in each of its languages", as
   expect((await request.get(`${SHOP}/robots.txt`)).status()).toBe(200);
   expect((await request.get(`${SHOP}/en/robots.txt`)).url()).toBe(`${SHOP}/robots.txt`);
 });
+
+test("the shop shows what a merchant translated, at the slugs of each language", async ({
+  page,
+  request,
+}) => {
+  const SHOP = app.url;
+  await registerWithEmail(page, uniqueEmail("merchant"));
+  const { name, slug } = uniqueTenant("Worded Shop");
+  await createTenant(page, name);
+  await page.goto(`/t/${slug}/languages`);
+  const languages = page.locator("form[data-shop-languages]");
+  await languages.getByLabel("Main language").selectOption("fr");
+  await languages.getByRole("checkbox", { name: "English" }).check();
+  await languages.getByRole("button", { name: "Save the languages" }).click();
+  await expect(page.getByRole("status")).toContainText("Languages saved");
+
+  // A category and two products in it; one product and the category are
+  // worded in English, the other product is not.
+  await createCategory(page, slug, "Chats");
+  const categoryUrl = page.url().split("?")[0];
+  const treeUrl = await publishProduct(page, slug, "Arbre à chat", "49.90", "Chats");
+  await publishProduct(page, slug, "Griffoir", "19.90", "Chats");
+  const english = page.locator("[data-translation=en]");
+  await page.goto(`${treeUrl}?tab=translations`);
+  await english.getByLabel("Translated name").fill("Cat Tree");
+  await english.getByLabel("Translated description", { exact: true }).fill("Three floors of sisal.");
+  await english.getByRole("button", { name: "Save translation" }).click();
+  await expect(page.getByRole("status")).toContainText("Translation saved");
+  await page.goto(`${categoryUrl}/translations`);
+  await english.getByLabel("Translated name").fill("Cats");
+  await english.getByRole("button", { name: "Save translation" }).click();
+  await expect(page.getByRole("status")).toContainText("Translation saved");
+  // One of the shop's own pages, in both languages.
+  const pageUrl = await publishPage(page, slug, "Mentions légales", "Le site est édité par Acme.");
+  await page.goto(`${pageUrl}/translations`);
+  await english.getByLabel("Translated title", { exact: true }).fill("Legal notice");
+  await english.getByLabel("Translated content (Markdown)").fill("The site is published by Acme.");
+  await english.getByRole("button", { name: "Save translation" }).click();
+  await expect(page.getByRole("status")).toContainText("Translation saved");
+
+  const key = await mintKey(page, slug);
+  await app.start(request, key, 2);
+  await expect(async () => {
+    expect((await request.get(`${SHOP}/en/p/cat-tree`)).status()).toBe(200);
+    expect((await request.get(`${SHOP}/en/c/cats`)).status()).toBe(200);
+    expect((await request.get(`${SHOP}/en/legal-notice`)).status()).toBe(200);
+  }).toPass({ timeout: 15_000 });
+
+  // The listing in English: the translated product under its English
+  // slug, the other one as the main language words it.
+  await page.goto(`${SHOP}/en/shop`);
+  await expect(page.locator("[data-product=cat-tree]")).toContainText("Cat Tree");
+  await expect(page.locator("[data-product=griffoir]")).toContainText("Griffoir");
+  await expect(page.locator("[data-product=arbre-a-chat]")).toHaveCount(0);
+  await page.locator("[data-product=cat-tree]").getByRole("link", { name: "Cat Tree" }).first().click();
+  await expect(page).toHaveURL(`${SHOP}/en/p/cat-tree`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Cat Tree");
+  await expect(page.locator("[data-description]")).toContainText("Three floors of sisal.");
+  await expect(page).toHaveTitle(/Cat Tree/);
+  // The breadcrumb names the category in English, at its English address.
+  await expect(page.locator("[data-crumbs]").getByRole("link", { name: "Cats" })).toHaveAttribute("href", "/en/c/cats");
+  // Each language's own address, for search engines and for the footer.
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", `${SHOP}/en/p/cat-tree`);
+  await expect(page.locator('link[rel="alternate"][hreflang="fr"]')).toHaveAttribute("href", `${SHOP}/p/arbre-a-chat`);
+  await expect(page.locator('link[rel="alternate"][hreflang="en"]')).toHaveAttribute("href", `${SHOP}/en/p/cat-tree`);
+  await page.locator("[data-languages]").getByRole("link", { name: "Français" }).click();
+  await expect(page).toHaveURL(`${SHOP}/p/arbre-a-chat`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Arbre à chat");
+  await expect(page.locator('link[rel="alternate"][hreflang="en"]')).toHaveAttribute("href", `${SHOP}/en/p/cat-tree`);
+
+  // One address a language: the main slug moves to the English one in
+  // English, and the English one is nothing in French.
+  await page.goto(`${SHOP}/en/p/arbre-a-chat`);
+  await expect(page).toHaveURL(`${SHOP}/en/p/cat-tree`);
+  expect((await request.get(`${SHOP}/p/cat-tree`)).status()).toBe(404);
+  // A product without a translation is read at its main slug.
+  await page.goto(`${SHOP}/en/p/griffoir`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Griffoir");
+  await expect(page.locator('link[rel="alternate"][hreflang="fr"]')).toHaveAttribute("href", `${SHOP}/p/griffoir`);
+
+  // The category, the same way.
+  await page.goto(`${SHOP}/en/c/chats`);
+  await expect(page).toHaveURL(`${SHOP}/en/c/cats`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Cats");
+  await expect(page.locator("[data-product=cat-tree]")).toContainText("Cat Tree");
+  await expect(page.locator('link[rel="alternate"][hreflang="fr"]')).toHaveAttribute("href", `${SHOP}/c/chats`);
+  await page.goto(`${SHOP}/c/chats`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Chats");
+  await expect(page.locator("[data-product=arbre-a-chat]")).toContainText("Arbre à chat");
+
+  // Search engines are given each language's files, with its addresses.
+  const index = await (await request.get(`${SHOP}/sitemap.xml`)).text();
+  expect(index).toContain(`<loc>${SHOP}/sitemap-pages.xml</loc>`);
+  expect(index).toContain(`<loc>${SHOP}/en/sitemap-pages.xml</loc>`);
+  expect(index).toContain(`<loc>${SHOP}/en/sitemap-products.xml?part=1</loc>`);
+  const englishProducts = await (await request.get(`${SHOP}/en/sitemap-products.xml?part=1`)).text();
+  expect(englishProducts).toContain(`<loc>${SHOP}/en/p/cat-tree</loc>`);
+  expect(englishProducts).toContain(`<loc>${SHOP}/en/p/griffoir</loc>`);
+  expect(englishProducts).not.toContain("arbre-a-chat");
+  const frenchProducts = await (await request.get(`${SHOP}/sitemap-products.xml?part=1`)).text();
+  expect(frenchProducts).toContain(`<loc>${SHOP}/p/arbre-a-chat</loc>`);
+  expect(frenchProducts).not.toContain("/en/");
+  const englishPages = await (await request.get(`${SHOP}/en/sitemap-pages.xml`)).text();
+  expect(englishPages).toContain(`<loc>${SHOP}/en</loc>`);
+  expect(englishPages).toContain(`<loc>${SHOP}/en/shop</loc>`);
+  expect(englishPages).toContain(`<loc>${SHOP}/en/c/cats</loc>`);
+  expect(englishPages).toContain(`<loc>${SHOP}/en/legal-notice</loc>`);
+
+  // A page of the shop's own, at the address English names it.
+  await page.goto(`${SHOP}/en/legal-notice`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Legal notice");
+  await expect(page.locator("main")).toContainText("The site is published by Acme.");
+  await page.goto(`${SHOP}/mentions-legales`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Mentions légales");
+  await expect(page.locator("main")).toContainText("Le site est édité par Acme.");
+});

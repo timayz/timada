@@ -91,6 +91,78 @@ pub async fn published_sitemap_articles(db: &Db) -> anyhow::Result<Vec<SitemapEn
     .await
 }
 
+/// The slug a row of `rows` (named `alias`) goes by in the language bound
+/// as `?{param}`: its translation's, read through its primary key, or its
+/// own.
+fn slug_in(translations: &str, kind: &str, alias: &str, param: u8) -> String {
+    format!(
+        "COALESCE((SELECT t.slug FROM {translations} t
+                   WHERE t.kind = '{kind}' AND t.subject_id = {alias}.id AND t.language = ?{param}),
+                  {alias}.slug)"
+    )
+}
+
+/// [`published_sitemap_products`] at the slugs `language` reads them at.
+pub async fn published_sitemap_products_in(
+    db: &Db,
+    part: u32,
+    language: &str,
+) -> anyhow::Result<Vec<SitemapEntry>> {
+    let Some(before) = part.checked_sub(1) else {
+        return Ok(Vec::new());
+    };
+    db.fetch_all(
+        &format!(
+            "SELECT {} AS slug, p.updated_at
+             FROM storefront_category_products cp
+             JOIN storefront_products p ON p.id = cp.product_id
+             WHERE cp.category_id = ?1
+             ORDER BY cp.category_id, cp.product_id LIMIT ?2 OFFSET ?3",
+            slug_in("storefront_translations", "product", "p", 4)
+        ),
+        (
+            WHOLE_SHOP,
+            i64::from(SITEMAP_PRODUCTS),
+            i64::from(before) * i64::from(SITEMAP_PRODUCTS),
+            language,
+        ),
+    )
+    .await
+}
+
+/// [`published_sitemap_categories`] at the slugs `language` reads them at.
+pub async fn published_sitemap_categories_in(
+    db: &Db,
+    language: &str,
+) -> anyhow::Result<Vec<SitemapEntry>> {
+    db.fetch_all(
+        &format!(
+            "SELECT {} AS slug, c.updated_at FROM storefront_categories c
+             WHERE c.archived = 0 ORDER BY c.id",
+            slug_in("storefront_translations", "category", "c", 1)
+        ),
+        (language,),
+    )
+    .await
+}
+
+/// [`published_sitemap_articles`] at the slugs `language` reads them at.
+pub async fn published_sitemap_articles_in(
+    db: &Db,
+    language: &str,
+) -> anyhow::Result<Vec<SitemapEntry>> {
+    db.fetch_all(
+        &format!(
+            "SELECT {} AS slug, a.updated_at FROM storefront_articles a
+             INDEXED BY storefront_articles_published
+             ORDER BY a.published_at DESC, a.id DESC LIMIT ?2",
+            slug_in("storefront_text_translations", "article", "a", 1)
+        ),
+        (language, i64::from(SITEMAP_ARTICLES)),
+    )
+    .await
+}
+
 /// How many product files the sitemap has ([`sitemap_products`] reads one).
 pub async fn sitemap_parts(cx: &Cx) -> Result<u32> {
     published_sitemap_parts(store(cx).db())
@@ -100,17 +172,26 @@ pub async fn sitemap_parts(cx: &Cx) -> Result<u32> {
 
 /// The published products of sitemap file `part`, from 1 to
 /// [`sitemap_parts`]; empty past the last.
+///
+/// A request read in another language ([`read_in`](crate::read_in)) gets
+/// the slugs of that language, here and from the two below.
 pub async fn sitemap_products(cx: &Cx, part: u32) -> Result<Vec<SitemapEntry>> {
-    published_sitemap_products(store(cx).db(), part)
-        .await
-        .map_err(Error::from_anyhow)
+    let db = store(cx).db();
+    match crate::read_in(cx) {
+        Some(language) => published_sitemap_products_in(db, part, language).await,
+        None => published_sitemap_products(db, part).await,
+    }
+    .map_err(Error::from_anyhow)
 }
 
 /// The live categories, for the sitemap.
 pub async fn sitemap_categories(cx: &Cx) -> Result<Vec<SitemapEntry>> {
-    published_sitemap_categories(store(cx).db())
-        .await
-        .map_err(Error::from_anyhow)
+    let db = store(cx).db();
+    match crate::read_in(cx) {
+        Some(language) => published_sitemap_categories_in(db, language).await,
+        None => published_sitemap_categories(db).await,
+    }
+    .map_err(Error::from_anyhow)
 }
 
 /// The shop's published pages, for the sitemap.
@@ -122,9 +203,12 @@ pub async fn sitemap_pages(cx: &Cx) -> Result<Vec<SitemapEntry>> {
 
 /// The blog's published articles, for the sitemap.
 pub async fn sitemap_articles(cx: &Cx) -> Result<Vec<SitemapEntry>> {
-    published_sitemap_articles(store(cx).db())
-        .await
-        .map_err(Error::from_anyhow)
+    let db = store(cx).db();
+    match crate::read_in(cx) {
+        Some(language) => published_sitemap_articles_in(db, language).await,
+        None => published_sitemap_articles(db).await,
+    }
+    .map_err(Error::from_anyhow)
 }
 
 /// The address shoppers reach `path` at: under

@@ -3,13 +3,14 @@
 //! and categories it shows in between, drawn as the shop's own cards.
 
 use timada_storefront::{
-    ArticleBlock, ArticleLd, Category, Product, ProductQuery, article_ld, breadcrumb_ld,
-    category_by_slug, menu, product_by_slug, product_image, products, require_article,
+    ArticleBlock, ArticleLd, Category, Product, ProductQuery, article_ld, article_slugs,
+    breadcrumb_ld, category_by_slug, menu, product_by_slug, product_image, products,
+    require_article,
 };
 use topcoat::{
     Result,
     context::Cx,
-    router::{href, module_param, page},
+    router::{error::redirect_permanent, href, module_param, page},
     view::{Unescaped, View, attributes, view},
 };
 
@@ -75,10 +76,21 @@ async fn shown(cx: &Cx, blocks: Vec<ArticleBlock>) -> Result<Vec<Shown>> {
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let mut article = require_article(cx, slug(cx)).await?;
+    // One address a language: asked by its main slug where it is
+    // translated, it moves to the one it goes by here.
+    if article.slug != slug(cx) {
+        return Err(
+            redirect_permanent(href!(index, slug: article.slug.clone()).resolve(cx)).into(),
+        );
+    }
+    let slugs = article_slugs(cx, &article.id).await?;
     let nav = menu(cx).await?;
     let blocks = shown(cx, std::mem::take(&mut article.blocks)).await?;
     let path = href!(index, slug: article.slug.clone()).resolve(cx);
     let speaking = crate::app::lang::speaking(cx).await;
+    let elsewhere = speaking.elsewhere(&path, |language| {
+        href!(index, slug: slugs.in_language(language).to_owned()).resolve(cx)
+    });
     let url = speaking.absolute(cx, &path);
     let home = speaking.absolute(cx, &href!(crate::app::index).resolve(cx));
     let blog = speaking.absolute(cx, &href!(super::index).resolve(cx));
@@ -107,6 +119,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             title: &article.meta_title,
             description: Some(article.meta_description.as_str()).filter(|text| !text.is_empty()),
             canonical: Some(path.as_str()),
+            elsewhere: &elsewhere,
             image: image.as_deref(),
             published: Some(article.published_at),
             structured: &structured,

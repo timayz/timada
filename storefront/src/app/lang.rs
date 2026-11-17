@@ -14,7 +14,7 @@
 //! ([`shop_languages`]); this storefront serves those it has words for
 //! ([`SPOKEN`]) and leaves the others out.
 
-use timada_storefront::{absolute_url, shop_languages};
+use timada_storefront::{ReadIn, absolute_url, shop_languages};
 use topcoat::{
     context::{Cx, memoize},
     router::{
@@ -49,8 +49,9 @@ const ENGLISH_ROUTES: &[(&str, &str)] = &[
 ];
 
 /// The first parts of a path that are the same address in every language:
-/// what search engines and the library's own callers read.
-const UNLOCALIZED: &[&str] = &["robots.txt", "store", "favicon.ico"];
+/// what search engines and the library's own callers read. The sitemap's
+/// index is one of them; the files it lists are a language's each.
+const UNLOCALIZED: &[&str] = &["robots.txt", "sitemap.xml", "store", "favicon.ico"];
 
 /// The attributes of a page that hold an address of the shop.
 const ADDRESS_ATTRIBUTES: &[&str] = &[
@@ -144,11 +145,7 @@ impl Languages {
             .split('/')
             .next()
             .unwrap_or_default();
-        if !path.starts_with('/')
-            || path.starts_with("//")
-            || UNLOCALIZED.contains(&first)
-            || first.starts_with("sitemap")
-        {
+        if !path.starts_with('/') || path.starts_with("//") || UNLOCALIZED.contains(&first) {
             return internal.to_owned();
         }
         if language == self.main {
@@ -249,19 +246,53 @@ impl Speaking<'_> {
 
     /// The whole address of the French path `internal` in each language
     /// of the shop, the main one first: none for a shop read in one
-    /// language.
-    pub fn alternates(&self, cx: &Cx, internal: &str) -> Vec<(&'static str, String)> {
+    /// language. `elsewhere` gives the French path of the languages that
+    /// read the page at another one (a product goes by another slug in
+    /// each).
+    pub fn alternates(
+        &self,
+        cx: &Cx,
+        internal: &str,
+        elsewhere: &[(&'static str, String)],
+    ) -> Vec<(&'static str, String)> {
         if self.languages.others.is_empty() {
             return Vec::new();
         }
         self.languages
             .all()
             .map(|language| {
+                let path = elsewhere
+                    .iter()
+                    .find(|(theirs, _)| *theirs == language)
+                    .map_or(internal, |(_, path)| path.as_str());
                 (
                     language,
-                    absolute_url(cx, &self.languages.write(language, internal)),
+                    absolute_url(cx, &self.languages.write(language, path)),
                 )
             })
+            .collect()
+    }
+
+    /// The whole address of the French path `internal` in every language
+    /// of the shop, the main one first: one for a shop read in one.
+    pub fn in_each(&self, cx: &Cx, internal: &str) -> Vec<String> {
+        self.languages
+            .all()
+            .map(|language| absolute_url(cx, &self.languages.write(language, internal)))
+            .collect()
+    }
+
+    /// The French path each language reads a page at, when it is `path`
+    /// of the language's own slug: `canonical`'s query stays on.
+    pub fn elsewhere(
+        &self,
+        canonical: &str,
+        path: impl Fn(&str) -> String,
+    ) -> Vec<(&'static str, String)> {
+        let query = split(canonical).1;
+        self.languages
+            .all()
+            .map(|language| (language, format!("{}{query}", path(language))))
             .collect()
     }
 }
@@ -294,7 +325,14 @@ impl Layer for Localized {
                     return Err(redirect_permanent(proper).into());
                 }
                 if internal != visible {
-                    return Err(rewrite(internal, body).into());
+                    let sent = rewrite(internal, body);
+                    // What the library's readers word the catalogue in:
+                    // the main language needs no saying.
+                    return Err(if language == languages.main {
+                        sent.into()
+                    } else {
+                        sent.with(ReadIn::new(language)).into()
+                    });
                 }
             }
             let answer = next.run(cx, body).await;
@@ -449,9 +487,10 @@ mod tests {
         assert_eq!(shop.write("en", "/en/shop"), "/en/shop");
         assert_eq!(shop.write("en", "/en"), "/en");
         assert_eq!(shop.write("en", "/robots.txt"), "/robots.txt");
+        assert_eq!(shop.write("en", "/sitemap.xml"), "/sitemap.xml");
         assert_eq!(
             shop.write("en", "/sitemap-products.xml?part=1"),
-            "/sitemap-products.xml?part=1"
+            "/en/sitemap-products.xml?part=1"
         );
         assert_eq!(shop.write("en", "/store/status"), "/store/status");
         assert_eq!(shop.write("en", "//cdn.example/x"), "//cdn.example/x");
