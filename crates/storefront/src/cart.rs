@@ -58,7 +58,7 @@ use std::net::IpAddr;
 
 use anyhow::Context as _;
 use topcoat_core::context::Cx;
-use topcoat_core::error::Result;
+use topcoat_core::error::{Error, Result};
 use topcoat_router::request::client_ip;
 
 use timada_catalog::DeliveryDays;
@@ -1038,10 +1038,21 @@ fn picture(product: &Product, variant_id: Option<&str>) -> Option<String> {
         .map(|image| image.thumb_url.clone())
 }
 
-/// The cart, priced, or `None` for an id the store does not know.
+/// The cart, priced, or `None` for an id the store does not know. Its
+/// amounts are written as the request writes them ([`money`]), and its
+/// lines and offers named in the language the request is read in, where
+/// the products have a translation.
 pub async fn cart(cx: &Cx, cart_id: &str) -> Result<Option<CartView>> {
-    let cart = store(cx).cart(cart_id).await.map_err(into_error)?;
-    Ok(cart.map(|cart| cart.written_with(money(cx))))
+    let Some(cart) = store(cx).cart(cart_id).await.map_err(into_error)? else {
+        return Ok(None);
+    };
+    let mut cart = cart.written_with(money(cx));
+    if let Some(language) = crate::read_in(cx) {
+        crate::read_in::cart_in(store(cx).db(), language, &mut cart)
+            .await
+            .map_err(Error::from_anyhow)?;
+    }
+    Ok(Some(cart))
 }
 
 /// Adds `quantity` of a product (one variant of it, when it sells variants)

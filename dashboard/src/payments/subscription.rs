@@ -31,7 +31,7 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use timada_catalog::CatalogError;
+use timada_catalog::{CatalogError, TranslationKind};
 use timada_discounts::{
     DISCOUNT_ALREADY_USED, DISCOUNT_EXHAUSTED, DISCOUNT_UNKNOWN, DiscountError, RESERVATION_SECS,
 };
@@ -304,6 +304,40 @@ async fn on_checkout_requested<E: Executor>(
 }
 
 impl Checkouts {
+    /// Names the goods of a payment as the shopper read them: in the
+    /// language the request was made in, when it is one of the shop's other
+    /// languages and the product is worded in it. The order keeps these
+    /// names, so its page, its mails and its invoice say what the shopper
+    /// saw; a product with no translation there keeps its main name, as on
+    /// the storefront. A language the shop is not read in changes nothing,
+    /// whatever the merchant already worded in it.
+    async fn name_as_read(
+        &self,
+        tenant_id: &str,
+        pending: &mut timada_orders::PendingPayment,
+    ) -> anyhow::Result<()> {
+        let Some(language) = pending.request.language.as_deref() else {
+            return Ok(());
+        };
+        let read_in = timada_pages::Command::new(self.store.clone(), tenant_id)
+            .languages()
+            .await?
+            .is_some_and(|languages| languages.others.iter().any(|other| other == language));
+        if !read_in {
+            return Ok(());
+        }
+        let catalog = timada_catalog::Command::new(self.store.clone(), tenant_id);
+        for line in &mut pending.lines {
+            if let Some(translation) = catalog
+                .load_translation(TranslationKind::Product, &line.product_id, language)
+                .await?
+            {
+                line.name = translation.name;
+            }
+        }
+        Ok(())
+    }
+
     /// Answers the request to pay `request_id` of a cart (`event` is the
     /// request), asked at `requested_at` (unix seconds), with a payment to
     /// confirm or a refusal, unless another node claimed it first. A fault
@@ -412,6 +446,7 @@ impl Checkouts {
         // Goods a supplier buys once the order is placed keep the money held
         // until they are bought; otherwise it is taken as soon as the order is.
         pending.supplier = self.goods.supplier_of(tenant_id, &pending.lines).await?;
+        self.name_as_read(tenant_id, &mut pending).await?;
         let Some(merchant) = payments.active_tenant(&self.store, tenant_id).await? else {
             refuse(PAYMENTS_UNAVAILABLE).await?;
             return Ok(());
