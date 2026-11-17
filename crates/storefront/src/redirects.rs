@@ -26,12 +26,19 @@ pub(crate) const PRODUCT: &str = "product";
 pub(crate) const PAGE: &str = "page";
 /// The `kind` of a blog article's rows.
 pub(crate) const ARTICLE: &str = "article";
+/// The `kind` of a category's rows: a category keeps its main slug for
+/// life, so these are the slugs its translations left.
+pub(crate) const CATEGORY: &str = "category";
+/// The `language` of the slugs a thing left in the shop's main language.
+pub(crate) const MAIN: &str = "";
 
-/// Makes the former slugs of one thing in the copy what `wanted` says,
-/// writing only when they differ: most events of a product move none.
+/// Makes the former slugs of one thing in one language ([`MAIN`] for the
+/// main one) in the copy what `wanted` says, writing only when they
+/// differ: most events of a product move none.
 pub(crate) async fn write_former_slugs(
     tx: &Connection,
     kind: &str,
+    language: &str,
     id: &str,
     wanted: &[FormerSlug],
 ) -> anyhow::Result<()> {
@@ -43,8 +50,8 @@ pub(crate) async fn write_former_slugs(
     let were: Vec<(String, i64)> = fetch_all(
         tx,
         "SELECT slug, left_at FROM storefront_former_slugs
-         WHERE kind = ?1 AND id = ?2 ORDER BY slug, left_at",
-        (kind, id),
+         WHERE kind = ?1 AND id = ?2 AND language = ?3 ORDER BY slug, left_at",
+        (kind, id, language),
     )
     .await?;
     if were == wanted {
@@ -52,19 +59,34 @@ pub(crate) async fn write_former_slugs(
     }
     execute(
         tx,
-        "DELETE FROM storefront_former_slugs WHERE kind = ?1 AND id = ?2",
-        (kind, id),
+        "DELETE FROM storefront_former_slugs WHERE kind = ?1 AND id = ?2 AND language = ?3",
+        (kind, id, language),
     )
     .await?;
     for (slug, left_at) in &wanted {
         execute(
             tx,
-            "INSERT INTO storefront_former_slugs (kind, slug, id, left_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            (kind, slug.as_str(), id, *left_at),
+            "INSERT INTO storefront_former_slugs (kind, language, slug, id, left_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            (kind, language, slug.as_str(), id, *left_at),
         )
         .await?;
     }
+    Ok(())
+}
+
+/// Forgets the former slugs of a thing that is gone, in every language.
+pub(crate) async fn forget_former_slugs(
+    tx: &Connection,
+    kind: &str,
+    id: &str,
+) -> anyhow::Result<()> {
+    execute(
+        tx,
+        "DELETE FROM storefront_former_slugs WHERE kind = ?1 AND id = ?2",
+        (kind, id),
+    )
+    .await?;
     Ok(())
 }
 
@@ -83,16 +105,7 @@ pub enum MovedProduct {
 /// `None` when no product left that slug, or the one that did is a draft,
 /// deleted, or archived out of every live category.
 pub async fn moved_product_slug(db: &Db, slug: &str) -> anyhow::Result<Option<MovedProduct>> {
-    let left: Vec<(String, String, String)> = db
-        .fetch_all(
-            "SELECT p.id, p.slug, p.status
-             FROM storefront_former_slugs f
-             JOIN storefront_products p ON p.id = f.id
-             WHERE f.kind = ?1 AND f.slug = ?2
-             ORDER BY f.left_at DESC, f.id",
-            (PRODUCT, slug),
-        )
-        .await?;
+    let left = products_that_left(db, MAIN, slug).await?;
     if let Some((_, now, _)) = left.iter().find(|(_, _, status)| status == "published") {
         return Ok(Some(MovedProduct::Product(now.clone())));
     }
@@ -111,6 +124,96 @@ pub async fn moved_product_slug(db: &Db, slug: &str) -> anyhow::Result<Option<Mo
     Ok(None)
 }
 
+/// The products that left `slug` in `language`, the latest leaver first:
+/// each one's id, main slug and status.
+async fn products_that_left(
+    db: &Db,
+    language: &str,
+    slug: &str,
+) -> anyhow::Result<Vec<(String, String, String)>> {
+    db.fetch_all(
+        "SELECT p.id, p.slug, p.status
+         FROM storefront_former_slugs f
+         JOIN storefront_products p ON p.id = f.id
+         WHERE f.kind = ?1 AND f.language = ?2 AND f.slug = ?3
+         ORDER BY f.left_at DESC, f.id",
+        (PRODUCT, language, slug),
+    )
+    .await
+}
+
+/// The slug the thing `id` of `kind` goes by in `language`: its
+/// translation's, or its main one where it has none (a dropped
+/// translation's old address leads there).
+async fn slug_in(db: &Db, kind: &str, id: &str, language: &str) -> anyhow::Result<Option<String>> {
+    Ok(crate::read_in::slugs_of(db, kind, id)
+        .await?
+        .map(|slugs| slugs.in_language(language).to_owned()))
+}
+
+/// [`moved_product_slug`] for an address read in `language`, one of the
+/// shop's other languages: the slugs a translation left there first, then
+/// the ones left in the main language, which are a product's address there
+/// while it has no translation. What is returned is the slug in that
+/// language; `None` too when it is `slug` itself, which the page already
+/// answered for.
+pub async fn moved_product_slug_in(
+    db: &Db,
+    language: &str,
+    slug: &str,
+) -> anyhow::Result<Option<MovedProduct>> {
+    let mut left = products_that_left(db, language, slug).await?;
+    left.extend(products_that_left(db, MAIN, slug).await?);
+    if let Some((id, _, _)) = left.iter().find(|(_, _, status)| status == "published") {
+        return Ok(slug_in(db, PRODUCT, id, language)
+            .await?
+            .filter(|now| now != slug)
+            .map(MovedProduct::Product));
+    }
+    for (id, _, status) in &left {
+        if status != "archived" {
+            continue;
+        }
+        if let Some(category) = published_product_categories(db, id)
+            .await?
+            .into_iter()
+            .next()
+        {
+            let slug = slug_in(db, CATEGORY, &category.id, language)
+                .await?
+                .unwrap_or(category.slug);
+            return Ok(Some(MovedProduct::Category(slug)));
+        }
+    }
+    Ok(None)
+}
+
+/// The slug, in `language`, of the live category whose translation there
+/// last went by `slug`, if any. A category keeps its main slug for life:
+/// only a translation's address moves.
+pub async fn moved_category_slug_in(
+    db: &Db,
+    language: &str,
+    slug: &str,
+) -> anyhow::Result<Option<String>> {
+    let left: Option<(String,)> = db
+        .fetch_optional(
+            "SELECT c.id
+             FROM storefront_former_slugs f
+             JOIN storefront_categories c ON c.id = f.id
+             WHERE f.kind = ?1 AND f.language = ?2 AND f.slug = ?3 AND c.archived = 0
+             ORDER BY f.left_at DESC, f.id LIMIT 1",
+            (CATEGORY, language, slug),
+        )
+        .await?;
+    let Some((id,)) = left else {
+        return Ok(None);
+    };
+    Ok(slug_in(db, CATEGORY, &id, language)
+        .await?
+        .filter(|now| now != slug))
+}
+
 /// The slug of the published page that last went by `slug`, if any.
 pub async fn moved_page_slug(db: &Db, slug: &str) -> anyhow::Result<Option<String>> {
     let now: Option<(String,)> = db
@@ -118,9 +221,9 @@ pub async fn moved_page_slug(db: &Db, slug: &str) -> anyhow::Result<Option<Strin
             "SELECT p.slug
              FROM storefront_former_slugs f
              JOIN storefront_pages p ON p.id = f.id
-             WHERE f.kind = ?1 AND f.slug = ?2
+             WHERE f.kind = ?1 AND f.language = ?2 AND f.slug = ?3
              ORDER BY f.left_at DESC, f.id LIMIT 1",
-            (PAGE, slug),
+            (PAGE, MAIN, slug),
         )
         .await?;
     Ok(now.map(|(slug,)| slug))
@@ -128,17 +231,47 @@ pub async fn moved_page_slug(db: &Db, slug: &str) -> anyhow::Result<Option<Strin
 
 /// The slug of the published article that last went by `slug`, if any.
 pub async fn moved_article_slug(db: &Db, slug: &str) -> anyhow::Result<Option<String>> {
-    let now: Option<(String,)> = db
-        .fetch_optional(
-            "SELECT a.slug
-             FROM storefront_former_slugs f
-             JOIN storefront_articles a ON a.id = f.id
-             WHERE f.kind = ?1 AND f.slug = ?2
-             ORDER BY f.left_at DESC, f.id LIMIT 1",
-            (ARTICLE, slug),
-        )
-        .await?;
-    Ok(now.map(|(slug,)| slug))
+    Ok(article_that_left(db, MAIN, slug)
+        .await?
+        .map(|(_, slug)| slug))
+}
+
+/// The published article that last left `slug` in `language`: its id and
+/// its main slug.
+async fn article_that_left(
+    db: &Db,
+    language: &str,
+    slug: &str,
+) -> anyhow::Result<Option<(String, String)>> {
+    db.fetch_optional(
+        "SELECT a.id, a.slug
+         FROM storefront_former_slugs f
+         JOIN storefront_articles a ON a.id = f.id
+         WHERE f.kind = ?1 AND f.language = ?2 AND f.slug = ?3
+         ORDER BY f.left_at DESC, f.id LIMIT 1",
+        (ARTICLE, language, slug),
+    )
+    .await
+}
+
+/// [`moved_article_slug`] for an address read in `language`: the slugs a
+/// translation left there first, then the ones left in the main language.
+/// What is returned is the slug in that language.
+pub async fn moved_article_slug_in(
+    db: &Db,
+    language: &str,
+    slug: &str,
+) -> anyhow::Result<Option<String>> {
+    let left = match article_that_left(db, language, slug).await? {
+        Some(left) => Some(left),
+        None => article_that_left(db, MAIN, slug).await?,
+    };
+    let Some((id, _)) = left else {
+        return Ok(None);
+    };
+    Ok(slug_in(db, ARTICLE, &id, language)
+        .await?
+        .filter(|now| now != slug))
 }
 
 /// Where the merchant's list sends the old path `path` (no query), if it
@@ -157,12 +290,28 @@ pub async fn redirect_target(db: &Db, path: &str) -> anyhow::Result<Option<Strin
     Ok(to.map(|(to,)| to))
 }
 
-/// Where the product that went by `slug` is now; see
-/// [`moved_product_slug`]. For a product page that found nothing.
+/// Where the product that went by `slug` is now, in the language the
+/// request is read in; see [`moved_product_slug`] and
+/// [`moved_product_slug_in`]. For a product page that found nothing.
 pub async fn moved_product(cx: &Cx, slug: &str) -> Result<Option<MovedProduct>> {
-    moved_product_slug(store(cx).db(), slug)
-        .await
-        .map_err(Error::from_anyhow)
+    let db = store(cx).db();
+    match crate::read_in(cx) {
+        Some(language) => moved_product_slug_in(db, language, slug).await,
+        None => moved_product_slug(db, slug).await,
+    }
+    .map_err(Error::from_anyhow)
+}
+
+/// The slug of the live category that went by `slug` in the language the
+/// request is read in; see [`moved_category_slug_in`]. Always `None` in
+/// the main language, where a category never moves.
+pub async fn moved_category(cx: &Cx, slug: &str) -> Result<Option<String>> {
+    match crate::read_in(cx) {
+        Some(language) => moved_category_slug_in(store(cx).db(), language, slug)
+            .await
+            .map_err(Error::from_anyhow),
+        None => Ok(None),
+    }
 }
 
 /// The slug of the published page that went by `slug`; see
@@ -173,12 +322,16 @@ pub async fn moved_page(cx: &Cx, slug: &str) -> Result<Option<String>> {
         .map_err(Error::from_anyhow)
 }
 
-/// The slug of the published article that went by `slug`; see
-/// [`moved_article_slug`].
+/// The slug of the published article that went by `slug`, in the language
+/// the request is read in; see [`moved_article_slug`] and
+/// [`moved_article_slug_in`].
 pub async fn moved_article(cx: &Cx, slug: &str) -> Result<Option<String>> {
-    moved_article_slug(store(cx).db(), slug)
-        .await
-        .map_err(Error::from_anyhow)
+    let db = store(cx).db();
+    match crate::read_in(cx) {
+        Some(language) => moved_article_slug_in(db, language, slug).await,
+        None => moved_article_slug(db, slug).await,
+    }
+    .map_err(Error::from_anyhow)
 }
 
 /// Where the merchant's list sends `path`; see [`redirect_target`].
@@ -255,7 +408,7 @@ mod tests {
         let id = id.to_owned();
         let kind = kind.to_owned();
         db.write(&(kind, id, former), |tx, (kind, id, former)| {
-            Box::pin(async move { write_former_slugs(tx, kind, id, former).await })
+            Box::pin(async move { write_former_slugs(tx, kind, MAIN, id, former).await })
         })
         .await
         .unwrap();

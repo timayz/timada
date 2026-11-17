@@ -1,12 +1,15 @@
 //! An address that moved answers with a permanent redirect instead of a
 //! 404, so the links to it and what search engines know of it follow:
 //! a path on the merchant's list of redirects, a product's, a page's or an
-//! article's former slug, and an archived product, sent to its category.
+//! article's former slug, the one a translation left in its language, and
+//! an archived product, sent to its category.
 //!
 //! Only an address nothing answers is looked up: a slug something else
 //! took since shows that thing.
 
-use timada_storefront::{MovedProduct, moved_article, moved_page, moved_product, redirect_for};
+use timada_storefront::{
+    MovedProduct, moved_article, moved_category, moved_page, moved_product, redirect_for,
+};
 use topcoat::{
     Result,
     context::Cx,
@@ -70,6 +73,11 @@ async fn moved_to(cx: &Cx) -> Result<Option<String>> {
             }
             None => None,
         },
+        // A category keeps its slug for life in the main language; its
+        // translation's may move.
+        ["c", slug] => moved_category(cx, slug)
+            .await?
+            .map(|now| href!(c::slug::index, c::slug::slug: now).resolve(cx)),
         ["blog", slug] => moved_article(cx, slug)
             .await?
             .map(|now| href!(blog::slug::index, blog::slug::slug: now).resolve(cx)),

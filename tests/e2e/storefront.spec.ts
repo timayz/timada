@@ -2035,4 +2035,27 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   await page.goto(`${SHOP}/mentions-legales`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Mentions légales");
   await expect(page.locator("main")).toContainText("Le site est édité par Acme.");
+
+  // An English address that moved answers from the new one, in English
+  // alone; a dropped translation's leads to the main slug there.
+  const leads = async (path: string, to: string | null) => {
+    await expect(async () => {
+      const response = await request.get(`${SHOP}${path}`, { maxRedirects: 0 });
+      expect([response.status(), response.headers()["location"] ?? null]).toEqual(to ? [308, to] : [404, null]);
+    }).toPass({ timeout: 15_000 });
+  };
+  await page.goto(`${treeUrl}?tab=translations`);
+  await english.getByLabel("Address in this language").fill("big-cat-tree");
+  await english.getByRole("button", { name: "Save translation" }).click();
+  await expect(page.getByRole("status")).toContainText("Translation saved");
+  await page.goto(`${categoryUrl}/translations`);
+  await english.getByLabel("Address in this language").fill("felines");
+  await english.getByRole("button", { name: "Save translation" }).click();
+  await expect(page.getByRole("status")).toContainText("Translation saved");
+  await leads("/en/p/cat-tree", "/en/p/big-cat-tree");
+  await leads("/en/c/cats", "/en/c/felines");
+  await leads("/p/cat-tree", null);
+  await page.goto(`${SHOP}/en/p/cat-tree`);
+  await expect(page).toHaveURL(`${SHOP}/en/p/big-cat-tree`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Cat Tree");
 });

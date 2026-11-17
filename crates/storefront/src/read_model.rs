@@ -257,7 +257,8 @@ async fn delete_product_rows(db: &Db, product_id: &str) -> anyhow::Result<()> {
             ] {
                 execute(tx, statement, (product_id,)).await?;
             }
-            write_former_slugs(tx, crate::redirects::PRODUCT, product_id, &[]).await?;
+            crate::redirects::forget_former_slugs(tx, crate::redirects::PRODUCT, product_id)
+                .await?;
             Ok(())
         })
     })
@@ -709,7 +710,14 @@ async fn upsert_product(db: &Db, product: &ProductState) -> anyhow::Result<()> {
                     left_at: product.updated_at,
                 });
             }
-            write_former_slugs(tx, crate::redirects::PRODUCT, &product.id, &former).await?;
+            write_former_slugs(
+                tx,
+                crate::redirects::PRODUCT,
+                crate::redirects::MAIN,
+                &product.id,
+                &former,
+            )
+            .await?;
             // A variant added or removed changes what is counted.
             refresh_stock(tx, product).await?;
             Ok(())

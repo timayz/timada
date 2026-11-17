@@ -17,7 +17,7 @@ use topcoat_router::error::not_found;
 
 use crate::context::store;
 use crate::query::search_key;
-use crate::redirects::{PAGE, write_former_slugs};
+use crate::redirects::{MAIN, PAGE, write_former_slugs};
 
 /// The longest description a page gives search engines when the merchant
 /// wrote none: the start of its text.
@@ -186,7 +186,7 @@ async fn upsert_page(db: &Db, page: &PageState) -> anyhow::Result<()> {
                 )
                 .await?;
                 // A page nobody reads is not redirected to.
-                return write_former_slugs(tx, PAGE, &page.id, &[]).await;
+                return write_former_slugs(tx, PAGE, MAIN, &page.id, &[]).await;
             }
             execute(
                 tx,
@@ -211,7 +211,7 @@ async fn upsert_page(db: &Db, page: &PageState) -> anyhow::Result<()> {
             )
             .await?;
             // The slugs it left: where an old address is redirected from.
-            write_former_slugs(tx, PAGE, &page.id, &page.former_slugs).await
+            write_former_slugs(tx, PAGE, MAIN, &page.id, &page.former_slugs).await
         })
     })
     .await
