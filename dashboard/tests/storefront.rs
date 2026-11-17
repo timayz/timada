@@ -3362,6 +3362,134 @@ async fn a_store_knows_the_languages_it_is_read_in() {
 }
 
 #[tokio::test]
+async fn a_store_carries_what_a_product_and_a_category_say_in_other_languages() {
+    use timada_catalog::{TranslationKind, TranslationText};
+    use timada_storefront::{translated_slug, translation_of};
+
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme);
+    let tree = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Arbre à chat".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    let cats = catalog
+        .create_category(
+            "alice",
+            timada_catalog::CreateCategory {
+                name: "Chats".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .translate(
+            "alice",
+            TranslationKind::Product,
+            &tree.id,
+            "en",
+            TranslationText {
+                name: "Cat Tree".into(),
+                description: "Three floors.".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .translate(
+            "alice",
+            TranslationKind::Category,
+            &cats.id,
+            "en",
+            TranslationText {
+                name: "Cats".into(),
+                questions: vec![timada_catalog::CategoryQuestion {
+                    question: "Which size?".into(),
+                    answer: "Measure your cat.".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
+    let english = async |kind, id: &str| translation_of(&db, kind, id, "en").await.unwrap();
+    eventually("the translations reach the local copy", async || {
+        english(TranslationKind::Product, &tree.id).await.is_some()
+            && english(TranslationKind::Category, &cats.id).await.is_some()
+    })
+    .await;
+    let product = english(TranslationKind::Product, &tree.id).await.unwrap();
+    assert_eq!(product.name, "Cat Tree");
+    assert_eq!(product.slug, "cat-tree");
+    assert_eq!(product.description, "Three floors.");
+    assert_eq!(product.meta_title, "");
+    let category = english(TranslationKind::Category, &cats.id).await.unwrap();
+    assert_eq!(category.slug, "cats");
+    assert_eq!(category.questions[0].answer, "Measure your cat.");
+    // Its address there, and nothing in a language it is not worded in.
+    assert_eq!(
+        translated_slug(&db, TranslationKind::Product, "en", "cat-tree")
+            .await
+            .unwrap(),
+        Some(tree.id.clone())
+    );
+    assert_eq!(
+        translated_slug(&db, TranslationKind::Category, "en", "cat-tree")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        translation_of(&db, TranslationKind::Product, &tree.id, "de")
+            .await
+            .unwrap(),
+        None
+    );
+
+    // A new slug moves the address; a dropped translation leaves no row.
+    catalog
+        .translate(
+            "alice",
+            TranslationKind::Product,
+            &tree.id,
+            "en",
+            TranslationText {
+                name: "Cat Tree".into(),
+                slug: Some("big-cat-tree".into()),
+                description: "Three floors.".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    catalog
+        .drop_translation("alice", TranslationKind::Category, &cats.id, "en")
+        .await
+        .unwrap();
+    eventually("the copy follows the translations", async || {
+        english(TranslationKind::Category, &cats.id).await.is_none()
+            && english(TranslationKind::Product, &tree.id)
+                .await
+                .is_some_and(|product| product.slug == "big-cat-tree")
+    })
+    .await;
+
+    store.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_product_shows_its_own_delivery_time_else_the_shops_default() {
     let h = harness(None).await;
     let acme = h.create("acme").await;

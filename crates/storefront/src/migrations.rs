@@ -283,6 +283,24 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             main TEXT NOT NULL,
             others_json TEXT NOT NULL
         );
+        -- What a product or a category (`kind`) says in one more language
+        -- of the shop, as the back office worded it: a part left empty is
+        -- read in the main language, and so is a thing with no row.
+        CREATE TABLE storefront_translations (
+            kind TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            language TEXT NOT NULL,
+            name TEXT NOT NULL,
+            slug TEXT NOT NULL,
+            description TEXT NOT NULL,
+            body TEXT NOT NULL,
+            meta_title TEXT NOT NULL,
+            meta_description TEXT NOT NULL,
+            questions_json TEXT NOT NULL,
+            PRIMARY KEY (kind, subject_id, language)
+        );
+        CREATE INDEX storefront_translations_slug
+            ON storefront_translations (kind, language, slug);
         -- The shop's shipping methods as the back office has them, for
         -- what the offers say of delivery: one row, a JSON list.
         CREATE TABLE storefront_shipping_methods (
@@ -354,6 +372,7 @@ pub const TABLES: &[&str] = &[
     "storefront_meta_pixel",
     "storefront_newsletter_popup",
     "storefront_languages",
+    "storefront_translations",
     "storefront_shipping_methods",
     "storefront_return_policy",
 ];

@@ -633,6 +633,43 @@ pub fn category_slug_id(slug: &str) -> String {
     evento::hash_ids(vec!["category-slug", slug])
 }
 
+/// What a translation words: a product or a category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TranslationKind {
+    Product,
+    Category,
+}
+
+impl TranslationKind {
+    /// The name the events and the index ids carry.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Product => "product",
+            Self::Category => "category",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "product" => Some(Self::Product),
+            "category" => Some(Self::Category),
+            _ => None,
+        }
+    }
+}
+
+/// The stream of what a product or a category says in `language`.
+pub fn translation_id(kind: TranslationKind, subject_id: &str, language: &str) -> String {
+    evento::hash_ids(vec!["translation", kind.as_str(), subject_id, language])
+}
+
+/// The index stream of a slug in `language`. Each kind and each language
+/// has its own: a product's page and a category's live under different
+/// paths, and a language's under its own prefix.
+pub fn translation_slug_id(kind: TranslationKind, language: &str, slug: &str) -> String {
+    evento::hash_ids(vec!["translation-slug", kind.as_str(), language, slug])
+}
+
 /// Trims a category name and checks it is 1 to 80 characters.
 pub fn normalize_category_name(name: &str) -> Result<String, CatalogError> {
     let name = name.trim();

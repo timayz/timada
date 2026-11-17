@@ -24,6 +24,7 @@ pub mod rename;
 pub mod seo;
 pub mod stock;
 pub mod tax_category;
+pub mod translations;
 pub mod uncategorize;
 pub mod unpublish;
 pub mod variants;
@@ -36,7 +37,7 @@ use timada_catalog::{
     MAX_FEED_LABEL_LEN, MAX_GOOGLE_CATEGORY_LEN, MAX_IMAGES_PER_PRODUCT, MAX_META_DESCRIPTION_LEN,
     MAX_META_TITLE_LEN, MAX_MPN_LEN, MAX_NAME_LEN, MAX_OPTION_LABEL_LEN, MAX_OPTION_NAME_LEN,
     MAX_OPTIONS, MAX_SKU_LEN, MAX_VARIANTS, OPTION_KINDS, ProductOption, ProductState,
-    ProductVariant, TAX_CATEGORIES, format_money, tax_category_label,
+    ProductVariant, TAX_CATEGORIES, TranslationKind, format_money, tax_category_label,
 };
 use timada_core::Rendition;
 use timada_tenancy::{
@@ -72,6 +73,7 @@ use crate::components::table::{
 use crate::components::textarea::textarea;
 use crate::db::Db;
 use crate::media::Media;
+use crate::ui::translations::{MainWording, translation_cards, translation_cards_of};
 use crate::ui::{
     LINK, PageTab, Shell, document, empty_row, fact, facts, format_time, notice, page_header,
     page_tabs, section_card, status_badge,
@@ -102,6 +104,7 @@ pub enum Tab {
     Facts,
     Shopping,
     Margin,
+    Translations,
     AliExpress,
 }
 
@@ -116,6 +119,7 @@ impl Tab {
             Self::Facts => Some("facts"),
             Self::Shopping => Some("shopping"),
             Self::Margin => Some("margin"),
+            Self::Translations => Some("translations"),
             Self::AliExpress => Some("aliexpress"),
         }
     }
@@ -128,6 +132,7 @@ impl Tab {
             Self::Facts,
             Self::Shopping,
             Self::Margin,
+            Self::Translations,
             Self::AliExpress,
         ]
         .into_iter()
@@ -582,9 +587,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .iter()
         .map(|option| OptionRow::of(option, &product))
         .collect();
+    // The languages the shop is translated into: a shop read in one has
+    // no translations tab.
+    let other_languages = crate::app::t::slug::announcements::pages(&access)?
+        .languages()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .map(|languages| languages.others)
+        .unwrap_or_default();
     // A product no longer linked has no AliExpress tab to come back to.
     let tab = match Tab::of(query.tab.as_deref()) {
         Tab::AliExpress if link.is_none() => Tab::Overview,
+        Tab::Translations if other_languages.is_empty() => Tab::Overview,
         tab => tab,
     };
     // Only the tabs that show the stock read it: the overview for a product
@@ -647,6 +661,25 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .filter(|row| !product.categories.contains(&row.category.id))
         .map(Choice::of)
         .collect();
+    // Only the translations tab reads what the product says elsewhere.
+    let translation_cards = if tab == Tab::Translations {
+        let translations = catalog(&access)?
+            .load_translations(TranslationKind::Product, &product.id, &other_languages)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        translation_cards_of(&other_languages, &translations)
+    } else {
+        Vec::new()
+    };
+    let main_wording = MainWording {
+        name: product.name.clone(),
+        description: product.description.clone(),
+        meta_title: product.meta_title.clone(),
+        meta_description: product.meta_description.clone(),
+        name_max: MAX_NAME_LEN,
+        description_max: MAX_DESCRIPTION_LEN,
+        category: None,
+    };
     // Only the margin tab reads what a sale costs the shop and the VAT in
     // a price.
     let margin_view = if tab == Tab::Margin {
@@ -721,9 +754,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         page_tab(Tab::Shopping, "Shopping feed", None),
         page_tab(Tab::Margin, "Cost & margin", None),
     ];
+    if !other_languages.is_empty() {
+        tabs.push(page_tab(Tab::Translations, "Translations", None));
+    }
     if link.is_some() {
         tabs.push(page_tab(Tab::AliExpress, "AliExpress", None));
     }
+    let save_translation =
+        href!(translations::save::save, slug: slug.clone(), product_id: product.id.clone())
+            .resolve(cx);
+    let remove_translation =
+        href!(translations::remove::remove, slug: slug.clone(), product_id: product.id.clone())
+            .resolve(cx);
     // The reduction of a product sold as is, and the most it may be
     // measured from.
     let compare_at = product
@@ -1421,6 +1463,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             if let Some(margin) = &margin_view {
                 margin_tab(editable: editable, margin: margin)
+            }
+
+            if tab == Tab::Translations {
+                translation_cards(editable: editable, save: &save_translation, remove: &remove_translation, main: &main_wording, cards: &translation_cards)
             }
 
             if tab == Tab::Shopping {
