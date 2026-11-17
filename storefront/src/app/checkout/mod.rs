@@ -14,6 +14,8 @@ pub mod countries;
 pub mod places;
 pub mod start;
 
+use std::borrow::Cow;
+
 use timada_storefront::{
     CartView, Checkout, OfferView, OrderError, VatEstimate, accepts_business_buyers, menu,
     payment_setup, recent_reviews, request_language, request_time_zone, save_address,
@@ -32,12 +34,13 @@ use topcoat::{
 
 use crate::app::account::sign_in::sign_in_url;
 use crate::app::cart::{cart_url, current_cart, discount, summary_line};
+use crate::app::words::t;
 use crate::app::{document, say};
 use crate::shopper::{
     CheckoutDraft, PaymentInProgress, accounts_enabled, cart_id, checkout_draft,
     save_checkout_draft, set_payment_in_progress, shopper_token, signed_in,
 };
-use countries::{DEFAULT_COUNTRY, countries_for};
+use countries::{DEFAULT_COUNTRY, countries_for, country_name};
 
 /// How many reviews the page shows beside the cart.
 const REVIEWS_SHOWN: u32 = 3;
@@ -54,6 +57,9 @@ const vat = document.querySelector("[data-checkout-vat]");
 const country = form.elements.country;
 // Absent when the shop does not sell to businesses.
 const vatNumber = form.elements.vat_number;
+// The script's own sentences, in the page's language.
+const words = form.dataset;
+const language = document.documentElement.lang || "fr";
 
 // The shipping method picked, among those that ship to the country.
 const methods = [...form.querySelectorAll("input[name=shipping_method]")];
@@ -115,6 +121,8 @@ const provinceBox = form.querySelector("[data-province]");
 const provinceLabel = form.querySelector("[data-province-label]");
 const province = form.elements.region;
 const cityLabel = form.querySelector("[data-city-label]");
+const provinceWord = provinceLabel.textContent;
+const cityWord = cityLabel.textContent;
 const cityField = form.elements.city;
 const cityPick = form.querySelector("[data-city-pick]");
 const townBox = form.querySelector("[data-town]");
@@ -134,7 +142,7 @@ const placeKey = (name) => name
 function listPlaces(select, names, prompt) {
   select.replaceChildren(
     new Option(prompt, ""),
-    ...names.map((name) => new Option(name === "Other" ? "Autre" : name, name)),
+    ...names.map((name) => new Option(name === "Other" ? words.sayOther : name, name)),
   );
 }
 function typeCity() {
@@ -142,7 +150,7 @@ function typeCity() {
   cityField.type = "text";
   cityField.removeAttribute("aria-label");
   cityLabel.htmlFor = cityField.id;
-  cityLabel.textContent = "Ville";
+  cityLabel.textContent = cityWord;
   communeHint.hidden = true;
   cityPick.hidden = cityPick.disabled = true;
   townBox.hidden = townPick.disabled = true;
@@ -158,9 +166,9 @@ function showCityPicked() {
   const towns = cities.find((city) => city.name === cityPick.value)?.towns || [];
   const other = cityPick.value === "Other";
   cityField.type = other ? "text" : "hidden";
-  if (other) cityField.setAttribute("aria-label", "Votre ville");
+  if (other) cityField.setAttribute("aria-label", words.sayYourCity);
   else cityField.removeAttribute("aria-label");
-  listPlaces(townPick, towns, "Choisir…");
+  listPlaces(townPick, towns, words.sayChoose);
   townBox.hidden = townPick.disabled = !towns.length;
 }
 // Lists the cities, on the place already in the field when they have it: a
@@ -175,7 +183,7 @@ function listCities(answer, prompt) {
   cityPick.value = city ? city.name : other ? "Other" : "";
   cityLabel.htmlFor = cityPick.id;
   const districts = DISTRICT_LISTS.includes(country.value);
-  cityLabel.textContent = districts ? "Province / district" : "Ville";
+  cityLabel.textContent = districts ? words.sayDistrict : cityWord;
   communeHint.hidden = !districts;
   cityPick.hidden = false;
   cityPick.disabled = !cities.length;
@@ -209,19 +217,19 @@ async function showPlaces(postalChanged = false) {
   if (postalChanged && awaited && province.value) return;
   // France's list holds its départements, not its régions.
   const french = country.value === "FR";
-  provinceLabel.textContent = french ? "Département" : "Région / Province";
+  provinceLabel.textContent = french ? words.sayDepartment : provinceWord;
   const current = provincePicked || places.province || "";
   // What was picked in another province is no place in this one.
   if (shownProvince && current !== shownProvince) cityField.value = "";
   shownProvince = current;
-  listPlaces(province, places.provinces, "Choisir…");
+  listPlaces(province, places.provinces, words.sayChoose);
   province.value = places.provinces.includes(current) ? current : "";
   // Hidden and still empty, it must not hold the form back.
   province.disabled = awaited;
   provinceBox.hidden = awaited || !!places.province;
-  if (awaited) listCities([], "Saisissez d'abord votre code postal");
-  else if (!province.value) listCities([], french ? "Choisir d'abord le département" : "Choisir d'abord la région");
-  else if (places.cities.length) listCities(places.cities, "Choisir…");
+  if (awaited) listCities([], words.sayPostalFirst);
+  else if (!province.value) listCities([], french ? words.sayDepartmentFirst : words.sayRegionFirst);
+  else if (places.cities.length) listCities(places.cities, words.sayChoose);
   else typeCity();
 }
 province.addEventListener("change", () => {
@@ -329,7 +337,7 @@ if (key && window.Stripe) {
     // country, else all of them.
     shippingRates: rates.length
       ? (ratesTo(country.value).length ? ratesTo(country.value) : allRates)
-      : [{ id: "standard", displayName: "Livraison standard", amount: 0 }],
+      : [{ id: "standard", displayName: words.sayStandardShipping, amount: 0 }],
   }));
   // Only the methods that ship to the wallet's address, priced in.
   express.on("shippingaddresschange", (event) => {
@@ -413,37 +421,45 @@ function phoneText() {
 const flagOf = (iso) => [...iso].map((c) => String.fromCodePoint(0x1f1e6 + c.charCodeAt(0) - 65)).join("");
 let regionName = (iso) => iso;
 try {
-  const names = new Intl.DisplayNames(["fr"], { type: "region" });
+  const names = new Intl.DisplayNames([language], { type: "region" });
   regionName = (iso) => names.of(iso) || iso;
 } catch {}
 const plain = (text) => text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 const phoneCountries = [...phoneCode.options]
   .map((option) => ({ option, iso: option.dataset.iso, dial: option.value, name: regionName(option.dataset.iso) }))
-  .sort((a, b) => a.name.localeCompare(b.name, "fr"));
+  .sort((a, b) => a.name.localeCompare(b.name, language));
 const pickedCountry = () => phoneCode.selectedOptions[0]?.dataset.iso || "";
 const picker = document.createElement("div");
 picker.className = "phone-picker";
 picker.innerHTML = `
-  <button type="button" class="phone-country" aria-haspopup="dialog" aria-expanded="false" aria-label="Indicatif">
+  <button type="button" class="phone-country" aria-haspopup="dialog" aria-expanded="false">
     <span class="phone-flag"></span> <span class="phone-dial"></span>
   </button>
-  <div class="phone-dialog" role="dialog" aria-modal="true" aria-label="Indicatif" hidden>
-    <input type="search" class="phone-search" placeholder="Rechercher" aria-label="Rechercher un pays" role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls="phone-country-list" autocomplete="off">
-    <p class="phone-none" hidden>Aucun pays trouvé</p>
-    <ul class="phone-list" id="phone-country-list" role="listbox" aria-label="Pays de l'indicatif"></ul>
+  <div class="phone-dialog" role="dialog" aria-modal="true" hidden>
+    <input type="search" class="phone-search" role="combobox" aria-expanded="true" aria-autocomplete="list" aria-controls="phone-country-list" autocomplete="off">
+    <p class="phone-none" hidden></p>
+    <ul class="phone-list" id="phone-country-list" role="listbox"></ul>
   </div>`;
 const phoneButton = picker.querySelector(".phone-country");
 const phoneDialog = picker.querySelector(".phone-dialog");
 const phoneSearch = picker.querySelector(".phone-search");
 const phoneNone = picker.querySelector(".phone-none");
 const phoneList = picker.querySelector(".phone-list");
+const dialWord = phoneCode.getAttribute("aria-label");
+phoneButton.setAttribute("aria-label", dialWord);
+phoneDialog.setAttribute("aria-label", dialWord);
+phoneSearch.placeholder = words.sayFind;
+phoneSearch.setAttribute("aria-label", words.sayFindCountry);
+phoneNone.textContent = words.sayNoCountry;
+phoneList.setAttribute("aria-label", words.sayDialCountries);
 let shown = [];
 let highlighted = -1;
 function showPhoneCountry() {
   const iso = pickedCountry();
   phoneButton.querySelector(".phone-flag").textContent = flagOf(iso);
   phoneButton.querySelector(".phone-dial").textContent = `+${phoneCode.value}`;
-  phoneButton.setAttribute("aria-label", `Indicatif : ${regionName(iso)} +${phoneCode.value}`);
+  phoneButton.setAttribute("aria-label", words.sayDialOf
+    .replace("{country}", () => regionName(iso)).replace("{dial}", () => phoneCode.value));
 }
 function highlight(index) {
   const items = [...phoneList.children];
@@ -570,7 +586,7 @@ async function pay() {
     fail(refused.message);
     return false;
   } catch {
-    fail("Une erreur est survenue. Veuillez réessayer.");
+    fail(words.sayFailed);
     return false;
   }
 }
@@ -611,8 +627,10 @@ fn saved_url(cx: &Cx, address: Option<&str>, billing: Option<&str>) -> String {
 }
 
 /// `dont 9,97€ VAT FR 20%`: the amount as the shop writes it.
-fn vat_text(estimate: &VatEstimate) -> String {
-    format!("dont {} {}", estimate.amount(), estimate.label())
+fn vat_text(cx: &Cx, estimate: &VatEstimate) -> String {
+    t!(checkout_vat_included, amount: estimate.amount(), label: estimate.label())
+        .resolve(cx)
+        .into_owned()
 }
 
 /// The shop's shipping options, as Express Checkout's rates (with the
@@ -697,8 +715,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         country
     } else {
         countries_for(&cart.shipping_options)
-            .find(|(code, _)| cart.ships_to(code))
-            .map_or(country, |(code, _)| code.to_owned())
+            .find(|code| cart.ships_to(code))
+            .map_or(country, |code| code.to_owned())
     };
     let (phone_code, phone_number) = draft.phone_parts();
     let phone_country =
@@ -719,30 +737,36 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let shipping_text = match &shipping {
         Some(option) => option.price(),
         None if cart.shipping_required => "—".to_owned(),
-        None => "Offerte".to_owned(),
+        None => t!(checkout_shipping_free).resolve(cx).into_owned(),
     };
     // What the VAT line says for each country and shipping method (`""`
     // for none), for the page's script to switch.
-    let billing_countries: Vec<(&str, &str)> = countries_for(&cart.shipping_options).collect();
-    let countries: Vec<(&str, &str, String)> = countries_for(&cart.shipping_options)
-        .filter(|(code, _)| cart.ships_to(code))
-        .map(|(code, name)| {
+    let billing_countries: Vec<(&str, Cow<'static, str>)> = countries_for(&cart.shipping_options)
+        .map(|code| (code, country_name(cx, code)))
+        .collect();
+    let countries: Vec<(&str, Cow<'static, str>, String)> = countries_for(&cart.shipping_options)
+        .filter(|code| cart.ships_to(code))
+        .map(|code| {
             let mut texts = serde_json::Map::new();
             for option in std::iter::once(None).chain(cart.shipping_options_to(code).map(Some)) {
                 if let Some(estimate) = cart.vat_estimate_with(code, option) {
                     texts.insert(
                         option.map(|option| option.id.clone()).unwrap_or_default(),
-                        vat_text(&estimate).into(),
+                        vat_text(cx, &estimate).into(),
                     );
                 }
             }
-            (code, name, serde_json::Value::Object(texts).to_string())
+            (
+                code,
+                country_name(cx, code),
+                serde_json::Value::Object(texts).to_string(),
+            )
         })
         .collect();
     let vat = cart
         .vat_estimate_with(&country, shipping.as_ref())
         .as_ref()
-        .map(vat_text)
+        .map(|estimate| vat_text(cx, estimate))
         .filter(|_| draft.vat_number.trim().is_empty() || country == "FR");
     let total_cents = cart.total_with(shipping.as_ref());
     let total = cart.total_with_label(shipping.as_ref()).unwrap_or_default();
@@ -764,45 +788,46 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .unwrap_or_default();
 
     let events = crate::app::tag::checkout_events(cx, &cart).await?;
+    let title = t!(checkout_title).resolve(cx);
 
     Ok(view! {
         document(
-            title: "Commander",
+            title: &title,
             nav: &nav,
             no_drawer: true,
             events: Some(&events),
             <div class="wrap">
-                <ol class="steps" aria-label="Étapes de la commande">
-                    <li class="done"><a href=(&back_to_cart)>"Panier"</a></li>
-                    <li aria-current="step">"Livraison & paiement"</li>
-                    <li>"Confirmation"</li>
+                <ol class="steps" aria-label=(t!(checkout_steps))>
+                    <li class="done"><a href=(&back_to_cart)>(t!(shell_cart))</a></li>
+                    <li aria-current="step">(t!(checkout_step_delivery))</li>
+                    <li>(t!(checkout_step_confirmation))</li>
                 </ol>
-                <h1 class="vh">"Commander"</h1>
+                <h1 class="vh">(t!(checkout_title))</h1>
                 if let Some(code) = query.error.as_deref() {
                     <p class="notice" role="alert">(say(code))</p>
                 }
                 <div class="checkout-grid">
-                    <aside class="checkout-aside" aria-label="Récapitulatif de la commande">
+                    <aside class="checkout-aside" aria-label=(t!(checkout_summary_label))>
                         <section class="card summary" data-checkout-summary="">
-                            <h2>"Votre panier"</h2>
+                            <h2>(t!(checkout_cart_title))</h2>
                             <ul class="lines">
                                 for line in &cart.lines {
                                     summary_line(line: line, currency: &currency, back: "checkout")
                                 }
                             </ul>
                             <details class="promo" open=(cart.discount_code.is_some())>
-                                <summary>"Vous avez un code promo ? Saisissez-le ici"</summary>
+                                <summary>(t!(checkout_promo_prompt))</summary>
                                 <form class="discount" method="post" action=(href!(discount::discount))>
                                     <input type="hidden" name="back" value="checkout">
                                     if let Some(code) = &cart.discount_code {
-                                        <span>"Code " <code>(code)</code></span>
-                                        <button name="remove" value="1">"Retirer le code"</button>
+                                        <span>(t!(checkout_promo_applied)) " " <code>(code)</code></span>
+                                        <button name="remove" value="1">(t!(checkout_promo_remove))</button>
                                     } else {
                                         <label>
-                                            <span class="vh">"Code promo"</span>
-                                            <input type="text" name="code" maxlength="32" autocomplete="off" placeholder="Code promo">
+                                            <span class="vh">(t!(checkout_promo_code))</span>
+                                            <input type="text" name="code" maxlength="32" autocomplete="off" placeholder=(t!(checkout_promo_code.placeholder))>
                                         </label>
-                                        <button>"Appliquer"</button>
+                                        <button>(t!(checkout_promo_apply))</button>
                                     }
                                 </form>
                                 if let Some(refused) = cart.discount_refused {
@@ -810,19 +835,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 }
                             </details>
                             <dl class="totals">
-                                <dt>"Sous-total"</dt>
+                                <dt>(t!(checkout_subtotal))</dt>
                                 <dd data-checkout-subtotal="">(cart.subtotal().unwrap_or_default())</dd>
                                 if let (Some(discount), Some(amount)) = (&cart.discount, cart.discount_amount()) {
-                                    <dt>"Code promo " <code>(&discount.code)</code></dt>
+                                    <dt>(t!(checkout_promo_code)) " " <code>(&discount.code)</code></dt>
                                     <dd data-checkout-discount=(&discount.code)>(amount)</dd>
                                 }
-                                <dt>"Livraison"</dt>
+                                <dt>(t!(checkout_shipping))</dt>
                                 <dd data-checkout-shipping="">(&shipping_text)</dd>
                                 if let Some(days) = cart.delivery_window {
-                                    <dt>"Délai de livraison"</dt>
+                                    <dt>(t!(checkout_delivery_time))</dt>
                                     <dd data-checkout-delivery=(crate::app::delivery_days(days))>(crate::app::delivery_days(days))</dd>
                                 }
-                                <dt class="total">"Total"</dt>
+                                <dt class="total">(t!(checkout_total))</dt>
                                 <dd class="total">
                                     <strong class="price" data-checkout-total="">(&total)</strong>
                                     <small data-checkout-vat="" hidden=(vat.is_none())>
@@ -832,24 +857,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             </dl>
                         </section>
                         <section class="reassure">
-                            <h2>"Commandez en toute confiance"</h2>
+                            <h2>(t!(checkout_trust_title))</h2>
                             <ul>
-                                <li>"Livraison avec suivi"</li>
-                                <li>"14 jours satisfait ou remboursé"</li>
-                                <li>"Un service client à votre écoute"</li>
-                                <li>"Paiement sécurisé"</li>
+                                <li>(t!(checkout_trust_tracking))</li>
+                                <li>(t!(checkout_trust_refund))</li>
+                                <li>(t!(checkout_trust_service))</li>
+                                <li>(t!(reassure_payment_title))</li>
                             </ul>
                         </section>
                         if !reviews.is_empty() {
                             <section class="reviews-aside" data-checkout-reviews="">
-                                <h2>"Ce que disent nos clients"</h2>
+                                <h2>(t!(checkout_reviews_title))</h2>
                                 for review in &reviews {
                                     <figure class="review">
                                         <figcaption>
                                             <span class="avatar" aria-hidden="true">(initials(&review.author_name))</span>
                                             <span>(&review.author_name)</span>
                                         </figcaption>
-                                        <div class="rating" aria-label=(format!("{} sur 5", review.rating))>(review.stars())</div>
+                                        <div class="rating" aria-label=(t!(rating_of_five, rating: review.rating))>(review.stars())</div>
                                         if let Some(title) = &review.title { <strong>(title)</strong> }
                                         <blockquote>(&review.body)</blockquote>
                                     </figure>
@@ -860,17 +885,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
                     <div class="checkout-main">
                         if let Some(shopper) = &shopper {
-                            <p class="returning" data-signed-in="">"Connecté en tant que " <strong>(&shopper.email)</strong></p>
+                            <p class="returning" data-signed-in="">(t!(checkout_signed_in_as)) " " <strong>(&shopper.email)</strong></p>
                         } else if accounts {
                             <p class="returning" data-returning="">
-                                "Déjà client ? " <a href=(&sign_in)>"Cliquez ici pour vous connecter"</a>
+                                (t!(checkout_returning)) " " <a href=(&sign_in)>(t!(checkout_returning_sign_in))</a>
                             </p>
                         }
                         if setup.is_some() {
-                            <section class="express" data-express="" hidden="" aria-label="Paiement express">
-                                <h2>"Paiement express"</h2>
+                            <section class="express" data-express="" hidden="" aria-label=(t!(checkout_express))>
+                                <h2>(t!(checkout_express))</h2>
                                 <div id="express-checkout"></div>
-                                <p class="or"><span>"ou"</span></p>
+                                <p class="or"><span>(t!(checkout_express_or))</span></p>
                             </section>
                         }
                         <form class="checkout" method="post" action=(href!(place)) data-checkout-form=""
@@ -878,17 +903,29 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             data-publishable-key=(&publishable_key) data-amount=(total_cents)
                             data-goods=(cart.total_cents) data-goods-total=(&goods_total) data-shipping=(&rates)
                             data-currency=(currency.to_lowercase())
-                            data-places-path=(href!(places::places)) data-region=(&draft.region)>
+                            data-places-path=(href!(places::places)) data-region=(&draft.region)
+                            data-say-choose=(t!(checkout_place_choose)) data-say-other=(t!(checkout_place_other))
+                            data-say-your-city=(t!(checkout_city_typed)) data-say-district=(t!(checkout_district))
+                            data-say-department=(t!(checkout_department))
+                            data-say-postal-first=(t!(checkout_place_postal_first))
+                            data-say-department-first=(t!(checkout_place_department_first))
+                            data-say-region-first=(t!(checkout_place_region_first))
+                            data-say-standard-shipping=(t!(checkout_shipping_standard))
+                            data-say-dial-of=(t!(checkout_phone_dial_of, country: "{country}", dial: "{dial}"))
+                            data-say-find=(t!(checkout_phone_search)) data-say-find-country=(t!(checkout_phone_search.label))
+                            data-say-no-country=(t!(checkout_phone_no_country))
+                            data-say-dial-countries=(t!(checkout_phone_countries))
+                            data-say-failed=(t!(checkout_pay_failed))>
                             <input type="hidden" name="expected_total_cents" value=(total_cents)>
                             <section class="card">
-                                <h2>"Vos coordonnées"</h2>
-                                <label for="checkout-email">"E-mail"</label>
+                                <h2>(t!(checkout_details_title))</h2>
+                                <label for="checkout-email">(t!(checkout_email))</label>
                                 <input id="checkout-email" name="email" type="email" required="" autocomplete="email" value=(&draft.email) readonly=(shopper.is_some())>
-                                <label for="checkout-name">"Nom complet"</label>
+                                <label for="checkout-name">(t!(checkout_name))</label>
                                 <input id="checkout-name" name="name" required="" autocomplete="name" value=(&draft.name)>
-                                <label for="checkout-phone">"Téléphone"</label>
+                                <label for="checkout-phone">(t!(checkout_phone))</label>
                                 <div class="phone" data-phone="">
-                                    <select id="checkout-phone-code" name="phone_code" aria-label="Indicatif" autocomplete="tel-country-code">
+                                    <select id="checkout-phone-code" name="phone_code" aria-label=(t!(checkout_phone_dial)) autocomplete="tel-country-code">
                                         for (dial_country, dial) in countries::DIAL_CODES {
                                             <option value=(dial) data-iso=(dial_country) selected=(*dial_country == phone_country)>(countries::flag(dial_country)) " +" (dial)</option>
                                         }
@@ -897,7 +934,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 </div>
                             </section>
                             <section class="card">
-                                <h2>"Adresse de livraison"</h2>
+                                <h2>(t!(checkout_address_title))</h2>
                                 if let Some(shopper) = shopper.as_ref().filter(|shopper| !shopper.addresses.is_empty()) {
                                     <ul class="saved" data-saved-addresses="">
                                         for saved in &shopper.addresses {
@@ -905,52 +942,52 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                                 data-billing-current=(billing_to.as_deref() == Some(saved.id.as_str()))>
                                                 (&saved.address.name) ", " (&saved.address.line1) ", "
                                                 (&saved.address.postal_code) " " (&saved.address.city) " "
-                                                <a href=(saved_url(cx, Some(&saved.id), billing_to.as_deref()))>"Livrer ici"</a> " "
-                                                <a href=(saved_url(cx, shipping_to.as_deref(), Some(&saved.id))) data-bill-here="">"Facturer ici"</a>
+                                                <a href=(saved_url(cx, Some(&saved.id), billing_to.as_deref()))>(t!(checkout_saved_ship_here))</a> " "
+                                                <a href=(saved_url(cx, shipping_to.as_deref(), Some(&saved.id))) data-bill-here="">(t!(checkout_saved_bill_here))</a>
                                             </li>
                                         }
                                     </ul>
                                 }
-                                <label for="checkout-line1">"Adresse"</label>
+                                <label for="checkout-line1">(t!(checkout_line1))</label>
                                 <input id="checkout-line1" name="line1" required="" autocomplete="address-line1" aria-describedby="checkout-commune-hint" value=(&draft.line1)>
-                                <p class="hint" id="checkout-commune-hint" data-commune-hint="" hidden=(true)>"Indiquez votre commune avec la rue."</p>
+                                <p class="hint" id="checkout-commune-hint" data-commune-hint="" hidden=(true)>(t!(checkout_commune_hint))</p>
                                 <details class="more" open=(!draft.line2.is_empty())>
-                                    <summary>"+ Ajouter une société, un appartement, un étage…"</summary>
-                                    <label for="checkout-line2">"Complément d'adresse (facultatif)"</label>
+                                    <summary>(t!(checkout_line2_prompt))</summary>
+                                    <label for="checkout-line2">(t!(checkout_line2))</label>
                                     <input id="checkout-line2" name="line2" autocomplete="address-line2" value=(&draft.line2)>
                                 </details>
                                 <div class="row">
                                     <span>
-                                        <label for="checkout-country">"Pays"</label>
+                                        <label for="checkout-country">(t!(checkout_country))</label>
                                         <select id="checkout-country" name="country" required="" autocomplete="country">
                                             for (code, name, text) in &countries {
-                                                <option value=(*code) selected=(*code == country) data-vat=(text)>(*name)</option>
+                                                <option value=(*code) selected=(*code == country) data-vat=(text)>(name.as_ref())</option>
                                             }
                                         </select>
                                     </span>
                                     <span>
-                                        <label for="checkout-postal-code">"Code postal"</label>
+                                        <label for="checkout-postal-code">(t!(checkout_postal_code))</label>
                                         <input id="checkout-postal-code" name="postal_code" required="" autocomplete="postal-code" value=(&draft.postal_code)>
                                     </span>
                                 </div>
                                 <div class="row">
                                     <span data-province="" hidden=(true)>
-                                        <label for="checkout-region" data-province-label="">"Région / Province"</label>
+                                        <label for="checkout-region" data-province-label="">(t!(checkout_province))</label>
                                         <select id="checkout-region" name="region" required="" autocomplete="address-level1" disabled=(true)></select>
                                     </span>
                                     <span>
-                                        <label for="checkout-city" data-city-label="">"Ville"</label>
+                                        <label for="checkout-city" data-city-label="">(t!(checkout_city))</label>
                                         <select id="checkout-city-pick" data-city-pick="" required="" hidden=(true) disabled=(true)></select>
                                         <input id="checkout-city" name="city" required="" autocomplete="address-level2" value=(&draft.city)>
                                     </span>
                                     <span data-town="" hidden=(true)>
-                                        <label for="checkout-town">"Commune"</label>
+                                        <label for="checkout-town">(t!(checkout_town))</label>
                                         <select id="checkout-town" data-town-pick="" required="" disabled=(true)></select>
                                     </span>
                                 </div>
                                 if !cart.shipping_options.is_empty() || cart.shipping_required {
                                     <fieldset class="shipping-methods" data-shipping-methods="">
-                                        <legend>"Mode de livraison"</legend>
+                                        <legend>(t!(checkout_shipping_method))</legend>
                                         for option in &cart.shipping_options {
                                             <label class="method" hidden=(!option.ships_to(&country))>
                                                 <input type="radio" name="shipping_method" value=(&option.id)
@@ -963,39 +1000,39 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                                 <span class="price">(option.price())</span>
                                             </label>
                                         }
-                                        <p class="notice" data-no-shipping="" hidden=(shipping.is_some())>"Cette boutique ne livre pas dans ce pays."</p>
+                                        <p class="notice" data-no-shipping="" hidden=(shipping.is_some())>(t!(checkout_no_shipping))</p>
                                     </fieldset>
                                 }
                                 if business {
-                                    <label for="checkout-vat">"Numéro de TVA intracommunautaire (facultatif, pour une facture hors TVA)"</label>
+                                    <label for="checkout-vat">(t!(checkout_vat_number))</label>
                                     <input id="checkout-vat" name="vat_number" autocomplete="off" placeholder="DE123456789" value=(&draft.vat_number)>
                                 }
                                 <label class="check">
                                     <input type="checkbox" name="billing_different" value="1" checked=(bills_elsewhere)>
-                                    " Utiliser une autre adresse de facturation (facultatif)"
+                                    " " (t!(checkout_billing_different))
                                 </label>
                                 <fieldset class="billing" data-billing="" hidden=(!bills_elsewhere) disabled=(!bills_elsewhere)>
-                                    <legend class="vh">"Adresse de facturation"</legend>
-                                    <label for="billing-name">"Nom ou société à facturer"</label>
+                                    <legend class="vh">(t!(checkout_billing_title))</legend>
+                                    <label for="billing-name">(t!(checkout_billing_name))</label>
                                     <input id="billing-name" name="billing_name" required="" autocomplete="billing name" value=(&draft.billing_name)>
-                                    <label for="billing-line1">"Adresse (facturation)"</label>
+                                    <label for="billing-line1">(t!(checkout_billing_line1))</label>
                                     <input id="billing-line1" name="billing_line1" required="" autocomplete="billing address-line1" value=(&draft.billing_line1)>
-                                    <label for="billing-line2">"Complément d'adresse de facturation (facultatif)"</label>
+                                    <label for="billing-line2">(t!(checkout_billing_line2))</label>
                                     <input id="billing-line2" name="billing_line2" autocomplete="billing address-line2" value=(&draft.billing_line2)>
                                     <div class="row">
                                         <span>
-                                            <label for="billing-city">"Ville de facturation"</label>
+                                            <label for="billing-city">(t!(checkout_billing_city))</label>
                                             <input id="billing-city" name="billing_city" required="" autocomplete="billing address-level2" value=(&draft.billing_city)>
                                         </span>
                                         <span>
-                                            <label for="billing-postal-code">"Code postal de facturation"</label>
+                                            <label for="billing-postal-code">(t!(checkout_billing_postal_code))</label>
                                             <input id="billing-postal-code" name="billing_postal_code" required="" autocomplete="billing postal-code" value=(&draft.billing_postal_code)>
                                         </span>
                                         <span>
-                                            <label for="billing-country">"Pays de facturation"</label>
+                                            <label for="billing-country">(t!(checkout_billing_country))</label>
                                             <select id="billing-country" name="billing_country" required="" autocomplete="billing country">
                                                 for (code, name) in &billing_countries {
-                                                    <option value=(*code) selected=(*code == billing_country)>(*name)</option>
+                                                    <option value=(*code) selected=(*code == billing_country)>(name.as_ref())</option>
                                                 }
                                             </select>
                                         </span>
@@ -1003,27 +1040,27 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     if shopper.is_some() {
                                         <label class="check">
                                             <input type="checkbox" name="save_billing_address" value="1">
-                                            " Enregistrer cette adresse de facturation dans mon compte"
+                                            " " (t!(checkout_billing_save))
                                         </label>
                                     }
                                 </fieldset>
-                                <p class="hint" data-import-notice="">"Livraison hors UE ? Des droits de douane et taxes peuvent être dus à la réception."</p>
+                                <p class="hint" data-import-notice="">(t!(checkout_import_notice))</p>
                                 if shopper.is_some() {
                                     <label class="check">
                                         <input type="checkbox" name="save_address" value="1" checked="">
-                                        " Enregistrer cette adresse dans mon compte"
+                                        " " (t!(checkout_address_save))
                                     </label>
                                 }
-                                <label for="checkout-note">"Remarque pour la boutique (facultatif)"</label>
+                                <label for="checkout-note">(t!(checkout_note))</label>
                                 <textarea id="checkout-note" name="note" rows="2">(&draft.note)</textarea>
                                 <label class="check">
                                     <input type="checkbox" name="newsletter" value="1" data-checkout-newsletter="">
-                                    " Je souhaite recevoir les nouveautés et offres de la boutique par e-mail (un lien de confirmation vous est envoyé)"
+                                    " " (t!(checkout_newsletter))
                                 </label>
                             </section>
                             if !offers.is_empty() {
                                 <section class="card offers" aria-labelledby="checkout-offers-title" data-checkout-offers="">
-                                    <h2 id="checkout-offers-title">"Offre exclusive"</h2>
+                                    <h2 id="checkout-offers-title">(t!(checkout_offers_title))</h2>
                                     <ul>
                                         for offer in &offers {
                                             <li data-checkout-offer=(&offer.name)>
@@ -1037,29 +1074,29 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                                     if offer.title.is_some() { <small>(&offer.name)</small> }
                                                     if let Some(label) = &offer.variant_label { <small class="variant">(label)</small> }
                                                     <span>
-                                                        <s aria-label=(format!("au lieu de {}", offer.price()))>(offer.price())</s> " "
+                                                        <s aria-label=(t!(checkout_offer_instead_of, price: offer.price()))>(offer.price())</s> " "
                                                         <strong class="price" data-offer-price="">(offer.offer_price())</strong> " "
                                                         <span class="off">"−" (offer.percent_off()) "%"</span>
                                                     </span>
                                                 </span>
                                                 // The offer's own form sits after this one: forms do not nest.
                                                 <button type="submit" form=(format!("offer-{}", offer.offer_id))
-                                                    aria-label=(format!("Ajouter {} à {}", offer.name, offer.offer_price()))>"Ajouter"</button>
+                                                    aria-label=(t!(checkout_offer_add_label, name: &offer.name, price: offer.offer_price()))>(t!(checkout_offer_add))</button>
                                             </li>
                                         }
                                     </ul>
                                 </section>
                             }
                             <section class="card">
-                                <h2>"Paiement"</h2>
-                                <p class="hint">"Toutes les transactions sont sécurisées et chiffrées. Les données de votre carte ne sont jamais stockées sur nos serveurs."</p>
+                                <h2>(t!(checkout_payment_title))</h2>
+                                <p class="hint">(t!(checkout_payment_secure))</p>
                                 if setup.is_some() {
                                     <div id="payment-element"></div>
                                 } else {
-                                    <p class="hint" data-payments-off="">"Le paiement par carte n'est pas encore disponible dans cette boutique."</p>
+                                    <p class="hint" data-payments-off="">(t!(checkout_payments_off))</p>
                                 }
                                 <p class="notice" role="alert" data-payment-error="" hidden=""></p>
-                                <button class="primary place">"Payer ma commande · " <span data-place-total="">(&total)</span></button>
+                                <button class="primary place">(t!(checkout_pay_button)) " · " <span data-place-total="">(&total)</span></button>
                             </section>
                         </form>
                         for offer in &offers {

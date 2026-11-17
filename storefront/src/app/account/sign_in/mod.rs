@@ -16,6 +16,7 @@ use topcoat::{
     view::{View, view},
 };
 
+use crate::app::words::t;
 use crate::app::{document, say};
 use crate::shopper::{SignInFlow, safe_next, set_sign_in_flow, sign_in_flow};
 
@@ -43,21 +44,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = menu(cx).await?;
     let next = safe_next(query.next.as_deref(), href!(super::index).resolve(cx));
     let email = sign_in_flow(cx).map(|flow| flow.email).unwrap_or_default();
+    let title = t!(shell_sign_in).resolve(cx);
     Ok(view! {
         document(
-            title: "Se connecter",
+            title: &title,
             nav: &nav,
             <div class="wrap">
-                <h1>"Se connecter"</h1>
-                <p>"Saisissez votre adresse e-mail : nous vous enverrons un code pour vous connecter. Pas de mot de passe ni de compte à créer : vos commandes passées avec cette adresse sont déjà là."</p>
+                <h1>(t!(shell_sign_in))</h1>
+                <p>(t!(account_sign_in_text))</p>
                 if let Some(code) = query.error.as_deref() {
                     <p class="notice" role="alert">(say(code))</p>
                 }
                 <form class="sign-in" method="post" action=(href!(request))>
                     <input type="hidden" name="next" value=(&next)>
-                    <label for="sign-in-email">"E-mail"</label>
+                    <label for="sign-in-email">(t!(account_sign_in_email))</label>
                     <input id="sign-in-email" name="email" type="email" required="" autocomplete="email" value=(&email)>
-                    <button class="primary">"Recevoir un code"</button>
+                    <button class="primary">(t!(account_sign_in_request))</button>
                 </form>
             </div>
         )

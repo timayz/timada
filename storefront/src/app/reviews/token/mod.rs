@@ -15,6 +15,7 @@ use topcoat::{
 use crate::app::account::sign_in::sign_in_url;
 use crate::app::document;
 use crate::app::orders::order_id::{index as order_page, order_id};
+use crate::app::words::t;
 use crate::shopper::remember_order;
 
 module_param!(pub token);
@@ -31,17 +32,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         return Err(redirect(to).into());
     }
     let nav = menu(cx).await?;
+    let title = t!(order_review_link_expired_title).resolve(cx);
 
     Ok(view! {
         document(
-            title: "Lien expiré",
+            title: &title,
             nav: &nav,
             <div class="wrap">
-                <h1>"Ce lien a expiré"</h1>
+                <h1>(t!(order_review_link_expired_heading))</h1>
                 <p data-review-link-expired="">
-                    "Le lien pour donner votre avis sur votre commande ne fonctionne plus. Connectez-vous avec l'adresse e-mail utilisée pour commander afin de retrouver vos commandes et donner votre avis."
+                    (t!(order_review_link_expired_text))
                 </p>
-                <p><a class="primary" href=(sign_in_url(cx, None, None))>"Se connecter"</a></p>
+                <p><a class="primary" href=(sign_in_url(cx, None, None))>(t!(shell_sign_in))</a></p>
             </div>
         )
     })

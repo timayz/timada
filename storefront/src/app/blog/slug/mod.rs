@@ -15,7 +15,7 @@ use topcoat::{
 };
 
 use super::published_on;
-use crate::app::{SHOP_NAME, c, catalog_grid, document};
+use crate::app::{SHOP_NAME, c, catalog_grid, document, words::t};
 
 module_param!(pub slug);
 
@@ -95,6 +95,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let home = speaking.absolute(cx, &href!(crate::app::index).resolve(cx));
     let blog = speaking.absolute(cx, &href!(super::index).resolve(cx));
     let image = article.cover.as_ref().map(|cover| cover.url.clone());
+    let home_name = t!(shell_home).resolve(cx);
+    let blog_name = t!(footer_blog).resolve(cx);
     let structured = [
         article_ld(&ArticleLd {
             title: &article.title,
@@ -107,8 +109,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             publisher_url: &home,
         }),
         breadcrumb_ld([
-            ("Accueil", home.as_str()),
-            ("Blog", blog.as_str()),
+            (&*home_name, home.as_str()),
+            (&*blog_name, blog.as_str()),
             (article.title.as_str(), url.as_str()),
         ]),
     ];
@@ -125,14 +127,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             structured: &structured,
             nav: &nav,
             <div class="wrap">
-                <nav class="crumbs" aria-label="Fil d'Ariane" data-crumbs="">
-                    <a href=(href!(crate::app::index))>"Accueil"</a>
-                    " / " <a href=(href!(super::index))>"Blog"</a>
+                <nav class="crumbs" aria-label=(t!(shell_crumbs)) data-crumbs="">
+                    <a href=(href!(crate::app::index))>(t!(shell_home))</a>
+                    " / " <a href=(href!(super::index))>(t!(footer_blog))</a>
                     " / " (&article.title)
                 </nav>
                 <article class="page post" data-article=(&article.slug)>
                     <h1>(&article.title)</h1>
-                    <p class="post-date">"Publié le " published_on(at: article.published_at)</p>
+                    <p class="post-date">(t!(blog_published_on)) " " published_on(at: article.published_at)</p>
                     if !article.summary.is_empty() {
                         <p class="post-lead">(&article.summary)</p>
                     }
@@ -141,7 +143,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     }
                     if contents {
                         <nav class="toc" aria-labelledby="toc-title" data-toc="">
-                            <h2 id="toc-title">"Sommaire"</h2>
+                            <h2 id="toc-title">(t!(blog_contents))</h2>
                             <ol>
                                 for heading in &article.headings {
                                     <li class=((heading.level > 2).then_some("sub"))>
@@ -160,7 +162,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     <p class="post-category">
                                         <a href=(href!(c::slug::index, c::slug::slug: category.slug.clone()))
                                             data-article-category=(&category.slug)>
-                                            "Voir " (&category.name) " →"
+                                            (t!(blog_see_category, name: &category.name))
                                         </a>
                                     </p>
                                 }

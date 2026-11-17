@@ -15,7 +15,7 @@ use topcoat::{
     view::{Unescaped, View, view},
 };
 
-use crate::app::{newsletter, sitemap};
+use crate::app::{newsletter, sitemap, words::t};
 use crate::shopper::{NEWSLETTER_COOKIE, invited};
 
 /// The pop-up this page carries for this visitor, if any: the merchant
@@ -69,17 +69,17 @@ pub async fn newsletter_dialog(cx: &Cx, popup: &NewsletterPopup) -> Result<impl 
             data-delay=(popup.delay_secs) data-on-leave=(popup.on_leave.then_some(""))
             data-cookie=(NEWSLETTER_COOKIE)>
             <form class="popup-close" method="dialog">
-                <button aria-label="Fermer">"×"</button>
+                <button aria-label=(t!(newsletter_popup_close))>"×"</button>
             </form>
             <h2 id="popup-title">(&popup.title)</h2>
             if !popup.text.is_empty() {
                 <p>(&popup.text)</p>
             }
             <form class="newsletter" method="post" action=(href!(newsletter::subscribe))>
-                <label for="popup-email">"Votre e-mail"</label>
+                <label for="popup-email">(t!(newsletter_email))</label>
                 <div class="newsletter-row">
-                    <input id="popup-email" name="email" type="email" required="" autocomplete="email" placeholder="vous@exemple.fr">
-                    <button class="btn">"S'inscrire"</button>
+                    <input id="popup-email" name="email" type="email" required="" autocomplete="email" placeholder=(t!(newsletter_email.placeholder))>
+                    <button class="btn">(t!(newsletter_subscribe))</button>
                 </div>
             </form>
         </dialog>

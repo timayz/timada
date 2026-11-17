@@ -1,0 +1,45 @@
+# The cart: its page (`/cart`), a line of it beside the checkout, and the
+# drawer that slides in on every page.
+
+cart_title = Votre panier
+cart_column_product = Produit
+cart_column_price = Prix
+cart_column_quantity = Quantité
+cart_column_amount = Montant
+cart_line_unnamed = Un produit qui n'est plus vendu
+cart_line_offer = Offre : 1 à { $price }
+cart_line_delivery = Livraison en { $days }
+cart_line_off_sale = Plus en vente : retirez-le pour commander le reste.
+cart_quantity_of = Quantité de { $name }
+cart_update = Mettre à jour
+cart_remove = Retirer
+    .label = Retirer { $name }
+cart_one_less = Un de moins : { $name }
+cart_one_more = Un de plus : { $name }
+cart_subtotal_label = Sous-total :
+cart_delivery_estimate = Livraison estimée : { $days } après la commande
+cart_promo_code = Code promo
+cart_promo_amount_after = {" "}:
+cart_promo_applied = Code
+cart_promo_remove = Retirer le code
+cart_promo_apply = Appliquer
+cart_total_label = Total :
+cart_order = Commander
+cart_empty = Votre panier est vide.
+cart_continue = Continuer mes achats
+cart_drawer_title = Votre panier ({ $count })
+cart_drawer_close = Fermer le panier
+cart_drawer_promo_question = Vous avez un code promo ?
+cart_drawer_subtotal = Sous-total
+cart_drawer_delivery = Délai de livraison
+cart_drawer_total = Total
+cart_drawer_taxes_hint = Taxes et frais de livraison calculés à l'étape de paiement.
+cart_drawer_order = Commander · { $total }
+cart_drawer_unavailable = Le panier est momentanément indisponible. Réessayez dans quelques minutes.
+cart_upsell_title = Vous aimerez aussi
+cart_upsell_add = Ajouter
+    .label = Ajouter { $name }
+cart_upsell_options = Choisir les options
+    .label = Choisir les options de { $name }
+cart_express_standard = Livraison standard
+cart_express_failed = Une erreur est survenue. Veuillez réessayer.

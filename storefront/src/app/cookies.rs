@@ -31,7 +31,7 @@ use topcoat::{
 };
 
 use crate::app::cart::site_path;
-use crate::app::document;
+use crate::app::{document, words::t};
 use crate::shopper::{consent, keep_source_within, remember_arrival, set_consent};
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -54,20 +54,17 @@ pub async fn consent_banner(cx: &Cx) -> Result<impl View> {
     // longer knows.
     let referrer = request_referrer(cx);
     Ok(view! {
-        <section class="consent" aria-label="Cookies" data-consent="">
+        <section class="consent" aria-label=(t!(cookies_label)) data-consent="">
             <div class="wrap">
-                <p>
-                    "Avec votre accord, nous utilisons des cookies pour mesurer l'audience du site et l'efficacité de nos publicités. "
-                    "Vous pouvez changer d'avis à tout moment, depuis le bas de chaque page."
-                </p>
+                <p>(t!(cookies_banner_text))</p>
                 <form method="post" action=(href!(answer))>
                     <input type="hidden" name="from" value=(here)>
                     if let Some(referrer) = &referrer {
                         <input type="hidden" name="referrer" value=(referrer)>
                     }
-                    <button class="btn" name="answer" value="none">"Tout refuser"</button>
-                    <button class="btn" name="answer" value="all">"Tout accepter"</button>
-                    <a href=(href!(index))>"Choisir"</a>
+                    <button class="btn" name="answer" value="none">(t!(cookies_refuse_all))</button>
+                    <button class="btn" name="answer" value="all">(t!(cookies_accept_all))</button>
+                    <a href=(href!(index))>(t!(cookies_choose))</a>
                 </form>
             </div>
         </section>
@@ -80,38 +77,35 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = menu(cx).await?;
     let given = consent(cx);
     let allowed = given.unwrap_or_default();
-    let title = "Gestion des cookies";
+    let title = t!(footer_cookies).resolve(cx);
     Ok(view! {
         document(
-            title: title,
+            title: &title,
             nav: &nav,
             no_banner: true,
             <div class="wrap">
-                <nav class="crumbs" aria-label="Fil d'Ariane">
-                    <a href=(href!(crate::app::index))>"Accueil"</a> " / " (title)
+                <nav class="crumbs" aria-label=(t!(shell_crumbs))>
+                    <a href=(href!(crate::app::index))>(t!(shell_home))</a> " / " (&*title)
                 </nav>
-                <h1>(title)</h1>
+                <h1>(&*title)</h1>
                 <div class="card panel" data-cookies=(given.map(|consent| consent.cookie_value()).unwrap_or("unanswered"))>
                     if query.done.is_some() {
-                        <p class="notice" role="status">"Votre choix est enregistré."</p>
+                        <p class="notice" role="status">(t!(cookies_saved))</p>
                     }
-                    <p>
-                        "Les cookies nécessaires au fonctionnement de la boutique (votre panier, votre commande, votre connexion) sont toujours déposés. "
-                        "Les autres ne le sont qu'avec votre accord, que vous pouvez retirer ici à tout moment."
-                    </p>
+                    <p>(t!(cookies_intro))</p>
                     <form class="cookies" method="post" action=(href!(answer))>
                         <label class="check">
                             <input type="checkbox" name="analytics" value="1" checked=(allowed.analytics)>
-                            <span><strong>"Mesure d'audience"</strong>" : savoir quelles pages sont vues et d'où viennent nos visiteurs."</span>
+                            <span><strong>(t!(cookies_analytics))</strong>(t!(cookies_analytics.purpose))</span>
                         </label>
                         <label class="check">
                             <input type="checkbox" name="ads" value="1" checked=(allowed.ads)>
-                            <span><strong>"Publicité"</strong>" : mesurer l'efficacité de nos annonces et les adapter à vos centres d'intérêt."</span>
+                            <span><strong>(t!(cookies_ads))</strong>(t!(cookies_ads.purpose))</span>
                         </label>
                         <p class="cookies-act">
-                            <button class="btn" name="answer" value="choice">"Enregistrer mes choix"</button>
-                            <button class="btn" name="answer" value="none">"Tout refuser"</button>
-                            <button class="btn" name="answer" value="all">"Tout accepter"</button>
+                            <button class="btn" name="answer" value="choice">(t!(cookies_save))</button>
+                            <button class="btn" name="answer" value="none">(t!(cookies_refuse_all))</button>
+                            <button class="btn" name="answer" value="all">(t!(cookies_accept_all))</button>
                         </p>
                     </form>
                 </div>

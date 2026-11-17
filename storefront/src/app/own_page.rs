@@ -14,7 +14,7 @@ use topcoat::{
 
 use crate::app::{
     conditions_generales_de_vente, document, mentions_legales, politique_de_confidentialite,
-    politique_de_livraison, politique_de_remboursement, qui_sommes_nous,
+    politique_de_livraison, politique_de_remboursement, qui_sommes_nous, words::t,
 };
 
 /// The slug of each page's text in the back office, which is also the
@@ -51,8 +51,8 @@ pub async fn shop_page(cx: &Cx, page: &PublicPage, nav: &[CategoryNode]) -> Resu
             description: Some(page.meta_description.as_str()),
             nav: nav,
             <div class="wrap">
-                <nav class="crumbs" aria-label="Fil d'Ariane" data-crumbs="">
-                    <a href=(href!(crate::app::index))>"Accueil"</a> " / " (&page.title)
+                <nav class="crumbs" aria-label=(t!(shell_crumbs)) data-crumbs="">
+                    <a href=(href!(crate::app::index))>(t!(shell_home))</a> " / " (&page.title)
                 </nav>
                 <article class="page" data-page=(&page.slug)>
                     <h1>(&page.title)</h1>

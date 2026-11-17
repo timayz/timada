@@ -1,280 +1,70 @@
 //! The countries the shop ships to, as the checkout's select lists them.
 
-use timada_storefront::ShippingOption;
+use std::{borrow::Cow, sync::LazyLock};
 
-/// ISO 3166-1 alpha-2 and the name a shopper reads, in that order: the EU,
-/// then its neighbours and a few more.
-pub const COUNTRIES: &[(&str, &str)] = &[
-    ("AT", "Autriche"),
-    ("BE", "Belgique"),
-    ("BG", "Bulgarie"),
-    ("HR", "Croatie"),
-    ("CY", "Chypre"),
-    ("CZ", "Tchéquie"),
-    ("DK", "Danemark"),
-    ("EE", "Estonie"),
-    ("FI", "Finlande"),
-    ("FR", "France"),
-    ("DE", "Allemagne"),
-    ("GR", "Grèce"),
-    ("HU", "Hongrie"),
-    ("IE", "Irlande"),
-    ("IT", "Italie"),
-    ("LV", "Lettonie"),
-    ("LT", "Lituanie"),
-    ("LU", "Luxembourg"),
-    ("MT", "Malte"),
-    ("MC", "Monaco"),
-    ("NL", "Pays-Bas"),
-    ("PL", "Pologne"),
-    ("PT", "Portugal"),
-    ("RO", "Roumanie"),
-    ("SK", "Slovaquie"),
-    ("SI", "Slovénie"),
-    ("ES", "Espagne"),
-    ("SE", "Suède"),
-    ("CA", "Canada"),
-    ("NO", "Norvège"),
-    ("CH", "Suisse"),
-    ("GB", "Royaume-Uni"),
-    ("US", "États-Unis"),
+use timada_storefront::ShippingOption;
+use topcoat::{
+    context::Cx,
+    l10n::{Catalog, locale, try_locale},
+};
+
+/// The countries a form names first, by ISO 3166-1 alpha-2 code, in this
+/// order: the EU, then its neighbours and a few more.
+pub const COUNTRIES: &[&str] = &[
+    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IE", "IT", "LV",
+    "LT", "LU", "MT", "MC", "NL", "PL", "PT", "RO", "SK", "SI", "ES", "SE", "CA", "NO", "CH", "GB",
+    "US",
 ];
 
 /// Every other country a shipping method can name, for those a shop ticks: its
-/// shipping page offers them all. By their short French names in the CLDR.
-const OTHER_COUNTRIES: &[(&str, &str)] = &[
-    ("AF", "Afghanistan"),
-    ("ZA", "Afrique du Sud"),
-    ("AL", "Albanie"),
-    ("DZ", "Algérie"),
-    ("AD", "Andorre"),
-    ("AO", "Angola"),
-    ("AI", "Anguilla"),
-    ("AQ", "Antarctique"),
-    ("AG", "Antigua-et-Barbuda"),
-    ("SA", "Arabie saoudite"),
-    ("AR", "Argentine"),
-    ("AM", "Arménie"),
-    ("AW", "Aruba"),
-    ("AU", "Australie"),
-    ("AZ", "Azerbaïdjan"),
-    ("BS", "Bahamas"),
-    ("BH", "Bahreïn"),
-    ("BD", "Bangladesh"),
-    ("BB", "Barbade"),
-    ("BZ", "Belize"),
-    ("BJ", "Bénin"),
-    ("BM", "Bermudes"),
-    ("BT", "Bhoutan"),
-    ("BY", "Biélorussie"),
-    ("BO", "Bolivie"),
-    ("BA", "Bosnie-Herzégovine"),
-    ("BW", "Botswana"),
-    ("BR", "Brésil"),
-    ("BN", "Brunei"),
-    ("BF", "Burkina Faso"),
-    ("BI", "Burundi"),
-    ("KH", "Cambodge"),
-    ("CM", "Cameroun"),
-    ("CV", "Cap-Vert"),
-    ("CL", "Chili"),
-    ("CN", "Chine"),
-    ("CO", "Colombie"),
-    ("KM", "Comores"),
-    ("CG", "Congo-Brazzaville"),
-    ("CD", "Congo-Kinshasa"),
-    ("KP", "Corée du Nord"),
-    ("KR", "Corée du Sud"),
-    ("CR", "Costa Rica"),
-    ("CI", "Côte d’Ivoire"),
-    ("CU", "Cuba"),
-    ("CW", "Curaçao"),
-    ("DJ", "Djibouti"),
-    ("DM", "Dominique"),
-    ("EG", "Égypte"),
-    ("AE", "Émirats arabes unis"),
-    ("EC", "Équateur"),
-    ("ER", "Érythrée"),
-    ("SZ", "Eswatini"),
-    ("VA", "État de la Cité du Vatican"),
-    ("ET", "Éthiopie"),
-    ("FJ", "Fidji"),
-    ("GA", "Gabon"),
-    ("GM", "Gambie"),
-    ("GE", "Géorgie"),
-    ("GS", "Géorgie du Sud-et-les Îles Sandwich du Sud"),
-    ("GH", "Ghana"),
-    ("GI", "Gibraltar"),
-    ("GD", "Grenade"),
-    ("GL", "Groenland"),
-    ("GP", "Guadeloupe"),
-    ("GU", "Guam"),
-    ("GT", "Guatemala"),
-    ("GG", "Guernesey"),
-    ("GN", "Guinée"),
-    ("GQ", "Guinée équatoriale"),
-    ("GW", "Guinée-Bissau"),
-    ("GY", "Guyana"),
-    ("GF", "Guyane française"),
-    ("HT", "Haïti"),
-    ("HN", "Honduras"),
-    ("HK", "Hong Kong"),
-    ("BV", "Île Bouvet"),
-    ("CX", "Île Christmas"),
-    ("IM", "Île de Man"),
-    ("NF", "Île Norfolk"),
-    ("AX", "Îles Åland"),
-    ("KY", "Îles Caïmans"),
-    ("CC", "Îles Cocos"),
-    ("CK", "Îles Cook"),
-    ("FO", "Îles Féroé"),
-    ("HM", "Îles Heard-et-MacDonald"),
-    ("FK", "Îles Malouines"),
-    ("MP", "Îles Mariannes du Nord"),
-    ("MH", "Îles Marshall"),
-    ("UM", "Îles mineures éloignées des États-Unis"),
-    ("PN", "Îles Pitcairn"),
-    ("SB", "Îles Salomon"),
-    ("TC", "Îles Turques-et-Caïques"),
-    ("VG", "Îles Vierges britanniques"),
-    ("VI", "Îles Vierges des États-Unis"),
-    ("IN", "Inde"),
-    ("ID", "Indonésie"),
-    ("IQ", "Irak"),
-    ("IR", "Iran"),
-    ("IS", "Islande"),
-    ("IL", "Israël"),
-    ("JM", "Jamaïque"),
-    ("JP", "Japon"),
-    ("JE", "Jersey"),
-    ("JO", "Jordanie"),
-    ("KZ", "Kazakhstan"),
-    ("KE", "Kenya"),
-    ("KG", "Kirghizstan"),
-    ("KI", "Kiribati"),
-    ("KW", "Koweït"),
-    ("RE", "La Réunion"),
-    ("LA", "Laos"),
-    ("LS", "Lesotho"),
-    ("LB", "Liban"),
-    ("LR", "Liberia"),
-    ("LY", "Libye"),
-    ("LI", "Liechtenstein"),
-    ("MO", "Macao"),
-    ("MK", "Macédoine du Nord"),
-    ("MG", "Madagascar"),
-    ("MY", "Malaisie"),
-    ("MW", "Malawi"),
-    ("MV", "Maldives"),
-    ("ML", "Mali"),
-    ("MA", "Maroc"),
-    ("MQ", "Martinique"),
-    ("MU", "Maurice"),
-    ("MR", "Mauritanie"),
-    ("YT", "Mayotte"),
-    ("MX", "Mexique"),
-    ("FM", "Micronésie"),
-    ("MD", "Moldavie"),
-    ("MN", "Mongolie"),
-    ("ME", "Monténégro"),
-    ("MS", "Montserrat"),
-    ("MZ", "Mozambique"),
-    ("MM", "Myanmar (Birmanie)"),
-    ("NA", "Namibie"),
-    ("NR", "Nauru"),
-    ("NP", "Népal"),
-    ("NI", "Nicaragua"),
-    ("NE", "Niger"),
-    ("NG", "Nigeria"),
-    ("NU", "Niue"),
-    ("NC", "Nouvelle-Calédonie"),
-    ("NZ", "Nouvelle-Zélande"),
-    ("OM", "Oman"),
-    ("UG", "Ouganda"),
-    ("UZ", "Ouzbékistan"),
-    ("PK", "Pakistan"),
-    ("PW", "Palaos"),
-    ("PS", "Palestine"),
-    ("PA", "Panama"),
-    ("PG", "Papouasie-Nouvelle-Guinée"),
-    ("PY", "Paraguay"),
-    ("BQ", "Pays-Bas caribéens"),
-    ("PE", "Pérou"),
-    ("PH", "Philippines"),
-    ("PF", "Polynésie française"),
-    ("PR", "Porto Rico"),
-    ("QA", "Qatar"),
-    ("CF", "République centrafricaine"),
-    ("DO", "République dominicaine"),
-    ("RU", "Russie"),
-    ("RW", "Rwanda"),
-    ("EH", "Sahara occidental"),
-    ("BL", "Saint-Barthélemy"),
-    ("KN", "Saint-Christophe-et-Niévès"),
-    ("SM", "Saint-Marin"),
-    ("MF", "Saint-Martin"),
-    ("SX", "Saint-Martin (partie néerlandaise)"),
-    ("PM", "Saint-Pierre-et-Miquelon"),
-    ("VC", "Saint-Vincent-et-les Grenadines"),
-    ("SH", "Sainte-Hélène"),
-    ("LC", "Sainte-Lucie"),
-    ("SV", "Salvador"),
-    ("WS", "Samoa"),
-    ("AS", "Samoa américaines"),
-    ("ST", "Sao Tomé-et-Principe"),
-    ("SN", "Sénégal"),
-    ("RS", "Serbie"),
-    ("SC", "Seychelles"),
-    ("SL", "Sierra Leone"),
-    ("SG", "Singapour"),
-    ("SO", "Somalie"),
-    ("SD", "Soudan"),
-    ("SS", "Soudan du Sud"),
-    ("LK", "Sri Lanka"),
-    ("SR", "Suriname"),
-    ("SJ", "Svalbard et Jan Mayen"),
-    ("SY", "Syrie"),
-    ("TJ", "Tadjikistan"),
-    ("TW", "Taïwan"),
-    ("TZ", "Tanzanie"),
-    ("TD", "Tchad"),
-    ("TF", "Terres australes françaises"),
-    ("IO", "Territoire britannique de l’océan Indien"),
-    ("TH", "Thaïlande"),
-    ("TL", "Timor oriental"),
-    ("TG", "Togo"),
-    ("TK", "Tokelau"),
-    ("TO", "Tonga"),
-    ("TT", "Trinité-et-Tobago"),
-    ("TN", "Tunisie"),
-    ("TM", "Turkménistan"),
-    ("TR", "Turquie"),
-    ("TV", "Tuvalu"),
-    ("UA", "Ukraine"),
-    ("UY", "Uruguay"),
-    ("VU", "Vanuatu"),
-    ("VE", "Venezuela"),
-    ("VN", "Viêt Nam"),
-    ("WF", "Wallis-et-Futuna"),
-    ("YE", "Yémen"),
-    ("ZM", "Zambie"),
-    ("ZW", "Zimbabwe"),
+/// shipping page offers them all.
+const OTHER_COUNTRIES: &[&str] = &[
+    "AF", "ZA", "AL", "DZ", "AD", "AO", "AI", "AQ", "AG", "SA", "AR", "AM", "AW", "AU", "AZ", "BS",
+    "BH", "BD", "BB", "BZ", "BJ", "BM", "BT", "BY", "BO", "BA", "BW", "BR", "BN", "BF", "BI", "KH",
+    "CM", "CV", "CL", "CN", "CO", "KM", "CG", "CD", "KP", "KR", "CR", "CI", "CU", "CW", "DJ", "DM",
+    "EG", "AE", "EC", "ER", "SZ", "VA", "ET", "FJ", "GA", "GM", "GE", "GS", "GH", "GI", "GD", "GL",
+    "GP", "GU", "GT", "GG", "GN", "GQ", "GW", "GY", "GF", "HT", "HN", "HK", "BV", "CX", "IM", "NF",
+    "AX", "KY", "CC", "CK", "FO", "HM", "FK", "MP", "MH", "UM", "PN", "SB", "TC", "VG", "VI", "IN",
+    "ID", "IQ", "IR", "IS", "IL", "JM", "JP", "JE", "JO", "KZ", "KE", "KG", "KI", "KW", "RE", "LA",
+    "LS", "LB", "LR", "LY", "LI", "MO", "MK", "MG", "MY", "MW", "MV", "ML", "MA", "MQ", "MU", "MR",
+    "YT", "MX", "FM", "MD", "MN", "ME", "MS", "MZ", "MM", "NA", "NR", "NP", "NI", "NE", "NG", "NU",
+    "NC", "NZ", "OM", "UG", "UZ", "PK", "PW", "PS", "PA", "PG", "PY", "BQ", "PE", "PH", "PF", "PR",
+    "QA", "CF", "DO", "RU", "RW", "EH", "BL", "KN", "SM", "MF", "SX", "PM", "VC", "SH", "LC", "SV",
+    "WS", "AS", "ST", "SN", "RS", "SC", "SL", "SG", "SO", "SD", "SS", "LK", "SR", "SJ", "SY", "TJ",
+    "TW", "TZ", "TD", "TF", "IO", "TH", "TL", "TG", "TK", "TO", "TT", "TN", "TM", "TR", "TV", "UA",
+    "UY", "VU", "VE", "VN", "WF", "YE", "ZM", "ZW",
 ];
 
 /// The countries a form can name for a shop with these shipping methods: the
 /// usual ones, then any other that a method names. One that ships everywhere
 /// keeps to the usual ones.
-pub fn countries_for(
-    methods: &[ShippingOption],
-) -> impl Iterator<Item = (&'static str, &'static str)> + '_ {
+pub fn countries_for(methods: &[ShippingOption]) -> impl Iterator<Item = &'static str> + '_ {
     COUNTRIES
         .iter()
-        .chain(OTHER_COUNTRIES.iter().filter(|(code, _)| {
+        .chain(OTHER_COUNTRIES.iter().filter(|code| {
             methods
                 .iter()
-                .any(|method| method.countries.iter().any(|c| c == code))
+                .any(|method| method.countries.iter().any(|c| c == *code))
         }))
         .copied()
+}
+
+/// The names of the countries in each language the storefront speaks, as
+/// Fluent files beside this one (`countries/fr.ftl`), keyed by country
+/// code: a list read by code, apart from the sentences of the pages.
+static NAMES: LazyLock<Catalog> = LazyLock::new(|| {
+    Catalog::new([
+        (locale!("fr"), &[include_str!("countries/fr.ftl")][..]),
+        (locale!("en"), &[include_str!("countries/en.ftl")][..]),
+    ])
+});
+
+/// What a shopper reads for the country `code`, in the language of the
+/// request: its code, for one no file names.
+pub fn country_name(cx: &Cx, code: &'static str) -> Cow<'static, str> {
+    try_locale(cx)
+        .and_then(|locale| NAMES.format(locale, code, None, &[]))
+        .unwrap_or(Cow::Borrowed(code))
 }
 
 /// Where a checkout starts when the shopper has not said.
@@ -565,14 +355,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_country_a_shipping_method_can_name_has_one_french_name() {
+    fn every_country_a_shipping_method_can_name_is_listed_once() {
         for country in rust_iso3166::ALL {
             let named = COUNTRIES
                 .iter()
                 .chain(OTHER_COUNTRIES)
-                .filter(|(code, _)| *code == country.alpha2)
+                .filter(|code| **code == country.alpha2)
                 .count();
             assert_eq!(named, 1, "{}", country.alpha2);
+        }
+    }
+
+    #[test]
+    fn every_country_has_a_name_in_each_language() {
+        for language in crate::app::lang::SPOKEN {
+            let cx = Cx::new().with(language.parse::<topcoat::l10n::Locale>().unwrap());
+            for code in COUNTRIES.iter().chain(OTHER_COUNTRIES) {
+                assert_ne!(country_name(&cx, code), *code, "{code} in {language}");
+            }
         }
     }
 }

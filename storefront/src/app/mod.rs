@@ -38,6 +38,7 @@ pub mod sitemap;
 pub mod support_client;
 pub mod tag;
 pub mod topbar;
+pub mod words;
 
 use timada_storefront::{
     CategoryNode, ConsentMode, PIXEL_EVENTS_SCRIPT, Product, ProductQuery, ProductSort,
@@ -65,14 +66,13 @@ use indisponible::{StoreAway, UnavailablePage};
 use menu::{MENU_CSS, MENU_SCRIPT, site_menu};
 use search::{SEARCH_CSS, SEARCH_SCRIPT};
 use topbar::announcement_bar;
+use words::{Worded, t};
 
 /// A review carries up to three photos of up to 8 MiB each.
 const REVIEW_LIMIT: usize = 26 * 1024 * 1024;
 
 /// The shop's name, as the pages say it.
 pub const SHOP_NAME: &str = "Ma boutique";
-/// What the shop says about itself, on the home and in the footer.
-const TAGLINE: &str = "Le slogan de votre boutique";
 /// The address the support page and the footer name.
 pub const CONTACT_EMAIL: &str = "contact@example.com";
 
@@ -148,12 +148,11 @@ pub fn money(cents: i64, currency: &str) -> String {
 }
 
 /// How long delivery takes, as a shopper reads it: `8 à 15 jours`, `3 jours`.
-pub fn delivery_days(days: timada_storefront::DeliveryDays) -> String {
-    let unit = |n: u16| if n == 1 { "jour" } else { "jours" };
+pub fn delivery_days(days: timada_storefront::DeliveryDays) -> Worded<'static> {
     if days.min == days.max {
-        format!("{} {}", days.max, unit(days.max))
+        t!(delivery_days, days: days.max)
     } else {
-        format!("{} à {} {}", days.min, days.max, unit(days.max))
+        t!(delivery_days_range, min: days.min, max: days.max)
     }
 }
 
@@ -320,7 +319,9 @@ pub async fn document(
     }
     .tags();
     let page_title = if title == SHOP_NAME {
-        format!("{SHOP_NAME} : {TAGLINE}")
+        t!(shell_home_title, shop: SHOP_NAME, tagline: t!(shop_tagline).resolve(cx))
+            .resolve(cx)
+            .into_owned()
     } else {
         format!("{title} – {SHOP_NAME}")
     };
@@ -381,25 +382,25 @@ pub async fn document(
                 <header class="masthead">
                     <div class="wrap">
                         if !nav.is_empty() {
-                            <a class="menu-toggle" href="#menu" aria-controls="menu">"Menu"</a>
+                            <a class="menu-toggle" href="#menu" aria-controls="menu">(t!(shell_menu))</a>
                         }
                         <a class="brand" href=(href!(index))>(SHOP_NAME)</a>
                         <form class="search" method="get" action=(href!(boutique::index)) role="search"
                             data-search=(href!(search::index)) data-search-min=(search::MIN_CHARS)>
-                            <input name="q" type="search" placeholder="Rechercher un produit…" aria-label="Rechercher un produit"
+                            <input name="q" type="search" placeholder=(t!(shell_search.placeholder)) aria-label=(t!(shell_search.label))
                                 autocomplete="off" aria-autocomplete="list" aria-controls="search-drop" aria-expanded="false">
-                            <button>"Rechercher"</button>
+                            <button>(t!(shell_search))</button>
                             <div id="search-drop" class="search-drop" data-search-drop="" hidden=""></div>
                         </form>
-                        <nav class="quick" aria-label="Compte et panier">
-                            <a class="quick-support" href=(href!(support_client::index))>"Support client"</a>
+                        <nav class="quick" aria-label=(t!(shell_quick_label))>
+                            <a class="quick-support" href=(href!(support_client::index))>(t!(shell_support))</a>
                             if accounts {
                                 <a class="account-link" href=(href!(account::index)) data-account-link="">
-                                    if signed_in { "Mon compte" } else { "Se connecter" }
+                                    if signed_in { (t!(shell_account)) } else { (t!(shell_sign_in)) }
                                 </a>
                             }
                             <a class="cart-link" href=(href!(cart::index)) data-cart-link="" aria-controls="cart">
-                                <span class="quick-label">"Panier"</span>
+                                <span class="quick-label">(t!(shell_cart))</span>
                                 <span class="count" data-cart-count="" hidden=(count == 0)>(count)</span>
                                 <span class="cart-total" data-cart-total="" hidden=(cart_unavailable)>(total)</span>
                             </a>
@@ -455,45 +456,45 @@ pub async fn site_footer(
             <div class="wrap">
                 <div>
                     <a class="brand" href=(href!(index))>(SHOP_NAME)</a>
-                    <p>(TAGLINE)</p>
+                    <p>(t!(shop_tagline))</p>
                 </div>
                 <div>
-                    <h2>"A propos"</h2>
+                    <h2>(t!(footer_about))</h2>
                     <ul>
-                        <li><a href=(href!(mentions_legales::index))>"Mentions légales"</a></li>
-                        <li><a href=(href!(conditions_generales_de_vente::index))>"Conditions générales de vente"</a></li>
-                        <li><a href=(href!(politique_de_confidentialite::index))>"Politique de confidentialité"</a></li>
-                        <li><a href=(href!(politique_de_remboursement::index))>"Politique de remboursement"</a></li>
-                        <li><a href=(href!(politique_de_livraison::index))>"Politique de livraison"</a></li>
-                        <li><a href=(href!(cookies::index))>"Gestion des cookies"</a></li>
+                        <li><a href=(href!(mentions_legales::index))>(t!(footer_legal_notice))</a></li>
+                        <li><a href=(href!(conditions_generales_de_vente::index))>(t!(footer_terms_of_sale))</a></li>
+                        <li><a href=(href!(politique_de_confidentialite::index))>(t!(footer_privacy_policy))</a></li>
+                        <li><a href=(href!(politique_de_remboursement::index))>(t!(footer_refund_policy))</a></li>
+                        <li><a href=(href!(politique_de_livraison::index))>(t!(footer_shipping_policy))</a></li>
+                        <li><a href=(href!(cookies::index))>(t!(footer_cookies))</a></li>
                     </ul>
                 </div>
                 <div>
-                    <h2>"Liens utiles"</h2>
+                    <h2>(t!(footer_useful_links))</h2>
                     <ul>
-                        <li><a href=(href!(account::index))>"Suivre ma commande"</a></li>
-                        <li><a href=(href!(boutique::index))>"Nos produits"</a></li>
-                        <li><a href=(href!(support_client::index))>"Support client"</a></li>
-                        <li><a href=(href!(qui_sommes_nous::index))>"Qui sommes-nous ?"</a></li>
+                        <li><a href=(href!(account::index))>(t!(footer_track_order))</a></li>
+                        <li><a href=(href!(boutique::index))>(t!(footer_products))</a></li>
+                        <li><a href=(href!(support_client::index))>(t!(shell_support))</a></li>
+                        <li><a href=(href!(qui_sommes_nous::index))>(t!(footer_about_us))</a></li>
                         if blog {
-                            <li><a href=(href!(blog::index)) data-blog-link="">"Blog"</a></li>
+                            <li><a href=(href!(blog::index)) data-blog-link="">(t!(footer_blog))</a></li>
                         }
                     </ul>
                 </div>
                 <div>
-                    <h2>"Contact"</h2>
+                    <h2>(t!(footer_contact))</h2>
                     <p><a href=(format!("mailto:{CONTACT_EMAIL}"))>(CONTACT_EMAIL)</a></p>
                 </div>
                 <div>
-                    <h2>"Newsletter"</h2>
-                    <p>"Nouveautés et offres réservées aux abonnés."</p>
+                    <h2>(t!(footer_newsletter))</h2>
+                    <p>(t!(footer_newsletter_pitch))</p>
                     newsletter::newsletter_form()
                 </div>
             </div>
             if !alternates.is_empty() {
                 // `hreflang` first: it tells [`lang::Localized`] the link
                 // goes to another language's address on purpose.
-                <nav class="languages" aria-label="Langues" data-languages="">
+                <nav class="languages" aria-label=(t!(footer_languages)) data-languages="">
                     <ul>
                         for (code, address) in alternates {
                             <li>
@@ -533,10 +534,10 @@ pub async fn product_card(cx: &Cx, product: &Product) -> Result<impl View> {
             <div class="card-body">
                 <h3 class="card-title"><a href=(&link)>(&product.name)</a></h3>
                 <p class="card-price">
-                    if varies { <small>"Plage de prix"</small> }
+                    if varies { <small>(t!(card_price_range))</small> }
                     if let (Some(was), Some(currency)) = (product.compare_at_cents, product.currency.as_deref()) {
                         if product.variants.is_empty() {
-                            <s class="was" data-compare-at=""><span class="unseen">"Ancien prix : "</span>(money(was, currency))</s>
+                            <s class="was" data-compare-at=""><span class="unseen">(t!(price_former)) " "</span>(money(was, currency))</s>
                         }
                     }
                     <span data-price="">(price_line(product))</span>
@@ -544,7 +545,7 @@ pub async fn product_card(cx: &Cx, product: &Product) -> Result<impl View> {
                 if let (Some(rating), Some(whole)) = (product.rating(), product.rating_stars()) {
                     <p class="card-rating" data-rating=(format!("{rating:.1}"))>
                         <span class="stars" aria-hidden="true">(timada_storefront::stars(whole))</span>
-                        " " (product.review_count) " avis"
+                        " " (t!(card_review_count, count: product.review_count))
                     </p>
                 }
                 <div class="card-act">
@@ -553,10 +554,10 @@ pub async fn product_card(cx: &Cx, product: &Product) -> Result<impl View> {
                             <input type="hidden" name="slug" value=(&product.slug)>
                             <input type="hidden" name="quantity" value="1">
                             <input type="hidden" name="from" value=(here)>
-                            <button class="btn">"Ajouter au panier"</button>
+                            <button class="btn">(t!(card_add_to_cart))</button>
                         </form>
                     } else {
-                        <a class="btn" href=(&link)>"Choix des options"</a>
+                        <a class="btn" href=(&link)>(t!(card_choose_options))</a>
                     }
                 </div>
             </div>
@@ -649,16 +650,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             nav: &nav,
             <section class="hero">
                 <div class="wrap">
-                    <span class="eyebrow">(TAGLINE)</span>
-                    <h1>"Présentez votre boutique en une phrase"</h1>
-                    <p>"Deux ou trois lignes pour dire ce que vous vendez, à qui, et pourquoi vous choisir."</p>
-                    <a class="btn" href=(discover) data-discover="">"Découvrir"</a>
+                    <span class="eyebrow">(t!(shop_tagline))</span>
+                    <h1>(t!(home_hero_title))</h1>
+                    <p>(t!(home_hero_text))</p>
+                    <a class="btn" href=(discover) data-discover="">(t!(home_discover))</a>
                 </div>
             </section>
             if !newest.items.is_empty() {
                 <section class="block" data-section="nouveautes">
                     <div class="wrap">
-                        <h2>"Nouveautés"</h2>
+                        <h2>(t!(home_new_arrivals))</h2>
                         <ul class="rail">
                             for product in &newest.items {
                                 product_card(product: product)
@@ -669,15 +670,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             }
             <section class="block band">
                 <div class="wrap prose">
-                    <h2>"Notre sélection"</h2>
-                    <p>"Mettez ici en avant une gamme, une saison ou un temps fort de votre boutique."</p>
-                    <a class="btn" href=(href!(boutique::index))>"Voir la sélection"</a>
+                    <h2>(t!(home_selection_title))</h2>
+                    <p>(t!(home_selection_text))</p>
+                    <a class="btn" href=(href!(boutique::index))>(t!(home_selection_link))</a>
                 </div>
             </section>
             if !tiles.is_empty() {
                 <section class="block" data-section="categories">
                     <div class="wrap">
-                        <h2>"Catégories"</h2>
+                        <h2>(t!(home_categories))</h2>
                         <ul class="tiles">
                             for tile in &tiles {
                                 <li>
@@ -686,7 +687,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         if let Some(image) = &tile.image {
                                             product_image(image: image, attrs: attributes! {})
                                         }
-                                        <span>(&tile.node.category.name) <small>(tile.node.product_count) " articles"</small></span>
+                                        <span>(&tile.node.category.name) <small>(t!(home_tile_count, count: tile.node.product_count))</small></span>
                                     </a>
                                 </li>
                             }
@@ -696,22 +697,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             }
             <section class="block band">
                 <div class="wrap prose">
-                    <h2>"À propos"</h2>
-                    <p>"Racontez ici en quelques lignes qui vous êtes et comment vous choisissez vos produits."</p>
-                    <a class="btn" href=(href!(qui_sommes_nous::index))>"En savoir plus"</a>
+                    <h2>(t!(home_about_title))</h2>
+                    <p>(t!(home_about_text))</p>
+                    <a class="btn" href=(href!(qui_sommes_nous::index))>(t!(home_about_link))</a>
                 </div>
             </section>
             if !quotes.is_empty() {
                 <section class="block" data-section="avis">
                     <div class="wrap">
-                        <h2>"Ils nous font confiance"</h2>
+                        <h2>(t!(home_reviews_title))</h2>
                         <ul class="quotes">
                             for review in &quotes {
                                 <li data-review=(&review.id)>
-                                    <span class="stars" aria-label=(format!("{} sur 5", review.rating))>(review.stars())</span>
+                                    <span class="stars" aria-label=(t!(rating_of_five, rating: review.rating))>(review.stars())</span>
                                     if let Some(title) = &review.title { <strong>" " (title)</strong> }
                                     <blockquote>(&review.body)</blockquote>
-                                    <cite>(&review.author_name) " · Achat vérifié"</cite>
+                                    <cite>(&review.author_name) " · " (t!(review_verified))</cite>
                                 </li>
                             }
                         </ul>
@@ -721,7 +722,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             if !picks.items.is_empty() {
                 <section class="block" data-section="selection">
                     <div class="wrap">
-                        <h2>"Rien que pour vous"</h2>
+                        <h2>(t!(home_picks_title))</h2>
                         <ul class="rail">
                             for product in &picks.items {
                                 product_card(product: product)
@@ -746,23 +747,23 @@ pub async fn reassurance(cx: &Cx) -> Result<impl View> {
         <ul class="reassure" data-reassure="">
             <li>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/></svg>
-                <strong>"Expédition rapide"</strong>
-                <p>"Commande assurée, livraison avec suivi de colis."</p>
+                <strong>(t!(reassure_shipping_title))</strong>
+                <p>(t!(reassure_shipping_text))</p>
             </li>
             <li>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
-                <strong>"Paiement sécurisé"</strong>
-                <p>"Vos paiements en ligne sont entièrement sécurisés."</p>
+                <strong>(t!(reassure_payment_title))</strong>
+                <p>(t!(reassure_payment_text))</p>
             </li>
             <li>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 12a8 8 0 0 1 16 0v5a2 2 0 0 1-2 2h-2v-6h4M4 12v5a2 2 0 0 0 2 2h2v-6H4"/></svg>
-                <strong>"Service client"</strong>
-                <p>"À votre écoute pour toute question."</p>
+                <strong>(t!(reassure_service_title))</strong>
+                <p>(t!(reassure_service_text))</p>
             </li>
             <li>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 12a8 8 0 1 0 3-6.2"/><path d="M4 4v5h5"/></svg>
-                <strong>"Retours sous 14 jours"</strong>
-                <p>"Changez d'avis jusqu'à 14 jours après la livraison."</p>
+                <strong>(t!(reassure_returns_title))</strong>
+                <p>(t!(reassure_returns_text))</p>
             </li>
         </ul>
     })
@@ -770,112 +771,74 @@ pub async fn reassurance(cx: &Cx) -> Result<impl View> {
 
 /// How a refusal (an [`OrderError`](timada_storefront::OrderError) code
 /// carried in the URL) reads to a shopper.
-pub fn say(code: &str) -> &'static str {
+pub fn say(code: &str) -> Worded<'static> {
     match code {
-        "invalid_quantity" => "Choisissez une quantité de 1 à 99.",
-        "too_many_lines" => "Votre panier est plein : commandez d'abord ce qu'il contient.",
-        "product_unavailable" => "Désolé, ce produit n'est plus en vente.",
-        "out_of_stock" => "Désolé, il n'en reste pas assez.",
-        "variant_required" => "Choisissez d'abord une option.",
-        "variant_not_found" => "Cette combinaison n'est pas en vente.",
-        "mixed_currencies" => "Ce produit est vendu dans une autre devise que votre panier.",
-        "empty_cart" => "Votre panier est vide.",
-        "price_changed" => {
-            "Un prix a changé depuis votre visite : vérifiez le nouveau total et confirmez à nouveau."
-        }
-        "payments_unavailable" => {
-            "Le paiement est indisponible pour le moment. Réessayez plus tard."
-        }
-        "invoicing_not_configured" => {
-            "Cette boutique ne peut pas encore prendre de commandes : sa configuration n'est pas terminée. Réessayez plus tard."
-        }
-        "oss_required_for_currency" => {
-            "Cette boutique ne peut pas livrer dans votre pays dans cette devise. Choisissez une livraison en France ou contactez la boutique."
-        }
-        "payment_failed" => "Le paiement n'a pas abouti. Réessayez ou utilisez une autre carte.",
-        "payment_expired" => "Ce paiement n'est plus ouvert. Veuillez recommencer votre commande.",
-        "payment_returned_out_of_stock" => {
-            "Le dernier exemplaire est parti pendant votre paiement : rien n'a été débité. Votre panier est inchangé."
-        }
-        "payment_returned_discount_exhausted" => {
-            "Ce code promo a été épuisé pendant votre paiement : rien n'a été débité. Retirez le code et réessayez."
-        }
+        "invalid_quantity" => t!(error_invalid_quantity),
+        "too_many_lines" => t!(error_too_many_lines),
+        "product_unavailable" => t!(error_product_unavailable),
+        "out_of_stock" => t!(error_out_of_stock),
+        "variant_required" => t!(error_variant_required),
+        "variant_not_found" => t!(error_variant_not_found),
+        "mixed_currencies" => t!(error_mixed_currencies),
+        "empty_cart" => t!(error_empty_cart),
+        "price_changed" => t!(error_price_changed),
+        "payments_unavailable" => t!(error_payments_unavailable),
+        "invoicing_not_configured" => t!(error_invoicing_not_configured),
+        "oss_required_for_currency" => t!(error_oss_required_for_currency),
+        "payment_failed" => t!(error_payment_failed),
+        "payment_expired" => t!(error_payment_expired),
+        "payment_returned_out_of_stock" => t!(error_payment_returned_out_of_stock),
+        "payment_returned_discount_exhausted" => t!(error_payment_returned_discount_exhausted),
         "payment_returned_discount_already_used" => {
-            "Ce code promo a déjà servi pour votre adresse : rien n'a été débité. Retirez le code et réessayez."
+            t!(error_payment_returned_discount_already_used)
         }
-        "invalid_email" => "Saisissez une adresse e-mail valide.",
-        "invalid_vat_number" => {
-            "Saisissez un numéro de TVA intracommunautaire : le préfixe du pays, puis lettres et chiffres."
-        }
-        "shipping_unavailable" => "Choisissez un mode de livraison qui dessert votre pays.",
-        "business_buyers_refused" => {
-            "Cette boutique ne vend pas aux professionnels : laissez le numéro de TVA vide."
-        }
-        "invalid_ship_name" => "Saisissez le nom du destinataire.",
-        "invalid_address" => "Saisissez la rue, le code postal et la ville.",
-        "invalid_country" => "Saisissez le pays sous forme de code à deux lettres, par exemple FR.",
-        "invalid_phone" => "Le numéro de téléphone est trop long.",
-        "missing_phone" => {
-            "Indiquez un numéro de téléphone : le transporteur peut avoir à vous joindre."
-        }
-        "invalid_note" => "La remarque est trop longue.",
-        "cart_checked_out" => "Ce panier a déjà été commandé.",
-        "cart_not_found" => "Ce panier n'existe plus : ajoutez de nouveau vos articles.",
-        "too_many_carts" => {
-            "Trop de paniers commencés en peu de temps : réessayez dans quelques minutes."
-        }
-        "discount_unknown" => "Ce code promo n'est pas valable.",
-        "discount_inactive" => "Ce code promo ne peut pas être utilisé pour le moment.",
-        "discount_currency" => "Ce code promo concerne une autre devise.",
-        "discount_exhausted" => "Ce code promo a été utilisé autant de fois que possible.",
-        "discount_already_used" => "Vous avez déjà utilisé ce code promo.",
-        "offer_ended" => {
-            "Cette offre n'est plus disponible : l'article a été ajouté à son prix habituel."
-        }
-        "review_invalid_rating" => "Choisissez de une à cinq étoiles.",
-        "review_invalid_title" => "Le titre fait au plus 100 caractères.",
-        "review_invalid_body" => "Dites-nous en un peu plus : de 10 à 2000 caractères.",
-        "review_too_many_photos" => "Joignez au plus trois photos.",
-        "review_invalid_photo" => "Joignez des photos JPEG, PNG, WebP ou GIF de 8 Mio au plus.",
-        "review_storage_full" => {
-            "La boutique ne peut plus recevoir de photos pour le moment : envoyez votre avis sans photo."
-        }
-        "review_order_not_found" => "Cette commande ne peut pas être évaluée.",
-        "review_not_purchased" => "Ce produit ne fait pas partie de cette commande.",
-        "review_order_cancelled" => "Une commande annulée ne peut pas être évaluée.",
-        "review_order_not_paid" => "Une commande s'évalue une fois confirmée.",
-        "order_in_preparation" => {
-            "La boutique prépare déjà votre commande : elle ne peut plus être annulée ici. Contactez-la."
-        }
-        "not_cancellable" => "Cette commande est partie : elle ne peut plus être annulée.",
-        "order_cancelled" => "Cette commande est déjà annulée.",
-        "cancellation_pending" => "L'annulation de votre commande est en cours.",
-        "review_already_reviewed" => "Vous avez déjà donné votre avis sur ce produit.",
-        "review_not_pending" => {
-            "La boutique a déjà examiné votre avis : il ne peut plus être modifié."
-        }
-        "review_not_found" => "Cet avis est introuvable.",
-        "review_photo_not_found" => "L'une de vos photos a été retirée entre-temps : réessayez.",
-        "wrong_code" => {
-            "Ce n'est pas le code que nous avons envoyé. Vérifiez l'e-mail et réessayez."
-        }
-        "code_expired" => "Ce code a expiré : demandez-en un nouveau.",
-        "too_many_attempts" => "Trop de codes erronés : demandez-en un nouveau.",
-        "code_recently_sent" => {
-            "Un code a été envoyé il y a moins d'une minute : vérifiez votre boîte de réception."
-        }
-        "too_many_requests" => "Trop de codes demandés : réessayez dans quelques minutes.",
-        "too_many_addresses" => "Votre compte conserve dix adresses : retirez-en une d'abord.",
-        "signed_out" => "Vous avez été déconnecté. Veuillez vous reconnecter.",
-        "store_unavailable" => {
-            "Cette fonctionnalité est momentanément indisponible. Réessayez dans quelques minutes."
-        }
-        "writes_paused" => {
-            "Cette boutique n'accepte temporairement aucune modification. Réessayez dans quelques minutes."
-        }
-        "write_not_taken" => {
-            "Votre demande n'a pas abouti et rien n'a été enregistré. Veuillez réessayer."
-        }
-        _ => "Une erreur s'est produite. Veuillez réessayer.",
+        "invalid_email" => t!(error_invalid_email),
+        "invalid_vat_number" => t!(error_invalid_vat_number),
+        "shipping_unavailable" => t!(error_shipping_unavailable),
+        "business_buyers_refused" => t!(error_business_buyers_refused),
+        "invalid_ship_name" => t!(error_invalid_ship_name),
+        "invalid_address" => t!(error_invalid_address),
+        "invalid_country" => t!(error_invalid_country),
+        "invalid_phone" => t!(error_invalid_phone),
+        "missing_phone" => t!(error_missing_phone),
+        "invalid_note" => t!(error_invalid_note),
+        "cart_checked_out" => t!(error_cart_checked_out),
+        "cart_not_found" => t!(error_cart_not_found),
+        "too_many_carts" => t!(error_too_many_carts),
+        "discount_unknown" => t!(error_discount_unknown),
+        "discount_inactive" => t!(error_discount_inactive),
+        "discount_currency" => t!(error_discount_currency),
+        "discount_exhausted" => t!(error_discount_exhausted),
+        "discount_already_used" => t!(error_discount_already_used),
+        "offer_ended" => t!(error_offer_ended),
+        "review_invalid_rating" => t!(error_review_invalid_rating),
+        "review_invalid_title" => t!(error_review_invalid_title),
+        "review_invalid_body" => t!(error_review_invalid_body),
+        "review_too_many_photos" => t!(error_review_too_many_photos),
+        "review_invalid_photo" => t!(error_review_invalid_photo),
+        "review_storage_full" => t!(error_review_storage_full),
+        "review_order_not_found" => t!(error_review_order_not_found),
+        "review_not_purchased" => t!(error_review_not_purchased),
+        "review_order_cancelled" => t!(error_review_order_cancelled),
+        "review_order_not_paid" => t!(error_review_order_not_paid),
+        "order_in_preparation" => t!(error_order_in_preparation),
+        "not_cancellable" => t!(error_not_cancellable),
+        "order_cancelled" => t!(error_order_cancelled),
+        "cancellation_pending" => t!(error_cancellation_pending),
+        "review_already_reviewed" => t!(error_review_already_reviewed),
+        "review_not_pending" => t!(error_review_not_pending),
+        "review_not_found" => t!(error_review_not_found),
+        "review_photo_not_found" => t!(error_review_photo_not_found),
+        "wrong_code" => t!(error_wrong_code),
+        "code_expired" => t!(error_code_expired),
+        "too_many_attempts" => t!(error_too_many_attempts),
+        "code_recently_sent" => t!(error_code_recently_sent),
+        "too_many_requests" => t!(error_too_many_requests),
+        "too_many_addresses" => t!(error_too_many_addresses),
+        "signed_out" => t!(error_signed_out),
+        "store_unavailable" => t!(error_store_unavailable),
+        "writes_paused" => t!(error_writes_paused),
+        "write_not_taken" => t!(error_write_not_taken),
+        _ => t!(error_unknown),
     }
 }
