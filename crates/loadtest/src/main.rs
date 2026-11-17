@@ -10,7 +10,11 @@
 //! the rate step by step until a limit breaks, and reports the last rate held.
 //! `scripts/loadtest.sh` sets up the three-node cluster, the shop and the
 //! storefront, then runs this.
+//!
+//! `flood` is apart: one form posted again and again at one address
+//! (`scripts/limits.sh`).
 
+mod flood;
 mod http;
 mod journey;
 mod load;
@@ -72,6 +76,8 @@ enum Mode {
         #[arg(long)]
         keep_going: bool,
     },
+    /// One form posted again and again at one address.
+    Flood(flood::Flood),
 }
 
 #[derive(Args)]
@@ -177,6 +183,13 @@ async fn main() -> Result<()> {
         .init();
     let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
     let cli = Cli::parse();
+    let cli = match cli.mode {
+        Mode::Flood(flood) => {
+            flood::check(&flood)?;
+            return flood.run().await;
+        }
+        mode => Cli { mode },
+    };
     let stop_on_breach = matches!(
         cli.mode,
         Mode::Ramp {
@@ -223,6 +236,7 @@ async fn main() -> Result<()> {
             }
             (common, steps)
         }
+        Mode::Flood(_) => unreachable!("run above"),
     };
     let common = &common;
 

@@ -4,7 +4,10 @@
 //! (`POST /cluster/limits`, under `cluster.secret`) and counts them with its
 //! own, so a client spread over a balancer is held to one limit, not one per
 //! node. A node that does not answer in time counts for nothing: its share
-//! is given up rather than the request held back. Two nodes deciding at the
+//! is given up rather than the request held back, and it is not waited for
+//! again until it answers: the checks go on without it, one of them now and
+//! then asking it on the side. A key this node alone let through to its
+//! limit is refused without asking anyone. Two nodes deciding at the
 //! very same moment may each let the last pass through, so the limit holds
 //! to within a moment's requests, not to the unit. The keys travel hashed:
 //! they name e-mail and network addresses.
@@ -31,6 +34,12 @@ use crate::peers::{self, Peers};
 /// How long a node waits for a peer's counts before counting it for nothing.
 const PEER_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// How long a peer that failed to answer is left alone before it is asked
+/// again, on the side: no check waits for a peer that is away. Measured
+/// (#602, `docs/sizing.md`): a peer that takes connections and answers
+/// nothing held every check for `PEER_TIMEOUT`, for as long as it lasted.
+const AWAY_FOR: Duration = Duration::from_secs(5);
+
 /// The most keys one question to a peer may carry: the policies ask about
 /// two.
 const MAX_KEYS_ASKED: usize = 16;
@@ -47,6 +56,11 @@ pub struct RateLimiter {
     state: Mutex<State>,
     /// The other nodes; `None` on a single node, which asks nobody.
     peers: Option<Arc<Peers>>,
+    /// The peers that failed to answer, by address, and until when each is
+    /// left alone.
+    away: Arc<Mutex<HashMap<String, Instant>>>,
+    /// `AWAY_FOR`, but in tests.
+    away_for: Duration,
 }
 
 /// What a node asks a peer: its passes of these keys within the window.
@@ -80,7 +94,17 @@ impl RateLimiter {
         Self {
             state: Mutex::default(),
             peers,
+            away: Arc::default(),
+            away_for: AWAY_FOR,
         }
+    }
+
+    /// Leaves a peer that failed to answer alone for `away_for` instead of
+    /// `AWAY_FOR`.
+    #[cfg(test)]
+    fn leaving_alone(mut self, away_for: Duration) -> Self {
+        self.away_for = away_for;
+        self
     }
 
     /// Whether `key` may go once more: fewer than `limit` times let through
@@ -103,8 +127,32 @@ impl RateLimiter {
             .iter()
             .map(|(key, limit)| (key.as_str(), *limit))
             .collect();
+        // Full on this node's own passes: whatever the others let through,
+        // the answer is no.
+        if self.full_here(&hashed, window, Instant::now()) {
+            return false;
+        }
         let elsewhere = self.counts_elsewhere(&hashed, window).await;
         self.check_all_at(&hashed, window, Instant::now(), &elsewhere)
+    }
+
+    /// Whether this node alone let one of the keys through to its limit
+    /// within `window`.
+    fn full_here(&self, wanted: &[(&str, u32)], window: Duration, now: Instant) -> bool {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        wanted.iter().any(|&(key, limit)| {
+            state.keys.get(key).is_some_and(|hits| {
+                let here = hits
+                    .at
+                    .iter()
+                    .filter(|at| now.duration_since(**at) < window)
+                    .count() as u64;
+                here >= u64::from(limit)
+            })
+        })
     }
 
     /// Whether a request carries the cluster's secret.
@@ -132,7 +180,9 @@ impl RateLimiter {
 
     /// The other nodes' passes of each key within `window`, summed per key
     /// in the order of `wanted`. A node that fails to answer in time counts
-    /// for nothing, with a warning.
+    /// for nothing, with a warning, and so does a node that failed lately:
+    /// it is asked on the side every `away_for`, and waited for again once
+    /// it answered.
     async fn counts_elsewhere(&self, wanted: &[(&str, u32)], window: Duration) -> Vec<u64> {
         let mut elsewhere = vec![0u64; wanted.len()];
         let Some(peers) = self.peers.as_deref() else {
@@ -143,42 +193,78 @@ impl RateLimiter {
             keys: wanted.iter().map(|&(key, _)| key.to_owned()).collect(),
         })
         .expect("a question serializes");
-        let asks: Vec<_> = peers
-            .urls()
-            .iter()
-            .map(|url| {
-                let request = peers
-                    .client()
-                    .post(format!("{url}/cluster/limits"))
-                    .header(reqwest::header::AUTHORIZATION, peers.authorization())
-                    .header(reqwest::header::CONTENT_TYPE, "application/json")
-                    .timeout(PEER_TIMEOUT)
-                    .body(body.clone());
-                let url = url.clone();
-                tokio::spawn(async move { (url, ask(request).await) })
-            })
-            .collect();
+        let now = Instant::now();
+        let mut asks = Vec::new();
+        for url in peers.urls() {
+            let request = peers
+                .client()
+                .post(format!("{url}/cluster/limits"))
+                .header(reqwest::header::AUTHORIZATION, peers.authorization())
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .timeout(PEER_TIMEOUT)
+                .body(body.clone());
+            let peer = url.clone();
+            let asked = wanted.len();
+            let ask = async move {
+                let answered = match ask(request).await {
+                    Ok(counted) if counted.counts.len() == asked => Ok(counted.counts),
+                    Ok(counted) => Err(anyhow::anyhow!(
+                        "asked about {asked} keys, it answered for {}",
+                        counted.counts.len()
+                    )),
+                    Err(err) => Err(err),
+                };
+                (peer, answered)
+            };
+            let left_alone = {
+                let mut away = self.away.lock().unwrap_or_else(|p| p.into_inner());
+                match away.get_mut(url.as_str()) {
+                    // Its time is up: this check asks it on the side, and
+                    // the checks that follow leave it alone meanwhile.
+                    Some(until) if *until <= now => {
+                        *until = now + self.away_for;
+                        Some(true)
+                    }
+                    Some(_) => Some(false),
+                    None => None,
+                }
+            };
+            match left_alone {
+                None => asks.push(tokio::spawn(ask)),
+                Some(true) => {
+                    let away = self.away.clone();
+                    tokio::spawn(async move {
+                        let (url, answered) = ask.await;
+                        if answered.is_ok() {
+                            away.lock().unwrap_or_else(|p| p.into_inner()).remove(&url);
+                            tracing::info!(peer = %url, "a peer answers again; its passes count");
+                        }
+                    });
+                }
+                Some(false) => {}
+            }
+        }
         for ask in asks {
             let Ok((url, answered)) = ask.await else {
                 continue;
             };
             match answered {
-                Ok(counted) if counted.counts.len() == wanted.len() => {
-                    for (total, count) in elsewhere.iter_mut().zip(counted.counts) {
+                Ok(counts) => {
+                    for (total, count) in elsewhere.iter_mut().zip(counts) {
                         *total = total.saturating_add(count);
                     }
                 }
-                Ok(counted) => tracing::warn!(
-                    peer = %url,
-                    asked = wanted.len(),
-                    answered = counted.counts.len(),
-                    "a peer answered for other keys than asked; its passes are not counted"
-                ),
-                Err(err) => tracing::warn!(
-                    peer = %url,
-                    %err,
-                    "cannot ask a peer what it let through; its passes are not counted"
-                ),
+                Err(err) => {
+                    self.away
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .insert(url.clone(), Instant::now() + self.away_for);
+                    tracing::warn!(
+                        peer = %url,
+                        %err,
+                        "cannot ask a peer what it let through; its passes are not counted until it answers"
+                    );
+                }
             }
         }
         elsewhere
@@ -763,6 +849,96 @@ mod tests {
         // Another key is free on both.
         assert!(limiter.check("other", 1, MINUTE).await);
         assert!(!limiter.check("other", 1, MINUTE).await);
+    }
+
+    /// A peer counting the questions it was asked, and answering them with
+    /// what `answer` gives.
+    async fn counting(
+        answer: impl Fn() -> (u16, &'static [u8]) + Send + Sync + 'static,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let url = answering({
+            let asked = asked.clone();
+            move |_, _| {
+                asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (status, body) = answer();
+                (status, body.to_vec())
+            }
+        })
+        .await;
+        (url, asked)
+    }
+
+    #[tokio::test]
+    async fn a_key_full_on_this_node_asks_nobody() {
+        use std::sync::atomic::Ordering;
+        let (url, asked) = counting(|| (200, br#"{"counts":[0]}"#)).await;
+        let limiter = RateLimiter::new(Some(Arc::new(Peers::for_test(vec![url], 3))));
+        assert!(limiter.check("a", 2, MINUTE).await);
+        assert!(limiter.check("a", 2, MINUTE).await);
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
+        for _ in 0..5 {
+            assert!(!limiter.check("a", 2, MINUTE).await);
+        }
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            2,
+            "this node's own passes fill the limit"
+        );
+        // Another key is still asked about.
+        assert!(limiter.check("b", 2, MINUTE).await);
+        assert_eq!(asked.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_peer_that_failed_is_not_waited_for_until_it_answers() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // A peer that let the key through twice, failing at first.
+        let failing = Arc::new(AtomicBool::new(true));
+        let (url, asked) = counting({
+            let failing = failing.clone();
+            move || match failing.load(Ordering::SeqCst) {
+                true => (500, b""),
+                false => (200, br#"{"counts":[2]}"#),
+            }
+        })
+        .await;
+        let limiter = RateLimiter::new(Some(Arc::new(Peers::for_test(vec![url], 3))))
+            .leaving_alone(Duration::from_millis(200));
+        // The first check finds it failing; the next ones leave it alone,
+        // and its passes count for nothing.
+        for _ in 0..3 {
+            assert!(limiter.check("a", 100, MINUTE).await);
+        }
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+
+        // Its time up, a check asks it on the side without waiting for it:
+        // still failing, it is left alone again.
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert!(limiter.check("a", 100, MINUTE).await);
+        assert!(limiter.check("a", 100, MINUTE).await);
+        for _ in 0..200 {
+            if asked.load(Ordering::SeqCst) == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(asked.load(Ordering::SeqCst), 2);
+
+        // It answers again: asked on the side once more, then waited for,
+        // and its two passes fill a limit of two.
+        failing.store(false, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert!(limiter.check("b", 2, MINUTE).await, "not waited for yet");
+        let mut refused = false;
+        for _ in 0..200 {
+            if !limiter.check("c", 2, MINUTE).await {
+                refused = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(refused, "the peer's passes count again");
     }
 
     #[test]

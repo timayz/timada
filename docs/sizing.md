@@ -117,6 +117,48 @@ The figures below are from `b03d06d`, when they cost over a core.
 - On `b03d06d` that was one core per node under load, and again per extra
   region served; on `11a31fd` count a tenth of one.
 
+## The limits held across the nodes
+
+The sign-in, code, contact, newsletter and cart limits are held for the whole
+cluster: before letting a client through, a node asks every other node what
+it let through (`dashboard/src/rate_limit.rs`). `make limits`
+(`scripts/limits.sh`) floods the password sign-in of one node, alone and then
+as one of three, and prints what each node spent. The figures are from
+2026-11-16 (#602): release build, 64 senders, the three nodes and the sender
+on the same 12-core machine.
+
+| A sign-in that is | Answers/s | p50 | Processor, the node asked | Each other node |
+|---|---|---|---|---|
+| refused, on one node alone | 98,000 to 110,000 | 0.5 ms | 0.04 ms | |
+| refused on the node's own count, three nodes | 98,600 | 0.6 ms | 0.04 ms | nothing |
+| refused on the others' counts, three nodes | 30,200 | 1.9 ms | 0.14 ms | 0.035 ms |
+| let through to the password check | 145 to 153 | 0.4 s | 70 ms | under 0.2 core in all |
+
+- **Asking the two others costs 0.1 ms of processor** on the node that asks
+  and 0.035 ms on each node asked, and 1.3 ms of wait with 64 at once. A
+  refusal that asks is three and a half times dearer than one that does not,
+  and 30,000 of them a second on one node keep a core busy on each of the two
+  others.
+- **A node whose own count is full asks nobody** (since #602; before, every
+  refusal asked): a flood on one node costs the others nothing. A client the
+  balancer spreads over the nodes is still asked about by the nodes that did
+  not let it through to the limit themselves: 40,000 refusals a second over
+  the three kept 2.4 cores busy on each of two nodes and 1.5 on the third.
+- **The password check is what a sign-in flood costs**, not the limit: 70 ms
+  of processor each, and 1.5 GiB of memory for 64 at once. 150 a second fill
+  the twelve cores. The limits are what holds it back (30 tries per address
+  and 10 per account in 15 minutes, `[auth]`).
+- **A node that is gone costs nothing**: it refuses the connection at once
+  (69,000 refusals a second over the two left).
+- **A node that takes connections and answers nothing** (stopped where it
+  stands, or its machine unreachable) is waited for 2 s once, by the checks
+  under way when it stops answering. It is then left alone, its passes
+  counted for nothing, and asked on the side every 5 s until it answers:
+  91,000 refusals a second over the two others with the third stopped, the
+  longest 2.2 s. Before #602 every check waited the 2 s for as long as the
+  node stayed that way: 32 sign-ins a second for 64 senders, each 2.0 s, and
+  at 200 arriving a second the node asked held 900 files open.
+
 ## Not measured
 
 - The same on three nodes, and under the mix of a real shop (the load test,
@@ -124,8 +166,6 @@ The figures below are from `b03d06d`, when they cost over a core.
 - The storefront connections: the store API tells every connection of every
   write, whatever its shop, before `b03d06d`; a connection that serves one
   shop is now told of that shop's writes alone.
-- The sign-in and contact limits ask every other node at each check
-  (`rate_limit.rs`): three requests per check on three nodes.
 - How long a node takes to begin a new cluster over a copy put back
   (`snapshot restore --from-one-node`, #597): it reads every event once before
   it serves.

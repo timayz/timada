@@ -107,7 +107,7 @@ impl Probe {
 }
 
 /// CPU seconds so far, and resident megabytes.
-fn read(pid: u32) -> Option<(f64, f64)> {
+pub fn read(pid: u32) -> Option<(f64, f64)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // The command name may hold spaces; the fields after it do not.
     let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
