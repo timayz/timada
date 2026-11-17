@@ -536,6 +536,75 @@ pub mod category {
     }
 }
 
+/// The translations' events, in their own module: the macro names an event
+/// struct after its variant, and `Described`, `SeoSet` and `Claimed` already
+/// belong to the product above.
+pub mod translation {
+    use crate::value_object::CategoryQuestion;
+
+    /// What a product or a category says in one more language of the shop:
+    /// one stream per thing and language, with the deterministic id
+    /// [`translation_id`](crate::translation_id). The thing's own stream
+    /// keeps the shop's main language and everything that is no wording (a
+    /// price, a picture, a place in the tree); what a translation leaves
+    /// out is read in the main language. Apart from the thing's stream on
+    /// purpose: wording ten languages again fills these streams, not the
+    /// product's, which has its 65,535 versions to spend on prices and
+    /// stock (#472).
+    #[evento::aggregate(name = "timada-catalog/Translation")]
+    pub enum Translation {
+        /// The name in `language`, and the slug its address there goes by,
+        /// which [`TranslationSlug`] holds from then on. The first event of
+        /// a translation, and the first after one was dropped. `kind` is
+        /// `product` or `category`, `subject_id` the thing's id.
+        Named {
+            kind: String,
+            subject_id: String,
+            language: String,
+            name: String,
+            slug: String,
+            named_by: String,
+        },
+        /// Empty goes back to the main language's.
+        Described {
+            description: String,
+            described_by: String,
+        },
+        /// The buying guide below a category's products; a product has
+        /// none. Empty goes back to the main language's.
+        BodyWritten { body: String, written_by: String },
+        /// What search engines show for its page in this language; empty
+        /// falls back to the translated name and description.
+        SeoSet {
+            meta_title: String,
+            meta_description: String,
+            set_by: String,
+        },
+        /// The questions a category's page answers, the list whole; empty
+        /// goes back to the main language's.
+        QuestionsSet {
+            questions: Vec<CategoryQuestion>,
+            set_by: String,
+        },
+        /// The translation is gone, whole: the thing is read in the main
+        /// language again, and its slug in this one is free.
+        Dropped { dropped_by: String },
+    }
+
+    /// The index `(kind, language, slug) → thing`: one stream per slug of a
+    /// language, with the deterministic id
+    /// [`translation_slug_id`](crate::translation_slug_id).
+    #[evento::aggregate(name = "timada-catalog/TranslationSlug")]
+    pub enum TranslationSlug {
+        /// `version` is the version of the translation the claim was made
+        /// at: the translation's next write moves it to the slug or fails,
+        /// so a translation past it has used the claim or never will. No
+        /// release: a slug whose holder let go of it is taken over at
+        /// once.
+        Claimed { subject_id: String, version: u16 },
+    }
+}
+
 /// The stock events, in their own module: the macro names an event struct
 /// after its variant, and `Released` already belongs to the indexes above.
 pub mod stock {

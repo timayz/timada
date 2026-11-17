@@ -55,6 +55,7 @@ mod source;
 mod store;
 mod support;
 mod terms;
+mod translations;
 
 pub use announcements::*;
 pub use articles::*;
@@ -94,3 +95,4 @@ pub use timada_core::Rendition;
 /// A day from Unix seconds, for a host to write an article's date its own
 /// way: `(year, month, day)` in UTC, and `YYYY-MM-DD`.
 pub use timada_core::civil::{civil_date, format_date};
+pub use translations::*;

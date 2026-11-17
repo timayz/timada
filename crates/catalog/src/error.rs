@@ -9,6 +9,8 @@ pub enum CatalogError {
     InvalidSlug,
     #[error("this slug is already taken")]
     SlugTaken,
+    #[error("a language is one of the list")]
+    InvalidLanguage,
     #[error("the description must be at most 4000 characters")]
     InvalidDescription,
     #[error(
@@ -219,6 +221,7 @@ impl CatalogError {
             Self::InvalidImageOrder => "invalid_image_order",
             Self::TooManyOptions => "too_many_options",
             Self::InvalidOptionName => "invalid_option_name",
+            Self::InvalidLanguage => "language_invalid",
             Self::OptionExists => "option_exists",
             Self::InvalidOptionValues => "invalid_option_values",
             Self::OptionNotFound => "option_not_found",

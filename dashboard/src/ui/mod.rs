@@ -6,6 +6,7 @@ pub mod chrome;
 pub mod icons;
 pub mod page;
 pub mod theme;
+pub mod translations;
 
 pub use chrome::{Shell, auth_document, document};
 pub use page::*;

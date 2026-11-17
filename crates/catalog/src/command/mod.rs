@@ -24,6 +24,7 @@ mod release;
 mod sku_index;
 mod slug_index;
 mod stock;
+mod translation;
 mod variant;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,6 +43,7 @@ pub use listing_filters::*;
 pub use option::*;
 pub use ordered::*;
 pub use stock::*;
+pub use translation::*;
 pub use variant::*;
 
 use evento::{Executor, Projection, metadata::Event};

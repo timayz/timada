@@ -690,6 +690,26 @@ The codes are ISO 639-1, from the one list every context shares
 the store, out of use, for the day it comes back. Which address shows which language is
 the host's.
 
+What a product or a category says in another language is a stream of its own, one per
+thing and language (`timada-catalog/Translation`), written from the product's
+**Translations** tab and the category's **Translations** page: a name, the slug its
+address goes by in that language, a description, the search engines' title and
+description and, for a category, its buying guide and its questions. The catalog
+subscription copies each into `storefront_translations`:
+
+```rust
+use timada_storefront::{TranslationKind, translated_slug, translation_of};
+
+// What the product says in English, if it was worded there.
+let english = translation_of(db, TranslationKind::Product, &product.id, "en").await?;
+// Whose address `/en/p/cat-tree` is, as a translation says.
+let id = translated_slug(db, TranslationKind::Product, "en", "cat-tree").await?;
+```
+
+A part a translation leaves empty is read in the main language, and so is a thing with
+no translation, which goes by its main slug in every language. A slug is held once per
+kind and language; a translation cannot take a slug that is another thing's main one.
+
 ## Announcements
 
 The short messages at the top of the shop ("-10% maintenant avec le code BIENVENUE10")
