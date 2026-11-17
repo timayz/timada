@@ -2045,6 +2045,26 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Mentions légales");
   await expect(page.locator("main")).toContainText("Le site est édité par Acme.");
 
+  // The search in English matches the English words: the listing and the
+  // live search find the translated product by them, under its English
+  // name and address, and the page by its English title. A French word
+  // finds only what has no English wording.
+  await page.goto(`${SHOP}/en/shop?q=cat+tree`);
+  await expect(page.locator("ul.catalog [data-product]")).toHaveCount(1);
+  await expect(page.locator("[data-product=cat-tree]")).toContainText("Cat Tree");
+  await page.goto(`${SHOP}/en/shop?q=arbre`);
+  await expect(page.locator("ul.catalog [data-product]")).toHaveCount(0);
+  await page.goto(`${SHOP}/en/shop?q=griffoir`);
+  await expect(page.locator("ul.catalog [data-product]")).toHaveCount(1);
+  await page.goto(`${SHOP}/boutique?q=arbre`);
+  await expect(page.locator("[data-product=arbre-a-chat]")).toContainText("Arbre à chat");
+  const fragment = await (await request.get(`${SHOP}/en/search?q=cat+tree`)).text();
+  expect(fragment).toContain('data-search-product="cat-tree"');
+  expect(fragment).toContain('href="/en/p/cat-tree"');
+  const legal = await (await request.get(`${SHOP}/en/search?q=legal`)).text();
+  expect(legal).toContain("Legal notice");
+  expect(await (await request.get(`${SHOP}/en/search?q=mentions`)).text()).not.toContain("Mentions légales");
+
   // The cart names its lines as the page that filled it did, and links
   // them to the address of the language; in French it reads in French.
   await page.goto(`${SHOP}/en/p/cat-tree`);

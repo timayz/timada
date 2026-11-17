@@ -458,6 +458,11 @@ pub struct ProductQuery {
     /// [`facet_key`] writes them: "Colour: Rose".
     pub options: Vec<(String, String)>,
     pub sort: ProductSort,
+    /// The language, other than the shop's main one, a search is read in:
+    /// a product worded in it is found by those words, one that is not by
+    /// its main ones. The library's readers set it from the request
+    /// ([`read_in`](crate::read_in)); it changes nothing without `q`.
+    pub language: Option<String>,
 }
 
 impl Default for ProductQuery {
@@ -472,11 +477,18 @@ impl Default for ProductQuery {
             max_cents: None,
             options: Vec::new(),
             sort: ProductSort::default(),
+            language: None,
         }
     }
 }
 
 impl ProductQuery {
+    /// Reads a search in `language`, one of the shop's other languages.
+    pub fn read_in(mut self, language: impl Into<String>) -> Self {
+        self.language = Some(language.into());
+        self
+    }
+
     pub fn page(mut self, page: u32) -> Self {
         self.page = page.max(1);
         self
@@ -908,6 +920,19 @@ async fn found(
     let mut found: Vec<Found> = found_statement(query, search, aside, options)
         .fetch_all(db)
         .await?;
+    // Read in another language: the products worded in it are found by
+    // those words, off the translations' own index, and their rows read by
+    // their keys, a list at a time.
+    if let Some(language) = query.language.as_deref() {
+        let ids: Vec<(String,)> = translated_statement(language, search).fetch_all(db).await?;
+        let ids: Vec<String> = ids.into_iter().map(|(id,)| id).collect();
+        for ids in ids.chunks(FOUND_IDS) {
+            let rows: Vec<Found> = found_by_ids_statement(query, ids, aside, options)
+                .fetch_all(db)
+                .await?;
+            found.extend(rows);
+        }
+    }
     if found.iter().any(|product| !product.attributes.is_empty()) {
         let names: Option<(String,)> = db
             .fetch_optional("SELECT names_json FROM storefront_listing_filters", ())
@@ -956,6 +981,73 @@ fn found_statement(
             format!("(p.slug LIKE {pattern} ESCAPE '\\' OR p.name LIKE {pattern} ESCAPE '\\')")
         }
     }];
+    if let Some(language) = query.language.as_deref() {
+        // Worded in the language, a product is found by those words alone
+        // ([`translated_statement`]). Its key is named: the planner would
+        // take the slug's index, led by `kind` too, and read every row.
+        conditions.push(format!(
+            "NOT EXISTS (SELECT 1 FROM storefront_translations t
+                INDEXED BY {}
+                WHERE t.kind = 'product' AND t.subject_id = p.id AND t.language = {})",
+            crate::translations::TRANSLATIONS_KEY,
+            statement.bind(language)
+        ));
+    }
+    found_rows(statement, conditions, query, aside, options)
+}
+
+/// How many product rows a search read in another language asks for at
+/// once, by their keys.
+const FOUND_IDS: usize = 200;
+
+/// The ids of the products whose wording in `language` a search matches:
+/// asked of the translations' full-text index alone (or of the language's
+/// rows, for a pattern), as [`found_statement`] asks the products'.
+fn translated_statement(language: &str, search: &Search) -> Statement {
+    let mut statement = Statement::default();
+    let language = statement.bind(language);
+    statement.sql = match search {
+        Search::Phrase(phrase) => format!(
+            "SELECT t.subject_id FROM storefront_translations t
+             WHERE fts_match(t.slug_search, t.name_search, {})
+               AND t.kind = 'product' AND t.language = {language}",
+            statement.bind(phrase.as_str())
+        ),
+        Search::Pattern(pattern) => {
+            let pattern = statement.bind(pattern.as_str());
+            format!(
+                "SELECT t.subject_id FROM storefront_translations t
+                    INDEXED BY storefront_translations_slug
+                 WHERE t.kind = 'product' AND t.language = {language}
+                   AND (t.slug LIKE {pattern} ESCAPE '\\' OR t.name LIKE {pattern} ESCAPE '\\')"
+            )
+        }
+    };
+    statement
+}
+
+/// What [`found`] reads of the products `ids`, those of them the rest of
+/// the query keeps: one lookup by key each.
+fn found_by_ids_statement(
+    query: &ProductQuery,
+    ids: &[String],
+    aside: Option<&str>,
+    options: bool,
+) -> Statement {
+    let mut statement = Statement::default();
+    let conditions = vec![format!("p.id IN ({})", statement.bind_all(ids))];
+    found_rows(statement, conditions, query, aside, options)
+}
+
+/// The rows [`found`] reads, of the published products `conditions` keep
+/// within the query's band.
+fn found_rows(
+    mut statement: Statement,
+    mut conditions: Vec<String>,
+    query: &ProductQuery,
+    aside: Option<&str>,
+    options: bool,
+) -> Statement {
     conditions.push("p.status = 'published'".to_owned());
     if let Some(min) = query.min_cents {
         conditions.push(format!("p.max_amount_cents >= {}", statement.bind(min)));
@@ -2061,6 +2153,77 @@ mod sql {
         }
     }
 
+    /// What the translations' subscription writes for a product worded in
+    /// `language`.
+    async fn word(db: &Db, id: &str, language: &str, name: &str, slug: &str) {
+        db.execute(
+            "INSERT INTO storefront_translations (kind, subject_id, language, name, slug,
+                description, body, meta_title, meta_description, questions_json, slug_search,
+                name_search)
+             VALUES ('product', ?1, ?2, ?3, ?4, '', '', '', '', '[]', ?5, ?6)",
+            (id, language, name, slug, search_key(slug), search_key(name)),
+        )
+        .await
+        .unwrap();
+    }
+
+    /// A search read in another language matches what its reader sees: the
+    /// translation's words for a product that has one, the main ones for
+    /// the others (#646).
+    #[tokio::test]
+    async fn a_search_read_in_a_language_matches_its_wording() {
+        let db = catalog().await;
+        word(&db, "collar", "en", "Necklace Élégant", "necklace").await;
+        // A draft's wording is copied too, and never found.
+        word(&db, "draft", "en", "Necklace draft", "necklace-draft").await;
+        // Another language's wording is another search's.
+        word(&db, "basket", "de", "Necklace Korb", "korb").await;
+        let found = |query: ProductQuery| ids(&db, query.sort(ProductSort::PriceAsc));
+        let english = |q: &str| ProductQuery::default().search(q).read_in("en");
+
+        // The translation's words, through the index and as a pattern,
+        // accents and case aside; no longer the main ones.
+        for q in ["neckl", "ELEGANT", "ne"] {
+            assert_eq!(found(english(q)).await, (owned(&["collar"]), 1), "{q}");
+        }
+        for q in ["collar", "co"] {
+            assert_eq!(found(english(q)).await.1, 0, "{q}");
+        }
+        // A product with no English wording is found by its main words.
+        for q in ["basket", "ba"] {
+            assert_eq!(found(english(q)).await, (owned(&["basket"]), 1), "{q}");
+        }
+        // The main language is searched as before, whatever is translated.
+        assert_eq!(
+            found(ProductQuery::default().search("collar")).await,
+            (owned(&["collar"]), 1)
+        );
+        assert_eq!(found(ProductQuery::default().search("neckl")).await.1, 0);
+
+        // The rest of the query holds over what the translation found, and
+        // the facet counts it.
+        assert_eq!(
+            found(english("neckl").priced_between(None, Some(500)))
+                .await
+                .1,
+            0
+        );
+        assert_eq!(
+            found(english("neckl").with_option("Couleur", "Rose")).await,
+            (owned(&["collar"]), 1)
+        );
+        assert_eq!(found(english("neckl").in_category("cat")).await.1, 1);
+        assert_eq!(found(english("neckl").exclude("collar")).await.1, 0);
+        let colours: Vec<(String, i64)> =
+            published_option_values(&db, &english("neckl"), "Couleur")
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|value| (value.key, value.count))
+                .collect();
+        assert_eq!(colours, [("bleu".to_owned(), 1), ("rose".to_owned(), 1)]);
+    }
+
     #[tokio::test]
     async fn a_search_keeps_what_the_rest_of_the_query_keeps() {
         let db = catalog().await;
@@ -2372,6 +2535,38 @@ mod sql {
             let plan = plan_of(&db, &found_statement(&search, &phrase, None, options)).await;
             assert_eq!(plan, ["QUERY INDEX METHOD fts"], "with options: {options}");
         }
+        // Read in another language: the products' index still answers on
+        // its own, each hit looked up once in the translations by its key;
+        // the translations' index answers for the worded ones, and their
+        // rows are read by key.
+        let english = search.clone().read_in("en");
+        let plan = plan_of(&db, &found_statement(&english, &phrase, None, false)).await;
+        assert_eq!(
+            plan.first().map(String::as_str),
+            Some("QUERY INDEX METHOD fts")
+        );
+        assert!(
+            plan.iter().skip(1).all(|step| step.starts_with("SEARCH")
+                && step.contains("sqlite_autoindex_storefront_translations_1")
+                && step.contains("kind=? AND subject_id=? AND language=?")),
+            "{plan:?}"
+        );
+        let plan = plan_of(&db, &translated_statement("en", &phrase)).await;
+        assert_eq!(plan, ["QUERY INDEX METHOD fts"]);
+        let pattern = Search::Pattern(like_contains("co"));
+        let plan = plan_of(&db, &translated_statement("en", &pattern)).await;
+        assert!(
+            plan.iter().all(|step| step.starts_with("SEARCH")
+                && step.contains("storefront_translations_slug (kind=? AND language=?)")),
+            "{plan:?}"
+        );
+        let ids = ["collar".to_owned(), "basket".to_owned()];
+        let plan = plan_of(&db, &found_by_ids_statement(&english, &ids, None, true)).await;
+        assert!(
+            plan.iter().all(|step| step.starts_with("SEARCH")
+                && step.contains("sqlite_autoindex_storefront_products_1 (id=?)")),
+            "{plan:?}"
+        );
         reads_in_order(
             &plan_of(&db, &newest_statement("cat", &["basket".to_owned()], 4)).await,
             "storefront_category_products_newest",

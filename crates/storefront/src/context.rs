@@ -1,6 +1,8 @@
 //! What a page asks for: the store, a product, a page of products. Errors
 //! are topcoat errors, so `?` works in a page.
 
+use std::borrow::Cow;
+
 use topcoat_core::context::{Cx, context, try_context};
 use topcoat_core::error::{Error, Result};
 use topcoat_router::error::not_found;
@@ -44,6 +46,7 @@ pub fn money(cx: &Cx) -> &MoneyFormat {
 /// A page of the published catalog.
 pub async fn products(cx: &Cx, query: &ProductQuery) -> Result<ProductPage> {
     let store = store(cx);
+    let query = &searched_in(cx, query);
     let mut page = published_products(store.db(), query)
         .await
         .map_err(Error::from_anyhow)?;
@@ -52,6 +55,18 @@ pub async fn products(cx: &Cx, query: &ProductQuery) -> Result<ProductPage> {
     }
     in_language(cx, &mut page.items).await?;
     Ok(page)
+}
+
+/// `query`, its search read in the language of the request when that is
+/// not the main one: what a visitor types is matched against what they
+/// read.
+fn searched_in<'a>(cx: &Cx, query: &'a ProductQuery) -> Cow<'a, ProductQuery> {
+    match crate::read_in(cx) {
+        Some(language) if query.q.is_some() && query.language.is_none() => {
+            Cow::Owned(query.clone().read_in(language))
+        }
+        _ => Cow::Borrowed(query),
+    }
 }
 
 /// Words `products` in the language the request is read in, when it is not
@@ -69,7 +84,7 @@ async fn in_language(cx: &Cx, products: &mut [Product]) -> Result<()> {
 /// its count, for a filter's links: see
 /// [`published_option_values`](crate::published_option_values).
 pub async fn option_values(cx: &Cx, query: &ProductQuery, option: &str) -> Result<Vec<FacetValue>> {
-    published_option_values(store(cx).db(), query, option)
+    published_option_values(store(cx).db(), &searched_in(cx, query), option)
         .await
         .map_err(Error::from_anyhow)
 }

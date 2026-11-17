@@ -3587,6 +3587,112 @@ async fn a_store_carries_what_a_page_and_an_article_say_in_other_languages() {
     store.shutdown().await;
 }
 
+/// A search read in another language matches what the merchant worded in
+/// it: the copy indexes a translation as it does a product (#646).
+#[tokio::test]
+async fn a_search_in_another_language_finds_what_is_worded_in_it() {
+    use timada_catalog::{TranslationKind, TranslationText};
+    use timada_pages::{TextKind, TextTranslation};
+    use timada_storefront::search_published_pages_in;
+
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let catalog = h.catalog(&acme);
+    let pages = h.pages(&acme);
+    let tree = stock(&catalog, "Arbre à chat", 4900, &[]).await;
+    stock(&catalog, "Griffoir", 1900, &[]).await;
+    catalog
+        .translate(
+            "alice",
+            TranslationKind::Product,
+            &tree,
+            "en",
+            TranslationText {
+                name: "Cat Tree".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let delivery = pages
+        .create_page(
+            "alice",
+            timada_pages::CreatePage {
+                slug: "livraison".into(),
+                title: "Livraison".into(),
+                body: "Sous 48 h.".into(),
+            },
+        )
+        .await
+        .unwrap();
+    pages.publish_page("alice", &delivery).await.unwrap();
+    pages
+        .translate_text(
+            "alice",
+            TextKind::Page,
+            &delivery,
+            "en",
+            TextTranslation {
+                title: "Shipping".into(),
+                body: "Within two days.".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
+    let names = async |query: ProductQuery| -> Vec<String> {
+        published_products(&db, &query)
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|product| product.name)
+            .collect()
+    };
+    let english = |q: &str| ProductQuery::default().search(q).read_in("en");
+    eventually("the English words reach the index", async || {
+        names(english("cat tree")).await == ["Arbre à chat"]
+    })
+    .await;
+    // Worded in English, it is no longer found there by its French name;
+    // the product that is not worded still is, and French is as before.
+    assert!(names(english("arbre")).await.is_empty());
+    assert_eq!(names(english("griff")).await, ["Griffoir"]);
+    assert_eq!(
+        names(ProductQuery::default().search("arbre")).await,
+        ["Arbre à chat"]
+    );
+    assert!(
+        names(ProductQuery::default().search("cat tree"))
+            .await
+            .is_empty()
+    );
+
+    // A page is found by, and listed under, its English title and text.
+    let found = async |language: Option<&str>, q: &str| -> Vec<String> {
+        search_published_pages_in(&db, language, q, 5)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|page| page.title)
+            .collect()
+    };
+    eventually("the page's English words reach the copy", async || {
+        found(Some("en"), "shipp").await == ["Shipping"]
+    })
+    .await;
+    assert_eq!(found(Some("en"), "within").await, ["Shipping"]);
+    assert!(found(Some("en"), "livrais").await.is_empty());
+    assert_eq!(found(None, "livrais").await, ["Livraison"]);
+    assert!(found(None, "shipp").await.is_empty());
+
+    store.shutdown().await;
+}
+
 /// A translation's address that moved answers from where it went, in its
 /// language (#647).
 #[tokio::test]
