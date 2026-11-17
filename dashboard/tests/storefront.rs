@@ -3326,6 +3326,42 @@ async fn a_store_shows_the_announcements_whose_window_is_open() {
 }
 
 #[tokio::test]
+async fn a_store_knows_the_languages_it_is_read_in() {
+    let h = harness(None).await;
+    let acme = h.create("acme").await;
+    let (token, _) = h.key(&acme).await;
+    let pages = h.pages(&acme);
+    let db = h.local_db("acme-shop").await;
+    let store = Store::connect(h.config(&token), db.clone()).await.unwrap();
+    // Never set: the shop's own language, and no other.
+    assert_eq!(
+        timada_storefront::published_languages(&db).await.unwrap(),
+        None
+    );
+    pages
+        .set_languages("alice", "fr", &["de".to_owned(), "en".to_owned()])
+        .await
+        .unwrap();
+    let read = async || {
+        timada_storefront::published_languages(&db)
+            .await
+            .unwrap()
+            .map(|languages| (languages.main, languages.others))
+    };
+    eventually("the languages reach the local copy", async || {
+        read().await == Some(("fr".to_owned(), vec!["en".to_owned(), "de".to_owned()]))
+    })
+    .await;
+    pages.set_languages("alice", "en", &[]).await.unwrap();
+    eventually("the copy follows a change of languages", async || {
+        read().await == Some(("en".to_owned(), Vec::new()))
+    })
+    .await;
+
+    store.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_product_shows_its_own_delivery_time_else_the_shops_default() {
     let h = harness(None).await;
     let acme = h.create("acme").await;

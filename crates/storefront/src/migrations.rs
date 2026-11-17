@@ -275,6 +275,14 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             delay_secs INTEGER NOT NULL,
             on_leave INTEGER NOT NULL
         );
+        -- The languages the storefront is read in, as the back office set
+        -- them: the main one and the others (a JSON list of codes). One
+        -- row, none while the shop never set them.
+        CREATE TABLE storefront_languages (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            main TEXT NOT NULL,
+            others_json TEXT NOT NULL
+        );
         -- The shop's shipping methods as the back office has them, for
         -- what the offers say of delivery: one row, a JSON list.
         CREATE TABLE storefront_shipping_methods (
@@ -345,6 +353,7 @@ pub const TABLES: &[&str] = &[
     "storefront_google_tag",
     "storefront_meta_pixel",
     "storefront_newsletter_popup",
+    "storefront_languages",
     "storefront_shipping_methods",
     "storefront_return_policy",
 ];

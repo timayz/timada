@@ -29,6 +29,7 @@ pub const PAGES: IconData = iconify_icon!("lucide:book-open");
 pub const ARTICLES: IconData = iconify_icon!("lucide:newspaper");
 pub const ANNOUNCEMENTS: IconData = iconify_icon!("lucide:megaphone");
 pub const NEWSLETTER_POPUP: IconData = iconify_icon!("lucide:mail-plus");
+pub const LANGUAGES: IconData = iconify_icon!("lucide:languages");
 pub const REDIRECTS: IconData = iconify_icon!("lucide:corner-up-right");
 pub const GOOGLE_TAG: IconData = iconify_icon!("lucide:chart-no-axes-column");
 pub const META_PIXEL: IconData = iconify_icon!("lucide:scan-eye");

@@ -8,7 +8,7 @@
 //! context would otherwise write for itself: the canonical form of an
 //! e-mail address ([`email`]), of a slug ([`slug`]), of a currency
 //! ([`currency`]) and of what a page tells search engines ([`seo`]), the clock ([`time`]), calendar dates ([`civil`]), an
-//! amount for a person to read ([`money`]) and a `LIKE` pattern ([`sql`]),
+//! amount for a person to read ([`money`]), the languages a shop words itself in ([`languages`]) and a `LIKE` pattern ([`sql`]),
 //! and the database the read models share with the store ([`db`]). No web
 //! framework: contexts depend on this crate and on evento, nothing more
 //! between them.
@@ -20,6 +20,7 @@ pub mod currency;
 pub mod db;
 pub mod email;
 pub mod keys;
+pub mod languages;
 pub mod money;
 pub mod page;
 pub mod picture;
