@@ -286,6 +286,14 @@ pub fn newsletter_popup_id() -> String {
     evento::hash_ids(vec!["newsletter-popup"])
 }
 
+/// How many languages a storefront is read in beside its main one.
+pub const MAX_OTHER_LANGUAGES: usize = 10;
+
+/// The stream of the shop's languages: one per tenant store.
+pub fn languages_id() -> String {
+    evento::hash_ids(vec!["languages"])
+}
+
 /// The longest Meta pixel id.
 pub const MAX_META_PIXEL_ID_LEN: usize = 20;
 

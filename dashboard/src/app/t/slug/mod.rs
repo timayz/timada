@@ -17,6 +17,7 @@ pub mod feed;
 pub mod google_tag;
 pub mod invoices;
 pub mod invoicing;
+pub mod languages;
 pub mod mail;
 pub mod members;
 pub mod messages;
