@@ -18,8 +18,7 @@ use std::borrow::Cow;
 
 use timada_storefront::{
     CartView, Checkout, OfferView, OrderError, VatEstimate, accepts_business_buyers, menu,
-    payment_setup, recent_reviews, request_language, request_time_zone, save_address,
-    start_payment,
+    payment_setup, recent_reviews, request_time_zone, save_address, start_payment,
 };
 use topcoat::{
     Result,
@@ -1203,8 +1202,9 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
         vat_number: business.then(|| draft.vat_number.clone()),
         billing: draft.billing(),
         shipping_method: Some(draft.shipping_method.clone()),
-        // The shop mails about the order in the shopper's language.
-        language: request_language(cx),
+        // The shop mails about the order in the shopper's language, and
+        // the order names its goods in it.
+        language: crate::app::lang::checkout_language(cx).await,
         // A scheduled newsletter keeps the shopper's hours.
         time_zone: request_time_zone(cx),
         // What brought the shopper, as far as they allowed keeping it.

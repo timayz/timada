@@ -15,6 +15,7 @@ use timada_pages::{render_article, render_markdown};
 use topcoat_core::context::{Cx, try_context};
 
 use crate::articles::{ArticleCard, PublicArticle};
+use crate::cart::CartView;
 use crate::pages::{DESCRIPTION_CHARS, PublicPage, excerpt};
 use crate::query::{Category, CategoryHub, CategoryNode, Product, Seo};
 use crate::translations::{
@@ -63,6 +64,43 @@ pub(crate) async fn products_in(
             translation_of(db, TranslationKind::Product, &product.id, language).await?
         {
             word_product(product, translation);
+        }
+    }
+    Ok(())
+}
+
+/// Words a cart's lines and its offers in `language`: the name of each
+/// product that has a translation, and the slug its page goes by there.
+/// The cart itself keeps no name: the dashboard prices it from the
+/// catalog, in the main language.
+pub(crate) async fn cart_in(db: &Db, language: &str, cart: &mut CartView) -> anyhow::Result<()> {
+    let mut worded: HashMap<String, Option<Translation>> = HashMap::new();
+    let ids = cart
+        .lines
+        .iter()
+        .map(|line| &line.product_id)
+        .chain(cart.offers.iter().map(|offer| &offer.product_id));
+    for id in ids {
+        if !worded.contains_key(id) {
+            let translation = translation_of(db, TranslationKind::Product, id, language).await?;
+            worded.insert(id.clone(), translation);
+        }
+    }
+    for line in &mut cart.lines {
+        if let Some(Some(translation)) = worded.get(&line.product_id) {
+            line.name = translation.name.clone();
+            // Only a product still on sale here has a page to link to.
+            if line.slug.is_some() {
+                line.slug = Some(translation.slug.clone());
+            }
+        }
+    }
+    for offer in &mut cart.offers {
+        if let Some(Some(translation)) = worded.get(&offer.product_id) {
+            offer.name = translation.name.clone();
+            if offer.slug.is_some() {
+                offer.slug = Some(translation.slug.clone());
+            }
         }
     }
     Ok(())
