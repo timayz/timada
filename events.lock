@@ -352,6 +352,10 @@ event timada-pages/PageSlug::Claimed { page_id: String, page_version: u16 }
 event timada-pages/PageSlug::Released unit
 event timada-pages/Redirects::RedirectAdded { redirect_id: String, from: String, to: String, added_by: String }
 event timada-pages/Redirects::RedirectRemoved { redirect_id: String, removed_by: String }
+event timada-pages/Translation::Dropped { dropped_by: String }
+event timada-pages/Translation::SeoSet { meta_title: String, meta_description: String, set_by: String }
+event timada-pages/Translation::Written { kind: String, subject_id: String, language: String, title: String, slug: String, summary: String, body: String, written_by: String }
+event timada-pages/TranslationSlug::Claimed { subject_id: String, version: u16 }
 event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }
 event timada-reviews/Review::Published { published_by: String }
 event timada-reviews/Review::Rejected { reason: String, rejected_by: String }

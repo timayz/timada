@@ -706,6 +706,20 @@ let english = translation_of(db, TranslationKind::Product, &product.id, "en").aw
 let id = translated_slug(db, TranslationKind::Product, "en", "cat-tree").await?;
 ```
 
+A page and an article have theirs the same way (`timada-pages/Translation`, written from
+their **Translations** pages in the back office, copied into
+`storefront_text_translations`): a title, a Markdown body that may show the pictures of
+the text it translates, the search engines' words and, for an article, its summary and
+the slug its address goes by in that language. A page has no slug there: where a page is
+remains the storefront's choice.
+
+```rust
+use timada_storefront::{TextKind, text_translation_of, translated_article_slug};
+
+let english = text_translation_of(db, TextKind::Page, &page.id, "en").await?;
+let id = translated_article_slug(db, "en", "choosing-a-size").await?;
+```
+
 A part a translation leaves empty is read in the main language, and so is a thing with
 no translation, which goes by its main slug in every language. A slug is held once per
 kind and language; a translation cannot take a slug that is another thing's main one.
