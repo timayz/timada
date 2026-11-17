@@ -1,7 +1,7 @@
 //! What a page asks for: the store, a product, a page of products. Errors
 //! are topcoat errors, so `?` works in a page.
 
-use topcoat_core::context::{Cx, context};
+use topcoat_core::context::{Cx, context, try_context};
 use topcoat_core::error::{Error, Result};
 use topcoat_router::error::not_found;
 
@@ -30,11 +30,15 @@ pub fn media_url(cx: &Cx) -> Option<&str> {
     store(cx).media_url()
 }
 
-/// How the store writes an amount of money
-/// ([`StoreConfig::money`](crate::StoreConfig::money)), for a page that
-/// formats cents of its own; the views the library builds already carry it.
+/// How an amount of money is written for this request: the
+/// [`MoneyFormat`] the host carries in the request's context, when it
+/// writes prices one way per language (`12,50€` in French, `€12.50` in
+/// English), else the store's
+/// ([`StoreConfig::money`](crate::StoreConfig::money)). For a page that
+/// formats cents of its own; the views the library's readers return for a
+/// request already carry it.
 pub fn money(cx: &Cx) -> &MoneyFormat {
-    store(cx).money()
+    try_context::<MoneyFormat>(cx).unwrap_or_else(|| store(cx).money())
 }
 
 /// A page of the published catalog.

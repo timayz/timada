@@ -512,5 +512,11 @@ pub async fn remove_address(
 
 /// The orders of the account; see [`Store::shopper_orders`].
 pub async fn shopper_orders(cx: &Cx, token: &str) -> Result<ShopperRefusable<Vec<ShopperOrder>>> {
-    store(cx).shopper_orders(token).await.map_err(into_error)
+    let orders = store(cx).shopper_orders(token).await.map_err(into_error)?;
+    Ok(orders.map(|mut orders| {
+        for order in &mut orders {
+            order.money = crate::money(cx).clone();
+        }
+        orders
+    }))
 }

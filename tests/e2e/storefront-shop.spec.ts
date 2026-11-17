@@ -420,7 +420,7 @@ test("a shopper pays with Stripe and the merchant fulfils or refunds the order",
     });
     await expect(page.locator("[data-checkout-total]")).toHaveText("25,00€");
     await expect(page.locator("[data-checkout-vat]")).toHaveText(
-      "(dont 4,17€ VAT FR 20%)",
+      "(dont 4,17€ TVA FR 20 %)",
     );
     await page.getByLabel("Pays", { exact: true }).selectOption("US");
     await expect(page.locator("[data-checkout-vat]")).toBeHidden();
@@ -1813,7 +1813,7 @@ test("a shopper picks a delivery method that ships to their country, and pays fo
     );
     await expect(page.locator("[data-checkout-total]")).toHaveText("29,90€");
     await expect(page.locator("[data-checkout-vat]")).toContainText(
-      "VAT FR 20%",
+      "TVA FR 20 %",
     );
     expect(
       await page.evaluate(() => (window as any).__stripe.elements.amount),

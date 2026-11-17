@@ -248,7 +248,7 @@ impl Panel {
                 let active = band == Some(index);
                 FilterLink {
                     key: format!("{}-{}", lo / 100, hi / 100),
-                    label: t!(listing_price_band, from: money(*lo, "EUR"), to: money(*hi, "EUR"))
+                    label: t!(listing_price_band, from: money(*lo, "EUR").resolve(cx), to: money(*hi, "EUR").resolve(cx))
                         .resolve(cx)
                         .into_owned(),
                     href: link(&if active {
