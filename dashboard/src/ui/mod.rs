@@ -159,7 +159,7 @@ pub fn describe_error(code: &str) -> &'static str {
             "A category answers at most 20 questions: each on one line of at most 200 characters, followed by its answer of at most 1,500."
         }
         "too_many_pinned_products" => "A category shows at most 8 products first.",
-        "too_many_listing_filters" => "Listings are narrowed by at most 8 options.",
+        "too_many_listing_filters" => "Listings are narrowed by at most 8 options or facts.",
         "invalid_discount_code" => "A code is 3 to 32 letters, digits, dashes and underscores.",
         "discount_code_taken" => "Another live discount already uses this code.",
         "invalid_percent" => "Enter a percentage above 0 and at most 100, like 10 or 12.5.",

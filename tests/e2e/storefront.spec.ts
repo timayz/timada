@@ -20,7 +20,7 @@ import {
   publishProduct,
   publishVariedProduct,
 } from "./storefront";
-import { selectByText } from "./forms";
+import { productTab, selectByText } from "./forms";
 import { addShippingMethod, addToCart } from "./shop";
 import { createTenant, uniqueTenant } from "./tenants";
 
@@ -1352,7 +1352,14 @@ test("a listing is narrowed by the options the merchant marks as filters", async
   await createCategory(page, slug, "Chat");
   await publishVariedProduct(page, slug, "Tapis", "Taille", [["S", "19.90"], ["M", "24.90"]], "Chat");
   await publishVariedProduct(page, slug, "Coussin", "Taille", [["M", "14.90"]], "Chat");
-  await publishVariedProduct(page, slug, "Collier", "Couleur", [["Rose", "9.90"]], "Chat");
+  const collar = await publishVariedProduct(page, slug, "Collier", "Couleur", [["Rose", "9.90"]], "Chat");
+  // A fact of its table, which nothing filters by yet.
+  await page.goto(collar);
+  await productTab(page, "Facts");
+  await page.getByLabel("Fact name").fill("Matière");
+  await page.getByLabel("Fact value").fill("Nylon");
+  await page.getByRole("button", { name: "Set fact" }).click();
+  await expect(page.getByRole("status")).toContainText("Fact saved.");
   await app.start(request, await mintKey(page, slug, false), 3);
 
   // Until the merchant chooses, the storefront offers the colour alone.
@@ -1364,10 +1371,10 @@ test("a listing is narrowed by the options the merchant marks as filters", async
   // The merchant marks the size, then the colour.
   await page.goto(`/t/${slug}/categories`);
   await expect(page.locator("[data-listing-filters]")).toHaveAttribute("data-listing-filters", "unset");
-  await page.getByLabel("Options shoppers filter by").fill("Taille\nCouleur\ntaille\n");
+  await page.getByLabel("Options and facts shoppers filter by").fill("Taille\nCouleur\ntaille\n");
   await page.getByRole("button", { name: "Save filters" }).click();
   await expect(page.getByRole("status")).toContainText("Filters saved.");
-  await expect(page.getByLabel("Options shoppers filter by")).toHaveValue("Taille\nCouleur");
+  await expect(page.getByLabel("Options and facts shoppers filter by")).toHaveValue("Taille\nCouleur");
   await expect(page.locator("[data-listing-filters]")).toHaveAttribute("data-listing-filters", "set");
 
   // The storefront offers both, in that order, with what each value counts.
@@ -1408,9 +1415,29 @@ test("a listing is narrowed by the options the merchant marks as filters", async
   expect(rules).toContain("Disallow: /*?*taille=\n");
   expect(rules).toContain("Disallow: /*?*couleur=\n");
 
+  // A name no option has is a fact of the products' tables: the products
+  // already copied are filed under it.
+  await page.goto(`/t/${slug}/categories`);
+  await page.getByLabel("Options and facts shoppers filter by").fill("Taille\nMatière");
+  await page.getByRole("button", { name: "Save filters" }).click();
+  await expect(page.getByRole("status")).toContainText("Filters saved.");
+  await expect(async () => {
+    await page.goto(`${app.url}/c/chat`);
+    await expect(filters.locator("[data-filter=matiere]")).toHaveText(["Nylon (1)"], { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await filters.locator("summary").click();
+  await filters.locator("[data-filter=matiere][data-filter-value=nylon]").click();
+  await expect(page).toHaveURL(`${app.url}/c/chat?matiere=nylon`);
+  await expect(page.locator("ul.catalog > li[data-product]")).toHaveAttribute("data-product", "collier");
+  // A search is narrowed by it too.
+  await page.goto(`${app.url}/boutique?q=collier&matiere=nylon`);
+  await expect(page.locator("ul.catalog > li[data-product]")).toHaveCount(1);
+  await page.goto(`${app.url}/boutique?q=tapis&matiere=nylon`);
+  await expect(page.locator("ul.catalog > li[data-product]")).toHaveCount(0);
+
   // None at all: the price alone, and an address naming one shows everything.
   await page.goto(`/t/${slug}/categories`);
-  await page.getByLabel("Options shoppers filter by").fill("");
+  await page.getByLabel("Options and facts shoppers filter by").fill("");
   await page.getByRole("button", { name: "Save filters" }).click();
   await expect(page.getByRole("status")).toContainText("Filters saved.");
   await expect(async () => {

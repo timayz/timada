@@ -519,6 +519,12 @@ catalogue stays newest first.
 (under **Categories**; eight at most, in their order), or `None` while they never chose,
 which leaves the choice to the host. Each is an option's name: `option_values` gives
 the values a listing offers for it with their counts, and `with_option` narrows by one.
+A name no option has is looked for among the facts of a product's table ("Matière"), so
+a fact narrows a listing as an option does, its one value standing for the product; a
+name that is an option on one product and a fact on another is one filter. Only the
+facts on the list are counted, and a value longer than an option's may be (40
+characters) is left out. When the list changes, the copy files its products again a few
+hundred at a time: until it is through, a new filter counts the products reached so far.
 
 The storefront offers the colour until the merchant chooses (`DEFAULT_FILTERS` in
 `storefront/src/app/filters.rs`), then theirs: a group of links an option, each under
