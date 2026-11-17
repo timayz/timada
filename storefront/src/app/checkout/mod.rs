@@ -1204,7 +1204,7 @@ pub(crate) async fn ask(cx: &Cx, form: CheckoutForm) -> Result<Asked> {
         shipping_method: Some(draft.shipping_method.clone()),
         // The shop mails about the order in the shopper's language, and
         // the order names its goods in it.
-        language: crate::app::lang::checkout_language(cx).await,
+        language: timada_storefront::shopper_language(cx),
         // A scheduled newsletter keeps the shopper's hours.
         time_zone: request_time_zone(cx),
         // What brought the shopper, as far as they allowed keeping it.

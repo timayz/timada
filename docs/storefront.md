@@ -851,7 +851,7 @@ let session = start_payment(cx, &cart_id, Checkout {
     email, shipping, note,
     shipping_method: method.map(|m| m.id.clone()),
     expected_total_cents: Some(view.total_with(method)),   // the total the shopper saw
-    language: request_language(cx),                        // the browser's Accept-Language
+    language: shopper_language(cx),                        // the address's, else the browser's
     ..Default::default()
 }).await?;
 // Ok(session): confirm with Stripe using session.client_secret; confirmPayment
@@ -1052,9 +1052,12 @@ delete_account(cx, &token).await?;                 // its key is destroyed, sess
   (`X-Shopper-IP`), so behind a reverse proxy the host must trust it
   (`.trusted_proxies(…)` on its router), or all its shoppers share one address.
   `Store::request_sign_in_code` takes the address itself.
-- `request_sign_in_code(cx, …)` also reports the request's language, the primary
-  subtag of its `Accept-Language` (`language=fr`); `request_language(cx)` reads it
-  for `Checkout::language` too. The dashboard keeps the language on the order and
+- `request_sign_in_code(cx, …)` also reports the shopper's language
+  (`language=fr`), which `shopper_language(cx)` gives, for `Checkout::language`, the
+  newsletter sign-up and a message to the shop too: the language of the address in
+  a shop read in several (the host carries an `AddressLanguage` in the request's
+  context, beside `ReadIn`), else the primary subtag of the browser's
+  `Accept-Language` (`request_language(cx)`). The dashboard keeps the language on the order and
   mails the shopper in it when the shop has that wording, else in the shop's
   default language (see [mail](mail.md)). `Store::request_sign_in_code` takes the
   language itself, as its third argument.
@@ -1081,8 +1084,8 @@ if takes_messages(cx) {                          // the host gave the dashboard'
 
 - The message goes to the dashboard (`POST /store/contact` at the dashboard
   address) with a key that allows `store:checkout`, the visitor's address (as the
-  host's trusted proxies report it) and the primary subtag of their
-  `Accept-Language`, so the merchant answers in their language.
+  host's trusted proxies report it) and their language (`shopper_language(cx)`), so
+  the merchant answers in it.
 - A refusal is a `MessageRefusal` to word for the visitor (`code()`):
   `message_invalid_name` (a first and a last name, 80 characters at most each),
   `message_invalid_email`, `message_invalid_body` (10 to 4000 characters),
