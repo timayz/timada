@@ -94,9 +94,10 @@ pub async fn published_sitemap_articles(db: &Db) -> anyhow::Result<Vec<SitemapEn
 /// The slug a row of `rows` (named `alias`) goes by in the language bound
 /// as `?{param}`: its translation's, read through its primary key, or its
 /// own.
-fn slug_in(translations: &str, kind: &str, alias: &str, param: u8) -> String {
+pub(crate) fn slug_in(translations: &str, kind: &str, alias: &str, param: u8) -> String {
     format!(
         "COALESCE((SELECT t.slug FROM {translations} t
+                       INDEXED BY sqlite_autoindex_{translations}_1
                    WHERE t.kind = '{kind}' AND t.subject_id = {alias}.id AND t.language = ?{param}),
                   {alias}.slug)"
     )
