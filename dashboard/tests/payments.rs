@@ -1016,6 +1016,73 @@ async fn a_paid_cart_becomes_one_order() {
 /// A shop that said what its goods and its sales cost: the order keeps
 /// them as they stood when its payment was asked for, with the VAT the
 /// sale was expected to carry, and tells what it left.
+/// An order names its goods in the language it was placed in, when the
+/// shop is read in it and the product is worded in it (#648).
+#[tokio::test]
+async fn an_order_names_its_goods_in_the_language_it_was_placed_in() {
+    use timada_catalog::{TranslationKind, TranslationText};
+
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let store = h.store(&acme);
+    let catalog = timada_catalog::Command::new(store.clone(), &acme.id);
+    let pages = timada_pages::Command::new(store.clone(), &acme.id);
+    let orders = timada_orders::Command::new(store, &acme.id);
+    let asked_in = |language: &str| Checkout {
+        language: Some(language.to_owned()),
+        ..checkout(Some(2500))
+    };
+    let lines_of = async |cart_id: &str, language: &str| {
+        let PaymentAnswer::Requested(payment) =
+            h.ask_with(&acme, cart_id, asked_in(language)).await
+        else {
+            panic!("a payment is opened");
+        };
+        payment
+    };
+
+    // The mug is worded in English before the shop is read in English: a
+    // browser's language alone names nothing.
+    let (cart_id, mug) = h.cart(&acme).await;
+    catalog
+        .translate(
+            "alice",
+            TranslationKind::Product,
+            &mug,
+            "en",
+            TranslationText {
+                name: "Tea Mug".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let payment = lines_of(&cart_id, "en").await;
+    assert_eq!(payment.lines[0].name, "Mug");
+
+    // Read in English and in German: an English order says "Tea Mug", a
+    // German one the main name, the mug having no German wording.
+    pages
+        .set_languages("alice", "fr", &["en".to_owned(), "de".to_owned()])
+        .await
+        .unwrap();
+    let payment = lines_of(&cart_id, "de").await;
+    assert_eq!(payment.lines[0].name, "Mug");
+    let payment = lines_of(&cart_id, "en").await;
+    assert_eq!(payment.lines[0].name, "Tea Mug");
+
+    h.stripe.authorize(&payment.payment_id);
+    let body = authorized(&payment.payment_id);
+    let Outcome::Placed { order_id } = h.webhook(&acme, &body, signed(&body)).await else {
+        panic!("the order is placed");
+    };
+    let order = orders.load_order(&order_id).await.unwrap().unwrap();
+    assert_eq!(order.language.as_deref(), Some("en"));
+    assert_eq!(order.lines[0].name, "Tea Mug");
+    assert_eq!(order.total_cents, 2500);
+}
+
 #[tokio::test]
 async fn an_order_keeps_what_its_sale_cost_with_the_vat_expected() {
     let h = harness().await;

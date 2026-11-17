@@ -316,6 +316,18 @@ fn amounts(cx: &Cx, language: &str) -> MoneyFormat {
         .free(t!(checkout_shipping_free).resolve(cx))
 }
 
+/// The language a shopper checks out in, which the order keeps: its mails
+/// go out in it, and its lines are named in it. In a shop read in several
+/// languages it is the one of the address, what the shopper read the
+/// goods in; a shop read in one keeps going by the browser's.
+pub async fn checkout_language(cx: &Cx) -> Option<String> {
+    if languages(cx).await.others.is_empty() {
+        timada_storefront::request_language(cx)
+    } else {
+        Some(speaking(cx).await.language.to_owned())
+    }
+}
+
 /// The code of the language the pages word this request in.
 pub fn spoken(cx: &Cx) -> String {
     try_locale(cx).map_or_else(|| BASE.to_owned(), |locale| locale.to_string())

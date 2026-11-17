@@ -1968,7 +1968,8 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   await english.getByRole("button", { name: "Save translation" }).click();
   await expect(page.getByRole("status")).toContainText("Translation saved");
 
-  const key = await mintKey(page, slug);
+  // The key takes orders: the cart is read in English further down.
+  const key = await mintKey(page, slug, true);
   await app.start(request, key, 2);
   await expect(async () => {
     expect((await request.get(`${SHOP}/en/p/cat-tree`)).status()).toBe(200);
@@ -2043,6 +2044,27 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   await page.goto(`${SHOP}/mentions-legales`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Mentions légales");
   await expect(page.locator("main")).toContainText("Le site est édité par Acme.");
+
+  // The cart names its lines as the page that filled it did, and links
+  // them to the address of the language; in French it reads in French.
+  await page.goto(`${SHOP}/en/p/cat-tree`);
+  // The first is the product's own; the related product has one too.
+  await page.getByRole("button", { name: "Add to cart" }).first().click();
+  const drawer = page.locator("[data-cart-drawer].open .drawer-panel");
+  await expect(drawer).toContainText("Cat Tree");
+  await page.goto(`${SHOP}/en/cart`);
+  await expect(page.locator("main").getByRole("link", { name: "Cat Tree" }).first()).toHaveAttribute(
+    "href",
+    "/en/p/cat-tree",
+  );
+  await expect(page.locator("main")).not.toContainText("Arbre à chat");
+  await page.goto(`${SHOP}/en/checkout`);
+  await expect(page.locator("main")).toContainText("Cat Tree");
+  await page.goto(`${SHOP}/cart`);
+  await expect(page.locator("main").getByRole("link", { name: "Arbre à chat" }).first()).toHaveAttribute(
+    "href",
+    "/p/arbre-a-chat",
+  );
 
   // An English address that moved answers from the new one, in English
   // alone; a dropped translation's leads to the main slug there.
