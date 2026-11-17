@@ -11,7 +11,7 @@ use timada_storefront::{NewsletterPopup, newsletter_popup, takes_newsletter_sign
 use topcoat::{
     Result,
     context::Cx,
-    router::{href, request::original_uri},
+    router::href,
     view::{Unescaped, View, view},
 };
 
@@ -23,7 +23,9 @@ use crate::shopper::{NEWSLETTER_COOKIE, invited};
 /// not subscribed, and the page is one a shopper reads, not the cart, the
 /// checkout or their account.
 pub async fn popup_for(cx: &Cx) -> Result<Option<NewsletterPopup>> {
-    if invited(cx) || !takes_newsletter_signups(cx) || sitemap::is_private(original_uri(cx).path())
+    if invited(cx)
+        || !takes_newsletter_signups(cx)
+        || sitemap::is_private(&crate::app::lang::speaking(cx).await.internal)
     {
         return Ok(None);
     }

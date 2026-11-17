@@ -44,7 +44,8 @@ pub async fn start(cx: &Cx, Form(form): Form<CheckoutForm>) -> Result<Json<Start
         }
         | Asked::Refused { to_cart: true, .. }
         | Asked::Refused { code: None, .. } => Started {
-            redirect: Some(asked.back(cx)),
+            // A script follows it: no link of a page, so turned here.
+            redirect: Some(crate::app::lang::speaking(cx).await.path(&asked.back(cx))),
             ..Started::default()
         },
         Asked::Refused { code, .. } => Started {

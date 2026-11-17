@@ -19,6 +19,7 @@ pub mod cookies;
 pub mod emails;
 pub mod filters;
 pub mod indisponible;
+pub mod lang;
 pub mod mentions_legales;
 pub mod menu;
 pub mod moved;
@@ -40,10 +41,10 @@ pub mod topbar;
 
 use timada_storefront::{
     CategoryNode, ConsentMode, PIXEL_EVENTS_SCRIPT, Product, ProductQuery, ProductSort,
-    RouterBuilderStoreExt, SocialCard, Store, TAG_EVENTS_SCRIPT, TIME_ZONE_SCRIPT, absolute_url,
-    consent_script, google_tag_head, is_store_unavailable, json_ld, menu, meta_pixel_head,
-    organization_ld, page_view_event, pixel_add_to_cart_event, pixel_event_id, product_image,
-    products, recent_reviews, tag_events_json, website_ld,
+    RouterBuilderStoreExt, SocialCard, Store, TAG_EVENTS_SCRIPT, TIME_ZONE_SCRIPT, consent_script,
+    google_tag_head, is_store_unavailable, json_ld, menu, meta_pixel_head, organization_ld,
+    page_view_event, pixel_add_to_cart_event, pixel_event_id, product_image, products,
+    recent_reviews, tag_events_json, website_ld,
 };
 use topcoat::{
     Result,
@@ -95,6 +96,9 @@ pub fn router(store: Store, cookie_key: Key, trusted_proxies: Vec<IpNet>) -> Rou
         .layer(LayerFn::new(Some("/orders"), pass).with(BodyLimit::max(REVIEW_LIMIT)))
         // At `/` and before the cookie layer, which then runs outside it.
         .layer(LayerFn::new(Some("/"), remember_source))
+        // Outside the layers above: they and the pages see the French
+        // address, and what they answer is turned back on its way out.
+        .layer(lang::Localized)
         .trusted_proxies(TrustedProxies::new().networks(trusted_proxies))
         .layer(CookieLayer::new())
         .with(cookie_key)
@@ -112,15 +116,17 @@ fn pass<'a>(cx: &'a Cx, body: Body, next: Next<'a>) -> LayerFuture<'a> {
 /// pages are left out: a bank's or Stripe's page sending the shopper back is
 /// not what brought them.
 fn remember_source<'a>(cx: &'a Cx, body: Body, next: Next<'a>) -> LayerFuture<'a> {
-    let path = original_uri(cx).path();
-    if *method(cx) == Method::GET
-        && !path.starts_with("/checkout")
-        && let Err(err) = crate::shopper::remember_request(cx)
-    {
-        // A sale is never lost to what measures it.
-        tracing::warn!(error = %err, "cannot keep what brought the visitor");
-    }
-    next.run(cx, body)
+    Box::pin(async move {
+        let path = lang::speaking(cx).await.internal;
+        if *method(cx) == Method::GET
+            && !path.starts_with("/checkout")
+            && let Err(err) = crate::shopper::remember_request(cx)
+        {
+            // A sale is never lost to what measures it.
+            tracing::warn!(error = %err, "cannot keep what brought the visitor");
+        }
+        next.run(cx, body).await
+    })
 }
 
 /// `19,90€`, as the shop writes its prices (`12,50 USD` for another
@@ -289,8 +295,15 @@ pub async fn document(
             ));
         }
     }
-    let noindex = noindex || sitemap::is_private(original_uri(cx).path());
-    let canonical = absolute_url(cx, canonical.unwrap_or(original_uri(cx).path()));
+    let speaking = lang::speaking(cx).await;
+    let language = speaking.language;
+    let noindex = noindex || sitemap::is_private(&speaking.internal);
+    let canonical_path = canonical.unwrap_or(&speaking.internal);
+    let canonical = speaking.absolute(cx, canonical_path);
+    // The same page in the shop's other languages, for search engines and
+    // for the footer's links; a page kept out of them names none.
+    let alternates = speaking.alternates(cx, canonical_path);
+    let main_address = alternates.first().map(|(_, address)| address.clone());
     let card = SocialCard {
         title,
         description: description.unwrap_or_default(),
@@ -308,7 +321,7 @@ pub async fn document(
     };
     Ok(view! {
         <!DOCTYPE html>
-        <html lang="fr">
+        <html lang=(language)>
             <head>
                 <meta charset="utf-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -329,6 +342,14 @@ pub async fn document(
                     <script>(Unescaped::new_unchecked(head.clone()))</script>
                 }
                 <link rel="canonical" href=(&canonical)>
+                if !noindex {
+                    for (code, address) in &alternates {
+                        <link rel="alternate" hreflang=(*code) href=(address)>
+                    }
+                    if let Some(address) = &main_address {
+                        <link rel="alternate" hreflang="x-default" href=(address)>
+                    }
+                }
                 for tag in &card {
                     if tag.property {
                         <meta property=(tag.key) content=(&tag.content)>
@@ -397,7 +418,7 @@ pub async fn document(
                     <script>(Unescaped::new_unchecked(PIXEL_EVENTS_SCRIPT))</script>
                 }
                 <main>(child)</main>
-                site_footer()
+                site_footer(language: language, alternates: &alternates)
                 if let Some(invitation) = &invitation {
                     popup::newsletter_dialog(popup: invitation)
                 }
@@ -414,7 +435,14 @@ pub async fn document(
 /// reach it. The pages are the shop's own routes; their text comes from the
 /// back office.
 #[topcoat::view::component]
-pub async fn site_footer(cx: &Cx) -> Result<impl View> {
+pub async fn site_footer(
+    cx: &Cx,
+    /// The language the page is read in.
+    language: &str,
+    /// The page in each language of the shop, as whole addresses: none for
+    /// a shop read in one.
+    alternates: &[(&'static str, String)],
+) -> Result<impl View> {
     // The blog is linked once it has something to read.
     let blog = timada_storefront::has_articles(cx).await?;
     Ok(view! {
@@ -457,6 +485,21 @@ pub async fn site_footer(cx: &Cx) -> Result<impl View> {
                     newsletter::newsletter_form()
                 </div>
             </div>
+            if !alternates.is_empty() {
+                // `hreflang` first: it tells [`lang::Localized`] the link
+                // goes to another language's address on purpose.
+                <nav class="languages" aria-label="Langues" data-languages="">
+                    <ul>
+                        for (code, address) in alternates {
+                            <li>
+                                <a hreflang=(*code) href=(address) lang=(*code) aria-current=((*code == language).then_some("true"))>
+                                    (lang::native_name(code))
+                                </a>
+                            </li>
+                        }
+                    </ul>
+                </nav>
+            }
             <p class="legal">"© " (SHOP_NAME)</p>
         </footer>
     })
@@ -586,7 +629,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .unwrap_or_else(|| href!(boutique::index).resolve(cx));
 
     // Who the shop is, for the name a search result shows.
-    let home = absolute_url(cx, &href!(index).resolve(cx));
+    let home = lang::speaking(cx)
+        .await
+        .absolute(cx, &href!(index).resolve(cx));
     let structured = [
         organization_ld(SHOP_NAME, &home, Some(CONTACT_EMAIL)),
         website_ld(SHOP_NAME, &home),

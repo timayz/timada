@@ -2,7 +2,7 @@
 //! it, what shoppers said, and what goes with it.
 
 use timada_storefront::{
-    ProductPageLd, absolute_url, breadcrumb_ld, categories, category_path, menu_of, offer_terms,
+    ProductPageLd, breadcrumb_ld, categories, category_path, menu_of, offer_terms,
     product_categories, product_image, product_ld, product_seo, related_products, require_product,
     reviews_of, stars,
 };
@@ -124,15 +124,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // For search engines: one address for the product whatever variant or
     // page of reviews is open, and what this page shows as data.
     let path = href!(index, slug: product.slug.clone()).resolve(cx);
-    let canonical = absolute_url(cx, &path);
-    let home = absolute_url(cx, &href!(crate::app::index).resolve(cx));
+    let speaking = crate::app::lang::speaking(cx).await;
+    let canonical = speaking.absolute(cx, &path);
+    let home = speaking.absolute(cx, &href!(crate::app::index).resolve(cx));
     let trail: Vec<(String, String)> = crumbs
         .iter()
         .map(|crumb| {
             let path =
                 href!(crate::app::c::slug::index, crate::app::c::slug::slug: crumb.slug.clone())
                     .resolve(cx);
-            (crumb.name.clone(), absolute_url(cx, &path))
+            (crumb.name.clone(), speaking.absolute(cx, &path))
         })
         .collect();
     // What the shop says of delivery and returns, on every offer.
@@ -148,7 +149,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             },
             |variant| {
                 let position = product.variants.iter().position(|v| v.id == variant.id);
-                absolute_url(cx, position.map_or(path.as_str(), |n| &variant_paths[n]))
+                speaking.absolute(cx, position.map_or(path.as_str(), |n| &variant_paths[n]))
             },
         ),
         breadcrumb_ld(
