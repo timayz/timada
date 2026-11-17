@@ -1257,6 +1257,33 @@ answer a script follows (`speaking.path(path)`).
 - No visitor is redirected on their browser's language: a search engine's crawler
   sends none.
 
+### What is read in another language
+
+On its way from `/en/…` to the page, `Localized` puts a `ReadIn("en")` in the request's
+context, and the library's readers word what they return in that language wherever the
+merchant translated it: `products`, `product_by_slug`, `categories` and `menu`,
+`category_by_slug`, `category_hub`, `product_seo` and `category_seo`,
+`product_categories`, `related_products`, `cart_recommendations`, `page`, `articles` and
+`article`. A part a translation leaves empty, and a thing with no translation, are read
+in the main language. The main language itself carries no `ReadIn`: its rows are read
+as they are.
+
+- **Slugs.** A product, a category and an article come back under the slug they go by in
+  the language. `product_by_slug` (and the two like it) finds one by that slug, or by
+  its main slug; the page compares the slug asked with the one returned and answers the
+  other with a permanent redirect, so `/en/p/arbre-a-chat` moves to `/en/p/cat-tree`.
+  In French `/p/cat-tree` is nothing.
+- **The other languages' addresses.** `product_slugs`, `category_slugs` and
+  `article_slugs` give a thing's slug in every language (`Slugs::in_language`); a page
+  hands `document` the paths with `speaking.elsewhere(…)`, for the `hreflang` links and
+  the footer's.
+- **Sitemap.** `/sitemap.xml` lists the files of each language
+  (`/en/sitemap-pages.xml`, `/en/sitemap-products.xml?part=N`), each with its own
+  addresses and slugs.
+- **Not yet:** the search matches the main language's words, the lines of a cart and an
+  order keep the name the product had when it was added, and a translation's former
+  slug is not redirected.
+
 ### Settings
 
 `storefront --help` and `storefront serve --help` list them; each is a flag or the

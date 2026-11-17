@@ -1448,6 +1448,16 @@ pub async fn published_category_by_slug(db: &Db, slug: &str) -> anyhow::Result<O
     .await
 }
 
+/// A live category by id, if any.
+pub async fn published_category_by_id(db: &Db, id: &str) -> anyhow::Result<Option<Category>> {
+    db.fetch_optional(
+        "SELECT id, slug, name, description, parent_id, position, in_menu
+         FROM storefront_categories WHERE id = ?1 AND archived = 0",
+        (id,),
+    )
+    .await
+}
+
 /// The options the shop's listings are narrowed by ("Couleur", "Taille"),
 /// in the order the merchant set; `None` while the shop never set them,
 /// which leaves the choice to the host.
@@ -1546,7 +1556,7 @@ pub struct Seo {
 impl Seo {
     /// What the merchant wrote, with `name` and `description` standing in
     /// for what was left empty.
-    fn of(meta: Option<(String, String)>, name: &str, description: &str) -> Self {
+    pub(crate) fn of(meta: Option<(String, String)>, name: &str, description: &str) -> Self {
         let (meta_title, meta_description) = meta.unwrap_or_default();
         Self {
             title: if meta_title.is_empty() {

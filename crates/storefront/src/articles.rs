@@ -30,6 +30,7 @@ const SUMMARY_CHARS: usize = 240;
 /// An article in the blog's list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArticleCard {
+    pub id: String,
     pub slug: String,
     pub title: String,
     /// The merchant's summary, or the start of the text.
@@ -75,6 +76,7 @@ pub struct PublicArticle {
 
 #[derive(FromRow)]
 struct CardRow {
+    id: String,
     slug: String,
     title: String,
     summary: String,
@@ -120,7 +122,7 @@ pub async fn published_articles(
         .await?;
     let rows: Vec<CardRow> = db
         .fetch_all(
-            "SELECT slug, title, summary, excerpt, cover_json, published_at
+            "SELECT id, slug, title, summary, excerpt, cover_json, published_at
              FROM storefront_articles INDEXED BY storefront_articles_published
              ORDER BY published_at DESC, id DESC LIMIT ?1 OFFSET ?2",
             (
@@ -139,6 +141,7 @@ pub async fn published_articles(
                 } else {
                     row.summary
                 },
+                id: row.id,
                 slug: row.slug,
                 title: row.title,
                 published_at: row.published_at,
@@ -174,7 +177,29 @@ pub async fn published_article(
             (slug,),
         )
         .await?;
-    Ok(row.map(|row| {
+    Ok(row.map(|row| shown(row, media_url)))
+}
+
+/// A published article by id, if any.
+pub async fn published_article_by_id(
+    db: &Db,
+    id: &str,
+    media_url: Option<&str>,
+) -> anyhow::Result<Option<PublicArticle>> {
+    let row: Option<ArticleRow> = db
+        .fetch_optional(
+            "SELECT id, slug, title, summary, body, excerpt, meta_title, meta_description,
+                cover_json, published_at, updated_at
+             FROM storefront_articles WHERE id = ?1",
+            (id,),
+        )
+        .await?;
+    Ok(row.map(|row| shown(row, media_url)))
+}
+
+/// A row, ready to show.
+fn shown(row: ArticleRow, media_url: Option<&str>) -> PublicArticle {
+    {
         let rendered = render_article(&row.body, media_url.unwrap_or_default());
         PublicArticle {
             blocks: rendered.blocks,
@@ -199,15 +224,21 @@ pub async fn published_article(
             published_at: row.published_at,
             updated_at: row.updated_at,
         }
-    }))
+    }
 }
 
 /// A page of the blog's list; see [`published_articles`].
 pub async fn articles(cx: &Cx, page: u32, per_page: u32) -> Result<ArticlePage> {
     let store = store(cx);
-    published_articles(store.db(), page, per_page, store.media_url())
+    let mut list = published_articles(store.db(), page, per_page, store.media_url())
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(Error::from_anyhow)?;
+    if let Some(language) = crate::read_in(cx) {
+        crate::read_in::article_cards_in(store.db(), language, &mut list.articles)
+            .await
+            .map_err(Error::from_anyhow)?;
+    }
+    Ok(list)
 }
 
 /// Whether the blog has anything published; see [`any_published_article`].
@@ -218,11 +249,44 @@ pub async fn has_articles(cx: &Cx) -> Result<bool> {
 }
 
 /// A published article by slug, if any.
+///
+/// A request read in another language ([`read_in`](crate::read_in)) finds
+/// it by its slug in that language, and by its main slug when it has no
+/// translation there; the article comes back worded in the language, under
+/// the slug it goes by there, which a page compares with the one asked.
 pub async fn article(cx: &Cx, slug: &str) -> Result<Option<PublicArticle>> {
     let store = store(cx);
-    published_article(store.db(), slug, store.media_url())
-        .await
-        .map_err(Error::from_anyhow)
+    let db = store.db();
+    let Some(language) = crate::read_in(cx) else {
+        return published_article(db, slug, store.media_url())
+            .await
+            .map_err(Error::from_anyhow);
+    };
+    let found = async {
+        let mut article = match crate::translated_article_slug(db, language, slug).await? {
+            Some(id) => published_article_by_id(db, &id, store.media_url()).await?,
+            None => None,
+        };
+        if article.is_none() {
+            article = published_article(db, slug, store.media_url()).await?;
+        }
+        if let Some(article) = &mut article {
+            crate::read_in::article_in(db, language, store.media_url(), article).await?;
+        }
+        anyhow::Ok(article)
+    };
+    found.await.map_err(Error::from_anyhow)
+}
+
+/// The slugs an article goes by, in the main language and in each it is
+/// translated into.
+pub async fn article_slugs(cx: &Cx, article_id: &str) -> Result<crate::Slugs> {
+    Ok(
+        crate::read_in::slugs_of(store(cx).db(), "article", article_id)
+            .await
+            .map_err(Error::from_anyhow)?
+            .unwrap_or_default(),
+    )
 }
 
 /// A published article by slug, or 404.

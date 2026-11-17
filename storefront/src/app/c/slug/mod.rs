@@ -5,12 +5,13 @@
 
 use timada_storefront::{
     ProductQuery, ProductSort, breadcrumb_ld, categories, category_hub, category_path,
-    category_seo, menu_of, option_values, products, require_category_in,
+    category_seo, category_slugs, find_category, menu_of, option_values, products,
+    require_category,
 };
 use topcoat::{
     Result,
     context::Cx,
-    router::{href, module_param, page, query_params},
+    router::{error::redirect_permanent, href, module_param, page, query_params},
     view::{Unescaped, View, view},
 };
 
@@ -64,7 +65,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // even when the merchant left it out of the menu.
     let tree = categories(cx).await?;
     let nav = menu_of(&tree);
-    let node = require_category_in(&tree, slug(cx))?;
+    let Some(node) = find_category(&tree, slug(cx)) else {
+        // One address a language: asked by its main slug where it is
+        // translated, it moves to the one it goes by here.
+        let category = require_category(cx, slug(cx)).await?;
+        return Err(redirect_permanent(href!(index, slug: category.slug).resolve(cx)).into());
+    };
     let category = node.category.clone();
     let children = node.children.clone();
     let crumbs = category_path(&tree, &category);
@@ -140,6 +146,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         link(&Filters::default(), page.page)
     };
     let speaking = crate::app::lang::speaking(cx).await;
+    let slugs = category_slugs(cx, &category.id).await?;
+    let elsewhere = speaking.elsewhere(&canonical, |language| {
+        href!(index, slug: slugs.in_language(language).to_owned()).resolve(cx)
+    });
     let home = speaking.absolute(cx, &href!(crate::app::index).resolve(cx));
     let trail: Vec<(String, String)> = crumbs
         .iter()
@@ -162,6 +172,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             title: &seo.title,
             noindex: narrowed,
             canonical: Some(canonical.as_str()),
+            elsewhere: &elsewhere,
             structured: &structured,
             description: Some(seo.description.as_str()).filter(|text| !text.is_empty()),
             nav: &nav,

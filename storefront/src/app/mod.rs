@@ -193,6 +193,11 @@ pub async fn document(
     /// variant's address the product's).
     #[default]
     canonical: Option<&str>,
+    /// The path of the page in the languages that read it at another one
+    /// than `canonical`'s: a product, a category and an article go by a
+    /// slug of their own in each (see [`lang::Speaking::elsewhere`]).
+    #[default]
+    elsewhere: &[(&'static str, String)],
     /// A picture a shared link shows, as a whole address.
     #[default]
     image: Option<&str>,
@@ -302,7 +307,7 @@ pub async fn document(
     let canonical = speaking.absolute(cx, canonical_path);
     // The same page in the shop's other languages, for search engines and
     // for the footer's links; a page kept out of them names none.
-    let alternates = speaking.alternates(cx, canonical_path);
+    let alternates = speaking.alternates(cx, canonical_path, elsewhere);
     let main_address = alternates.first().map(|(_, address)| address.clone());
     let card = SocialCard {
         title,
