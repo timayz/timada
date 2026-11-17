@@ -19,7 +19,8 @@ use crate::cart::CartView;
 use crate::pages::{DESCRIPTION_CHARS, PublicPage, excerpt};
 use crate::query::{Category, CategoryHub, CategoryNode, Product, Seo};
 use crate::translations::{
-    TextKind, TextTranslation, Translation, TranslationKind, text_translation_of, translation_of,
+    TEXT_TRANSLATIONS_KEY, TRANSLATIONS_KEY, TextKind, TextTranslation, Translation,
+    TranslationKind, text_translation_of, translation_of,
 };
 
 /// The language, other than the shop's main one, a request is read in.
@@ -226,10 +227,22 @@ impl Slugs {
 /// The slugs of the thing `id` of `kind` (`product`, `category` or
 /// `article`); `None` when it is not shown.
 pub(crate) async fn slugs_of(db: &Db, kind: &str, id: &str) -> anyhow::Result<Option<Slugs>> {
-    let (rows, translations) = match kind {
-        "product" => ("storefront_products", "storefront_translations"),
-        "category" => ("storefront_categories", "storefront_translations"),
-        _ => ("storefront_articles", "storefront_text_translations"),
+    let (rows, translations, key) = match kind {
+        "product" => (
+            "storefront_products",
+            "storefront_translations",
+            TRANSLATIONS_KEY,
+        ),
+        "category" => (
+            "storefront_categories",
+            "storefront_translations",
+            TRANSLATIONS_KEY,
+        ),
+        _ => (
+            "storefront_articles",
+            "storefront_text_translations",
+            TEXT_TRANSLATIONS_KEY,
+        ),
     };
     let main: Option<(String,)> = db
         .fetch_optional(&format!("SELECT slug FROM {rows} WHERE id = ?1"), (id,))
@@ -240,7 +253,8 @@ pub(crate) async fn slugs_of(db: &Db, kind: &str, id: &str) -> anyhow::Result<Op
     let translated = db
         .fetch_all(
             &format!(
-                "SELECT language, slug FROM {translations} WHERE kind = ?1 AND subject_id = ?2"
+                "SELECT language, slug FROM {translations} INDEXED BY {key}
+                 WHERE kind = ?1 AND subject_id = ?2"
             ),
             (kind, id),
         )

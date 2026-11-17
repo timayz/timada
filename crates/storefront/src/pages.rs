@@ -97,18 +97,50 @@ pub async fn search_published_pages(
     q: &str,
     limit: usize,
 ) -> anyhow::Result<Vec<PageLink>> {
+    search_published_pages_in(db, None, q, limit).await
+}
+
+/// [`search_published_pages`] read in `language`, one of the shop's other
+/// languages: a page worded in it is matched by, and listed under, the
+/// title and the text it has there, the others by their main ones.
+pub async fn search_published_pages_in(
+    db: &Db,
+    language: Option<&str>,
+    q: &str,
+    limit: usize,
+) -> anyhow::Result<Vec<PageLink>> {
     let key = search_key(q);
     if key.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
     // A shop has a handful of pages: they are matched here rather than in
     // SQL, which has no accent folding.
-    let rows: Vec<(String, String, String)> = db
-        .fetch_all(
-            "SELECT slug, title, text FROM storefront_pages ORDER BY title COLLATE NOCASE, id",
-            (),
-        )
+    let mut pages: Vec<(String, String, String, String)> = db
+        .fetch_all("SELECT id, slug, title, text FROM storefront_pages", ())
         .await?;
+    if let Some(language) = language {
+        let worded: Vec<(String, String, String)> = db
+            .fetch_all(
+                "SELECT subject_id, title, body FROM storefront_text_translations
+                    INDEXED BY storefront_text_translations_slug
+                 WHERE kind = 'page' AND language = ?1",
+                (language,),
+            )
+            .await?;
+        for (id, title, body) in worded {
+            if let Some(page) = pages.iter_mut().find(|page| page.0 == id) {
+                page.2 = title;
+                // A translation that leaves the text empty reads the main one.
+                if !body.trim().is_empty() {
+                    page.3 = timada_pages::markdown_text(&body);
+                }
+            }
+        }
+    }
+    pages.sort_by(|a, b| (a.2.to_lowercase(), &a.0).cmp(&(b.2.to_lowercase(), &b.0)));
+    let rows = pages
+        .into_iter()
+        .map(|(_, slug, title, text)| (slug, title, text));
     let starts_a_word = |text: &str| {
         search_key(text).split(' ').any(|word| {
             word.trim_matches(|c: char| !c.is_alphanumeric())
@@ -151,9 +183,10 @@ pub async fn require_page(cx: &Cx, slug: &str) -> Result<PublicPage> {
     page(cx, slug).await?.ok_or_else(|| not_found().into())
 }
 
-/// The pages a search finds; see [`search_published_pages`].
+/// The pages a search finds, in the language the request is read in; see
+/// [`search_published_pages_in`].
 pub async fn search_pages(cx: &Cx, q: &str, limit: usize) -> Result<Vec<PageLink>> {
-    search_published_pages(store(cx).db(), q, limit)
+    search_published_pages_in(store(cx).db(), crate::read_in(cx), q, limit)
         .await
         .map_err(Error::from_anyhow)
 }

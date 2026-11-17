@@ -286,6 +286,10 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         -- What a product or a category (`kind`) says in one more language
         -- of the shop, as the back office worded it: a part left empty is
         -- read in the main language, and so is a thing with no row.
+        -- `slug_search` and `name_search` are what a search read in the
+        -- row's language finds the thing by, folded and indexed as a
+        -- product's own are: one index for every language, the row's
+        -- `language` telling them apart.
         CREATE TABLE storefront_translations (
             kind TEXT NOT NULL,
             subject_id TEXT NOT NULL,
@@ -297,10 +301,15 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             meta_title TEXT NOT NULL,
             meta_description TEXT NOT NULL,
             questions_json TEXT NOT NULL,
+            slug_search TEXT NOT NULL,
+            name_search TEXT NOT NULL,
             PRIMARY KEY (kind, subject_id, language)
         );
         CREATE INDEX storefront_translations_slug
             ON storefront_translations (kind, language, slug);
+        CREATE INDEX storefront_translations_fts ON storefront_translations
+            USING fts(slug_search, name_search)
+            WITH (tokenizer = 'ngram', min_gram = 3, max_gram = 3);
         -- The same for a page or an article (`kind`): `slug` is an
         -- article's in that language, empty for a page.
         CREATE TABLE storefront_text_translations (

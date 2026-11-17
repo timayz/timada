@@ -18,7 +18,7 @@ pub use timada_pages::TextKind;
 use timada_pages::aggregator::translation::Translation as TextStream;
 use timada_pages::text_translation_projection;
 
-use crate::query::CategoryQuestion;
+use crate::query::{CategoryQuestion, search_key};
 use crate::redirects::write_former_slugs;
 
 /// What a product or a category says in one language. Each part is as the
@@ -62,6 +62,14 @@ impl From<Row> for Translation {
     }
 }
 
+/// The key of `storefront_translations`, named wherever a statement reads
+/// a thing's rows by it: left to itself the planner takes the slug's
+/// index, led by `kind` as the key is, and reads every row of the kind and
+/// the language for each thing looked up.
+pub(crate) const TRANSLATIONS_KEY: &str = "sqlite_autoindex_storefront_translations_1";
+/// The same for `storefront_text_translations`.
+pub(crate) const TEXT_TRANSLATIONS_KEY: &str = "sqlite_autoindex_storefront_text_translations_1";
+
 const COLUMNS: &str = "name, slug, description, body, meta_title, meta_description, questions_json";
 
 /// What the thing says in `language`; `None` where it has no translation.
@@ -74,7 +82,7 @@ pub async fn translation_of(
     let row: Option<Row> = db
         .fetch_optional(
             &format!(
-                "SELECT {COLUMNS} FROM storefront_translations
+                "SELECT {COLUMNS} FROM storefront_translations INDEXED BY {TRANSLATIONS_KEY}
                  WHERE kind = ?1 AND subject_id = ?2 AND language = ?3"
             ),
             (kind.as_str(), subject_id, language),
@@ -135,8 +143,10 @@ pub(crate) async fn on_translation_event<E: Executor>(
     .await?;
     if state.dropped {
         db.execute(
-            "DELETE FROM storefront_translations
-             WHERE kind = ?1 AND subject_id = ?2 AND language = ?3",
+            &format!(
+                "DELETE FROM storefront_translations INDEXED BY {TRANSLATIONS_KEY}
+                 WHERE kind = ?1 AND subject_id = ?2 AND language = ?3"
+            ),
             (
                 state.kind.as_str(),
                 state.subject_id.as_str(),
@@ -157,13 +167,14 @@ pub(crate) async fn on_translation_event<E: Executor>(
     db.execute(
         "INSERT INTO storefront_translations
             (kind, subject_id, language, name, slug, description, body, meta_title,
-             meta_description, questions_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             meta_description, questions_json, slug_search, name_search)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT (kind, subject_id, language) DO UPDATE SET
             name = excluded.name, slug = excluded.slug, description = excluded.description,
             body = excluded.body, meta_title = excluded.meta_title,
             meta_description = excluded.meta_description,
-            questions_json = excluded.questions_json",
+            questions_json = excluded.questions_json,
+            slug_search = excluded.slug_search, name_search = excluded.name_search",
         (
             state.kind.as_str(),
             state.subject_id.as_str(),
@@ -175,6 +186,9 @@ pub(crate) async fn on_translation_event<E: Executor>(
             state.meta_title.as_str(),
             state.meta_description.as_str(),
             serde_json::to_string(&questions)?,
+            // What a search in this language finds it by.
+            search_key(&state.slug),
+            search_key(&state.name),
         ),
     )
     .await?;
@@ -206,9 +220,11 @@ pub async fn text_translation_of(
     language: &str,
 ) -> anyhow::Result<Option<TextTranslation>> {
     db.fetch_optional(
-        "SELECT title, slug, summary, body, meta_title, meta_description
-         FROM storefront_text_translations
-         WHERE kind = ?1 AND subject_id = ?2 AND language = ?3",
+        &format!(
+            "SELECT title, slug, summary, body, meta_title, meta_description
+             FROM storefront_text_translations INDEXED BY {TEXT_TRANSLATIONS_KEY}
+             WHERE kind = ?1 AND subject_id = ?2 AND language = ?3"
+        ),
         (kind.as_str(), subject_id, language),
     )
     .await
@@ -267,8 +283,10 @@ pub(crate) async fn on_text_translation_event<E: Executor>(
     }
     if state.dropped {
         db.execute(
-            "DELETE FROM storefront_text_translations
-             WHERE kind = ?1 AND subject_id = ?2 AND language = ?3",
+            &format!(
+                "DELETE FROM storefront_text_translations INDEXED BY {TEXT_TRANSLATIONS_KEY}
+                 WHERE kind = ?1 AND subject_id = ?2 AND language = ?3"
+            ),
             (
                 state.kind.as_str(),
                 state.subject_id.as_str(),
@@ -301,4 +319,84 @@ pub(crate) async fn on_text_translation_event<E: Executor>(
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A thing's translation is read by its key, one row, not by a pass
+    /// over every row of its kind and language: the plans of the lookups
+    /// the readers make for each product of a listing.
+    #[tokio::test]
+    async fn a_things_translation_is_read_by_its_key() {
+        let db = Db::from(
+            timada_core::db::Turso::in_memory_concurrent()
+                .await
+                .unwrap(),
+        );
+        crate::migrate(&db).await.unwrap();
+        let slug_of = crate::sitemap::slug_in("storefront_translations", "product", "p", 1);
+        for (sql, binds, key, columns) in [
+            (
+                format!(
+                    "SELECT {COLUMNS} FROM storefront_translations INDEXED BY {TRANSLATIONS_KEY}
+                     WHERE kind = ?1 AND subject_id = ?2 AND language = ?3"
+                ),
+                3,
+                TRANSLATIONS_KEY,
+                "kind=? AND subject_id=? AND language=?",
+            ),
+            (
+                format!(
+                    "SELECT title FROM storefront_text_translations
+                        INDEXED BY {TEXT_TRANSLATIONS_KEY}
+                     WHERE kind = ?1 AND subject_id = ?2 AND language = ?3"
+                ),
+                3,
+                TEXT_TRANSLATIONS_KEY,
+                "kind=? AND subject_id=? AND language=?",
+            ),
+            (
+                format!(
+                    "DELETE FROM storefront_translations INDEXED BY {TRANSLATIONS_KEY}
+                     WHERE kind = ?1 AND subject_id = ?2 AND language = ?3"
+                ),
+                3,
+                TRANSLATIONS_KEY,
+                "kind=? AND subject_id=? AND language=?",
+            ),
+            (
+                format!(
+                    "SELECT language, slug FROM storefront_translations
+                        INDEXED BY {TRANSLATIONS_KEY}
+                     WHERE kind = ?1 AND subject_id = ?2"
+                ),
+                2,
+                TRANSLATIONS_KEY,
+                "kind=? AND subject_id=?",
+            ),
+            (
+                format!("SELECT {slug_of} FROM storefront_products p WHERE p.id = ?2"),
+                2,
+                TRANSLATIONS_KEY,
+                "kind=? AND subject_id=? AND language=?",
+            ),
+        ] {
+            let plan: Vec<(i64, i64, i64, String)> = db
+                .fetch_all(
+                    &format!("EXPLAIN QUERY PLAN {sql}"),
+                    timada_core::db::params_from_iter(
+                        ["product", "a", "en"].into_iter().take(binds),
+                    ),
+                )
+                .await
+                .unwrap();
+            assert!(
+                plan.iter().any(|(_, _, _, step)| step.starts_with("SEARCH")
+                    && step.contains(&format!("{key} ({columns})"))),
+                "{sql}: {plan:?}"
+            );
+        }
+    }
 }
