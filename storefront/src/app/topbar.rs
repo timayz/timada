@@ -14,6 +14,8 @@ use topcoat::{
     view::{Unescaped, View, view},
 };
 
+use crate::app::words::t;
+
 /// Shows the next announcement every five seconds.
 pub const TOPBAR_SCRIPT: &str = r#"
 (() => {
@@ -27,7 +29,7 @@ pub const TOPBAR_SCRIPT: &str = r#"
   pause.addEventListener("click", () => {
     paused = !paused;
     pause.setAttribute("aria-pressed", String(paused));
-    pause.textContent = paused ? "Reprendre" : "Pause";
+    pause.textContent = pause.getAttribute(paused ? "data-say-resume" : "data-say-pause");
   });
   const hold = (on) => () => { held = on || bar.matches(":hover") || bar.contains(document.activeElement); };
   bar.addEventListener("mouseenter", hold(true));
@@ -48,7 +50,7 @@ pub const TOPBAR_SCRIPT: &str = r#"
 pub async fn announcement_bar(cx: &Cx, announcements: &[LiveAnnouncement]) -> Result<impl View> {
     Ok(view! {
         if !announcements.is_empty() {
-            <div class="topbar" role="region" aria-label="Annonces" data-announcements="">
+            <div class="topbar" role="region" aria-label=(t!(misc_announcements)) data-announcements="">
                 <div class="wrap">
                     for (index, announcement) in announcements.iter().enumerate() {
                         <p data-announcement=(&announcement.id) hidden=(index > 0)>
@@ -56,7 +58,8 @@ pub async fn announcement_bar(cx: &Cx, announcements: &[LiveAnnouncement]) -> Re
                         </p>
                     }
                     if announcements.len() > 1 {
-                        <button type="button" class="topbar-pause" aria-pressed="false" data-announcements-pause="" hidden="">"Pause"</button>
+                        <button type="button" class="topbar-pause" aria-pressed="false" data-announcements-pause="" hidden=""
+                            data-say-pause=(t!(misc_announcements_pause)) data-say-resume=(t!(misc_announcements_resume))>(t!(misc_announcements_pause))</button>
                     }
                 </div>
             </div>

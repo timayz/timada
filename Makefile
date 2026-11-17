@@ -1,4 +1,4 @@
-.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate stripe.listen aliexpress.tunnel e2e e2e.cluster loadtest limits lint fmt-check fmt test machete check
+.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate stripe.listen aliexpress.tunnel e2e e2e.cluster loadtest limits lint fmt-check fmt test machete l10n check
 
 # What `make seed` writes and `make storefront` reads: the key and the addresses
 # of the seeded shop. Git ignores it.
@@ -169,9 +169,14 @@ test:
 machete:
 	cargo machete --with-metadata
 
+# The storefront's sentences: a key a language lacks, one no page uses, an
+# argument a page does not give.
+l10n:
+	cd storefront && topcoat l10n check
+
 # The gate before a pull request: tests, lint, formatting, unused
-# dependencies. The browser suite (`make e2e`) needs the compose stack and is
+# dependencies, the storefront's sentences. The browser suite (`make e2e`) needs the compose stack and is
 # run separately.
-check: test lint fmt-check machete
+check: test lint fmt-check machete l10n
 	@echo "✓ All checks passed!"
 

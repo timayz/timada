@@ -19,6 +19,7 @@ use crate::app::{
     boutique::PER_PAGE,
     catalog_grid, document,
     filters::{Filters, Panel, filter_fields, filter_panel, shop_filters},
+    words::{Worded, t},
 };
 
 module_param!(pub slug);
@@ -50,14 +51,25 @@ struct CategoryLink<'a> {
 /// that has sold nothing yet.
 const DEFAULT_SORT: ProductSort = ProductSort::BestSelling;
 
-/// The sort menu, as the shop words it.
-const SORTS: &[(ProductSort, &str)] = &[
-    (ProductSort::BestSelling, "Tri par popularité"),
-    (ProductSort::Newest, "Tri du plus récent au plus ancien"),
-    (ProductSort::TopRated, "Tri par notes moyennes"),
-    (ProductSort::PriceAsc, "Tri par tarif croissant"),
-    (ProductSort::PriceDesc, "Tri par tarif décroissant"),
+/// The sort menu, in the shop's order.
+const SORTS: &[ProductSort] = &[
+    ProductSort::BestSelling,
+    ProductSort::Newest,
+    ProductSort::TopRated,
+    ProductSort::PriceAsc,
+    ProductSort::PriceDesc,
 ];
+
+/// A sort, as the shop words it.
+fn sort_label(sort: ProductSort) -> Worded<'static> {
+    match sort {
+        ProductSort::BestSelling => t!(listing_sort_best_selling),
+        ProductSort::Newest => t!(listing_sort_newest),
+        ProductSort::TopRated => t!(listing_sort_top_rated),
+        ProductSort::PriceAsc => t!(listing_sort_price_asc),
+        ProductSort::PriceDesc => t!(listing_sort_price_desc),
+    }
+}
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
@@ -131,12 +143,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             )
         }
     };
-    let panel = Panel::build(&filters, &values, |filters| link(filters, 1));
-    let sort_label = SORTS
-        .iter()
-        .find(|(candidate, _)| *candidate == sort)
-        .map(|(_, label)| *label)
-        .unwrap_or_default();
+    let panel = Panel::build(cx, &filters, &values, |filters| link(filters, 1));
 
     // Search engines keep the plain listing for those, and each page of it
     // for itself.
@@ -159,8 +166,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             (crumb.name.clone(), speaking.absolute(cx, &path))
         })
         .collect();
+    let home_name = t!(shell_home).resolve(cx);
     let structured = [breadcrumb_ld(
-        [("Accueil", home.as_str())].into_iter().chain(
+        [(home_name.as_ref(), home.as_str())].into_iter().chain(
             trail
                 .iter()
                 .map(|(name, url)| (name.as_str(), url.as_str())),
@@ -177,8 +185,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             description: Some(seo.description.as_str()).filter(|text| !text.is_empty()),
             nav: &nav,
             <div class="wrap">
-                <nav class="crumbs" aria-label="Fil d'Ariane" data-crumbs="">
-                    <a href=(href!(crate::app::index))>"Accueil"</a>
+                <nav class="crumbs" aria-label=(t!(shell_crumbs)) data-crumbs="">
+                    <a href=(href!(crate::app::index))>(t!(shell_home))</a>
                     for crumb in &crumbs {
                         " / "
                         <a href=(href!(index, slug: crumb.slug.clone()))>(&crumb.name)</a>
@@ -190,7 +198,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <p class="description">(&category.description)</p>
                 }
                 if !children.is_empty() {
-                    <nav aria-label="Sous-catégories">
+                    <nav aria-label=(t!(listing_subcategories))>
                         <ul class="chips">
                             for child in &children {
                                 <li>
@@ -206,36 +214,36 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 filter_panel(panel: &panel)
                 <div class="listing-head">
                     <p data-results=(total)>
-                        (total) (if total == 1 { " résultat affiché" } else { " résultats affichés" })
-                        " · " (sort_label)
+                        (t!(listing_results, count: total))
+                        " · " (sort_label(sort))
                     </p>
                     <form class="sort" method="get">
                         filter_fields(filters: &filters)
-                        <label for="sort">"Trier"</label>
+                        <label for="sort">(t!(listing_sort))</label>
                         <select id="sort" name="sort" data-sort="">
-                            for (candidate, label) in SORTS {
-                                <option value=(candidate.as_str()) selected=(*candidate == sort)>(*label)</option>
+                            for candidate in SORTS {
+                                <option value=(candidate.as_str()) selected=(*candidate == sort)>(sort_label(*candidate))</option>
                             }
                         </select>
-                        <button>"Trier"</button>
+                        <button>(t!(listing_sort))</button>
                     </form>
                 </div>
                 if page.items.is_empty() {
                     if panel.active {
                         <p data-filters-empty="">
-                            "Aucun produit ne correspond à ces filtres. "
-                            <a href=(&panel.clear)>"Effacer les filtres"</a>
+                            (t!(listing_none_filtered)) " "
+                            <a href=(&panel.clear)>(t!(listing_filters_clear))</a>
                         </p>
                     } else {
-                        <p>"Rien dans cette catégorie pour le moment."</p>
+                        <p>(t!(listing_category_none))</p>
                     }
                 }
                 catalog_grid(products: &page.items)
                 if page.pages() > 1 {
-                    <nav class="pages" aria-label="Pages">
-                        if page.has_prev() { <a href=(link(&filters, page.page - 1))>"← Précédent"</a> }
-                        <span>"Page " (page.page) " sur " (page.pages())</span>
-                        if page.has_next() { <a href=(link(&filters, page.page + 1))>"Suivant →"</a> }
+                    <nav class="pages" aria-label=(t!(listing_pages))>
+                        if page.has_prev() { <a href=(link(&filters, page.page - 1))>(t!(listing_previous))</a> }
+                        <span>(t!(listing_page, page: page.page, pages: page.pages()))</span>
+                        if page.has_next() { <a href=(link(&filters, page.page + 1))>(t!(listing_next))</a> }
                     </nav>
                 }
                 if page.page == 1 && !hub.guide_html.is_empty() {
@@ -247,7 +255,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 }
                 if page.page == 1 && !hub.questions.is_empty() {
                     <section class="category-questions" aria-labelledby="questions-title" data-category-questions="">
-                        <h2 id="questions-title">"Questions fréquentes"</h2>
+                        <h2 id="questions-title">(t!(listing_questions))</h2>
                         for asked in &hub.questions {
                             <details>
                                 <summary>(&asked.question)</summary>

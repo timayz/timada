@@ -15,6 +15,7 @@ use topcoat::{
     view::{View, view},
 };
 
+use crate::app::words::t;
 use crate::app::{delivery_days, document, money, say};
 use crate::shopper::cart_id;
 
@@ -97,21 +98,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .and_then(|cart| cart.currency.clone())
         .unwrap_or_default();
+    let title = t!(cart_title).resolve(cx);
 
     Ok(view! {
         document(
-            title: "Votre panier",
+            title: &title,
             nav: &nav,
             no_drawer: true,
             <div class="wrap">
-                <h1>"Votre panier"</h1>
+                <h1>(t!(cart_title))</h1>
                 if let Some(code) = query.error.as_deref() {
                     <p class="notice" role="alert">(say(code))</p>
                 }
                 if let Some(cart) = &cart {
                     <table class="cart" data-cart="">
                         <thead>
-                            <tr><th></th><th>"Produit"</th><th>"Prix"</th><th>"Quantité"</th><th>"Montant"</th><th></th></tr>
+                            <tr><th></th><th>(t!(cart_column_product))</th><th>(t!(cart_column_price))</th><th>(t!(cart_column_quantity))</th><th>(t!(cart_column_amount))</th><th></th></tr>
                         </thead>
                         <tbody>
                             for line in cart.lines.iter().chain(&cart.unavailable) {
@@ -124,20 +126,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     <td>
                                         if let Some(slug) = &line.slug {
                                             <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::slug: slug.clone()))>(&line.name)</a>
+                                        } else if line.name.is_empty() {
+                                            (t!(cart_line_unnamed))
                                         } else {
-                                            (if line.name.is_empty() { "Un produit qui n'est plus vendu" } else { line.name.as_str() })
+                                            (&line.name)
                                         }
                                         if let Some(label) = &line.variant_label {
                                             <div><small>(label)</small></div>
                                         }
                                         if let Some(offer) = &line.offer {
-                                            <div><small class="offer-note" data-line-offer=(&offer.offer_id)>"Offre : 1 à " (money(offer.unit_amount_cents as i64, &currency))</small></div>
+                                            <div><small class="offer-note" data-line-offer=(&offer.offer_id)>(t!(cart_line_offer, price: money(offer.unit_amount_cents as i64, &currency)))</small></div>
                                         }
                                         if let Some(days) = line.delivery_days {
-                                            <div><small class="delivery-note" data-line-delivery=(delivery_days(days))>"Livraison en " (delivery_days(days))</small></div>
+                                            <div><small class="delivery-note" data-line-delivery=(delivery_days(days))>(t!(cart_line_delivery, days: delivery_days(days).resolve(cx)))</small></div>
                                         }
                                         if line.unit_amount_cents.is_none() {
-                                            <div><small>"Plus en vente : retirez-le pour commander le reste."</small></div>
+                                            <div><small>(t!(cart_line_off_sale))</small></div>
                                         }
                                     </td>
                                     <td>
@@ -150,10 +154,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                             <input type="hidden" name="product_id" value=(&line.product_id)>
                                             <input type="hidden" name="variant_id" value=(line.variant_id.as_deref().unwrap_or(""))>
                                             <label>
-                                                <span hidden="">"Quantité de " (&line.name)</span>
-                                                <input type="number" name="quantity" min="0" max="99" value=(line.quantity) aria-label=(format!("Quantité de {}", line.name))>
+                                                <span hidden="">(t!(cart_quantity_of, name: &line.name))</span>
+                                                <input type="number" name="quantity" min="0" max="99" value=(line.quantity) aria-label=(t!(cart_quantity_of, name: &line.name))>
                                             </label>
-                                            <button>"Mettre à jour"</button>
+                                            <button>(t!(cart_update))</button>
                                         </form>
                                     </td>
                                     <td data-line-amount="">
@@ -165,42 +169,42 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                         <form method="post" action=(href!(remove::remove))>
                                             <input type="hidden" name="product_id" value=(&line.product_id)>
                                             <input type="hidden" name="variant_id" value=(line.variant_id.as_deref().unwrap_or(""))>
-                                            <button aria-label=(format!("Retirer {}", line.name))>"Retirer"</button>
+                                            <button aria-label=(t!(cart_remove.label, name: &line.name))>(t!(cart_remove))</button>
                                         </form>
                                     </td>
                                 </tr>
                             }
                         </tbody>
                     </table>
-                    <p>"Sous-total : " <span data-cart-subtotal="">(cart.subtotal().unwrap_or_default())</span></p>
+                    <p>(t!(cart_subtotal_label)) " " <span data-cart-subtotal="">(cart.subtotal().unwrap_or_default())</span></p>
                     if let Some(days) = cart.delivery_window {
-                        <p data-cart-delivery=(delivery_days(days))>"Livraison estimée : " (delivery_days(days)) " après la commande"</p>
+                        <p data-cart-delivery=(delivery_days(days))>(t!(cart_delivery_estimate, days: delivery_days(days).resolve(cx)))</p>
                     }
                     if let (Some(discount), Some(amount)) = (&cart.discount, cart.discount_amount()) {
-                        <p data-cart-discount=(&discount.code)>"Code promo " <code>(&discount.code)</code> " : " <span data-discount-amount="">(amount)</span></p>
+                        <p data-cart-discount=(&discount.code)>(t!(cart_promo_code)) " " <code>(&discount.code)</code> (t!(cart_promo_amount_after)) " " <span data-discount-amount="">(amount)</span></p>
                     }
                     if let Some(refused) = cart.discount_refused {
                         <p class="notice" role="alert" data-discount-refused=(refused)>(say(refused))</p>
                     }
                     <form class="discount" method="post" action=(href!(discount::discount))>
                         if let Some(code) = &cart.discount_code {
-                            <span>"Code " <code>(code)</code></span>
-                            <button name="remove" value="1">"Retirer le code"</button>
+                            <span>(t!(cart_promo_applied)) " " <code>(code)</code></span>
+                            <button name="remove" value="1">(t!(cart_promo_remove))</button>
                         } else {
                             <label>
-                                "Code promo "
+                                (t!(cart_promo_code)) " "
                                 <input type="text" name="code" maxlength="32" autocomplete="off">
                             </label>
-                            <button>"Appliquer"</button>
+                            <button>(t!(cart_promo_apply))</button>
                         }
                     </form>
-                    <p>"Total : " <strong class="price" data-cart-total="">(cart.total().unwrap_or_default())</strong></p>
+                    <p>(t!(cart_total_label)) " " <strong class="price" data-cart-total="">(cart.total().unwrap_or_default())</strong></p>
                     if cart.can_check_out() {
-                        <p><a class="btn" href=(href!(crate::app::checkout::index))>"Commander"</a></p>
+                        <p><a class="btn" href=(href!(crate::app::checkout::index))>(t!(cart_order))</a></p>
                     }
                 } else {
-                    <p data-cart-empty="">"Votre panier est vide."</p>
-                    <p><a href=(href!(crate::app::index))>"Continuer mes achats"</a></p>
+                    <p data-cart-empty="">(t!(cart_empty))</p>
+                    <p><a href=(href!(crate::app::index))>(t!(cart_continue))</a></p>
                 }
             </div>
         )
@@ -245,7 +249,7 @@ pub async fn summary_line(
 ) -> Result<impl View> {
     let variant_id = line.variant_id.clone().unwrap_or_default();
     let name = if line.name.is_empty() {
-        "Un produit qui n'est plus vendu".to_owned()
+        t!(cart_line_unnamed).resolve(cx).into_owned()
     } else {
         line.name.clone()
     };
@@ -265,10 +269,10 @@ pub async fn summary_line(
                 }
                 if let Some(label) = &line.variant_label { <small class="variant">(label)</small> }
                 if let Some(offer) = &line.offer {
-                    <small class="offer-note" data-line-offer=(&offer.offer_id)>"Offre : 1 à " (money(offer.unit_amount_cents as i64, currency))</small>
+                    <small class="offer-note" data-line-offer=(&offer.offer_id)>(t!(cart_line_offer, price: money(offer.unit_amount_cents as i64, currency)))</small>
                 }
                 if let Some(days) = line.delivery_days {
-                    <small class="delivery-note" data-line-delivery=(delivery_days(days))>"Livraison en " (delivery_days(days))</small>
+                    <small class="delivery-note" data-line-delivery=(delivery_days(days))>(t!(cart_line_delivery, days: delivery_days(days).resolve(cx)))</small>
                 }
                 if line.amount_cents.is_some() {
                     <span class="qty">
@@ -278,7 +282,7 @@ pub async fn summary_line(
                             <input type="hidden" name="quantity" value=(line.quantity.saturating_sub(1))>
                             <input type="hidden" name="back" value=(back)>
                             <input type="hidden" name="from" value=(from)>
-                            <button aria-label=(format!("Un de moins : {}", line.name))>"−"</button>
+                            <button aria-label=(t!(cart_one_less, name: &line.name))>"−"</button>
                         </form>
                         <span data-line-quantity="">(line.quantity)</span>
                         <form method="post" action=(href!(quantity::quantity))>
@@ -287,11 +291,11 @@ pub async fn summary_line(
                             <input type="hidden" name="quantity" value=(line.quantity + 1)>
                             <input type="hidden" name="back" value=(back)>
                             <input type="hidden" name="from" value=(from)>
-                            <button aria-label=(format!("Un de plus : {}", line.name)) disabled=(line.quantity >= 99)>"+"</button>
+                            <button aria-label=(t!(cart_one_more, name: &line.name)) disabled=(line.quantity >= 99)>"+"</button>
                         </form>
                     </span>
                 } else {
-                    <small class="off-sale">"Plus en vente : retirez-le pour commander le reste."</small>
+                    <small class="off-sale">(t!(cart_line_off_sale))</small>
                 }
             </span>
             <span class="amount">
@@ -303,7 +307,7 @@ pub async fn summary_line(
                     <input type="hidden" name="variant_id" value=(&variant_id)>
                     <input type="hidden" name="back" value=(back)>
                     <input type="hidden" name="from" value=(from)>
-                    <button class="remove" aria-label=(format!("Retirer {}", line.name))>"×"</button>
+                    <button class="remove" aria-label=(t!(cart_remove.label, name: &line.name))>"×"</button>
                 </form>
             </span>
         </li>

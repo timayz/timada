@@ -11,7 +11,7 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::app::document;
+use crate::app::{document, words::t};
 
 module_param!(pub token);
 
@@ -19,16 +19,17 @@ module_param!(pub token);
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let token = token(cx).to_owned();
     let nav = menu(cx).await?;
+    let title = t!(newsletter_automated_stop_title).resolve(cx);
     Ok(view! {
         document(
-            title: "Ne plus recevoir nos e-mails automatiques",
+            title: &title,
             nav: &nav,
             <div class="wrap">
-                <h1>"Ne plus recevoir nos e-mails automatiques"</h1>
+                <h1>(&*title)</h1>
                 <div class="card panel">
-                    <p>"Vous ne recevrez plus les e-mails que la boutique envoie d'elle-même (après une commande, un avis…). Vos commandes, elles, continuent de vous être confirmées."</p>
+                    <p>(t!(newsletter_automated_stop_text))</p>
                     <form method="post" action=(href!(submit, token: token)) data-automation-opt-out="">
-                        <button class="btn">"Ne plus les recevoir"</button>
+                        <button class="btn">(t!(newsletter_automated_stop_button))</button>
                     </form>
                 </div>
             </div>
@@ -41,17 +42,18 @@ pub async fn submit(cx: &Cx) -> Result<impl View> {
     let token = token(cx).to_owned();
     let stopped = stop_automated_mails(cx, &token).await?;
     let nav = menu(cx).await?;
+    let title = t!(newsletter_automated_title).resolve(cx);
     Ok(view! {
         document(
-            title: "E-mails automatiques",
+            title: &title,
             nav: &nav,
             <div class="wrap">
-                <h1>"E-mails automatiques"</h1>
+                <h1>(&*title)</h1>
                 <div class="card panel" role="status">
                     if stopped {
-                        <p>"C'est noté : vous ne recevrez plus nos e-mails automatiques."</p>
+                        <p>(t!(newsletter_automated_stopped))</p>
                     } else {
-                        <p>"Ce lien ne fonctionne pas : il a peut-être été coupé. Écrivez-nous et nous nous en chargeons."</p>
+                        <p>(t!(newsletter_automated_broken_link))</p>
                     }
                 </div>
             </div>

@@ -28,7 +28,7 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::app::{document, say};
+use crate::app::{document, say, words::t};
 
 /// Where the layer sends a request the dashboard could not answer.
 const PATH: &str = "/indisponible";
@@ -103,19 +103,20 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         return Err(see_other(href!(crate::app::index).resolve(cx)).into());
     };
     let nav = menu(cx).await?;
+    let title = t!(misc_unavailable_title).resolve(cx);
     Ok(view! {
         document(
-            title: "Momentanément indisponible",
+            title: &title,
             nav: &nav,
             <div class="wrap unavailable" data-store-unavailable="">
-                <h1>"Cette fonctionnalité est momentanément indisponible"</h1>
+                <h1>(t!(misc_unavailable_heading))</h1>
                 <p class="notice" role="alert">(say(STORE_UNAVAILABLE))</p>
-                <p>"Le panier, la commande, votre compte et nos formulaires ne répondent pas pour le moment. Rien n'est perdu : votre panier vous attend. En attendant, vous pouvez continuer à découvrir nos produits."</p>
+                <p>(t!(misc_unavailable_text))</p>
                 <p class="actions">
                     if let Some(retry) = &away.retry {
-                        <a class="primary" href=(retry)>"Réessayer"</a>
+                        <a class="primary" href=(retry)>(t!(misc_unavailable_retry))</a>
                     }
-                    <a href=(href!(crate::app::index))>"Retour à l'accueil"</a>
+                    <a href=(href!(crate::app::index))>(t!(misc_unavailable_home))</a>
                 </p>
             </div>
         )

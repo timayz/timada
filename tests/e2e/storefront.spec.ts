@@ -1859,6 +1859,14 @@ test("the shop is read under an address of its own in each of its languages", as
   await expect(footer.locator('a[href="/en/legal-notice"]')).toHaveCount(1);
   await expect(footer.locator('a[href="/en/support"]')).toHaveCount(1);
   await expect(page.locator('a[href="/boutique"]')).toHaveCount(0);
+  // The storefront's own sentences are English too: the masthead, the
+  // footer, the home.
+  await expect(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+  await expect(page.getByPlaceholder("Search for a product…")).toBeVisible();
+  await expect(footer.getByRole("link", { name: "Legal notice" })).toBeVisible();
+  await expect(footer.getByRole("link", { name: "Customer support" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "New arrivals" })).toBeVisible();
+  await expect(page.locator("main")).not.toContainText("Nouveautés");
 
   // A page has one address a language: the French name moves to the
   // English one.
@@ -1871,12 +1879,28 @@ test("the shop is read under an address of its own in each of its languages", as
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", `${SHOP}/en/p/arbre-a-chat`);
 
-  // A form posts and comes back in the language.
-  await addToCart(page);
+  // A form posts and comes back in the language, and the drawer the
+  // cart's script fills speaks it.
+  await page.getByRole("button", { name: "Add to cart" }).click();
+  const drawer = page.locator("[data-cart-drawer].open .drawer-panel");
+  await expect(drawer).toBeVisible();
+  await expect(drawer).toContainText("Your cart (1)");
   await expect(page).toHaveURL(new RegExp(`^${SHOP}/en/p/arbre-a-chat`));
   await page.goto(`${SHOP}/en/cart`);
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Your cart");
   await expect(page.locator("main")).toContainText("Arbre à chat");
+  // A refusal, the checkout and the countries it names, in English.
+  await page.goto(`${SHOP}/en/cart?error=out_of_stock`);
+  await expect(page.getByRole("alert")).toHaveText("Sorry, there are not enough left.");
+  await page.goto(`${SHOP}/en/checkout`);
+  await expect(page.getByLabel("Country", { exact: true }).locator("option[value=DE]")).toHaveText("Germany");
+  // The same pages in French say it in French.
+  await page.goto(`${SHOP}/cart?error=out_of_stock`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Votre panier");
+  await expect(page.getByRole("alert")).toHaveText("Désolé, il n'en reste pas assez.");
+  await page.goto(`${SHOP}/checkout`);
+  await expect(page.getByLabel("Pays", { exact: true }).locator("option[value=DE]")).toHaveText("Allemagne");
 
   // The footer switches to the same page in French, which has no prefix.
   await page.goto(`${SHOP}/en/p/arbre-a-chat`);

@@ -15,8 +15,8 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::app::document;
 use crate::app::newsletter::newsletter_url;
+use crate::app::{document, words::t};
 
 module_param!(pub token);
 
@@ -24,16 +24,17 @@ module_param!(pub token);
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let token = token(cx).to_owned();
     let nav = menu(cx).await?;
+    let title = t!(newsletter_unsubscribe_title).resolve(cx);
     Ok(view! {
         document(
-            title: "Se désinscrire",
+            title: &title,
             nav: &nav,
             <div class="wrap">
-                <h1>"Se désinscrire de la newsletter"</h1>
+                <h1>(t!(newsletter_unsubscribe_heading))</h1>
                 <div class="card panel">
-                    <p>"Vous ne recevrez plus nos nouveautés ni nos offres par e-mail. Vos commandes, elles, continuent de vous être confirmées."</p>
+                    <p>(t!(newsletter_unsubscribe_text))</p>
                     <form method="post" action=(href!(submit, token: token)) data-newsletter-unsubscribe="">
-                        <button class="btn">"Me désinscrire"</button>
+                        <button class="btn">(t!(newsletter_unsubscribe_button))</button>
                     </form>
                 </div>
             </div>

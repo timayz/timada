@@ -1,6 +1,8 @@
 //! `POST /checkout/start`: the page's script asks to pay here, then
 //! confirms the payment with Stripe.
 
+use std::borrow::Cow;
+
 use topcoat::{
     Result,
     context::Cx,
@@ -20,7 +22,7 @@ pub struct Started {
     client_secret: Option<String>,
     /// Why not, as the shopper reads it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<&'static str>,
+    error: Option<Cow<'static, str>>,
     /// Where to go instead: the cart, or this page priced afresh.
     #[serde(skip_serializing_if = "Option::is_none")]
     redirect: Option<String>,
@@ -49,7 +51,7 @@ pub async fn start(cx: &Cx, Form(form): Form<CheckoutForm>) -> Result<Json<Start
             ..Started::default()
         },
         Asked::Refused { code, .. } => Started {
-            error: code.map(say),
+            error: code.map(|code| say(code).resolve(cx)),
             ..Started::default()
         },
     };

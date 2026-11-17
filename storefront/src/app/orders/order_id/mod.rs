@@ -24,6 +24,7 @@ use topcoat::{
 };
 
 use crate::app::account::sign_in::sign_in_url;
+use crate::app::words::t;
 use crate::app::{delivery_days, document, money, say};
 use crate::shopper::holds_order;
 
@@ -169,16 +170,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let order_key = order_id.to_owned();
     let status = match order.status {
         OrderStatus::Authorized | OrderStatus::Paid if order.pending_cancellation.is_some() => {
-            "Annulation en cours."
+            t!(order_status_cancelling)
         }
         OrderStatus::Authorized if order.supplier.is_some() => {
-            "Enregistrée : votre carte sera débitée dès que la boutique l'aura confirmée."
+            t!(order_status_authorized_supplier)
         }
-        OrderStatus::Authorized => "Enregistrée : le paiement est en cours.",
-        OrderStatus::Paid => "Payée : la boutique la prépare.",
-        OrderStatus::Fulfilled => "Expédiée : elle est en route.",
-        OrderStatus::Cancelled if order.is_paid() => "Annulée, et le paiement remboursé.",
-        OrderStatus::Cancelled => "Annulée. Rien n'a été débité.",
+        OrderStatus::Authorized => t!(order_status_authorized),
+        OrderStatus::Paid => t!(order_status_paid),
+        OrderStatus::Fulfilled => t!(order_status_fulfilled),
+        OrderStatus::Cancelled if order.is_paid() => t!(order_status_refunded),
+        OrderStatus::Cancelled => t!(order_status_cancelled),
     };
     let paid = order.is_paid();
     let cancellable = order.cancellable_by_shopper();
@@ -188,9 +189,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .map(|_| match query.error.as_deref() {
             Some(code) => (true, say(code)),
-            None => (false, "Votre commande est annulée : rien n'a été débité."),
+            None => (false, t!(order_cancelled_notice)),
         });
-    let title = format!("Commande {}", order.reference);
+    let title = t!(order_title, reference: &order.reference).resolve(cx);
     let currency = order.currency.clone();
 
     Ok(view! {
@@ -199,23 +200,23 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             nav: &nav,
             events: Some(&sale),
             <div class="wrap">
-                <h1>"Merci pour votre commande !"</h1>
-                <p>"Votre commande " <strong data-order-reference="">(&order.reference)</strong> " est enregistrée."</p>
+                <h1>(t!(order_thanks))</h1>
+                <p>(t!(order_recorded_before)) " " <strong data-order-reference="">(&order.reference)</strong> " " (t!(order_recorded_after))</p>
                 <p data-order-status=(order.status.as_str())>(status)</p>
                 if let Some((refused, text)) = cancel_notice {
                     <p class="notice" role=(if refused { "alert" } else { "status" }) data-order-cancel-notice="">(text)</p>
                 }
                 if cancellable {
                     <details class="order-cancel" data-order-cancel="">
-                        <summary>"Annuler ma commande"</summary>
-                        <p>"Tant que la boutique ne l'a pas commandée à son fournisseur, votre commande s'annule ici, et rien n'est débité."</p>
+                        <summary>(t!(order_cancel))</summary>
+                        <p>(t!(order_cancel_text))</p>
                         <form method="post" action=(href!(cancel::cancel, order_id: order_key.clone()))>
-                            <button>"Confirmer l'annulation"</button>
+                            <button>(t!(order_cancel_confirm))</button>
                         </form>
                     </details>
                 }
                 if let Some(tracking) = &order.tracking {
-                    <p>"Numéro de colis : "
+                    <p>(t!(order_tracking_number)) " "
                         if let Some(link) = &order.tracking_url {
                             <a data-order-tracking="" href=(link) rel="noopener" target="_blank">(tracking)</a>
                         } else {
@@ -225,7 +226,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 }
                 for parcel in parcels.iter().filter(|parcel| !parcel.checkpoints.is_empty()) {
                     <section class="parcel" data-order-parcel=(&parcel.number)>
-                        <h2>"Colis " (&parcel.number)</h2>
+                        <h2>(t!(order_parcel, number: &parcel.number))</h2>
                         <ol class="parcel-steps">
                             for step in parcel.checkpoints.iter().rev() {
                                 <li>
@@ -252,18 +253,22 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </tbody>
                 </table>
                 if let Some(discount) = &order.discount {
-                    <p data-order-discount=(&discount.code)>"Code promo " <code>(&discount.code)</code> " : -" (money(discount.amount_cents as i64, &currency))</p>
+                    <p data-order-discount=(&discount.code)>(t!(order_discount_before)) " " <code>(&discount.code)</code> (t!(order_discount_after, amount: money(discount.amount_cents as i64, &currency)))</p>
                 }
                 if let Some(shipping) = &order.shipping_charge {
-                    <p data-order-shipping=(&shipping.name)>"Livraison (" (&shipping.name) ") : "
-                        if shipping.amount_cents == 0 { "Offerte" } else { (money(shipping.amount_cents as i64, &currency)) }
+                    <p data-order-shipping=(&shipping.name)>
+                        if shipping.amount_cents == 0 {
+                            (t!(order_shipping, name: &shipping.name, amount: t!(order_shipping_free).resolve(cx)))
+                        } else {
+                            (t!(order_shipping, name: &shipping.name, amount: money(shipping.amount_cents as i64, &currency)))
+                        }
                     </p>
                 }
-                <p>"Total : " <strong class="price" data-order-total="">(money(order.total_cents as i64, &currency))</strong></p>
+                <p>(t!(order_total)) " " <strong class="price" data-order-total="">(money(order.total_cents as i64, &currency))</strong></p>
                 if let Some(days) = order.delivery_window() {
-                    <p data-order-delivery=(delivery_days(days))>"Livraison estimée : " (delivery_days(days)) " après la commande"</p>
+                    <p data-order-delivery=(delivery_days(days))>(t!(order_delivery_estimate, days: delivery_days(days).resolve(cx)))</p>
                 }
-                <h2>"Adresse de livraison"</h2>
+                <h2>(t!(order_shipping_address))</h2>
                 <address data-order-address="">
                     (&order.shipping.name) <br>
                     (&order.shipping.line1) <br>
@@ -272,7 +277,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     (&order.shipping.country)
                 </address>
                 if let Some(billing) = &order.billing {
-                    <h2>"Adresse de facturation"</h2>
+                    <h2>(t!(order_billing_address))</h2>
                     <address data-order-billing="">
                         (&billing.name) <br>
                         (&billing.line1) <br>
@@ -281,9 +286,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         (&billing.country)
                     </address>
                 }
-                <p>"Une confirmation est envoyée à " (&order.email) "."</p>
+                <p>(t!(order_confirmation_sent, email: &order.email))</p>
                 if !line_reviews.is_empty() {
-                    <h2 id="reviews">"Vos avis"</h2>
+                    <h2 id="reviews">(t!(order_reviews_title))</h2>
                     for line in &line_reviews {
                         <section class="review" id=(format!("review-{}", line.product_id)) data-review-of=(&line.product_id)>
                             <h3>(&line.name)</h3>
@@ -292,19 +297,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     <p class="notice" role="alert">(say(code))</p>
                                 }
                                 if query.reviewed.is_some() && query.error.is_none() {
-                                    <p role="status">"Merci ! Votre avis a été transmis à la boutique."</p>
+                                    <p role="status">(t!(order_review_sent))</p>
                                 }
                                 if query.revised.is_some() && query.error.is_none() {
-                                    <p role="status">"Vos modifications ont été transmises à la boutique."</p>
+                                    <p role="status">(t!(order_review_revised))</p>
                                 }
                             }
                             if let Some(review) = &line.review {
                                 <p data-review-status=(review.status.as_str())>
-                                    <span class="rating" aria-label=(format!("{} sur 5", review.rating))>(stars(review.rating))</span> " "
+                                    <span class="rating" aria-label=(t!(rating_of_five, rating: review.rating))>(stars(review.rating))</span> " "
                                     (match review.status {
-                                        ReviewStatus::Pending => "Votre avis est en attente de publication par la boutique.",
-                                        ReviewStatus::Published => "Votre avis est publié. Merci !",
-                                        ReviewStatus::Rejected => "La boutique n'a pas publié votre avis.",
+                                        ReviewStatus::Pending => t!(order_review_pending),
+                                        ReviewStatus::Published => t!(order_review_published),
+                                        ReviewStatus::Rejected => t!(order_review_rejected),
                                     })
                                     if let Some(reason) = review.rejection_reason.as_deref().filter(|reason| !reason.is_empty()) {
                                         " " (reason)
@@ -312,49 +317,49 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 </p>
                                 if let Some(reply) = review.reply.as_deref().filter(|_| review.is_published()) {
                                     <blockquote class="review-reply" data-review-reply="">
-                                        <p><strong>"Réponse de la boutique"</strong></p>
+                                        <p><strong>(t!(order_review_reply))</strong></p>
                                         <p>(reply)</p>
                                     </blockquote>
                                 }
                                 if review.status == ReviewStatus::Pending {
                                     <details class="review-edit" data-review-edit=(&line.product_id) open=(query.product.as_deref() == Some(line.product_id.as_str()) && query.error.is_some())>
-                                        <summary>"Modifier mon avis"</summary>
+                                        <summary>(t!(order_review_edit))</summary>
                                         <form method="post" enctype="multipart/form-data" action=(href!(revise::revise, order_id: order_key.clone()))>
                                             <input type="hidden" name="product_id" value=(&line.product_id)>
                                             <fieldset>
-                                                <legend>"Votre note"</legend>
+                                                <legend>(t!(order_review_rating))</legend>
                                                 for value in (1u8..=5).rev() {
                                                     <label>
                                                         <input type="radio" name="rating" value=(value) required="" checked=(value == review.rating)>
-                                                        " " (value) (if value == 1 { " étoile" } else { " étoiles" })
+                                                        " " (t!(order_review_stars, count: value))
                                                     </label> " "
                                                 }
                                             </fieldset>
                                             <p>
-                                                <label for=(format!("edit-title-{}", line.product_id))>"Titre (facultatif)"</label>
+                                                <label for=(format!("edit-title-{}", line.product_id))>(t!(order_review_title))</label>
                                                 <input id=(format!("edit-title-{}", line.product_id)) name="title" type="text" maxlength=(MAX_TITLE_LEN) value=(review.title.as_deref().unwrap_or_default())>
                                             </p>
                                             <p>
-                                                <label for=(format!("edit-body-{}", line.product_id))>"Votre avis"</label>
+                                                <label for=(format!("edit-body-{}", line.product_id))>(t!(order_review_body))</label>
                                                 <textarea id=(format!("edit-body-{}", line.product_id)) name="body" rows="4" maxlength=(MAX_BODY_LEN) required="">(&review.body)</textarea>
                                             </p>
                                             if !line.photos.is_empty() {
                                                 <fieldset>
-                                                    <legend>"Vos photos"</legend>
+                                                    <legend>(t!(order_review_kept_photos))</legend>
                                                     for (id, url) in &line.photos {
                                                         <label data-review-photo-keep=(id)>
                                                             <input type="checkbox" name="keep_photo" value=(id) checked="">
-                                                            <img src=(url) alt="Une photo que vous avez ajoutée" width="64" height="64">
-                                                            " Conserver cette photo"
+                                                            <img src=(url) alt=(t!(order_review_photo_alt)) width="64" height="64">
+                                                            " " (t!(order_review_keep_photo))
                                                         </label> " "
                                                     }
                                                 </fieldset>
                                             }
                                             <p>
-                                                <label for=(format!("edit-photos-{}", line.product_id))>(format!("Ajouter des photos (jusqu'à {MAX_PHOTOS} en tout)"))</label>
+                                                <label for=(format!("edit-photos-{}", line.product_id))>(t!(order_review_add_photos, max: MAX_PHOTOS))</label>
                                                 <input id=(format!("edit-photos-{}", line.product_id)) name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple="">
                                             </p>
-                                            <button class="primary">"Enregistrer mes modifications"</button>
+                                            <button class="primary">(t!(order_review_save))</button>
                                         </form>
                                     </details>
                                 }
@@ -362,44 +367,47 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 <form method="post" enctype="multipart/form-data" action=(href!(review::review, order_id: order_key.clone()))>
                                     <input type="hidden" name="product_id" value=(&line.product_id)>
                                     <fieldset>
-                                        <legend>"Votre note"</legend>
+                                        <legend>(t!(order_review_rating))</legend>
                                         for value in (1u8..=5).rev() {
                                             <label>
                                                 <input type="radio" name="rating" value=(value) required="">
-                                                " " (value) (if value == 1 { " étoile" } else { " étoiles" })
+                                                " " (t!(order_review_stars, count: value))
                                             </label> " "
                                         }
                                     </fieldset>
                                     <p>
-                                        <label for=(format!("title-{}", line.product_id))>"Titre (facultatif)"</label>
+                                        <label for=(format!("title-{}", line.product_id))>(t!(order_review_title))</label>
                                         <input id=(format!("title-{}", line.product_id)) name="title" type="text" maxlength=(MAX_TITLE_LEN)>
                                     </p>
                                     <p>
-                                        <label for=(format!("body-{}", line.product_id))>"Votre avis"</label>
+                                        <label for=(format!("body-{}", line.product_id))>(t!(order_review_body))</label>
                                         <textarea id=(format!("body-{}", line.product_id)) name="body" rows="4" maxlength=(MAX_BODY_LEN) required=""></textarea>
                                     </p>
                                     <p>
-                                        <label for=(format!("photos-{}", line.product_id))>(format!("Photos (facultatif, jusqu'à {MAX_PHOTOS})"))</label>
+                                        <label for=(format!("photos-{}", line.product_id))>(t!(order_review_photos, max: MAX_PHOTOS))</label>
                                         <input id=(format!("photos-{}", line.product_id)) name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple="">
                                     </p>
-                                    <button class="primary">"Envoyer mon avis"</button>
+                                    <button class="primary">(t!(order_review_send))</button>
                                 </form>
                             }
                         </section>
                     }
                 }
                 if paid || !documents.is_empty() {
-                    <h2>"Facture"</h2>
+                    <h2>(t!(order_invoice_title))</h2>
                 }
                 if paid && documents.is_empty() {
-                    <p data-invoice-pending="">"Votre facture est en préparation : rechargez cette page dans un instant."</p>
+                    <p data-invoice-pending="">(t!(order_invoice_pending))</p>
                 }
                 <ul data-documents="">
                     for doc in &documents {
                         <li>
                             <a data-document=(&doc.label) href=(href!(documents::document_id::pdf, order_id: order_key.clone(), documents::document_id::document_id: doc.document_id.clone()))>
-                                (if doc.kind == DocumentKind::CreditNote { "Avoir " } else { "Facture " })
-                                (&doc.label)
+                                if doc.kind == DocumentKind::CreditNote {
+                                    (t!(order_document_credit_note, label: &doc.label))
+                                } else {
+                                    (t!(order_document_invoice, label: &doc.label))
+                                }
                             </a>
                             " · " (format_amount_fr(doc.total_cents, &doc.currency)) " (PDF)"
                         </li>

@@ -15,16 +15,16 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::{boutique, c};
+use super::{boutique, c, words::t};
 
 /// The menu under the header. `nav` holds only what the menu shows.
 #[topcoat::view::component]
 pub async fn site_menu(cx: &Cx, nav: &[CategoryNode]) -> Result<impl View> {
     Ok(view! {
-        <nav id="menu" class="sections" aria-label="Catégories">
-            <a class="menu-close" href="#">"Fermer le menu"</a>
+        <nav id="menu" class="sections" aria-label=(t!(listing_menu))>
+            <a class="menu-close" href="#">(t!(listing_menu_close))</a>
             <ul class="menu-bar">
-                <li class="menu-item"><a class="menu-top" href=(href!(boutique::index)) data-menu-all="">"Nos produits"</a></li>
+                <li class="menu-item"><a class="menu-top" href=(href!(boutique::index)) data-menu-all="">(t!(footer_products))</a></li>
                 for node in nav {
                     <li class="menu-item">
                         if node.children.is_empty() {
@@ -38,7 +38,7 @@ pub async fn site_menu(cx: &Cx, nav: &[CategoryNode]) -> Result<impl View> {
                                 <div class="menu-panel">
                                     <a class="menu-all" data-category=(&node.category.slug) data-products=(node.product_count)
                                         href=(href!(c::slug::index, c::slug::slug: node.category.slug.clone()))>
-                                        "Tout " (&node.category.name)
+                                        (t!(listing_menu_all, name: &node.category.name))
                                     </a>
                                     <ul class="menu-columns">
                                         for child in &node.children {

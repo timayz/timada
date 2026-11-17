@@ -14,6 +14,7 @@ use topcoat::{
 
 use crate::app::account::{account_url, sign_in::sign_in_url};
 use crate::app::document;
+use crate::app::words::t;
 use crate::shopper::{forget_checkout_draft, forget_shopper, session, shopper_token};
 
 #[page]
@@ -21,22 +22,23 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let to_sign_in = sign_in_url(cx, Some(&href!(index).resolve(cx)), None);
     let shopper = session(cx).await?.clone().ok_or_redirect(to_sign_in)?;
     let nav = menu(cx).await?;
+    let title = t!(account_delete_title).resolve(cx);
     Ok(view! {
         document(
-            title: "Supprimer mon compte",
+            title: &title,
             nav: &nav,
             <div class="wrap">
-                <h1>"Supprimer mon compte"</h1>
-                <p>"Supprimer le compte de " <strong>(&shopper.email)</strong> " :"</p>
+                <h1>(t!(account_delete_title))</h1>
+                <p>(t!(account_delete_of_before)) " " <strong>(&shopper.email)</strong> (t!(account_delete_of_after))</p>
                 <ul>
-                    <li>"efface les adresses que vous avez enregistrées ;"</li>
-                    <li>"vous déconnecte partout, y compris sur ce navigateur."</li>
+                    <li>(t!(account_delete_forgets_addresses))</li>
+                    <li>(t!(account_delete_signs_out))</li>
                 </ul>
-                <p>"Vos commandes et leurs factures restent chez la boutique, qui doit les conserver. Si vous vous reconnectez avec cette adresse, vous repartez avec un nouveau compte et y retrouvez vos commandes."</p>
+                <p>(t!(account_delete_orders_stay))</p>
                 <form method="post" action=(href!(delete))>
-                    <button class="primary">"Supprimer mon compte"</button>
+                    <button class="primary">(t!(account_delete_confirm))</button>
                     " "
-                    <a href=(account_url(cx, None))>"Conserver mon compte"</a>
+                    <a href=(account_url(cx, None))>(t!(account_delete_keep))</a>
                 </form>
             </div>
         )

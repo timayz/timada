@@ -14,6 +14,7 @@ use topcoat::{
 };
 
 use crate::app::cart::add::{OPTION_FIELD_PREFIX, add};
+use crate::app::words::t;
 use crate::app::{delivery_days, document, money, price_line, product_card, say};
 
 module_param!(pub slug);
@@ -87,6 +88,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .left(product.variants.first().map(|variant| variant.id.as_str()))
         .filter(|left| product.options.is_empty() && (1..=5).contains(left));
     let currency = product.currency.clone().unwrap_or_else(|| "EUR".to_owned());
+    // The average as it is written, to one decimal.
+    let average = product
+        .rating()
+        .and_then(|rating| format!("{rating:.1}").parse::<f64>().ok());
     // The first paragraph introduces the product beside its price; the
     // rest, when there is more, folds under "Description".
     let (intro, more): (String, String) = match product.description.split_once("\n\n") {
@@ -149,6 +154,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .collect();
     // What the shop says of delivery and returns, on every offer.
     let terms = offer_terms(cx).await?;
+    let home_name = t!(shell_home).resolve(cx);
     let structured = [
         product_ld(
             &product,
@@ -164,7 +170,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             },
         ),
         breadcrumb_ld(
-            [("Accueil", home.as_str())]
+            [(home_name.as_ref(), home.as_str())]
                 .into_iter()
                 .chain(
                     trail
@@ -198,8 +204,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             structured: &structured,
             nav: &nav,
             <div class="wrap">
-                <nav class="crumbs" aria-label="Fil d'Ariane" data-crumbs="">
-                    <a href=(href!(crate::app::index))>"Accueil"</a>
+                <nav class="crumbs" aria-label=(t!(shell_crumbs)) data-crumbs="">
+                    <a href=(href!(crate::app::index))>(t!(shell_home))</a>
                     for crumb in &crumbs {
                         " / "
                         <a href=(href!(crate::app::c::slug::index, crate::app::c::slug::slug: crumb.slug.clone()))>(&crumb.name)</a>
@@ -226,24 +232,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <p class="price">
                             if let Some(variant) = &shown {
                                 if let Some(was) = variant.compare_at_cents {
-                                    <s class="was" data-compare-at=""><span class="unseen">"Ancien prix : "</span>(money(was, &variant.currency))</s>
+                                    <s class="was" data-compare-at=""><span class="unseen">(t!(price_former)) " "</span>(money(was, &variant.currency))</s>
                                 }
                                 <span data-price="" data-shown-variant=(&variant.id)>(money(variant.amount_cents, &variant.currency))</span>
                             } else {
-                                if varies { <small>"Plage de prix"</small> }
+                                if varies { <small>(t!(card_price_range))</small> }
                                 if let (Some(was), Some(currency)) = (product.compare_at_cents, product.currency.as_deref()) {
                                     if product.variants.is_empty() {
-                                        <s class="was" data-compare-at=""><span class="unseen">"Ancien prix : "</span>(money(was, currency))</s>
+                                        <s class="was" data-compare-at=""><span class="unseen">(t!(price_former)) " "</span>(money(was, currency))</s>
                                     }
                                 }
                                 <span data-price="">(price_line(&product))</span>
                             }
                         </p>
-                        if let (Some(rating), Some(whole)) = (product.rating(), product.rating_stars()) {
+                        if let (Some(rating), Some(average), Some(whole)) = (product.rating(), average, product.rating_stars()) {
                             <p class="rating" data-product-rating=(format!("{rating:.1}"))>
                                 <a href="#reviews">
                                     <span class="stars" aria-hidden="true">(stars(whole))</span>
-                                    " " (format!("{rating:.1}").replace('.', ",")) "/5 · " (product.review_count) " avis"
+                                    " " (t!(product_rating, rating: average, count: product.review_count))
                                 </a>
                             </p>
                         }
@@ -255,9 +261,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <p class="notice" role="alert">(say(code))</p>
                         }
                         if sold_out || shown_sold_out {
-                            <p class="stock" data-stock="sold-out">"Épuisé"</p>
+                            <p class="stock" data-stock="sold-out">(t!(product_sold_out))</p>
                         } else if let Some(left) = few_left {
-                            <p class="stock" data-stock=(left)>"Plus que " (left) " en stock"</p>
+                            <p class="stock" data-stock=(left)>(t!(product_few_left, left))</p>
                         }
                         // Plain HTML: the menus pick the variant on the server, so a
                         // shopper with no JavaScript buys the same way; the table
@@ -275,31 +281,31 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 </p>
                             }
                             <p>
-                                <label for="quantity">"Quantité"</label>
-                                <input id="quantity" name="quantity" type="number" min="1" max="99" value="1" aria-label=(format!("quantité de {}", product.name))>
+                                <label for="quantity">(t!(product_quantity))</label>
+                                <input id="quantity" name="quantity" type="number" min="1" max="99" value="1" aria-label=(t!(product_quantity.label, name: &product.name))>
                             </p>
-                            <button class="btn" disabled=(sold_out)>"Ajouter au panier"</button>
+                            <button class="btn" disabled=(sold_out)>(t!(card_add_to_cart))</button>
                         </form>
                         <ul class="reassure-list" data-reassure="">
                             if let Some(days) = product.delivery_days {
-                                <li data-delivery-days=(delivery_days(days))>"Livraison avec suivi en " (delivery_days(days))</li>
+                                <li data-delivery-days=(delivery_days(days))>(t!(product_delivery_within, days: delivery_days(days).resolve(cx)))</li>
                             } else {
-                                <li>"Livraison avec suivi"</li>
+                                <li>(t!(product_delivery))</li>
                             }
-                            <li>"14 jours satisfait ou remboursé"</li>
-                            <li>"Un service client à votre écoute"</li>
+                            <li>(t!(product_money_back))</li>
+                            <li>(t!(product_service))</li>
                         </ul>
                         if !product.options.is_empty() {
                             <details>
-                                <summary>"Tarifs par option"</summary>
+                                <summary>(t!(product_variants))</summary>
                                 <table class="variants" data-variants="">
                                     <thead>
                                         <tr>
                                             for option in &product.options {
                                                 <th scope="col">(option.display_name())</th>
                                             }
-                                            <th scope="col">"Prix"</th>
-                                            <th scope="col">"Stock"</th>
+                                            <th scope="col">(t!(product_variants_price))</th>
+                                            <th scope="col">(t!(product_variants_stock))</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -319,9 +325,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                                 <td class="price">(money(variant.amount_cents, &currency))</td>
                                                 <td>
                                                     match product.left(Some(&variant.id)) {
-                                                        Some(0) => "Épuisé",
-                                                        Some(left) if left <= 5 => (format!("Plus que {left}")),
-                                                        _ => "En stock",
+                                                        Some(0) => (t!(product_sold_out)),
+                                                        Some(left) if left <= 5 => (t!(product_variant_few_left, left)),
+                                                        _ => (t!(product_variant_in_stock)),
                                                     }
                                                 </td>
                                             </tr>
@@ -332,13 +338,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                         if !more.is_empty() {
                             <details open="">
-                                <summary>"Description"</summary>
+                                <summary>(t!(product_description))</summary>
                                 <p class="description">(&more)</p>
                             </details>
                         }
                         if !product.attributes.is_empty() {
                             <details>
-                                <summary>"Informations complémentaires"</summary>
+                                <summary>(t!(product_facts))</summary>
                                 <table class="attributes" data-attributes="">
                                     <tbody>
                                         for attribute in &product.attributes {
@@ -354,15 +360,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </div>
                 </div>
                 <section class="reviews" id="reviews" data-reviews=(reviews.total)>
-                    <h2>"Avis de nos clients"</h2>
+                    <h2>(t!(product_reviews))</h2>
                     if reviews.items.is_empty() {
-                        <p>"Aucun avis pour le moment. Vous l'avez acheté ? Donnez votre avis depuis la page de votre commande."</p>
+                        <p>(t!(product_reviews_none))</p>
                     }
                     <ul>
                         for review in &reviews.items {
                             <li data-review=(&review.id)>
                                 <p>
-                                    <span class="stars" aria-label=(format!("{} sur 5", review.rating))>(review.stars())</span>
+                                    <span class="stars" aria-label=(t!(rating_of_five, rating: review.rating))>(review.stars())</span>
                                     if let Some(title) = &review.title {
                                         " " <strong>(title)</strong>
                                     }
@@ -371,19 +377,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 if !review.photos.is_empty() {
                                     <p>
                                         for photo in &review.photos {
-                                            <a href=(&photo.url)><img src=(&photo.thumb_url) width=(photo.thumb_width) height=(photo.thumb_height) loading="lazy" alt="Une photo du client" data-review-photo=(&photo.id)></a>
+                                            <a href=(&photo.url)><img src=(&photo.thumb_url) width=(photo.thumb_width) height=(photo.thumb_height) loading="lazy" alt=(t!(product_review_photo)) data-review-photo=(&photo.id)></a>
                                         }
                                     </p>
                                 }
                                 <p>
                                     <small>
-                                        (&review.author_name) " · Achat vérifié"
+                                        (&review.author_name) " · " (t!(review_verified))
                                         if let Some(label) = &review.variant_label { " · " (label) }
                                     </small>
                                 </p>
                                 if let Some(reply) = &review.reply {
                                     <blockquote class="review-reply" data-review-reply="">
-                                        <p><strong>"Réponse de la boutique"</strong></p>
+                                        <p><strong>(t!(product_review_reply))</strong></p>
                                         <p>(reply)</p>
                                     </blockquote>
                                 }
@@ -391,16 +397,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     </ul>
                     if reviews.pages() > 1 {
-                        <nav class="pages" aria-label="Pages d'avis">
-                            if reviews.page > 1 { <a href=(reviews_link(reviews.page - 1))>"Avis plus récents"</a> }
-                            <span>"Page " (reviews.page) " sur " (reviews.pages())</span>
-                            if reviews.page < reviews.pages() { <a href=(reviews_link(reviews.page + 1))>"Avis plus anciens"</a> }
+                        <nav class="pages" aria-label=(t!(product_reviews.pages))>
+                            if reviews.page > 1 { <a href=(reviews_link(reviews.page - 1))>(t!(product_reviews_newer))</a> }
+                            <span>(t!(product_reviews_page, page: reviews.page, pages: reviews.pages()))</span>
+                            if reviews.page < reviews.pages() { <a href=(reviews_link(reviews.page + 1))>(t!(product_reviews_older))</a> }
                         </nav>
                     }
                 </section>
                 if !related.is_empty() {
                     <section class="related" data-section="similaires">
-                        <h2>"Produits similaires"</h2>
+                        <h2>(t!(product_related))</h2>
                         <ul class="rail four">
                             for product in &related {
                                 product_card(product: product)
