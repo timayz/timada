@@ -16,6 +16,7 @@ use topcoat::{
 use super::{add::add, discount, drawer_url, summary_line};
 use crate::app::checkout::countries::countries_for;
 use crate::app::say;
+use crate::app::words::t;
 
 /// How many products the "frequently bought together" column offers.
 const OFFERED: u32 = 6;
@@ -75,7 +76,6 @@ pub async fn cart_drawer(
         .unwrap_or_default();
     let methods = cart.as_ref().map_or(&[][..], |cart| &cart.shipping_options);
     let countries = countries_for(methods)
-        .map(|(code, _)| code)
         .filter(|code| cart.as_ref().is_none_or(|cart| cart.ships_to(code)))
         .collect::<Vec<_>>()
         .join(",");
@@ -94,13 +94,14 @@ pub async fn cart_drawer(
             data-publishable-key=(&publishable_key) data-amount=(total_cents)
             data-currency=(currency.to_lowercase()) data-countries=(&countries) data-shipping=(&rates)
             data-start-path=(href!(crate::app::checkout::start::start))
-            data-return-path=(href!(crate::app::checkout::complete::index))>
+            data-return-path=(href!(crate::app::checkout::complete::index))
+            data-say-standard=(t!(cart_express_standard)) data-say-failed=(t!(cart_express_failed))>
             <a class="drawer-backdrop" href="#" tabindex="-1" aria-hidden="true" data-drawer-close=""></a>
             <div class="drawer-sheet">
                 <section class="drawer-panel" role="dialog" aria-labelledby="cart-drawer-title">
                     <header class="drawer-head">
-                        <h2 id="cart-drawer-title">"Votre panier (" (count) ")"</h2>
-                        <a class="drawer-close" href="#" aria-label="Fermer le panier" data-drawer-close="">"×"</a>
+                        <h2 id="cart-drawer-title">(t!(cart_drawer_title, count))</h2>
+                        <a class="drawer-close" href="#" aria-label=(t!(cart_drawer_close)) data-drawer-close="">"×"</a>
                     </header>
                     if let Some(code) = error.as_deref() {
                         <p class="notice" role="alert" data-cart-error=(code)>(say(code))</p>
@@ -113,19 +114,19 @@ pub async fn cart_drawer(
                                 }
                             </ul>
                             <details class="promo" open=(cart.discount_code.is_some() || promo_refused)>
-                                <summary>"Vous avez un code promo ?"</summary>
+                                <summary>(t!(cart_drawer_promo_question))</summary>
                                 <form class="discount" method="post" action=(href!(discount::discount))>
                                     <input type="hidden" name="back" value="drawer">
                                     <input type="hidden" name="from" value=(&from)>
                                     if let Some(code) = &cart.discount_code {
-                                        <span>"Code " <code>(code)</code></span>
-                                        <button name="remove" value="1">"Retirer le code"</button>
+                                        <span>(t!(cart_promo_applied)) " " <code>(code)</code></span>
+                                        <button name="remove" value="1">(t!(cart_promo_remove))</button>
                                     } else {
                                         <label>
-                                            <span class="vh">"Code promo"</span>
-                                            <input type="text" name="code" maxlength="32" autocomplete="off" placeholder="Code promo">
+                                            <span class="vh">(t!(cart_promo_code))</span>
+                                            <input type="text" name="code" maxlength="32" autocomplete="off" placeholder=(t!(cart_promo_code))>
                                         </label>
-                                        <button>"Appliquer"</button>
+                                        <button>(t!(cart_promo_apply))</button>
                                     }
                                 </form>
                                 if let Some(refused) = cart.discount_refused {
@@ -133,20 +134,20 @@ pub async fn cart_drawer(
                                 }
                             </details>
                             <dl class="totals">
-                                <dt>"Sous-total"</dt>
+                                <dt>(t!(cart_drawer_subtotal))</dt>
                                 <dd data-drawer-subtotal="">(cart.subtotal().unwrap_or_default())</dd>
                                 if let (Some(discount), Some(amount)) = (&cart.discount, cart.discount_amount()) {
-                                    <dt>"Code promo " <code>(&discount.code)</code></dt>
+                                    <dt>(t!(cart_promo_code)) " " <code>(&discount.code)</code></dt>
                                     <dd data-drawer-discount=(&discount.code)>(amount)</dd>
                                 }
                                 if let Some(days) = cart.delivery_window {
-                                    <dt>"Délai de livraison"</dt>
+                                    <dt>(t!(cart_drawer_delivery))</dt>
                                     <dd data-drawer-delivery=(crate::app::delivery_days(days))>(crate::app::delivery_days(days))</dd>
                                 }
-                                <dt class="total">"Total"</dt>
+                                <dt class="total">(t!(cart_drawer_total))</dt>
                                 <dd class="total"><strong class="price" data-drawer-total="">(&total)</strong></dd>
                             </dl>
-                            <p class="hint">"Taxes et frais de livraison calculés à l'étape de paiement."</p>
+                            <p class="hint">(t!(cart_drawer_taxes_hint))</p>
                         </div>
                         if setup.is_some() {
                             <div class="drawer-express" data-drawer-express="" hidden="">
@@ -155,20 +156,20 @@ pub async fn cart_drawer(
                             </div>
                         }
                         if cart.can_check_out() {
-                            <a class="place" href=(href!(crate::app::checkout::index))>"Commander · " (&total)</a>
+                            <a class="place" href=(href!(crate::app::checkout::index))>(t!(cart_drawer_order, total: &total))</a>
                         }
-                        <a class="drawer-continue" href="#" data-drawer-close="">"Continuer mes achats"</a>
+                        <a class="drawer-continue" href="#" data-drawer-close="">(t!(cart_continue))</a>
                     } else if unavailable {
-                        <p class="drawer-empty notice" role="status" data-cart-unavailable="">"Le panier est momentanément indisponible. Réessayez dans quelques minutes."</p>
-                        <a class="drawer-continue" href=(href!(crate::app::index))>"Continuer mes achats"</a>
+                        <p class="drawer-empty notice" role="status" data-cart-unavailable="">(t!(cart_drawer_unavailable))</p>
+                        <a class="drawer-continue" href=(href!(crate::app::index))>(t!(cart_continue))</a>
                     } else {
-                        <p class="drawer-empty" data-cart-empty="">"Votre panier est vide."</p>
-                        <a class="drawer-continue" href=(href!(crate::app::index))>"Continuer mes achats"</a>
+                        <p class="drawer-empty" data-cart-empty="">(t!(cart_empty))</p>
+                        <a class="drawer-continue" href=(href!(crate::app::index))>(t!(cart_continue))</a>
                     }
                 </section>
                 if !offered.is_empty() {
                     <section class="upsell" aria-labelledby="cart-upsell-title" data-upsell="">
-                        <h2 id="cart-upsell-title">"Vous aimerez aussi"</h2>
+                        <h2 id="cart-upsell-title">(t!(cart_upsell_title))</h2>
                         <ul>
                             for product in &offered {
                                 <li data-offer=(&product.slug)>
@@ -184,11 +185,11 @@ pub async fn cart_drawer(
                                             <input type="hidden" name="slug" value=(&product.slug)>
                                             <input type="hidden" name="quantity" value="1">
                                             <input type="hidden" name="from" value=(&from)>
-                                            <button aria-label=(format!("Ajouter {}", product.name))>"Ajouter"</button>
+                                            <button aria-label=(t!(cart_upsell_add.label, name: &product.name))>(t!(cart_upsell_add))</button>
                                         </form>
                                     } else {
                                         <a class="offer-options" href=(href!(crate::app::p::slug::index, crate::app::p::slug::slug: product.slug.clone()))
-                                            aria-label=(format!("Choisir les options de {}", product.name))>"Choisir les options"</a>
+                                            aria-label=(t!(cart_upsell_options.label, name: &product.name))>(t!(cart_upsell_options))</a>
                                     }
                                 </li>
                             }
@@ -418,7 +419,7 @@ async function express() {
     allowedShippingCountries: drawer.dataset.countries.split(","),
     shippingRates: rates().length
       ? ratesTo(null)
-      : [{ id: "standard", displayName: "Livraison standard", amount: 0 }],
+      : [{ id: "standard", displayName: drawer.dataset.sayStandard, amount: 0 }],
   }));
   // Only the methods that ship to the wallet's address, priced in.
   button.on("shippingaddresschange", (event) => {
@@ -496,7 +497,7 @@ async function pay(event) {
     payError(refused.message);
     return false;
   } catch {
-    payError("Une erreur est survenue. Veuillez réessayer.");
+    payError(drawer.dataset.sayFailed);
     return false;
   }
 }

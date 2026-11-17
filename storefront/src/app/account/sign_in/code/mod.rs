@@ -13,6 +13,7 @@ use topcoat::{
     view::{View, view},
 };
 
+use crate::app::words::t;
 use crate::app::{document, say};
 use crate::shopper::{forget_sign_in_flow, set_shopper_token, sign_in_flow};
 
@@ -43,28 +44,29 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let flow = sign_in_flow(cx).ok_or_redirect(super::sign_in_url(cx, None, None))?;
     let query = query_params::<CodeQuery>(cx)?;
     let nav = menu(cx).await?;
+    let title = t!(account_code_title).resolve(cx);
     Ok(view! {
         document(
-            title: "Saisir le code",
+            title: &title,
             nav: &nav,
             <div class="wrap">
-                <h1>"Saisir le code"</h1>
-                <p>"Nous avons envoyé un code à six chiffres à " <strong>(&flow.email)</strong> ". Il est valable 10 minutes."</p>
+                <h1>(t!(account_code_title))</h1>
+                <p>(t!(account_code_sent_before)) " " <strong>(&flow.email)</strong> (t!(account_code_sent_after))</p>
                 if let Some(code) = query.error.as_deref() {
                     <p class="notice" role="alert">(say(code))</p>
                 } else if query.resent.is_some() {
-                    <p class="notice" role="status">"Un nouveau code est en route."</p>
+                    <p class="notice" role="status">(t!(account_code_resent))</p>
                 }
                 <form class="sign-in" method="post" action=(href!(verify))>
-                    <label for="sign-in-code">"Code"</label>
+                    <label for="sign-in-code">(t!(account_code_label))</label>
                     <input id="sign-in-code" name="code" required="" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="8">
-                    <button class="primary">"Valider"</button>
+                    <button class="primary">(t!(account_code_submit))</button>
                 </form>
                 <form method="post" action=(href!(verify))>
                     <input type="hidden" name="resend" value="1">
-                    <button>"Recevoir un nouveau code"</button>
+                    <button>(t!(account_code_resend))</button>
                 </form>
-                <p><a href=(super::sign_in_url(cx, Some(&flow.next), None))>"Utiliser une autre adresse"</a></p>
+                <p><a href=(super::sign_in_url(cx, Some(&flow.next), None))>(t!(account_code_other_address))</a></p>
             </div>
         )
     })

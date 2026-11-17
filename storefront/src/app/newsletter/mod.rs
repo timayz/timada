@@ -21,7 +21,10 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::app::{document, say};
+use crate::app::{
+    document, say,
+    words::{Worded, t},
+};
 
 /// What the form says when the shop has nowhere to send sign-ups (no
 /// dashboard address).
@@ -49,31 +52,23 @@ pub fn newsletter_url(cx: &Cx, error: Option<&str>, done: Option<&str>) -> Strin
 
 /// How a refusal reads; the codes the rest of the shop shares read as they
 /// do elsewhere.
-pub fn say_newsletter(code: &str) -> &'static str {
+pub fn say_newsletter(code: &str) -> Worded<'static> {
     match code {
-        "newsletter_invalid_email" => "Saisissez une adresse e-mail valide.",
-        "newsletter_invalid_link" => {
-            "Ce lien ne fonctionne pas, ou plus : inscrivez-vous à nouveau pour en recevoir un autre."
-        }
-        "newsletter_link_expired" => {
-            "Ce lien a expiré : inscrivez-vous à nouveau pour en recevoir un autre."
-        }
-        "too_many_requests" => "Trop d'inscriptions envoyées : réessayez dans quelques minutes.",
-        "newsletter_unavailable" | NEWSLETTER_OFF => {
-            "L'inscription à la newsletter est indisponible pour le moment."
-        }
+        "newsletter_invalid_email" => t!(error_invalid_email),
+        "newsletter_invalid_link" => t!(newsletter_error_invalid_link),
+        "newsletter_link_expired" => t!(newsletter_error_link_expired),
+        "too_many_requests" => t!(newsletter_error_too_many_requests),
+        "newsletter_unavailable" | NEWSLETTER_OFF => t!(newsletter_error_unavailable),
         other => say(other),
     }
 }
 
 /// What a step done reads as.
-fn say_done(done: &str) -> Option<&'static str> {
+fn say_done(done: &str) -> Option<Worded<'static>> {
     Some(match done {
-        "sent" => {
-            "Presque fini ! Nous venons de vous envoyer un e-mail : cliquez sur le lien qu'il contient pour confirmer votre inscription."
-        }
-        "confirmed" => "C'est confirmé : vous recevrez nos nouveautés et nos offres.",
-        "unsubscribed" => "C'est fait : vous ne recevrez plus notre newsletter.",
+        "sent" => t!(newsletter_done_sent),
+        "confirmed" => t!(newsletter_done_confirmed),
+        "unsubscribed" => t!(newsletter_done_unsubscribed),
         _ => return None,
     })
 }
@@ -83,10 +78,10 @@ fn say_done(done: &str) -> Option<&'static str> {
 pub async fn newsletter_form(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         <form class="newsletter" method="post" action=(href!(subscribe)) data-newsletter-form="">
-            <label for="newsletter-email">"Votre e-mail"</label>
+            <label for="newsletter-email">(t!(newsletter_email))</label>
             <div class="newsletter-row">
-                <input id="newsletter-email" name="email" type="email" required="" autocomplete="email" placeholder="vous@exemple.fr">
-                <button class="btn">"S'inscrire"</button>
+                <input id="newsletter-email" name="email" type="email" required="" autocomplete="email" placeholder=(t!(newsletter_email.placeholder))>
+                <button class="btn">(t!(newsletter_subscribe))</button>
             </div>
         </form>
     })
@@ -97,16 +92,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<NewsletterQuery>(cx)?;
     let nav = menu(cx).await?;
     let done = query.done.as_deref().and_then(say_done);
-    let title = "Newsletter";
+    let title = t!(footer_newsletter).resolve(cx);
     Ok(view! {
         document(
-            title: title,
+            title: &title,
             nav: &nav,
             <div class="wrap">
-                <nav class="crumbs" aria-label="Fil d'Ariane">
-                    <a href=(href!(crate::app::index))>"Accueil"</a> " / " (title)
+                <nav class="crumbs" aria-label=(t!(shell_crumbs))>
+                    <a href=(href!(crate::app::index))>(t!(shell_home))</a> " / " (&*title)
                 </nav>
-                <h1>"Notre newsletter"</h1>
+                <h1>(t!(newsletter_heading))</h1>
                 <div class="card panel" data-newsletter="">
                     if let Some(code) = &query.error {
                         <p class="notice" role="alert" data-newsletter-error=(code)>(say_newsletter(code))</p>
@@ -114,7 +109,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     if let Some(done) = done {
                         <p class="notice" role="status" data-newsletter-done=(query.done.as_deref().unwrap_or_default())>(done)</p>
                     }
-                    <p>"Nouveautés, conseils et offres réservées aux abonnés, une à deux fois par mois. Vous vous désinscrivez en un clic, depuis chaque e-mail."</p>
+                    <p>(t!(newsletter_pitch))</p>
                     newsletter_form()
                 </div>
             </div>

@@ -20,6 +20,7 @@ use topcoat::{
 
 use crate::app::checkout::checkout_url;
 use crate::app::document;
+use crate::app::words::t;
 use crate::shopper::{
     checkout_draft, forget_cart, forget_payment, payment_in_progress, remember_order,
     remember_purchase, save_checkout_draft,
@@ -72,15 +73,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         return Err(redirect(checkout_url(cx, Some(&returned_code(&returned.code)))).into());
     }
     let nav = menu(cx).await?;
+    let title = t!(checkout_confirming_title).resolve(cx);
 
     Ok(view! {
         document(
-            title: "Confirmation du paiement",
+            title: &title,
             nav: &nav,
             <div class="wrap">
-                <h1>"Confirmation de votre paiement…"</h1>
-                <p data-payment-confirming="">"Cela prend quelques secondes. La page se rafraîchit toute seule."</p>
-                <p><a href=(href!(index))>"Vérifier à nouveau"</a></p>
+                <h1>(t!(checkout_confirming_heading))</h1>
+                <p data-payment-confirming="">(t!(checkout_confirming_text))</p>
+                <p><a href=(href!(index))>(t!(checkout_confirming_again))</a></p>
                 <script>(Unescaped::new_unchecked(RELOAD_SCRIPT))</script>
             </div>
         )

@@ -922,7 +922,7 @@ into the tenant's store whenever the merchant changes the Stripe settings.
   A missing method, one that does not ship there or one removed since is refused with
   `shipping_unavailable`. A shop without methods ships for free and takes none. The
   storefront's checkout offers the countries its methods name, whichever they are,
-  with their French names (`checkout/countries.rs`); a method that ships everywhere,
+  by their names in the visitor's language (`checkout/countries.rs`); a method that ships everywhere,
   or a shop without methods, offers the 33 it lists first.
 - A cart takes one discount code: `apply_discount(cx, &cart_id, code)` (an unknown
   code is refused at once, `discount_unknown`) and `remove_discount`. `CartView` then
@@ -1173,7 +1173,7 @@ ignores and `make storefront` reads.
 ## The storefront
 
 `storefront/` is a complete shop on the library, to start your own from: it has every
-page a shop needs in French, and no brand and no colours. A top bar with the merchant's
+page a shop needs in French and in English, and no brand and no colours. A top bar with the merchant's
 announcements, a masthead with the search, the category bar, a home with the newest products,
 the category tiles, the latest reviews and the four promises, listings with sort labels
 and, on a category's first page, its longer text below the products, a product page
@@ -1202,11 +1202,12 @@ the old tenant's products. `make reset` removes the copy and the settings with t
 
 ### Making it your own
 
-- **Who you are:** `SHOP_NAME`, `TAGLINE` and `CONTACT_EMAIL` at the top of
-  `storefront/src/app/mod.rs`. What the top bar says (a promo code, a sale) is written
+- **Who you are:** `SHOP_NAME` and `CONTACT_EMAIL` at the top of
+  `storefront/src/app/mod.rs`, and `shop_tagline` in the sentences (see "What the pages
+  say"). What the top bar says (a promo code, a sale) is written
   in the back office, under Announcements.
 - **What your tags do before a visitor answers the cookie banner:** `CONSENT_MODE`,
-  beside them (see "Cookie consent"). The banner's words are in `cookies.rs`.
+  beside them (see "Cookie consent").
 - **Your look:** add it to `storefront/src/app/theme.css`, which holds the layout only
   and is inlined in every page, with the sheets of the cart drawer, the menu and the
   search beside the code they style (`DRAWER_CSS`, `MENU_CSS`, `SEARCH_CSS`). The pages
@@ -1214,12 +1215,57 @@ the old tenant's products. `make reset` removes the copy and the settings with t
   (`Canvas`), and a state never rests on a colour alone. Stripe's elements take their
   colours from `appearance` where the pages create them (`checkout/mod.rs`,
   `cart/drawer.rs`).
-- **What you say:** the home's sections in `storefront/src/app/mod.rs`, the questions in
-  `support_client/mod.rs`, the promises in `reassurance`, and the refusals in `say`. Your
-  legal pages are written in the back office; `storefront/pages` holds placeholders to
-  seed them with.
-- **Your language:** the text and the addresses (`/boutique`, `/support-client`, …) are
-  French and in the code, like the `12,50€` of `money`.
+- **What you say:** every sentence of the pages is in `storefront/src/app/l10n`, in
+  French and in English (see "What the pages say"): the home's sections in `home.ftl`,
+  the questions in `support.ftl`, the promises and the frame in `shell.ftl`, the
+  refusals in `errors.ftl`. Your legal pages are written in the back office;
+  `storefront/pages` holds placeholders to seed them with.
+- **Your language:** the pages are routed at French addresses (`/boutique`,
+  `/support-client`, …) and named in English under `/en`; the `12,50€` of `money` is
+  written one way for every language.
+
+### What the pages say
+
+No sentence a visitor reads is written in the pages' code: each is a
+[Fluent](https://projectfluent.org/) message, under the same key in every language the
+storefront speaks.
+
+```
+storefront/src/app/l10n/fr/cart.ftl      cart_empty = Votre panier est vide.
+storefront/src/app/l10n/en/cart.ftl      cart_empty = Your cart is empty.
+```
+
+A page names the sentence and gives what it holds; it is read in the language of the
+visitor's address, which `Localized` puts in the request as a `Locale`:
+
+```rust
+use crate::app::words::t;
+
+view! {
+    <h1>(t!(cart_title))</h1>
+    <p>(t!(cart_lines, count: cart.item_count))</p>
+    <input placeholder=(t!(shell_search.placeholder))>
+}
+// Outside a view: a title, a JSON answer.
+let title = t!(cart_title).resolve(cx);
+```
+
+- **One file per part of the shop** (`shell`, `home`, `cart`, `checkout`, `product`,
+  `listing`, `account`, `orders`, `blog`, `support`, `newsletter`, `cookies`, `errors`,
+  `misc`), all loaded as one set: a key starts with the name of its part.
+- **A count** chooses its words in the file, not in the page: `{ $count -> [one] … *[other] … }`.
+- **A sentence a script shows** is written by the page in a `data-say-…` attribute the
+  script reads; no script holds a sentence.
+- **The countries' names** are apart, in `checkout/countries/fr.ftl` and `en.ftl`, keyed
+  by country code and read with `country_name(cx, code)`.
+- **Another language:** add its directory beside `fr` and `en` with the same files, its
+  countries file, its name in `SPOKEN` and its page names in `routes` (see "An address
+  per language").
+- **`topcoat l10n check`**, run in `storefront/`, tells a key a language lacks, a
+  sentence a page no longer uses and an argument a page does not give. A key with no
+  sentence shows as the key itself.
+- **Not yet:** a price is written the same way in every language, and so is what the
+  library writes for free shipping (`MoneyFormat::free`).
 
 ### An address per language
 
@@ -1243,8 +1289,8 @@ plain `href!`s. What is no link of a page is turned by hand, with `lang::speakin
 an address in the data for a search engine (`speaking.absolute(cx, path)`), or in an
 answer a script follows (`speaking.path(path)`).
 
-- `SPOKEN` lists the languages the storefront has words for; a language the merchant
-  chose that is not there has no address.
+- `SPOKEN` lists the languages the storefront has words for (see "What the pages
+  say"); a language the merchant chose that is not there has no address.
 - `ENGLISH_ROUTES` names the pages in English; add a table like it for another
   language, in `routes`.
 - A page has one address a language: `/en/boutique` answers with a permanent redirect

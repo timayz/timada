@@ -16,6 +16,7 @@ use topcoat::{
     view::{View, attributes, view},
 };
 
+use crate::app::words::t;
 use crate::app::{boutique, c, own_page, p, price_line, support_client};
 
 /// How many of each the dropdown shows.
@@ -79,12 +80,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             })
     };
     // The support page first when it matches, then the merchant's pages.
-    let support = &support_client::SEARCH_ENTRY;
+    let support = support_client::search_entry(cx);
     let mut own_pages: Vec<PageLink> = Vec::new();
-    if starts_a_word(support.title) || support.paragraphs.iter().any(|p| starts_a_word(p)) {
+    if starts_a_word(&support.title) || support.paragraphs.iter().any(|p| starts_a_word(p)) {
         own_pages.push(PageLink {
             slug: support.slug.to_owned(),
-            title: support.title.to_owned(),
+            title: support.title.into_owned(),
         });
     }
     // Only the pages the shop has an address for.
@@ -103,7 +104,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .resolve(cx);
     // The support page is the shop's own; the others carry the merchant's text.
     let page_link = |slug: &str| {
-        if slug == support_client::SEARCH_ENTRY.slug {
+        if slug == support_client::SLUG {
             href!(support_client::index).resolve(cx)
         } else {
             own_page::url(cx, slug).unwrap_or_default()
@@ -113,7 +114,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         <div class="search-panel" data-search-results="" data-query=(&q)>
             if nothing {
-                <p class="search-empty" data-search-empty="">"Aucun résultat pour « " (&q) " »"</p>
+                <p class="search-empty" data-search-empty="">(t!(listing_search_none, q: &q))</p>
             } else {
                 if let Some(found) = &found && !found.items.is_empty() {
                     <ul class="search-list search-products">
@@ -140,23 +141,23 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <li>
                                 <a class="search-row" href=(href!(c::slug::index, c::slug::slug: category.slug.clone())) data-search-category=(&category.slug)>
                                     <span class="search-name">(&category.name)</span>
-                                    <small class="search-kind">"Catégorie"</small>
+                                    <small class="search-kind">(t!(listing_search_category))</small>
                                 </a>
                             </li>
                         }
                     </ul>
                 }
                 if let Some(found) = &found && !found.items.is_empty() {
-                    <a class="search-all" href=(&all) data-search-all="">"Voir tous les résultats (" (found.total) ")"</a>
+                    <a class="search-all" href=(&all) data-search-all="">(t!(listing_search_all, count: found.total))</a>
                 }
                 if !own_pages.is_empty() {
-                    <p class="search-heading">"Autres résultats"</p>
+                    <p class="search-heading">(t!(listing_search_others))</p>
                     <ul class="search-list search-pages">
                         for page in &own_pages {
                             <li>
                                 <a class="search-row" href=(page_link(&page.slug)) data-search-page=(&page.slug)>
                                     <span class="search-name">(&page.title)</span>
-                                    <small class="search-kind">"Page"</small>
+                                    <small class="search-kind">(t!(listing_search_page))</small>
                                 </a>
                             </li>
                         }

@@ -19,7 +19,7 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::money;
+use super::{money, words::t};
 
 /// The bands, in cents, as the shop offers them.
 pub const PRICE_BANDS: &[(i64, i64)] = &[
@@ -235,6 +235,7 @@ pub struct Panel {
 
 impl Panel {
     pub fn build(
+        cx: &Cx,
         filters: &Filters,
         offered: &[(ShopFilter, Vec<FacetValue>)],
         link: impl Fn(&Filters) -> String,
@@ -247,7 +248,9 @@ impl Panel {
                 let active = band == Some(index);
                 FilterLink {
                     key: format!("{}-{}", lo / 100, hi / 100),
-                    label: format!("De {} à {}", money(*lo, "EUR"), money(*hi, "EUR")),
+                    label: t!(listing_price_band, from: money(*lo, "EUR"), to: money(*hi, "EUR"))
+                        .resolve(cx)
+                        .into_owned(),
                     href: link(&if active {
                         filters.without_band()
                     } else {
@@ -294,10 +297,10 @@ impl Panel {
 pub async fn filter_panel(cx: &Cx, panel: &Panel) -> Result<impl View> {
     Ok(view! {
         <details class="filters" data-filters="" open=(panel.active)>
-            <summary>"Afficher les filtres"</summary>
+            <summary>(t!(listing_filters))</summary>
             <div class="filters-body">
                 <section>
-                    <h3>"Filtrer par tarif"</h3>
+                    <h3>(t!(listing_filter_by_price))</h3>
                     <ul class="chips">
                         for band in &panel.bands {
                             <li>
@@ -309,7 +312,7 @@ pub async fn filter_panel(cx: &Cx, panel: &Panel) -> Result<impl View> {
                 </section>
                 for group in &panel.groups {
                     <section data-filter-group=(&group.filter.key)>
-                        <h3>"Filtrer par " (group.filter.name.to_lowercase())</h3>
+                        <h3>(t!(listing_filter_by, name: group.filter.name.to_lowercase()))</h3>
                         <ul class="chips">
                             for value in &group.links {
                                 <li>
@@ -323,7 +326,7 @@ pub async fn filter_panel(cx: &Cx, panel: &Panel) -> Result<impl View> {
                 }
                 if panel.active {
                     <p class="filters-clear">
-                        <a data-filters-clear="" href=(&panel.clear)>"Effacer les filtres"</a>
+                        <a data-filters-clear="" href=(&panel.clear)>(t!(listing_filters_clear))</a>
                     </p>
                 }
             </div>

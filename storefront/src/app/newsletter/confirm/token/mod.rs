@@ -14,8 +14,8 @@ use topcoat::{
     view::{View, view},
 };
 
-use crate::app::document;
 use crate::app::newsletter::newsletter_url;
+use crate::app::{document, words::t};
 
 module_param!(pub token);
 
@@ -23,16 +23,17 @@ module_param!(pub token);
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let token = token(cx).to_owned();
     let nav = menu(cx).await?;
+    let title = t!(newsletter_confirm_title).resolve(cx);
     Ok(view! {
         document(
-            title: "Confirmer l'inscription",
+            title: &title,
             nav: &nav,
             <div class="wrap">
-                <h1>"Confirmer votre inscription"</h1>
+                <h1>(t!(newsletter_confirm_heading))</h1>
                 <div class="card panel">
-                    <p>"Un clic encore et vous recevrez notre newsletter."</p>
+                    <p>(t!(newsletter_confirm_text))</p>
                     <form method="post" action=(href!(submit, token: token)) data-newsletter-confirm="">
-                        <button class="btn">"Confirmer mon inscription"</button>
+                        <button class="btn">(t!(newsletter_confirm_button))</button>
                     </form>
                 </div>
             </div>

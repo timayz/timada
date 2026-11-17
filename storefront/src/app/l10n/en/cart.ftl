@@ -1,0 +1,45 @@
+# The cart: its page (`/cart`), a line of it beside the checkout, and the
+# drawer that slides in on every page.
+
+cart_title = Your cart
+cart_column_product = Product
+cart_column_price = Price
+cart_column_quantity = Quantity
+cart_column_amount = Amount
+cart_line_unnamed = A product that is no longer sold
+cart_line_offer = Offer: 1 at { $price }
+cart_line_delivery = Delivery in { $days }
+cart_line_off_sale = No longer on sale: remove it to order the rest.
+cart_quantity_of = Quantity of { $name }
+cart_update = Update
+cart_remove = Remove
+    .label = Remove { $name }
+cart_one_less = One less: { $name }
+cart_one_more = One more: { $name }
+cart_subtotal_label = Subtotal:
+cart_delivery_estimate = Estimated delivery: { $days } after you order
+cart_promo_code = Promo code
+cart_promo_amount_after = :
+cart_promo_applied = Code
+cart_promo_remove = Remove the code
+cart_promo_apply = Apply
+cart_total_label = Total:
+cart_order = Checkout
+cart_empty = Your cart is empty.
+cart_continue = Continue shopping
+cart_drawer_title = Your cart ({ $count })
+cart_drawer_close = Close the cart
+cart_drawer_promo_question = Have a promo code?
+cart_drawer_subtotal = Subtotal
+cart_drawer_delivery = Delivery time
+cart_drawer_total = Total
+cart_drawer_taxes_hint = Taxes and delivery costs are calculated at checkout.
+cart_drawer_order = Checkout · { $total }
+cart_drawer_unavailable = The cart is unavailable for the moment. Try again in a few minutes.
+cart_upsell_title = You may also like
+cart_upsell_add = Add
+    .label = Add { $name }
+cart_upsell_options = Choose options
+    .label = Choose options for { $name }
+cart_express_standard = Standard delivery
+cart_express_failed = Something went wrong. Please try again.

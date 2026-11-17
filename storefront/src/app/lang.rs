@@ -17,6 +17,7 @@
 use timada_storefront::{ReadIn, absolute_url, shop_languages};
 use topcoat::{
     context::{Cx, memoize},
+    l10n::{Locale, locale, try_locale},
     router::{
         Body, HeaderValue, Layer, LayerFuture, Method, Next, Path,
         error::{RedirectError, SeeOther, redirect_permanent, rewrite},
@@ -297,6 +298,13 @@ impl Speaking<'_> {
     }
 }
 
+/// The catalogue (`l10n/{locale}`) the pages take their sentences from for
+/// a visitor reading `language`: its own, as every language of [`SPOKEN`]
+/// has one.
+fn wording(language: &str) -> Locale {
+    language.parse().unwrap_or(locale!("fr"))
+}
+
 /// Wraps every request; register it on the router with no path.
 pub struct Localized;
 
@@ -308,14 +316,22 @@ impl Layer for Localized {
     fn handle<'a>(&'a self, cx: &'a Cx, body: Body, next: Next<'a>) -> LayerFuture<'a> {
         Box::pin(async move {
             let languages = languages(cx).await;
-            if languages.plain() {
-                return next.run(cx, body).await;
-            }
             let asked = original_uri(cx);
             let visible = asked
                 .path_and_query()
                 .map_or(asked.path(), |whole| whole.as_str());
             let (language, internal) = languages.read(visible);
+            // What the pages word their own sentences in, from here on.
+            let worded;
+            let cx = if try_locale(cx).is_some() {
+                cx
+            } else {
+                worded = cx.with(wording(language));
+                &worded
+            };
+            if languages.plain() {
+                return next.run(cx, body).await;
+            }
             // The first time through, the address is still the visitor's.
             if uri(cx) == asked {
                 let proper = languages.write(language, &internal);
@@ -328,6 +344,7 @@ impl Layer for Localized {
                     let sent = rewrite(internal, body);
                     // What the library's readers word the catalogue in:
                     // the main language needs no saying.
+                    let sent = sent.with(wording(language));
                     return Err(if language == languages.main {
                         sent.into()
                     } else {
@@ -419,6 +436,15 @@ fn with_addresses(page: &str, write: impl Fn(&str) -> String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_language_spoken_has_its_sentences() {
+        let worded = crate::app::words::catalogue::t::locales();
+        for language in SPOKEN {
+            assert!(worded.contains(&wording(language)), "{language}");
+        }
+        assert_eq!(worded.len(), SPOKEN.len());
+    }
 
     fn french_and_english() -> Languages {
         Languages::of("fr", &["en".to_owned(), "de".to_owned(), "fr".to_owned()])

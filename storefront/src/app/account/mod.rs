@@ -22,6 +22,7 @@ use topcoat::{
 };
 
 use crate::app::orders::order_id::{index as order_page, order_id};
+use crate::app::words::{Worded, t};
 use crate::app::{document, say};
 use crate::shopper::{forget_shopper, session, shopper_token};
 
@@ -49,22 +50,22 @@ pub fn account_done_url(cx: &Cx, done: &str) -> String {
 }
 
 /// What the account page says once something is done.
-fn say_done(code: &str) -> Option<&'static str> {
+fn say_done(code: &str) -> Option<Worded<'static>> {
     match code {
-        sign_out_everywhere::DONE => Some("Vous êtes déconnecté de tous les autres navigateurs."),
-        newsletter::SUBSCRIBED => Some("C'est noté : vous recevrez notre newsletter."),
-        newsletter::UNSUBSCRIBED => Some("C'est fait : vous ne recevrez plus notre newsletter."),
+        sign_out_everywhere::DONE => Some(t!(account_done_signed_out_elsewhere)),
+        newsletter::SUBSCRIBED => Some(t!(account_done_newsletter_on)),
+        newsletter::UNSUBSCRIBED => Some(t!(account_done_newsletter_off)),
         _ => None,
     }
 }
 
 /// An order's status, as the orders table shows it.
-fn status_label(status: OrderStatus) -> &'static str {
+fn status_label(status: OrderStatus) -> Worded<'static> {
     match status {
-        OrderStatus::Authorized => "Enregistrée",
-        OrderStatus::Paid => "Payée",
-        OrderStatus::Fulfilled => "Expédiée",
-        OrderStatus::Cancelled => "Annulée",
+        OrderStatus::Authorized => t!(account_status_authorized),
+        OrderStatus::Paid => t!(account_status_paid),
+        OrderStatus::Fulfilled => t!(account_status_fulfilled),
+        OrderStatus::Cancelled => t!(account_status_cancelled),
     }
 }
 
@@ -89,15 +90,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let subscribed = shopper_newsletter(cx, &token).await?.unwrap_or(false);
     let query = query_params::<AccountQuery>(cx)?;
     let nav = menu(cx).await?;
+    let title = t!(shell_account).resolve(cx);
     Ok(view! {
         document(
-            title: "Mon compte",
+            title: &title,
             nav: &nav,
             <div class="wrap">
-                <h1>"Mon compte"</h1>
-                <p>"Connecté avec l'adresse " <strong data-account-email="">(&shopper.email)</strong></p>
+                <h1>(t!(shell_account))</h1>
+                <p>(t!(account_signed_in_as)) " " <strong data-account-email="">(&shopper.email)</strong></p>
                 <form method="post" action=(href!(sign_out::sign_out))>
-                    <button>"Se déconnecter"</button>
+                    <button>(t!(account_sign_out))</button>
                 </form>
                 if let Some(code) = query.error.as_deref() {
                     <p class="notice" role="alert">(say(code))</p>
@@ -106,13 +108,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <p class="notice" role="status">(done)</p>
                 }
                 <section data-account-orders="">
-                    <h2>"Mes commandes"</h2>
+                    <h2>(t!(account_orders_title))</h2>
                     if orders.is_empty() {
-                        <p>"Aucune commande pour le moment."</p>
+                        <p>(t!(account_orders_empty))</p>
                     } else {
                         <table class="history">
                             <thead>
-                                <tr><th>"Commande"</th><th>"Articles"</th><th>"Total"</th><th>"Statut"</th></tr>
+                                <tr><th>(t!(account_orders_reference))</th><th>(t!(account_orders_items))</th><th>(t!(account_orders_total))</th><th>(t!(account_orders_status))</th></tr>
                             </thead>
                             <tbody>
                                 for order in &orders {
@@ -128,9 +130,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     }
                 </section>
                 <section data-account-addresses="">
-                    <h2>"Mes adresses"</h2>
+                    <h2>(t!(account_addresses_title))</h2>
                     if shopper.addresses.is_empty() {
-                        <p>"Les adresses de livraison que vous saisissez en passant commande sont enregistrées ici."</p>
+                        <p>(t!(account_addresses_empty))</p>
                     } else {
                         <ul class="saved">
                             for saved in &shopper.addresses {
@@ -141,7 +143,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     (&saved.address.country) " "
                                     <form method="post" action=(href!(addresses::remove::remove))>
                                         <input type="hidden" name="address_id" value=(&saved.id)>
-                                        <button>"Retirer"</button>
+                                        <button>(t!(account_address_remove))</button>
                                     </form>
                                 </li>
                             }
@@ -149,32 +151,32 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     }
                 </section>
                 <section data-account-newsletter=(if subscribed { "on" } else { "off" })>
-                    <h2>"Newsletter"</h2>
+                    <h2>(t!(footer_newsletter))</h2>
                     if subscribed {
-                        <p>"Vous recevez nos nouveautés et nos offres par e-mail."</p>
+                        <p>(t!(account_newsletter_on_text))</p>
                         <form method="post" action=(href!(newsletter::newsletter))>
                             <input type="hidden" name="subscribed" value="false">
-                            <button>"Ne plus recevoir la newsletter"</button>
+                            <button>(t!(account_newsletter_stop))</button>
                         </form>
                     } else {
-                        <p>"Nouveautés, conseils et offres réservées aux abonnés, une à deux fois par mois."</p>
+                        <p>(t!(account_newsletter_off_text))</p>
                         <form method="post" action=(href!(newsletter::newsletter))>
                             <input type="hidden" name="subscribed" value="true">
-                            <button>"Recevoir la newsletter"</button>
+                            <button>(t!(account_newsletter_start))</button>
                         </form>
                     }
                 </section>
                 <section data-account-sessions="">
-                    <h2>"Mes connexions"</h2>
-                    <p>"Connecté sur un ordinateur que vous n'utilisez plus ? Déconnectez-vous de tous les autres navigateurs ; celui-ci reste connecté."</p>
+                    <h2>(t!(account_sessions_title))</h2>
+                    <p>(t!(account_sessions_text))</p>
                     <form method="post" action=(href!(sign_out_everywhere::sign_out_everywhere))>
-                        <button>"Se déconnecter partout ailleurs"</button>
+                        <button>(t!(account_sign_out_elsewhere))</button>
                     </form>
                 </section>
                 <section data-account-delete="">
-                    <h2>"Supprimer mon compte"</h2>
-                    <p>"Efface vos adresses et vous déconnecte partout. Vos commandes restent chez la boutique."</p>
-                    <a href=(href!(delete::index))>"Supprimer mon compte…"</a>
+                    <h2>(t!(account_delete_title))</h2>
+                    <p>(t!(account_delete_text))</p>
+                    <a href=(href!(delete::index))>(t!(account_delete_link))</a>
                 </section>
             </div>
         )
