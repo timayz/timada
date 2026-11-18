@@ -11,6 +11,8 @@ pub enum CatalogError {
     SlugTaken,
     #[error("a language is one of the list")]
     InvalidLanguage,
+    #[error("a word and what a language reads for it are at most 400 characters")]
+    InvalidWord,
     #[error("the description must be at most 4000 characters")]
     InvalidDescription,
     #[error(
@@ -222,6 +224,7 @@ impl CatalogError {
             Self::TooManyOptions => "too_many_options",
             Self::InvalidOptionName => "invalid_option_name",
             Self::InvalidLanguage => "language_invalid",
+            Self::InvalidWord => "invalid_word",
             Self::OptionExists => "option_exists",
             Self::InvalidOptionValues => "invalid_option_values",
             Self::OptionNotFound => "option_not_found",

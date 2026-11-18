@@ -221,7 +221,7 @@ async fn on_language_noted(
 
 /// A language code from the list, lowercased; `InvalidLanguage` for any
 /// other.
-fn normalize_language(code: &str) -> Result<String, CatalogError> {
+pub(crate) fn normalize_language(code: &str) -> Result<String, CatalogError> {
     let code = code.trim().to_ascii_lowercase();
     if is_language(&code) {
         Ok(code)

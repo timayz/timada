@@ -296,6 +296,7 @@ pub fn describe_error(code: &str) -> &'static str {
             "A Conversions API token needs the ID of the pixel it was made for."
         }
         "language_invalid" => "Choose the languages from the list.",
+        "invalid_word" => "A word and its translation are at most 400 characters.",
         "too_many_languages" => "A storefront is translated into at most 10 languages.",
         "newsletter_popup_invalid" => {
             "A pop-up shown needs what it offers, in at most 80 characters; the sentence under it is at most 300, and it opens within 600 seconds."
