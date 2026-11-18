@@ -48,15 +48,29 @@ pub async fn live_announcements(db: &Db, now: u64) -> anyhow::Result<Vec<LiveAnn
         .collect())
 }
 
-/// The messages on the bar now; see [`live_announcements`].
+/// The messages on the bar now; see [`live_announcements`]. A request
+/// read in another language ([`read_in`](crate::read_in)) gets each as the
+/// shop worded it there, and in the main language where it did not.
 pub async fn announcements(cx: &Cx) -> Result<Vec<LiveAnnouncement>> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    live_announcements(store(cx).db(), now)
+    let db = store(cx).db();
+    let mut live = live_announcements(db, now)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(Error::from_anyhow)?;
+    if let Some(language) = crate::read_in(cx) {
+        let worded = crate::wordings::wordings_in(db, language)
+            .await
+            .map_err(Error::from_anyhow)?;
+        for announcement in &mut live {
+            if let Some(text) = worded.get(&crate::wordings::announcement_key(&announcement.id)) {
+                announcement.html = render_announcement(text);
+            }
+        }
+    }
+    Ok(live)
 }
 
 /// Rewrites the copy whole: a shop has a handful of messages.

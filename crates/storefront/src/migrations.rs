@@ -344,6 +344,15 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             id INTEGER PRIMARY KEY CHECK (id = 1),
             methods_json TEXT NOT NULL
         );
+        -- What the shop's short texts say in a language, for the ones
+        -- worded there: `key` is `announcement:<id>`, `popup:title` or
+        -- `popup:text`.
+        CREATE TABLE storefront_wordings (
+            language TEXT NOT NULL,
+            key TEXT NOT NULL,
+            text TEXT NOT NULL,
+            PRIMARY KEY (language, key)
+        );
         -- What a language calls the shop's shipping methods, for the ones
         -- named there.
         CREATE TABLE storefront_shipping_names (
@@ -425,6 +434,7 @@ pub const TABLES: &[&str] = &[
     "storefront_words",
     "storefront_shipping_methods",
     "storefront_shipping_names",
+    "storefront_wordings",
     "storefront_return_policy",
 ];
 

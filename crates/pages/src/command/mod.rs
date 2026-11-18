@@ -14,6 +14,7 @@ mod meta_pixel;
 mod newsletter_popup;
 mod page;
 mod redirects;
+mod shop_wording;
 mod slug_index;
 mod translation;
 
@@ -27,6 +28,7 @@ pub use meta_pixel::*;
 pub use newsletter_popup::*;
 pub use page::*;
 pub use redirects::*;
+pub use shop_wording::*;
 pub use translation::*;
 
 use evento::{Executor, Projection, metadata::Event};

@@ -7,6 +7,7 @@
 
 pub mod add;
 pub mod announcement_id;
+pub mod wording;
 
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 use serde::Deserialize;
@@ -51,6 +52,16 @@ pub fn announcements_url(
     href!(index, slug: slug.to_owned())
         .query(Flash { error, message })
         .resolve(cx)
+}
+
+/// What one of the shop's other languages reads on the bar.
+struct WordedIn {
+    language: String,
+    /// What its card is headed with.
+    heading: String,
+    /// A message's id, its text, and its text in the language (empty where
+    /// it has none).
+    rows: Vec<(String, String, String)>,
 }
 
 /// The pages gateway in the tenant's streams (403 while suspended).
@@ -203,6 +214,39 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .announcements()
         .await
         .map_err(topcoat::Error::from_anyhow)?;
+    // What each of the shop's other languages reads for the messages.
+    let other_languages = pages(&access)?
+        .languages()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .map(|languages| languages.others)
+        .unwrap_or_default();
+    let mut worded_in: Vec<WordedIn> = Vec::new();
+    if !announcements.is_empty() {
+        for language in other_languages {
+            let worded = pages(&access)?
+                .shop_wording(&language)
+                .await
+                .map_err(topcoat::Error::from_anyhow)?
+                .announcements;
+            let rows = announcements
+                .iter()
+                .map(|announcement| {
+                    let theirs = worded.get(&announcement.id).cloned().unwrap_or_default();
+                    (announcement.id.clone(), announcement.text.clone(), theirs)
+                })
+                .collect();
+            let heading = format!(
+                "Announcements in {}",
+                timada_core::languages::language_name(&language).unwrap_or(&language)
+            );
+            worded_in.push(WordedIn {
+                language,
+                heading,
+                rows,
+            });
+        }
+    }
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let shop_zone = tenant.shop_time_zone().to_owned();
@@ -274,6 +318,31 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                 )
             )
+
+            for WordedIn { language, heading, rows } in &worded_in {
+                section_card(
+                    title: Some(heading),
+                    description: Some("What a visitor reading this language sees on the bar, written as the main message is. One left empty is read in the main language."),
+                    attrs: attributes! { data-announcement-wording=(language) },
+                    <form method="post" action=(href!(wording::wording, slug: slug.clone())) class="flex max-w-2xl flex-col gap-4">
+                        <input type="hidden" name="language" value=(language) />
+                        <fieldset class="contents" disabled=(!can_manage)>
+                            for (id, text, theirs) in rows {
+                                field(
+                                    field_label(attrs: attributes! { for=(format!("wording-{language}-{id}")) }, (text))
+                                    input(attrs: attributes! {
+                                        id=(format!("wording-{language}-{id}")) name=(format!("{}{id}", wording::TEXT_FIELD_PREFIX)) type="text"
+                                        maxlength=(MAX_ANNOUNCEMENT_LEN) value=(theirs) lang=(language) autocomplete="off"
+                                    })
+                                )
+                            }
+                            if can_manage {
+                                <div>button(attrs: attributes! { type="submit" }, "Save translations")</div>
+                            }
+                        </fieldset>
+                    </form>
+                )
+            }
 
             if can_manage {
                 section_card(

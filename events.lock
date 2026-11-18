@@ -357,6 +357,8 @@ event timada-pages/PageSlug::Claimed { page_id: String, page_version: u16 }
 event timada-pages/PageSlug::Released unit
 event timada-pages/Redirects::RedirectAdded { redirect_id: String, from: String, to: String, added_by: String }
 event timada-pages/Redirects::RedirectRemoved { redirect_id: String, removed_by: String }
+event timada-pages/ShopWording::AnnouncementWorded { language: String, announcement_id: String, text: String, worded_by: String }
+event timada-pages/ShopWording::PopupWorded { language: String, title: String, text: String, worded_by: String }
 event timada-pages/SlugLanguages::Noted { language: String }
 event timada-pages/Translation::Dropped { dropped_by: String }
 event timada-pages/Translation::SeoSet { meta_title: String, meta_description: String, set_by: String }

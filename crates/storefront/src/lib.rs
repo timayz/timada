@@ -57,6 +57,7 @@ mod store;
 mod support;
 mod terms;
 mod translations;
+mod wordings;
 mod words;
 
 pub use announcements::*;

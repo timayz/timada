@@ -37,11 +37,26 @@ pub async fn shown_newsletter_popup(db: &Db) -> anyhow::Result<Option<Newsletter
 }
 
 /// The pop-up, while the merchant has one shown; see
-/// [`shown_newsletter_popup`].
+/// [`shown_newsletter_popup`]. A request read in another language
+/// ([`read_in`](crate::read_in)) gets its title and its text as the shop
+/// worded them there, each in the main language where it did not.
 pub async fn newsletter_popup(cx: &Cx) -> Result<Option<NewsletterPopup>> {
-    shown_newsletter_popup(store(cx).db())
+    let db = store(cx).db();
+    let mut popup = shown_newsletter_popup(db)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(Error::from_anyhow)?;
+    if let (Some(language), Some(popup)) = (crate::read_in(cx), &mut popup) {
+        let mut worded = crate::wordings::wordings_in(db, language)
+            .await
+            .map_err(Error::from_anyhow)?;
+        if let Some(title) = worded.remove(crate::wordings::POPUP_TITLE) {
+            popup.title = title;
+        }
+        if let Some(text) = worded.remove(crate::wordings::POPUP_TEXT) {
+            popup.text = text;
+        }
+    }
+    Ok(popup)
 }
 
 /// Copies the pop-up while it is shown, and drops it once it is not.
