@@ -162,8 +162,10 @@ node 0, every write journaled by the three. Runs of 2026-11-16 on evento
 - **About one command in 500,000 took 5 s** with nothing wrong on any node
   (two of 100,000 in one run, four of a million in another, none in five
   other runs; none failed). Five seconds is how long evento waits for the
-  answers to a write before it gives up on them; what was waited for is not
-  known yet (timayz/evento#549).
+  answers to a write before it gives up on them. Two of the three nodes had
+  taken the write from another node's catch-up round before applying it
+  themselves, and sent no answer for it (timayz/evento#549). evento alpha.39
+  answers in that case too; the runs above were not made again on it.
 
 ### The 47 subscriptions on every node
 

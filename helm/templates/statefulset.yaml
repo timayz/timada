@@ -6,8 +6,8 @@ metadata:
     app: timada
 spec:
   serviceName: timada
-  # One node. A cluster names its nodes by IP address (`cluster.peers`), which
-  # a pod does not keep across restarts, so this chart does not run one.
+  # One node: this chart does not yet generate the `[cluster]` section a
+  # group of pods needs (#674).
   replicas: 1
   selector:
     matchLabels:
