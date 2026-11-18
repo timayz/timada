@@ -38,6 +38,7 @@ pub async fn cart_drawer(
     #[default] unavailable: bool,
 ) -> Result<impl View> {
     let query = query_params::<DrawerQuery>(cx)?;
+    let paths = crate::app::address::paths(cx).await?;
     // Where the drawer's forms come back to: this page, as the shopper sees
     // it, without the refusal it may already show.
     let from = original_uri(cx)
@@ -173,7 +174,7 @@ pub async fn cart_drawer(
                         <ul>
                             for product in &offered {
                                 <li data-offer=(&product.slug)>
-                                    <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::slug: product.slug.clone()))>
+                                    <a href=(crate::app::address::product_href(cx, paths, product))>
                                         if let Some(image) = product.image() {
                                             product_image(image: image, attrs: attributes! { class="offer-pic" })
                                         }
@@ -188,7 +189,7 @@ pub async fn cart_drawer(
                                             <button aria-label=(t!(cart_upsell_add.label, name: &product.name))>(t!(cart_upsell_add))</button>
                                         </form>
                                     } else {
-                                        <a class="offer-options" href=(href!(crate::app::p::slug::index, crate::app::p::slug::slug: product.slug.clone()))
+                                        <a class="offer-options" href=(crate::app::address::product_href(cx, paths, product))
                                             aria-label=(t!(cart_upsell_options.label, name: &product.name))>(t!(cart_upsell_options))</a>
                                     }
                                 </li>

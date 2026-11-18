@@ -603,6 +603,7 @@ mod tests {
             gtin: None,
             mpn: None,
             compare_at_cents: None,
+            categories: Vec::new(),
         }
     }
 

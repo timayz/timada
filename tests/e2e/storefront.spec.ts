@@ -16,6 +16,7 @@ import {
 import {
   StorefrontApp,
   PNG,
+  fileUnder,
   mintKey,
   publishProduct,
   publishVariedProduct,
@@ -268,7 +269,7 @@ test("the storefront shows the catalogue in French", async ({
 
   // A category: the breadcrumb, the sub-categories, the count and the
   // shop's sort labels.
-  await page.goto(`${app.url}/c/couchage`);
+  await page.goto(`${app.url}/couchage`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Couchage");
   // Search engines read the merchant's title; with no description written
   // anywhere, the page gives them none.
@@ -303,7 +304,7 @@ test("the storefront shows the catalogue in French", async ({
   // The filters: the colours of the listing with their counts, a colour on
   // and off again, the price bands (a range reaches into every band it
   // overlaps), the sort keeping them, and nothing left.
-  await page.goto(`${app.url}/c/tapis`);
+  await page.goto(`${app.url}/couchage/tapis`);
   const filters = page.locator("[data-filters]");
   await expect(filters.locator("summary")).toHaveText("Afficher les filtres");
   await expect(filters).toHaveJSProperty("open", false);
@@ -377,7 +378,7 @@ test("the storefront shows the catalogue in French", async ({
   await expect(page.locator("[data-filters-empty]")).toBeVisible();
 
   // A product: the French page, then into the cart from it, and from a card.
-  await page.goto(`${app.url}/p/tapis-fraicheur`);
+  await page.goto(`${app.url}/couchage/tapis/tapis-fraicheur`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "Tapis fraîcheur",
   );
@@ -532,23 +533,23 @@ test("the storefront shows the catalogue in French", async ({
   const listed = await (await request.get(`${app.url}/sitemap-pages.xml`)).text();
   expect(listed).toContain(`<url><loc>${app.url}/</loc></url>`);
   expect(listed).toContain(`<url><loc>${app.url}/boutique</loc></url>`);
-  expect(listed).toMatch(new RegExp(`<url><loc>${app.url}/c/couchage</loc><lastmod>\\d{4}-\\d{2}-\\d{2}</lastmod></url>`));
-  expect(listed).toContain(`<loc>${app.url}/c/tapis</loc>`);
+  expect(listed).toMatch(new RegExp(`<url><loc>${app.url}/couchage</loc><lastmod>\\d{4}-\\d{2}-\\d{2}</lastmod></url>`));
+  expect(listed).toContain(`<loc>${app.url}/couchage/tapis</loc>`);
   // A page is listed once its text is published, at the shop's address for it.
   expect(listed).toContain(`<loc>${app.url}/politique-de-livraison</loc>`);
   expect(listed).not.toContain("mentions-legales");
   const sold = await (await request.get(`${app.url}/sitemap-products.xml?part=1`)).text();
-  expect(sold).toMatch(new RegExp(`<url><loc>${app.url}/p/tapis-fraicheur</loc><lastmod>\\d{4}-\\d{2}-\\d{2}</lastmod></url>`));
-  expect(sold).toContain(`<loc>${app.url}/p/collier-etoile</loc>`);
+  expect(sold).toMatch(new RegExp(`<url><loc>${app.url}/couchage/tapis/tapis-fraicheur</loc><lastmod>\\d{4}-\\d{2}-\\d{2}</lastmod></url>`));
+  expect(sold).toContain(`<loc>${app.url}/couchage/tapis/collier-etoile</loc>`);
   expect((await request.get(`${app.url}/sitemap-products.xml?part=2`)).status()).toBe(404);
   // A page a search engine has no use for says so; a listing does once it
   // is narrowed or sorted, not as it is.
   const noindex = page.locator("meta[name=robots][content=noindex]");
-  await page.goto(`${app.url}/c/tapis`);
+  await page.goto(`${app.url}/couchage/tapis`);
   await expect(noindex).toHaveCount(0);
-  await page.goto(`${app.url}/c/tapis?sort=price_asc`);
+  await page.goto(`${app.url}/couchage/tapis?sort=price_asc`);
   await expect(noindex).toHaveCount(1);
-  await page.goto(`${app.url}/c/tapis?couleur=rose`);
+  await page.goto(`${app.url}/couchage/tapis?couleur=rose`);
   await expect(noindex).toHaveCount(1);
   await page.goto(`${app.url}/boutique`);
   await expect(noindex).toHaveCount(0);
@@ -569,19 +570,19 @@ test("the storefront shows the catalogue in French", async ({
   await expect(meta("og:site_name")).toHaveAttribute("content", "Ma boutique");
   expect((await data()).map((d) => d["@type"])).toEqual(["Organization", "WebSite"]);
   // A listing sorted or filtered names the plain one.
-  await page.goto(`${app.url}/c/tapis?sort=price_asc&couleur=rose`);
-  await expect(canonical).toHaveAttribute("href", `${app.url}/c/tapis`);
+  await page.goto(`${app.url}/couchage/tapis?sort=price_asc&couleur=rose`);
+  await expect(canonical).toHaveAttribute("href", `${app.url}/couchage/tapis`);
   const [trail] = await data();
   expect(trail["@type"]).toBe("BreadcrumbList");
   expect(trail.itemListElement.map((item: { name: string; item: string }) => [item.name, item.item])).toEqual([
     ["Accueil", `${app.url}/`],
-    ["Couchage", `${app.url}/c/couchage`],
-    ["Tapis", `${app.url}/c/tapis`],
+    ["Couchage", `${app.url}/couchage`],
+    ["Tapis", `${app.url}/couchage/tapis`],
   ]);
   expect(rules).toContain("Disallow: /*?*sort=\n");
   // A product sold as is: one offer, its picture at the page's size.
-  await page.goto(`${app.url}/p/tapis-fraicheur`);
-  await expect(canonical).toHaveAttribute("href", `${app.url}/p/tapis-fraicheur`);
+  await page.goto(`${app.url}/couchage/tapis/tapis-fraicheur`);
+  await expect(canonical).toHaveAttribute("href", `${app.url}/couchage/tapis/tapis-fraicheur`);
   await expect(meta("og:type")).toHaveAttribute("content", "product");
   await expect(meta("og:title")).toHaveAttribute("content", "Tapis rafraîchissant pour chat");
   await expect(meta("og:image")).toHaveAttribute("content", /\/1200\/.+\.webp$/);
@@ -592,7 +593,7 @@ test("the storefront shows the catalogue in French", async ({
   expect(matData.name).toBe("Tapis fraîcheur");
   expect(matData.description).toBe("Un tapis qui garde votre chat au frais.");
   expect(matData.offers).toMatchObject({
-    url: `${app.url}/p/tapis-fraicheur`,
+    url: `${app.url}/couchage/tapis/tapis-fraicheur`,
     price: "19.90",
     priceCurrency: "EUR",
     availability: "https://schema.org/InStock",
@@ -601,7 +602,7 @@ test("the storefront shows the catalogue in French", async ({
   expect(matTrail.itemListElement).toHaveLength(4);
   // A product with variants: a group, and an address for each variant,
   // which opens the page on it and still names the product's address.
-  await page.goto(`${app.url}/p/collier-etoile`);
+  await page.goto(`${app.url}/couchage/tapis/collier-etoile`);
   await expect(page.locator("[data-brand]")).toHaveText("Chatounette");
   const [collar] = await data();
   expect(collar["@type"]).toBe("ProductGroup");
@@ -616,7 +617,7 @@ test("the storefront shows the catalogue in French", async ({
     ["Collier étoilé – Bleu", "59.90"],
   ]);
   const blue: string = collar.hasVariant[1].offers.url;
-  expect(blue).toMatch(new RegExp(`^${app.url}/p/collier-etoile\\?v=`));
+  expect(blue).toMatch(new RegExp(`^${app.url}/couchage/tapis/collier-etoile\\?v=`));
   await expect(page.locator("[data-variants] a").nth(1)).toHaveAttribute("href", blue.slice(app.url.length));
   expect(collar.hasVariant[1].offers.priceSpecification).toMatchObject({
     priceType: "https://schema.org/StrikethroughPrice",
@@ -627,7 +628,7 @@ test("the storefront shows the catalogue in French", async ({
   await expect(page.locator("[data-shown-variant]")).toHaveText("59,90€");
   await expect(page.locator("s[data-compare-at]")).toHaveText("Ancien prix : 69,90€");
   await expect(page.locator("select[data-option=Couleur]")).toHaveValue("Bleu");
-  await expect(canonical).toHaveAttribute("href", `${app.url}/p/collier-etoile`);
+  await expect(canonical).toHaveAttribute("href", `${app.url}/couchage/tapis/collier-etoile`);
   await expect(meta("product:price:amount")).toHaveAttribute("content", "59.90");
   await expect(noindex).toHaveCount(0);
 
@@ -1195,24 +1196,36 @@ test("an address that moved answers with a redirect for good", async ({
     }).toPass({ timeout: 15_000 });
   };
   await leads("/p/tea-cup", null);
-  expect((await answer("/p/blue-mug"))[0]).toBe(200);
+  // A product is read under the category it is filed under; its own route
+  // and the category's lead there, and so does a path that names it
+  // under nothing or under a category it is not in.
+  expect((await answer("/mugs/blue-mug"))[0]).toBe(200);
+  expect((await answer("/mugs"))[0]).toBe(200);
+  await leads("/p/blue-mug", "/mugs/blue-mug");
+  await leads("/p/blue-mug?v=1", "/mugs/blue-mug?v=1");
+  await leads("/c/mugs", "/mugs");
+  await leads("/blue-mug", "/mugs/blue-mug");
+  await leads("/mugs/mugs/blue-mug", "/mugs/blue-mug");
+  await leads("/blue-mug/mugs", "/mugs");
 
   // A product renamed: its old address leads to the new one.
   await page.goto(mug);
   await page.getByLabel("Name", { exact: true }).fill("Tea Cup");
   await page.getByRole("button", { name: "Rename" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Tea Cup");
-  await leads("/p/blue-mug", "/p/tea-cup");
-  expect((await answer("/p/tea-cup"))[0]).toBe(200);
+  await leads("/mugs/blue-mug", "/mugs/tea-cup");
+  await leads("/p/blue-mug", "/mugs/tea-cup");
+  expect((await answer("/mugs/tea-cup"))[0]).toBe(200);
   // A browser lands on the product, which names its new address.
   await page.goto(`${app.url}/p/blue-mug`);
-  await expect(page).toHaveURL(`${app.url}/p/tea-cup`);
-  await expect(page.locator("link[rel=canonical]")).toHaveAttribute("href", `${app.url}/p/tea-cup`);
+  await expect(page).toHaveURL(`${app.url}/mugs/tea-cup`);
+  await expect(page.locator("link[rel=canonical]")).toHaveAttribute("href", `${app.url}/mugs/tea-cup`);
 
   // A product archived: its address leads to the category it was in.
   await page.goto(old);
   await page.getByRole("button", { name: "Archive" }).click();
-  await leads("/p/old-mug", "/c/mugs");
+  await leads("/p/old-mug", "/mugs");
+  await leads("/mugs/old-mug", "/mugs");
 
   // A page moved to the address the shop serves it at.
   expect((await answer("/livraison"))[0]).toBe(404);
@@ -1225,13 +1238,13 @@ test("an address that moved answers with a redirect for good", async ({
   await page.goto(`/t/${slug}/redirects`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Redirects");
   await page.getByLabel("Old path").fill("/products/blue-mug/");
-  await page.getByLabel("Sends to").fill("/p/tea-cup");
+  await page.getByLabel("Sends to").fill("/mugs");
   await page.getByRole("button", { name: "Add redirect" }).click();
   await expect(page.getByRole("status")).toContainText("Redirect added");
   const row = page.locator('[data-redirect="/products/blue-mug"]');
-  await expect(row.locator("[data-redirect-to]")).toHaveText("/p/tea-cup");
-  await leads("/products/blue-mug", "/p/tea-cup");
-  await leads("/products/blue-mug/", "/p/tea-cup");
+  await expect(row.locator("[data-redirect-to]")).toHaveText("/mugs");
+  await leads("/products/blue-mug", "/mugs");
+  await leads("/products/blue-mug/", "/mugs");
   // Checked: no chain, nothing twice, nowhere outside the shop.
   for (const [from, to, refusal] of [
     ["/products/blue-mug", "/p/other", "already redirects"],
@@ -1250,10 +1263,11 @@ test("an address that moved answers with a redirect for good", async ({
   const posted = await request.post(`${app.url}/products/blue-mug`, { maxRedirects: 0 });
   expect(posted.status()).not.toBe(308);
 
-  // Deleted, the old path is unknown again.
+  // Deleted, the old path is the shop's to answer again: it ends with a
+  // slug the product left, which leads to the product wherever it is.
   await row.getByRole("button", { name: "Delete the redirect from /products/blue-mug" }).click();
   await expect(page.getByRole("status")).toContainText("Redirect deleted.");
-  await leads("/products/blue-mug", null);
+  await leads("/products/blue-mug", "/mugs/tea-cup");
 });
 
 test("a category opens on the products put first, then its guide and the questions it answers", async ({
@@ -1394,12 +1408,12 @@ test("a listing is narrowed by the options the merchant marks as filters", async
   const medium = filters.locator("[data-filter=taille][data-filter-value=m]");
   await expect(medium).toHaveAttribute("rel", "nofollow");
   await medium.click();
-  await expect(page).toHaveURL(`${app.url}/c/chat?taille=m`);
+  await expect(page).toHaveURL(`${app.url}/chat?taille=m`);
   await expect(page.locator("[data-results]")).toHaveAttribute("data-results", "2");
   await expect(page.locator("ul.catalog > li[data-product]")).toHaveCount(2);
   await expect(medium).toHaveAttribute("aria-current", "true");
   await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", "noindex");
-  await expect(page.locator("link[rel=canonical]")).toHaveAttribute("href", `${app.url}/c/chat`);
+  await expect(page.locator("link[rel=canonical]")).toHaveAttribute("href", `${app.url}/chat`);
   // The other filter counts what is left; a sort keeps the filter.
   await expect(filters.locator("[data-filter=couleur]")).toHaveCount(0);
   await page.locator("[data-sort]").selectOption("price_asc");
@@ -1427,7 +1441,7 @@ test("a listing is narrowed by the options the merchant marks as filters", async
   }).toPass({ timeout: 15_000 });
   await filters.locator("summary").click();
   await filters.locator("[data-filter=matiere][data-filter-value=nylon]").click();
-  await expect(page).toHaveURL(`${app.url}/c/chat?matiere=nylon`);
+  await expect(page).toHaveURL(`${app.url}/chat?matiere=nylon`);
   await expect(page.locator("ul.catalog > li[data-product]")).toHaveAttribute("data-product", "collier");
   // A search is narrowed by it too.
   await page.goto(`${app.url}/boutique?q=collier&matiere=nylon`);
@@ -1660,7 +1674,7 @@ test("the blog lists the merchant's articles, each with its contents and the pro
   await expect(blocks).toHaveCount(2);
   await expect(blocks.nth(0).locator("[data-product=tapis-bleu] [data-price]")).toHaveText("19,90€");
   await expect(blocks.nth(0).locator("[data-article-category]")).toHaveCount(0);
-  await expect(blocks.nth(1).locator("[data-article-category]")).toHaveAttribute("href", "/c/tapis");
+  await expect(blocks.nth(1).locator("[data-article-category]")).toHaveAttribute("href", "/tapis");
   await expect(blocks.nth(1).locator("[data-product=tapis-bleu]")).toBeVisible();
   await expect(shown).not.toContainText("never-was");
 
@@ -1957,6 +1971,118 @@ test("the shop is read under an address of its own in each of its languages", as
   expect((await request.get(`${SHOP}/en/robots.txt`)).url()).toBe(`${SHOP}/robots.txt`);
 });
 
+test("a product is read under the category it was opened from", async ({ page, request }) => {
+  const SHOP = app.url;
+  await registerWithEmail(page, uniqueEmail("merchant"));
+  const { name, slug } = uniqueTenant("Paths Shop");
+  await createTenant(page, name);
+  // A mouse filed under "Jeux / Souris", then under "Cadeaux" too, and a
+  // ball filed nowhere.
+  await createCategory(page, slug, "Jeux");
+  await createCategory(page, slug, "Souris", "Jeux");
+  await createCategory(page, slug, "Cadeaux");
+  const mouse = await publishProduct(page, slug, "Peluche", "6.90", "Souris");
+  await fileUnder(page, mouse, "Cadeaux");
+  await publishProduct(page, slug, "Balle", "2.90");
+  await app.start(request, await mintKey(page, slug, true), 2);
+
+  const canonical = page.locator("link[rel=canonical]");
+  const crumbs = page.locator("[data-crumbs] a");
+  /// Where `path` answers from, without following.
+  const answer = async (path: string) => {
+    const response = await request.get(`${SHOP}${path}`, { maxRedirects: 0 });
+    return [response.status(), response.headers()["location"] ?? null];
+  };
+
+  // A category's page is at its path in the tree, and lists the product
+  // under itself.
+  await expect(async () => {
+    await page.goto(`${SHOP}/jeux/souris`);
+    await expect(page.locator("[data-product=peluche]")).toHaveCount(1, { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(canonical).toHaveAttribute("href", `${SHOP}/jeux/souris`);
+  await expect(crumbs).toHaveText(["Accueil", "Jeux"]);
+  await expect(crumbs.nth(1)).toHaveAttribute("href", "/jeux");
+  await page.locator("[data-product=peluche] h3 a").click();
+  await expect(page).toHaveURL(`${SHOP}/jeux/souris/peluche`);
+  await expect(crumbs).toHaveText(["Accueil", "Jeux", "Souris"]);
+  await expect(crumbs.nth(2)).toHaveAttribute("href", "/jeux/souris");
+  // It is the first it was filed under, so the address search engines
+  // are told.
+  await expect(canonical).toHaveAttribute("href", `${SHOP}/jeux/souris/peluche`);
+
+  // Opened from the other category it is read there, with that
+  // category's breadcrumb; the address search engines keep is the same.
+  await page.goto(`${SHOP}/cadeaux`);
+  await page.locator("[data-product=peluche] h3 a").click();
+  await expect(page).toHaveURL(`${SHOP}/cadeaux/peluche`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Peluche");
+  await expect(crumbs).toHaveText(["Accueil", "Cadeaux"]);
+  await expect(canonical).toHaveAttribute("href", `${SHOP}/jeux/souris/peluche`);
+  expect((await answer("/cadeaux/peluche"))[0]).toBe(200);
+  expect((await answer("/jeux/souris/peluche"))[0]).toBe(200);
+  // A page that lists it from a category above its own, or from no
+  // category, links its default address.
+  await page.goto(`${SHOP}/jeux`);
+  await expect(page.locator("[data-product=peluche] h3 a")).toHaveAttribute("href", "/jeux/souris/peluche");
+  await page.goto(`${SHOP}/boutique`);
+  await expect(page.locator("[data-product=peluche] h3 a")).toHaveAttribute("href", "/jeux/souris/peluche");
+  await expect(page.locator("[data-product=balle] h3 a")).toHaveAttribute("href", "/p/balle");
+  expect(await (await request.get(`${SHOP}/search?q=peluche`)).text()).toContain('href="/jeux/souris/peluche"');
+  // And so does the cart.
+  await page.goto(`${SHOP}/cadeaux/peluche`);
+  await page.getByRole("button", { name: "Ajouter au panier" }).first().click();
+  await expect(page.locator("[data-cart-drawer].open .drawer-panel")).toContainText("Peluche");
+  await expect(page).toHaveURL(new RegExp(`^${SHOP}/cadeaux/peluche`));
+  await page.goto(`${SHOP}/cart`);
+  await expect(page.locator("main").getByRole("link", { name: "Peluche" }).first()).toHaveAttribute(
+    "href",
+    "/jeux/souris/peluche",
+  );
+
+  // The routes the pages had before, and a path that is not the thing's
+  // own, move to it for good; one that names nothing is a 404.
+  expect(await answer("/p/peluche")).toEqual([308, "/jeux/souris/peluche"]);
+  expect(await answer("/c/souris")).toEqual([308, "/jeux/souris"]);
+  expect(await answer("/souris")).toEqual([308, "/jeux/souris"]);
+  expect(await answer("/cadeaux/souris?sort=newest")).toEqual([308, "/jeux/souris?sort=newest"]);
+  expect(await answer("/jeux/peluche")).toEqual([308, "/jeux/souris/peluche"]);
+  expect(await answer("/peluche")).toEqual([308, "/jeux/souris/peluche"]);
+  expect(await answer("/jeux/souris/nothing")).toEqual([404, null]);
+  expect(await answer("/nothing/peluche/more")).toEqual([404, null]);
+  // A product filed nowhere keeps its own route.
+  expect((await answer("/p/balle"))[0]).toBe(200);
+  expect(await answer("/jeux/balle")).toEqual([308, "/p/balle"]);
+  // Search engines are given each thing once, at its own address.
+  const listed = await (await request.get(`${SHOP}/sitemap-pages.xml`)).text();
+  expect(listed).toContain(`<loc>${SHOP}/jeux/souris</loc>`);
+  expect(listed).not.toContain("/c/");
+  const sold = await (await request.get(`${SHOP}/sitemap-products.xml?part=1`)).text();
+  expect(sold).toContain(`<loc>${SHOP}/jeux/souris/peluche</loc>`);
+  expect(sold).not.toContain("/cadeaux/peluche");
+  expect(sold).toContain(`<loc>${SHOP}/p/balle</loc>`);
+
+  // The merchant picks the other category as its main one: the default
+  // address moves there, and both still answer.
+  await page.goto(`${mouse}?tab=categories`);
+  await page.getByLabel("Its address is under").selectOption({ label: "Cadeaux" });
+  await page.getByRole("button", { name: "Set main category" }).click();
+  await expect(page.getByRole("status")).toContainText("Main category set.");
+  await expect(async () => {
+    expect(await answer("/p/peluche")).toEqual([308, "/cadeaux/peluche"]);
+  }).toPass({ timeout: 15_000 });
+  await page.goto(`${SHOP}/jeux/souris/peluche`);
+  await expect(canonical).toHaveAttribute("href", `${SHOP}/cadeaux/peluche`);
+  await expect(crumbs).toHaveText(["Accueil", "Jeux", "Souris"]);
+  // Taken out of a category, its address there moves to the one it has.
+  await page.goto(`${mouse}?tab=categories`);
+  await page.locator("[data-membership=souris]").getByRole("button", { name: "Remove" }).click();
+  await expect(page.locator("[data-membership=souris]")).toHaveCount(0);
+  await expect(async () => {
+    expect(await answer("/jeux/souris/peluche")).toEqual([308, "/cadeaux/peluche"]);
+  }).toPass({ timeout: 15_000 });
+});
+
 test("the shop shows what a merchant translated, at the slugs of each language", async ({
   page,
   request,
@@ -2000,8 +2126,8 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   const key = await mintKey(page, slug, true);
   await app.start(request, key, 2);
   await expect(async () => {
-    expect((await request.get(`${SHOP}/en/p/cat-tree`)).status()).toBe(200);
-    expect((await request.get(`${SHOP}/en/c/cats`)).status()).toBe(200);
+    expect((await request.get(`${SHOP}/en/cats/cat-tree`)).status()).toBe(200);
+    expect((await request.get(`${SHOP}/en/cats`)).status()).toBe(200);
     expect((await request.get(`${SHOP}/en/legal-notice`)).status()).toBe(200);
   }).toPass({ timeout: 15_000 });
 
@@ -2012,37 +2138,37 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   await expect(page.locator("[data-product=griffoir]")).toContainText("Griffoir");
   await expect(page.locator("[data-product=arbre-a-chat]")).toHaveCount(0);
   await page.locator("[data-product=cat-tree]").getByRole("link", { name: "Cat Tree" }).first().click();
-  await expect(page).toHaveURL(`${SHOP}/en/p/cat-tree`);
+  await expect(page).toHaveURL(`${SHOP}/en/cats/cat-tree`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Cat Tree");
   await expect(page.locator("[data-description]")).toContainText("Three floors of sisal.");
   await expect(page).toHaveTitle(/Cat Tree/);
   // The breadcrumb names the category in English, at its English address.
-  await expect(page.locator("[data-crumbs]").getByRole("link", { name: "Cats" })).toHaveAttribute("href", "/en/c/cats");
+  await expect(page.locator("[data-crumbs]").getByRole("link", { name: "Cats" })).toHaveAttribute("href", "/en/cats");
   // Each language's own address, for search engines and for the footer.
-  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", `${SHOP}/en/p/cat-tree`);
-  await expect(page.locator('link[rel="alternate"][hreflang="fr"]')).toHaveAttribute("href", `${SHOP}/p/arbre-a-chat`);
-  await expect(page.locator('link[rel="alternate"][hreflang="en"]')).toHaveAttribute("href", `${SHOP}/en/p/cat-tree`);
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", `${SHOP}/en/cats/cat-tree`);
+  await expect(page.locator('link[rel="alternate"][hreflang="fr"]')).toHaveAttribute("href", `${SHOP}/chats/arbre-a-chat`);
+  await expect(page.locator('link[rel="alternate"][hreflang="en"]')).toHaveAttribute("href", `${SHOP}/en/cats/cat-tree`);
   await page.locator("[data-languages]").getByRole("link", { name: "Français" }).click();
-  await expect(page).toHaveURL(`${SHOP}/p/arbre-a-chat`);
+  await expect(page).toHaveURL(`${SHOP}/chats/arbre-a-chat`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Arbre à chat");
-  await expect(page.locator('link[rel="alternate"][hreflang="en"]')).toHaveAttribute("href", `${SHOP}/en/p/cat-tree`);
+  await expect(page.locator('link[rel="alternate"][hreflang="en"]')).toHaveAttribute("href", `${SHOP}/en/cats/cat-tree`);
 
   // One address a language: the main slug moves to the English one in
   // English, and the English one is nothing in French.
   await page.goto(`${SHOP}/en/p/arbre-a-chat`);
-  await expect(page).toHaveURL(`${SHOP}/en/p/cat-tree`);
+  await expect(page).toHaveURL(`${SHOP}/en/cats/cat-tree`);
   expect((await request.get(`${SHOP}/p/cat-tree`)).status()).toBe(404);
   // A product without a translation is read at its main slug.
   await page.goto(`${SHOP}/en/p/griffoir`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Griffoir");
-  await expect(page.locator('link[rel="alternate"][hreflang="fr"]')).toHaveAttribute("href", `${SHOP}/p/griffoir`);
+  await expect(page.locator('link[rel="alternate"][hreflang="fr"]')).toHaveAttribute("href", `${SHOP}/chats/griffoir`);
 
   // The category, the same way.
   await page.goto(`${SHOP}/en/c/chats`);
-  await expect(page).toHaveURL(`${SHOP}/en/c/cats`);
+  await expect(page).toHaveURL(`${SHOP}/en/cats`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Cats");
   await expect(page.locator("[data-product=cat-tree]")).toContainText("Cat Tree");
-  await expect(page.locator('link[rel="alternate"][hreflang="fr"]')).toHaveAttribute("href", `${SHOP}/c/chats`);
+  await expect(page.locator('link[rel="alternate"][hreflang="fr"]')).toHaveAttribute("href", `${SHOP}/chats`);
   await page.goto(`${SHOP}/c/chats`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Chats");
   await expect(page.locator("[data-product=arbre-a-chat]")).toContainText("Arbre à chat");
@@ -2053,16 +2179,16 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   expect(index).toContain(`<loc>${SHOP}/en/sitemap-pages.xml</loc>`);
   expect(index).toContain(`<loc>${SHOP}/en/sitemap-products.xml?part=1</loc>`);
   const englishProducts = await (await request.get(`${SHOP}/en/sitemap-products.xml?part=1`)).text();
-  expect(englishProducts).toContain(`<loc>${SHOP}/en/p/cat-tree</loc>`);
-  expect(englishProducts).toContain(`<loc>${SHOP}/en/p/griffoir</loc>`);
+  expect(englishProducts).toContain(`<loc>${SHOP}/en/cats/cat-tree</loc>`);
+  expect(englishProducts).toContain(`<loc>${SHOP}/en/cats/griffoir</loc>`);
   expect(englishProducts).not.toContain("arbre-a-chat");
   const frenchProducts = await (await request.get(`${SHOP}/sitemap-products.xml?part=1`)).text();
-  expect(frenchProducts).toContain(`<loc>${SHOP}/p/arbre-a-chat</loc>`);
+  expect(frenchProducts).toContain(`<loc>${SHOP}/chats/arbre-a-chat</loc>`);
   expect(frenchProducts).not.toContain("/en/");
   const englishPages = await (await request.get(`${SHOP}/en/sitemap-pages.xml`)).text();
   expect(englishPages).toContain(`<loc>${SHOP}/en</loc>`);
   expect(englishPages).toContain(`<loc>${SHOP}/en/shop</loc>`);
-  expect(englishPages).toContain(`<loc>${SHOP}/en/c/cats</loc>`);
+  expect(englishPages).toContain(`<loc>${SHOP}/en/cats</loc>`);
   expect(englishPages).toContain(`<loc>${SHOP}/en/legal-notice</loc>`);
 
   // A page of the shop's own, at the address English names it.
@@ -2088,14 +2214,14 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   await expect(page.locator("[data-product=arbre-a-chat]")).toContainText("Arbre à chat");
   const fragment = await (await request.get(`${SHOP}/en/search?q=cat+tree`)).text();
   expect(fragment).toContain('data-search-product="cat-tree"');
-  expect(fragment).toContain('href="/en/p/cat-tree"');
+  expect(fragment).toContain('href="/en/cats/cat-tree"');
   const legal = await (await request.get(`${SHOP}/en/search?q=legal`)).text();
   expect(legal).toContain("Legal notice");
   expect(await (await request.get(`${SHOP}/en/search?q=mentions`)).text()).not.toContain("Mentions légales");
 
   // The cart names its lines as the page that filled it did, and links
   // them to the address of the language; in French it reads in French.
-  await page.goto(`${SHOP}/en/p/cat-tree`);
+  await page.goto(`${SHOP}/en/cats/cat-tree`);
   // The first is the product's own; the related product has one too.
   await page.getByRole("button", { name: "Add to cart" }).first().click();
   const drawer = page.locator("[data-cart-drawer].open .drawer-panel");
@@ -2103,7 +2229,7 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   await page.goto(`${SHOP}/en/cart`);
   await expect(page.locator("main").getByRole("link", { name: "Cat Tree" }).first()).toHaveAttribute(
     "href",
-    "/en/p/cat-tree",
+    "/en/cats/cat-tree",
   );
   await expect(page.locator("main")).not.toContainText("Arbre à chat");
   await page.goto(`${SHOP}/en/checkout`);
@@ -2111,7 +2237,7 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   await page.goto(`${SHOP}/cart`);
   await expect(page.locator("main").getByRole("link", { name: "Arbre à chat" }).first()).toHaveAttribute(
     "href",
-    "/p/arbre-a-chat",
+    "/chats/arbre-a-chat",
   );
 
   // An English address that moved answers from the new one, in English
@@ -2130,11 +2256,11 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   await english.getByLabel("Address in this language").fill("felines");
   await english.getByRole("button", { name: "Save translation" }).click();
   await expect(page.getByRole("status")).toContainText("Translation saved");
-  await leads("/en/p/cat-tree", "/en/p/big-cat-tree");
-  await leads("/en/c/cats", "/en/c/felines");
+  await leads("/en/cats/cat-tree", "/en/felines/big-cat-tree");
+  await leads("/en/cats", "/en/felines");
   await leads("/p/cat-tree", null);
-  await page.goto(`${SHOP}/en/p/cat-tree`);
-  await expect(page).toHaveURL(`${SHOP}/en/p/big-cat-tree`);
+  await page.goto(`${SHOP}/en/cats/cat-tree`);
+  await expect(page).toHaveURL(`${SHOP}/en/felines/big-cat-tree`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Cat Tree");
 });
 
@@ -2209,7 +2335,7 @@ test("the shop words its options, its facts and its filters once, for every prod
   await expect(filters.locator("h3")).toHaveText(["Filter by price", "Filter by colour"]);
   await expect(filters.locator("[data-filter=couleur]")).toHaveText(["Bleu (1)", "Pink (2)"]);
   await filters.locator("[data-filter=couleur][data-filter-value=rose]").click();
-  await expect(page).toHaveURL(`${SHOP}/en/c/chat?couleur=rose`);
+  await expect(page).toHaveURL(`${SHOP}/en/chat?couleur=rose`);
   await expect(page.locator("ul.catalog > li[data-product]")).toHaveCount(2);
   await page.goto(`${SHOP}/c/chat`);
   await filters.locator("summary").click();

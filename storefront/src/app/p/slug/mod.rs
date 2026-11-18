@@ -2,9 +2,8 @@
 //! it, what shoppers said, and what goes with it.
 
 use timada_storefront::{
-    ProductPageLd, breadcrumb_ld, categories, category_path, menu_of, offer_terms,
-    product_categories, product_image, product_ld, product_seo, product_slugs, related_products,
-    require_product, reviews_of, stars,
+    ProductPageLd, breadcrumb_ld, categories, menu_of, offer_terms, product_image, product_ld,
+    product_seo, related_products, require_product, reviews_of, stars,
 };
 use topcoat::{
     Result,
@@ -15,7 +14,7 @@ use topcoat::{
 
 use crate::app::cart::add::{OPTION_FIELD_PREFIX, add};
 use crate::app::words::t;
-use crate::app::{delivery_days, document, money, price_line, product_card, say};
+use crate::app::{address, delivery_days, document, money, price_line, product_card, say};
 
 module_param!(pub slug);
 
@@ -48,36 +47,41 @@ const RELATED: u32 = 4;
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<ProductPageQuery>(cx)?;
     let product = require_product(cx, slug(cx)).await?;
-    // One address a language: asked by another slug of its own (the main
-    // one, where it is translated), it moves to the one it goes by here.
-    if product.slug != slug(cx) {
-        return Err(
-            redirect_permanent(href!(index, slug: product.slug.clone()).resolve(cx)).into(),
-        );
-    }
-    let slugs = product_slugs(cx, &product.id).await?;
+    let paths = address::paths(cx).await?;
+    // Its default address: under its main category, which is the one
+    // search engines are told, or this route for a product filed nowhere.
+    let path = address::product_href(cx, paths, &product);
+    // The category of the path it was asked under, when it was.
+    let under = address::via(cx).and_then(|via| via.category_id.clone());
+    let here = match &under {
+        Some(category_id) => address::product_href_under(cx, paths, category_id, &product),
+        // One address a language, and one place for a product: asked at
+        // this route though it is filed somewhere, or by another slug of
+        // its own (the main one, where it is translated), it moves to its
+        // default address.
+        None if product.slug != slug(cx) || paths.product(&product).is_some() => {
+            return Err(redirect_permanent(format!("{path}{}", address::query_of(cx))).into());
+        }
+        None => path.clone(),
+    };
     let seo = product_seo(cx, &product).await?;
     let reviews = reviews_of(cx, &product, query.reviews.unwrap_or(1)).await?;
-    let slug = product.slug.clone();
-    let reviews_link = move |page: u32| {
-        format!(
-            "{}#reviews",
-            href!(index, slug: slug.clone())
-                .query(ReviewsLink { reviews: page })
-                .resolve(cx)
-        )
+    let reviews_link = {
+        let here = here.clone();
+        move |page: u32| {
+            format!(
+                "{}#reviews",
+                address::with_query(&here, &ReviewsLink { reviews: page })
+            )
+        }
     };
     let tree = categories(cx).await?;
     let nav = menu_of(&tree);
     let related = related_products(cx, &product, RELATED).await?;
-    // The first category it is filed under carries the breadcrumb, with
-    // the categories above it.
-    let crumbs = match product_categories(cx, &product).await?.into_iter().next() {
-        Some(category) => {
-            let mut path = category_path(&tree, &category);
-            path.push(category);
-            path
-        }
+    // The breadcrumb follows the address: the category it was asked
+    // under, else its main one, with the categories above it.
+    let crumbs = match under.as_deref().or_else(|| paths.main(&product.categories)) {
+        Some(category_id) => address::trail(&tree, category_id),
         None => Vec::new(),
     };
     let varies = product.price_range().is_some_and(|range| range.varies());
@@ -127,28 +131,29 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let variant_paths: Vec<String> = product
         .variants
         .iter()
-        .map(|variant| {
-            href!(index, slug: product.slug.clone())
-                .query(VariantLink { v: &variant.id })
-                .resolve(cx)
-        })
+        .map(|variant| address::with_query(&here, &VariantLink { v: &variant.id }))
+        .collect();
+    // And the one search engines list it at, under the default address.
+    let variant_listings: Vec<String> = product
+        .variants
+        .iter()
+        .map(|variant| address::with_query(&path, &VariantLink { v: &variant.id }))
         .collect();
 
-    // For search engines: one address for the product whatever variant or
-    // page of reviews is open, and what this page shows as data.
-    let path = href!(index, slug: product.slug.clone()).resolve(cx);
+    // For search engines: one address for the product whatever category
+    // it was reached from and whatever variant or page of reviews is open,
+    // and what this page shows as data.
     let speaking = crate::app::lang::speaking(cx).await;
+    let there = crate::app::lang::product_elsewhere(cx, &product).await?;
     let elsewhere = speaking.elsewhere(&path, |language| {
-        href!(index, slug: slugs.in_language(language).to_owned()).resolve(cx)
+        crate::app::lang::there(&there, language, &path)
     });
     let canonical = speaking.absolute(cx, &path);
     let home = speaking.absolute(cx, &href!(crate::app::index).resolve(cx));
     let trail: Vec<(String, String)> = crumbs
         .iter()
         .map(|crumb| {
-            let path =
-                href!(crate::app::c::slug::index, crate::app::c::slug::slug: crumb.slug.clone())
-                    .resolve(cx);
+            let path = address::category_href(cx, paths, crumb);
             (crumb.name.clone(), speaking.absolute(cx, &path))
         })
         .collect();
@@ -166,7 +171,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             },
             |variant| {
                 let position = product.variants.iter().position(|v| v.id == variant.id);
-                speaking.absolute(cx, position.map_or(path.as_str(), |n| &variant_paths[n]))
+                speaking.absolute(cx, position.map_or(path.as_str(), |n| &variant_listings[n]))
             },
         ),
         breadcrumb_ld(
@@ -208,7 +213,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <a href=(href!(crate::app::index))>(t!(shell_home))</a>
                     for crumb in &crumbs {
                         " / "
-                        <a href=(href!(crate::app::c::slug::index, crate::app::c::slug::slug: crumb.slug.clone()))>(&crumb.name)</a>
+                        <a href=(address::category_href(cx, paths, crumb))>(&crumb.name)</a>
                     }
                     " / " (&product.name)
                 </nav>

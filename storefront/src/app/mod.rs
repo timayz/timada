@@ -9,6 +9,7 @@
 //! inlined in every page, layout only, and no asset bundle.
 
 pub mod account;
+pub mod address;
 pub mod blog;
 pub mod boutique;
 pub mod c;
@@ -92,6 +93,7 @@ pub fn router(store: Store, cookie_key: Key, trusted_proxies: Vec<IpNet>) -> Rou
     module_router!()
         .discover()
         .layer(UnavailablePage)
+        .layer(address::Addresses)
         .layer(moved::MovedAddress)
         .layer(LayerFn::new(Some("/orders"), pass).with(BodyLimit::max(REVIEW_LIMIT)))
         // At `/` and before the cookie layer, which then runs outside it.
@@ -563,9 +565,20 @@ pub async fn site_footer(
 /// A product's card, as the listings show it: the picture, the name, the
 /// price (a range across the variants) and the button: a product sold as
 /// is goes straight into the cart, one with options sends to its page.
+///
+/// On a category's page (`under`, its id) the card links the product
+/// under that category; anywhere else, under its main one.
 #[topcoat::view::component]
-pub async fn product_card(cx: &Cx, product: &Product) -> Result<impl View> {
-    let link = href!(p::slug::index, p::slug::slug: product.slug.clone()).resolve(cx);
+pub async fn product_card(
+    cx: &Cx,
+    product: &Product,
+    #[default] under: Option<&str>,
+) -> Result<impl View> {
+    let paths = address::paths(cx).await?;
+    let link = match under {
+        Some(category_id) => address::product_href_under(cx, paths, category_id, product),
+        None => address::product_href(cx, paths, product),
+    };
     let varies = product.price_range().is_some_and(|range| range.varies());
     let simple = product.options.is_empty();
     // Where the cart drawer opens after the add: this very page.
@@ -615,12 +628,17 @@ pub async fn product_card(cx: &Cx, product: &Product) -> Result<impl View> {
 }
 
 /// A grid of product cards: the catalogue, a category and a search share it.
+/// A category's page names itself (`under`), for the cards to link under it.
 #[topcoat::view::component]
-pub async fn catalog_grid(cx: &Cx, products: &[Product]) -> Result<impl View> {
+pub async fn catalog_grid(
+    cx: &Cx,
+    products: &[Product],
+    #[default] under: Option<&str>,
+) -> Result<impl View> {
     Ok(view! {
         <ul class="catalog">
             for product in products {
-                product_card(product: product)
+                product_card(product: product, under: under)
             }
         </ul>
     })
@@ -643,6 +661,7 @@ struct Tile {
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let nav = menu(cx).await?;
+    let paths = address::paths(cx).await?;
     let newest = products(
         cx,
         &ProductQuery::default()
@@ -680,7 +699,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let quotes = recent_reviews(cx, QUOTES).await?;
     let discover = nav
         .first()
-        .map(|node| href!(c::slug::index, c::slug::slug: node.category.slug.clone()).resolve(cx))
+        .map(|node| address::category_href(cx, paths, &node.category))
         .unwrap_or_else(|| href!(boutique::index).resolve(cx));
 
     // Who the shop is, for the name a search result shows.
@@ -732,7 +751,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             for tile in &tiles {
                                 <li>
                                     <a class="tile" data-tile=(&tile.node.category.slug)
-                                        href=(href!(c::slug::index, c::slug::slug: tile.node.category.slug.clone()))>
+                                        href=(address::category_href(cx, paths, &tile.node.category))>
                                         if let Some(image) = &tile.image {
                                             product_image(image: image, attrs: attributes! {})
                                         }

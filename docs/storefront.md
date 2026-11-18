@@ -178,8 +178,12 @@ let mut index = SitemapIndex::new().sitemap(&absolute_url(cx, "/sitemap-pages.xm
 for part in 1..=sitemap_parts(cx).await? { /* index.sitemap(…?part=N) */ }
 // One file of products: at most SITEMAP_PRODUCTS (10,000), oldest first.
 let mut file = Sitemap::new();
+let paths = paths(cx).await?;                          // see "Addresses"
 for product in sitemap_products(cx, part).await? {
-    file = file.url(&absolute_url(cx, &format!("/p/{}", product.slug)), Some(product.updated_at));
+    // Its default address: under its main category.
+    if let Some(path) = paths.filed(&product.categories, &product.slug) {
+        file = file.url(&absolute_url(cx, &path), Some(product.updated_at));
+    }
 }
 let xml = file.xml();                                  // serve as SITEMAP_CONTENT_TYPE
 let txt = robots_txt(&absolute_url(cx, "/sitemap.xml"), &["/cart", "/checkout"]);
@@ -210,7 +214,7 @@ the content:
 use timada_storefront::{ProductPageLd, SocialCard, absolute_url, breadcrumb_ld, json_ld,
     offer_terms, organization_ld, product_ld, website_ld};
 
-let url = absolute_url(cx, &format!("/p/{}", product.slug));     // the canonical address
+let url = absolute_url(cx, &paths.product(&product).unwrap());   // the canonical address
 let card = SocialCard { title: &seo.title, description: &seo.description, url: &url,
     site_name: "Acme", image: product.image().map(|i| i.url.as_str()),
     price: Some((1990, "EUR")) }.tags();                          // Open Graph and Twitter
@@ -471,11 +475,63 @@ from another platform: an old path (no query, a trailing slash aside) and the pa
 the shop it sends to. A redirect never leads to another one.
 
 The storefront does this in one layer (`storefront/src/app/moved.rs`): a `GET` or `HEAD`
-that ends in a 404 is looked up in the merchant's list, then as a product's address
-(`/p/{slug}`), an article's (`/blog/{slug}`), then as one of its own pages, and
-answered with a 308. Each old address
+that ends in a 404 is looked up in the merchant's list, then as an article's address
+(`/blog/{slug}`) or one of its own pages, then by its last part as a slug a product or a
+category left, whatever is before it, and answered with a 308 to where the thing is
+now. Each old address
 goes to its own page, never all of them to the home, and they are kept for as long as
 the product or the page is.
+
+## Addresses
+
+A category's page is at the root, by its full path in the tree, and a product's under
+the path of a category it is filed under, then its slug:
+
+| | |
+| --- | --- |
+| a category | `/jeux-pour-chat/souris` |
+| a product, under each category it is filed under | `/jeux-pour-chat/souris/souris-en-peluche` |
+| a product filed nowhere | the host's (`/p/{slug}` in the storefront) |
+
+A product filed under several categories is read under each: a listing links it under
+the category whose page it is, so the address and the breadcrumb follow where the
+shopper came from. Everything else (a search, the cart, the sitemap, a feed, a mail)
+links its **default address**, under its main category, which its pages also name as
+`canonical`. The main category is the one the merchant picked on the product's
+Categories tab, else the first it was filed under (`Product::categories` lists them,
+the main one first).
+
+```rust
+use timada_storefront::{Addressed, paths, resolve_path};
+
+let paths = paths(cx).await?;              // every live category's path, in the request's language
+paths.category(&category.id);              // Some("/jeux-pour-chat/souris")
+paths.product(&product);                   // Some(".../souris-en-peluche"), None when filed nowhere
+paths.under(&category.id, &product.slug);  // its address under that category
+paths.filed(&line.categories, slug);       // the same default address, for a line of the cart
+
+match resolve_path(cx, &paths, "/jeux-pour-chat/souris/souris-en-peluche").await? {
+    Some(Addressed::Category(slug)) => { /* the category's page */ }
+    Some(Addressed::Product { slug, category_id }) => { /* the product, read under that category */ }
+    Some(Addressed::Moved(path)) => { /* a permanent redirect: a wrong parent, a category it is not in */ }
+    Some(Addressed::Unfiled(slug)) => { /* a product with no path: the host's own route */ }
+    None => { /* nothing: a 404 */ }
+}
+```
+
+A slug names one thing: the catalog refuses a product's slug a category goes by and the
+other way round, and a category takes none of the names the storefront keeps for its
+own pages (`timada_catalog::RESERVED_SLUGS`) nor a language's code. In a request read in
+another language each part of a path is the slug of that language; `paths_in(cx,
+language)` gives another language's, for the `hreflang` links.
+
+The router has no route for a path of any depth, so the storefront keeps its pages
+routed at `/c/{slug}` and `/p/{slug}` and resolves a path in a layer
+(`storefront/src/app/address.rs`): a `GET` no fixed route answered is handed to the
+page it names with topcoat's `rewrite`, carrying the category it was asked under. A
+fixed route therefore always wins over a category of the same name. Asked for directly,
+`/c/{slug}` and `/p/{slug}` of a filed product answer with a permanent redirect to the
+path.
 
 ## Browsing the categories
 
@@ -702,7 +758,7 @@ use timada_storefront::{TranslationKind, translated_slug, translation_of};
 
 // What the product says in English, if it was worded there.
 let english = translation_of(db, TranslationKind::Product, &product.id, "en").await?;
-// Whose address `/en/p/cat-tree` is, as a translation says.
+// Which product goes by `cat-tree` in English, as a translation says.
 let id = translated_slug(db, TranslationKind::Product, "en", "cat-tree").await?;
 ```
 
@@ -1306,7 +1362,7 @@ French names the pages its own way.
 | --- | --- |
 | `/` | `/en` |
 | `/boutique` | `/en/shop` |
-| `/p/arbre-a-chat` | `/en/p/arbre-a-chat` |
+| `/chats/arbre-a-chat` | `/en/cats/cat-tree` |
 | `/mentions-legales` | `/en/legal-notice` |
 
 `storefront/src/app/lang.rs` holds it all. The pages stay routed at their French
@@ -1346,8 +1402,8 @@ as they are.
 - **Slugs.** A product, a category and an article come back under the slug they go by in
   the language. `product_by_slug` (and the two like it) finds one by that slug, or by
   its main slug; the page compares the slug asked with the one returned and answers the
-  other with a permanent redirect, so `/en/p/arbre-a-chat` moves to `/en/p/cat-tree`.
-  In French `/p/cat-tree` is nothing.
+  other with a permanent redirect, so `/en/chats/arbre-a-chat` moves to
+  `/en/cats/cat-tree`. In French `/chats/cat-tree` is nothing.
 - **The other languages' addresses.** `product_slugs`, `category_slugs` and
   `article_slugs` give a thing's slug in every language (`Slugs::in_language`); a page
   hands `document` the paths with `speaking.elsewhere(…)`, for the `hreflang` links and

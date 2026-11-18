@@ -5,8 +5,7 @@
 
 use timada_storefront::{
     ProductQuery, ProductSort, breadcrumb_ld, categories, category_hub, category_path,
-    category_seo, category_slugs, find_category, menu_of, option_values, products,
-    require_category,
+    category_seo, find_category, menu_of, option_values, products, require_category,
 };
 use topcoat::{
     Result,
@@ -16,9 +15,11 @@ use topcoat::{
 };
 
 use crate::app::{
+    address,
     boutique::PER_PAGE,
     catalog_grid, document,
     filters::{Filters, Panel, filter_fields, filter_panel, shop_filters},
+    lang,
     words::{Worded, t},
 };
 
@@ -77,13 +78,21 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // even when the merchant left it out of the menu.
     let tree = categories(cx).await?;
     let nav = menu_of(&tree);
+    let paths = address::paths(cx).await?;
     let Some(node) = find_category(&tree, slug(cx)) else {
         // One address a language: asked by its main slug where it is
         // translated, it moves to the one it goes by here.
         let category = require_category(cx, slug(cx)).await?;
-        return Err(redirect_permanent(href!(index, slug: category.slug).resolve(cx)).into());
+        let moved = address::category_href(cx, paths, &category);
+        return Err(redirect_permanent(format!("{moved}{}", address::query_of(cx))).into());
     };
     let category = node.category.clone();
+    // Its page is at its path in the tree: asked for at this route, it
+    // moves there for good.
+    let own = address::category_href(cx, paths, &category);
+    if address::via(cx).is_none() {
+        return Err(redirect_permanent(format!("{own}{}", address::query_of(cx))).into());
+    }
     let children = node.children.clone();
     let crumbs = category_path(&tree, &category);
     let seo = category_seo(cx, &category).await?;
@@ -129,18 +138,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     }
     let link = {
         let sort = (sort != DEFAULT_SORT).then(|| sort.as_str());
-        let slug = category.slug.clone();
+        let own = own.clone();
         move |filters: &Filters, number: u32| {
-            filters.onto(
-                href!(index, slug: slug.clone())
-                    .query(CategoryLink {
-                        sort,
-                        page: (number > 1).then_some(number),
-                        min_price: filters.min_price,
-                        max_price: filters.max_price,
-                    })
-                    .resolve(cx),
-            )
+            filters.onto(address::with_query(
+                &own,
+                &CategoryLink {
+                    sort,
+                    page: (number > 1).then_some(number),
+                    min_price: filters.min_price,
+                    max_price: filters.max_price,
+                },
+            ))
         }
     };
     let panel = Panel::build(cx, &filters, &values, |filters| link(filters, 1));
@@ -148,21 +156,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // Search engines keep the plain listing for those, and each page of it
     // for itself.
     let canonical = if narrowed {
-        href!(index, slug: category.slug.clone()).resolve(cx)
+        own.clone()
     } else {
         link(&Filters::default(), page.page)
     };
     let speaking = crate::app::lang::speaking(cx).await;
-    let slugs = category_slugs(cx, &category.id).await?;
-    let elsewhere = speaking.elsewhere(&canonical, |language| {
-        href!(index, slug: slugs.in_language(language).to_owned()).resolve(cx)
-    });
+    let there = lang::category_elsewhere(cx, &category).await?;
+    let elsewhere = speaking.elsewhere(&canonical, |language| lang::there(&there, language, &own));
     let home = speaking.absolute(cx, &href!(crate::app::index).resolve(cx));
     let trail: Vec<(String, String)> = crumbs
         .iter()
         .chain([&category])
         .map(|crumb| {
-            let path = href!(index, slug: crumb.slug.clone()).resolve(cx);
+            let path = address::category_href(cx, paths, crumb);
             (crumb.name.clone(), speaking.absolute(cx, &path))
         })
         .collect();
@@ -189,7 +195,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <a href=(href!(crate::app::index))>(t!(shell_home))</a>
                     for crumb in &crumbs {
                         " / "
-                        <a href=(href!(index, slug: crumb.slug.clone()))>(&crumb.name)</a>
+                        <a href=(address::category_href(cx, paths, crumb))>(&crumb.name)</a>
                     }
                     " / " (&category.name)
                 </nav>
@@ -203,7 +209,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             for child in &children {
                                 <li>
                                     <a data-subcategory=(&child.category.slug)
-                                        href=(href!(index, slug: child.category.slug.clone()))>
+                                        href=(address::category_href(cx, paths, &child.category))>
                                         (&child.category.name) " (" (child.product_count) ")"
                                     </a>
                                 </li>
@@ -238,7 +244,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <p>(t!(listing_category_none))</p>
                     }
                 }
-                catalog_grid(products: &page.items)
+                catalog_grid(products: &page.items, under: Some(category.id.as_str()))
                 if page.pages() > 1 {
                     <nav class="pages" aria-label=(t!(listing_pages))>
                         if page.has_prev() { <a href=(link(&filters, page.page - 1))>(t!(listing_previous))</a> }

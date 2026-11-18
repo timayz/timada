@@ -1,11 +1,12 @@
 //! What a search engine is told to read: the addresses of a sitemap, read
 //! off the local copy so they answer when the store is away, and the XML
-//! and `robots.txt` they are written as. Which address a product, a
-//! category, a page or an article has is the host's: the library gives the slugs and
-//! writes the files.
+//! and `robots.txt` they are written as. Which address a page or an
+//! article has is the host's: the library gives the slugs and writes the
+//! files. A category and a product are listed at their path
+//! ([`Paths`](crate::Paths)), a product at its default one alone.
 
 use timada_core::civil::format_date;
-use timada_core::db::{Db, FromRow};
+use timada_core::db::{Db, FromRow, Json, Row};
 use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
 
@@ -18,10 +19,26 @@ pub const SITEMAP_PRODUCTS: u32 = 10_000;
 
 /// Something a sitemap lists: its slug, and when it last changed (unix
 /// seconds).
-#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SitemapEntry {
+    pub id: String,
     pub slug: String,
     pub updated_at: i64,
+    /// For a product, the categories it is filed under, its main one
+    /// first: what [`Paths::filed`](crate::Paths::filed) makes its address
+    /// of. Empty for anything else.
+    pub categories: Vec<String>,
+}
+
+impl FromRow for SitemapEntry {
+    fn from_row(row: &Row<'_>) -> anyhow::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            slug: row.get("slug")?,
+            updated_at: row.get("updated_at")?,
+            categories: row.get::<Json<_>>("filed_json")?.0,
+        })
+    }
 }
 
 /// How many files the published products fill, [`SITEMAP_PRODUCTS`] each:
@@ -43,7 +60,7 @@ pub async fn published_sitemap_products(db: &Db, part: u32) -> anyhow::Result<Ve
         return Ok(Vec::new());
     };
     db.fetch_all(
-        "SELECT p.slug, p.updated_at
+        "SELECT p.id, p.slug, p.updated_at, p.filed_json
          FROM storefront_category_products cp
          JOIN storefront_products p ON p.id = cp.product_id
          WHERE cp.category_id = ?1
@@ -60,7 +77,8 @@ pub async fn published_sitemap_products(db: &Db, part: u32) -> anyhow::Result<Ve
 /// The live categories, in no particular order.
 pub async fn published_sitemap_categories(db: &Db) -> anyhow::Result<Vec<SitemapEntry>> {
     db.fetch_all(
-        "SELECT slug, updated_at FROM storefront_categories WHERE archived = 0 ORDER BY id",
+        "SELECT id, slug, updated_at, '[]' AS filed_json FROM storefront_categories
+         WHERE archived = 0 ORDER BY id",
         (),
     )
     .await
@@ -70,7 +88,8 @@ pub async fn published_sitemap_categories(db: &Db) -> anyhow::Result<Vec<Sitemap
 /// for.
 pub async fn published_sitemap_pages(db: &Db) -> anyhow::Result<Vec<SitemapEntry>> {
     db.fetch_all(
-        "SELECT slug, max(updated_at) AS updated_at FROM storefront_pages GROUP BY slug ORDER BY slug",
+        "SELECT min(id) AS id, slug, max(updated_at) AS updated_at, '[]' AS filed_json
+         FROM storefront_pages GROUP BY slug ORDER BY slug",
         (),
     )
     .await
@@ -83,7 +102,7 @@ pub const SITEMAP_ARTICLES: u32 = 10_000;
 /// The published articles of the blog, the most recent first.
 pub async fn published_sitemap_articles(db: &Db) -> anyhow::Result<Vec<SitemapEntry>> {
     db.fetch_all(
-        "SELECT slug, updated_at FROM storefront_articles
+        "SELECT id, slug, updated_at, '[]' AS filed_json FROM storefront_articles
          INDEXED BY storefront_articles_published
          ORDER BY published_at DESC, id DESC LIMIT ?1",
         (i64::from(SITEMAP_ARTICLES),),
@@ -114,7 +133,7 @@ pub async fn published_sitemap_products_in(
     };
     db.fetch_all(
         &format!(
-            "SELECT {} AS slug, p.updated_at
+            "SELECT p.id, {} AS slug, p.updated_at, p.filed_json
              FROM storefront_category_products cp
              JOIN storefront_products p ON p.id = cp.product_id
              WHERE cp.category_id = ?1
@@ -138,7 +157,7 @@ pub async fn published_sitemap_categories_in(
 ) -> anyhow::Result<Vec<SitemapEntry>> {
     db.fetch_all(
         &format!(
-            "SELECT {} AS slug, c.updated_at FROM storefront_categories c
+            "SELECT c.id, {} AS slug, c.updated_at, '[]' AS filed_json FROM storefront_categories c
              WHERE c.archived = 0 ORDER BY c.id",
             slug_in("storefront_translations", "category", "c", 1)
         ),
@@ -154,7 +173,7 @@ pub async fn published_sitemap_articles_in(
 ) -> anyhow::Result<Vec<SitemapEntry>> {
     db.fetch_all(
         &format!(
-            "SELECT {} AS slug, a.updated_at FROM storefront_articles a
+            "SELECT a.id, {} AS slug, a.updated_at, '[]' AS filed_json FROM storefront_articles a
              INDEXED BY storefront_articles_published
              ORDER BY a.published_at DESC, a.id DESC LIMIT ?2",
             slug_in("storefront_text_translations", "article", "a", 1)
@@ -387,12 +406,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(published_sitemap_parts(&db).await.unwrap(), 1);
-        let entry = |slug: &str, updated_at| SitemapEntry {
-            slug: slug.to_owned(),
-            updated_at,
-        };
+        let entry = |slug: &str, updated_at: i64| (slug.to_owned(), updated_at);
         assert_eq!(
-            published_sitemap_products(&db, 1).await.unwrap(),
+            listed(published_sitemap_products(&db, 1).await.unwrap()),
             [entry("a-mat", 10), entry("b-mug", 20)]
         );
         assert_eq!(published_sitemap_products(&db, 2).await.unwrap(), []);
@@ -453,19 +469,21 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            published_sitemap_categories(&db).await.unwrap(),
-            [SitemapEntry {
-                slug: "mats".into(),
-                updated_at: 5
-            }]
+            listed(published_sitemap_categories(&db).await.unwrap()),
+            [("mats".to_owned(), 5)]
         );
         assert_eq!(
-            published_sitemap_pages(&db).await.unwrap(),
-            [SitemapEntry {
-                slug: "legal".into(),
-                updated_at: 7
-            }]
+            listed(published_sitemap_pages(&db).await.unwrap()),
+            [("legal".to_owned(), 7)]
         );
+    }
+
+    /// The slug and the date of each entry, in their order.
+    fn listed(entries: Vec<SitemapEntry>) -> Vec<(String, i64)> {
+        entries
+            .into_iter()
+            .map(|entry| (entry.slug, entry.updated_at))
+            .collect()
     }
 
     #[test]

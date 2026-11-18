@@ -65,7 +65,11 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             brand TEXT,
             gtin TEXT,
             mpn TEXT,
-            compare_at_cents INTEGER
+            compare_at_cents INTEGER,
+            -- The ids of the categories it is filed under, its main one
+            -- first (the one its address is under by default), then the
+            -- others in the order it joined them.
+            filed_json TEXT NOT NULL DEFAULT '[]'
         );
         CREATE UNIQUE INDEX storefront_products_slug ON storefront_products (slug)
             WHERE status <> 'archived';

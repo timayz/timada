@@ -139,6 +139,10 @@ pub struct CartLineView {
     pub sku: Option<String>,
     /// The product's handle, when it is still on sale here.
     pub slug: Option<String>,
+    /// The categories it is filed under, its main one first
+    /// ([`Product::categories`](crate::Product::categories)): what
+    /// [`Paths::filed`](crate::Paths::filed) makes its address of.
+    pub categories: Vec<String>,
     /// The variant's picture, else the product's first one.
     pub image_url: Option<String>,
     pub quantity: u32,
@@ -181,6 +185,8 @@ pub struct OfferView {
     pub title: Option<String>,
     /// The product's handle, when it is on sale here.
     pub slug: Option<String>,
+    /// The categories it is filed under, its main one first.
+    pub categories: Vec<String>,
     /// The variant's picture, else the product's first one.
     pub image_url: Option<String>,
     /// What one costs without the offer.
@@ -674,6 +680,7 @@ impl Store {
                 variant_label: line.variant_label.clone(),
                 sku: line.sku.clone(),
                 slug: local.map(|p| p.slug.clone()),
+                categories: local.map(|p| p.categories.clone()).unwrap_or_default(),
                 image_url: local.and_then(|p| picture(p, line.variant_id.as_deref())),
                 quantity: line.quantity,
                 tax_category: tax_category.to_owned(),
@@ -704,6 +711,7 @@ impl Store {
                     variant_label: offer.variant_label.clone(),
                     title: offer.title.clone(),
                     slug: local.map(|p| p.slug.clone()),
+                    categories: local.map(|p| p.categories.clone()).unwrap_or_default(),
                     image_url: local.and_then(|p| picture(p, offer.variant_id.as_deref())),
                     unit_amount_cents: offer.unit_amount_cents,
                     offer_amount_cents: offer.offer_amount_cents,
@@ -724,6 +732,7 @@ impl Store {
                     variant_label: None,
                     sku: None,
                     slug: local.map(|p| p.slug.clone()),
+                    categories: local.map(|p| p.categories.clone()).unwrap_or_default(),
                     image_url: local.and_then(|p| picture(p, None)),
                     quantity: line.quantity,
                     tax_category: timada_catalog::TAX_CATEGORY_STANDARD.to_owned(),

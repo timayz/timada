@@ -118,7 +118,7 @@ impl Shopper<'_> {
     }
 
     async fn category(&mut self) -> Result<()> {
-        let Some(slug) = self
+        let Some(mut path) = self
             .context
             .catalog
             .categories
@@ -127,7 +127,6 @@ impl Shopper<'_> {
         else {
             return Ok(());
         };
-        let mut path = format!("/c/{slug}");
         match self.rng.random_range(0..100) {
             0..70 => {}
             70..85 => path.push_str("?page=2"),
@@ -139,18 +138,18 @@ impl Shopper<'_> {
     }
 
     async fn product(&mut self) -> Result<()> {
-        let Some(slug) = self.context.catalog.products.choose(&mut self.rng).cloned() else {
+        let Some(product) = self.context.catalog.products.choose(&mut self.rng).cloned() else {
             return Ok(());
         };
-        let page = self.visitor.get(&format!("/p/{slug}")).await?;
+        let page = self.visitor.get(&product.path).await?;
         if self.rng.random_bool(self.context.mix.add_to_cart) {
             self.think().await;
-            self.add(&slug, &page.body).await?;
+            self.add(&product, &page.body).await?;
         }
         Ok(())
     }
 
-    async fn add(&mut self, slug: &str, body: &str) -> Result<()> {
+    async fn add(&mut self, product: &site::Listed, body: &str) -> Result<()> {
         let metrics = self.context.http.metrics();
         if site::product_sold_out(body) {
             metrics.count("cart.sold_out");
@@ -162,9 +161,9 @@ impl Shopper<'_> {
             _ => 3,
         };
         let mut form = vec![
-            ("slug", slug.to_owned()),
+            ("slug", product.slug.clone()),
             ("quantity", quantity.to_string()),
-            ("from", format!("/p/{slug}")),
+            ("from", product.path.clone()),
         ];
         let variants = site::variants_on_sale(body);
         if body.contains("data-variants") {

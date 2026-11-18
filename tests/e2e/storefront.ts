@@ -56,7 +56,7 @@ async function createProduct(page: Page, slug: string, name: string) {
 
 /// Files the product at `url` under the category whose menu text contains
 /// `category`, once the category list shows it.
-async function fileUnder(page: Page, url: string, category: string) {
+export async function fileUnder(page: Page, url: string, category: string) {
   await expect(async () => {
     await page.goto(`${url}?tab=categories`);
     await expect(page.getByLabel("Category")).toContainText(category, { timeout: 1000 });
