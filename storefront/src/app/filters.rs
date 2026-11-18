@@ -11,7 +11,7 @@
 //! the products of the plain one again, and search engines are kept out of
 //! it.
 
-use timada_storefront::{FacetValue, ProductQuery, facet_key, listing_filters};
+use timada_storefront::{FacetValue, ProductQuery, facet_key, listing_filters, worded};
 use topcoat::{
     Result,
     context::Cx,
@@ -44,6 +44,9 @@ const RESERVED: &[&str] = &["q", "page", "sort", "min_price", "max_price", "v"];
 pub struct ShopFilter {
     /// As the merchant names the option: "Couleur".
     pub name: String,
+    /// What the visitor reads for it: the shop's word for the name in
+    /// their language ("Colour"), else the name.
+    pub label: String,
     /// What carries it in an address: `couleur`.
     pub key: String,
 }
@@ -62,6 +65,7 @@ fn filters_of<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<ShopFilter> {
         }
         filters.push(ShopFilter {
             name: name.to_owned(),
+            label: name.to_owned(),
             key,
         });
     }
@@ -71,10 +75,14 @@ fn filters_of<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<ShopFilter> {
 /// The options the shop's listings are narrowed by: the merchant's, or
 /// [`DEFAULT_FILTERS`] while they never chose.
 pub async fn shop_filters(cx: &Cx) -> Result<Vec<ShopFilter>> {
-    Ok(match listing_filters(cx).await? {
+    let mut filters = match listing_filters(cx).await? {
         Some(names) => filters_of(names.iter().map(String::as_str)),
         None => filters_of(DEFAULT_FILTERS.iter().copied()),
-    })
+    };
+    for filter in &mut filters {
+        filter.label = worded(cx, &filter.name).await?;
+    }
+    Ok(filters)
 }
 
 /// What a listing is narrowed by.
@@ -312,7 +320,7 @@ pub async fn filter_panel(cx: &Cx, panel: &Panel) -> Result<impl View> {
                 </section>
                 for group in &panel.groups {
                     <section data-filter-group=(&group.filter.key)>
-                        <h3>(t!(listing_filter_by, name: group.filter.name.to_lowercase()))</h3>
+                        <h3>(t!(listing_filter_by, name: group.filter.label.to_lowercase()))</h3>
                         <ul class="chips">
                             for value in &group.links {
                                 <li>

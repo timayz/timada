@@ -57,6 +57,7 @@ mod store;
 mod support;
 mod terms;
 mod translations;
+mod words;
 
 pub use announcements::*;
 pub use articles::*;
@@ -98,3 +99,4 @@ pub use timada_core::Rendition;
 /// way: `(year, month, day)` in UTC, and `YYYY-MM-DD`.
 pub use timada_core::civil::{civil_date, format_date};
 pub use translations::*;
+pub use words::*;

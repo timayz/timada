@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 
+use timada_catalog::word_key;
 use timada_core::db::Db;
 use timada_pages::{render_article, render_markdown};
 use topcoat_core::context::{Cx, try_context};
@@ -17,12 +18,13 @@ use topcoat_core::context::{Cx, try_context};
 use crate::articles::{ArticleCard, PublicArticle};
 use crate::cart::CartView;
 use crate::pages::{DESCRIPTION_CHARS, PublicPage, excerpt};
-use crate::query::{Category, CategoryHub, CategoryNode, Product, Seo};
+use crate::query::{Category, CategoryHub, CategoryNode, Product, Seo, published_products_by_ids};
 use crate::shoppers::request_language;
 use crate::translations::{
     TEXT_TRANSLATIONS_KEY, TRANSLATIONS_KEY, TextKind, TextTranslation, Translation,
     TranslationKind, text_translation_of, translation_of,
 };
+use crate::words::published_words;
 
 /// The language, other than the shop's main one, a request is read in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,20 +90,75 @@ pub(crate) async fn products_in(
     products: &mut [Product],
 ) -> anyhow::Result<()> {
     // Each through the primary key: a page of a listing at most.
-    for product in products {
+    for product in products.iter_mut() {
         if let Some(translation) =
             translation_of(db, TranslationKind::Product, &product.id, language).await?
         {
             word_product(product, translation);
         }
     }
+    product_words_in(db, language, products).await
+}
+
+/// Words what `products` share with the rest of the shop in `language`:
+/// the names of their options and the values these take, which become the
+/// labels a shopper reads ([`ProductOption::display_name`],
+/// [`ProductOption::display_value`]), and the facts of their tables. The
+/// words of them all are read at once; one the shop has not worded there
+/// stays as the main language writes it.
+///
+/// [`ProductOption::display_name`]: crate::ProductOption::display_name
+/// [`ProductOption::display_value`]: crate::ProductOption::display_value
+async fn product_words_in(db: &Db, language: &str, products: &mut [Product]) -> anyhow::Result<()> {
+    let mut terms: Vec<&str> = Vec::new();
+    for product in products.iter() {
+        for option in &product.options {
+            terms.push(option.display_name());
+            terms.extend(
+                option
+                    .values
+                    .iter()
+                    .map(|value| option.display_value(value)),
+            );
+        }
+        for fact in &product.attributes {
+            terms.extend([fact.name.as_str(), fact.value.as_str()]);
+        }
+    }
+    let words = published_words(db, language, terms);
+    let words = words.await?;
+    if words.is_empty() {
+        return Ok(());
+    }
+    let word = |term: &str| words.get(&word_key(term)).cloned();
+    for product in products {
+        for option in &mut product.options {
+            if let Some(name) = word(option.display_name()) {
+                option.label = Some(name);
+            }
+            for value in &option.values {
+                if let Some(wording) = word(option.display_value(value)) {
+                    option.value_labels.insert(value.clone(), wording);
+                }
+            }
+        }
+        for fact in &mut product.attributes {
+            if let Some(name) = word(&fact.name) {
+                fact.name = name;
+            }
+            if let Some(value) = word(&fact.value) {
+                fact.value = value;
+            }
+        }
+    }
     Ok(())
 }
 
 /// Words a cart's lines and its offers in `language`: the name of each
-/// product that has a translation, and the slug its page goes by there.
-/// The cart itself keeps no name: the dashboard prices it from the
-/// catalog, in the main language.
+/// product that has a translation, the slug its page goes by there, and
+/// the values of the variant taken as the shop words them there. The cart
+/// itself keeps no name: the dashboard prices it from the catalog, in the
+/// main language.
 pub(crate) async fn cart_in(db: &Db, language: &str, cart: &mut CartView) -> anyhow::Result<()> {
     let mut worded: HashMap<String, Option<Translation>> = HashMap::new();
     let ids = cart
@@ -130,6 +187,46 @@ pub(crate) async fn cart_in(db: &Db, language: &str, cart: &mut CartView) -> any
             if offer.slug.is_some() {
                 offer.slug = Some(translation.slug.clone());
             }
+        }
+    }
+    // A variant's values, from the products still on sale here: one that
+    // is not keeps the label the cart came with.
+    let varied: Vec<&str> = cart
+        .lines
+        .iter()
+        .filter(|line| line.variant_label.is_some())
+        .map(|line| line.product_id.as_str())
+        .chain(
+            cart.offers
+                .iter()
+                .filter(|offer| offer.variant_label.is_some())
+                .map(|offer| offer.product_id.as_str()),
+        )
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut products = published_products_by_ids(db, &varied).await?;
+    product_words_in(db, language, &mut products).await?;
+    let label = |product_id: &str, variant_id: Option<&str>| {
+        let product = products.iter().find(|product| product.id == product_id)?;
+        let variant = product
+            .variants
+            .iter()
+            .find(|variant| Some(variant.id.as_str()) == variant_id)?;
+        Some(product.variant_label(variant)).filter(|label| !label.is_empty())
+    };
+    for line in &mut cart.lines {
+        if line.variant_label.is_some()
+            && let Some(label) = label(&line.product_id, line.variant_id.as_deref())
+        {
+            line.variant_label = Some(label);
+        }
+    }
+    for offer in &mut cart.offers {
+        if offer.variant_label.is_some()
+            && let Some(label) = label(&offer.product_id, offer.variant_id.as_deref())
+        {
+            offer.variant_label = Some(label);
         }
     }
     Ok(())

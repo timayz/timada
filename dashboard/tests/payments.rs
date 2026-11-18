@@ -1083,6 +1083,85 @@ async fn an_order_names_its_goods_in_the_language_it_was_placed_in() {
     assert_eq!(order.total_cents, 2500);
 }
 
+/// And the values of the variant it took, as the shop words them in that
+/// language: a word is the whole shop's, not the product's (#655).
+#[tokio::test]
+async fn an_order_names_a_variant_in_the_language_it_was_placed_in() {
+    use timada_catalog::{DefineVariant, OptionSelection};
+
+    let h = harness().await;
+    let acme = h.create("acme").await;
+    let acme = h.connect_stripe(&acme).await;
+    let store = h.store(&acme);
+    let catalog = timada_catalog::Command::new(store.clone(), &acme.id);
+    let pages = timada_pages::Command::new(store.clone(), &acme.id);
+    let orders = timada_orders::Command::new(store, &acme.id);
+    pages
+        .set_languages("alice", "fr", &["en".to_owned()])
+        .await
+        .unwrap();
+    let collar = catalog
+        .create_product(
+            "alice",
+            CreateProduct {
+                name: "Collier".into(),
+                slug: None,
+            },
+        )
+        .await
+        .unwrap();
+    let colour = catalog
+        .define_option("alice", &collar.id, "Couleur", vec!["Rose foncé".into()])
+        .await
+        .unwrap();
+    let variant = catalog
+        .define_variant(
+            "alice",
+            &collar.id,
+            DefineVariant {
+                selections: vec![OptionSelection {
+                    option_id: colour,
+                    value: "Rose foncé".into(),
+                }],
+                sku: None,
+                amount_cents: 990,
+                currency: "EUR".into(),
+                image_id: None,
+            },
+        )
+        .await
+        .unwrap();
+    catalog.publish_product("alice", &collar.id).await.unwrap();
+    catalog
+        .word("alice", "en", "rose foncé", "Dark pink")
+        .await
+        .unwrap();
+    let cart_id = orders
+        .start_cart(
+            STOREFRONT_ACTOR,
+            CartItem {
+                product_id: collar.id.clone(),
+                variant_id: Some(variant),
+                quantity: 1,
+            },
+        )
+        .await
+        .unwrap();
+    let label_in = async |language: &str| {
+        let asked = Checkout {
+            language: Some(language.to_owned()),
+            ..checkout(Some(990))
+        };
+        let PaymentAnswer::Requested(payment) = h.ask_with(&acme, &cart_id, asked).await else {
+            panic!("a payment is opened");
+        };
+        payment.lines[0].variant_label.clone()
+    };
+    assert_eq!(label_in("fr").await.as_deref(), Some("Rose foncé"));
+    assert_eq!(label_in("en").await.as_deref(), Some("Dark pink"));
+    h.finish().await;
+}
+
 #[tokio::test]
 async fn an_order_keeps_what_its_sale_cost_with_the_vat_expected() {
     let h = harness().await;

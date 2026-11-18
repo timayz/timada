@@ -73,7 +73,9 @@ use crate::components::table::{
 use crate::components::textarea::textarea;
 use crate::db::Db;
 use crate::media::Media;
-use crate::ui::translations::{MainWording, translation_cards, translation_cards_of};
+use crate::ui::translations::{
+    MainWording, WordCard, translation_cards, translation_cards_of, word_cards,
+};
 use crate::ui::{
     LINK, PageTab, Shell, document, empty_row, fact, facts, format_time, notice, page_header,
     page_tabs, section_card, status_badge,
@@ -671,6 +673,26 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         Vec::new()
     };
+    // And what each language reads for the words the product shares with
+    // the rest of the shop.
+    let mut word_cards = Vec::new();
+    if tab == Tab::Translations {
+        let words = product.words();
+        for language in &other_languages {
+            let worded = catalog(&access)?
+                .load_words(language, &words)
+                .await
+                .map_err(topcoat::Error::from_anyhow)?;
+            let words = words
+                .iter()
+                .map(|word| {
+                    let wording = worded.get(&timada_catalog::word_key(word));
+                    (word.clone(), wording.cloned().unwrap_or_default())
+                })
+                .collect();
+            word_cards.push(WordCard::new(language, words));
+        }
+    }
     let main_wording = MainWording {
         name: product.name.clone(),
         description: product.description.clone(),
@@ -765,6 +787,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             .resolve(cx);
     let remove_translation =
         href!(translations::remove::remove, slug: slug.clone(), product_id: product.id.clone())
+            .resolve(cx);
+    let save_words =
+        href!(translations::words::words, slug: slug.clone(), product_id: product.id.clone())
             .resolve(cx);
     // The reduction of a product sold as is, and the most it may be
     // measured from.
@@ -1467,6 +1492,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             if tab == Tab::Translations {
                 translation_cards(editable: editable, save: &save_translation, remove: &remove_translation, main: &main_wording, cards: &translation_cards)
+                word_cards(editable: editable, save: &save_words, cards: &word_cards)
             }
 
             if tab == Tab::Shopping {

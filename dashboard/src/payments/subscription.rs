@@ -334,6 +334,18 @@ impl Checkouts {
             {
                 line.name = translation.name;
             }
+            // The values of the variant taken, as the shop words them
+            // there: a word it has not worded stays the main language's.
+            let Some(variant_id) = line.variant_id.as_deref() else {
+                continue;
+            };
+            let Some(product) = catalog.load_product(&line.product_id).await? else {
+                continue;
+            };
+            if let Some(variant) = product.variant(variant_id) {
+                let words = catalog.load_words(language, &product.words()).await?;
+                line.variant_label = product.variant_label_in(variant, &words);
+            }
         }
         Ok(())
     }

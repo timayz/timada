@@ -724,6 +724,18 @@ A part a translation leaves empty is read in the main language, and so is a thin
 no translation, which goes by its main slug in every language. A slug is held once per
 kind and language; a translation cannot take a slug that is another thing's main one.
 
+The words the products share are worded once for the whole shop, not per product: the
+name of an option (« Couleur »), a value it takes (« Rose foncé »), the label and the
+value of a fact of a product's table. Each is a stream per language and word
+(`timada-catalog/Word`, case aside), written from the **Options and facts** card of any
+product's Translations tab that carries the word, and copied into `storefront_words`.
+A request read in another language gets them where the library's readers return them:
+`ProductOption::display_name` and `display_value`, a product's `attributes`, the labels
+of `option_values`, a cart line's `variant_label`. A filter's name stays the main
+language's, which its values are looked up by; `worded(cx, name)` gives what the visitor
+reads for it. An order keeps the variant's values in the language it was placed in, as
+it keeps the product's name.
+
 ## Announcements
 
 The short messages at the top of the shop ("-10% maintenant avec le code BIENVENUE10")

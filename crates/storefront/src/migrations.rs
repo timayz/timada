@@ -326,6 +326,15 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         );
         CREATE INDEX storefront_text_translations_slug
             ON storefront_text_translations (kind, language, slug);
+        -- What a language reads for a word the products share (an
+        -- option's name, one of its values, a fact's label or value), as
+        -- the back office worded it once for the whole shop. `id` is the
+        -- language, U+001F, then the word without case: one column, so a
+        -- page's words are read a seek each.
+        CREATE TABLE storefront_words (
+            id TEXT PRIMARY KEY,
+            wording TEXT NOT NULL
+        );
         -- The shop's shipping methods as the back office has them, for
         -- what the offers say of delivery: one row, a JSON list.
         CREATE TABLE storefront_shipping_methods (
@@ -402,6 +411,7 @@ pub const TABLES: &[&str] = &[
     "storefront_languages",
     "storefront_translations",
     "storefront_text_translations",
+    "storefront_words",
     "storefront_shipping_methods",
     "storefront_return_policy",
 ];
