@@ -30,11 +30,31 @@ spec:
         fsGroup: 10001
         fsGroupChangePolicy: OnRootMismatch
         runAsNonRoot: true
+      {{- if .Values.database.migrate }}
+      initContainers:
+        # Creates the store if needed and applies its pending migrations,
+        # before the server starts on it.
+        - name: timada-migrate
+          image: timayz/timada:{{ .Values.image.tag }}
+          imagePullPolicy: IfNotPresent
+          command:
+            ["timada-dashboard", "migrate", "--config", "/etc/timada/config.toml"]
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: config
+              readOnly: true
+              mountPath: /etc/timada
+            - name: data
+              mountPath: /var/lib/timada
+          envFrom:
+            - secretRef:
+                name: timada-env
+      {{- end }}
       containers:
         - name: timada
           image: timayz/timada:{{ .Values.image.tag }}
           imagePullPolicy: IfNotPresent
-          # Opening the store applies its pending migrations: no step before it.
           command:
             ["timada-dashboard", "serve", "--config", "/etc/timada/config.toml"]
           securityContext:

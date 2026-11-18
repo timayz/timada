@@ -11,6 +11,10 @@ image:
 #   TIMADA__MAIL__SMTP_URL     smtps://user:pass@host:465
 extraSecretEnv: {}
 
+database:
+  # Run `timada-dashboard migrate` before the server starts.
+  migrate: true
+
 hostname: "timada.app"
 
 # Time allowed for the pod to shut down gracefully on a rolling update. Must be
