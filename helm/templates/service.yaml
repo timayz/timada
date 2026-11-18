@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: timada
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
+    {{- if .Values.config.store_api }}
+    - name: store-api
+      port: 4321
+      targetPort: 4321
+      protocol: TCP
+    {{- end }}
+  selector:
+    app: timada

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: timada
+description: Helm chart for the Timada dashboard
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+sources:
+  - https://github.com/timayz/timada
+maintainers:
+  - name: Timada

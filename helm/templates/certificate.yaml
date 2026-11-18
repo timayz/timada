@@ -1,0 +1,17 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: timada
+  namespace: envoy-gateway-system
+spec:
+  dnsNames:
+    - {{ .Values.hostname | quote }}
+  secretName: timada-tls
+  issuerRef:
+    kind: ClusterIssuer
+    name: letsencrypt
+  {{- with .Values.certificate.annotations }}
+  secretTemplate:
+    annotations:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}

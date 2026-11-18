@@ -39,5 +39,24 @@ against it, see `seeds/README.md` and `docs/storefront.md`.
 | `tests/e2e` | the Playwright suite |
 | `docs/` | `architecture.md` first, then one file per area (`storefront`, `payments`, `invoicing`, `mail`, `automations`, `aliexpress`, `loadtest`) |
 
+## Releasing
+
+Three workflows, as in the other timayz services:
+
+- **Builder** (by hand) pushes `timayz/timada:builder` from `builder.Dockerfile`: the
+  toolchain, the Tailwind and topcoat CLIs, and a first build of the dashboard. Run it
+  once before the first release, and again when the toolchain or the topcoat version
+  moves (the CLI versions are pinned in that file).
+- **Release** (by hand) reads the commits since the last tag, bumps the crates'
+  versions, writes the GitHub release and pushes the `v…` tag.
+- **Publish** (on that tag) builds `Dockerfile` on top of the builder image and pushes
+  `timayz/timada:<version>`: the `timada-dashboard` binary and its asset bundle, run as
+  user 10001, with `/var/lib/timada` as the place for its data.
+
+`helm/` deploys that image as one node: a StatefulSet with one volume for the store,
+the pictures and the personal-data keys, the configuration from `values.yaml`
+(`config`, written as the server's file) and the secrets as `TIMADA__…` variables
+(`extraSecretEnv`).
+
 Every change goes through a branch and a pull request; `make check` must be green
 before one is opened.
