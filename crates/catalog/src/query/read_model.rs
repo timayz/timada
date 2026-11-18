@@ -405,7 +405,7 @@ pub async fn upsert_product(
             .await?;
             let slug_search = tenant_search_key(tenant_id, &product.slug);
             let name_search = search_key(&product.name);
-            // Twenty values: more than a tuple of parameters holds. The
+            // Twenty-one values: more than a tuple of parameters holds. The
             // same numbering serves the insert and the update, the two
             // search keys last so the update can leave them off.
             let mut values = vec![
@@ -435,6 +435,7 @@ pub async fn upsert_product(
                 Value::from(product.tax_category()),
                 Value::from(product.delivery_days.map(|days| i64::from(days.min))),
                 Value::from(product.delivery_days.map(|days| i64::from(days.max))),
+                Value::from(timada_core::db::Json(product.filed_under()).to_text()?),
             ];
             match &was {
                 None => {
@@ -445,10 +446,10 @@ pub async fn upsert_product(
                         "INSERT INTO catalog_products (tenant_id, id, slug, name, amount_cents,
                             currency, status, created_by, created_at, updated_at, thumbnail,
                             image_count, min_amount_cents, max_amount_cents, variant_count,
-                            tax_category, delivery_min_days, delivery_max_days, slug_search,
-                            name_search)
+                            tax_category, delivery_min_days, delivery_max_days, filed_json,
+                            slug_search, name_search)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                            ?15, ?16, ?17, ?18, ?19, ?20)",
+                            ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
                         params_from_iter(values),
                     )
                     .await?;
@@ -586,7 +587,7 @@ const PRODUCT_UPDATE: &str = "UPDATE catalog_products SET
     slug = ?3, name = ?4, amount_cents = ?5, currency = ?6, status = ?7,
     updated_at = ?10, thumbnail = ?11, image_count = ?12, min_amount_cents = ?13,
     max_amount_cents = ?14, variant_count = ?15, tax_category = ?16, delivery_min_days = ?17,
-    delivery_max_days = ?18
+    delivery_max_days = ?18, filed_json = ?19
  WHERE tenant_id = ?1 AND id = ?2";
 
 /// [`PRODUCT_UPDATE`] with the two full-text columns too, for a renamed
@@ -595,7 +596,7 @@ const PRODUCT_UPDATE_SEARCHED: &str = "UPDATE catalog_products SET
     slug = ?3, name = ?4, amount_cents = ?5, currency = ?6, status = ?7,
     updated_at = ?10, thumbnail = ?11, image_count = ?12, min_amount_cents = ?13,
     max_amount_cents = ?14, variant_count = ?15, tax_category = ?16, delivery_min_days = ?17,
-    delivery_max_days = ?18, slug_search = ?19, name_search = ?20
+    delivery_max_days = ?18, filed_json = ?19, slug_search = ?20, name_search = ?21
  WHERE tenant_id = ?1 AND id = ?2";
 
 /// Writes the row of a category as the write model sees it, and works the

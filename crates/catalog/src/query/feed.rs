@@ -21,6 +21,7 @@ use timada_core::db::{Connection, Db, Json, execute, fetch_optional};
 use timada_core::format_amount;
 use timada_core::xml::xml_text as xml;
 
+use super::paths::CategoryPaths;
 use crate::command::ProductState;
 use crate::margin::{Margin, MarginTiers, ProductCosts, ShopCosts};
 use crate::value_object::DeliveryDays;
@@ -30,6 +31,10 @@ use crate::value_object::DeliveryDays;
 pub struct FeedProduct {
     pub id: String,
     pub slug: String,
+    /// The categories it is filed under, its main one first: what its
+    /// address on the storefront is made of ([`CategoryPaths::product`]).
+    #[serde(default)]
+    pub categories: Vec<String>,
     pub name: String,
     pub description: String,
     pub brand: Option<String>,
@@ -101,6 +106,11 @@ impl FeedProduct {
         Some(Self {
             id: product.id.clone(),
             slug: product.slug.clone(),
+            categories: product
+                .filed_under()
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             name: product.name.clone(),
             description: product.description.clone(),
             brand: product.brand.clone(),
@@ -384,8 +394,11 @@ pub struct FeedShop {
     /// The shop's name.
     pub name: String,
     /// Where shoppers find the shop, without a trailing slash. A product's
-    /// page is `/p/{slug}` under it, and opens on a variant at `?v={id}`.
+    /// page is at its default address under it (`paths`), and opens on a
+    /// variant at `?v={id}`.
     pub storefront_url: String,
+    /// Where the shop's categories are, for a product's address.
+    pub paths: CategoryPaths,
     /// The delivery prices, one a country a method names. A method that
     /// ships everywhere names none and is left to the account's own
     /// delivery settings: a feed gives a price per country.
@@ -479,7 +492,11 @@ pub fn write_feed_items(
     shop: &FeedShop,
     image_url: impl Fn(&str) -> String,
 ) {
-    let page = format!("{}/p/{}", shop.storefront_url, product.slug);
+    let page = format!(
+        "{}{}",
+        shop.storefront_url,
+        shop.paths.product(&product.categories, &product.slug)
+    );
     if product.variants.is_empty() {
         let Some(amount_cents) = product.amount_cents else {
             return;
@@ -769,6 +786,7 @@ mod tests {
         FeedProduct {
             id: "01MUG".into(),
             slug: "blue-mug".into(),
+            categories: Vec::new(),
             name: "Blue Mug".into(),
             description: "Holds 50 cl & more.".into(),
             brand: Some("Acme".into()),
@@ -811,6 +829,7 @@ mod tests {
         FeedShop {
             name: "Acme".into(),
             storefront_url: "https://shop.example".into(),
+            paths: CategoryPaths::default(),
             shippings: vec![FeedShipping {
                 country: "FR".into(),
                 service: "Colissimo".into(),
@@ -875,6 +894,27 @@ mod tests {
                 plan.join("\n")
             );
         }
+    }
+
+    #[test]
+    fn an_item_links_the_product_under_its_main_category() {
+        let shop = FeedShop {
+            paths: CategoryPaths::of(&[
+                ("c1".into(), "kitchen".into(), None),
+                ("c2".into(), "mugs".into(), Some("c1".into())),
+            ]),
+            ..shop()
+        };
+        let filed = FeedProduct {
+            categories: vec!["c2".into(), "c1".into()],
+            ..mug()
+        };
+        assert!(
+            items(&filed, &shop)
+                .contains("<g:link>https://shop.example/kitchen/mugs/blue-mug</g:link>")
+        );
+        // Filed nowhere, it keeps its own route.
+        assert!(items(&mug(), &shop).contains("<g:link>https://shop.example/p/blue-mug</g:link>"));
     }
 
     #[test]

@@ -61,6 +61,9 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             delivery_min_days INTEGER,
             delivery_max_days INTEGER,
             stock_state TEXT NOT NULL DEFAULT 'untracked',
+            -- The ids of the categories it is filed under, its main one
+            -- first: what its address on the storefront is made of.
+            filed_json TEXT NOT NULL DEFAULT '[]',
             slug_search TEXT NOT NULL,
             name_search TEXT NOT NULL,
             PRIMARY KEY (tenant_id, id)

@@ -401,7 +401,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <form method="post" action=(href!(pin::pin, slug: slug.clone(), category_id: category.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
                         field(
                             field_label(attrs: attributes! { for="category-pinned" }, "Products shown first")
-                            field_description(attrs: attributes! { id="category-pinned-hint" }, "Up to " (MAX_PINNED_PRODUCTS) " products the category's page opens on, ahead of the others: one product address a line (the end of /p/…), in the order to show them. Only those published and filed here or below are shown.")
+                            field_description(attrs: attributes! { id="category-pinned-hint" }, "Up to " (MAX_PINNED_PRODUCTS) " products the category's page opens on, ahead of the others: one product a line (the last part of its address), in the order to show them. Only those published and filed here or below are shown.")
                             textarea(
                                 attrs: attributes! { id="category-pinned" name="products" rows="4" aria-describedby="category-pinned-hint" class="font-mono text-xs" },
                                 (&pinned_text)
