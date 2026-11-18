@@ -11,11 +11,11 @@ use crate::aggregator::translation::{
 };
 use crate::error::CatalogError;
 use crate::value_object::{
-    CategoryQuestion, FALLBACK_CATEGORY_SLUG, ImageAlt, TranslationKind, normalize_alt,
-    normalize_category_body, normalize_category_description, normalize_category_name,
-    normalize_category_questions, normalize_description, normalize_name, normalize_seo,
-    normalize_slug, slug_languages_id, slugify, slugify_or, suffixed_slug, translation_id,
-    translation_slug_id,
+    CategoryQuestion, FALLBACK_CATEGORY_SLUG, ImageAlt, TranslationKind, is_reserved_slug,
+    normalize_alt, normalize_category_body, normalize_category_description,
+    normalize_category_name, normalize_category_questions, normalize_description, normalize_name,
+    normalize_seo, normalize_slug, slug_languages_id, slugify, slugify_or, suffixed_slug,
+    translation_id, translation_slug_id,
 };
 
 use super::{CLAIM_ATTEMPTS, Command};
@@ -384,6 +384,47 @@ impl<E: Executor> Command<E> {
         Ok(false)
     }
 
+    /// Whether anything of `kind` goes by `slug`, as its main slug or in
+    /// any language, or has claimed it and may yet: what the claim of a
+    /// main slug of the other kind refuses. A product's address ends with
+    /// its slug under the path of a category, and a category's page is at
+    /// the same depth under its parent's, so one slug names one thing
+    /// whatever its kind.
+    pub(crate) async fn slug_of_kind(
+        &self,
+        kind: TranslationKind,
+        slug: &str,
+    ) -> anyhow::Result<bool> {
+        Ok(self.main_slug_of_another(kind, slug, "").await?
+            || self.translation_slug_of_another(kind, slug, "").await?)
+    }
+
+    /// Whether something of the other kind goes by `slug` where a
+    /// translation of `kind` in `language` would: as its main slug (which
+    /// it also goes by in a language it has no translation in), or as its
+    /// own slug in that language.
+    async fn slug_of_other_kind_in(
+        &self,
+        kind: TranslationKind,
+        language: &str,
+        slug: &str,
+    ) -> anyhow::Result<bool> {
+        let other = kind.other();
+        if self.main_slug_of_another(other, slug, "").await? {
+            return Ok(true);
+        }
+        Ok(
+            match self.load_translation_slug(other, language, slug).await? {
+                Some(index) => {
+                    !self
+                        .translation_slug_let_go(other, language, slug, &index)
+                        .await?
+                }
+                None => false,
+            },
+        )
+    }
+
     /// Notes that `slug` is about to have an entry in `language`, for the
     /// claim of a main slug to find it. Noted once: a language already
     /// there, or noted by another writer meanwhile, is left as it is.
@@ -461,7 +502,9 @@ impl<E: Executor> Command<E> {
     /// of its translation the next write is made at. The entry is created,
     /// or taken over when it is already the thing's or held by one that
     /// let go of it. Fails when another thing holds it, in this language or
-    /// as its main slug, or wins the race for it. The main slug is looked
+    /// as its main slug, or wins the race for it; a thing of the other kind
+    /// counts (a product and a category never share a slug), and a category
+    /// takes no reserved name ([`is_reserved_slug`]). The main slug is looked
     /// at before the claim and after it: the claim of a main slug does the
     /// same with the translations, so of two racing for one slug at least
     /// one sees the other. A claim refused that late stays, as one whose
@@ -475,14 +518,23 @@ impl<E: Executor> Command<E> {
         version: u16,
         routing_key: Option<String>,
     ) -> Result<(), CatalogError> {
-        if self.main_slug_of_another(kind, slug, subject_id).await? {
+        if kind == TranslationKind::Category && is_reserved_slug(slug) {
+            return Err(CatalogError::SlugReserved);
+        }
+        let taken = async || {
+            anyhow::Ok(
+                self.main_slug_of_another(kind, slug, subject_id).await?
+                    || self.slug_of_other_kind_in(kind, language, slug).await?,
+            )
+        };
+        if taken().await? {
             return Err(CatalogError::SlugTaken);
         }
         self.note_slug_language(kind, language, slug, routing_key.clone())
             .await?;
         self.take_translation_slug(kind, language, slug, subject_id, version, routing_key)
             .await?;
-        if self.main_slug_of_another(kind, slug, subject_id).await? {
+        if taken().await? {
             return Err(CatalogError::SlugTaken);
         }
         Ok(())
@@ -566,7 +618,9 @@ impl<E: Executor> Command<E> {
                 .await
             {
                 Ok(()) => break,
-                Err(CatalogError::SlugTaken) if attempt + 1 < SLUG_ATTEMPTS => {
+                Err(CatalogError::SlugTaken | CatalogError::SlugReserved)
+                    if attempt + 1 < SLUG_ATTEMPTS =>
+                {
                     slug = suffixed_slug(&base);
                 }
                 Err(err) => return Err(err),

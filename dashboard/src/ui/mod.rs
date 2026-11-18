@@ -105,7 +105,10 @@ pub fn describe_error(code: &str) -> &'static str {
         "role_in_use" => "Move its members to another role before removing it.",
         "invalid_product_name" => "A product name is 1 to 120 characters.",
         "invalid_product_slug" => "A product slug is 2 to 64 lowercase letters, digits and dashes.",
-        "product_slug_taken" => "Another product already uses this slug.",
+        "product_slug_taken" => "Another product or a category already uses this slug.",
+        "slug_reserved" => {
+            "This slug is the address of one of the shop's own pages. Choose another one."
+        }
         "invalid_description" => "A description is at most 4000 characters.",
         "invalid_seo" => {
             "The search engines' title is at most 70 characters, the description at most 160."
@@ -151,7 +154,7 @@ pub fn describe_error(code: &str) -> &'static str {
             "A category slug is 2 to 64 lowercase letters, digits and dashes."
         }
         "invalid_category_description" => "A category description is at most 2000 characters.",
-        "category_slug_taken" => "Another category already uses this slug.",
+        "category_slug_taken" => "Another category or a product already uses this slug.",
         "category_not_found" => "This category does not exist.",
         "category_archived" => "This category is archived and cannot change any more.",
         "category_cycle" => "A category cannot be moved under one of its own sub-categories.",

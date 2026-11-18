@@ -9,6 +9,8 @@ pub enum CatalogError {
     InvalidSlug,
     #[error("this slug is already taken")]
     SlugTaken,
+    #[error("this slug is the address of one of the shop's own pages")]
+    SlugReserved,
     #[error("a language is one of the list")]
     InvalidLanguage,
     #[error("a word and what a language reads for it are at most 400 characters")]
@@ -185,6 +187,7 @@ impl CatalogError {
             Self::InvalidName => "invalid_product_name",
             Self::InvalidSlug => "invalid_product_slug",
             Self::SlugTaken => "product_slug_taken",
+            Self::SlugReserved => "slug_reserved",
             Self::InvalidDescription => "invalid_description",
             Self::InvalidSeo => "invalid_seo",
             Self::InvalidBrand => "invalid_brand",

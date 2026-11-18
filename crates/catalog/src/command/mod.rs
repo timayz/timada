@@ -62,10 +62,10 @@ use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
     AiWritingDeclared, Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Classified,
     CompareAtSet, Created, Deleted, DeliveryDaysSet, Described, FeedLabelsSet, FeedListingSet,
-    Identified, ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered, OptionDefined,
-    OptionHidden, OptionKindSet, OptionLabelled, OptionRemoved, OptionRenamed, OptionShown,
-    OptionValueLabelled, OptionValuesChanged, Priced, Published, Released, Renamed, SeoSet,
-    TaxCategorySet, Uncategorized, Unpublished, VariantCompareAtSet, VariantDefined,
+    Identified, ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered, MainCategorySet,
+    OptionDefined, OptionHidden, OptionKindSet, OptionLabelled, OptionRemoved, OptionRenamed,
+    OptionShown, OptionValueLabelled, OptionValuesChanged, Priced, Published, Released, Renamed,
+    SeoSet, TaxCategorySet, Uncategorized, Unpublished, VariantCompareAtSet, VariantDefined,
     VariantIdentified, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged,
     VariantsRepriced,
 };
@@ -304,6 +304,11 @@ pub struct ProductState {
     pub deleted: bool,
     /// The categories it belongs to, by id.
     pub categories: BTreeSet<String>,
+    /// The same, in the order it was filed under them.
+    pub filed: Vec<String>,
+    /// The one the merchant picked as its main category, while the product
+    /// is filed under it.
+    pub main_category: Option<String>,
     /// Its pictures, in the order they are shown; the first is the one a
     /// listing uses.
     pub images: Vec<ProductImage>,
@@ -502,6 +507,22 @@ impl ProductState {
         self.options.iter().find(|o| o.id == option_id)
     }
 
+    /// The categories it is filed under, its main one first: the one the
+    /// merchant picked, else the first it was filed under; then the others
+    /// in the order it joined them. A reader that knows which categories
+    /// are live takes the first of them as the product's main category.
+    pub fn filed_under(&self) -> Vec<&str> {
+        let main = self.main_category.as_deref();
+        main.into_iter()
+            .chain(
+                self.filed
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|id| Some(*id) != main),
+            )
+            .collect()
+    }
+
     /// The ways it varies that shoppers choose, in the order a page shows the
     /// menus.
     pub fn shown_options(&self) -> impl Iterator<Item = &ProductOption> {
@@ -607,6 +628,7 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_deleted())
         .handler(on_categorized())
         .handler(on_uncategorized())
+        .handler(on_main_category_set())
         .handler(on_image_added())
         .handler(on_image_alt_changed())
         .handler(on_images_reordered())
@@ -736,7 +758,9 @@ async fn on_categorized(
     event: Event<Categorized>,
     product: &mut ProductState,
 ) -> anyhow::Result<()> {
-    product.categories.insert(event.data.category_id.to_owned());
+    if product.categories.insert(event.data.category_id.to_owned()) {
+        product.filed.push(event.data.category_id.to_owned());
+    }
     product.updated_at = event.timestamp;
     Ok(())
 }
@@ -747,6 +771,20 @@ async fn on_uncategorized(
     product: &mut ProductState,
 ) -> anyhow::Result<()> {
     product.categories.remove(&event.data.category_id);
+    product.filed.retain(|id| *id != event.data.category_id);
+    if product.main_category.as_deref() == Some(event.data.category_id.as_str()) {
+        product.main_category = None;
+    }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_main_category_set(
+    event: Event<MainCategorySet>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.main_category = event.data.category_id.to_owned();
     product.updated_at = event.timestamp;
     Ok(())
 }

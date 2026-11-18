@@ -84,6 +84,7 @@ event timada-catalog/Product::ImageAdded { image_id: String, picture: timada_cor
 event timada-catalog/Product::ImageAltChanged { image_id: String, alt: String, changed_by: String }
 event timada-catalog/Product::ImageRemoved { image_id: String, removed_by: String }
 event timada-catalog/Product::ImagesReordered { image_ids: Vec<String>, reordered_by: String }
+event timada-catalog/Product::MainCategorySet { category_id: Option<String>, set_by: String }
 event timada-catalog/Product::OptionDefined { option_id: String, name: String, values: Vec<String>, defined_by: String }
 event timada-catalog/Product::OptionHidden { option_id: String, value: String, hidden_by: String }
 event timada-catalog/Product::OptionKindSet { option_id: String, kind: Option<String>, set_by: String }

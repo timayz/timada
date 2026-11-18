@@ -29,12 +29,10 @@ async fn creating_a_category_derives_its_slug_and_starts_at_the_top() {
 }
 
 #[tokio::test]
-async fn a_category_slug_is_independent_of_a_product_slug() {
+async fn a_category_slug_taken_gets_a_suffix() {
     let cmd = command().await;
-    let product = create_product(&cmd, "Mug").await;
     let category = create_category(&cmd, "Mug").await;
-    assert_eq!(product.slug, "mug");
-    assert_eq!(category.slug, "mug", "the two indexes do not collide");
+    assert_eq!(category.slug, "mug");
 
     let second = create_category(&cmd, "MUG!").await;
     assert!(second.slug.starts_with("mug-"), "{}", second.slug);

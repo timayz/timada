@@ -4,7 +4,7 @@ use timada_core::claim::claim_is_fresh;
 
 use crate::aggregator::category::{Claimed, Released};
 use crate::error::CatalogError;
-use crate::value_object::{TranslationKind, category_slug_id};
+use crate::value_object::{TranslationKind, category_slug_id, is_reserved_slug};
 
 use super::{CLAIM_ATTEMPTS, CategorySlugState, Command};
 
@@ -12,23 +12,33 @@ impl<E: Executor> Command<E> {
     /// Points a normalized slug at `category_id`. The entry is created, or
     /// taken over when it is free, already the category's, or held by a
     /// category that let go of it. Fails when another category holds it, or
-    /// wins the race for it, and when another category's translation goes
-    /// by it in any language, looked at before the claim and after it (see
-    /// [`claim_slug`](Self::claim_slug)).
+    /// wins the race for it, when another category's translation goes by it
+    /// in any language, and when a product does, in any language: all
+    /// looked at before the claim and after it (see
+    /// [`claim_slug`](Self::claim_slug)). A reserved name
+    /// ([`is_reserved_slug`]) is refused outright.
     pub(crate) async fn claim_category_slug(
         &self,
         slug: &str,
         category_id: &str,
         routing_key: Option<String>,
     ) -> Result<(), CatalogError> {
-        let translated =
-            || self.translation_slug_of_another(TranslationKind::Category, slug, category_id);
-        if translated().await? {
+        if is_reserved_slug(slug) {
+            return Err(CatalogError::SlugReserved);
+        }
+        let taken = async || {
+            anyhow::Ok(
+                self.translation_slug_of_another(TranslationKind::Category, slug, category_id)
+                    .await?
+                    || self.slug_of_kind(TranslationKind::Product, slug).await?,
+            )
+        };
+        if taken().await? {
             return Err(CatalogError::SlugTaken);
         }
         self.take_category_slug(slug, category_id, routing_key)
             .await?;
-        if translated().await? {
+        if taken().await? {
             return Err(CatalogError::SlugTaken);
         }
         Ok(())

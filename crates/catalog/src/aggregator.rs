@@ -57,6 +57,14 @@ pub enum Product {
         category_id: String,
         uncategorized_by: String,
     },
+    /// The category, among those the product is filed under, whose path
+    /// its address is under wherever no category leads to it, and the one
+    /// search engines are told. `None` goes back to the first it was filed
+    /// under, which also stands in once the product leaves this one.
+    MainCategorySet {
+        category_id: Option<String>,
+        set_by: String,
+    },
     /// A picture of the product: its two renditions, as the host rendered
     /// them from the upload ([`timada_core::Picture`]). The bytes live
     /// outside the store, named after the id; the host decides the address
