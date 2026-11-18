@@ -2290,3 +2290,61 @@ test("a picture's text and a delivery method's name are read in the visitor's la
   await page.goto(`${SHOP}/checkout`);
   await expect(page.locator("[data-shipping-methods] .name")).toHaveText(["Colis suivi"]);
 });
+
+test("the bar's messages and the newsletter pop-up are read in the visitor's language", async ({
+  page,
+  request,
+}) => {
+  const SHOP = app.url;
+  await registerWithEmail(page, uniqueEmail("merchant"));
+  const { name, slug } = uniqueTenant("Bar Shop");
+  await createTenant(page, name);
+  await page.goto(`/t/${slug}/languages`);
+  const languages = page.locator("form[data-shop-languages]");
+  await languages.getByLabel("Main language").selectOption("fr");
+  await languages.getByRole("checkbox", { name: "English" }).check();
+  await languages.getByRole("button", { name: "Save the languages" }).click();
+  await expect(page.getByRole("status")).toContainText("Languages saved");
+  await publishProduct(page, slug, "Collier", "9.90");
+
+  // Two messages, one worded in English.
+  await addAnnouncement(page, slug, "**-10 %** avec le code BIENVENUE10");
+  await addAnnouncement(page, slug, "Livraison offerte dès 50 €");
+  const wording = page.locator("[data-announcement-wording=en]");
+  await wording.getByLabel("**-10 %** avec le code BIENVENUE10").fill("**10% off** with the code WELCOME10");
+  await wording.getByRole("button", { name: "Save translations" }).click();
+  await expect(page.getByRole("status")).toContainText("Translations saved");
+  await expect(wording.getByLabel("**-10 %** avec le code BIENVENUE10")).toHaveValue("**10% off** with the code WELCOME10");
+  await expect(wording.getByLabel("Livraison offerte dès 50 €")).toHaveValue("");
+
+  // The pop-up, with its offer in English and its sentence left as it is.
+  await page.goto(`/t/${slug}/newsletter-popup`);
+  await page.getByLabel("Show the pop-up on the storefront").check();
+  await page.getByLabel("What it offers").fill("-10 % sur votre première commande");
+  await page.getByLabel("A sentence under it (optional)").fill("Le code arrive par e-mail.");
+  await page.getByLabel("Opens after (seconds on a page)").fill("1");
+  await page.getByRole("button", { name: "Save the pop-up" }).click();
+  await expect(page.getByRole("status")).toContainText("the storefront shows it in a moment");
+  const popupWording = page.locator("[data-popup-wording=en]");
+  await popupWording.getByLabel("Translated offer").fill("10% off your first order");
+  await popupWording.getByRole("button", { name: "Save translation" }).click();
+  await expect(page.getByRole("status")).toContainText("Translation saved");
+  await expect(popupWording.getByLabel("Translated offer")).toHaveValue("10% off your first order");
+
+  await app.start(request, await mintKey(page, slug, false), 1);
+  const messages = page.locator("[data-announcement]");
+  const popup = page.locator("dialog[data-newsletter-popup]");
+  // In English: the worded message and offer, the rest as the main
+  // language writes it.
+  await expect(async () => {
+    await page.goto(`${SHOP}/en`);
+    await expect(messages.first().locator("strong")).toHaveText("10% off", { timeout: 1000 });
+    await expect(popup.locator("h2")).toHaveText("10% off your first order", { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(messages).toContainText(["with the code WELCOME10", "Livraison offerte dès 50 €"]);
+  await expect(popup).toContainText("Le code arrive par e-mail.");
+  // In French, as the merchant wrote them.
+  await page.goto(`${SHOP}/`);
+  await expect(messages.first().locator("strong")).toHaveText("-10 %");
+  await expect(popup.locator("h2")).toHaveText("-10 % sur votre première commande");
+});
