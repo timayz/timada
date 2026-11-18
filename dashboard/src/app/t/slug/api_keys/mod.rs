@@ -170,7 +170,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             section_card(
                 title: Some("Storefront address"),
-                description: Some("The confirmation mailed to a shopper after payment links to the order at this address followed by /orders/ and the order's id, and the shopping feed links each product to /p/ and its slug. Leave it blank to mail confirmations without a link; the shopping feed then answers nothing."),
+                description: Some("The confirmation mailed to a shopper after payment links to the order at this address followed by /orders/ and the order's id, and the shopping feed links each product to its address under it. Leave it blank to mail confirmations without a link; the shopping feed then answers nothing."),
                 <form method="post" action=(href!(storefront::storefront, slug: slug.clone())) class="flex max-w-xl flex-col gap-4">
                     field(
                         field_label(attrs: attributes! { for="storefront-url" }, "Where shoppers find the shop")

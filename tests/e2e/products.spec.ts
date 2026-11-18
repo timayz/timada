@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { productTab, selectByText } from "./forms";
 import { invite, inviteLink } from "./invitations";
-import { publishProduct } from "./storefront";
+import { fileUnder, publishProduct } from "./storefront";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // The catalog: an owner creates a product under /t/{slug}/products, edits it
@@ -478,6 +478,17 @@ test("a shop opens its shopping feed at a secret address, moves it and closes it
   expect(xml).not.toContain("<g:description>");
   expect(xml).not.toContain("Plate");
   expect(xml.trimEnd().endsWith("</rss>")).toBe(true);
+
+  // Filed under a category, it is linked where the storefront reads it:
+  // under the category's path.
+  await page.goto(`/t/${slug}/categories`);
+  await page.getByLabel("Name").fill("Mugs");
+  await page.getByRole("button", { name: "Create category" }).click();
+  await expect(page.getByRole("status")).toContainText("Category created.");
+  await fileUnder(page, mugUrl, "Mugs");
+  await expect(async () => {
+    expect(await (await request.get(first)).text()).toContain("<g:link>https://shop.example/mugs/blue-mug</g:link>");
+  }).toPass({ timeout: 15_000 });
 
   // The same product for a Meta and a TikTok catalogue, each in its own
   // words, and the shop's reviews for Google, under the same secret.

@@ -540,7 +540,8 @@ delivery methods, where pictures are served from) and sends the XML 200 products
 time behind the response, so a large shop is never held in memory; a read that fails
 breaks the response off instead of ending it early. What the feed does with the data:
 
-- an item links to `/p/{slug}` under the storefront's address, and to `?v={variant id}`
+- an item links to the product's default address under the storefront's (under its
+  main category, `CategoryPaths::product`; `/p/{slug}` filed nowhere), and to `?v={variant id}`
   for a variant; a shop that has not set the address has no feed (404);
 - pictures are the 1200 px renditions (Merchant Center refuses small ones), the
   variant's own first, ten more at most;
