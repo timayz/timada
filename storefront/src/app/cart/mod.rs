@@ -93,6 +93,7 @@ pub async fn current_cart(cx: &Cx) -> Result<Option<CartView>> {
 pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<CartQuery>(cx)?;
     let nav = menu(cx).await?;
+    let paths = crate::app::address::paths(cx).await?;
     let cart = current_cart(cx).await?.filter(|cart| !cart.is_empty());
     let currency = cart
         .as_ref()
@@ -125,7 +126,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     </td>
                                     <td>
                                         if let Some(slug) = &line.slug {
-                                            <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::slug: slug.clone()))>(&line.name)</a>
+                                            <a href=(crate::app::address::filed_href(cx, paths, &line.categories, slug))>(&line.name)</a>
                                         } else if line.name.is_empty() {
                                             (t!(cart_line_unnamed))
                                         } else {
@@ -247,6 +248,7 @@ pub async fn summary_line(
     back: &str,
     #[default] from: &str,
 ) -> Result<impl View> {
+    let paths = crate::app::address::paths(cx).await?;
     let variant_id = line.variant_id.clone().unwrap_or_default();
     let name = if line.name.is_empty() {
         t!(cart_line_unnamed).resolve(cx).into_owned()
@@ -263,7 +265,7 @@ pub async fn summary_line(
             </span>
             <span class="what">
                 if let Some(slug) = &line.slug {
-                    <a href=(href!(crate::app::p::slug::index, crate::app::p::slug::slug: slug.clone()))>(&name)</a>
+                    <a href=(crate::app::address::filed_href(cx, paths, &line.categories, slug))>(&name)</a>
                 } else {
                     (&name)
                 }

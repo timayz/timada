@@ -4,7 +4,7 @@
 //! checkout's totals), by pattern rather than with an HTML parser: the
 //! markup is the storefront's own and stable.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use anyhow::{Result, ensure};
@@ -16,30 +16,43 @@ use crate::http::Visitor;
 const CRAWL_PAGES: u32 = 3;
 
 pub struct Catalog {
+    /// The path of each category's page (`/jeux-pour-chat/souris`).
     pub categories: Vec<String>,
-    pub products: Vec<String>,
-    /// Words shoppers search for, taken from the product addresses.
+    pub products: Vec<Listed>,
+    /// Words shoppers search for, taken from the products' slugs.
     pub terms: Vec<String>,
+}
+
+/// A product a page lists: where its card leads, and the slug the cart's
+/// form names it by.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Listed {
+    pub path: String,
+    pub slug: String,
 }
 
 impl Catalog {
     pub async fn discover(visitor: &mut Visitor<'_>) -> Result<Self> {
         let home = visitor.get("/").await?;
-        let mut categories = links(&home.body, &CATEGORY_LINK);
-        let mut products = links(&home.body, &PRODUCT_LINK);
+        let mut categories = category_links(&home.body);
+        // By slug: a product listed under two categories is one product,
+        // at the address the first page that listed it gave.
+        let mut products: BTreeMap<String, String> = product_links(&home.body);
         for category in categories.clone() {
             for page in 1..=CRAWL_PAGES {
-                let found = visitor.get(&format!("/c/{category}?page={page}")).await?;
+                let found = visitor.get(&format!("{category}?page={page}")).await?;
                 let before = products.len();
-                products.extend(links(&found.body, &PRODUCT_LINK));
-                categories.extend(links(&found.body, &CATEGORY_LINK));
+                for (slug, path) in product_links(&found.body) {
+                    products.entry(slug).or_insert(path);
+                }
+                categories.extend(category_links(&found.body));
                 if products.len() == before {
                     break;
                 }
             }
         }
         let terms: BTreeSet<String> = products
-            .iter()
+            .keys()
             .flat_map(|slug| slug.split('-'))
             .filter(|word| word.len() >= 4)
             .map(str::to_owned)
@@ -50,21 +63,38 @@ impl Catalog {
         );
         Ok(Self {
             categories: categories.into_iter().collect(),
-            products: products.into_iter().collect(),
+            products: products
+                .into_iter()
+                .map(|(slug, path)| Listed { path, slug })
+                .collect(),
             terms: terms.into_iter().collect(),
         })
     }
 }
 
-static CATEGORY_LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"href="/c/([^"?#/]+)"#).unwrap());
-static PRODUCT_LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"href="/p/([^"?#/]+)"#).unwrap());
+/// A link to a category's page: the menu's, a page's chips of
+/// sub-categories, the home's tiles. Its address is the category's path.
+static CATEGORY_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"data-(?:category|subcategory|tile)="[^"]+"[^>]*?href="(/[^"?#]+)""#).unwrap()
+});
+/// A product's card: its slug, then where its picture leads.
+static PRODUCT_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"data-product="([^"]+)"[^>]*>\s*<a class="card-pic" href="(/[^"?#]+)""#).unwrap()
+});
 
-fn links(body: &str, pattern: &Regex) -> BTreeSet<String> {
-    pattern
+/// The paths of the categories `body` links to.
+fn category_links(body: &str) -> BTreeSet<String> {
+    CATEGORY_LINK
         .captures_iter(body)
         .map(|captures| captures[1].to_owned())
+        .collect()
+}
+
+/// The products `body` lists, by slug, each with where its card leads.
+fn product_links(body: &str) -> BTreeMap<String, String> {
+    PRODUCT_LINK
+        .captures_iter(body)
+        .map(|captures| (captures[1].to_owned(), captures[2].to_owned()))
         .collect()
 }
 
@@ -209,6 +239,25 @@ mod tests {
                 490,
                 vec!["FR".into(), "BE".into(), "CH".into()]
             )]
+        );
+    }
+
+    #[test]
+    fn categories_and_products_are_found_by_their_links() {
+        let body = r#"<a class="menu-top" data-category="souris" data-products="2" href="/jeux/souris">Souris</a>
+            <li class="card" data-product="peluche">
+            <a class="card-pic" href="/jeux/souris/peluche"><img></a></li>
+            <li class="card" data-product="balle"><a class="card-pic" href="/p/balle"></a></li>"#;
+        assert_eq!(
+            category_links(body).into_iter().collect::<Vec<_>>(),
+            ["/jeux/souris"]
+        );
+        assert_eq!(
+            product_links(body).into_iter().collect::<Vec<_>>(),
+            [
+                ("balle".to_owned(), "/p/balle".to_owned()),
+                ("peluche".to_owned(), "/jeux/souris/peluche".to_owned()),
+            ]
         );
     }
 

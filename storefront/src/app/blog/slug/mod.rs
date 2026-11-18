@@ -15,7 +15,7 @@ use topcoat::{
 };
 
 use super::published_on;
-use crate::app::{SHOP_NAME, c, catalog_grid, document, words::t};
+use crate::app::{SHOP_NAME, catalog_grid, document, words::t};
 
 module_param!(pub slug);
 
@@ -86,6 +86,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let slugs = article_slugs(cx, &article.id).await?;
     let nav = menu(cx).await?;
     let blocks = shown(cx, std::mem::take(&mut article.blocks)).await?;
+    let paths = crate::app::address::paths(cx).await?;
     let path = href!(index, slug: article.slug.clone()).resolve(cx);
     let speaking = crate::app::lang::speaking(cx).await;
     let elsewhere = speaking.elsewhere(&path, |language| {
@@ -160,7 +161,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             <aside class="post-products" data-article-products="">
                                 if let Some(category) = &block.category {
                                     <p class="post-category">
-                                        <a href=(href!(c::slug::index, c::slug::slug: category.slug.clone()))
+                                        <a href=(crate::app::address::category_href(cx, paths, category))
                                             data-article-category=(&category.slug)>
                                             (t!(blog_see_category, name: &category.name))
                                         </a>

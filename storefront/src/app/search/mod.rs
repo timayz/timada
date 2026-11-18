@@ -17,7 +17,7 @@ use topcoat::{
 };
 
 use crate::app::words::t;
-use crate::app::{boutique, c, own_page, p, price_line, support_client};
+use crate::app::{address, boutique, own_page, price_line, support_client};
 
 /// How many of each the dropdown shows.
 const PRODUCTS: u32 = 4;
@@ -63,6 +63,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             .await?,
         )
     };
+    let paths = address::paths(cx).await?;
     let tree = categories(cx).await?;
     // The view takes its data along, so the hits are copied out of the tree.
     let hits: Vec<Category> = search_categories(&tree, &q, CATEGORIES)
@@ -120,7 +121,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <ul class="search-list search-products">
                         for product in &found.items {
                             <li>
-                                <a class="search-row search-product" href=(href!(p::slug::index, p::slug::slug: product.slug.clone())) data-search-product=(&product.slug)>
+                                <a class="search-row search-product" href=(address::product_href(cx, paths, product)) data-search-product=(&product.slug)>
                                     if let Some(image) = product.image() {
                                         product_image(image: image, attrs: attributes! { class="search-pic" })
                                     } else {
@@ -139,7 +140,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     <ul class="search-list search-categories">
                         for category in &hits {
                             <li>
-                                <a class="search-row" href=(href!(c::slug::index, c::slug::slug: category.slug.clone())) data-search-category=(&category.slug)>
+                                <a class="search-row" href=(address::category_href(cx, paths, category)) data-search-category=(&category.slug)>
                                     <span class="search-name">(&category.name)</span>
                                     <small class="search-kind">(t!(listing_search_category))</small>
                                 </a>

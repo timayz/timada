@@ -190,7 +190,7 @@ test("the shop browses the categories its products are filed under", async ({
   ).toHaveAttribute("data-category-direct", "0");
 
   // A top-level category lists what is under it, newest first by default.
-  await page.goto(`${SHOP}/c/bedding`);
+  await page.goto(`${SHOP}/bedding`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Bedding");
   await expect(page.locator("[data-subcategory=mats]")).toContainText(
     "Mats (2)",
@@ -210,13 +210,13 @@ test("the shop browses the categories its products are filed under", async ({
   );
 
   // A sub-category page carries a breadcrumb up to its parent.
-  await page.goto(`${SHOP}/c/mats`);
+  await page.goto(`${SHOP}/bedding/mats`);
   await expect(page.locator("[data-crumbs]")).toContainText("Bedding");
   await expect(page.locator("[data-crumbs]")).toContainText("Mats");
   expect((await page.goto(`${SHOP}/c/nothing-here`))?.status()).toBe(404);
 
   // A product page carries its category and what else is in it.
-  await page.goto(`${SHOP}/p/cooling-mat`);
+  await page.goto(`${SHOP}/bedding/mats/cooling-mat`);
   await expect(page.locator("[data-crumbs]")).toContainText("Mats");
   const related = page.locator("[data-section=similaires]");
   await expect(related).toContainText("Produits similaires");
@@ -237,7 +237,7 @@ test("the shop browses the categories its products are filed under", async ({
   await expect(small.locator("nav#menu")).toBeVisible();
   await small.locator("nav#menu").getByText("Bedding", { exact: true }).click();
   await small.locator("nav#menu [data-category=mats]").click();
-  await expect(small).toHaveURL(`${SHOP}/c/mats`);
+  await expect(small).toHaveURL(`${SHOP}/bedding/mats`);
   await phone.close();
 
   // A category the merchant hides leaves the menu, with what is under it;
@@ -257,7 +257,7 @@ test("the shop browses the categories its products are filed under", async ({
     });
   }).toPass({ timeout: 15_000 });
   await expect(page.locator("nav#menu [data-category=mats]")).toHaveCount(0);
-  await page.goto(`${SHOP}/c/mats`);
+  await page.goto(`${SHOP}/bedding/mats`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Mats");
   await expect(page.locator("[data-crumbs]")).toContainText("Bedding");
 });

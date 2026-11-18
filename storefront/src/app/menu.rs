@@ -15,11 +15,12 @@ use topcoat::{
     view::{View, view},
 };
 
-use super::{boutique, c, words::t};
+use super::{address, boutique, words::t};
 
 /// The menu under the header. `nav` holds only what the menu shows.
 #[topcoat::view::component]
 pub async fn site_menu(cx: &Cx, nav: &[CategoryNode]) -> Result<impl View> {
+    let paths = address::paths(cx).await?;
     Ok(view! {
         <nav id="menu" class="sections" aria-label=(t!(listing_menu))>
             <a class="menu-close" href="#">(t!(listing_menu_close))</a>
@@ -29,7 +30,7 @@ pub async fn site_menu(cx: &Cx, nav: &[CategoryNode]) -> Result<impl View> {
                     <li class="menu-item">
                         if node.children.is_empty() {
                             <a class="menu-top" data-category=(&node.category.slug) data-products=(node.product_count)
-                                href=(href!(c::slug::index, c::slug::slug: node.category.slug.clone()))>
+                                href=(address::category_href(cx, paths, &node.category))>
                                 (&node.category.name)
                             </a>
                         } else {
@@ -37,14 +38,14 @@ pub async fn site_menu(cx: &Cx, nav: &[CategoryNode]) -> Result<impl View> {
                                 <summary class="menu-top">(&node.category.name)</summary>
                                 <div class="menu-panel">
                                     <a class="menu-all" data-category=(&node.category.slug) data-products=(node.product_count)
-                                        href=(href!(c::slug::index, c::slug::slug: node.category.slug.clone()))>
+                                        href=(address::category_href(cx, paths, &node.category))>
                                         (t!(listing_menu_all, name: &node.category.name))
                                     </a>
                                     <ul class="menu-columns">
                                         for child in &node.children {
                                             <li>
                                                 <a class="menu-heading" data-category=(&child.category.slug) data-products=(child.product_count)
-                                                    href=(href!(c::slug::index, c::slug::slug: child.category.slug.clone()))>
+                                                    href=(address::category_href(cx, paths, &child.category))>
                                                     (&child.category.name)
                                                 </a>
                                                 if !child.children.is_empty() {
@@ -52,7 +53,7 @@ pub async fn site_menu(cx: &Cx, nav: &[CategoryNode]) -> Result<impl View> {
                                                         for leaf in &child.children {
                                                             <li>
                                                                 <a data-category=(&leaf.category.slug) data-products=(leaf.product_count)
-                                                                    href=(href!(c::slug::index, c::slug::slug: leaf.category.slug.clone()))>
+                                                                    href=(address::category_href(cx, paths, &leaf.category))>
                                                                     (&leaf.category.name)
                                                                 </a>
                                                             </li>

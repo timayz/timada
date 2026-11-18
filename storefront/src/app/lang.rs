@@ -15,7 +15,10 @@
 //! ([`SPOKEN`]) and leaves the others out.
 
 use crate::app::words::t;
-use timada_storefront::{AddressLanguage, MoneyFormat, ReadIn, absolute_url, shop_languages};
+use timada_storefront::{
+    AddressLanguage, Category, MoneyFormat, Product, ReadIn, absolute_url, paths_in, product_slugs,
+    shop_languages,
+};
 use topcoat::{
     context::{Cx, context, memoize, try_context},
     l10n::{Locale, locale, try_locale},
@@ -314,6 +317,59 @@ fn amounts(cx: &Cx, language: &str) -> MoneyFormat {
     let language = language.to_owned();
     MoneyFormat::new(move |cents, currency| super::write_money(&language, cents, currency))
         .free(t!(checkout_shipping_free).resolve(cx))
+}
+
+/// Where each language of the shop reads a category's page: the language,
+/// then the French path of its page there (each part of it the slug of
+/// that language). Nothing for a shop read in one language.
+pub async fn category_elsewhere(
+    cx: &Cx,
+    category: &Category,
+) -> topcoat::Result<Vec<(&'static str, String)>> {
+    let languages = languages(cx).await;
+    let mut there = Vec::new();
+    if languages.others.is_empty() {
+        return Ok(there);
+    }
+    for language in languages.all() {
+        let paths = paths_in(cx, (language != languages.main).then_some(language)).await?;
+        if let Some(path) = paths.category(&category.id) {
+            there.push((language, path.to_owned()));
+        }
+    }
+    Ok(there)
+}
+
+/// The same for a product's default address: under its main category, by
+/// the slug it goes by in each language.
+pub async fn product_elsewhere(
+    cx: &Cx,
+    product: &Product,
+) -> topcoat::Result<Vec<(&'static str, String)>> {
+    let languages = languages(cx).await;
+    let mut there = Vec::new();
+    if languages.others.is_empty() {
+        return Ok(there);
+    }
+    let slugs = product_slugs(cx, &product.id).await?;
+    for language in languages.all() {
+        let paths = paths_in(cx, (language != languages.main).then_some(language)).await?;
+        let slug = slugs.in_language(language);
+        there.push((
+            language,
+            super::address::filed_href(cx, &paths, &product.categories, slug),
+        ));
+    }
+    Ok(there)
+}
+
+/// The path `language` reads the page at among `there`, else `fallback`.
+pub fn there(there: &[(&'static str, String)], language: &str, fallback: &str) -> String {
+    there
+        .iter()
+        .find(|(theirs, _)| *theirs == language)
+        .map_or(fallback, |(_, path)| path.as_str())
+        .to_owned()
 }
 
 /// The code of the language the pages word this request in.
