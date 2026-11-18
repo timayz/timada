@@ -34,13 +34,15 @@ use timada_core::{Picture, Rendition};
 use crate::aggregator::category::Category;
 use crate::aggregator::feed::Feed;
 use crate::aggregator::stock::StockItem;
+use crate::aggregator::translation::{Translation, Word};
 use crate::aggregator::{DeliveryDefault, Product, ProductCost};
 use crate::command::{
     CategoryState, ProductState, StockState, StockSummary, category_projection,
     delivery_default_projection, feed_projection, product_cost_projection, product_projection,
-    stock_projection,
+    stock_projection, translation_projection, word_projection,
 };
 use crate::query::feed::{settle_feed_product, settle_product_costs};
+use crate::query::paths::TRANSLATIONS_KEY;
 use crate::query::{PRODUCTS, refresh_category_counts};
 
 /// The cursor identity of the read-model subscription, in the store.
@@ -57,7 +59,109 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(on_delivery_default_event())
         .handler(on_feed_event())
         .handler(on_product_cost_event())
+        .handler(on_translation_event())
+        .handler(on_word_event())
         .any_routing_key()
+}
+
+/// What a product or a category says in another language, one row a thing
+/// and a language; none once the translation is dropped.
+#[evento::subscription_all]
+async fn on_translation_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<Translation>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(state) = translation_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    if superseded(&event, state.aggregate_version) {
+        return Ok(());
+    }
+    if state.dropped {
+        db.execute(
+            &format!(
+                "DELETE FROM catalog_translations INDEXED BY {TRANSLATIONS_KEY}
+                 WHERE tenant_id = ?1 AND kind = ?2 AND subject_id = ?3 AND language = ?4"
+            ),
+            (
+                event.tenant.as_str(),
+                state.kind.as_str(),
+                state.subject_id.as_str(),
+                state.language.as_str(),
+            ),
+        )
+        .await?;
+        return Ok(());
+    }
+    db.execute(
+        "INSERT INTO catalog_translations
+            (tenant_id, kind, subject_id, language, name, slug, description)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT (tenant_id, kind, subject_id, language) DO UPDATE SET
+            name = excluded.name, slug = excluded.slug, description = excluded.description",
+        (
+            event.tenant.as_str(),
+            state.kind.as_str(),
+            state.subject_id.as_str(),
+            state.language.as_str(),
+            state.name.as_str(),
+            state.slug.as_str(),
+            state.description.as_str(),
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+/// What a language reads for a word of the shop's products, one row a
+/// language and a word; none once it is taken back.
+#[evento::subscription_all]
+async fn on_word_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<Word>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(state) = word_projection()
+        .load(&event.aggregate_id)
+        .tenant(&event.tenant)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    if superseded(&event, state.aggregate_version) {
+        return Ok(());
+    }
+    if state.wording.is_empty() {
+        db.execute(
+            "DELETE FROM catalog_words WHERE tenant_id = ?1 AND language = ?2 AND key = ?3",
+            (
+                event.tenant.as_str(),
+                state.language.as_str(),
+                state.key().as_str(),
+            ),
+        )
+        .await?;
+        return Ok(());
+    }
+    db.execute(
+        "INSERT INTO catalog_words (tenant_id, language, key, wording) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (tenant_id, language, key) DO UPDATE SET wording = excluded.wording",
+        (
+            event.tenant.as_str(),
+            state.language.as_str(),
+            state.key().as_str(),
+            state.wording.as_str(),
+        ),
+    )
+    .await?;
+    Ok(())
 }
 
 /// What the shop pays for the things a product sells, one row a product

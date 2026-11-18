@@ -13,7 +13,7 @@
 //! sale, grouped by `item_group_id`, or one for a product sold as is. The
 //! rows know nothing of their readers.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
 
 use anyhow::Result;
@@ -21,7 +21,7 @@ use timada_core::db::{Connection, Db, Json, execute, fetch_optional};
 use timada_core::format_amount;
 use timada_core::xml::xml_text as xml;
 
-use super::paths::CategoryPaths;
+use super::paths::{CategoryPaths, ProductWording};
 use crate::command::ProductState;
 use crate::margin::{Margin, MarginTiers, ProductCosts, ShopCosts};
 use crate::value_object::DeliveryDays;
@@ -98,6 +98,43 @@ pub struct FeedVariant {
 }
 
 impl FeedProduct {
+    /// The product as a feed in another language writes it: its name, the
+    /// slug its address goes by there and its description as `wording`
+    /// says them (a part it leaves empty stays the main language's), and
+    /// the values of its combinations as `words` read them.
+    pub fn worded(
+        mut self,
+        wording: Option<ProductWording>,
+        words: &HashMap<String, String>,
+    ) -> Self {
+        if let Some(wording) = wording {
+            self.name = wording.name;
+            self.slug = wording.slug;
+            if !wording.description.is_empty() {
+                self.description = wording.description;
+            }
+        }
+        if words.is_empty() {
+            return self;
+        }
+        let word = |value: &str| {
+            words
+                .get(&crate::word_key(value))
+                .cloned()
+                .unwrap_or_else(|| value.to_owned())
+        };
+        for variant in &mut self.variants {
+            // The label is the values a shopper chose, joined.
+            if let Some(label) = &mut variant.label {
+                *label = label.split(" / ").map(word).collect::<Vec<_>>().join(" / ");
+            }
+            for (_, value) in &mut variant.kinds {
+                *value = word(value);
+            }
+        }
+        self
+    }
+
     /// What a feed says of the product, or `None` when no feed carries it.
     pub fn of(product: &ProductState) -> Option<Self> {
         if !product.is_in_feed() {
@@ -399,6 +436,9 @@ pub struct FeedShop {
     pub storefront_url: String,
     /// Where the shop's categories are, for a product's address.
     pub paths: CategoryPaths,
+    /// What a product's address starts with under the shop's, for a feed
+    /// in another language (`/en`); empty for the main one.
+    pub prefix: String,
     /// The delivery prices, one a country a method names. A method that
     /// ships everywhere names none and is left to the account's own
     /// delivery settings: a feed gives a price per country.
@@ -493,8 +533,9 @@ pub fn write_feed_items(
     image_url: impl Fn(&str) -> String,
 ) {
     let page = format!(
-        "{}{}",
+        "{}{}{}",
         shop.storefront_url,
+        shop.prefix,
         shop.paths.product(&product.categories, &product.slug)
     );
     if product.variants.is_empty() {
@@ -830,6 +871,7 @@ mod tests {
             name: "Acme".into(),
             storefront_url: "https://shop.example".into(),
             paths: CategoryPaths::default(),
+            prefix: String::new(),
             shippings: vec![FeedShipping {
                 country: "FR".into(),
                 service: "Colissimo".into(),

@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use timada_catalog::{
     FeedReader, FeedShipping, FeedShop, GOOGLE_FEED_TAIL, default_delivery_days, feed_product,
-    feed_products, google_feed_head, write_feed_items,
+    feed_products, google_feed_head, product_wording, write_feed_items,
 };
 use timada_core::Rendition;
 use timada_reviews::{
@@ -72,24 +72,145 @@ pub async fn shop_of(
         name: tenant.name.clone(),
         storefront_url,
         paths: timada_catalog::category_paths(db, &tenant.id).await?,
+        prefix: String::new(),
         shippings,
         delivery_days: default_delivery_days(db, &tenant.id).await?,
         margin: crate::margins::feed_margin(store, tenant, &costs).await?,
     }))
 }
 
+/// A country and a language the shop sells in: what one feed is for. The
+/// countries are the ones its shipping methods name, the languages the
+/// ones its storefront is read in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Market {
+    /// Two letters, upper case: `BE`.
+    pub country: String,
+    /// An ISO 639-1 code: `fr`.
+    pub language: String,
+}
+
+impl Market {
+    /// What a feed's address names it by: `be-fr`.
+    pub fn code(&self) -> String {
+        format!("{}-{}", self.country.to_ascii_lowercase(), self.language)
+    }
+
+    /// The market an address names, whatever the shop sells in.
+    pub fn parse(code: &str) -> Option<Self> {
+        let (country, language) = code.split_once('-')?;
+        let valid = |part: &str| part.len() == 2 && part.bytes().all(|b| b.is_ascii_lowercase());
+        (valid(country) && valid(language)).then(|| Market {
+            country: country.to_ascii_uppercase(),
+            language: language.to_owned(),
+        })
+    }
+}
+
+/// The markets the shop has a feed for: each country its shipping methods
+/// name, in each language its storefront is read in (the main one first).
+/// None for a shop that never chose its languages, or whose methods name no
+/// country: its one feed, in the main language, is all it has.
+pub async fn markets_of(store: &Executor, tenant: &TenantState) -> anyhow::Result<Vec<Market>> {
+    let Some(languages) = timada_pages::Command::new(store.clone(), &tenant.id)
+        .languages()
+        .await?
+    else {
+        return Ok(Vec::new());
+    };
+    let mut countries: Vec<String> = timada_orders::Command::new(store.clone(), &tenant.id)
+        .shipping_methods()
+        .await?
+        .into_iter()
+        .flat_map(|method| method.countries)
+        .collect();
+    countries.sort();
+    countries.dedup();
+    Ok(countries
+        .iter()
+        .flat_map(|country| {
+            std::iter::once(&languages.main)
+                .chain(&languages.others)
+                .map(|language| Market {
+                    country: country.clone(),
+                    language: language.clone(),
+                })
+        })
+        .collect())
+}
+
+/// What a feed in another language words its products with.
+pub struct FeedWording {
+    language: String,
+    /// What the language reads for the words the products share.
+    words: HashMap<String, String>,
+}
+
+/// `shop` as the feed of `market` says it, or `None` when the shop does
+/// not sell there: the delivery prices of that country alone, each method
+/// named as the language names it, and, in a language other than the main
+/// one, each product at its address there, worded as it is read there.
+pub async fn in_market(
+    store: &Executor,
+    db: &Db,
+    tenant: &TenantState,
+    mut shop: FeedShop,
+    market: &Market,
+) -> anyhow::Result<Option<(FeedShop, Option<FeedWording>)>> {
+    if !markets_of(store, tenant).await?.contains(market) {
+        return Ok(None);
+    }
+    shop.shippings
+        .retain(|shipping| shipping.country == market.country);
+    let main = timada_pages::Command::new(store.clone(), &tenant.id)
+        .languages()
+        .await?
+        .is_none_or(|languages| languages.main == market.language);
+    if main {
+        return Ok(Some((shop, None)));
+    }
+    // A method's name in the language, by the name it has in the main one:
+    // a shop's methods are few, and a feed's lines carry no id.
+    let orders = timada_orders::Command::new(store.clone(), &tenant.id);
+    let named = orders.shipping_names(&market.language).await?;
+    for method in orders.shipping_methods().await? {
+        if let Some(theirs) = named.get(&method.id) {
+            for shipping in &mut shop.shippings {
+                if shipping.service == method.name {
+                    shipping.service = theirs.clone();
+                }
+            }
+        }
+    }
+    shop.paths = timada_catalog::category_paths_in(db, &tenant.id, &market.language).await?;
+    shop.prefix = format!("/{}", market.language);
+    let words = timada_catalog::words_in(db, &tenant.id, &market.language).await?;
+    Ok(Some((
+        shop,
+        Some(FeedWording {
+            language: market.language.clone(),
+            words,
+        }),
+    )))
+}
+
 /// The products of `tenant_id` as `reader` takes them, as a response body
 /// written behind the response: each page of products is read when the
 /// reader has taken the one before. A read that fails breaks the body off
 /// rather than end it early.
+///
+/// `wording` is what a feed in another language words them with: a
+/// product with no translation there is listed as the main language says
+/// it, as the storefront reads it.
 pub fn products_feed(
     reader: FeedReader,
     db: Db,
     media: Arc<Media>,
     tenant_id: String,
     shop: FeedShop,
+    wording: Option<FeedWording>,
 ) -> Body {
-    Body::new(pages_of(reader, db, media, tenant_id, shop, PAGE))
+    Body::new(pages_of(reader, db, media, tenant_id, shop, wording, PAGE))
 }
 
 /// What a reviews feed says of the product `id`, when the shop's shopping
@@ -206,6 +327,7 @@ fn pages_of(
     media: Arc<Media>,
     tenant_id: String,
     shop: FeedShop,
+    wording: Option<FeedWording>,
     page: i64,
 ) -> Pages {
     let (pages, body) = mpsc::channel::<Result<Bytes, Broken>>(1);
@@ -219,18 +341,35 @@ fn pages_of(
         }
         let mut after: Option<String> = None;
         loop {
-            let products = match feed_products(&db, &tenant_id, after.as_deref(), page).await {
-                Ok(products) => products,
+            let read = async {
+                let mut products = feed_products(&db, &tenant_id, after.as_deref(), page).await?;
+                // The id a page is read after is the product's own, whatever
+                // it is called in the language.
+                let last = products.last().map(|product| product.id.clone());
+                if let Some(wording) = &wording {
+                    let mut worded = Vec::with_capacity(products.len());
+                    for product in products {
+                        let theirs =
+                            product_wording(&db, &tenant_id, &product.id, &wording.language)
+                                .await?;
+                        worded.push(product.worded(theirs, &wording.words));
+                    }
+                    products = worded;
+                }
+                anyhow::Ok((products, last))
+            };
+            let (products, last) = match read.await {
+                Ok(read) => read,
                 Err(err) => {
                     tracing::error!(tenant = %tenant_id, %err, "a shopping feed broke off");
                     let _ = pages.send(Err(err.into())).await;
                     return;
                 }
             };
-            let Some(last) = products.last() else {
+            let Some(last) = last else {
                 break;
             };
-            after = Some(last.id.clone());
+            after = Some(last);
             let mut xml = String::new();
             for product in &products {
                 write_feed_items(&mut xml, reader, product, &shop, |image_id| {
@@ -301,6 +440,7 @@ mod tests {
             name: "Acme".into(),
             storefront_url: "https://shop.example".into(),
             paths: Default::default(),
+            prefix: String::new(),
             ..Default::default()
         }
     }
@@ -365,6 +505,7 @@ mod tests {
             media(),
             TENANT.into(),
             shop(),
+            None,
             2,
         ))
         .await;
@@ -379,6 +520,190 @@ mod tests {
         }
     }
 
+    /// A feed in another language: a product at its address there, under
+    /// its category's slug there, worded as its translation says, its
+    /// combinations by the shop's words; one with no translation as the
+    /// main language says it.
+    #[tokio::test]
+    async fn a_feed_in_another_language_words_and_links_as_it_is_read_there() {
+        use timada_catalog::{
+            CreateCategory, DefineVariant, OptionSelection, TranslationKind, TranslationText,
+        };
+
+        let store = evento::Turso::in_memory_concurrent().await.unwrap();
+        let mut conn = store.connect().unwrap();
+        timada_catalog::MIGRATIONS
+            .to_latest(&mut conn)
+            .await
+            .map_err(|(_, err)| err)
+            .unwrap();
+        let db = Db::from(store.clone());
+        let catalog = Command::new(store.clone(), TENANT);
+        let cats = catalog
+            .create_category(
+                "user-alice",
+                CreateCategory {
+                    name: "Chats".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let named = |name: &str| TranslationText {
+            name: name.into(),
+            ..Default::default()
+        };
+        catalog
+            .translate(
+                "user-alice",
+                TranslationKind::Category,
+                &cats.id,
+                "en",
+                named("Cats"),
+            )
+            .await
+            .unwrap();
+        let create = async |name: &str| {
+            let product = catalog
+                .create_product(
+                    "user-alice",
+                    CreateProduct {
+                        name: name.into(),
+                        slug: None,
+                    },
+                )
+                .await
+                .unwrap();
+            catalog
+                .categorize_product("user-alice", &product.id, &cats.id)
+                .await
+                .unwrap();
+            product.id
+        };
+        // A collar in one colour, worded in English.
+        let collar = create("Collier").await;
+        let colour = catalog
+            .define_option("user-alice", &collar, "Couleur", vec!["Rose".into()])
+            .await
+            .unwrap();
+        catalog
+            .define_variant(
+                "user-alice",
+                &collar,
+                DefineVariant {
+                    selections: vec![OptionSelection {
+                        option_id: colour,
+                        value: "Rose".into(),
+                    }],
+                    sku: None,
+                    amount_cents: 990,
+                    currency: "EUR".into(),
+                    image_id: None,
+                },
+            )
+            .await
+            .unwrap();
+        catalog
+            .translate(
+                "user-alice",
+                TranslationKind::Product,
+                &collar,
+                "en",
+                TranslationText {
+                    description: "A collar for a cat.".into(),
+                    ..named("Collar")
+                },
+            )
+            .await
+            .unwrap();
+        catalog
+            .word("user-alice", "en", "Rose", "Pink")
+            .await
+            .unwrap();
+        // A bowl with no English wording.
+        let bowl = create("Gamelle").await;
+        catalog
+            .price_product("user-alice", &bowl, 500, "EUR")
+            .await
+            .unwrap();
+        for id in [&collar, &bowl] {
+            catalog.publish_product("user-alice", id).await.unwrap();
+        }
+        timada_catalog::read_model_subscription::<evento::Turso>(db.clone())
+            .run_once(&store)
+            .await
+            .unwrap();
+
+        let english = FeedShop {
+            paths: timada_catalog::category_paths_in(&db, TENANT, "en")
+                .await
+                .unwrap(),
+            prefix: "/en".into(),
+            ..shop()
+        };
+        let wording = FeedWording {
+            language: "en".into(),
+            words: timada_catalog::words_in(&db, TENANT, "en").await.unwrap(),
+        };
+        let (xml, whole) = read(pages_of(
+            FeedReader::Google,
+            db.clone(),
+            media(),
+            TENANT.into(),
+            english,
+            Some(wording),
+            1,
+        ))
+        .await;
+        assert!(whole);
+        assert!(
+            xml.contains("<g:link>https://shop.example/en/cats/collar?v="),
+            "{xml}"
+        );
+        assert!(xml.contains("<g:title>Collar – Pink</g:title>"), "{xml}");
+        assert!(xml.contains("A collar for a cat."), "{xml}");
+        assert!(
+            xml.contains("<g:link>https://shop.example/en/cats/gamelle</g:link>"),
+            "{xml}"
+        );
+        assert!(xml.contains("<g:title>Gamelle</g:title>"), "{xml}");
+        assert!(!xml.contains("Collier") && !xml.contains("Rose"), "{xml}");
+
+        // The main language's feed is as it was.
+        let french = FeedShop {
+            paths: timada_catalog::category_paths(&db, TENANT).await.unwrap(),
+            ..shop()
+        };
+        let (xml, _) = read(pages_of(
+            FeedReader::Google,
+            db,
+            media(),
+            TENANT.into(),
+            french,
+            None,
+            2,
+        ))
+        .await;
+        assert!(
+            xml.contains("<g:link>https://shop.example/chats/collier?v="),
+            "{xml}"
+        );
+        assert!(xml.contains("<g:title>Collier – Rose</g:title>"), "{xml}");
+    }
+
+    #[test]
+    fn a_market_is_a_country_then_a_language() {
+        let market = Market::parse("be-fr").unwrap();
+        assert_eq!(
+            (market.country.as_str(), market.language.as_str()),
+            ("BE", "fr")
+        );
+        assert_eq!(market.code(), "be-fr");
+        for not_one in ["google", "BE-fr", "be", "be-fra", "be_fr", ""] {
+            assert!(Market::parse(not_one).is_none(), "{not_one}");
+        }
+    }
+
     #[tokio::test]
     async fn a_read_that_fails_breaks_the_feed_off() {
         // No table to read: the first page fails.
@@ -389,6 +714,7 @@ mod tests {
             media(),
             TENANT.into(),
             shop(),
+            None,
             2,
         ))
         .await;
@@ -514,6 +840,7 @@ mod tests {
                 media(),
                 TENANT.into(),
                 shop(),
+                None,
                 2,
             ))
             .await;
