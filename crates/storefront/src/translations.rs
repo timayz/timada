@@ -9,6 +9,8 @@
 //! (a draft's wording is copied too): a reader joins them to the things it
 //! lists, so a row of an unlisted thing is never shown.
 
+use std::collections::HashMap;
+
 use evento::{Executor, metadata::RawEvent, subscription::Context};
 pub use timada_catalog::TranslationKind;
 use timada_catalog::aggregator::translation::Translation as Stream;
@@ -35,6 +37,9 @@ pub struct Translation {
     pub meta_description: String,
     /// The questions a category's page answers.
     pub questions: Vec<CategoryQuestion>,
+    /// What a product's pictures show, by picture id, for the ones said in
+    /// this language.
+    pub alts: HashMap<String, String>,
 }
 
 #[derive(FromRow)]
@@ -46,6 +51,7 @@ struct Row {
     meta_title: String,
     meta_description: String,
     questions_json: String,
+    alts_json: String,
 }
 
 impl From<Row> for Translation {
@@ -58,6 +64,7 @@ impl From<Row> for Translation {
             meta_title: row.meta_title,
             meta_description: row.meta_description,
             questions: serde_json::from_str(&row.questions_json).unwrap_or_default(),
+            alts: serde_json::from_str(&row.alts_json).unwrap_or_default(),
         }
     }
 }
@@ -70,7 +77,8 @@ pub(crate) const TRANSLATIONS_KEY: &str = "sqlite_autoindex_storefront_translati
 /// The same for `storefront_text_translations`.
 pub(crate) const TEXT_TRANSLATIONS_KEY: &str = "sqlite_autoindex_storefront_text_translations_1";
 
-const COLUMNS: &str = "name, slug, description, body, meta_title, meta_description, questions_json";
+const COLUMNS: &str =
+    "name, slug, description, body, meta_title, meta_description, questions_json, alts_json";
 
 /// What the thing says in `language`; `None` where it has no translation.
 pub async fn translation_of(
@@ -164,16 +172,21 @@ pub(crate) async fn on_translation_event<E: Executor>(
             answer: asked.answer.clone(),
         })
         .collect();
+    let alts: HashMap<&str, &str> = state
+        .alts
+        .iter()
+        .map(|said| (said.image_id.as_str(), said.alt.as_str()))
+        .collect();
     db.execute(
         "INSERT INTO storefront_translations
             (kind, subject_id, language, name, slug, description, body, meta_title,
-             meta_description, questions_json, slug_search, name_search)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             meta_description, questions_json, slug_search, name_search, alts_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT (kind, subject_id, language) DO UPDATE SET
             name = excluded.name, slug = excluded.slug, description = excluded.description,
             body = excluded.body, meta_title = excluded.meta_title,
             meta_description = excluded.meta_description,
-            questions_json = excluded.questions_json,
+            questions_json = excluded.questions_json, alts_json = excluded.alts_json,
             slug_search = excluded.slug_search, name_search = excluded.name_search",
         (
             state.kind.as_str(),
@@ -189,6 +202,7 @@ pub(crate) async fn on_translation_event<E: Executor>(
             // What a search in this language finds it by.
             search_key(&state.slug),
             search_key(&state.name),
+            serde_json::to_string(&alts)?,
         ),
     )
     .await?;

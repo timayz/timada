@@ -727,6 +727,13 @@ pub fn normalize_category_body(body: &str) -> Result<String, CatalogError> {
     Ok(body.to_owned())
 }
 
+/// What one picture of a product shows, said in another language.
+#[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]
+pub struct ImageAlt {
+    pub image_id: String,
+    pub alt: String,
+}
+
 /// A question shoppers ask about a category, and the answer its page
 /// gives.
 #[derive(Debug, Clone, PartialEq, Eq, bitcode::Encode, bitcode::Decode)]

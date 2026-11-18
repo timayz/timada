@@ -83,6 +83,7 @@ pub fn catalog_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(crate::translations::on_text_translation_event())
         .handler(crate::words::on_word_event())
         .handler(crate::terms::on_shipping_methods_event())
+        .handler(crate::terms::on_shipping_names_event())
         .handler(crate::terms::on_return_policy_event())
         .handler(on_delivery_default_event())
         .handler(on_best_sellers_event())

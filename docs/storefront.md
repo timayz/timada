@@ -736,6 +736,14 @@ language's, which its values are looked up by; `worded(cx, name)` gives what the
 reads for it. An order keeps the variant's values in the language it was placed in, as
 it keeps the product's name.
 
+Two more short texts have a wording per language. A product's translation says what each
+of its pictures shows (`AltsSet`, a field per picture on the Translations tab): the
+readers return `Image::alt` in the language of the request. And a shipping method is
+named per language (`timada-orders/ShippingNames`, one stream per language, written from
+the Shipping page and copied into `storefront_shipping_names`): `cart(cx)` names its
+`shipping_options` in the language of the request, and an order keeps the name of the
+language it was placed in.
+
 ## Announcements
 
 The short messages at the top of the shop ("-10% maintenant avec le code BIENVENUE10")

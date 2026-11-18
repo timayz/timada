@@ -80,6 +80,11 @@ fn word_product(product: &mut Product, translation: Translation) {
     product.name = translation.name;
     product.slug = translation.slug;
     said(translation.description, &mut product.description);
+    for image in &mut product.images {
+        if let Some(alt) = translation.alts.get(&image.id) {
+            image.alt = alt.clone();
+        }
+    }
 }
 
 /// Words each product in `language`, where it has a translation: its name,
@@ -155,8 +160,9 @@ async fn product_words_in(db: &Db, language: &str, products: &mut [Product]) -> 
 }
 
 /// Words a cart's lines and its offers in `language`: the name of each
-/// product that has a translation, the slug its page goes by there, and
-/// the values of the variant taken as the shop words them there. The cart
+/// product that has a translation, the slug its page goes by there, the
+/// values of the variant taken as the shop words them there, and the names
+/// of the ways it ships. The cart
 /// itself keeps no name: the dashboard prices it from the catalog, in the
 /// main language.
 pub(crate) async fn cart_in(db: &Db, language: &str, cart: &mut CartView) -> anyhow::Result<()> {
@@ -187,6 +193,18 @@ pub(crate) async fn cart_in(db: &Db, language: &str, cart: &mut CartView) -> any
             if offer.slug.is_some() {
                 offer.slug = Some(translation.slug.clone());
             }
+        }
+    }
+    // The ways it ships, as the language calls them.
+    let names: Vec<(String, String)> = db
+        .fetch_all(
+            "SELECT method_id, name FROM storefront_shipping_names WHERE language = ?1",
+            (language,),
+        )
+        .await?;
+    for option in &mut cart.shipping_options {
+        if let Some((_, name)) = names.iter().find(|(id, _)| *id == option.id) {
+            option.name = name.clone();
         }
     }
     // A variant's values, from the products still on sale here: one that

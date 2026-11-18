@@ -701,6 +701,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         name_max: MAX_NAME_LEN,
         description_max: MAX_DESCRIPTION_LEN,
         category: None,
+        images: product
+            .images
+            .iter()
+            .map(|image| (image.id.clone(), image.alt.clone()))
+            .collect(),
     };
     // Only the margin tab reads what a sale costs the shop and the VAT in
     // a price.

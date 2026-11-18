@@ -6,15 +6,16 @@ use timada_core::languages::is_language;
 use timada_core::{FormerSlug, leave_slug};
 
 use crate::aggregator::translation::{
-    BodyWritten, Claimed, Described, Dropped, Named, Noted, QuestionsSet, SeoSet, SlugLanguages,
-    Translation, TranslationSlug,
+    AltsSet, BodyWritten, Claimed, Described, Dropped, Named, Noted, QuestionsSet, SeoSet,
+    SlugLanguages, Translation, TranslationSlug,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
-    CategoryQuestion, FALLBACK_CATEGORY_SLUG, TranslationKind, normalize_category_body,
-    normalize_category_description, normalize_category_name, normalize_category_questions,
-    normalize_description, normalize_name, normalize_seo, normalize_slug, slug_languages_id,
-    slugify, slugify_or, suffixed_slug, translation_id, translation_slug_id,
+    CategoryQuestion, FALLBACK_CATEGORY_SLUG, ImageAlt, TranslationKind, normalize_alt,
+    normalize_category_body, normalize_category_description, normalize_category_name,
+    normalize_category_questions, normalize_description, normalize_name, normalize_seo,
+    normalize_slug, slug_languages_id, slugify, slugify_or, suffixed_slug, translation_id,
+    translation_slug_id,
 };
 
 use super::{CLAIM_ATTEMPTS, Command};
@@ -39,6 +40,11 @@ pub struct TranslationText {
     pub body: String,
     /// The questions a category's page answers; a product has none.
     pub questions: Vec<CategoryQuestion>,
+    /// What a product's pictures show, said in this language; a category
+    /// has none. A picture left out, or given an empty text, is described
+    /// as the main language does, and one the product does not have is
+    /// set aside.
+    pub alts: Vec<ImageAlt>,
 }
 
 /// The write model of one translation, and what a storefront copies of it.
@@ -61,6 +67,8 @@ pub struct TranslationState {
     pub meta_title: String,
     pub meta_description: String,
     pub questions: Vec<CategoryQuestion>,
+    /// What a product's pictures show, for the ones said in this language.
+    pub alts: Vec<ImageAlt>,
     /// Gone: the thing is read in the main language. The former slugs
     /// stay, for an old address to be answered from.
     pub dropped: bool,
@@ -82,6 +90,7 @@ pub fn translation_projection<E: Executor>() -> Projection<E, TranslationState> 
         .handler(on_body_written())
         .handler(on_seo_set())
         .handler(on_questions_set())
+        .handler(on_alts_set())
         .handler(on_dropped())
         .strict()
 }
@@ -147,6 +156,13 @@ async fn on_questions_set(
 }
 
 #[evento::handler]
+async fn on_alts_set(event: Event<AltsSet>, state: &mut TranslationState) -> anyhow::Result<()> {
+    state.alts = event.data.alts.to_owned();
+    state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
 async fn on_dropped(event: Event<Dropped>, state: &mut TranslationState) -> anyhow::Result<()> {
     let slug = std::mem::take(&mut state.slug);
     leave_slug(&mut state.former_slugs, &slug, "", event.timestamp);
@@ -156,6 +172,7 @@ async fn on_dropped(event: Event<Dropped>, state: &mut TranslationState) -> anyh
     state.meta_title.clear();
     state.meta_description.clear();
     state.questions.clear();
+    state.alts.clear();
     state.dropped = true;
     state.updated_at = event.timestamp;
     Ok(())
@@ -579,9 +596,21 @@ impl<E: Executor> Command<E> {
         routing_key: Option<String>,
     ) -> Result<(), CatalogError> {
         let language = normalize_language(language)?;
+        let mut alts = Vec::new();
         let (name, description, body, questions, fallback_slug) = match kind {
             TranslationKind::Product => {
-                self.require_editable(subject_id).await?;
+                let product = self.require_editable(subject_id).await?;
+                // In the pictures' own order, each once.
+                for image in &product.images {
+                    let said = text.alts.iter().find(|alt| alt.image_id == image.id);
+                    let alt = normalize_alt(said.map_or("", |alt| alt.alt.as_str()))?;
+                    if !alt.is_empty() {
+                        alts.push(ImageAlt {
+                            image_id: image.id.clone(),
+                            alt,
+                        });
+                    }
+                }
                 (
                     normalize_name(&text.name)?,
                     normalize_description(&text.description)?,
@@ -706,6 +735,13 @@ impl<E: Executor> Command<E> {
         if live.map_or(!questions.is_empty(), |was| was.questions != questions) {
             write.event(&QuestionsSet {
                 questions,
+                set_by: actor.to_owned(),
+            });
+            changed = true;
+        }
+        if live.map_or(!alts.is_empty(), |was| was.alts != alts) {
+            write.event(&AltsSet {
+                alts,
                 set_by: actor.to_owned(),
             });
             changed = true;

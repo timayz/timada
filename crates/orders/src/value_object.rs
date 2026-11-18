@@ -549,6 +549,11 @@ pub fn shipment_id(order_id: &str) -> String {
     evento::hash_ids(vec!["shipment", order_id])
 }
 
+/// The stream of what the shop's shipping methods are called in `language`.
+pub fn shipping_names_id(language: &str) -> String {
+    evento::hash_ids(vec!["shipping-names", language])
+}
+
 /// The stream of how the tenant ships: one per tenant store.
 pub fn shipping_methods_id() -> String {
     evento::hash_ids(vec!["shipping-methods"])
