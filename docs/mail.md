@@ -232,9 +232,11 @@ built-in wording is English whatever the shop's languages.
 default language's), its own plain-text version, history and "Back to the built-in
 wording". The editors of the same mail link to one another.
 
-The shopper's language comes from the storefront: the primary subtag of the browser's
-`Accept-Language` (`fr` from `fr-FR,fr;q=0.9,en;q=0.8`), sent with the sign-in code
-request and with the checkout, and kept on the order (`Cart::LanguageGiven`,
+The shopper's language comes from the storefront (`shopper_language(cx)`): in a shop
+read in several languages, the one of the address the shopper asked from (`/en/…`); in
+a shop read in one, the primary subtag of the browser's `Accept-Language` (`fr` from
+`fr-FR,fr;q=0.9,en;q=0.8`). It is sent with the sign-in code request, the newsletter
+sign-up, a message to the shop and the checkout, and kept on the order (`Cart::LanguageGiven`,
 `Order::LanguageSet`). The order page in the dashboard shows it. At send time a mail
 goes out:
 

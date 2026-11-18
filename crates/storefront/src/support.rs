@@ -23,7 +23,7 @@ pub use timada_support::{
 
 use crate::context::store;
 use crate::error::{gateway_down, into_error, reach, reach_body};
-use crate::shoppers::request_language;
+use crate::read_in::shopper_language;
 use crate::store::Store;
 
 /// The header the visitor's address travels in to the dashboard.
@@ -132,11 +132,11 @@ impl Store {
 
 /// Hands the request's message to the dashboard; see
 /// [`Store::send_message`]. The visitor's address is the request's client,
-/// as the host's trusted proxies report it, and their language the
-/// request's `Accept-Language`.
+/// as the host's trusted proxies report it, and their language
+/// [`shopper_language`](crate::shopper_language)'s.
 pub async fn send_message(cx: &Cx, draft: MessageDraft) -> Result<MessageRefusable<String>> {
     store(cx)
-        .send_message(draft, client_ip(cx), request_language(cx).as_deref())
+        .send_message(draft, client_ip(cx), shopper_language(cx).as_deref())
         .await
         .map_err(into_error)
 }
