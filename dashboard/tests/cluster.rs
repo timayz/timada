@@ -106,7 +106,7 @@ impl Node {
         let dir = root.join(format!("node{id}"));
         std::fs::create_dir_all(&dir).unwrap();
         let path = Self::store_path(root, id);
-        let store = db::open_store(&path).await.unwrap();
+        let store = db::migrate_store(&path).await.unwrap();
         let store_db = db::Db::from(store.clone());
         let (cluster, store, local) = cluster::open(
             Some(&ClusterConfig {
@@ -972,7 +972,7 @@ async fn concurrent_writers_never_see_stale_versions() {
         .try_init();
     let root = temp_root("stress");
     let path = root.join("timada.db");
-    let store = db::open_store(&path).await.unwrap();
+    let store = db::migrate_store(&path).await.unwrap();
     let (cluster, store, _) = cluster::open(None, None, &[], false, &path, store)
         .await
         .unwrap();

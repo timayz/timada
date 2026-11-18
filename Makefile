@@ -33,8 +33,10 @@ down:
 
 # Build, serve, rebuild on change and live-reload. `topcoat dev` passes no
 # arguments to the binary, so the config path travels through the environment
-# and `serve` is the default subcommand.
-dev:
+# and `serve` is the default subcommand. `serve` does not migrate: the store
+# is migrated once here, and a migration added while this runs waits for
+# `make migrate`.
+dev: migrate
 	TIMADA_CONFIG=config/dev.local.toml topcoat dev -p timada-dashboard
 
 # Also removes what only meant something with that store: the storefront's copy
