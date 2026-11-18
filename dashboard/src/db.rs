@@ -21,23 +21,24 @@ pub use timada_core::db::{Connection, Db};
 /// write it.
 pub type Store = Turso;
 
-/// Opens the store at `path`, creating the file and its directory if needed,
-/// and applies the pending migrations of its schema (the events', the
-/// consensus journal's, then the read models'). The file is opened for
-/// several writers at once; one opened before that way stays so.
+/// Creates the store at `path` if needed, file and directory, and applies the
+/// pending migrations of its schema (the events', the consensus journal's,
+/// then the read models'): what the `migrate` command does, and nothing else
+/// in a deployment. The file is opened for several writers at once; one
+/// opened before that way stays so.
 ///
 /// The system's temporary directory must exist and be writable first
 /// ([`check_temp_dir`]): the database spills the larger statements through
 /// it, and the first one that does would otherwise fail long after the open,
 /// with an error that looks like a store problem (#338).
-pub async fn open_store(path: &Path) -> Result<Store> {
+pub async fn migrate_store(path: &Path) -> Result<Store> {
     prepare_dir(path)?;
     check_temp_dir(&std::env::temp_dir())?;
     let store = Turso::open_concurrent(path)
         .await
         .with_context(|| format!("cannot open {}", path.display()))?;
-    // The journal's tables, so a `migrate` leaves nothing for `serve` to
-    // create; the node builds its journal over the same database later.
+    // The journal's tables too: the node builds its journal over the same
+    // database later.
     TursoJournal::new(store.database().clone())
         .await
         .with_context(|| format!("cannot migrate the consensus journal in {}", path.display()))?;
@@ -46,6 +47,91 @@ pub async fn open_store(path: &Path) -> Result<Store> {
         .with_context(|| format!("cannot migrate the read models in {}", path.display()))?;
     tracing::info!(path = %path.display(), "store ready");
     Ok(store)
+}
+
+/// Opens the store at `path` as [`migrate_store`] left it, and changes
+/// nothing in its schema: a store that is not there, or one with migrations
+/// still to apply, is refused, naming the `migrate` command. A server that
+/// starts never alters the schema by itself, so when it changes is the
+/// operator's to say, and a version started by mistake on a store leaves it
+/// as it was.
+///
+/// The temporary directory is checked as in [`migrate_store`].
+pub async fn open_store(path: &Path) -> Result<Store> {
+    if !path.is_file() {
+        anyhow::bail!(
+            "there is no store at {}: run `timada-dashboard migrate` first",
+            path.display()
+        );
+    }
+    check_temp_dir(&std::env::temp_dir())?;
+    let database = Turso::builder(
+        path.to_str()
+            .with_context(|| format!("{} is not valid UTF-8", path.display()))?,
+    )
+    .build()
+    .await
+    .with_context(|| format!("cannot open {}", path.display()))?;
+    let conn = database
+        .connect()
+        .with_context(|| format!("cannot open {}", path.display()))?;
+    let pending = pending_migrations(&conn)
+        .await
+        .with_context(|| format!("cannot read the migrations of {}", path.display()))?;
+    drop(conn);
+    if !pending.is_empty() {
+        anyhow::bail!(
+            "the store at {} has migrations to apply ({}): run `timada-dashboard migrate` first",
+            path.display(),
+            pending.join(", ")
+        );
+    }
+    let store = Turso::from_database(database)
+        .await
+        .with_context(|| format!("cannot open {}", path.display()))?;
+    tracing::info!(path = %path.display(), "store ready");
+    Ok(store)
+}
+
+/// Every list of migrations the store's schema is made of: the events', the
+/// consensus journal's, the read models' and this node's own tables'.
+fn store_migrations() -> impl Iterator<Item = &'static Migrations<'static>> {
+    [
+        &evento::turso::MIGRATIONS,
+        &evento::turso::CLUSTER_MIGRATIONS,
+    ]
+    .into_iter()
+    .chain(
+        STORE_READ_MODELS
+            .iter()
+            .map(|read_model| read_model.migrations),
+    )
+    .chain(NODE_TABLES.iter().copied())
+}
+
+/// The lists with migrations the store has not recorded, each as "name: how
+/// many". A list the store records more of than this version knows is a
+/// store a newer version migrated, which this one must not run on.
+async fn pending_migrations(conn: &Connection) -> Result<Vec<String>> {
+    let mut pending = Vec::new();
+    for migrations in store_migrations() {
+        let app = migrations.app();
+        let applied = migrations
+            .applied(conn)
+            .await
+            .with_context(|| format!("{app}: cannot read what was applied"))?
+            .len();
+        if applied > migrations.len() {
+            anyhow::bail!(
+                "{app}: the store records {applied} migrations and this version knows {}:                  it was migrated by a newer version",
+                migrations.len()
+            );
+        }
+        if applied < migrations.len() {
+            pending.push(format!("{app}: {}", migrations.len() - applied));
+        }
+    }
+    Ok(pending)
 }
 
 /// The files that make up the store at `path`: the file itself, its
@@ -299,7 +385,7 @@ const NODE_TABLES: &[&Migrations<'static>] = &[
 ];
 
 /// Applies the pending migrations of the read models in the store, and of
-/// this node's own tables (what [`open_store`] does; for a store a test
+/// this node's own tables (what [`migrate_store`] does; for a store a test
 /// built in memory).
 pub async fn migrate_store_read_models(store: &Store) -> Result<()> {
     let mut conn = store.connect()?;
@@ -394,8 +480,8 @@ mod tests {
 
     /// After a reset the read-model tables are there again, empty, with
     /// their indexes and the rows their migrations put in (the totals), and
-    /// the migrations are recorded again, so the next `open_store` has
-    /// nothing to apply.
+    /// the migrations are recorded again, so the next `open_store` finds
+    /// nothing left to apply.
     #[tokio::test]
     async fn a_reset_recreates_the_read_models_empty() {
         let store = Turso::in_memory_concurrent().await.unwrap();
@@ -604,6 +690,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// A server never creates its store: the first start of a deployment
+    /// is `migrate`'s.
+    #[tokio::test]
+    async fn open_store_refuses_a_store_that_is_not_there() {
+        let dir = scratch("open-missing");
+        let path = dir.join("timada.db");
+
+        let err = open_store(&path).await.unwrap_err().to_string();
+
+        assert!(err.contains("there is no store"), "{err}");
+        assert!(err.contains("timada-dashboard migrate"), "{err}");
+        assert!(!path.exists(), "nothing was created");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A store with migrations left to apply is refused as it stands, and
+    /// the refusal names the lists behind and the command; once migrated it
+    /// opens, for several writers still, with its schema untouched.
+    #[tokio::test]
+    async fn open_store_refuses_pending_migrations_and_applies_none() {
+        let dir = scratch("open-pending");
+        let path = dir.join("timada.db");
+        // The events' schema alone: the journal's and the read models' are
+        // still to apply.
+        drop(Turso::open_concurrent(&path).await.unwrap());
+
+        let err = open_store(&path).await.unwrap_err().to_string();
+
+        assert!(err.contains("has migrations to apply"), "{err}");
+        assert!(err.contains("evento-cluster: 1"), "{err}");
+        assert!(err.contains(timada_identity::MIGRATIONS.app()), "{err}");
+        assert!(err.contains("timada-dashboard migrate"), "{err}");
+        let store = Turso::open_concurrent(&path).await.unwrap();
+        let identity = timada_identity::MIGRATIONS
+            .applied(&store.connect().unwrap())
+            .await
+            .unwrap();
+        assert!(identity.is_empty(), "the refusal applied nothing");
+        drop(store);
+
+        let schema_migrated = schema(&Db::from(migrate_store(&path).await.unwrap())).await;
+        let store = open_store(&path).await.unwrap();
+        assert_eq!(
+            store.write_mode(),
+            evento::turso::WriteMode::Concurrent,
+            "still opened for several writers"
+        );
+        assert_eq!(schema(&Db::from(store)).await, schema_migrated);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

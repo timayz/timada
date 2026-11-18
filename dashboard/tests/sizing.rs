@@ -129,7 +129,7 @@ impl Node {
 
     /// Opens the store at `path`: alone, or as node `id` of `peers`.
     async fn open(path: &Path, among: Option<(u64, &[SocketAddr])>) -> Self {
-        let store = db::open_store(path).await.unwrap();
+        let store = db::migrate_store(path).await.unwrap();
         let config = among.map(|(id, peers)| ClusterConfig {
             node_id: id,
             peers: peers.to_vec(),

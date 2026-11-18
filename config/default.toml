@@ -31,8 +31,10 @@ trusted_proxies = []
 [database]
 # The database file: every tenant's events, the snapshots, the subscription
 # cursors and the consensus journal (what the cluster replicates), and the
-# read-model tables the pages read. Created on first start; a `-wal` and a
-# `-log` file live next to it and belong with it.
+# read-model tables the pages read. `timada-dashboard migrate` creates it and
+# applies what a new version adds to its schema; `serve` does neither, and
+# refuses to start until it is done. A `-wal` and a `-log` file live next to
+# it and belong with it.
 path = "data/timada.db"
 
 [auth]

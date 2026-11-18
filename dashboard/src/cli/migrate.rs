@@ -6,8 +6,8 @@ use crate::db;
 /// Creates the store if needed and applies its pending migrations.
 pub async fn migrate(config: Config) -> Result<()> {
     tracing::info!("running database migrations");
-    // Opening the store migrates it; closed again right away.
-    drop(db::open_store(&config.database.path).await?);
+    // Closed again right away.
+    drop(db::migrate_store(&config.database.path).await?);
     tracing::info!("migrations completed");
     Ok(())
 }
