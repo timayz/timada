@@ -116,3 +116,54 @@ async fn an_archived_product_takes_no_membership_changes() {
         assert!(matches!(err, Err(CatalogError::Archived)), "{err:?}");
     }
 }
+
+#[tokio::test]
+async fn a_product_has_a_main_category_among_those_it_is_filed_under() {
+    let cmd = command().await;
+    let product = create_product(&cmd, "Souris").await;
+    let mut ids = Vec::new();
+    for name in ["Jouets", "Chats", "Cadeaux"] {
+        let category = cmd
+            .create_category(ALICE, new_category(name))
+            .await
+            .unwrap();
+        cmd.categorize_product(ALICE, &product.id, &category.id)
+            .await
+            .unwrap();
+        ids.push(category.id);
+    }
+    let filed = async || {
+        let product = cmd.load_product(&product.id).await.unwrap().unwrap();
+        product
+            .filed_under()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    // Until the merchant picks: the first it was filed under.
+    assert_eq!(filed().await, ids);
+    cmd.set_main_category(ALICE, &product.id, Some(&ids[2]))
+        .await
+        .unwrap();
+    assert_eq!(filed().await, [ids[2].as_str(), &ids[0], &ids[1]]);
+    // Taken out of its main category, it falls back the same way.
+    cmd.uncategorize_product(ALICE, &product.id, &ids[2])
+        .await
+        .unwrap();
+    assert_eq!(filed().await, [ids[0].as_str(), &ids[1]]);
+    cmd.set_main_category(ALICE, &product.id, Some(&ids[1]))
+        .await
+        .unwrap();
+    cmd.set_main_category(ALICE, &product.id, None)
+        .await
+        .unwrap();
+    assert_eq!(filed().await, [ids[0].as_str(), &ids[1]]);
+
+    let elsewhere = cmd
+        .set_main_category(ALICE, &product.id, Some(&ids[2]))
+        .await;
+    assert!(
+        matches!(elsewhere, Err(CatalogError::CategoryNotFound)),
+        "{elsewhere:?}"
+    );
+}

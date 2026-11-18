@@ -104,6 +104,23 @@ test("an owner builds a category tree and files a product under it", async ({ pa
   await expect(page.getByRole("status")).toContainText("Added to the category.");
   await expect(page.locator("[data-membership=mats]")).toContainText("Cat mats");
 
+  // Filed under a second one, the merchant picks which of them its address
+  // is under: the first it joined until then.
+  await expect(page.locator("[data-main-category]")).toHaveCount(0);
+  await selectByText(page, "Category", "Bedding");
+  await page.getByRole("button", { name: "Add to category" }).click();
+  await expect(page.getByRole("status")).toContainText("Added to the category.");
+  const main = page.getByLabel("Its address is under");
+  await expect(main.locator("option:checked")).toHaveText("Cat mats");
+  await main.selectOption({ label: "Bedding" });
+  await page.getByRole("button", { name: "Set main category" }).click();
+  await expect(page.getByRole("status")).toContainText("Main category set.");
+  await expect(main.locator("option:checked")).toHaveText("Bedding");
+  // Taken out of it, the product falls back on the other.
+  await page.locator("[data-membership=bedding]").getByRole("button", { name: "Remove" }).click();
+  await expect(page.locator("[data-membership=bedding]")).toHaveCount(0);
+  await expect(page.locator("[data-main-category]")).toHaveCount(0);
+
   // The count reaches the tree. A product in a sub-category counts for its
   // parent too, because the parent's page in the shop lists it.
   await expect(async () => {
