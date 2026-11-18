@@ -284,3 +284,55 @@ async fn a_shop_without_methods_ships_for_free() {
     assert_eq!(order.total_cents, 1250);
     assert_eq!(order.shipping_charge, None);
 }
+
+#[tokio::test]
+async fn a_shipping_method_is_named_in_the_shops_other_languages() {
+    let (orders, _) = store().await;
+    let tracked_id = orders.add_shipping_method(ALICE, tracked()).await.unwrap();
+    assert!(orders.shipping_names("en").await.unwrap().is_empty());
+
+    orders
+        .name_shipping_method(ALICE, "EN", &tracked_id, " Tracked parcel ")
+        .await
+        .unwrap();
+    orders
+        .name_shipping_method(ALICE, "de", &tracked_id, "Sendung mit Verfolgung")
+        .await
+        .unwrap();
+    let english = orders.shipping_names("en").await.unwrap();
+    assert_eq!(
+        english.get(&tracked_id).map(String::as_str),
+        Some("Tracked parcel")
+    );
+    let german = orders.shipping_names("de").await.unwrap();
+    assert_eq!(
+        german.get(&tracked_id).map(String::as_str),
+        Some("Sendung mit Verfolgung")
+    );
+    // An empty name goes back to the main language's.
+    orders
+        .name_shipping_method(ALICE, "en", &tracked_id, " ")
+        .await
+        .unwrap();
+    assert!(orders.shipping_names("en").await.unwrap().is_empty());
+
+    let unknown = orders.name_shipping_method(ALICE, "en", "nope", "X").await;
+    assert!(
+        matches!(unknown, Err(OrderError::ShippingMethodNotFound)),
+        "{unknown:?}"
+    );
+    let language = orders
+        .name_shipping_method(ALICE, "xx", &tracked_id, "X")
+        .await;
+    assert!(
+        matches!(language, Err(OrderError::InvalidLanguage)),
+        "{language:?}"
+    );
+    let long = orders
+        .name_shipping_method(ALICE, "en", &tracked_id, &"x".repeat(81))
+        .await;
+    assert!(
+        matches!(long, Err(OrderError::InvalidShippingName)),
+        "{long:?}"
+    );
+}

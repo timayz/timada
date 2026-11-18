@@ -6,6 +6,7 @@
 pub mod add;
 pub mod delivery_days;
 pub mod method_id;
+pub mod names;
 pub mod returns;
 
 use std::collections::HashMap;
@@ -200,6 +201,35 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .return_policy()
         .await
         .map_err(topcoat::Error::from_anyhow)?;
+    // What each of the shop's other languages calls the methods: a method's
+    // id, its name, and the name there.
+    let other_languages = crate::app::t::slug::announcements::pages(&access)?
+        .languages()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .map(|languages| languages.others)
+        .unwrap_or_default();
+    let mut named_in: Vec<(String, String, Vec<(String, String, String)>)> = Vec::new();
+    if !methods.is_empty() {
+        for language in other_languages {
+            let names = orders(&access)?
+                .shipping_names(&language)
+                .await
+                .map_err(topcoat::Error::from_anyhow)?;
+            let rows = methods
+                .iter()
+                .map(|method| {
+                    let name = names.get(&method.id).cloned().unwrap_or_default();
+                    (method.id.clone(), method.name.clone(), name)
+                })
+                .collect();
+            let heading = format!(
+                "Shipping methods in {}",
+                timada_core::languages::language_name(&language).unwrap_or(&language)
+            );
+            named_in.push((language, heading, rows));
+        }
+    }
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let title = format!("Shipping · {}", tenant.name);
@@ -241,6 +271,27 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                 )
             )
+
+            for (language, heading, rows) in &named_in {
+                section_card(
+                    title: Some(heading),
+                    description: Some("What a shopper reading this language is shown for each method, in the cart, at checkout and with their order. One left empty is read in the main language."),
+                    attrs: attributes! { data-shipping-names=(language) },
+                    <form method="post" action=(href!(names::names, slug: slug.clone())) class="flex max-w-xl flex-col gap-4">
+                        <input type="hidden" name="language" value=(language) />
+                        for (id, name, theirs) in rows {
+                            field(
+                                field_label(attrs: attributes! { for=(format!("shipping-name-{language}-{id}")) }, (name))
+                                input(attrs: attributes! {
+                                    id=(format!("shipping-name-{language}-{id}")) name=(format!("{}{id}", names::NAME_FIELD_PREFIX)) type="text"
+                                    maxlength=(MAX_SHIPPING_NAME_LEN) value=(theirs) placeholder=(name) lang=(language) autocomplete="off"
+                                })
+                            )
+                        }
+                        <div>button(attrs: attributes! { type="submit" }, "Save names")</div>
+                    </form>
+                )
+            }
 
             section_card(
                 title: Some("Default delivery time"),

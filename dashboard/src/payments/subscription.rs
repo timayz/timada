@@ -326,6 +326,15 @@ impl Checkouts {
         if !read_in {
             return Ok(());
         }
+        // The way it ships, as the language calls it.
+        if let Some(shipping) = &mut pending.shipping {
+            let names = timada_orders::Command::new(self.store.clone(), tenant_id)
+                .shipping_names(language)
+                .await?;
+            if let Some(name) = names.get(&shipping.method_id) {
+                shipping.name = name.clone();
+            }
+        }
         let catalog = timada_catalog::Command::new(self.store.clone(), tenant_id);
         for line in &mut pending.lines {
             if let Some(translation) = catalog

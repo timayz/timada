@@ -663,6 +663,22 @@ pub enum OrderMail {
     MailFailed { reason: String, attempts: u32 },
 }
 
+/// What the shop's shipping methods are called in one more language of the
+/// shop: one stream per language, with the id
+/// [`shipping_names_id`](crate::shipping_names_id). A method's own stream
+/// keeps its name in the main language, its price and its countries; a
+/// method with no name here is read by that one.
+#[evento::aggregate(name = "timada-orders/ShippingNames")]
+pub enum ShippingNames {
+    /// An empty `name` goes back to the main language's.
+    MethodNamed {
+        language: String,
+        method_id: String,
+        name: String,
+        named_by: String,
+    },
+}
+
 /// How the tenant ships: the methods a shopper picks one of at checkout.
 /// One stream per tenant store, with the id
 /// [`shipping_methods_id`](crate::shipping_methods_id), so a quote reads them

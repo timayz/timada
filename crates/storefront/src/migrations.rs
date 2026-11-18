@@ -301,6 +301,9 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             meta_title TEXT NOT NULL,
             meta_description TEXT NOT NULL,
             questions_json TEXT NOT NULL,
+            -- What a product's pictures show, said in the language: a
+            -- JSON object, picture id to text.
+            alts_json TEXT NOT NULL,
             slug_search TEXT NOT NULL,
             name_search TEXT NOT NULL,
             PRIMARY KEY (kind, subject_id, language)
@@ -340,6 +343,14 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         CREATE TABLE storefront_shipping_methods (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             methods_json TEXT NOT NULL
+        );
+        -- What a language calls the shop's shipping methods, for the ones
+        -- named there.
+        CREATE TABLE storefront_shipping_names (
+            language TEXT NOT NULL,
+            method_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            PRIMARY KEY (language, method_id)
         );
         -- The shop's return terms: one row while it states some.
         CREATE TABLE storefront_return_policy (
@@ -413,6 +424,7 @@ pub const TABLES: &[&str] = &[
     "storefront_text_translations",
     "storefront_words",
     "storefront_shipping_methods",
+    "storefront_shipping_names",
     "storefront_return_policy",
 ];
 

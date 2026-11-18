@@ -119,6 +119,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         name_max: MAX_CATEGORY_NAME_LEN,
         description_max: MAX_CATEGORY_DESCRIPTION_LEN,
         category: Some((category.body.clone(), questions_text(&category.questions))),
+        images: Vec::new(),
     };
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();

@@ -9,10 +9,12 @@
 //! delivery is the dashboard's to say.
 
 use evento::{Executor, metadata::RawEvent, subscription::Context};
-use timada_core::db::{Db, Json};
-use timada_orders::aggregator::{ReturnPolicy, ShippingMethods};
+use timada_core::db::{Db, Json, execute};
+use timada_orders::aggregator::{ReturnPolicy, ShippingMethods, ShippingNames};
 pub use timada_orders::{ReturnTerms, ShippingMethod};
-use timada_orders::{return_policy_projection, shipping_methods_projection};
+use timada_orders::{
+    return_policy_projection, shipping_methods_projection, shipping_names_projection,
+};
 use topcoat_core::context::Cx;
 use topcoat_core::error::{Error, Result};
 
@@ -106,4 +108,42 @@ pub(crate) async fn on_return_policy_event<E: Executor>(
         }
     }
     Ok(())
+}
+
+/// Copies what a language calls the shipping methods, whole: a shop has a
+/// handful.
+#[evento::subscription_all]
+pub(crate) async fn on_shipping_names_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<ShippingNames>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(state) = shipping_names_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    db.write(&state, |tx, state| {
+        Box::pin(async move {
+            execute(
+                tx,
+                "DELETE FROM storefront_shipping_names WHERE language = ?1",
+                (state.language.as_str(),),
+            )
+            .await?;
+            for (method_id, name) in &state.names {
+                execute(
+                    tx,
+                    "INSERT INTO storefront_shipping_names (language, method_id, name)
+                     VALUES (?1, ?2, ?3)",
+                    (state.language.as_str(), method_id.as_str(), name.as_str()),
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    })
+    .await
 }
