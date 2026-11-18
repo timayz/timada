@@ -45,7 +45,9 @@ impl<E: Executor> Command<E> {
     /// holds it, or wins the race for it, and when another product's
     /// translation goes by it in any language: under that language's
     /// prefix the address is the translation's, and this product would
-    /// have none there. The translations are looked at before the claim
+    /// have none there. A category that goes by it, in any language,
+    /// refuses it too: a product's address ends with its slug where a
+    /// sub-category's would. The others are looked at before the claim
     /// and after it, as a translation's claim does with the main slugs, so
     /// of two racing for one slug at least one sees the other. A claim
     /// refused that late stays, as one whose write failed does.
@@ -56,14 +58,19 @@ impl<E: Executor> Command<E> {
         product_version: u16,
         routing_key: Option<String>,
     ) -> Result<(), CatalogError> {
-        let translated =
-            || self.translation_slug_of_another(TranslationKind::Product, slug, product_id);
-        if translated().await? {
+        let taken = async || {
+            anyhow::Ok(
+                self.translation_slug_of_another(TranslationKind::Product, slug, product_id)
+                    .await?
+                    || self.slug_of_kind(TranslationKind::Category, slug).await?,
+            )
+        };
+        if taken().await? {
             return Err(CatalogError::SlugTaken);
         }
         self.take_slug(slug, product_id, product_version, routing_key)
             .await?;
-        if translated().await? {
+        if taken().await? {
             return Err(CatalogError::SlugTaken);
         }
         Ok(())

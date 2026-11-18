@@ -15,6 +15,7 @@ pub mod feed_labels;
 pub mod feed_listing;
 pub mod identify;
 pub mod images;
+pub mod main_category;
 pub mod margin;
 pub mod options;
 pub mod own_costs;
@@ -477,6 +478,19 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     // the rest of this page, so a change shows at once; each one is then
     // read from its own stream too (a product is in a handful at most).
     let memberships = memberships_of(&access, &product).await?;
+    // The live ones, among which the merchant picks the main category:
+    // the one picked, else the first the product was filed under.
+    let live_memberships: Vec<(String, String)> = memberships
+        .iter()
+        .filter(|category| !category.archived)
+        .map(|category| (category.id.clone(), category.name.clone()))
+        .collect();
+    let main_category = product
+        .filed_under()
+        .into_iter()
+        .find(|id| live_memberships.iter().any(|(live, _)| live == id))
+        .unwrap_or_default()
+        .to_owned();
     // Each picture with the address a browser loads it from.
     let media = context::<Arc<Media>>(cx);
     let gallery: Vec<(timada_catalog::ProductImage, String)> = product
@@ -1145,6 +1159,21 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             </li>
                         }
                     </ul>
+                    if live_memberships.len() > 1 {
+                        <form method="post" action=(href!(main_category::main_category, slug: slug.clone(), product_id: product.id.clone())) class="mt-3 flex flex-wrap items-center gap-2" data-main-category=(&main_category)>
+                            <label class="text-sm font-medium" for="product-main-category">"Its address is under"</label>
+                            select(
+                                attrs: attributes! { id="product-main-category" name="category_id" disabled=(!editable) aria-describedby="product-main-category-hint" class="min-w-0 flex-1 sm:max-w-sm" },
+                                for (id, name) in &live_memberships {
+                                    <option value=(id) selected=(*id == main_category)>(name)</option>
+                                }
+                            )
+                            if editable {
+                                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Set main category")
+                            }
+                            <p id="product-main-category-hint" class="basis-full text-sm text-muted-foreground">"The product's address is under this category wherever a shopper did not come from another one, and it is the address search engines are told."</p>
+                        </form>
+                    }
                     if editable && !joinable.is_empty() {
                         <form method="post" action=(href!(categorize::categorize, slug: slug.clone(), product_id: product.id.clone())) class="mt-3 flex flex-wrap items-center gap-2">
                             <label class="sr-only" for="product-category">"Category"</label>

@@ -73,7 +73,9 @@ impl<E: Executor> super::Command<E> {
                         .await
                     {
                         Ok(()) => break,
-                        Err(CatalogError::SlugTaken) if attempt + 1 < SLUG_ATTEMPTS => {
+                        Err(CatalogError::SlugTaken | CatalogError::SlugReserved)
+                            if attempt + 1 < SLUG_ATTEMPTS =>
+                        {
                             slug = suffixed_slug(&base);
                         }
                         Err(err) => return Err(err),

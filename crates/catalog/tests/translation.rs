@@ -150,14 +150,16 @@ async fn a_slug_is_held_once_in_a_language_and_kept_across_renames() {
         .translate(ALICE, PRODUCT, &post.id, "en", at("Cat tree", "cat-tree"))
         .await;
     assert!(matches!(taken, Err(CatalogError::SlugTaken)), "{taken:?}");
-    // The same slug in another language, or for a category, is another slug.
+    // The same slug in another language is another slug; a category does
+    // not take it where a product goes by it.
     cmd.translate(ALICE, PRODUCT, &post.id, "de", at("Kratzbaum", "cat-tree"))
         .await
         .unwrap();
     let cats = create_category(&cmd, "Chats").await;
-    cmd.translate(ALICE, CATEGORY, &cats.id, "en", at("Cats", "cat-tree"))
-        .await
-        .unwrap();
+    let taken = cmd
+        .translate(ALICE, CATEGORY, &cats.id, "en", at("Cats", "cat-tree"))
+        .await;
+    assert!(matches!(taken, Err(CatalogError::SlugTaken)), "{taken:?}");
 
     // A new name keeps the address; a new slug moves it and remembers the
     // old one, which is free at once.
@@ -421,8 +423,7 @@ async fn a_main_slug_never_lands_on_another_things_translation() {
     let post = cmd.load_product(&post.id).await.unwrap().unwrap();
     assert!(post.slug.starts_with("cat-tree-"), "{}", post.slug);
 
-    // A category's translation guards the categories' slugs, not the
-    // products'.
+    // A category's translation guards the categories' slugs.
     let cats = create_category(&cmd, "Chats").await;
     cmd.translate(ALICE, CATEGORY, &cats.id, "de", at("Katzen", "katzen"))
         .await
@@ -439,15 +440,6 @@ async fn a_main_slug_never_lands_on_another_things_translation() {
     assert!(matches!(taken, Err(CatalogError::SlugTaken)), "{taken:?}");
     let namesake = create_category(&cmd, "Katzen").await;
     assert!(namesake.slug.starts_with("katzen-"), "{}", namesake.slug);
-    cmd.create_product(
-        ALICE,
-        CreateProduct {
-            slug: Some("katzen".to_owned()),
-            ..create("Katzen")
-        },
-    )
-    .await
-    .unwrap();
 
     // A translation that moved to another slug, was dropped, or whose
     // product is archived no longer holds anything.
@@ -509,4 +501,113 @@ async fn a_thing_may_go_by_its_own_translations_slug() {
         .unwrap();
     let tree = cmd.load_product(&tree.id).await.unwrap().unwrap();
     assert_eq!(tree.slug, "cat-tree");
+}
+
+/// A product's address ends with its slug under a category's path, where
+/// a sub-category's slug would be: one slug names one thing, whatever its
+/// kind (#663).
+#[tokio::test]
+async fn a_product_and_a_category_never_share_a_slug() {
+    let cmd = command().await;
+    let taken = |refused: Result<_, CatalogError>| {
+        assert!(matches!(refused, Err(CatalogError::SlugTaken)), "taken");
+    };
+
+    // Main slug against main slug, either way round; a name gets a suffix.
+    let bowls = create_category(&cmd, "Gamelles").await;
+    assert_eq!(bowls.slug, "gamelles");
+    let asked = CreateProduct {
+        slug: Some("gamelles".to_owned()),
+        ..create("Gamelles")
+    };
+    taken(cmd.create_product(ALICE, asked).await.map(|_| ()));
+    let namesake = create_product(&cmd, "Gamelles").await;
+    assert!(namesake.slug.starts_with("gamelles-"), "{}", namesake.slug);
+    let mouse = create_product(&cmd, "Souris").await;
+    let asked = CreateCategory {
+        slug: Some("souris".to_owned()),
+        ..new_category("Souris")
+    };
+    taken(cmd.create_category(ALICE, asked).await.map(|_| ()));
+    let namesake = create_category(&cmd, "Souris").await;
+    assert!(namesake.slug.starts_with("souris-"), "{}", namesake.slug);
+
+    // A translation's slug against the other kind's: a main slug (which
+    // the thing also goes by in a language it is not worded in), and a
+    // slug of the same language.
+    taken(
+        cmd.translate(ALICE, CATEGORY, &bowls.id, "en", at("Mouse", "souris"))
+            .await,
+    );
+    taken(
+        cmd.translate(ALICE, PRODUCT, &mouse.id, "en", at("Bowls", "gamelles"))
+            .await,
+    );
+    cmd.translate(ALICE, CATEGORY, &bowls.id, "en", at("Bowls", "bowls"))
+        .await
+        .unwrap();
+    taken(
+        cmd.translate(ALICE, PRODUCT, &mouse.id, "en", at("Bowls", "bowls"))
+            .await,
+    );
+    // Another language is another address: the category goes by its main
+    // slug in German, not by its English one.
+    cmd.translate(ALICE, PRODUCT, &mouse.id, "de", at("Maus", "bowls"))
+        .await
+        .unwrap();
+
+    // And a main slug against the other kind's translations, in any
+    // language.
+    let asked = CreateProduct {
+        slug: Some("bowls".to_owned()),
+        ..create("Bowls")
+    };
+    taken(cmd.create_product(ALICE, asked).await.map(|_| ()));
+    cmd.translate(ALICE, PRODUCT, &mouse.id, "en", at("Mouse", "mouse"))
+        .await
+        .unwrap();
+    let asked = CreateCategory {
+        slug: Some("mouse".to_owned()),
+        ..new_category("Mouse")
+    };
+    taken(cmd.create_category(ALICE, asked).await.map(|_| ()));
+}
+
+/// A category's page is at its slug, so it takes none of the names the
+/// storefront keeps for its own pages, nor a language's code.
+#[tokio::test]
+async fn a_category_takes_no_address_of_the_storefronts_own() {
+    let cmd = command().await;
+    for name in ["blog", "shop", "en", "mentions-legales"] {
+        let asked = CreateCategory {
+            slug: Some(name.to_owned()),
+            ..new_category("Divers")
+        };
+        let refused = cmd.create_category(ALICE, asked).await;
+        assert!(
+            matches!(refused, Err(CatalogError::SlugReserved)),
+            "{name}: {refused:?}"
+        );
+    }
+    // A name that gives one gets a suffix; a product may go by any.
+    let blog = create_category(&cmd, "Blog").await;
+    assert!(blog.slug.starts_with("blog-"), "{}", blog.slug);
+    let refused = cmd
+        .translate(ALICE, CATEGORY, &blog.id, "en", at("Cart", "cart"))
+        .await;
+    assert!(
+        matches!(refused, Err(CatalogError::SlugReserved)),
+        "{refused:?}"
+    );
+    cmd.translate(ALICE, CATEGORY, &blog.id, "en", named("Cart"))
+        .await
+        .unwrap();
+    let english = cmd
+        .load_translation(CATEGORY, &blog.id, "en")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(english.slug.starts_with("cart-"), "{}", english.slug);
+    let cart = create_product(&cmd, "Cart").await;
+    assert_eq!(cart.slug, "cart");
 }

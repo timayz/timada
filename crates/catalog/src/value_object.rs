@@ -656,6 +656,63 @@ impl TranslationKind {
             _ => None,
         }
     }
+
+    /// The other kind: a product's address ends with its slug under a
+    /// category's path, which is made of categories' slugs, so the two
+    /// kinds share their slugs.
+    pub fn other(self) -> Self {
+        match self {
+            Self::Product => Self::Category,
+            Self::Category => Self::Product,
+        }
+    }
+}
+
+/// The first parts of an address the base storefront keeps for its own
+/// pages, in each language it speaks: a category's page is at its slug, so
+/// none takes one of them, nor a language's code (`/en`). The back office
+/// cannot ask the storefront for its routes, so they are listed here; a
+/// host with other routes of its own still serves them ahead of a category
+/// of the same name.
+pub const RESERVED_SLUGS: &[&str] = &[
+    "about-us",
+    "account",
+    "assets",
+    "blog",
+    "boutique",
+    "cart",
+    "checkout",
+    "conditions-generales-de-vente",
+    "cookies",
+    "emails",
+    "feeds",
+    "indisponible",
+    "legal-notice",
+    "mentions-legales",
+    "newsletter",
+    "orders",
+    "politique-de-confidentialite",
+    "politique-de-livraison",
+    "politique-de-remboursement",
+    "privacy-policy",
+    "qui-sommes-nous",
+    "refund-policy",
+    "reviews",
+    "search",
+    "shipping-policy",
+    "shop",
+    "store",
+    "support",
+    "support-client",
+    "terms-of-sale",
+    "unavailable",
+];
+
+/// Whether a category cannot go by `slug`: one of [`RESERVED_SLUGS`], or
+/// the code of a language. At any depth: a category moved to the top keeps
+/// its slug and those of its translations.
+pub fn is_reserved_slug(slug: &str) -> bool {
+    RESERVED_SLUGS.contains(&slug) || timada_core::languages::is_language(slug)
 }
 
 /// The stream of what a product or a category says in `language`.
