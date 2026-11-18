@@ -33,6 +33,16 @@ struct FeedQuery {
     message: Option<String>,
 }
 
+/// The feeds of one country and language the shop sells in.
+struct MarketFeeds {
+    /// What they are for: `BE · French`.
+    label: String,
+    /// What their addresses name the market by: `be-fr`.
+    code: String,
+    /// A reader's name, then the address it fetches.
+    addresses: [(&'static str, String); 3],
+}
+
 /// The page, with a flash error code or message.
 pub fn feed_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str>) -> String {
     href!(index, slug: slug.to_owned())
@@ -116,6 +126,38 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             ]
         })
         .unwrap_or_default();
+    // A feed per country and language the shop sells in: what it is for,
+    // its code, then the address each reader fetches.
+    let mut markets: Vec<MarketFeeds> = Vec::new();
+    if let Some(token) = &token {
+        let sold_in = crate::feed::markets_of(access.executor()?, &access.tenant)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        for market in sold_in {
+            let code = market.code();
+            let language =
+                timada_core::languages::language_name(&market.language).unwrap_or(&market.language);
+            let at = |path: String| format!("{server}{path}");
+            markets.push(MarketFeeds {
+                label: format!("{} · {language}", market.country),
+                code: code.clone(),
+                addresses: [
+                    (
+                        "Google",
+                        at(href!(feeds::market::google::google, feeds::token: token.clone(), feeds::market::market: code.clone()).resolve(cx)),
+                    ),
+                    (
+                        "Meta",
+                        at(href!(feeds::market::meta::meta, feeds::token: token.clone(), feeds::market::market: code.clone()).resolve(cx)),
+                    ),
+                    (
+                        "TikTok",
+                        at(href!(feeds::market::tiktok::tiktok, feeds::token: token.clone(), feeds::market::market: code.clone()).resolve(cx)),
+                    ),
+                ],
+            });
+        }
+    }
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let title = format!("Shopping feed · {}", tenant.name);
@@ -171,6 +213,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     }
                 } else {
                     <p class="text-sm text-muted-foreground">"The feed is closed: it has no address."</p>
+                }
+                if !markets.is_empty() {
+                    <h3 class="mt-6 text-sm font-medium">"Per country and language"</h3>
+                    <p class="mt-1 max-w-3xl text-sm text-muted-foreground">"One feed for each country your shipping methods name, in each language of the shop: that country's delivery prices, and each product worded and linked as that language reads it. A product with no translation is listed in the main language. Give each to the reader's feed for that country and language."</p>
+                    <ul class="mt-3 flex max-w-3xl flex-col gap-4" data-feed-markets=(markets.len())>
+                        for MarketFeeds { label, code, addresses } in &markets {
+                            <li data-feed-market=(code)>
+                                <p class="text-sm font-medium">(label)</p>
+                                for (reader, address) in addresses {
+                                    <label class="mt-2 block text-xs text-muted-foreground" for=(format!("feed-{code}-{}", reader.to_lowercase()))>(*reader) " feed for " (label)</label>
+                                    input(attrs: attributes! {
+                                        id=(format!("feed-{code}-{}", reader.to_lowercase())) type="text" readonly="" value=(address)
+                                        data-feed-market-address=(reader.to_lowercase())
+                                    })
+                                }
+                            </li>
+                        }
+                    </ul>
                 }
                 if can_manage {
                     <div class="mt-4 flex flex-wrap gap-2">

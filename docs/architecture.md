@@ -538,7 +538,23 @@ turns a row into Merchant Center's XML, one item per variant on sale grouped by
 The dashboard (`feed.rs`) adds what only it knows (the storefront's address, the
 delivery methods, where pictures are served from) and sends the XML 200 products at a
 time behind the response, so a large shop is never held in memory; a read that fails
-breaks the response off instead of ending it early. What the feed does with the data:
+breaks the response off instead of ending it early.
+
+A shop read in several languages has a feed per country and language it sells in, at
+`/feeds/{token}/{country}-{language}/google` (and `/meta`, `/tiktok`): the countries are
+the ones its shipping methods name, the languages the ones of its Languages page
+(`feed::markets_of`), and the Shopping feed page lists them. The address without a
+market stays the whole shop's, in its main language. A market's feed (`feed::in_market`)
+keeps that country's delivery prices alone and, in a language other than the main one,
+words each product as its translation does (name, description), its variants by the
+shop's word list, and links it at its address in that language (`/en/…`, each part of
+the path the slug of that language). The catalog's read model keeps what that takes
+(`catalog_translations`, `catalog_words`), so a feed reads no stream. A product with no
+translation is listed as the main language says it, as the storefront reads it. One
+currency and one price per product: a market changes the delivery prices, not the
+product's. The reviews feed has one address: its format names no market.
+
+What the feed does with the data:
 
 - an item links to the product's default address under the storefront's (under its
   main category, `CategoryPaths::product`; `/p/{slug}` filed nowhere), and to `?v={variant id}`

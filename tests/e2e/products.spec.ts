@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { productTab, selectByText } from "./forms";
 import { invite, inviteLink } from "./invitations";
+import { addShippingMethod } from "./shop";
 import { fileUnder, publishProduct } from "./storefront";
 import { createTenant, uniqueTenant } from "./tenants";
 
@@ -489,6 +490,53 @@ test("a shop opens its shopping feed at a secret address, moves it and closes it
   await expect(async () => {
     expect(await (await request.get(first)).text()).toContain("<g:link>https://shop.example/mugs/blue-mug</g:link>");
   }).toPass({ timeout: 15_000 });
+
+  // A feed per country and language the shop sells in: none until it has
+  // languages and a method that names a country.
+  await page.goto(`/t/${slug}/feed`);
+  await expect(page.locator("[data-feed-markets]")).toHaveCount(0);
+  await page.goto(`/t/${slug}/languages`);
+  const languages = page.locator("form[data-shop-languages]");
+  await languages.getByLabel("Main language").selectOption("fr");
+  await languages.getByRole("checkbox", { name: "English" }).check();
+  await languages.getByRole("button", { name: "Save the languages" }).click();
+  await expect(page.getByRole("status")).toContainText("Languages saved");
+  await addShippingMethod(page, slug, "Colis suivi", "4,90", "France FR");
+  await addShippingMethod(page, slug, "Colis Belgique", "6,90", "Belgium BE");
+  await page.goto(`${mugUrl}?tab=translations`);
+  const english = page.locator("[data-translation=en]");
+  await english.getByLabel("Translated name").fill("Tea Mug");
+  await english.getByRole("button", { name: "Save translation" }).click();
+  await expect(page.getByRole("status")).toContainText("Translation saved");
+  await page.goto(`/t/${slug}/feed`);
+  await expect(page.locator("[data-feed-market]")).toHaveCount(4);
+  const market = (code: string, reader: string) =>
+    page.locator(`[data-feed-market="${code}"] [data-feed-market-address="${reader}"]`).inputValue();
+  const belgian = await market("be-en", "google");
+  expect(belgian).toBe(first.replace(/google$/, "be-en/google"));
+  // In English for Belgium: the translated name at its English address,
+  // and Belgium's delivery price alone.
+  await expect(async () => {
+    const answer = await request.get(belgian);
+    expect(answer.status()).toBe(200);
+    xml = await answer.text();
+    expect(xml).toContain("<g:title>Tea Mug</g:title>");
+  }).toPass({ timeout: 15_000 });
+  expect(xml).toContain("<g:link>https://shop.example/en/mugs/tea-mug</g:link>");
+  expect(xml).toContain("<g:country>BE</g:country>");
+  expect(xml).not.toContain("<g:country>FR</g:country>");
+  // In French for France: as the plain feed words it, France's price.
+  const french = await (await request.get(await market("fr-fr", "google"))).text();
+  expect(french).toContain("<g:title>Blue Mug</g:title>");
+  expect(french).toContain("<g:link>https://shop.example/mugs/blue-mug</g:link>");
+  expect(french).toContain("<g:country>FR</g:country>");
+  expect(french).not.toContain("<g:country>BE</g:country>");
+  // The other readers have theirs, and a market the shop does not sell in
+  // has none.
+  expect((await request.get(await market("be-en", "meta"))).status()).toBe(200);
+  expect((await request.get(await market("be-en", "tiktok"))).status()).toBe(200);
+  expect((await request.get(first.replace(/google$/, "de-en/google"))).status()).toBe(404);
+  expect((await request.get(first.replace(/google$/, "be-de/google"))).status()).toBe(404);
 
   // The same product for a Meta and a TikTok catalogue, each in its own
   // words, and the shop's reviews for Google, under the same secret.
