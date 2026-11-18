@@ -266,7 +266,7 @@ by construction.
    workers by state, the writes kept for absent nodes, the store connections by
    tenant, the size of the store's three files (`timada_store_bytes`) and evento's counters, every series labelled by node) and `/ready`. The
    `rejoin` command sets the same mark by hand, for a lost store file (delete the
-   file first: an empty journal comes back under the node's own id through evento's
+   file first, and run `migrate` after it for `serve` to have a store to start on: an empty journal comes back under the node's own id through evento's
    amnesia fence). A node back before anything was tidied up past it is simply waited
    for again. A journal found to be an older copy of itself is marked the same way,
    journal included. A cluster brought back from one node's copy (`snapshot restore
@@ -1269,8 +1269,10 @@ operators: it names what things do, not the libraries behind them.
 
 ## The command line
 
-`timada-dashboard serve` runs a node; `migrate` creates the database and applies
-what is pending; `reset` (debug builds) drops and recreates it; `rejoin` marks the
+`timada-dashboard serve` runs a node, on a database it never creates or migrates by
+itself: it refuses to start on one with migrations to apply, naming them (so does
+`rebuild`). `migrate` creates the database and applies what is pending, and is run
+before each new version starts (the helm chart does, in an init container); `reset` (debug builds) drops and recreates it; `rejoin` marks the
 store for a copy from a peer at the next start (see *The runtime*); `seed` loads a
 catalogue snapshot into a tenant and prints a storefront's settings for it (see
 `docs/storefront.md`); `snapshot save` keeps the platform (the database, pictures,

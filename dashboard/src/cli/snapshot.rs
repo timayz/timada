@@ -466,7 +466,7 @@ mod tests {
 
     /// A row in the store's file, written through the store itself.
     async fn store_database(path: &Path, value: i64) {
-        write_row(&crate::db::open_store(path).await.unwrap(), value).await;
+        write_row(&crate::db::migrate_store(path).await.unwrap(), value).await;
     }
 
     async fn write_row(store: &evento::Turso, value: i64) {
@@ -491,7 +491,7 @@ mod tests {
     }
 
     async fn store_value(path: &Path) -> i64 {
-        read_row(&crate::db::open_store(path).await.unwrap()).await
+        read_row(&crate::db::migrate_store(path).await.unwrap()).await
     }
 
     async fn value(path: &Path) -> i64 {
@@ -595,7 +595,7 @@ mod tests {
         crate::db::Store,
         evento::subscription::Subscription,
     ) {
-        let store = crate::db::open_store(path).await.unwrap();
+        let store = crate::db::migrate_store(path).await.unwrap();
         let (cluster, executor, _) =
             crate::cluster::open(None, None, &[], false, path, store.clone())
                 .await
@@ -714,7 +714,7 @@ mod tests {
         found(&store, "after", &after).await;
         // Every copy opens, and holds what was written before it was taken.
         for (n, mark) in marks.iter().enumerate().take(5) {
-            let copy = crate::db::open_store(&root.join(format!("kept-{n}")).join(STORE))
+            let copy = crate::db::migrate_store(&root.join(format!("kept-{n}")).join(STORE))
                 .await
                 .unwrap();
             let conn = copy.connect().unwrap();
