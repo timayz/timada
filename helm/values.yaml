@@ -1,0 +1,85 @@
+# Container image.
+image:
+  tag: "0.1.0"
+
+# Extra environment variables injected from the managed Secret. Every key of
+# the configuration can be set as TIMADA__<SECTION>__<KEY>, which wins over
+# `config` below: use it for what must not sit in a ConfigMap. A deployment
+# needs at least
+#   TIMADA__AUTH__SECRET_KEY   at least 32 characters
+#   TIMADA__SECRETS__KEY       at least 32 characters; never change it
+#   TIMADA__MAIL__SMTP_URL     smtps://user:pass@host:465
+extraSecretEnv: {}
+
+database:
+  # Run `timada-dashboard migrate` before the server starts.
+  migrate: true
+
+hostname: "timada.app"
+
+# Time allowed for the pod to shut down gracefully on a rolling update. Must be
+# long enough to drain HTTP and the store API, stop every worker and close the
+# store.
+terminationGracePeriodSeconds: 90
+
+# How long the server may take to start listening, in seconds. It listens once
+# its read models caught up with the store, which after a `rebuild` or on a
+# large store takes minutes.
+startupSeconds: 1800
+
+# Written as the server's configuration file. Every key and its default is in
+# config/default.toml; only what a deployment sets apart is here.
+config:
+  server:
+    url: "https://timada.app"
+    host: "0.0.0.0"
+    port: 3000
+    # The gateway's addresses, as IP addresses or CIDR networks: without
+    # them the sign-in history and the limits see the gateway instead of the
+    # visitor. Set it to the cluster's pod network.
+    trusted_proxies: []
+
+  database:
+    path: "/var/lib/timada/timada.db"
+
+  auth:
+    rp_name: "Timada"
+
+  mail:
+    from: "Timada <no-reply@timada.app>"
+
+  media:
+    dir: "/var/lib/timada/media"
+    public_url: "https://timada.app/media"
+
+  data_keys:
+    dir: "/var/lib/timada/shopper-keys"
+
+  # Where storefronts connect, on the Service's port 4321. Without the
+  # certificate files a key travels in clear text: fine inside the cluster,
+  # not beyond it. Remove the section to not expose the store API.
+  store_api:
+    listen: "0.0.0.0:4321"
+    # Address shown on the API keys page for storefronts to connect to.
+    public_addr: "timada:4321"
+
+  monitoring:
+    log_level: "info,tantivy=warn,turso_core::mvcc=warn"
+    log_json: true
+    log_target: true
+    log_line_number: true
+
+persistence:
+  size: 15Gi
+  # StorageClass for the data volume (the store, the pictures and the
+  # personal-data keys). Longhorn by default; set to a local-disk class (e.g.
+  # "local-path") for lower fsync latency: every write to the store is synced.
+  storageClassName: "longhorn"
+  # When true, labels the PVC into Longhorn's "critical" recurring-job group
+  # (snapshots + S3 backups). Set false when the volume does not live on
+  # Longhorn. Mind that a backup also keeps the personal-data keys, and
+  # restoring an old one brings deleted accounts back: keep them short-lived.
+  longhornCritical: true
+
+certificate:
+  annotations: {}

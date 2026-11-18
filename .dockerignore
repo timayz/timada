@@ -1,0 +1,45 @@
+# Rust build artifacts
+/target
+**/*.rs.bk
+
+# The local platform: store, pictures, keys, catalogue snapshots
+/data
+/seeds
+*.db
+*.db-wal
+*.db-shm
+*.db-log
+
+# Local configuration and secrets
+*.local.toml
+*.local.env
+.env
+
+# Git
+.git
+.gitignore
+
+# Tooling
+.claude/
+.pwmcp-profiles
+.vscode/
+.idea/
+
+# Not part of the build
+README.md
+docs/
+helm/
+.github/
+.docker/
+compose.yml
+Dockerfile
+builder.Dockerfile
+
+# Browser tests
+/tests
+/node_modules
+/test-results
+/playwright-report
+/blob-report
+package.json
+playwright.config.ts
