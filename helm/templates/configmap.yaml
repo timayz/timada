@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: timada-config
+data:
+  config.toml: |
+{{ .Values.config | toToml | indent 4 }}
