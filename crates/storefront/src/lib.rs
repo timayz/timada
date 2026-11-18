@@ -80,7 +80,7 @@ pub use newsletter_popup::*;
 pub use pages::*;
 pub use places::*;
 pub use query::*;
-pub use read_in::{ReadIn, Slugs, read_in};
+pub use read_in::{AddressLanguage, ReadIn, Slugs, read_in, shopper_language};
 pub use read_model::*;
 pub use redirects::*;
 pub use reviews::*;

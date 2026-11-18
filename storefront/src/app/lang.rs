@@ -15,7 +15,7 @@
 //! ([`SPOKEN`]) and leaves the others out.
 
 use crate::app::words::t;
-use timada_storefront::{MoneyFormat, ReadIn, absolute_url, shop_languages};
+use timada_storefront::{AddressLanguage, MoneyFormat, ReadIn, absolute_url, shop_languages};
 use topcoat::{
     context::{Cx, context, memoize, try_context},
     l10n::{Locale, locale, try_locale},
@@ -316,18 +316,6 @@ fn amounts(cx: &Cx, language: &str) -> MoneyFormat {
         .free(t!(checkout_shipping_free).resolve(cx))
 }
 
-/// The language a shopper checks out in, which the order keeps: its mails
-/// go out in it, and its lines are named in it. In a shop read in several
-/// languages it is the one of the address, what the shopper read the
-/// goods in; a shop read in one keeps going by the browser's.
-pub async fn checkout_language(cx: &Cx) -> Option<String> {
-    if languages(cx).await.others.is_empty() {
-        timada_storefront::request_language(cx)
-    } else {
-        Some(speaking(cx).await.language.to_owned())
-    }
-}
-
 /// The code of the language the pages word this request in.
 pub fn spoken(cx: &Cx) -> String {
     try_locale(cx).map_or_else(|| BASE.to_owned(), |locale| locale.to_string())
@@ -368,6 +356,16 @@ impl Layer for Localized {
             if languages.plain() {
                 return next.run(cx, body).await;
             }
+            // In a shop read in several languages, the one of the address
+            // is the one the shop writes to the shopper in.
+            let addressed;
+            let cx = if languages.others.is_empty() || try_context::<AddressLanguage>(cx).is_some()
+            {
+                cx
+            } else {
+                addressed = cx.with(AddressLanguage::new(language));
+                &addressed
+            };
             // The first time through, the address is still the visitor's.
             if uri(cx) == asked {
                 let proper = languages.write(language, &internal);
@@ -383,6 +381,10 @@ impl Layer for Localized {
                     let sent = sent
                         .with(wording(language))
                         .with(context::<MoneyFormat>(cx).clone());
+                    let sent = match try_context::<AddressLanguage>(cx) {
+                        Some(addressed) => sent.with(addressed.clone()),
+                        None => sent,
+                    };
                     return Err(if language == languages.main {
                         sent.into()
                     } else {

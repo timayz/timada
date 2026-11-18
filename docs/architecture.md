@@ -402,7 +402,8 @@ by construction.
    through the platform's server; newsletter campaigns, automated mails and their
    test mails never do, they go through the server picked for marketing only
    (`ShopMail::marketing_sender_of`). Each shop mail may be worded per language: the
-   shopper's language comes from the storefront's `Accept-Language` and is kept on
+   shopper's language comes from the storefront (the address's in a shop read in
+   several languages, else the browser's `Accept-Language`) and is kept on
    the order (`LanguageGiven`/`LanguageSet`). Details: `docs/mail.md`.
 6. **Authorisation** (`authz.rs`). Casbin RBAC with the tenant as domain and its custom
    roles as roles. Policies are not loaded at startup: every tenant-scoped request loads
@@ -954,8 +955,8 @@ a moment ago may show a second later.
 
 A shop's contact form writes a `Message` stream in the tenant's store
 (`timada-support`): who wrote (first and last name, the address to answer at), what,
-and in which language the browser browsed (the primary `Accept-Language` subtag), so
-the merchant answers in it. The id is a fresh ULID. The merchant reads the messages
+and in which language they read the shop (the address's in a shop read in several,
+else the browser's primary `Accept-Language` subtag), so the merchant answers in it. The id is a fresh ULID. The merchant reads the messages
 on `/t/{slug}/messages` (`support:read`, from the `support_messages` read model),
 answers from their own mailbox (the row links `mailto:` the address) and marks the
 message handled (`support:manage`); a message marked too soon is reopened.

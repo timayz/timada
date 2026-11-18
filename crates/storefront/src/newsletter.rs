@@ -26,7 +26,8 @@ pub use timada_newsletter::{
 
 use crate::context::store;
 use crate::error::{gateway_down, into_error, reach, reach_body};
-use crate::shoppers::{SHOPPER_SIGNED_OUT, request_language, request_time_zone};
+use crate::read_in::shopper_language;
+use crate::shoppers::{SHOPPER_SIGNED_OUT, request_time_zone};
 use crate::store::Store;
 
 /// The header the visitor's address travels in to the dashboard.
@@ -253,14 +254,15 @@ async fn answer<T>(
 
 /// Hands in the request's address for the shop's news; see
 /// [`Store::subscribe`]. The visitor's address is the request's client,
-/// as the host's trusted proxies report it, their language the request's
-/// `Accept-Language`, and their time zone [`request_time_zone`]'s.
+/// as the host's trusted proxies report it, their language
+/// [`shopper_language`](crate::shopper_language)'s, and their time zone
+/// [`request_time_zone`]'s.
 pub async fn subscribe(cx: &Cx, email: &str) -> Result<NewsletterRefusable<()>> {
     store(cx)
         .subscribe(
             email,
             client_ip(cx),
-            request_language(cx).as_deref(),
+            shopper_language(cx).as_deref(),
             request_time_zone(cx).as_deref(),
         )
         .await
@@ -291,8 +293,9 @@ pub async fn shopper_newsletter(cx: &Cx, token: &str) -> Result<NewsletterRefusa
         .map_err(into_error)
 }
 
-/// See [`Store::set_shopper_newsletter`]; the language and time zone are
-/// the request's.
+/// See [`Store::set_shopper_newsletter`]; the language is
+/// [`shopper_language`](crate::shopper_language)'s and the time zone the
+/// request's.
 pub async fn set_shopper_newsletter(
     cx: &Cx,
     token: &str,
@@ -302,7 +305,7 @@ pub async fn set_shopper_newsletter(
         .set_shopper_newsletter(
             token,
             subscribed,
-            request_language(cx).as_deref(),
+            shopper_language(cx).as_deref(),
             request_time_zone(cx).as_deref(),
         )
         .await

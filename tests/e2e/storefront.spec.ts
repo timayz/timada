@@ -1824,6 +1824,7 @@ test("the storefront stops cleanly when told to", async ({ page, request }) => {
 test("the shop is read under an address of its own in each of its languages", async ({
   page,
   request,
+  browser,
 }) => {
   const SHOP = app.url;
   await registerWithEmail(page, uniqueEmail("merchant"));
@@ -1918,6 +1919,33 @@ test("the shop is read under an address of its own in each of its languages", as
   await expect(page).toHaveURL(`${SHOP}/p/arbre-a-chat`);
   await expect(page.locator("html")).toHaveAttribute("lang", "fr");
   await expect(page.locator("footer.sitefooter").locator('a[href="/boutique"]')).toHaveCount(1);
+
+  // What a shopper asks for from a page is answered in the language of its
+  // address, whatever the browser's: a message written under /en from a
+  // French browser is to be answered in English, and one written at the
+  // French address from an English browser in French.
+  const write = async (locale: string, path: string, labels: string[], body: string) => {
+    const context = await browser.newContext({ locale });
+    const visitor = await context.newPage();
+    await visitor.goto(`${SHOP}${path}`);
+    const form = visitor.locator("[data-support-form]");
+    await form.getByLabel(labels[0]).fill("Ada");
+    await form.getByLabel(labels[1], { exact: true }).fill("Lovelace");
+    await form.getByLabel(labels[2]).fill("ada@example.com");
+    await form.getByLabel("Message").fill(body);
+    await form.getByRole("button", { name: labels[3] }).click();
+    await expect(visitor).toHaveURL(`${SHOP}${path}?sent=1`);
+    await context.close();
+  };
+  await write("fr-FR", "/en/support", ["First name", "Last name", "E-mail", "Send"], "Written under the English address.");
+  await write("en-US", "/support-client", ["Prénom", "Nom", "Email", "Envoyer"], "Écrit à l'adresse française.");
+  await expect(async () => {
+    await page.goto(`/t/${slug}/messages`);
+    await expect(page.locator("[data-message]")).toHaveCount(2);
+  }).toPass();
+  const message = (body: string) => page.locator("[data-message]").filter({ hasText: body });
+  await expect(message("Written under the English address.").locator("[data-message-language]")).toHaveText("en");
+  await expect(message("Écrit à l'adresse française.").locator("[data-message-language]")).toHaveText("fr");
 
   // No address for a language the storefront has no words for, nor for an
   // English name outside English.

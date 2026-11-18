@@ -30,6 +30,7 @@ pub use timada_shoppers::{MAX_ADDRESSES, SavedAddress, Shopper};
 use crate::context::store;
 use crate::error::{gateway_down, into_error, reach, reach_body};
 use crate::money::MoneyFormat;
+use crate::read_in::shopper_language;
 use crate::store::Store;
 
 /// What the dashboard answers for a token that no longer signs anyone in:
@@ -411,8 +412,8 @@ async fn answer<T>(
 
 /// The language the request's browser browses in, as the primary subtag
 /// of its `Accept-Language` (`fr`); `None` when it says nothing readable.
-/// For [`Checkout::language`](timada_orders::Checkout) and the sign-in
-/// code, so the shop mails the shopper in their language.
+/// What [`shopper_language`](crate::shopper_language) goes by in a shop
+/// read in one language.
 pub fn request_language(cx: &Cx) -> Option<String> {
     headers(cx)
         .get("accept-language")?
@@ -450,10 +451,11 @@ pub fn request_time_zone(cx: &Cx) -> Option<String> {
 
 /// Has the dashboard mail a sign-in code; see [`Store::request_sign_in_code`].
 /// The shopper's address is the request's client, as the host's trusted
-/// proxies report it, and their language the request's `Accept-Language`.
+/// proxies report it, and their language
+/// [`shopper_language`](crate::shopper_language)'s.
 pub async fn request_sign_in_code(cx: &Cx, email: &str) -> Result<ShopperRefusable<()>> {
     store(cx)
-        .request_sign_in_code(email, client_ip(cx), request_language(cx).as_deref())
+        .request_sign_in_code(email, client_ip(cx), shopper_language(cx).as_deref())
         .await
         .map_err(into_error)
 }

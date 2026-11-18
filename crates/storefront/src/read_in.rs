@@ -18,6 +18,7 @@ use crate::articles::{ArticleCard, PublicArticle};
 use crate::cart::CartView;
 use crate::pages::{DESCRIPTION_CHARS, PublicPage, excerpt};
 use crate::query::{Category, CategoryHub, CategoryNode, Product, Seo};
+use crate::shoppers::request_language;
 use crate::translations::{
     TEXT_TRANSLATIONS_KEY, TRANSLATIONS_KEY, TextKind, TextTranslation, Translation,
     TranslationKind, text_translation_of, translation_of,
@@ -36,6 +37,33 @@ impl ReadIn {
 /// The language the request is read in when it is not the shop's main one.
 pub fn read_in(cx: &Cx) -> Option<&str> {
     try_context::<ReadIn>(cx).map(|language| language.0.as_str())
+}
+
+/// The language of the address a request came at, in a shop read in
+/// several: the main one at an address without a prefix as much as another
+/// under its own. The host carries it in the request's context beside
+/// [`ReadIn`] (the storefront does for every page of such a shop); a shop
+/// read in one language has none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressLanguage(String);
+
+impl AddressLanguage {
+    pub fn new(language: impl Into<String>) -> Self {
+        AddressLanguage(language.into())
+    }
+}
+
+/// The language the shop writes to a shopper in, for what they ask from
+/// this request: the order's mails, the sign-in code, the newsletter's
+/// confirmation, the answer to a message. In a shop read in several
+/// languages it is the one of the address ([`AddressLanguage`]), what the
+/// shopper read the page in; a shop read in one goes by the browser's
+/// ([`request_language`]).
+pub fn shopper_language(cx: &Cx) -> Option<String> {
+    match try_context::<AddressLanguage>(cx) {
+        Some(language) => Some(language.0.clone()),
+        None => request_language(cx),
+    }
 }
 
 /// `theirs` unless it is empty.
