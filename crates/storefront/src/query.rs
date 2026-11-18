@@ -2159,8 +2159,8 @@ mod sql {
         db.execute(
             "INSERT INTO storefront_translations (kind, subject_id, language, name, slug,
                 description, body, meta_title, meta_description, questions_json, slug_search,
-                name_search)
-             VALUES ('product', ?1, ?2, ?3, ?4, '', '', '', '', '[]', ?5, ?6)",
+                name_search, alts_json)
+             VALUES ('product', ?1, ?2, ?3, ?4, '', '', '', '', '[]', ?5, ?6, '{}')",
             (id, language, name, slug, search_key(slug), search_key(name)),
         )
         .await

@@ -114,6 +114,8 @@ pub enum OrderError {
     InvalidReturnDays,
     #[error("a scheduled export needs an e-mail address or a web address to go to")]
     InvalidExportAddress,
+    #[error("a language is one of the list")]
+    InvalidLanguage,
     #[error("shipping method not found")]
     ShippingMethodNotFound,
     #[error("pick a shipping method that ships to this country")]
@@ -230,6 +232,7 @@ impl OrderError {
             Self::TooManyShippingMethods => "too_many_shipping_methods",
             Self::InvalidReturnDays => "invalid_return_days",
             Self::InvalidExportAddress => "invalid_export_address",
+            Self::InvalidLanguage => "language_invalid",
             Self::ShippingMethodNotFound => "shipping_method_not_found",
             Self::ShippingUnavailable => "shipping_unavailable",
             Self::Write(err) => return timada_core::write_refusal(err),

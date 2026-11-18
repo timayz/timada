@@ -277,3 +277,71 @@ async fn an_archived_product_keeps_its_gallery_as_it_was() {
         1
     );
 }
+
+#[tokio::test]
+async fn a_pictures_text_is_said_in_another_language_with_the_products_translation() {
+    use timada_catalog::{ImageAlt, TranslationKind, TranslationText};
+
+    let cmd = command().await;
+    let product = create_product(&cmd, "Blue Mug").await;
+    for id in ["img-1", "img-2"] {
+        cmd.add_image(ALICE, &product.id, image(id)).await.unwrap();
+    }
+    let said = |alts: &[(&str, &str)]| TranslationText {
+        name: "Tasse bleue".into(),
+        alts: alts
+            .iter()
+            .map(|(image_id, alt)| ImageAlt {
+                image_id: (*image_id).to_owned(),
+                alt: (*alt).to_owned(),
+            })
+            .collect(),
+        ..Default::default()
+    };
+    let translate = async |text: TranslationText| {
+        cmd.translate(ALICE, TranslationKind::Product, &product.id, "fr", text)
+            .await
+    };
+    let alts = async || {
+        cmd.load_translation(TranslationKind::Product, &product.id, "fr")
+            .await
+            .unwrap()
+            .unwrap()
+            .alts
+    };
+    // An empty text and a picture the product does not have are set aside.
+    translate(said(&[
+        ("img-2", " Une tasse bleue "),
+        ("img-1", " "),
+        ("img-9", "Rien"),
+    ]))
+    .await
+    .unwrap();
+    assert_eq!(
+        alts().await,
+        [ImageAlt {
+            image_id: "img-2".into(),
+            alt: "Une tasse bleue".into(),
+        }]
+    );
+    // The same list writes nothing; none takes them back.
+    let version = async || {
+        use evento::ProjectionAggregate;
+        cmd.load_translation(TranslationKind::Product, &product.id, "fr")
+            .await
+            .unwrap()
+            .unwrap()
+            .aggregate_version()
+            .unwrap()
+    };
+    let before = version().await;
+    translate(said(&[("img-2", "Une tasse bleue")]))
+        .await
+        .unwrap();
+    assert_eq!(version().await, before);
+    translate(said(&[])).await.unwrap();
+    assert!(alts().await.is_empty());
+
+    let long = translate(said(&[("img-1", &"x".repeat(MAX_ALT_LEN + 1))])).await;
+    assert!(matches!(long, Err(CatalogError::InvalidAlt)), "{long:?}");
+}

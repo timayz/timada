@@ -3,8 +3,8 @@
 //! wording where it is left empty, which is what a visitor then reads.
 
 use timada_catalog::{
-    CategoryQuestion, MAX_CATEGORY_BODY_LEN, MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN,
-    MAX_SLUG_LEN, MAX_WORD_LEN, TranslationState, TranslationText,
+    CategoryQuestion, ImageAlt, MAX_ALT_LEN, MAX_CATEGORY_BODY_LEN, MAX_META_DESCRIPTION_LEN,
+    MAX_META_TITLE_LEN, MAX_SLUG_LEN, MAX_WORD_LEN, TranslationState, TranslationText,
 };
 use timada_core::languages::language_name;
 use timada_pages::{TextTranslation, TextTranslationState};
@@ -32,7 +32,14 @@ pub struct MainWording {
     /// A category's buying guide and its questions (as the one textarea
     /// writes them); `None` for a product, which has neither.
     pub category: Option<(String, String)>,
+    /// A product's pictures, in their order: the id of each and what the
+    /// main language says it shows. None for a category.
+    pub images: Vec<(String, String)>,
 }
+
+/// What the fields of the pictures' texts are named after: followed by the
+/// picture's id.
+pub const ALT_FIELD_PREFIX: &str = "alt:";
 
 /// One language the thing is worded in, or may be.
 pub struct TranslationCard {
@@ -44,8 +51,19 @@ pub struct TranslationCard {
     pub meta_description: String,
     pub body: String,
     pub questions: String,
+    /// What the product's pictures show, said in this language, by picture
+    /// id.
+    pub alts: std::collections::HashMap<String, String>,
     /// Whether the thing has a translation in this language.
     pub set: bool,
+}
+
+impl TranslationCard {
+    /// What the language says the picture `image_id` shows; empty where it
+    /// says nothing of its own.
+    pub fn alt(&self, image_id: &str) -> &str {
+        self.alts.get(image_id).map_or("", String::as_str)
+    }
 }
 
 impl TranslationCard {
@@ -64,6 +82,14 @@ impl TranslationCard {
             body: text(|t| &t.body),
             questions: translation
                 .map(|t| questions_text(&t.questions))
+                .unwrap_or_default(),
+            alts: translation
+                .map(|t| {
+                    t.alts
+                        .iter()
+                        .map(|said| (said.image_id.clone(), said.alt.clone()))
+                        .collect()
+                })
                 .unwrap_or_default(),
             set: translation.is_some(),
         }
@@ -105,6 +131,9 @@ pub struct TranslationForm {
     pub body: String,
     #[serde(default)]
     pub questions: String,
+    /// The pictures' texts, among anything else posted.
+    #[serde(flatten)]
+    fields: std::collections::HashMap<String, String>,
 }
 
 impl TranslationForm {
@@ -118,6 +147,16 @@ impl TranslationForm {
             meta_description: self.meta_description.clone(),
             body: self.body.clone(),
             questions: parse_questions(&self.questions),
+            alts: self
+                .fields
+                .iter()
+                .filter_map(|(field, alt)| {
+                    Some(ImageAlt {
+                        image_id: field.strip_prefix(ALT_FIELD_PREFIX)?.to_owned(),
+                        alt: alt.clone(),
+                    })
+                })
+                .collect(),
         }
     }
 }
@@ -529,6 +568,19 @@ pub async fn translation_cards(
                                 (&card.meta_description)
                             )
                         )
+                        for (place, (image_id, alt)) in main.images.iter().enumerate() {
+                            field(
+                                field_label(attrs: attributes! { for=(format!("tr-{}-alt-{image_id}", card.language)) }, "What picture " (place + 1) " shows, translated")
+                                if !alt.is_empty() {
+                                    field_description(attrs: attributes! { id=(format!("tr-{}-alt-{image_id}-hint", card.language)) }, "In the main language: " (alt))
+                                }
+                                input(attrs: attributes! {
+                                    id=(format!("tr-{}-alt-{image_id}", card.language)) name=(format!("{ALT_FIELD_PREFIX}{image_id}")) type="text"
+                                    maxlength=(MAX_ALT_LEN) value=(card.alt(image_id)) placeholder=(alt) lang=(&card.language)
+                                    aria-describedby=((!alt.is_empty()).then(|| format!("tr-{}-alt-{image_id}-hint", card.language)))
+                                })
+                            )
+                        }
                         if editable {
                             <div>button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save translation")</div>
                         }

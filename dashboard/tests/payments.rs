@@ -1084,7 +1084,8 @@ async fn an_order_names_its_goods_in_the_language_it_was_placed_in() {
 }
 
 /// And the values of the variant it took, as the shop words them in that
-/// language: a word is the whole shop's, not the product's (#655).
+/// language (a word is the whole shop's, not the product's), and the way
+/// it ships (#655).
 #[tokio::test]
 async fn an_order_names_a_variant_in_the_language_it_was_placed_in() {
     use timada_catalog::{DefineVariant, OptionSelection};
@@ -1147,18 +1148,49 @@ async fn an_order_names_a_variant_in_the_language_it_was_placed_in() {
         )
         .await
         .unwrap();
-    let label_in = async |language: &str| {
+    // And the way it ships, as the language calls it.
+    let method_id = orders
+        .add_shipping_method(
+            "alice",
+            timada_orders::NewShippingMethod {
+                name: "Colis suivi".into(),
+                price_cents: 490,
+                currency: "EUR".into(),
+                countries: vec!["FR".into()],
+                free_above_cents: None,
+            },
+        )
+        .await
+        .unwrap();
+    orders
+        .name_shipping_method("alice", "en", &method_id, "Tracked parcel")
+        .await
+        .unwrap();
+    let asked_in = async |language: &str| {
         let asked = Checkout {
             language: Some(language.to_owned()),
-            ..checkout(Some(990))
+            shipping_method: Some(method_id.clone()),
+            ..checkout(Some(990 + 490))
         };
         let PaymentAnswer::Requested(payment) = h.ask_with(&acme, &cart_id, asked).await else {
             panic!("a payment is opened");
         };
-        payment.lines[0].variant_label.clone()
+        (
+            payment.lines[0].variant_label.clone().unwrap_or_default(),
+            payment
+                .shipping
+                .map(|shipping| shipping.name)
+                .unwrap_or_default(),
+        )
     };
-    assert_eq!(label_in("fr").await.as_deref(), Some("Rose foncé"));
-    assert_eq!(label_in("en").await.as_deref(), Some("Dark pink"));
+    assert_eq!(
+        asked_in("fr").await,
+        ("Rose foncé".to_owned(), "Colis suivi".to_owned())
+    );
+    assert_eq!(
+        asked_in("en").await,
+        ("Dark pink".to_owned(), "Tracked parcel".to_owned())
+    );
     h.finish().await;
 }
 

@@ -2235,3 +2235,58 @@ test("the shop words its options, its facts and its filters once, for every prod
     await expect(page.getByLabel("Colour", { exact: true }).locator("option")).toHaveText(["Rose", "Bleu"], { timeout: 1000 });
   }).toPass({ timeout: 15_000 });
 });
+
+test("a picture's text and a delivery method's name are read in the visitor's language", async ({
+  page,
+  request,
+}) => {
+  const SHOP = app.url;
+  await registerWithEmail(page, uniqueEmail("merchant"));
+  const { name, slug } = uniqueTenant("Alt Shop");
+  await createTenant(page, name);
+  await page.goto(`/t/${slug}/languages`);
+  const languages = page.locator("form[data-shop-languages]");
+  await languages.getByLabel("Main language").selectOption("fr");
+  await languages.getByRole("checkbox", { name: "English" }).check();
+  await languages.getByRole("button", { name: "Save the languages" }).click();
+  await expect(page.getByRole("status")).toContainText("Languages saved");
+
+  // A product with a picture, said in English with its translation.
+  const collar = await publishProduct(page, slug, "Collier", "9.90");
+  await addPicture(page, collar, "Un collier rose");
+  await page.goto(`${collar}?tab=translations`);
+  const english = page.locator("[data-translation=en]");
+  await english.getByLabel("Translated name").fill("Collar");
+  await english.getByLabel("What picture 1 shows, translated").fill("A pink collar");
+  await english.getByRole("button", { name: "Save translation" }).click();
+  await expect(page.getByRole("status")).toContainText("Translation saved");
+  await expect(english.getByLabel("What picture 1 shows, translated")).toHaveValue("A pink collar");
+
+  // A delivery method, named in English on the shipping page.
+  await addShippingMethod(page, slug, "Colis suivi", "4,90", "France FR");
+  const names = page.locator("[data-shipping-names=en]");
+  await names.getByLabel("Colis suivi", { exact: true }).fill("Tracked parcel");
+  await names.getByRole("button", { name: "Save names" }).click();
+  await expect(page.getByRole("status")).toContainText("Names saved");
+  await expect(names.getByLabel("Colis suivi", { exact: true })).toHaveValue("Tracked parcel");
+
+  const key = await mintKey(page, slug, true);
+  await app.start(request, key, 1);
+  await expect(async () => {
+    await page.goto(`${SHOP}/en/p/collar`);
+    await expect(page.locator('main img[alt="A pink collar"]').first()).toBeAttached({ timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await page.goto(`${SHOP}/p/collier`);
+  await expect(page.locator('main img[alt="Un collier rose"]').first()).toBeAttached();
+
+  // The checkout names the method as the language does.
+  await page.goto(`${SHOP}/en/p/collar`);
+  await page.getByRole("button", { name: "Add to cart" }).first().click();
+  await expect(page.locator("[data-cart-drawer].open .drawer-panel")).toContainText("Collar");
+  await expect(async () => {
+    await page.goto(`${SHOP}/en/checkout`);
+    await expect(page.locator("[data-shipping-methods] .name")).toHaveText(["Tracked parcel"], { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await page.goto(`${SHOP}/checkout`);
+  await expect(page.locator("[data-shipping-methods] .name")).toHaveText(["Colis suivi"]);
+});

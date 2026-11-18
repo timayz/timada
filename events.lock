@@ -130,6 +130,7 @@ event timada-catalog/StockItem::Untracked { untracked_by: String }
 event timada-catalog/StockPointer::Rolled { generation: u32, rolled_by: String }
 event timada-catalog/StockTake::Restored { restored_by: String }
 event timada-catalog/StockTake::Taken { cart_id: String, lines: Vec<TakenLine>, taken_by: String }
+event timada-catalog/Translation::AltsSet { alts: Vec<ImageAlt>, set_by: String }
 event timada-catalog/Translation::BodyWritten { body: String, written_by: String }
 event timada-catalog/Translation::Described { description: String, described_by: String }
 event timada-catalog/Translation::Dropped { dropped_by: String }
@@ -312,6 +313,7 @@ event timada-orders/Shipment::ParcelTracked { number: String, checkpoints: Vec<C
 event timada-orders/ShippingMethods::MethodAdded { method_id: String, name: String, price_cents: u64, currency: String, countries: Vec<String>, free_above_cents: Option<u64>, added_by: String }
 event timada-orders/ShippingMethods::MethodChanged { method_id: String, name: String, price_cents: u64, currency: String, countries: Vec<String>, free_above_cents: Option<u64>, changed_by: String }
 event timada-orders/ShippingMethods::MethodRemoved { method_id: String, removed_by: String }
+event timada-orders/ShippingNames::MethodNamed { language: String, method_id: String, name: String, named_by: String }
 event timada-orders/Storefront::StorefrontAddressCleared { cleared_by: String }
 event timada-orders/Storefront::StorefrontAddressSet { url: String, set_by: String }
 event timada-pages/Announcements::AnnouncementAdded { announcement_id: String, text: String, starts_at: Option<u64>, ends_at: Option<u64>, added_by: String }
@@ -462,6 +464,7 @@ type timada_catalog::value_object::CarriedHold { cart_id: String, quantity: u32,
 type timada_catalog::value_object::CarriedTake { order_id: String, cart_id: Option<String>, restored: bool }
 type timada_catalog::value_object::CategoryQuestion { question: String, answer: String }
 type timada_catalog::value_object::DeliveryDays { min: u16, max: u16 }
+type timada_catalog::value_object::ImageAlt { image_id: String, alt: String }
 type timada_catalog::value_object::OptionSelection { option_id: String, value: String }
 type timada_catalog::value_object::TakenLine { product_id: String, variant_id: Option<String>, quantity: u32 }
 type timada_catalog::value_object::VariantCost { variant_id: String, amount_cents: Option<u64> }

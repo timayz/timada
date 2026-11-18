@@ -540,7 +540,7 @@ pub mod category {
 /// struct after its variant, and `Described`, `SeoSet` and `Claimed` already
 /// belong to the product above.
 pub mod translation {
-    use crate::value_object::CategoryQuestion;
+    use crate::value_object::{CategoryQuestion, ImageAlt};
 
     /// What a product or a category says in one more language of the shop:
     /// one stream per thing and language, with the deterministic id
@@ -586,6 +586,10 @@ pub mod translation {
             questions: Vec<CategoryQuestion>,
             set_by: String,
         },
+        /// What a product's pictures show, said in this language, the list
+        /// whole: a picture it leaves out is described as the main language
+        /// does. A category has none.
+        AltsSet { alts: Vec<ImageAlt>, set_by: String },
         /// The translation is gone, whole: the thing is read in the main
         /// language again, and its slug in this one is free.
         Dropped { dropped_by: String },

@@ -15,6 +15,7 @@ mod payment_method;
 mod return_policy;
 mod shipment;
 mod shipping;
+mod shipping_names;
 mod storefront;
 
 use std::fmt;
@@ -27,6 +28,7 @@ pub use lifecycle::*;
 pub use payment_method::*;
 pub use return_policy::*;
 pub use shipment::*;
+pub use shipping_names::*;
 
 use evento::{Executor, Projection, metadata::Event};
 use timada_core::Sending;
