@@ -77,8 +77,8 @@ const LANES: usize = 16;
 const PAGE: u32 = 100;
 
 /// The shop's published products made after `since` (unix seconds), as a
-/// campaign shows them: linked to their page on the storefront
-/// (`{storefront}/p/{slug}`), with their first picture.
+/// campaign shows them: linked to their page on the storefront (their
+/// default address, under their main category), with their first picture.
 pub async fn new_products(
     db: &Db,
     cx: &Cx,
@@ -87,23 +87,33 @@ pub async fn new_products(
     since: i64,
 ) -> anyhow::Result<Vec<NewProductVars>> {
     let media = topcoat::context::context::<Arc<crate::media::Media>>(cx);
-    Ok(
-        timada_catalog::new_products(db, &tenant.id, since, NEW_PRODUCTS_SHOWN)
-            .await?
-            .into_iter()
-            .map(|product| NewProductVars {
-                url: format!("{}/p/{}", storefront.trim_end_matches('/'), product.slug),
-                price: product.price_label(),
-                // The row holds the listing rendition's path below the
-                // tenant's picture address.
-                image_url: product
-                    .thumbnail
-                    .as_deref()
-                    .map(|file| format!("{}/{file}", media.tenant_url(&tenant.id))),
-                name: product.name,
-            })
-            .collect(),
-    )
+    let paths = timada_catalog::category_paths(db, &tenant.id).await?;
+    let new = timada_catalog::new_products(db, &tenant.id, since, NEW_PRODUCTS_SHOWN).await?;
+    // Each at its default address, under its main category.
+    let mut links = Vec::with_capacity(new.len());
+    for product in &new {
+        let filed = timada_catalog::filed_under(db, &tenant.id, &product.id).await?;
+        links.push(format!(
+            "{}{}",
+            storefront.trim_end_matches('/'),
+            paths.product(&filed, &product.slug)
+        ));
+    }
+    Ok(new
+        .into_iter()
+        .zip(links)
+        .map(|(product, url)| NewProductVars {
+            url,
+            price: product.price_label(),
+            // The row holds the listing rendition's path below the
+            // tenant's picture address.
+            image_url: product
+                .thumbnail
+                .as_deref()
+                .map(|file| format!("{}/{file}", media.tenant_url(&tenant.id))),
+            name: product.name,
+        })
+        .collect())
 }
 
 /// This node's place among the nodes up, as of now: which subscribers it

@@ -71,6 +71,7 @@ pub async fn shop_of(
     Ok(Some(FeedShop {
         name: tenant.name.clone(),
         storefront_url,
+        paths: timada_catalog::category_paths(db, &tenant.id).await?,
         shippings,
         delivery_days: default_delivery_days(db, &tenant.id).await?,
         margin: crate::margins::feed_margin(store, tenant, &costs).await?,
@@ -119,7 +120,11 @@ async fn reviewed_product(
         product.variants.iter().map(|v| v.id.clone()).collect()
     };
     Ok(Some(ReviewedProduct {
-        url: format!("{}/p/{}", shop.storefront_url, product.slug),
+        url: format!(
+            "{}{}",
+            shop.storefront_url,
+            shop.paths.product(&product.categories, &product.slug)
+        ),
         name: product.name.clone(),
         gtins: each(&product.gtin, |v| &v.gtin),
         mpns: each(&product.mpn, |v| &v.mpn),
@@ -295,6 +300,7 @@ mod tests {
         FeedShop {
             name: "Acme".into(),
             storefront_url: "https://shop.example".into(),
+            paths: Default::default(),
             ..Default::default()
         }
     }

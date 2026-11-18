@@ -132,10 +132,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             )
                             field(
                                 field_label(attrs: attributes! { for="redirect-to" }, "Sends to")
-                                field_description(attrs: attributes! { id="redirect-to-hint" }, "A path of the storefront: " <code>"/p/blue-mug"</code> ". Send each old address to its own page, not all of them to the home.")
+                                field_description(attrs: attributes! { id="redirect-to-hint" }, "A path of the storefront: " <code>"/mugs/blue-mug"</code> ". Send each old address to its own page, not all of them to the home.")
                                 input(attrs: attributes! {
                                     id="redirect-to" name="to" type="text" required="" maxlength=(MAX_REDIRECT_PATH_LEN)
-                                    aria-describedby="redirect-to-hint" placeholder="/p/blue-mug"
+                                    aria-describedby="redirect-to-hint" placeholder="/mugs/blue-mug"
                                 })
                             )
                             <div>button(attrs: attributes! { type="submit" }, "Add redirect")</div>
