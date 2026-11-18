@@ -2,13 +2,16 @@
 //! 404, so the links to it and what search engines know of it follow:
 //! a path on the merchant's list of redirects, a product's, a page's or an
 //! article's former slug, the one a translation left in its language, and
-//! an archived product, sent to its category.
+//! an archived product, sent to its category. A product or a category is
+//! found by the last part of the address, whatever is before it, and sent
+//! to where it is now.
 //!
 //! Only an address nothing answers is looked up: a slug something else
 //! took since shows that thing.
 
 use timada_storefront::{
-    MovedProduct, moved_article, moved_category, moved_page, moved_product, redirect_for,
+    MovedProduct, moved_article, moved_category, moved_page, moved_product, product_by_slug,
+    redirect_for,
 };
 use topcoat::{
     Result,
@@ -21,7 +24,7 @@ use topcoat::{
     },
 };
 
-use crate::app::{blog, c, own_page, p};
+use crate::app::{address, blog, own_page};
 
 /// Wraps every request; register it on the router with no path.
 pub struct MovedAddress;
@@ -63,29 +66,44 @@ async fn moved_to(cx: &Cx) -> Result<Option<String>> {
         return Ok(Some(to));
     }
     let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
-    Ok(match segments.as_slice() {
-        ["p", slug] => match moved_product(cx, slug).await? {
-            Some(MovedProduct::Product(now)) => {
-                Some(href!(p::slug::index, p::slug::slug: now).resolve(cx))
+    match segments.as_slice() {
+        ["blog", slug] => {
+            return Ok(moved_article(cx, slug)
+                .await?
+                .map(|now| href!(blog::slug::index, blog::slug::slug: now).resolve(cx)));
+        }
+        // The shop's own pages are served at their slug.
+        [slug] if !slug.is_empty() => {
+            if let Some(now) = moved_page(cx, slug).await? {
+                return Ok(own_page::url(cx, &now));
             }
-            Some(MovedProduct::Category(category)) => {
-                Some(href!(c::slug::index, c::slug::slug: category).resolve(cx))
-            }
-            None => None,
-        },
+        }
+        _ => {}
+    }
+    // A product's address ends with its slug, a category's with its own,
+    // wherever in the tree and at the routes they had before: the last
+    // part is looked up among the slugs they left, and the answer is
+    // where the thing is now.
+    let Some(last) = segments.last().filter(|last| !last.is_empty()) else {
+        return Ok(None);
+    };
+    let paths = address::paths(cx).await?;
+    let category_at = |slug: &str| {
+        paths
+            .by_slug(slug)
+            .and_then(|id| paths.category(id))
+            .map(str::to_owned)
+    };
+    Ok(match moved_product(cx, last).await? {
+        Some(MovedProduct::Product(now)) => product_by_slug(cx, &now)
+            .await?
+            .map(|product| address::product_href(cx, paths, &product)),
+        Some(MovedProduct::Category(category)) => category_at(&category),
         // A category keeps its slug for life in the main language; its
         // translation's may move.
-        ["c", slug] => moved_category(cx, slug)
-            .await?
-            .map(|now| href!(c::slug::index, c::slug::slug: now).resolve(cx)),
-        ["blog", slug] => moved_article(cx, slug)
-            .await?
-            .map(|now| href!(blog::slug::index, blog::slug::slug: now).resolve(cx)),
-        // The shop's own pages are served at their slug.
-        [slug] if !slug.is_empty() => match moved_page(cx, slug).await? {
-            Some(now) => own_page::url(cx, &now),
+        None => match moved_category(cx, last).await? {
+            Some(now) => category_at(&now),
             None => None,
         },
-        _ => None,
     })
 }

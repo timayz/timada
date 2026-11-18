@@ -260,6 +260,10 @@ async fn main() -> Result<()> {
     stripe.serve(listener);
 
     let catalog = site::Catalog::discover(&mut http::Visitor::new(&http)).await?;
+    http.know(
+        catalog.categories.iter().cloned(),
+        catalog.products.iter().map(|product| product.path.clone()),
+    );
     eprintln!(
         "{} categories, {} products, {} search terms; {} steps",
         catalog.categories.len(),

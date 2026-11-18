@@ -4,8 +4,8 @@
 //! on adding to it) goes with the request that follows. Redirects are
 //! followed here too, each hop timed under its own route.
 
-use std::collections::BTreeMap;
-use std::sync::{Arc, LazyLock};
+use std::collections::{BTreeMap, HashSet};
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -21,6 +21,16 @@ pub struct Http {
     client: reqwest::Client,
     base: String,
     metrics: Arc<Metrics>,
+    /// The paths the shop's categories and products were found at, once
+    /// they were: a path alone does not say which of the two it is.
+    known: OnceLock<Known>,
+}
+
+/// The pages of the catalogue, by path.
+#[derive(Default)]
+struct Known {
+    categories: HashSet<String>,
+    products: HashSet<String>,
 }
 
 impl Http {
@@ -41,7 +51,33 @@ impl Http {
             client,
             base: base.trim_end_matches('/').to_owned(),
             metrics,
+            known: OnceLock::new(),
         })
+    }
+
+    /// Tells which paths are a category's page and which a product's, for
+    /// the route each request is reported under. Once: later calls change
+    /// nothing.
+    pub fn know(
+        &self,
+        categories: impl IntoIterator<Item = String>,
+        products: impl IntoIterator<Item = String>,
+    ) {
+        let _ = self.known.set(Known {
+            categories: categories.into_iter().collect(),
+            products: products.into_iter().collect(),
+        });
+    }
+
+    /// The route `path` is reported under: a category's or a product's
+    /// page when the path is known as one, else [`route_of`].
+    fn route_of(&self, path: &str) -> String {
+        let bare = path.split(['?', '#']).next().unwrap_or(path);
+        match self.known.get() {
+            Some(known) if known.products.contains(bare) => "/{category}/{product}".to_owned(),
+            Some(known) if known.categories.contains(bare) => "/{category}".to_owned(),
+            _ => route_of(path),
+        }
     }
 
     pub fn client(&self) -> &reqwest::Client {
@@ -91,7 +127,7 @@ impl<'a> Visitor<'a> {
         let mut path = path.to_owned();
         let mut form = form;
         for _ in 0..=MAX_REDIRECTS {
-            let route = format!("{method} {}", route_of(&path));
+            let route = format!("{method} {}", self.http.route_of(&path));
             let mut request = self
                 .http
                 .client
@@ -199,7 +235,6 @@ pub fn route_of(path: &str) -> String {
     static ROUTES: LazyLock<Vec<(Regex, &str)>> = LazyLock::new(|| {
         [
             (r"^/p/[^/]+$", "/p/{slug}"),
-            (r"^/c/[^/]+$", "/c/{slug}"),
             (r"^/orders/[^/]+$", "/orders/{id}"),
             (r"^/media/.+$", "/media/{file}"),
         ]
@@ -236,7 +271,6 @@ mod tests {
     #[test]
     fn routes_name_their_variable_segments() {
         assert_eq!(route_of("/p/arbre-a-chat?error=x"), "/p/{slug}");
-        assert_eq!(route_of("/c/jeux-pour-chat#cart"), "/c/{slug}");
         assert_eq!(route_of("/orders/abc"), "/orders/{id}");
         assert_eq!(route_of("/checkout/complete?x=1"), "/checkout/complete");
         assert_eq!(route_of("/"), "/");

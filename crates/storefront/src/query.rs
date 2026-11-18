@@ -248,6 +248,11 @@ pub struct Product {
     /// against, to strike through beside its price: above it whenever it
     /// is there. A variant has its own.
     pub compare_at_cents: Option<i64>,
+    /// The ids of the categories it is filed under, its main one first:
+    /// the one the merchant picked, else the first it joined. A category
+    /// archived since may still be among them; [`Paths`](crate::Paths)
+    /// goes by the first that is live.
+    pub categories: Vec<String>,
 }
 
 impl FromRow for Product {
@@ -284,6 +289,7 @@ impl FromRow for Product {
             gtin: row.get("gtin")?,
             mpn: row.get("mpn")?,
             compare_at_cents: row.get("compare_at_cents")?,
+            categories: row.get::<Json<_>>("filed_json")?.0,
         })
     }
 }
@@ -592,7 +598,7 @@ macro_rules! product_columns {
          p.images_json, p.options_json, p.variants_json, p.attributes_json, p.min_amount_cents,
          p.max_amount_cents, p.review_count, p.rating_x100, p.stock_json, p.in_stock,
          p.delivery_min_days, p.delivery_max_days, p.brand, p.gtin, p.mpn,
-         p.compare_at_cents"
+         p.compare_at_cents, p.filed_json"
     };
 }
 

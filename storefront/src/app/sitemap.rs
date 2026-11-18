@@ -21,7 +21,7 @@ use topcoat::{
     },
 };
 
-use crate::app::{blog, boutique, c, own_page, p, support_client};
+use crate::app::{address, blog, boutique, own_page, support_client};
 
 /// What a shopper does rather than reads: nothing a search engine should
 /// crawl or list. `robots.txt` keeps crawlers out of these and the layout
@@ -106,9 +106,12 @@ pub async fn pages(cx: &Cx) -> Result<impl IntoResponse> {
             &speaking.absolute(cx, &href!(support_client::index).resolve(cx)),
             None,
         );
+    let paths = address::paths(cx).await?;
     for category in sitemap_categories(cx).await? {
-        let path = href!(c::slug::index, c::slug::slug: category.slug.clone()).resolve(cx);
-        sitemap = sitemap.url(&speaking.absolute(cx, &path), Some(category.updated_at));
+        // One the tree does not hold has no page.
+        if let Some(path) = paths.category(&category.id) {
+            sitemap = sitemap.url(&speaking.absolute(cx, path), Some(category.updated_at));
+        }
     }
     // Only the pages the shop has an address for, and whose text is
     // published.
@@ -140,8 +143,10 @@ pub async fn products(cx: &Cx) -> Result<impl IntoResponse> {
         return Err(not_found().into());
     }
     let mut sitemap = Sitemap::new();
+    // Each at its default address, the one its pages name as canonical.
+    let paths = address::paths(cx).await?;
     for product in entries {
-        let path = href!(p::slug::index, p::slug::slug: product.slug.clone()).resolve(cx);
+        let path = address::filed_href(cx, paths, &product.categories, &product.slug);
         sitemap = sitemap.url(&speaking.absolute(cx, &path), Some(product.updated_at));
     }
     Ok(xml(sitemap.xml()))
