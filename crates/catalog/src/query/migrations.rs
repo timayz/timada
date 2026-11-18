@@ -86,6 +86,31 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             item_json TEXT NOT NULL,
             PRIMARY KEY (tenant_id, id)
         );
+        -- What a product or a category (`kind`) says in one more language
+        -- of the shop, for what is written outside a request (a feed in
+        -- that language): its name, the slug its address goes by there
+        -- and its description, empty where the main language's stands.
+        CREATE TABLE catalog_translations (
+            tenant_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            language TEXT NOT NULL,
+            name TEXT NOT NULL,
+            slug TEXT NOT NULL,
+            description TEXT NOT NULL,
+            PRIMARY KEY (tenant_id, kind, subject_id, language)
+        );
+        CREATE INDEX catalog_translations_language
+            ON catalog_translations (tenant_id, language, kind);
+        -- What a language reads for a word the shop's products share, by
+        -- the word without case.
+        CREATE TABLE catalog_words (
+            tenant_id TEXT NOT NULL,
+            language TEXT NOT NULL,
+            key TEXT NOT NULL,
+            wording TEXT NOT NULL,
+            PRIMARY KEY (tenant_id, language, key)
+        );
         CREATE TABLE catalog_product_costs (
             tenant_id TEXT NOT NULL,
             product_id TEXT NOT NULL,
@@ -165,6 +190,8 @@ pub const TABLES: &[&str] = &[
     "catalog_products",
     "catalog_variants",
     "catalog_feed_products",
+    "catalog_translations",
+    "catalog_words",
     "catalog_product_costs",
     "catalog_feeds",
     "catalog_delivery_default",

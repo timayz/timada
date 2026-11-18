@@ -78,6 +78,79 @@ pub async fn category_paths(db: &Db, tenant_id: &str) -> Result<CategoryPaths> {
     Ok(CategoryPaths::of(&rows))
 }
 
+/// The key of `catalog_translations`, named wherever a statement reads a
+/// thing's row by it: the planner otherwise takes the language's index,
+/// led by the tenant as the key is, and reads every row of the language.
+pub(crate) const TRANSLATIONS_KEY: &str = "sqlite_autoindex_catalog_translations_1";
+
+/// The paths of the tenant's live categories as `language` reads them:
+/// each part the slug the category goes by there, its main one where it
+/// has no translation.
+pub async fn category_paths_in(db: &Db, tenant_id: &str, language: &str) -> Result<CategoryPaths> {
+    let mut rows: Vec<(String, String, Option<String>)> = db
+        .fetch_all(
+            "SELECT id, slug, parent_id FROM catalog_categories
+             WHERE tenant_id = ?1 AND archived = 0",
+            (tenant_id,),
+        )
+        .await?;
+    let theirs: Vec<(String, String)> = db
+        .fetch_all(
+            "SELECT subject_id, slug FROM catalog_translations
+                INDEXED BY catalog_translations_language
+             WHERE tenant_id = ?1 AND language = ?2 AND kind = 'category'",
+            (tenant_id, language),
+        )
+        .await?;
+    let theirs: HashMap<String, String> = theirs.into_iter().collect();
+    for (id, slug, _) in &mut rows {
+        if let Some(translated) = theirs.get(id) {
+            *slug = translated.clone();
+        }
+    }
+    Ok(CategoryPaths::of(&rows))
+}
+
+/// What a product says in another language, as a feed in it writes it.
+#[derive(Debug, Clone, PartialEq, Eq, timada_core::db::FromRow)]
+pub struct ProductWording {
+    pub name: String,
+    pub slug: String,
+    /// Empty where the main language's stands.
+    pub description: String,
+}
+
+/// What the product says in `language`; `None` where it has no
+/// translation.
+pub async fn product_wording(
+    db: &Db,
+    tenant_id: &str,
+    product_id: &str,
+    language: &str,
+) -> Result<Option<ProductWording>> {
+    db.fetch_optional(
+        &format!(
+            "SELECT name, slug, description FROM catalog_translations INDEXED BY {TRANSLATIONS_KEY}
+             WHERE tenant_id = ?1 AND kind = 'product' AND subject_id = ?2 AND language = ?3"
+        ),
+        (tenant_id, product_id, language),
+    )
+    .await
+}
+
+/// What `language` reads for the words the shop's products share, by the
+/// word's key ([`word_key`](crate::word_key)): the whole list, a feed
+/// reads it once.
+pub async fn words_in(db: &Db, tenant_id: &str, language: &str) -> Result<HashMap<String, String>> {
+    let rows: Vec<(String, String)> = db
+        .fetch_all(
+            "SELECT key, wording FROM catalog_words WHERE tenant_id = ?1 AND language = ?2",
+            (tenant_id, language),
+        )
+        .await?;
+    Ok(rows.into_iter().collect())
+}
+
 /// The categories a product is filed under, its main one first; empty for
 /// a product the rows do not hold.
 pub async fn filed_under(db: &Db, tenant_id: &str, product_id: &str) -> Result<Vec<String>> {
