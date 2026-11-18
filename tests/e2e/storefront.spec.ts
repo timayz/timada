@@ -2137,3 +2137,101 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   await expect(page).toHaveURL(`${SHOP}/en/p/big-cat-tree`);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Cat Tree");
 });
+
+test("the shop words its options, its facts and its filters once, for every product", async ({
+  page,
+  request,
+}) => {
+  const SHOP = app.url;
+  await registerWithEmail(page, uniqueEmail("merchant"));
+  const { name, slug } = uniqueTenant("Words Shop");
+  await createTenant(page, name);
+  await page.goto(`/t/${slug}/languages`);
+  const languages = page.locator("form[data-shop-languages]");
+  await languages.getByLabel("Main language").selectOption("fr");
+  await languages.getByRole("checkbox", { name: "English" }).check();
+  await languages.getByRole("button", { name: "Save the languages" }).click();
+  await expect(page.getByRole("status")).toContainText("Languages saved");
+
+  // Two products varying by colour, one with a fact in its table.
+  await createCategory(page, slug, "Chat");
+  const collar = await publishVariedProduct(page, slug, "Collier", "Couleur", [["Rose", "9.90"], ["Bleu", "9.90"]], "Chat");
+  const leash = await publishVariedProduct(page, slug, "Laisse", "Couleur", [["Rose", "12.90"]], "Chat");
+  await page.goto(collar);
+  await productTab(page, "Facts");
+  await page.getByLabel("Fact name").fill("Matière");
+  await page.getByLabel("Fact value").fill("Cuir");
+  await page.getByRole("button", { name: "Set fact" }).click();
+  await expect(page.getByRole("status")).toContainText("Fact saved.");
+
+  // The collar's words in English: a field each, the blue left as it is.
+  await page.goto(`${collar}?tab=translations`);
+  const words = page.locator("[data-words=en]");
+  await expect(words.locator("label")).toHaveText(["Couleur", "Rose", "Bleu", "Matière", "Cuir"]);
+  await words.getByLabel("Couleur", { exact: true }).fill("Colour");
+  await words.getByLabel("Rose", { exact: true }).fill("Pink");
+  await words.getByLabel("Matière", { exact: true }).fill("Material");
+  await words.getByLabel("Cuir", { exact: true }).fill("Leather");
+  await words.getByRole("button", { name: "Save words" }).click();
+  await expect(page.getByRole("status")).toContainText("Words saved");
+  await expect(words.getByLabel("Rose", { exact: true })).toHaveValue("Pink");
+  await expect(words.getByLabel("Bleu", { exact: true })).toHaveValue("");
+  // They are the whole shop's: the leash, never worded, reads them too.
+  await page.goto(`${leash}?tab=translations`);
+  await expect(words.locator("label")).toHaveText(["Couleur", "Rose"]);
+  await expect(words.getByLabel("Couleur", { exact: true })).toHaveValue("Colour");
+  await expect(words.getByLabel("Rose", { exact: true })).toHaveValue("Pink");
+
+  const key = await mintKey(page, slug, true);
+  await app.start(request, key, 2);
+  // Under /en a product's menu and its table read the words; a value with
+  // none stays as the main language writes it.
+  await expect(async () => {
+    await page.goto(`${SHOP}/en/p/collier`);
+    await expect(page.getByLabel("Colour", { exact: true })).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(page.getByLabel("Colour", { exact: true }).locator("option")).toHaveText(["Pink", "Bleu"]);
+  await expect(page.locator("[data-attributes]")).toContainText("Material");
+  await expect(page.locator("[data-attributes]")).toContainText("Leather");
+  await page.goto(`${SHOP}/en/p/laisse`);
+  await expect(page.getByLabel("Colour", { exact: true }).locator("option")).toHaveText(["Pink"]);
+  // In French they are as the merchant wrote them.
+  await page.goto(`${SHOP}/p/collier`);
+  await expect(page.getByLabel("Couleur", { exact: true }).locator("option")).toHaveText(["Rose", "Bleu"]);
+  await expect(page.locator("[data-attributes]")).toContainText("Matière");
+  await expect(page.locator("[data-attributes]")).toContainText("Cuir");
+
+  // The filters of a listing are made of the same words: the name and the
+  // values read in English, the links carry the main language's keys.
+  const filters = page.locator("[data-filters]");
+  await page.goto(`${SHOP}/en/c/chat`);
+  await filters.locator("summary").click();
+  await expect(filters.locator("h3")).toHaveText(["Filter by price", "Filter by colour"]);
+  await expect(filters.locator("[data-filter=couleur]")).toHaveText(["Bleu (1)", "Pink (2)"]);
+  await filters.locator("[data-filter=couleur][data-filter-value=rose]").click();
+  await expect(page).toHaveURL(`${SHOP}/en/c/chat?couleur=rose`);
+  await expect(page.locator("ul.catalog > li[data-product]")).toHaveCount(2);
+  await page.goto(`${SHOP}/c/chat`);
+  await filters.locator("summary").click();
+  await expect(filters.locator("h3")).toHaveText(["Filtrer par tarif", "Filtrer par couleur"]);
+  await expect(filters.locator("[data-filter=couleur]")).toHaveText(["Bleu (1)", "Rose (2)"]);
+
+  // And the cart names the variant taken as the page did.
+  await page.goto(`${SHOP}/en/p/laisse`);
+  await page.getByRole("button", { name: "Add to cart" }).first().click();
+  await expect(page.locator("[data-cart-drawer].open .drawer-panel")).toContainText("Pink");
+  await page.goto(`${SHOP}/en/cart`);
+  await expect(page.locator("main small").filter({ hasText: "Pink" })).toHaveCount(1);
+  await page.goto(`${SHOP}/cart`);
+  await expect(page.locator("main small").filter({ hasText: "Rose" })).toHaveCount(1);
+
+  // A word taken back is read in the main language again, everywhere.
+  await page.goto(`${leash}?tab=translations`);
+  await words.getByLabel("Rose", { exact: true }).fill("");
+  await words.getByRole("button", { name: "Save words" }).click();
+  await expect(page.getByRole("status")).toContainText("Words saved");
+  await expect(async () => {
+    await page.goto(`${SHOP}/en/p/collier`);
+    await expect(page.getByLabel("Colour", { exact: true }).locator("option")).toHaveText(["Rose", "Bleu"], { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+});

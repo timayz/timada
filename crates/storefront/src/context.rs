@@ -83,10 +83,30 @@ async fn in_language(cx: &Cx, products: &mut [Product]) -> Result<()> {
 /// The values `option` takes across the products `query` lists, each with
 /// its count, for a filter's links: see
 /// [`published_option_values`](crate::published_option_values).
+///
+/// A request read in another language ([`read_in`](crate::read_in)) gets
+/// each value labelled as the shop words it there; its key, what a link
+/// carries, is the main language's either way.
 pub async fn option_values(cx: &Cx, query: &ProductQuery, option: &str) -> Result<Vec<FacetValue>> {
-    published_option_values(store(cx).db(), &searched_in(cx, query), option)
+    let db = store(cx).db();
+    let mut values = published_option_values(db, &searched_in(cx, query), option)
         .await
-        .map_err(Error::from_anyhow)
+        .map_err(Error::from_anyhow)?;
+    if let Some(language) = crate::read_in(cx) {
+        let words = crate::published_words(
+            db,
+            language,
+            values.iter().map(|value| value.label.as_str()),
+        )
+        .await
+        .map_err(Error::from_anyhow)?;
+        for value in &mut values {
+            if let Some(wording) = words.get(&timada_catalog::word_key(&value.label)) {
+                value.label = wording.clone();
+            }
+        }
+    }
+    Ok(values)
 }
 
 /// A published product by slug, if any.
@@ -241,7 +261,9 @@ pub async fn category_hub(cx: &Cx, category_id: &str) -> Result<CategoryHub> {
 /// The options the shop's listings are narrowed by, in the merchant's
 /// order; `None` while the shop never set them. Each is an option's name:
 /// [`option_values`] gives the values a listing offers for it, and
-/// [`ProductQuery::with_option`] narrows by one.
+/// [`ProductQuery::with_option`] narrows by one. The names are the main
+/// language's, which the values are looked up by: [`worded`](crate::worded)
+/// gives what a visitor reading another language is shown for one.
 pub async fn listing_filters(cx: &Cx) -> Result<Option<Vec<String>>> {
     published_listing_filters(store(cx).db())
         .await

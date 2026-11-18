@@ -615,6 +615,27 @@ pub mod translation {
     pub enum SlugLanguages {
         Noted { language: String },
     }
+
+    /// What the shop says in one more language for a word its products
+    /// share: the name of an option (« Couleur »), one of its values
+    /// (« Rose foncé »), the label or the value of a fact of their tables.
+    /// One stream per language and word, with the deterministic id
+    /// [`word_id`](crate::word_id): a word is worded once for the whole
+    /// shop, whatever the number of products that carry it, and the
+    /// filters of a listing, made of the same words, read the same entry.
+    #[evento::aggregate(name = "timada-catalog/Word")]
+    pub enum Word {
+        /// `term` is the word as the main language writes it, `wording`
+        /// what `language` reads for it.
+        Worded {
+            language: String,
+            term: String,
+            wording: String,
+            worded_by: String,
+        },
+        /// The word is read as the main language writes it again.
+        Unworded { unworded_by: String },
+    }
 }
 
 /// The stock events, in their own module: the macro names an event struct

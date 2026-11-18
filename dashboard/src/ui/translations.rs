@@ -4,7 +4,7 @@
 
 use timada_catalog::{
     CategoryQuestion, MAX_CATEGORY_BODY_LEN, MAX_META_DESCRIPTION_LEN, MAX_META_TITLE_LEN,
-    MAX_SLUG_LEN, TranslationState, TranslationText,
+    MAX_SLUG_LEN, MAX_WORD_LEN, TranslationState, TranslationText,
 };
 use timada_core::languages::language_name;
 use timada_pages::{TextTranslation, TextTranslationState};
@@ -119,6 +119,61 @@ impl TranslationForm {
             body: self.body.clone(),
             questions: parse_questions(&self.questions),
         }
+    }
+}
+
+/// The words a product shares with the rest of the shop, as one language
+/// reads them: its options, the values they take and the facts of its
+/// table.
+pub struct WordCard {
+    pub language: String,
+    /// What the card is headed with.
+    title: String,
+    /// A word as the main language writes it, then what the language reads
+    /// for it; empty while the shop has not worded it there.
+    pub words: Vec<(String, String)>,
+}
+
+impl WordCard {
+    pub fn new(language: &str, words: Vec<(String, String)>) -> Self {
+        WordCard {
+            language: language.to_owned(),
+            title: format!(
+                "Options and facts in {}",
+                language_name(language).unwrap_or(language)
+            ),
+            words,
+        }
+    }
+}
+
+/// What the fields of a [`WordCard`]'s form are named after: the word as
+/// the main language writes it, and what the language reads for it, both
+/// followed by the word's place in the card.
+pub const TERM_FIELD_PREFIX: &str = "term:";
+pub const WORDING_FIELD_PREFIX: &str = "wording:";
+
+/// A word card's form as it is posted.
+#[derive(serde::Deserialize)]
+pub struct WordsForm {
+    pub language: String,
+    /// The words and their wordings, among anything else posted.
+    #[serde(flatten)]
+    fields: std::collections::HashMap<String, String>,
+}
+
+impl WordsForm {
+    /// Each word posted with what the language reads for it; empty for a
+    /// word left to the main language.
+    pub fn words(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.fields.iter().filter_map(|(name, term)| {
+            let place = name.strip_prefix(TERM_FIELD_PREFIX)?;
+            let wording = self
+                .fields
+                .get(&format!("{WORDING_FIELD_PREFIX}{place}"))
+                .map_or("", String::as_str);
+            Some((term.as_str(), wording))
+        })
     }
 }
 
@@ -304,6 +359,47 @@ pub async fn text_translation_cards(
                     </form>
                 }
             )
+        }
+    })
+}
+
+/// One card a language, with the form that words what the product shares
+/// with the rest of the shop (posted to `save`): a field a word. None for
+/// a product without options and facts.
+#[component]
+pub async fn word_cards(
+    cx: &Cx,
+    editable: bool,
+    save: &str,
+    cards: &[WordCard],
+) -> Result<impl View> {
+    Ok(view! {
+        for card in cards {
+            if !card.words.is_empty() {
+                section_card(
+                    title: Some(&card.title),
+                    description: Some("A word is translated once for the whole shop: every product that carries it reads it, and so do the filters of the listings. One left empty is read in the main language."),
+                    attrs: attributes! { data-words=(&card.language) },
+                    <form method="post" action=(save) class="flex max-w-2xl flex-col gap-4">
+                        <input type="hidden" name="language" value=(&card.language) />
+                        <fieldset disabled=(!editable) class="contents">
+                            for (place, (term, wording)) in card.words.iter().enumerate() {
+                                field(
+                                    field_label(attrs: attributes! { for=(format!("word-{}-{place}", card.language)) }, (term))
+                                    <input type="hidden" name=(format!("{TERM_FIELD_PREFIX}{place}")) value=(term) />
+                                    input(attrs: attributes! {
+                                        id=(format!("word-{}-{place}", card.language)) name=(format!("{WORDING_FIELD_PREFIX}{place}")) type="text"
+                                        maxlength=(MAX_WORD_LEN) value=(wording) placeholder=(term) lang=(&card.language) autocomplete="off"
+                                    })
+                                )
+                            }
+                            if editable {
+                                <div>button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save words")</div>
+                            }
+                        </fieldset>
+                    </form>
+                )
+            }
         }
     })
 }

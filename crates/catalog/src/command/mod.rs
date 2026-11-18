@@ -26,6 +26,7 @@ mod slug_index;
 mod stock;
 mod translation;
 mod variant;
+mod word;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -45,6 +46,7 @@ pub use ordered::*;
 pub use stock::*;
 pub use translation::*;
 pub use variant::*;
+pub use word::*;
 
 use evento::{Executor, Projection, metadata::Event};
 

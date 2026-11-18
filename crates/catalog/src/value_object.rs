@@ -675,6 +675,31 @@ pub fn slug_languages_id(kind: TranslationKind, slug: &str) -> String {
     evento::hash_ids(vec!["slug-languages", kind.as_str(), slug])
 }
 
+/// The longest word the shop words in another language, and the longest
+/// wording: a fact's value, the longest of what a word may be.
+pub const MAX_WORD_LEN: usize = MAX_ATTRIBUTE_VALUE_LEN;
+
+/// What two words are compared by: case and the space around them do not
+/// make two words, so « couleur » and « Couleur » are worded once.
+pub fn word_key(term: &str) -> String {
+    term.trim().to_lowercase()
+}
+
+/// The stream of what the shop says for `term` in `language`.
+pub fn word_id(language: &str, term: &str) -> String {
+    evento::hash_ids(vec!["word", language, &word_key(term)])
+}
+
+/// Trims a word, or what a language reads for it, and checks it is at most
+/// [`MAX_WORD_LEN`] characters.
+pub fn normalize_word(word: &str) -> Result<String, CatalogError> {
+    let word = word.trim();
+    if word.chars().count() > MAX_WORD_LEN {
+        return Err(CatalogError::InvalidWord);
+    }
+    Ok(word.to_owned())
+}
+
 /// Trims a category name and checks it is 1 to 80 characters.
 pub fn normalize_category_name(name: &str) -> Result<String, CatalogError> {
     let name = name.trim();
