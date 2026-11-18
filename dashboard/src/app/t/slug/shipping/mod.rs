@@ -49,6 +49,16 @@ pub fn shipping_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&s
         .resolve(cx)
 }
 
+/// What one of the shop's other languages calls the shipping methods.
+struct NamedIn {
+    language: String,
+    /// What its card is headed with.
+    heading: String,
+    /// A method's id, its name, and the name in the language (empty where
+    /// it has none).
+    rows: Vec<(String, String, String)>,
+}
+
 /// The orders gateway in the tenant's streams (403 while suspended).
 pub fn orders(access: &TenantAccess) -> Result<Command<Executor>> {
     Ok(Command::new(access.executor()?.clone(), access.tenant_id()))
@@ -209,7 +219,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map_err(topcoat::Error::from_anyhow)?
         .map(|languages| languages.others)
         .unwrap_or_default();
-    let mut named_in: Vec<(String, String, Vec<(String, String, String)>)> = Vec::new();
+    let mut named_in: Vec<NamedIn> = Vec::new();
     if !methods.is_empty() {
         for language in other_languages {
             let names = orders(&access)?
@@ -227,7 +237,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 "Shipping methods in {}",
                 timada_core::languages::language_name(&language).unwrap_or(&language)
             );
-            named_in.push((language, heading, rows));
+            named_in.push(NamedIn {
+                language,
+                heading,
+                rows,
+            });
         }
     }
     let TenantAccess { tenant, .. } = access;
@@ -272,7 +286,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 )
             )
 
-            for (language, heading, rows) in &named_in {
+            for NamedIn { language, heading, rows } in &named_in {
                 section_card(
                     title: Some(heading),
                     description: Some("What a shopper reading this language is shown for each method, in the cart, at checkout and with their order. One left empty is read in the main language."),
