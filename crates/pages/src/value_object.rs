@@ -286,6 +286,11 @@ pub fn newsletter_popup_id() -> String {
     evento::hash_ids(vec!["newsletter-popup"])
 }
 
+/// The stream of what the shop's short texts say in `language`.
+pub fn shop_wording_id(language: &str) -> String {
+    evento::hash_ids(vec!["shop-wording", language])
+}
+
 /// How many languages a storefront is read in beside its main one.
 pub const MAX_OTHER_LANGUAGES: usize = 10;
 

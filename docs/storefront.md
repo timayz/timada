@@ -744,6 +744,12 @@ the Shipping page and copied into `storefront_shipping_names`): `cart(cx)` names
 `shipping_options` in the language of the request, and an order keeps the name of the
 language it was placed in.
 
+The bar's messages and the newsletter pop-up are worded per language too
+(`timada-pages/ShopWording`, one stream per language, written from a card per language
+on the Announcements and the Newsletter pop-up pages, copied into `storefront_wordings`):
+`announcements(cx)` and `newsletter_popup(cx)` answer in the language of the request,
+and in the main one for what has no wording there.
+
 ## Announcements
 
 The short messages at the top of the shop ("-10% maintenant avec le code BIENVENUE10")

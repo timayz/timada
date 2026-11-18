@@ -7,6 +7,7 @@
 //! who subscribed.
 
 pub mod set;
+pub mod wording;
 
 use timada_pages::{MAX_POPUP_DELAY_SECS, MAX_POPUP_TEXT_LEN, MAX_POPUP_TITLE_LEN};
 use timada_tenancy::{PERMISSION_PAGES_MANAGE, PERMISSION_PAGES_READ};
@@ -51,6 +52,26 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .newsletter_popup()
         .await
         .map_err(topcoat::Error::from_anyhow)?;
+    // What each of the shop's other languages reads on it: the language,
+    // its card's heading, the title and the text there.
+    let other_languages = pages(&access)?
+        .languages()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .map(|languages| languages.others)
+        .unwrap_or_default();
+    let mut worded_in: Vec<(String, String, String, String)> = Vec::new();
+    for language in other_languages {
+        let worded = pages(&access)?
+            .shop_wording(&language)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        let heading = format!(
+            "The pop-up in {}",
+            timada_core::languages::language_name(&language).unwrap_or(&language)
+        );
+        worded_in.push((language, heading, worded.popup_title, worded.popup_text));
+    }
     let TenantAccess { tenant, .. } = access;
     let slug = tenant.slug.clone();
     let title = format!("Newsletter pop-up · {}", tenant.name);
@@ -114,6 +135,36 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     </fieldset>
                 </form>
             )
+
+            for (language, heading, their_title, their_text) in &worded_in {
+                section_card(
+                    title: Some(heading),
+                    description: Some("What a visitor reading this language sees. What is left empty is read in the main language."),
+                    attrs: attributes! { data-popup-wording=(language) },
+                    <form method="post" action=(href!(wording::wording, slug: slug.clone())) class="flex max-w-2xl flex-col gap-4">
+                        <input type="hidden" name="language" value=(language) />
+                        <fieldset class="contents" disabled=(!can_manage)>
+                            field(
+                                field_label(attrs: attributes! { for=(format!("popup-title-{language}")) }, "Translated offer")
+                                input(attrs: attributes! {
+                                    id=(format!("popup-title-{language}")) name="title" type="text" maxlength=(MAX_POPUP_TITLE_LEN)
+                                    value=(their_title) placeholder=(&popup.title) lang=(language)
+                                })
+                            )
+                            field(
+                                field_label(attrs: attributes! { for=(format!("popup-text-{language}")) }, "Translated sentence under it")
+                                textarea(
+                                    attrs: attributes! { id=(format!("popup-text-{language}")) name="text" rows="3" maxlength=(MAX_POPUP_TEXT_LEN) placeholder=(&popup.text) lang=(language) },
+                                    (their_text)
+                                )
+                            )
+                            if can_manage {
+                                <div>button(attrs: attributes! { type="submit" }, "Save translation")</div>
+                            }
+                        </fieldset>
+                    </form>
+                )
+            }
 
             section_card(
                 title: Some("When it opens"),

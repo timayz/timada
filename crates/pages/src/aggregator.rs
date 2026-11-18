@@ -221,6 +221,32 @@ pub enum NewsletterPopup {
     },
 }
 
+/// What the shop's short texts say in one more language: the messages of
+/// its top bar and its newsletter pop-up. One stream per language, with the
+/// id [`shop_wording_id`](crate::shop_wording_id). Their own streams keep
+/// the main language and everything that is no wording (a message's
+/// window and place, when the pop-up opens); what has no wording here is
+/// read in the main language.
+#[evento::aggregate(name = "timada-pages/ShopWording")]
+pub enum ShopWording {
+    /// A message of the bar in `language`; an empty `text` goes back to
+    /// the main language's.
+    AnnouncementWorded {
+        language: String,
+        announcement_id: String,
+        text: String,
+        worded_by: String,
+    },
+    /// The pop-up's title and the text under it in `language`; an empty
+    /// one goes back to the main language's.
+    PopupWorded {
+        language: String,
+        title: String,
+        text: String,
+        worded_by: String,
+    },
+}
+
 /// The languages a shop's storefront is read in: one stream per shop, with
 /// the id [`languages_id`](crate::languages_id). What a product, a category,
 /// a page or an article says on its own stream is in the `main` one; each of
