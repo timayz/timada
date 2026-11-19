@@ -65,7 +65,7 @@ fn peer_label(peer: &PeerState) -> String {
             "no longer waited for, silent for {}",
             format_silence(silent)
         )
-    } else if silent >= 10 {
+    } else if !crate::cluster::in_touch(peer) {
         format!("not heard from for {}", format_silence(silent))
     } else {
         "in touch".to_owned()
@@ -115,6 +115,8 @@ fn state(health: &NodeHealth) -> (&'static str, Tone) {
         ("Copy needed", Tone::Warning)
     } else if !health.confirmed {
         ("Waiting for the other nodes", Tone::Neutral)
+    } else if !crate::cluster::reaches_majority(health) {
+        ("Out of touch with most nodes", Tone::Warning)
     } else {
         ("Serving", Tone::Success)
     }
