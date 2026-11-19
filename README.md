@@ -53,10 +53,15 @@ Three workflows, as in the other timayz services:
   `timayz/timada:<version>`: the `timada-dashboard` binary and its asset bundle, run as
   user 10001, with `/var/lib/timada` as the place for its data.
 
-`helm/` deploys that image as one node: a StatefulSet with one volume for the store,
-the pictures and the personal-data keys, the configuration from `values.yaml`
-(`config`, written as the server's file) and the secrets as `TIMADA__…` variables
-(`extraSecretEnv`).
+`helm/` deploys that image: a StatefulSet with one volume a node for the store, the
+pictures and the personal-data keys, the configuration from `values.yaml` (`config`,
+written as the server's file) and the secrets as `TIMADA__…` variables
+(`extraSecretEnv`). `replicas` is one node by default. With three, the chart writes the
+`[cluster]` section itself: each pod is named to the others through a headless Service
+(`timada-<i>.timada-headless`), its ordinal is its `node_id`, and
+`TIMADA__CLUSTER__SECRET` must be among the secrets. The pods start together and are
+updated one at a time, each serving a few seconds more (`preStopSeconds`) while the
+Service stops sending it requests. Choose the count before the first install.
 
 Every change goes through a branch and a pull request; `make check` must be green
 before one is opened.
