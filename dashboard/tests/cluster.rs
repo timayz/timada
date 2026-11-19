@@ -926,6 +926,38 @@ async fn the_nodes_up_share_out_what_they_do() {
     }
 }
 
+/// A node that reaches none of the others is not one a write goes through
+/// (#700). Started alone over an empty journal it has nothing for the
+/// others to confirm, so nothing it says of itself tells: it is in touch
+/// with a majority once another node is up, and no longer once that one
+/// has been silent long enough.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_reaches_a_majority_only_while_it_hears_another() {
+    let root = temp_root("majority");
+    let addrs = free_addrs().await;
+    let tuning = Tuning::default();
+    let n0 = Node::start(&root, 0, &addrs, tuning).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let alone = n0.cluster.health();
+    assert!(alone.serving(), "an empty journal waits for nobody");
+    assert!(!cluster::reaches_majority(&alone), "{:?}", alone.peers);
+
+    let n1 = Node::start(&root, 1, &addrs, tuning).await;
+    eventually("the two nodes hear each other", async || {
+        cluster::reaches_majority(&n0.cluster.health())
+            && cluster::reaches_majority(&n1.cluster.health())
+    })
+    .await;
+
+    n1.stop().await;
+    tokio::time::sleep(cluster::IN_TOUCH_WITHIN).await;
+    eventually("node 0 stops counting the node that left", async || {
+        !cluster::reaches_majority(&n0.cluster.health())
+    })
+    .await;
+    n0.stop().await;
+}
+
 /// While some nodes have no region yet (#512): they alone see the events
 /// written without one, and share out that work among themselves, which
 /// each node learns from their empty label; a region's work stays with the

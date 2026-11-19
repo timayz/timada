@@ -11,6 +11,13 @@
 //! how far each one trails, 200 or 503. A balancer polls it, an operator
 //! reads it.
 //!
+//! Taking writes means two things: nothing ended the node's part in the
+//! cluster (`NodeHealth::serving`), and it hears from most of the nodes,
+//! itself counted ([`crate::cluster::reaches_majority`]). A node cut off
+//! from the others refuses nothing by itself, but no write it takes can go
+//! through; a rolling update that waits for a restarted node to be ready
+//! must not take one that is not back among the others (#700).
+//!
 //! The lag of a read model is what its subscription recorded with its
 //! cursor the last time it acknowledged (how far the event it reached was
 //! behind the store's newest), raised to the age of the store's newest
@@ -30,7 +37,7 @@ use topcoat::router::{
     response::Response,
 };
 
-use crate::cluster::{Cluster, NodeHealth};
+use crate::cluster::{self, Cluster, NodeHealth};
 use crate::db::{self, Db};
 use crate::store_api::StoreConnections;
 use crate::workers::{WorkerState, Workers};
@@ -58,8 +65,13 @@ pub struct Report {
     pub ready: bool,
     /// The node's state in a word or two, as the cluster page shows it.
     pub node: &'static str,
-    /// Whether the node takes writes.
+    /// Whether the node takes writes: nothing ended its part in the cluster
+    /// and it hears from most of the nodes.
     pub serving: bool,
+    /// The cluster's nodes, this one included, and how many of them this
+    /// one hears from, itself counted.
+    pub nodes: usize,
+    pub nodes_in_touch: usize,
     /// The read model furthest behind the store, in seconds; `null` until
     /// the subscriptions first ran.
     pub lag_seconds: Option<i64>,
@@ -212,11 +224,17 @@ pub fn judge(
         (Some(limit), Some(lag)) => lag <= limit.as_secs() as i64,
         _ => true,
     };
-    let serving = health.serving();
+    let serving = health.serving() && cluster::reaches_majority(health);
     Report {
         ready: serving && within,
         node: node_state(health),
         serving,
+        nodes: health.nodes,
+        nodes_in_touch: 1 + health
+            .peers
+            .iter()
+            .filter(|peer| cluster::in_touch(peer))
+            .count(),
         lag_seconds,
         read_models,
         per_node,
@@ -235,6 +253,8 @@ pub fn node_state(health: &NodeHealth) -> &'static str {
         "copy needed"
     } else if !health.confirmed {
         "waiting for the other nodes"
+    } else if !cluster::reaches_majority(health) {
+        "out of touch with most nodes"
     } else {
         "serving"
     }
@@ -264,7 +284,7 @@ pub fn ready_route(cx: &Cx, _body: Body) -> RouteFuture<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::NodeId;
+    use crate::cluster::{NodeId, PeerState};
 
     fn cursor(key: &str, lag: i64, updated_at: Option<i64>) -> Cursor {
         Cursor {
@@ -274,12 +294,22 @@ mod tests {
         }
     }
 
+    fn peer(id: u64, heard: bool) -> PeerState {
+        PeerState {
+            id: NodeId(id),
+            silent_for: Duration::from_secs(2),
+            given_up: false,
+            label: heard.then(String::new),
+        }
+    }
+
+    /// A node of three that hears from one of the two others.
     fn health(confirmed: bool, rejoin_required: bool) -> NodeHealth {
         NodeHealth {
             id: NodeId(0),
             nodes: 3,
             backlog: (0, 100_000),
-            peers: Vec::new(),
+            peers: vec![peer(1, true), peer(2, false)],
             confirmed,
             rejoin_required,
             rolled_back: false,
@@ -392,5 +422,28 @@ mod tests {
             )
             .ready
         );
+    }
+
+    /// A node that heard from none of the others since it opened, as three
+    /// nodes started over empty journals that cannot reach each other, is
+    /// not ready: nothing ended its part, and no write it takes goes
+    /// through (#700).
+    #[test]
+    fn a_node_that_reaches_no_other_node_is_not_ready() {
+        let mut alone = health(true, false);
+        alone.peers = vec![peer(1, false), peer(2, false)];
+        let report = judge(&alone, Vec::new(), Vec::new(), 4, 4, None);
+        assert!(!report.ready && !report.serving);
+        assert_eq!(report.node, "out of touch with most nodes");
+        assert_eq!((report.nodes, report.nodes_in_touch), (3, 1));
+
+        let report = judge(&health(true, false), Vec::new(), Vec::new(), 4, 4, None);
+        assert!(report.ready && report.serving);
+        assert_eq!((report.nodes, report.nodes_in_touch), (3, 2));
+
+        // What ended the node's part is said first.
+        let mut copy = health(true, true);
+        copy.peers = vec![peer(1, false), peer(2, false)];
+        assert_eq!(node_state(&copy), "copy needed");
     }
 }
