@@ -13,6 +13,15 @@ image:
 # store that exists is not something this chart does.
 replicas: 1
 
+# The zones the nodes run in, as the machines' `topology.kubernetes.io/zone`
+# label names them, e.g. [eu-west-1a, eu-west-1b, eu-west-1c]. One node runs
+# in each, so the list sets how many there are and `replicas` is not read: a
+# zone going down takes one node away. A zone without a machine to run on
+# keeps its node waiting. The volumes must be made where the pod is placed:
+# see `persistence.storageClassName`. Empty: `replicas` nodes, wherever they
+# fit.
+zones: []
+
 # Extra environment variables injected from the managed Secret. Every key of
 # the configuration can be set as TIMADA__<SECTION>__<KEY>, which wins over
 # `config` below: use it for what must not sit in a ConfigMap. A deployment
@@ -52,6 +61,13 @@ config:
     url: "https://timada.app"
     host: "0.0.0.0"
     port: 3000
+    # `region` is left out on purpose: each pod then takes its own name for
+    # it (`timada-0`), so the background work on what a node created
+    # (payments, supplier orders, invoices, mails) is done by that node, and
+    # a node more is that much more of it done at once. While a node is down
+    # that work waits for it; pages and writes go on through the others. Set
+    # it here to give every node the same one instead: each then does all of
+    # that work, and none of it waits on one node.
     # The gateway's addresses, as IP addresses or CIDR networks: without
     # them the sign-in history and the limits see the gateway instead of the
     # visitor. Set it to the cluster's pod network.
@@ -92,6 +108,9 @@ persistence:
   # StorageClass for the data volume (the store, the pictures and the
   # personal-data keys). Longhorn by default; set to a local-disk class (e.g.
   # "local-path") for lower fsync latency: every write to the store is synced.
+  # With `zones`, a class whose volumes live in one zone must make them where
+  # the pod was placed (`volumeBindingMode: WaitForFirstConsumer`): made
+  # beforehand, they may all be in the same zone and hold the pods there.
   storageClassName: "longhorn"
   # When true, labels the PVC into Longhorn's "critical" recurring-job group
   # (snapshots + S3 backups). Set false when the volume does not live on
