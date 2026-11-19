@@ -358,8 +358,11 @@ dir = "data/shopper-keys"
 # does on a timer.
 # [cluster]
 # node_id = 0
+# # Each node as `ip:port` or `host:port`. A name is looked up each time the
+# # node is dialled, so a node that comes back at another address is found.
 # peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]
-# # Bind address for inbound peer traffic; defaults to peers[node_id].
+# # Bind address for inbound peer traffic; defaults to peers[node_id] when
+# # that is an IP address, and is required when it is a name.
 # listen = "0.0.0.0:7000"
 # # Each node's web address (server.port) as the other nodes reach it, in the
 # # order of `peers`; the limits under [auth] and [store] are also asked of

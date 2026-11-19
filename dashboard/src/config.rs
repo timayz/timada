@@ -927,9 +927,12 @@ pub struct ClusterConfig {
     /// This node's index into `peers`.
     pub node_id: u64,
     /// Every node's Accord address, including this one. `NodeId(i)` is `peers[i]`.
-    pub peers: Vec<SocketAddr>,
-    /// Address to bind for inbound Accord traffic. Defaults to `peers[node_id]`;
-    /// set it to `0.0.0.0:<port>` in a container.
+    /// Each is `ip:port` or `host:port`; a name is looked up each time the node
+    /// is dialled, so a node that comes back at another address is found again.
+    pub peers: Vec<evento::cluster::PeerAddr>,
+    /// Address to bind for inbound Accord traffic. Defaults to `peers[node_id]`
+    /// when that is an address, and is required when it is a name; set it to
+    /// `0.0.0.0:<port>` in a container.
     #[serde(default)]
     pub listen: Option<SocketAddr>,
     /// Every node's web address as the other nodes reach it, in `peers`
@@ -1521,6 +1524,24 @@ mod tests {
             cluster(1, &[], None).settings().absent_after(),
             Some(Duration::from_secs(24 * 3600))
         );
+    }
+
+    #[test]
+    fn a_node_named_by_host_needs_its_listen_address() {
+        let mut config: ClusterConfig = config::Config::builder()
+            .add_source(File::from_str(
+                "node_id = 0\npeers = [\"timada-0.timada-headless:7000\"]\n",
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("cluster.listen"), "{err}");
+
+        config.listen = Some("0.0.0.0:7000".parse().unwrap());
+        assert!(config.validate().is_ok());
     }
 
     #[test]
