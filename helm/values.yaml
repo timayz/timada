@@ -2,6 +2,17 @@
 image:
   tag: "0.1.0"
 
+# How many nodes run. One runs alone. Three (or five) are a cluster: each
+# keeps the whole store on a volume of its own, and they go on taking writes
+# while a majority of them is up, so one of three may be down or restarting.
+# The chart then writes the `[cluster]` section itself (each pod by its name,
+# its ordinal as its `node_id`) and needs TIMADA__CLUSTER__SECRET below;
+# `config.cluster` may still set `absent_after_secs` and `write_backlog`.
+# Needs Kubernetes 1.28 or later (the pod's ordinal as a label).
+# Choose it before the first install: going from one count to another on a
+# store that exists is not something this chart does.
+replicas: 1
+
 # Extra environment variables injected from the managed Secret. Every key of
 # the configuration can be set as TIMADA__<SECTION>__<KEY>, which wins over
 # `config` below: use it for what must not sit in a ConfigMap. A deployment
@@ -9,6 +20,8 @@ image:
 #   TIMADA__AUTH__SECRET_KEY   at least 32 characters
 #   TIMADA__SECRETS__KEY       at least 32 characters; never change it
 #   TIMADA__MAIL__SMTP_URL     smtps://user:pass@host:465
+# and with several nodes
+#   TIMADA__CLUSTER__SECRET    at least 32 characters, shared by the nodes
 extraSecretEnv: {}
 
 database:
@@ -21,6 +34,11 @@ hostname: "timada.app"
 # long enough to drain HTTP and the store API, stop every worker and close the
 # store.
 terminationGracePeriodSeconds: 90
+
+# How long a pod told to stop goes on serving first, in seconds, while the
+# Service and the gateway stop sending it requests; counted in the time above.
+# Needs Kubernetes 1.30 or later; 0 stops the pod at once.
+preStopSeconds: 5
 
 # How long the server may take to start listening, in seconds. It listens once
 # its read models caught up with the store, which after a `rebuild` or on a

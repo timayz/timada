@@ -1544,6 +1544,39 @@ mod tests {
         assert!(config.validate().is_ok());
     }
 
+    /// What the helm chart counts on: every pod reads one file, which names
+    /// the nodes and not which of them the pod is, and the pod's ordinal
+    /// reaches it as a variable (a string, and numbers written by helm are
+    /// floats).
+    #[test]
+    fn a_node_takes_its_id_from_the_environment() {
+        let env = Environment::with_prefix("timada")
+            .separator("__")
+            .source(Some(
+                [("TIMADA__CLUSTER__NODE_ID".to_owned(), "2".to_owned())].into(),
+            ));
+        #[derive(Deserialize)]
+        struct OnlyCluster {
+            cluster: ClusterConfig,
+        }
+        let mut config: OnlyCluster = config::Config::builder()
+            .add_source(File::from_str(
+                "[cluster]\nlisten = \"0.0.0.0:7000\"\nwrite_backlog = 5000.0\n\
+                 peers = [\"timada-0.timada-headless:7000\", \"timada-1.timada-headless:7000\", \"timada-2.timada-headless:7000\"]\n\
+                 web_peers = [\"http://timada-0.timada-headless:3000\", \"http://timada-1.timada-headless:3000\", \"http://timada-2.timada-headless:3000\"]\n",
+                config::FileFormat::Toml,
+            ))
+            .add_source(env)
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        config.cluster.secret = Some("0123456789abcdef0123456789abcdef".into());
+        assert!(config.cluster.validate().is_ok());
+        assert_eq!(config.cluster.node_id, 2);
+        assert_eq!(config.cluster.write_backlog, 5000);
+    }
+
     #[test]
     fn several_nodes_need_their_web_addresses_and_a_secret() {
         const SECRET: &str = "0123456789abcdef0123456789abcdef";
