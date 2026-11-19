@@ -438,3 +438,15 @@ pub mod company_series {
         Claimed { tenant_id: String },
     }
 }
+
+/// The regions the platform's nodes ever wrote under: one stream, id =
+/// [`regions_id`](crate::regions_id). A node says its own when it starts. A
+/// stream keeps the region it was created in, so a region is never taken
+/// off the list: its work goes on needing a node after the node that
+/// opened it has left.
+pub mod regions {
+    #[evento::aggregate(name = "timada-tenancy/Regions")]
+    pub enum Regions {
+        Opened { region: String },
+    }
+}

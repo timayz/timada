@@ -9,6 +9,7 @@ mod cluster;
 mod code_mails;
 mod components;
 mod config;
+mod cover;
 mod db;
 mod disk;
 mod ecb;

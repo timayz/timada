@@ -17,6 +17,8 @@
 mod cluster;
 #[path = "../src/config.rs"]
 mod config;
+#[path = "../src/cover.rs"]
+mod cover;
 #[path = "../src/db.rs"]
 mod db;
 #[path = "../src/mailroom/schema.rs"]
@@ -31,6 +33,8 @@ mod store_api;
 mod store_carts;
 #[path = "../src/store_copy.rs"]
 mod store_copy;
+#[path = "../src/workers.rs"]
+mod workers;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -1231,6 +1235,149 @@ async fn a_saga_runs_on_the_nodes_of_its_region_and_where_it_is_also_served() {
         saga.shutdown().await.unwrap();
     }
     for node in nodes {
+        node.stop().await;
+    }
+}
+
+/// What a node runs to take on the regions without a node: the test saga,
+/// looking five times a second for a region silent five seconds.
+fn cover(
+    node: &Node,
+    region: &str,
+    seen: &Seen,
+) -> (workers::Workers, tokio::task::JoinHandle<()>) {
+    let workers = workers::Workers::default();
+    let seen = seen.clone();
+    let sagas: Vec<cover::Saga> = vec![(
+        "test saga".to_owned(),
+        Arc::new(move |region: &str| saga(&seen).routing_key(region.to_owned())),
+    )];
+    let looking = cover::Cover::new(
+        node.cluster.clone(),
+        node.store.clone(),
+        node.local.clone(),
+        region.to_owned(),
+        sagas,
+        workers.clone(),
+        Duration::from_secs(5),
+    )
+    .start(Duration::from_millis(200));
+    (workers, looking)
+}
+
+/// Issue #709: each node has a region of its own (`a`, `b`, `c`), as the
+/// chart's pods do, and says it on the list in the store. Node 1 goes away:
+/// one of the two left, and one only, takes `b` on, and sees what is written
+/// to `b`'s tenant meanwhile (from the start of `b`'s history: it never
+/// followed it). Node 1 comes back: its own saga goes on from where it
+/// stopped, the other node stops following `b`, and what is written to the
+/// tenant afterwards is node 1's alone again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_region_whose_node_is_away_is_taken_on_by_one_of_the_others() {
+    let root = temp_root("cover");
+    let addrs = free_addrs().await;
+    let tuning = Tuning::default();
+    let (n0, n1, n2) = tokio::join!(
+        Node::start_in(&root, 0, &addrs, tuning, Some("a"), &[], false),
+        Node::start_in(&root, 1, &addrs, tuning, Some("b"), &[], false),
+        Node::start_in(&root, 2, &addrs, tuning, Some("c"), &[], false),
+    );
+    let seen: [Seen; 3] = Default::default();
+    let saga_0 = saga(&seen[0]).start(&n0.store).await.unwrap();
+    let saga_1 = saga(&seen[1]).start(&n1.store).await.unwrap();
+    let saga_2 = saga(&seen[2]).start(&n2.store).await.unwrap();
+    let (workers_0, cover_0) = cover(&n0, "a", &seen[0]);
+    let (_, cover_1) = cover(&n1, "b", &seen[1]);
+    let (workers_2, cover_2) = cover(&n2, "c", &seen[2]);
+
+    // The three nodes say their regions at this very moment, on one list.
+    let globex = Command(n1.store.clone())
+        .create_tenant(CreateTenant {
+            name: "globex".into(),
+            owner_user_id: "bob".into(),
+        })
+        .await
+        .unwrap();
+    eventually("node 1 sees its tenant", async || {
+        seen[1].names() == ["globex"]
+    })
+    .await;
+    eventually("every node said its region", async || {
+        Command(n0.local.0.clone())
+            .load_regions()
+            .await
+            .is_ok_and(|regions| regions.into_iter().collect::<Vec<_>>() == ["a", "b", "c"])
+    })
+    .await;
+    // Longer than a region goes silent before it is taken on: every region
+    // has its node, so nothing is.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert!(workers_0.states().is_empty() && workers_2.states().is_empty());
+    assert!(seen[0].names().is_empty() && seen[2].names().is_empty());
+
+    cover_1.abort();
+    saga_1.shutdown().await.unwrap();
+    n1.stop().await;
+    let through_0 = Command(n0.store.clone());
+    through_0
+        .rename_tenant("bob", &globex.id, "globex while away")
+        .await
+        .unwrap();
+    let took = |seen: &Seen| seen.names() == ["globex", "globex while away"];
+    eventually("one node takes region b on", async || {
+        took(&seen[0]) || took(&seen[2])
+    })
+    .await;
+    // Enough looks for the other node to have taken it on too.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let (taker, other) = if took(&seen[0]) { (0, 2) } else { (2, 0) };
+    assert!(seen[other].names().is_empty(), "one node only takes it on");
+    let taker_workers = if taker == 0 { &workers_0 } else { &workers_2 };
+    assert_eq!(
+        taker_workers
+            .states()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>(),
+        ["test saga for b"]
+    );
+
+    let n1 = Node::start_in(&root, 1, &addrs, tuning, Some("b"), &[], false).await;
+    let saga_1 = saga(&seen[1]).start(&n1.store).await.unwrap();
+    let (_, cover_1) = cover(&n1, "b", &seen[1]);
+    eventually("node 1 sees what it missed", async || {
+        seen[1].names() == ["globex", "globex while away"]
+    })
+    .await;
+    eventually("region b is handed back", async || {
+        taker_workers.states().is_empty()
+    })
+    .await;
+    through_0
+        .rename_tenant("bob", &globex.id, "globex back")
+        .await
+        .unwrap();
+    eventually("node 1 sees its tenant renamed", async || {
+        seen[1].names() == ["globex", "globex back", "globex while away"]
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(seen[taker].names(), ["globex", "globex while away"]);
+    assert!(
+        seen[other].names().is_empty(),
+        "other saw {:?}",
+        seen[other].names()
+    );
+
+    for looking in [cover_0, cover_1, cover_2] {
+        looking.abort();
+    }
+    workers_0.shutdown().await;
+    workers_2.shutdown().await;
+    for saga in [saga_0, saga_1, saga_2] {
+        saga.shutdown().await.unwrap();
+    }
+    for node in [n0, n1, n2] {
         node.stop().await;
     }
 }

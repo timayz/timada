@@ -1020,3 +1020,8 @@ mod pricing_tests {
         assert!(!rule(20_000, MAX_PLUS_CENTS + 1, Rounding::Cent).is_valid());
     }
 }
+
+/// Stream id of the list of regions ([`Regions`](crate::aggregator::regions::Regions)).
+pub fn regions_id() -> String {
+    evento::hash_ids(vec!["regions"])
+}

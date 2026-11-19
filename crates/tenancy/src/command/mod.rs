@@ -18,6 +18,7 @@ mod legal;
 mod mail;
 mod member;
 mod payments;
+mod regions;
 mod rename;
 mod role;
 mod slug_index;
@@ -34,6 +35,7 @@ pub use invite::*;
 pub use legal::*;
 pub use mail::*;
 pub use payments::*;
+pub use regions::*;
 pub use role::*;
 
 use evento::{Executor, Projection, metadata::Event};

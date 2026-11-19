@@ -257,6 +257,33 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         all_workers.push(workers::start(name, move || make(&deps), &local).await?);
     }
     let workers = Workers::new(all_workers);
+    // The regions whose node is away are taken on from here, and handed
+    // back (#709): a node with a region of its own may be its only one.
+    let cover = config.server.region.clone().map(|region| {
+        let sagas = SUBSCRIPTIONS
+            .iter()
+            .filter(|(_, kind, _)| *kind == Kind::Sharded)
+            .map(|(name, _, make)| {
+                let deps = deps.clone();
+                let make = *make;
+                let saga: crate::cover::Saga = (
+                    name.to_string(),
+                    Arc::new(move |region: &str| make(&deps).routing_key(region.to_owned())),
+                );
+                saga
+            })
+            .collect();
+        crate::cover::Cover::new(
+            cluster.clone(),
+            executor.clone(),
+            local.clone(),
+            region,
+            sagas,
+            workers.clone(),
+            crate::cover::AFTER,
+        )
+        .start(crate::cover::EVERY)
+    });
     let mailroom_sends = mailroom.start();
     let picture_fetches = fetcher.clone().start();
     // This node's picture files against the store, once a day.
@@ -484,6 +511,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     }
     store_copies.shutdown().await;
     cluster_watch.abort();
+    if let Some(cover) = cover {
+        cover.abort();
+    }
     mailroom_sends.abort();
     picture_fetches.abort();
     picture_reconcile.abort();
