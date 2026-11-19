@@ -132,7 +132,7 @@ impl Node {
         let store = db::migrate_store(path).await.unwrap();
         let config = among.map(|(id, peers)| ClusterConfig {
             node_id: id,
-            peers: peers.to_vec(),
+            peers: peers.iter().copied().map(Into::into).collect(),
             listen: None,
             web_peers: Vec::new(),
             secret: None,
