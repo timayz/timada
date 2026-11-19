@@ -159,6 +159,17 @@ node 0, every write journaled by the three. Runs of 2026-11-16 on evento
   case, not what they will do, and the one to expect lies between the two
   rows. The processor per command is the same as on the memory filesystem
   (3.6 ms and 2.0 ms).
+- **This disk stops every few seconds, and the writes stop with it** (#701).
+  A loop that appends 800 bytes and syncs, with no node running, syncs in
+  3 ms on this disk (a Kingston NV2, without power-loss protection), and
+  every 5 to 15 s spends 1 to 4 s where a sync costs 50 to 500 ms. Three
+  nodes writing through such a stretch answer nothing for 1 to 3.5 s: a write
+  is several syncs on a majority, one behind the other. Their logs then show
+  writes taken over by another node's recovery, which is the wait showing,
+  not its cause. On the memory filesystem the same load never stops (1,039
+  answers in 70 s, the 99th percentile at 93 ms, against 446 to 556 and
+  2.6 s). Run that loop on a volume before blaming anything else for writes
+  that stop in step.
 - **About one command in 500,000 took 5 s** with nothing wrong on any node
   (two of 100,000 in one run, four of a million in another, none in five
   other runs; none failed). Five seconds is how long evento waits for the
