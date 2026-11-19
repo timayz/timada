@@ -5,13 +5,17 @@ metadata:
   labels:
     app: timada
 spec:
-  serviceName: timada
-  # One node: this chart does not yet generate the `[cluster]` section a
-  # group of pods needs (#674).
-  replicas: 1
+  serviceName: timada-headless
+  replicas: {{ .Values.replicas }}
+  # Every pod starts at once: a node takes writes, and so becomes ready, once
+  # a majority of them is up, which one pod waiting for the one before it to
+  # be ready would never see.
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: timada
+  # One pod at a time, the next once the one before is ready again: the
+  # others are a majority meanwhile.
   updateStrategy:
     rollingUpdate:
       partition: 0
@@ -30,6 +34,19 @@ spec:
         fsGroup: 10001
         fsGroupChangePolicy: OnRootMismatch
         runAsNonRoot: true
+      {{- if gt (int .Values.replicas) 1 }}
+      # Each node on a machine of its own where there are enough of them: two
+      # on the one that fails would leave no majority.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: timada
+      {{- end }}
       {{- if .Values.database.migrate }}
       initContainers:
         # Creates the store if needed and applies its pending migrations,
@@ -50,6 +67,9 @@ spec:
           envFrom:
             - secretRef:
                 name: timada-env
+          {{- with include "timada.nodeEnv" . }}
+          {{- . | nindent 10 }}
+          {{- end }}
       {{- end }}
       containers:
         - name: timada
@@ -68,6 +88,9 @@ spec:
           envFrom:
             - secretRef:
                 name: timada-env
+          {{- with include "timada.nodeEnv" . }}
+          {{- . | nindent 10 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 3000
@@ -75,6 +98,19 @@ spec:
             - name: store-api
               containerPort: 4321
             {{- end }}
+            {{- if gt (int .Values.replicas) 1 }}
+            - name: cluster
+              containerPort: 7000
+            {{- end }}
+          {{- if gt (int .Values.preStopSeconds) 0 }}
+          # A pod told to stop goes on serving while the Service and the
+          # gateway learn it is leaving: stopped at once, the requests still
+          # sent its way are refused or left without an answer.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ int .Values.preStopSeconds }}
+          {{- end }}
           # The port opens once the read models caught up with the store.
           startupProbe:
             tcpSocket:

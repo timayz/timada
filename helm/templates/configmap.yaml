@@ -1,7 +1,24 @@
+{{- $config := deepCopy .Values.config }}
+{{- if gt (int .Values.replicas) 1 }}
+{{- /*
+The `[cluster]` section of several nodes: each pod's name under the headless
+Service, in the order of the pods' ordinals, so a pod's ordinal is its
+`node_id` (set in its environment by the StatefulSet). What `config.cluster`
+sets besides (`absent_after_secs`, `write_backlog`) is kept.
+*/}}
+{{- $peers := list }}
+{{- $webPeers := list }}
+{{- range $i := until (int .Values.replicas) }}
+{{- $peers = append $peers (printf "timada-%d.timada-headless:7000" $i) }}
+{{- $webPeers = append $webPeers (printf "http://timada-%d.timada-headless:3000" $i) }}
+{{- end }}
+{{- $generated := dict "peers" $peers "web_peers" $webPeers "listen" "0.0.0.0:7000" }}
+{{- $_ := set $config "cluster" (merge $generated ($config.cluster | default dict)) }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: timada-config
 data:
   config.toml: |
-{{ .Values.config | toToml | indent 4 }}
+{{ $config | toToml | indent 4 }}
