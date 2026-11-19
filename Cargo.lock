@@ -2260,8 +2260,8 @@ dependencies = [
 
 [[package]]
 name = "evento"
-version = "2.0.0-alpha.39"
-source = "git+https://github.com/timayz/evento?branch=alpha#e5882ef8ad48d74347a8dea194bf1e54c041e9a3"
+version = "2.0.0-alpha.40"
+source = "git+https://github.com/timayz/evento?branch=alpha#3017a6704875fab268a15b5cc433771b5ea51d40"
 dependencies = [
  "evento-cluster",
  "evento-core",
@@ -2275,8 +2275,8 @@ dependencies = [
 
 [[package]]
 name = "evento-cluster"
-version = "2.0.0-alpha.39"
-source = "git+https://github.com/timayz/evento?branch=alpha#e5882ef8ad48d74347a8dea194bf1e54c041e9a3"
+version = "2.0.0-alpha.40"
+source = "git+https://github.com/timayz/evento?branch=alpha#3017a6704875fab268a15b5cc433771b5ea51d40"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2294,8 +2294,8 @@ dependencies = [
 
 [[package]]
 name = "evento-core"
-version = "2.0.0-alpha.39"
-source = "git+https://github.com/timayz/evento?branch=alpha#e5882ef8ad48d74347a8dea194bf1e54c041e9a3"
+version = "2.0.0-alpha.40"
+source = "git+https://github.com/timayz/evento?branch=alpha#3017a6704875fab268a15b5cc433771b5ea51d40"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2314,8 +2314,8 @@ dependencies = [
 
 [[package]]
 name = "evento-fjall"
-version = "2.0.0-alpha.39"
-source = "git+https://github.com/timayz/evento?branch=alpha#e5882ef8ad48d74347a8dea194bf1e54c041e9a3"
+version = "2.0.0-alpha.40"
+source = "git+https://github.com/timayz/evento?branch=alpha#3017a6704875fab268a15b5cc433771b5ea51d40"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2331,8 +2331,8 @@ dependencies = [
 
 [[package]]
 name = "evento-lock"
-version = "2.0.0-alpha.39"
-source = "git+https://github.com/timayz/evento?branch=alpha#e5882ef8ad48d74347a8dea194bf1e54c041e9a3"
+version = "2.0.0-alpha.40"
+source = "git+https://github.com/timayz/evento?branch=alpha#3017a6704875fab268a15b5cc433771b5ea51d40"
 dependencies = [
  "anyhow",
  "quote",
@@ -2342,8 +2342,8 @@ dependencies = [
 
 [[package]]
 name = "evento-macro"
-version = "2.0.0-alpha.39"
-source = "git+https://github.com/timayz/evento?branch=alpha#e5882ef8ad48d74347a8dea194bf1e54c041e9a3"
+version = "2.0.0-alpha.40"
+source = "git+https://github.com/timayz/evento?branch=alpha#3017a6704875fab268a15b5cc433771b5ea51d40"
 dependencies = [
  "convert_case 0.12.0",
  "quote",
@@ -2352,8 +2352,8 @@ dependencies = [
 
 [[package]]
 name = "evento-remote"
-version = "2.0.0-alpha.39"
-source = "git+https://github.com/timayz/evento?branch=alpha#e5882ef8ad48d74347a8dea194bf1e54c041e9a3"
+version = "2.0.0-alpha.40"
+source = "git+https://github.com/timayz/evento?branch=alpha#3017a6704875fab268a15b5cc433771b5ea51d40"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2372,8 +2372,8 @@ dependencies = [
 
 [[package]]
 name = "evento-sql"
-version = "2.0.0-alpha.39"
-source = "git+https://github.com/timayz/evento?branch=alpha#e5882ef8ad48d74347a8dea194bf1e54c041e9a3"
+version = "2.0.0-alpha.40"
+source = "git+https://github.com/timayz/evento?branch=alpha#3017a6704875fab268a15b5cc433771b5ea51d40"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2389,8 +2389,8 @@ dependencies = [
 
 [[package]]
 name = "evento-sql-migrator"
-version = "2.0.0-alpha.39"
-source = "git+https://github.com/timayz/evento?branch=alpha#e5882ef8ad48d74347a8dea194bf1e54c041e9a3"
+version = "2.0.0-alpha.40"
+source = "git+https://github.com/timayz/evento?branch=alpha#3017a6704875fab268a15b5cc433771b5ea51d40"
 dependencies = [
  "async-trait",
  "evento-sql",
@@ -2401,8 +2401,8 @@ dependencies = [
 
 [[package]]
 name = "evento-turso"
-version = "2.0.0-alpha.39"
-source = "git+https://github.com/timayz/evento?branch=alpha#e5882ef8ad48d74347a8dea194bf1e54c041e9a3"
+version = "2.0.0-alpha.40"
+source = "git+https://github.com/timayz/evento?branch=alpha#3017a6704875fab268a15b5cc433771b5ea51d40"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4760,7 +4760,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.21.7",
  "chrono",
  "getrandom 0.2.17",
  "http",
