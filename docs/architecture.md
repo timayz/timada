@@ -259,11 +259,16 @@ by construction.
    200 while the node takes writes and no read model trails the store by more
    than `monitoring.ready_lag_secs`, 503 otherwise, the body saying how far each
    read model trails (its subscription's recorded lag, raised to the age of the
-   store's newest event when a worker stopped acknowledging). A node back from a
+   store's newest event when a worker stopped acknowledging). Taking writes means
+   that nothing ended the node's part in the cluster and that it hears from most of
+   the nodes, itself counted (`cluster::reaches_majority`: a peer counts once it said
+   something since this node started, and while it was heard from within 10 seconds);
+   a node cut off from the others answers 503 (`out of touch with most nodes`), as no
+   write it takes can go through. A node back from a
    night away, or one that is catching up after a copy or a `rebuild`, is left
    out until it reads low. `monitoring.metrics_listen` adds an internal port
    with `/metrics` (`metrics.rs`: Prometheus text with the same figures, the
-   workers by state, the writes kept for absent nodes, the store connections by
+   workers by state, the writes kept for absent nodes, the peers in touch (`timada_peers_in_touch`), the store connections by
    tenant, the size of the store's three files (`timada_store_bytes`) and evento's counters, every series labelled by node) and `/ready`. The
    `rejoin` command sets the same mark by hand, for a lost store file (delete the
    file first, and run `migrate` after it for `serve` to have a store to start on: an empty journal comes back under the node's own id through evento's

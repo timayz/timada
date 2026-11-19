@@ -248,6 +248,27 @@ pub async fn open(
 /// mails, the idle carts dropped.
 pub const LIVE_WITHIN: Duration = Duration::from_secs(30);
 
+/// How long a node may go unheard and still count as in touch: the nodes
+/// talk many times a second, so one silent this long is cut off or down.
+pub const IN_TOUCH_WITHIN: Duration = Duration::from_secs(10);
+
+/// Whether this node hears from `peer`: it said something since this node
+/// opened (a node says its label with what it gossips, [`label`]), and not
+/// longer than [`IN_TOUCH_WITHIN`] ago.
+pub fn in_touch(peer: &PeerState) -> bool {
+    peer.label.is_some() && !peer.given_up && peer.silent_for < IN_TOUCH_WITHIN
+}
+
+/// Whether this node hears from enough of the others for a write to go
+/// through: most of the cluster's nodes, itself counted. Alone, always. A
+/// node opened over an empty journal has nothing for the others to confirm
+/// (`NodeHealth::confirmed` from the start), so what it says of itself does
+/// not tell whether it reaches them (#700).
+pub fn reaches_majority(health: &NodeHealth) -> bool {
+    let in_touch = 1 + health.peers.iter().filter(|peer| in_touch(peer)).count();
+    in_touch > health.nodes / 2
+}
+
 /// This node, as the work it claims names it (`node-2`): its id in the
 /// cluster, the same across restarts.
 pub fn node_name(cluster: &Cluster) -> String {
@@ -391,6 +412,79 @@ mod tests {
                 label: label.map(str::to_owned),
             })
             .collect()
+    }
+
+    fn peer(id: u64, label: Option<&str>, silent_secs: u64, given_up: bool) -> PeerState {
+        PeerState {
+            id: NodeId(id),
+            silent_for: Duration::from_secs(silent_secs),
+            given_up,
+            label: label.map(str::to_owned),
+        }
+    }
+
+    fn health(nodes: usize, peers: Vec<PeerState>) -> NodeHealth {
+        NodeHealth {
+            id: NodeId(0),
+            nodes,
+            backlog: (0, 100_000),
+            peers,
+            confirmed: true,
+            rejoin_required: false,
+            rolled_back: false,
+            founded_apart: false,
+            copy_pending: false,
+            joined_at_start: false,
+            founded_at_start: false,
+        }
+    }
+
+    /// A node of three reaches a majority with one of the two others in
+    /// touch. A peer never heard from is not, however lately this node
+    /// opened (its silence counts from then), nor one gone quiet or no
+    /// longer waited for. A node alone reaches itself.
+    #[test]
+    fn a_majority_is_reached_with_most_nodes_in_touch() {
+        assert!(reaches_majority(&health(1, Vec::new())));
+        let quiet = || peer(2, Some(""), 10, false);
+        assert!(reaches_majority(&health(
+            3,
+            vec![peer(1, Some("eu"), 0, false), quiet()]
+        )));
+        assert!(reaches_majority(&health(
+            3,
+            vec![peer(1, Some(""), 9, false), quiet()]
+        )));
+        assert!(!reaches_majority(&health(
+            3,
+            vec![peer(1, None, 2, false), peer(2, None, 2, false)]
+        )));
+        assert!(!reaches_majority(&health(
+            3,
+            vec![peer(1, Some(""), 10, false), quiet()]
+        )));
+        assert!(!reaches_majority(&health(
+            3,
+            vec![peer(1, Some(""), 0, true), quiet()]
+        )));
+        // Of five, two others are needed.
+        let five = |in_touch: usize| {
+            health(
+                5,
+                (1..5)
+                    .map(|id| {
+                        peer(
+                            id,
+                            Some(""),
+                            if id as usize <= in_touch { 0 } else { 60 },
+                            false,
+                        )
+                    })
+                    .collect(),
+            )
+        };
+        assert!(!reaches_majority(&five(1)));
+        assert!(reaches_majority(&five(2)));
     }
 
     #[test]

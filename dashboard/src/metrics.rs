@@ -145,6 +145,13 @@ fn render(readiness: &Readiness, report: &Report) -> String {
     let given_up = health.peers.iter().filter(|peer| peer.given_up).count();
     let _ = writeln!(out, "# TYPE timada_peers_given_up gauge");
     let _ = writeln!(out, "timada_peers_given_up{{node=\"{node}\"}} {given_up}");
+    let in_touch = health
+        .peers
+        .iter()
+        .filter(|peer| crate::cluster::in_touch(peer))
+        .count();
+    let _ = writeln!(out, "# TYPE timada_peers_in_touch gauge");
+    let _ = writeln!(out, "timada_peers_in_touch{{node=\"{node}\"}} {in_touch}");
     let _ = writeln!(out, "# TYPE timada_store_connections gauge");
     let mut connections: Vec<(String, usize)> =
         readiness.connections_by_tenant().into_iter().collect();
