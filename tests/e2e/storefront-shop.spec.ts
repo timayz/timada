@@ -24,6 +24,10 @@ import { createTenant, setLegalIdentity, uniqueTenant } from "./tenants";
 // is in French. The app runs on a port of its own, so this file runs beside
 // the other storefront specs.
 
+/// How many nodes the suite runs against: three behind the balancer with
+/// `make e2e.cluster`, one otherwise.
+const NODES = Number(process.env.E2E_NODES ?? 1);
+
 const app = new StorefrontApp(Number(process.env.E2E_SHOP_PORT ?? 3459));
 const SHOP = app.url;
 
@@ -1657,9 +1661,19 @@ test("the shop's Meta pixel waits for advertising to be allowed, and a sale is t
       ],
     ]);
     // The dashboard tells Meta the same sale, under the same id, with the
-    // buyer hashed and the browser the checkout was made in.
+    // buyer hashed and the browser the checkout was made in. Every node of
+    // a cluster may tell it, and Meta counts the repeats once by that id:
+    // one call to as many as there are nodes, all of them this sale.
     const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
-    await expect.poll(() => meta.received.length, { timeout: 15_000 }).toBe(1);
+    const toldOnceByEachNode = () => {
+      expect(meta.received.length).toBeGreaterThanOrEqual(1);
+      expect(meta.received.length).toBeLessThanOrEqual(NODES);
+      expect(meta.received.map((told) => told.event.event_id)).toEqual(
+        meta.received.map(() => orderId),
+      );
+    };
+    await expect.poll(() => meta.received.length, { timeout: 15_000 }).toBeGreaterThanOrEqual(1);
+    toldOnceByEachNode();
     const sent = meta.received[0];
     expect(sent.pixelId).toBe(PIXEL);
     expect(sent.token).toBe("EAAe2eTOKEN");
@@ -1701,7 +1715,8 @@ test("the shop's Meta pixel waits for advertising to be allowed, and a sale is t
         { timeout: 1000 },
       );
     }).toPass({ timeout: 15_000 });
-    expect(meta.received).toHaveLength(1);
+    // The refused sale was not taken: the first one's calls are all there is.
+    toldOnceByEachNode();
 
     // The merchant takes the token off, then the pixel: the storefront
     // follows.
