@@ -1190,6 +1190,9 @@ impl ClusterConfig {
         evento::cluster::Settings {
             node_id: self.node_id,
             peers: self.peers.clone(),
+            // Every node listed founds the cluster: adding one to a cluster that
+            // runs is not something this configuration does yet (#710).
+            founders: None,
             listen: self.listen,
             absent_after_secs: self.absent_after_secs,
             write_backlog: self.write_backlog,
