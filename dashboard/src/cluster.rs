@@ -450,6 +450,7 @@ mod tests {
             copy_pending: false,
             joined_at_start: false,
             founded_at_start: false,
+            member: true,
         }
     }
 
