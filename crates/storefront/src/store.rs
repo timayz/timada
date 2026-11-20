@@ -1,14 +1,14 @@
 //! The connection to the store and the local copy of its catalog.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context as _;
-use evento::subscription::Subscription;
+use evento::remote::ClientState;
+use evento::subscription::{State, Subscription};
 use evento::{Evento, Executor as _, RemoteClient, Sidecar};
 use timada_core::db::Db;
-use tokio::sync::watch;
-use tokio::task::JoinHandle;
 
 use crate::config::StoreConfig;
 use crate::db::StoreDb;
@@ -16,11 +16,13 @@ use crate::error::StoreUnavailable;
 use crate::money::MoneyFormat;
 use crate::read_model::catalog_subscription;
 
-/// How long the supervisor waits before connecting or restarting the
-/// subscription again, doubling up to [`MAX_RESTART_DELAY`]; each wait is
-/// drawn between half and all of it ([`jittered`]).
+/// How long the catalog subscription waits before it goes on after a pass
+/// that failed, doubling up to [`MAX_RESTART_DELAY`] while it fails again.
 const FIRST_RESTART_DELAY: Duration = Duration::from_secs(1);
 const MAX_RESTART_DELAY: Duration = Duration::from_secs(30);
+
+/// How often [`first_answer`] looks at where the client stands.
+const FIRST_ANSWER_POLL: Duration = Duration::from_millis(20);
 
 /// A connected store. Cheap to clone; every clone shares the connection, the
 /// local database and the catalog subscription.
@@ -31,16 +33,22 @@ pub struct Store {
 
 struct Inner {
     config: StoreConfig,
-    /// The store API, once reached: events are read from and written to it,
-    /// cursors and snapshots stay local. Empty while the store has not
-    /// answered yet (it was away when the shop started).
-    executor: OnceLock<Evento>,
+    /// The connection to the store API. It exists whether the store answers
+    /// or not: it dials in the background, again after a growing delay with
+    /// some chance in it, and says how it stands.
+    client: RemoteClient,
+    /// The store through that connection: events are read from and written
+    /// to it, cursors and snapshots stay local.
+    executor: Evento,
+    /// Whether the store answered since the shop started.
+    answered: AtomicBool,
     db: StoreDb,
     /// The dashboard's HTTP side, when the host gave its address.
     api: Option<crate::reviews::Api>,
-    subscription: Mutex<SubscriptionState>,
-    stop: watch::Sender<bool>,
-    supervisor: Mutex<Option<JoinHandle<()>>>,
+    /// The catalog subscription, supervised: a pass that kept failing (the
+    /// store was away longer than its retries) is gone on from, at the
+    /// local cursor, after a growing delay.
+    subscription: Subscription,
 }
 
 /// What the status endpoint reports.
@@ -66,7 +74,7 @@ pub struct StoreStatus {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum SubscriptionState {
-    /// The store has not answered since the shop started: it is reached
+    /// The store has not answered since the shop started: it is dialled
     /// again after a growing delay, and the pages serve the local copy
     /// meanwhile.
     Connecting {
@@ -74,10 +82,12 @@ pub enum SubscriptionState {
     },
     Running,
     /// A pass kept failing (the store was unreachable for a while); the
-    /// subscription is restarted from its local cursor.
+    /// subscription goes on from its local cursor after a growing delay.
     Restarting {
         error: String,
     },
+    /// Ended: on shutdown, or because the store refuses the key, which no
+    /// waiting cures.
     Stopped {
         reason: String,
     },
@@ -93,8 +103,8 @@ impl Store {
     /// serve the key's shop right now (a suspended shop, a store that could
     /// not check the key: `Rejection::Unavailable`, what a degraded cluster
     /// answers): the shop opens on the catalog it has (empty, on a first
-    /// start), the store is reached again after a growing delay (1 s to
-    /// 30 s), and until then every call that needs it fails with
+    /// start), the store is dialled again after a growing delay, and until it
+    /// answers every call that needs it fails with
     /// [`StoreUnavailable`](crate::StoreUnavailable);
     /// [`status`](Self::status) says where it stands.
     pub async fn connect(config: StoreConfig, db: impl Into<StoreDb>) -> anyhow::Result<Store> {
@@ -108,55 +118,58 @@ impl Store {
             )?),
             None => None,
         };
-        let (stop, stopped) = watch::channel(false);
-        let inner = Arc::new(Inner {
-            config,
-            executor: OnceLock::new(),
-            db,
-            api,
-            subscription: Mutex::new(SubscriptionState::Connecting {
-                error: String::new(),
-            }),
-            stop,
-            supervisor: Mutex::new(None),
-        });
-
-        let subscription = match connect_client(&inner.config).await {
-            Ok(client) => {
-                inner.set_executor(client);
-                tracing::info!(addr = %inner.config.addr, "store connected");
-                Some(inner.start_subscription().await?)
+        let client = client_of(&config);
+        // The client carries the store's routing key (told by the server's
+        // first Hello); the wrapper asks it, so it prefixes the cursor key
+        // and keys new aggregates once the store has answered.
+        let executor = Evento::new(Sidecar::from((client.clone(), db.store().clone())));
+        let answered = match first_answer(&client, config.request_timeout).await {
+            Ok(true) => {
+                tracing::info!(addr = %config.addr, "store connected");
+                true
             }
-            Err(err) if refused_key(&err) => {
-                return Err(err.context(format!(
-                    "cannot connect to the store at {}",
-                    inner.config.addr
-                )));
-            }
-            Err(err) => {
-                let error = format!("{err:#}");
+            Ok(false) => {
                 tracing::warn!(
-                    addr = %inner.config.addr,
-                    %error,
+                    addr = %config.addr,
+                    error = %connecting_error(&client.state()),
                     "the store cannot be reached: serving the local copy until it answers"
                 );
-                inner.set_state(SubscriptionState::Connecting { error });
-                None
+                false
+            }
+            Err(err) => {
+                return Err(err.context(format!("cannot connect to the store at {}", config.addr)));
             }
         };
-        let supervisor = tokio::spawn(supervise(inner.clone(), subscription, stopped));
-        *inner.supervisor.lock().unwrap() = Some(supervisor);
-        Ok(Store { inner })
+        // Supervised, it starts whether the store answers or not, and
+        // handles its first event when it does.
+        let subscription = catalog_subscription(db.db().clone())
+            .supervised()
+            .restart_backoff(FIRST_RESTART_DELAY, MAX_RESTART_DELAY)
+            .start(&executor)
+            .await
+            .context("cannot start following the catalog")?;
+        Ok(Store {
+            inner: Arc::new(Inner {
+                config,
+                client,
+                executor,
+                answered: AtomicBool::new(answered),
+                db,
+                api,
+                subscription,
+            }),
+        })
     }
 
     /// The store's executor: events are read from and written to the store,
     /// subscription cursors and snapshots stay local. Fails while the store
     /// has not answered since the shop started.
     pub fn executor(&self) -> Result<&Evento, StoreUnavailable> {
-        self.inner
-            .executor
-            .get()
-            .ok_or_else(|| StoreUnavailable::new("the store API has not answered yet"))
+        if self.inner.has_answered() {
+            Ok(&self.inner.executor)
+        } else {
+            Err(StoreUnavailable::new("the store API has not answered yet"))
+        }
     }
 
     /// The local database, for reading: the catalog copy, cursors and
@@ -202,15 +215,19 @@ impl Store {
 
     /// Asks the store one cheap question and counts the local copy.
     pub async fn status(&self) -> StoreStatus {
-        let connected = match self.inner.executor.get() {
-            Some(executor) => {
-                let probe = executor.latest_timestamp(None, None, evento::TenantFilter::All);
-                tokio::time::timeout(self.inner.config.request_timeout, probe)
-                    .await
-                    .map(|answer| answer.is_ok())
-                    .unwrap_or(false)
-            }
-            None => false,
+        // Not asked of a store that never answered: the call would only say
+        // so.
+        let connected = if self.inner.has_answered() {
+            let probe = self
+                .inner
+                .executor
+                .latest_timestamp(None, None, evento::TenantFilter::All);
+            tokio::time::timeout(self.inner.config.request_timeout, probe)
+                .await
+                .map(|answer| answer.is_ok())
+                .unwrap_or(false)
+        } else {
+            false
         };
         let db = self.inner.db.db();
         // Kept as the whole shop's page lists and unlists them.
@@ -237,157 +254,106 @@ impl Store {
             .map(|(lag,)| lag);
         StoreStatus {
             connected,
-            subscription: self.inner.subscription.lock().unwrap().clone(),
+            subscription: self.inner.subscription_state(),
             products,
             last_event_at,
             lag_seconds,
         }
     }
 
-    /// Stops following the catalog. The local database is left as it is and
-    /// resumes from its cursor on the next connection.
+    /// Stops following the catalog, once the subscription is done with the
+    /// event in hand. The local database is left as it is and resumes from
+    /// its cursor on the next connection.
     pub async fn shutdown(self) {
-        let _ = self.inner.stop.send(true);
-        let supervisor = self.inner.supervisor.lock().unwrap().take();
-        if let Some(supervisor) = supervisor {
-            let _ = supervisor.await;
-        }
+        self.inner.subscription.stop();
+        self.inner.subscription.stopped().await;
     }
 }
 
 impl Inner {
-    fn set_state(&self, state: SubscriptionState) {
-        *self.subscription.lock().unwrap() = state;
+    /// Whether the store answered since the shop started: seen connected
+    /// once is enough, whatever the connection does afterwards.
+    fn has_answered(&self) -> bool {
+        if self.answered.load(Ordering::Relaxed) {
+            return true;
+        }
+        let connected = self.client.state().is_connected();
+        if connected {
+            self.answered.store(true, Ordering::Relaxed);
+        }
+        connected
     }
 
-    /// Keeps the connection: events on the store, cursors and snapshots
-    /// here. The client carries the store's routing key (told by the
-    /// server's Hello); the wrapper keeps it, so it prefixes the cursor key
-    /// and keys new aggregates.
-    fn set_executor(&self, client: RemoteClient) {
-        let executor = Evento::new(Sidecar::from((client, self.db.store().clone())));
-        // Set once the store first answers; a later call would be a bug of
-        // the supervisor, not a reason to drop the connection in use.
-        let _ = self.executor.set(executor);
-    }
-
-    async fn start_subscription(&self) -> anyhow::Result<Subscription> {
-        let executor = self
-            .executor
-            .get()
-            .context("the store API has not answered yet")?;
-        let subscription = catalog_subscription(self.db.db().clone())
-            .start(executor)
-            .await
-            .context("cannot start following the catalog")?;
-        self.set_state(SubscriptionState::Running);
-        Ok(subscription)
+    /// Where the catalog subscription stands, as the status says it.
+    fn subscription_state(&self) -> SubscriptionState {
+        let client = self.client.state();
+        if matches!(client, ClientState::Refused) {
+            return SubscriptionState::Stopped {
+                reason: "the store refuses this key".to_owned(),
+            };
+        }
+        if !self.has_answered() {
+            return SubscriptionState::Connecting {
+                error: connecting_error(&client),
+            };
+        }
+        match self.subscription.state() {
+            State::Running => SubscriptionState::Running,
+            State::Restarting { error, .. } => SubscriptionState::Restarting {
+                error: format!("{error:#}"),
+            },
+            State::Stopped(reason) => SubscriptionState::Stopped {
+                reason: format!("{reason:?}"),
+            },
+            // A state evento names later: shown as it says it.
+            other => SubscriptionState::Stopped {
+                reason: other.to_string(),
+            },
+        }
     }
 }
 
-/// Whether the store refused the key itself (`Rejection::Unauthorized`):
-/// no other answer means the key will never do.
-fn refused_key(err: &anyhow::Error) -> bool {
-    matches!(
-        err.downcast_ref::<evento::remote::Rejection>(),
-        Some(evento::remote::Rejection::Unauthorized)
-    )
-}
-
-/// Between half and all of `delay`: the shops a store lost at once (it
-/// restarted, a balancer moved its name) come back spread over the wait
-/// rather than all at its end.
-fn jittered(delay: Duration) -> Duration {
-    delay.mul_f64(rand::random_range(0.5..=1.0))
-}
-
-/// Connects to the store API and performs its handshake; the client then
-/// reconnects on its own when the connection drops.
-async fn connect_client(config: &StoreConfig) -> anyhow::Result<RemoteClient> {
+/// The connection to the store API of `config`, dialled in the background:
+/// it is there whether the store answers or not.
+fn client_of(config: &StoreConfig) -> RemoteClient {
     let mut builder =
         RemoteClient::builder(config.addr.clone()).request_timeout(config.request_timeout);
     builder = builder.token(config.token.clone());
     if let Some(tls) = config.tls.clone() {
         builder = builder.tls(tls.connector, tls.server_name);
     }
-    builder.connect().await
+    builder.connect_lazy()
 }
 
-/// Keeps the catalog subscription alive. A store that was away when the shop
-/// started (or said it could not serve it yet) is reached again after a
-/// growing delay, and the subscription started once it answers. A pass that kept failing (the store was away
-/// longer than the subscription's own retries) ends the worker, so it is
-/// started again from the local cursor after a growing delay. Without this
-/// the local copy would silently freeze.
-async fn supervise(
-    inner: Arc<Inner>,
-    mut handle: Option<Subscription>,
-    mut stop: watch::Receiver<bool>,
-) {
-    let stopped = || {
-        inner.set_state(SubscriptionState::Stopped {
-            reason: "shutdown".to_owned(),
-        });
-    };
-    let mut delay = FIRST_RESTART_DELAY;
-    loop {
-        let running = match handle.take() {
-            Some(running) => running,
-            None => loop {
-                tokio::select! {
-                    _ = stop.changed() => {
-                        stopped();
-                        return;
-                    }
-                    _ = tokio::time::sleep(jittered(delay)) => {}
-                }
-                delay = (delay * 2).min(MAX_RESTART_DELAY);
-                if inner.executor.get().is_none() {
-                    match connect_client(&inner.config).await {
-                        Ok(client) => {
-                            inner.set_executor(client);
-                            tracing::info!(addr = %inner.config.addr, "store connected");
-                        }
-                        Err(err) => {
-                            let error = format!("{err:#}");
-                            tracing::warn!(addr = %inner.config.addr, %error, "the store cannot be reached yet");
-                            inner.set_state(SubscriptionState::Connecting { error });
-                            continue;
-                        }
-                    }
-                }
-                match inner.start_subscription().await {
-                    Ok(running) => break running,
-                    Err(err) => {
-                        let error = format!("{err:#}");
-                        tracing::warn!(%error, "the catalog subscription cannot start yet");
-                        inner.set_state(SubscriptionState::Restarting { error });
-                    }
-                }
-            },
-        };
-        delay = FIRST_RESTART_DELAY;
-        tracing::info!("the catalog subscription is running");
+/// Why the last attempt to reach the store failed, for the status and the
+/// log; empty while none has.
+fn connecting_error(state: &ClientState) -> String {
+    match state {
+        ClientState::Connecting {
+            error: Some(error), ..
+        } => format!("{error:#}"),
+        _ => String::new(),
+    }
+}
 
-        let reason = tokio::select! {
-            _ = stop.changed() => {
-                running.shutdown().await.ok();
-                stopped();
-                return;
-            }
-            reason = running.stopped() => reason,
-        };
-        if !reason.is_failure() {
-            inner.set_state(SubscriptionState::Stopped {
-                reason: format!("{reason:?}"),
-            });
-            return;
+/// What the store first says, waited for `within` at most: `true` once it
+/// answered, `false` when a first attempt failed in a way that is tried
+/// again (unreachable, or it cannot serve the key's shop right now) or
+/// nothing came in time, and an error when it refuses the key itself
+/// (`Rejection::Unauthorized`): no other answer means the key will never do.
+async fn first_answer(client: &RemoteClient, within: Duration) -> anyhow::Result<bool> {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        match client.state() {
+            ClientState::Connected => return Ok(true),
+            // Its error carries the store's rejection.
+            ClientState::Refused => return client.connected().await.map(|()| true),
+            ClientState::Connecting { error: Some(_), .. } => return Ok(false),
+            _ => {}
         }
-        let error = reason
-            .error()
-            .map(|err| format!("{err:#}"))
-            .unwrap_or_else(|| format!("{reason:?}"));
-        tracing::warn!(%error, "the catalog subscription stopped, restarting");
-        inner.set_state(SubscriptionState::Restarting { error });
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(FIRST_ANSWER_POLL).await;
     }
 }
