@@ -61,7 +61,10 @@ written as the server's file) and the secrets as `TIMADA__…` variables
 (`timada-<i>.timada-headless`), its ordinal is its `node_id`, and
 `TIMADA__CLUSTER__SECRET` must be among the secrets. The pods start together and are
 updated one at a time, each serving a few seconds more (`preStopSeconds`) while the
-Service stops sending it requests. Choose the count before the first install.
+Service stops sending it requests. Choose the count before the first install. `zones`
+names the zones to run in instead, one node in each. Each pod takes its own name as its
+`server.region`, so the background work on what a node created is done by that node
+alone; `config.server.region` gives them all the same one.
 
 Every change goes through a branch and a pull request; `make check` must be green
 before one is opened.
