@@ -287,6 +287,12 @@ by construction.
    with its store before the copy from a peer. `/admin/cluster` shows this node (`Cluster::health`): the writes
    it keeps, how each other node stands, whether a copy is needed; `Cluster::watch`
    warns in the log at four fifths of the backlog and whenever a node is given up.
+   The members change while the cluster runs (#710): `cluster.founders` says how many of
+   `peers` it started with, a node listed after them and started over an empty store waits,
+   and an administrator adds it on `/admin/cluster` (`Cluster::add_node`): it copies the
+   store, its read models fill from the copy, and it serves. A node that left is removed
+   there too (`Cluster::remove_node`), from another node's page; it then answers `/ready`
+   with 503 (`removed from the cluster`) and is to be stopped.
 2. **Subscriptions** (`serve.rs`, `subscriptions()`). Every subscription the node runs
    is started once on the store and follows every tenant's streams: the platform's
    read models (users, the tenant catalog, the members' history), the tenants' read

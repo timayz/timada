@@ -4,7 +4,8 @@
 The `[cluster]` section of several nodes: each pod's name under the headless
 Service, in the order of the pods' ordinals, so a pod's ordinal is its
 `node_id` (set in its environment by the StatefulSet). What `config.cluster`
-sets besides (`absent_after_secs`, `write_backlog`) is kept.
+sets besides (`absent_after_secs`, `write_backlog`) is kept. `founders` says
+how many of them the cluster started with, once it was given more.
 */}}
 {{- $peers := list }}
 {{- $webPeers := list }}
@@ -13,6 +14,12 @@ sets besides (`absent_after_secs`, `write_backlog`) is kept.
 {{- $webPeers = append $webPeers (printf "http://timada-%d.timada-headless:3000" $i) }}
 {{- end }}
 {{- $generated := dict "peers" $peers "web_peers" $webPeers "listen" "0.0.0.0:7000" }}
+{{- with .Values.founders }}
+{{- if or (lt (int .) 2) (gt (int .) (include "timada.nodes" $ | int)) }}
+{{- fail "founders is how many nodes the cluster started with: at least 2, and no more than the nodes there are now" }}
+{{- end }}
+{{- $_ := set $generated "founders" (int .) }}
+{{- end }}
 {{- $_ := set $config "cluster" (merge $generated ($config.cluster | default dict)) }}
 {{- end }}
 apiVersion: v1

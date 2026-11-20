@@ -133,6 +133,7 @@ impl Node {
         let config = among.map(|(id, peers)| ClusterConfig {
             node_id: id,
             peers: peers.iter().copied().map(Into::into).collect(),
+            founders: None,
             listen: None,
             web_peers: Vec::new(),
             secret: None,

@@ -47,7 +47,7 @@ use timada_tenancy::{
     read_model_subscription,
 };
 
-use cluster::{Cluster, Executor};
+use cluster::{Cluster, Executor, NodeId};
 use config::{ClusterConfig, StoreApiConfig};
 use store_api::StoreConnections;
 
@@ -70,6 +70,8 @@ struct Tuning {
     absent_after_secs: u64,
     /// `write_backlog`.
     write_backlog: usize,
+    /// `founders`: how many of the peers found the cluster; `None`, all.
+    founders: Option<u64>,
 }
 
 impl Default for Tuning {
@@ -77,6 +79,7 @@ impl Default for Tuning {
         Self {
             absent_after_secs: 0,
             write_backlog: 100_000,
+            founders: None,
         }
     }
 }
@@ -112,6 +115,7 @@ impl Node {
             Some(&ClusterConfig {
                 node_id: id,
                 peers: peers.iter().copied().map(Into::into).collect(),
+                founders: tuning.founders,
                 listen: None,
                 web_peers: Vec::new(),
                 secret: None,
@@ -369,6 +373,7 @@ async fn a_node_away_too_long_copies_the_store_back_at_its_next_start() {
     let tuning = Tuning {
         absent_after_secs: 2,
         write_backlog: 100_000,
+        founders: None,
     };
     let nodes = start_all(&root, &addrs, tuning).await;
     let acme = create_everywhere(&nodes, "acme").await;
@@ -424,6 +429,7 @@ async fn a_node_at_its_write_backlog_refuses_writes() {
     let tuning = Tuning {
         absent_after_secs: 0,
         write_backlog: 3,
+        founders: None,
     };
     let nodes = start_all(&root, &addrs, tuning).await;
     let acme = create_everywhere(&nodes, "acme").await;
@@ -1438,6 +1444,107 @@ async fn a_slug_claimed_at_once_through_three_work_groups_goes_to_one() {
         }
     }
     for node in nodes {
+        node.stop().await;
+    }
+}
+
+/// Issue #710: a cluster founded with three nodes takes a fourth while it
+/// runs. Node 3 is listed after the founders and started over an empty
+/// store: it waits. A member adds it (what the cluster page does): it
+/// copies the store, its read models fill from the copy, and it takes
+/// writes the others see. Removed again, it counts no more and says so, and
+/// the three go on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_is_added_to_a_running_cluster_then_removed() {
+    let root = temp_root("members");
+    let mut listeners = Vec::new();
+    for _ in 0..4 {
+        listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
+    }
+    let addrs: Vec<SocketAddr> = listeners.iter().map(|l| l.local_addr().unwrap()).collect();
+    drop(listeners);
+    let tuning = Tuning {
+        founders: Some(3),
+        ..Tuning::default()
+    };
+    let (n0, n1, n2) = tokio::join!(
+        Node::start(&root, 0, &addrs, tuning),
+        Node::start(&root, 1, &addrs, tuning),
+        Node::start(&root, 2, &addrs, tuning),
+    );
+    assert_eq!(
+        n0.cluster.members().nodes,
+        [NodeId(0), NodeId(1), NodeId(2)]
+    );
+    let acme = Command(n0.store.clone())
+        .create_tenant(CreateTenant {
+            name: "acme".into(),
+            owner_user_id: "alice".into(),
+        })
+        .await
+        .unwrap();
+
+    // Node 3 starts and waits to be added.
+    let joining = tokio::spawn({
+        let (root, addrs) = (root.clone(), addrs.clone());
+        async move { Node::start(&root, 3, &addrs, tuning).await }
+    });
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(!joining.is_finished(), "a node nobody added does not open");
+
+    n1.cluster.add_node(NodeId(3), addrs[3]).await.unwrap();
+    let n3 = tokio::time::timeout(Duration::from_secs(60), joining)
+        .await
+        .expect("node 3 opens once it is added")
+        .unwrap();
+    eventually("every node counts four members", async || {
+        [&n0, &n1, &n2, &n3].iter().all(|node| {
+            let members = node.cluster.members();
+            members.nodes.len() == 4 && members.change.is_none()
+        })
+    })
+    .await;
+    assert!(n3.cluster.health().joined_at_start);
+    eventually("node 3's read models fill from the copy", async || {
+        timada_tenancy::active_tenant_ids(&n3.db)
+            .await
+            .unwrap()
+            .contains(&acme.id)
+    })
+    .await;
+    let globex = Command(n3.store.clone())
+        .create_tenant(CreateTenant {
+            name: "globex".into(),
+            owner_user_id: "bob".into(),
+        })
+        .await
+        .unwrap();
+    eventually("node 0 sees what node 3 wrote", async || {
+        timada_tenancy::active_tenant_ids(&n0.db)
+            .await
+            .unwrap()
+            .contains(&globex.id)
+    })
+    .await;
+
+    n0.cluster.remove_node(NodeId(3)).await.unwrap();
+    eventually(
+        "the three count three again, and node 3 is told",
+        async || {
+            let members = n0.cluster.members();
+            members.nodes.len() == 3 && members.change.is_none() && !n3.cluster.health().member
+        },
+    )
+    .await;
+    eventually("the three go on taking writes", async || {
+        Command(n2.store.clone())
+            .rename_tenant("alice", &acme.id, "acme of three")
+            .await
+            .is_ok()
+    })
+    .await;
+
+    for node in [n0, n1, n2, n3] {
         node.stop().await;
     }
 }

@@ -213,6 +213,18 @@ pub fn describe_error(code: &str) -> &'static str {
             "The shop's pictures take all the space it has. Remove some first, or ask the platform for more."
         }
         "invalid_media_quota" => "A picture quota is a number of megabytes above zero, or blank.",
+        "invalid_node" => {
+            "A node is named by its number: its place among the peers of the configuration."
+        }
+        "invalid_node_address" => {
+            "A node's address is a host or an IP address and a port, as in timada-3.timada-headless:7000."
+        }
+        "members_not_changed" => {
+            "The cluster's members were not changed: another change is in progress, or this node does not reach most of the others. Try again in a moment; the node's log says why."
+        }
+        "remove_this_node" => {
+            "Remove this node from the page of another node: this one must go on answering."
+        }
         "no_image" => "Choose a picture to upload.",
         "invalid_alt" => "The text describing a picture is at most 200 characters.",
         "image_not_found" => "This picture is no longer on the product.",
