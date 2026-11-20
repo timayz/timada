@@ -67,7 +67,7 @@ store.shutdown().await;
 ## What lives where
 
 Events stay on the store. The app's database file holds the subscription cursor (key
-`storefront/catalog`, prefixed by the store's region), the projection snapshots, the
+`storefront/catalog`, prefixed by the store's work group), the projection snapshots, the
 `storefront_products` rows (the gallery among them), the category tree
 (`storefront_categories` and `storefront_product_categories`) and the published reviews
 (`storefront_reviews`). Picture files are not
@@ -1043,7 +1043,7 @@ when the form should ask for nothing: a country without a list, or a postal code
 under France that means an overseas department, which `delivery_country` then names
 (`MQ`). Where the postal code names the province, `postal_code_awaited` says it is still
 too short: ask for it first, and for the province only if `province` stays empty. Put
-the pick in `ShippingAddress::region`. See
+the pick in `ShippingAddress::work_group`. See
 [aliexpress-provinces.md](aliexpress-provinces.md).
 
 ## Reviews

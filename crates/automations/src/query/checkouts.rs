@@ -15,12 +15,12 @@ pub struct LeftCheckout {
     pub request_id: String,
     /// Unix seconds of the request.
     pub requested_at: i64,
-    /// The region the request was made in (its routing key): the nodes that
-    /// do that region's work are the ones that saw it.
-    pub region: Option<String>,
+    /// The work group the request was made in (its routing key): the nodes that
+    /// do that work group's work are the ones that saw it.
+    pub work_group: Option<String>,
 }
 
-/// Records a cart's latest checkout request, made in `region`; a new one
+/// Records a cart's latest checkout request, made in `work_group`; a new one
 /// starts over.
 pub async fn record_checkout(
     db: &Db,
@@ -28,17 +28,23 @@ pub async fn record_checkout(
     cart_id: &str,
     request_id: &str,
     requested_at: u64,
-    region: Option<&str>,
+    work_group: Option<&str>,
 ) -> anyhow::Result<()> {
     db.execute(
         "INSERT INTO automations_checkouts (tenant_id, cart_id, request_id, requested_at,
-            region, ordered, detected)
+            work_group, ordered, detected)
          VALUES (?1, ?2, ?3, ?4, ?5, 0, 0)
          ON CONFLICT (tenant_id, cart_id) DO UPDATE SET
             request_id = excluded.request_id, requested_at = excluded.requested_at,
-            region = excluded.region, detected = 0
+            work_group = excluded.work_group, detected = 0
          WHERE automations_checkouts.ordered = 0",
-        (tenant_id, cart_id, request_id, requested_at as i64, region),
+        (
+            tenant_id,
+            cart_id,
+            request_id,
+            requested_at as i64,
+            work_group,
+        ),
     )
     .await?;
     Ok(())
@@ -73,7 +79,7 @@ pub async fn record_detected(
 /// What [`left_checkouts`] reads: off the index of the open checkouts, in
 /// its order.
 pub(super) const LEFT_CHECKOUTS: &str =
-    "SELECT c.tenant_id, c.cart_id, c.request_id, c.requested_at, c.region
+    "SELECT c.tenant_id, c.cart_id, c.request_id, c.requested_at, c.work_group
      FROM automations_checkouts c INDEXED BY automations_checkouts_open
      WHERE c.ordered = 0 AND c.detected = 0
        AND c.requested_at >= ?1 AND c.requested_at <= ?2

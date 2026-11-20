@@ -25,9 +25,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // it stands, for the subscriptions and the storefronts (#466).
     let (cluster, executor, local) = cluster::open(
         config.cluster.as_ref(),
-        config.server.region.as_deref(),
-        &config.server.also_serves,
-        config.server.also_serves_no_region,
+        config.server.work_group.as_deref(),
+        &config.server.also_works_for,
+        config.server.also_works_for_ungrouped,
         &config.database.path,
         store.clone(),
     )
@@ -257,22 +257,22 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         all_workers.push(workers::start(name, move || make(&deps), &local).await?);
     }
     let workers = Workers::new(all_workers);
-    // The sagas of a region whose node is away are run from here, and handed
-    // back when it returns (#709): a node with a region of its own may be
-    // its only one, and a stream keeps the region it was created in. One of
-    // the nodes up takes each such region on, under a lease the cluster
-    // gives, and goes on from where the node before it stopped. A region no
+    // The sagas of a work group whose node is away are run from here, and handed
+    // back when it returns (#709): a node with a work group of its own may be
+    // its only one, and a stream keeps the work group it was created in. One of
+    // the nodes up takes each such work group on, under a lease the cluster
+    // gives, and goes on from where the node before it stopped. A work group no
     // node was heard from for a minute counts as without one: longer than a
     // node takes to restart for an update. The sagas of this node's own
-    // region stay with the workers above; a node without a region takes
+    // work group stay with the workers above; a node without a work group takes
     // none on.
-    let cover = config.server.region.is_some().then(|| {
+    let cover = config.server.work_group.is_some().then(|| {
         let mut cover = cluster.cover(local.0.clone());
         for (name, kind, make) in SUBSCRIPTIONS {
             if *kind == Kind::Sharded {
                 let deps = deps.clone();
                 let make = *make;
-                cover = cover.subscription(*name, move |_region: &str| make(&deps));
+                cover = cover.subscription(*name, move |_work_group: &str| make(&deps));
             }
         }
         cover.start()
@@ -560,8 +560,8 @@ pub struct Deps {
 type Make = fn(&Deps) -> SubscriptionBuilder<Executor>;
 
 /// A worker built from a subscription: the one the table lists, or its copy
-/// for a region this node also serves, filtered on that region's key, or
-/// its copy for the events written without a region, filtered on no key.
+/// for a work group this node also serves, filtered on that work group's key, or
+/// its copy for the events written without a work group, filtered on no key.
 type Planned = (
     String,
     Kind,
@@ -571,49 +571,50 @@ type Planned = (
 /// What a subscription follows, and what it is for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
-    /// Every region's events, into the read-model tables. The builder says
+    /// Every work group's events, into the read-model tables. The builder says
     /// `.any_routing_key()`. After a start that copied the store from a
     /// peer, these catch up before the router takes requests.
     ReadModel,
-    /// Every region's events, for an effect each node has for itself: its
+    /// Every work group's events, for an effect each node has for itself: its
     /// copies of the keys. The builder says `.any_routing_key()`.
     PerNode,
-    /// The node's own region (the executor's default routing key, which the
-    /// builder leaves alone), and each region of `server.also_serves` as a
-    /// worker of its own, as are the events written without a region under
-    /// `server.also_serves_no_region`: a saga, whose work a region's nodes
+    /// The node's own work group (the executor's default routing key, which the
+    /// builder leaves alone), and each work group of `server.also_works_for` as a
+    /// worker of its own, as are the events written without a work group under
+    /// `server.also_works_for_ungrouped`: a saga, whose work a work group's nodes
     /// do for it.
     Sharded,
 }
 
 /// The workers to start for `server`: every subscription once, and the
-/// sharded ones again for each region this node also serves, named after it
+/// sharded ones again for each work group this node also serves, named after it
 /// (`payments for us-east-3`), and once more for the events written without
-/// a region when it serves those too (`payments for no region`). That last
+/// a work group when it serves those too (`payments for no work group`). That last
 /// copy keeps its cursor under the saga's bare key, where this node kept it
-/// while it had no region, and writes what it creates in the node's region.
-/// Without a region, one worker each, following the events written without
+/// while it had no work group, and writes what it creates in the node's work group.
+/// Without a work group, one worker each, following the events written without
 /// a key, as before.
 fn planned(server: &crate::config::ServerConfig) -> Vec<Planned> {
     debug_assert!(
-        (server.also_serves.is_empty() && !server.also_serves_no_region) || server.region.is_some(),
+        (server.also_works_for.is_empty() && !server.also_works_for_ungrouped)
+            || server.work_group.is_some(),
         "validated by Config::load"
     );
     let mut planned: Vec<Planned> = Vec::new();
     for (name, kind, make) in SUBSCRIPTIONS {
         planned.push((name.to_string(), *kind, Box::new(make)));
         if *kind == Kind::Sharded {
-            for region in &server.also_serves {
-                let region = region.clone();
+            for work_group in &server.also_works_for {
+                let work_group = work_group.clone();
                 planned.push((
-                    format!("{name} for {region}"),
+                    format!("{name} for {work_group}"),
                     *kind,
-                    Box::new(move |deps: &Deps| make(deps).routing_key(region.clone())),
+                    Box::new(move |deps: &Deps| make(deps).routing_key(work_group.clone())),
                 ));
             }
-            if server.also_serves_no_region {
+            if server.also_works_for_ungrouped {
                 planned.push((
-                    format!("{name} for no region"),
+                    format!("{name} for no work group"),
                     *kind,
                     Box::new(move |deps: &Deps| make(deps).no_routing_key()),
                 ));
@@ -634,7 +635,7 @@ fn planned(server: &crate::config::ServerConfig) -> Vec<Planned> {
 /// of them, the order confirmations it mails and the notices of contact
 /// messages it mails the members. Every bounded context registers its
 /// subscription here, under the name the cluster page shows, saying whether
-/// it follows every region or the node's own ([`Kind`]).
+/// it follows every work group or the node's own ([`Kind`]).
 const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     ("identity", Kind::ReadModel, |d| {
         timada_identity::read_model_subscription(d.db.clone())
@@ -818,14 +819,14 @@ mod tests {
     use super::*;
     use crate::config::ServerConfig;
 
-    fn server(region: Option<&str>, also_serves: &[&str]) -> ServerConfig {
+    fn server(work_group: Option<&str>, also_works_for: &[&str]) -> ServerConfig {
         ServerConfig {
             url: "https://timada.localhost".into(),
             host: "127.0.0.1".into(),
             port: 3000,
-            region: region.map(str::to_owned),
-            also_serves: also_serves.iter().map(|s| s.to_string()).collect(),
-            also_serves_no_region: false,
+            work_group: work_group.map(str::to_owned),
+            also_works_for: also_works_for.iter().map(|s| s.to_string()).collect(),
+            also_works_for_ungrouped: false,
             trusted_proxies: Vec::new(),
         }
     }
@@ -837,10 +838,10 @@ mod tests {
             .collect()
     }
 
-    /// Without a region, or without other regions to serve, the table as it
-    /// is; with them, every saga again per region, no read model.
+    /// Without a work group, or without other work groups to serve, the table as it
+    /// is; with them, every saga again per work group, no read model.
     #[test]
-    fn a_saga_is_planned_once_per_region_served() {
+    fn a_saga_is_planned_once_per_work_group_served() {
         let plain = names(&server(None, &[]));
         assert_eq!(plain.len(), SUBSCRIPTIONS.len());
         assert_eq!(names(&server(Some("eu-west-1"), &[])), plain);
@@ -861,30 +862,34 @@ mod tests {
         assert_eq!(more[at + 1], "payments for us-east-3");
     }
 
-    /// A node that also serves the events written without a region runs
-    /// every saga once more for them, after its copies for other regions.
+    /// A node that also serves the events written without a work group runs
+    /// every saga once more for them, after its copies for other work groups.
     #[test]
-    fn a_saga_is_planned_once_more_for_the_events_without_a_region() {
+    fn a_saga_is_planned_once_more_for_the_events_without_a_work_group() {
         let sagas = SUBSCRIPTIONS
             .iter()
             .filter(|(_, kind, _)| *kind == Kind::Sharded)
             .count();
         let keyless = names(&ServerConfig {
-            also_serves_no_region: true,
+            also_works_for_ungrouped: true,
             ..server(Some("eu-west-1"), &["us-east-3"])
         });
         assert_eq!(keyless.len(), SUBSCRIPTIONS.len() + 2 * sagas);
         let at = keyless.iter().position(|n| n == "payments").unwrap();
         assert_eq!(keyless[at + 1], "payments for us-east-3");
-        assert_eq!(keyless[at + 2], "payments for no region");
-        assert!(!keyless.iter().any(|n| n == "catalog for no region"));
-        assert!(!keyless.iter().any(|n| n == "shopper keys for no region"));
+        assert_eq!(keyless[at + 2], "payments for no work group");
+        assert!(!keyless.iter().any(|n| n == "catalog for no work group"));
+        assert!(
+            !keyless
+                .iter()
+                .any(|n| n == "shopper keys for no work group")
+        );
     }
 
     /// Every subscription in the table is classified on purpose: the read
     /// models and the per-node effects everywhere, the rest sharded.
     #[test]
-    fn read_models_follow_every_region() {
+    fn read_models_follow_every_work_group() {
         for (name, kind, _) in SUBSCRIPTIONS {
             let read_model = [
                 "identity",

@@ -246,7 +246,7 @@ pub async fn grant_owed_seats(store: &evento::Turso) {
 
 /// The same, as another node getting there only now: its cursor, kept under
 /// its own default routing key, starts at the beginning. The saga follows
-/// the node's own region, so this stand-in for a node of the same region
+/// the node's own work group, so this stand-in for a node of the same work group
 /// reads every key: the events were written without one.
 pub async fn grant_owed_seats_on(store: &evento::Turso, node: &str) {
     let executor = evento::Evento::new(store.clone()).default_routing_key(node);

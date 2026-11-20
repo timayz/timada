@@ -26,7 +26,7 @@
 //!   failing on must not hold every other shop's sales for ever.
 //!
 //! Telling twice is harmless (Meta drops the repeat by the event id), so
-//! every node of the region may run it and a pass may be replayed. A sale
+//! every node of the work group may run it and a pass may be replayed. A sale
 //! older than [`MAX_EVENT_AGE_SECS`] is not sent: Meta refuses it.
 
 use std::sync::Arc;
@@ -173,9 +173,9 @@ pub fn subscription<E: Executor>(
         .data(conversions)
         .data(TenantStore(store))
         .handler(on_browser_set())
-        // A saga: it follows the node's own region (the executor's default
-        // routing key), so a region's nodes do its work and the other
-        // regions' nodes leave it to them.
+        // A saga: it follows the node's own work group (the executor's default
+        // routing key), so a work group's nodes do its work and the other
+        // work groups' nodes leave it to them.
         .retry(5)
 }
 

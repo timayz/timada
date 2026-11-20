@@ -44,9 +44,9 @@ pub fn subscription<E: Executor>(room: Arc<Mailroom>) -> SubscriptionBuilder<E> 
         .data(room)
         .handler(on_received())
         .handler(on_notification_event())
-        // A saga: it follows the node's own region (the executor's default
-        // routing key), so a region's nodes do its work and the other
-        // regions' nodes leave it to them.
+        // A saga: it follows the node's own work group (the executor's default
+        // routing key), so a work group's nodes do its work and the other
+        // work groups' nodes leave it to them.
         .retry(5)
 }
 

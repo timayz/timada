@@ -1,7 +1,7 @@
 //! What a saga does with a step that failed: fail the pass, or give the
 //! event up.
 //!
-//! A subscription's cursor serves every tenant of the region. A handler that
+//! A subscription's cursor serves every tenant of the work group. A handler that
 //! returns an error holds it for all of them: evento tries the pass again a
 //! few times, the worker stops, and the supervisor (`workers.rs`) restarts
 //! it at the same event with a growing delay, for ever. That is right when
@@ -121,8 +121,8 @@ pub fn one_line(text: &str) -> String {
 /// seconds), as its dead-letter mode does with a handler's error: for the
 /// payments desk, which answers a request off the subscription's cursor,
 /// once the event is acknowledged. The row goes under the key of the
-/// worker that handed the event over: a saga's worker follows one region,
-/// under `{region}.{key}`, or the events written without one, under
+/// worker that handed the event over: a saga's worker follows one work group,
+/// under `{work_group}.{key}`, or the events written without one, under
 /// `{key}`.
 pub async fn dead_letter<E: Executor>(
     store: &E,
@@ -150,7 +150,7 @@ pub async fn dead_letter<E: Executor>(
     store
         .save_dead_letter(DeadLetter {
             subscription: match &event.routing_key {
-                Some(region) => format!("{region}.{subscription}"),
+                Some(work_group) => format!("{work_group}.{subscription}"),
                 None => subscription.to_owned(),
             },
             event_id: event.id,
@@ -170,7 +170,7 @@ pub async fn dead_letter<E: Executor>(
 }
 
 /// The keys of the cursors this node keeps, a subscription's each (with
-/// its region: `{region}.{key}`): evento keeps the dead letters beside them.
+/// its work group: `{work_group}.{key}`): evento keeps the dead letters beside them.
 async fn cursor_keys(db: &Db) -> Result<Vec<String>> {
     let keys: Vec<(String,)> = db.fetch_all("SELECT key FROM subscriber", ()).await?;
     Ok(keys.into_iter().map(|(key,)| key).collect())
@@ -332,13 +332,13 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let event = |tenant: &str, stream: &str, region: Option<&str>| evento::Event {
+        let event = |tenant: &str, stream: &str, work_group: Option<&str>| evento::Event {
             id: ulid::Ulid::generate(),
             tenant: tenant.to_owned(),
             aggregate_type: "timada-orders/Order".to_owned(),
             aggregate_id: stream.to_owned(),
             name: "Paid".to_owned(),
-            routing_key: region.map(str::to_owned),
+            routing_key: work_group.map(str::to_owned),
             ..Default::default()
         };
         let refused = anyhow::Error::from(OrderError::OrderCancelled).context("order o1");
@@ -368,7 +368,7 @@ mod tests {
                 .map(|letter| (letter.subscription.as_str(), letter.aggregate_id.as_str()))
                 .collect::<Vec<_>>(),
             [("eu.t", "o3"), ("eu.s", "o2"), ("s", "o1")],
-            "newest first, under the region's key"
+            "newest first, under the work group's key"
         );
         assert_eq!(letters[1].timestamp, now - 5);
         assert_eq!(letters[1].attempts, 1);

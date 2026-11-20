@@ -4,13 +4,13 @@
 //! this node's [`Checkouts`], which answers it off the subscription's
 //! cursor: up to [`LANES`] carts at once, a cart's requests one after the
 //! other. A pass that answered inside the handler would answer one request
-//! at a time for the whole region, each costing the supplier's read, the
+//! at a time for the whole work group, each costing the supplier's read, the
 //! pricing loads, the holds and Stripe's round trip: a campaign on one shop
 //! would push every shop's shoppers past the storefront's wait (#467).
 //! Instead the handler queues the request and acknowledges it, and the
 //! lanes answer in parallel; the claim on the cart
 //! (`Cart::CheckoutClaimed`, written at the version read) is still what
-//! makes one node of the region the one that answers.
+//! makes one node of the work group the one that answers.
 //!
 //! A fault of the store's (a write it is not taking, a read that failed,
 //! Stripe still opening the same payment) no longer fails the pass: the
@@ -287,9 +287,9 @@ pub fn subscription<E: Executor>(checkouts: Arc<Checkouts>) -> SubscriptionBuild
     SubscriptionBuilder::new(SUBSCRIPTION)
         .data(checkouts)
         .handler(on_checkout_requested())
-        // A saga: it follows the node's own region (the executor's default
-        // routing key), so a region's nodes do its work and the other
-        // regions' nodes leave it to them.
+        // A saga: it follows the node's own work group (the executor's default
+        // routing key), so a work group's nodes do its work and the other
+        // work groups' nodes leave it to them.
         .retry(5)
 }
 

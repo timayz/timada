@@ -9,7 +9,7 @@
 //! another currency than the euro, the European Central Bank's euro rate of
 //! the day. The invoicing crate decides the VAT from them.
 //!
-//! The pass serves every tenant of the region, so only the store's own
+//! The pass serves every tenant of the work group, so only the store's own
 //! faults fail it (`saga_fault`). A document that cannot be issued for a
 //! reason of the order's own (lines that do not add up, a credit note too
 //! large, no euro rate for a sale that needs one) is recorded on the order
@@ -71,9 +71,9 @@ pub fn subscription<E: Executor>(
         .handler(on_settled_outside())
         .handler(on_invoicing_requested())
         .handler(on_refunded())
-        // A saga: it follows the node's own region (the executor's default
-        // routing key), so a region's nodes do its work and the other
-        // regions' nodes leave it to them.
+        // A saga: it follows the node's own work group (the executor's default
+        // routing key), so a work group's nodes do its work and the other
+        // work groups' nodes leave it to them.
         .retry(5)
         // An order's own fault, recorded on it, gives the event up: a dead
         // letter, and the pass goes on to the other tenants.

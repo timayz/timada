@@ -1,5 +1,5 @@
 //! The mails about an order, sent by a subscription on every node of the
-//! region: the node that writes the claim on the mail's stream first is the
+//! work group: the node that writes the claim on the mail's stream first is the
 //! one that sends, then records how it went ([`timada_core::Sending`]), so a
 //! shopper gets each mail once and a send the shop's server fails is tried
 //! again later, by whichever node looks once the retry is due.

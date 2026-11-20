@@ -188,9 +188,9 @@ pub fn pushes_subscription<E: Executor>(
         .data(Store(store))
         .handler(on_pushed())
         .handler(on_claimed())
-        // A saga: it follows the node's own region (the executor's default
-        // routing key), so a region's nodes do its work and the other
-        // regions' nodes leave it to them.
+        // A saga: it follows the node's own work group (the executor's default
+        // routing key), so a work group's nodes do its work and the other
+        // work groups' nodes leave it to them.
         // The AliExpress order index is written in the platform's own
         // streams, the default tenant. A shop's store key can write the same
         // event, under any `aggregate_id` and payload, only in the shop's
@@ -248,7 +248,7 @@ async fn on_claimed<E: Executor>(
 }
 
 /// Reads `forward`'s orders again for what `event` recorded, on the node it
-/// belongs to among those serving the event's region, and while that is
+/// belongs to among those serving the event's work group, and while that is
 /// news. The read runs beside the subscription, a few at a time
 /// ([`PUSH_READS`](super::PUSH_READS)),
 /// so a burst of pushes while AliExpress is slow neither holds the next ones
