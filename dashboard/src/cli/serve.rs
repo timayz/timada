@@ -257,32 +257,25 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         all_workers.push(workers::start(name, move || make(&deps), &local).await?);
     }
     let workers = Workers::new(all_workers);
-    // The regions whose node is away are taken on from here, and handed
-    // back (#709): a node with a region of its own may be its only one.
-    let cover = config.server.region.clone().map(|region| {
-        let sagas = SUBSCRIPTIONS
-            .iter()
-            .filter(|(_, kind, _)| *kind == Kind::Sharded)
-            .map(|(name, _, make)| {
+    // The sagas of a region whose node is away are run from here, and handed
+    // back when it returns (#709): a node with a region of its own may be
+    // its only one, and a stream keeps the region it was created in. One of
+    // the nodes up takes each such region on, under a lease the cluster
+    // gives, and goes on from where the node before it stopped. A region no
+    // node was heard from for a minute counts as without one: longer than a
+    // node takes to restart for an update. The sagas of this node's own
+    // region stay with the workers above; a node without a region takes
+    // none on.
+    let cover = config.server.region.is_some().then(|| {
+        let mut cover = cluster.cover(local.0.clone());
+        for (name, kind, make) in SUBSCRIPTIONS {
+            if *kind == Kind::Sharded {
                 let deps = deps.clone();
                 let make = *make;
-                let saga: crate::cover::Saga = (
-                    name.to_string(),
-                    Arc::new(move |region: &str| make(&deps).routing_key(region.to_owned())),
-                );
-                saga
-            })
-            .collect();
-        crate::cover::Cover::new(
-            cluster.clone(),
-            executor.clone(),
-            local.clone(),
-            region,
-            sagas,
-            workers.clone(),
-            crate::cover::AFTER,
-        )
-        .start(crate::cover::EVERY)
+                cover = cover.subscription(*name, move |_region: &str| make(&deps));
+            }
+        }
+        cover.start()
     });
     let mailroom_sends = mailroom.start();
     let picture_fetches = fetcher.clone().start();
@@ -512,7 +505,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     store_copies.shutdown().await;
     cluster_watch.abort();
     if let Some(cover) = cover {
-        cover.abort();
+        cover.shutdown().await;
     }
     mailroom_sends.abort();
     picture_fetches.abort();

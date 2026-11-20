@@ -177,7 +177,7 @@ async fn supervise<F>(
             // Fresh trouble, or the last restart held up long enough to
             // count as recovered: the wait starts short again.
             delay = FIRST_RESTART_DELAY;
-            since = timada_core::unix_now();
+            since = crate::auth::now();
             attempts = 0;
         }
         attempts += 1;
@@ -216,37 +216,18 @@ async fn supervise<F>(
     }
 }
 
-/// Every worker of the node, for the cluster page: those it started with,
-/// and those it runs for a while for a region whose node is away
-/// (`cover.rs`).
+/// Every worker of the node, for the cluster page.
 #[derive(Clone, Default)]
-pub struct Workers(Arc<Mutex<Vec<Arc<Worker>>>>);
+pub struct Workers(Arc<Vec<Arc<Worker>>>);
 
 impl Workers {
     pub fn new(workers: Vec<Arc<Worker>>) -> Self {
-        Self(Arc::new(Mutex::new(workers)))
-    }
-
-    fn all(&self) -> Vec<Arc<Worker>> {
-        self.0.lock().unwrap().clone()
-    }
-
-    /// Lists a worker started after the others.
-    pub fn add(&self, worker: Arc<Worker>) {
-        self.0.lock().unwrap().push(worker);
-    }
-
-    /// Takes a worker off the list; stopping it is the caller's.
-    pub fn remove(&self, worker: &Arc<Worker>) {
-        self.0
-            .lock()
-            .unwrap()
-            .retain(|listed| !Arc::ptr_eq(listed, worker));
+        Self(Arc::new(workers))
     }
 
     /// Each worker's name and how it stands, in start order.
     pub fn states(&self) -> Vec<(String, WorkerState)> {
-        self.all()
+        self.0
             .iter()
             .map(|worker| (worker.name().to_owned(), worker.state()))
             .collect()
@@ -254,11 +235,10 @@ impl Workers {
 
     /// Stops every worker and waits for them.
     pub async fn shutdown(&self) {
-        let workers = self.all();
-        for worker in &workers {
+        for worker in self.0.iter() {
             worker.stop();
         }
-        for worker in &workers {
+        for worker in self.0.iter() {
             worker.stopped().await;
         }
     }
