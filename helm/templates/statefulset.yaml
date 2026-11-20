@@ -10,6 +10,12 @@ metadata:
 spec:
   serviceName: timada-headless
   replicas: {{ include "timada.nodes" . }}
+  {{- with .Values.firstNodeId }}
+  # The pods are numbered from here: a pod's ordinal is its node's number in
+  # the cluster, whose first nodes run in other releases.
+  ordinals:
+    start: {{ int . }}
+  {{- end }}
   # Every pod starts at once: a node takes writes, and so becomes ready, once
   # a majority of them is up, which one pod waiting for the one before it to
   # be ready would never see.
@@ -127,7 +133,7 @@ spec:
             - name: store-api
               containerPort: 4321
             {{- end }}
-            {{- if gt (include "timada.nodes" . | int) 1 }}
+            {{- if include "timada.clustered" . }}
             - name: cluster
               containerPort: 7000
             {{- end }}
