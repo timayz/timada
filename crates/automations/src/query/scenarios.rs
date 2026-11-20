@@ -100,7 +100,7 @@ pub(super) const SCENARIO_STATUS: &str = "SELECT status FROM automations_scenari
      WHERE tenant_id = ?1 AND id = ?2";
 
 /// Where one of the tenant's scenarios stands, as the read model last saw
-/// it: what the runner moves its runs by. It follows every region, so any
+/// it: what the runner moves its runs by. It follows every work group, so any
 /// node may move any run. `None` until the read model sees the scenario.
 pub async fn scenario_status(
     db: &Db,

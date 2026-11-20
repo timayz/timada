@@ -17,7 +17,7 @@ the goods for goods it buys after the sale (AliExpress). How it works is in
    AliExpress once the order is placed makes the order wait for it. The payments
    subscription only queues the request on the node; the node's lanes answer up to 16
    carts at once, a cart's requests one after the other, and the first node of the
-   region to claim a request (`Cart::CheckoutClaimed`) is the one that answers it. A
+   work group to claim a request (`Cart::CheckoutClaimed`) is the one that answers it. A
    fault of the store's puts the request back for a growing while instead of holding
    the subscription for every shop; `/admin/cluster` shows how many are being answered.
 3. The shopper's browser confirms the payment in Stripe's Payment Element

@@ -87,7 +87,7 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 cart_id TEXT NOT NULL,
                 request_id TEXT NOT NULL,
                 requested_at INTEGER NOT NULL,
-                region TEXT,
+                work_group TEXT,
                 ordered INTEGER NOT NULL,
                 detected INTEGER NOT NULL,
                 PRIMARY KEY (tenant_id, cart_id)

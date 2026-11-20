@@ -7,25 +7,27 @@
 url = "https://timada.localhost"
 host = "0.0.0.0"
 port = 3000
-# Region this node serves, e.g. "eu-west-1" or "us-east-3". Data created here
-# is tagged with it, and the background work on it (payments, supplier orders,
-# invoices, mails) is done by the nodes of that region alone; the pages and
-# their lists see every region. Omit for a single-region deployment, where
-# every node does all the work. Data keeps the region it was created in: the
-# background work on data created without one is done by the nodes without
-# one, and by those that say `also_serves_no_region`. A region none of whose
-# nodes was heard from for a minute has its work taken on by one of the nodes
-# up that have a region, until one of its own is back: a node may be the
-# only one of its region.
-# region = "eu-west-1"
-# Regions whose background work this node takes on all the time, besides its
-# own. Needs `region`.
-# also_serves = ["us-east-3"]
-# Also take on the background work on the data created without a region. Set
-# it on at least one node when giving regions to a deployment that ran
-# without them, and keep it: otherwise no node does that work once every node
-# has a region. Needs `region`.
-# also_serves_no_region = true
+# The work group this node belongs to: one word, e.g. "node-a", or
+# "eu-west-1" for the nodes of one place. Data created through this node is
+# tagged with it, and the background work on that data (payments, supplier
+# orders, invoices, mails) is done by the nodes of that group alone; the
+# pages and their lists see every group's data. A group of one node, each
+# node its own, spreads that work over the nodes: a node more is that much
+# more of it done at once. Omit it everywhere and every node does all the
+# work. Data keeps the group it was created in: the background work on data
+# created without one is done by the nodes without one, and by those that
+# say `also_works_for_ungrouped`. A group none of whose nodes was heard from
+# for a minute has its work taken on by one of the nodes up that have a
+# group, until one of its own is back.
+# work_group = "node-a"
+# Work groups whose background work this node takes on all the time, besides
+# its own. Needs `work_group`.
+# also_works_for = ["node-b"]
+# Also take on the background work on the data created without a work group.
+# Set it on at least one node when giving work groups to a deployment that
+# ran without them, and keep it: otherwise no node does that work once every
+# node has a group. Needs `work_group`.
+# also_works_for_ungrouped = true
 # Reverse proxies whose X-Forwarded-For header is trusted, as IP addresses or
 # CIDR networks. Without it the sign-in history records the proxy's address.
 # Behind the Docker-hosted Traefik of compose.yml: ["172.16.0.0/12"].

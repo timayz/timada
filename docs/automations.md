@@ -166,7 +166,7 @@ when the run gets to it.
 | `Finished`, `Cancelled { reason }` | the end, or a stop (a member, or the scenario deleted) |
 
 **What starts runs.** One subscription (`timada-automations/triggers`,
-`automations/triggers.rs`), on every node of the event's region, follows the
+`automations/triggers.rs`), on every node of the event's work group, follows the
 trigger events: an order placed, shipped, cancelled or refunded, a customer
 account made, a newsletter subscription confirmed, a review submitted or
 published, a contact message received. The same subscription keeps
@@ -176,9 +176,9 @@ starts a run of that version, one before it never does. An event older than an
 hour is history being replayed and starts nothing.
 
 The nodes share the runs out rather than race for them: each starts the runs
-whose id falls to it among the nodes up that see the event, those of its region
-or, for an event written without one, the nodes without a region and those
-that also serve such events (`server.also_serves_no_region`)
+whose id falls to it among the nodes up that see the event, those of its work group
+or, for an event written without one, the nodes without a work group and those
+that also serve such events (`server.also_works_for_ungrouped`)
 (`timada_core::Share`), with one write and no read, and keeps the others in
 `automations_starts`. Two minutes after keeping one (counted from then, not from
 the event: a node going through events late is about as late as the others), a
@@ -192,7 +192,7 @@ for the runs due on a timer (`[automations] check_secs`, at most
 (`shard`, the run id's place among the nodes up), and any run its node has not
 moved two minutes after it fell due (or four looks, when they are further apart).
 A node that stops drops out of the nodes up within 30 seconds, and its runs go to
-the others then. Any node can move any run, whatever its region: the scenario's
+the others then. Any node can move any run, whatever its work group: the scenario's
 state comes from `automations_scenarios` and its versions from
 `automations_versions`, which every node keeps. The runner
 (`automations/runner.rs`) loads a run and its version's definition, and a pure
@@ -359,11 +359,11 @@ the store says "nothing happened", so:
 2. Every look of the runner finds the requests older than the delay that no order
    followed, in shops with a published scenario on this trigger, and checks each
    against the cart itself (ordered since, or asked again: not left). The nodes of
-   the region the request was made in (for a request made without one, the nodes
-   without a region and those that also serve such requests) share them out as they share the runs: each looks at its own,
+   the work group the request was made in (for a request made without one, the nodes
+   without a work group and those that also serve such requests) share them out as they share the runs: each looks at its own,
    and at any other two minutes later. It writes a
    `timada-automations/AbandonedCheckout` stream (`Detected`, id hashed from the
-   cart and the request, at version 0, in the request's region so all its nodes
+   cart and the request, at version 0, in the request's work group so all its nodes
    see it), so a checkout is found left once whichever node finds it. Requests
    older than three days past the delay start nothing.
 3. `Detected` is the trigger event: it starts the runs like the others, about the

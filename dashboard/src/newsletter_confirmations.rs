@@ -59,7 +59,7 @@ pub fn subscription<E: Executor>(room: Arc<Mailroom>) -> SubscriptionBuilder<E> 
         .handler(on_mail_deferred())
         .handler(on_mail_failed())
         // The routing key stays the executor's: this node mails the
-        // confirmations of its own region.
+        // confirmations of its own work group.
         .retry(5)
 }
 

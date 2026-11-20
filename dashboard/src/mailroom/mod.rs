@@ -23,7 +23,7 @@
 //! lease's end, a deferral to the retry, an outcome removes the row.
 //!
 //! The table is a read model of the stream's `Sending` state, per node and
-//! for the node's region (the sagas are sharded by routing key), kept
+//! for the node's work group (the sagas are sharded by routing key), kept
 //! beside the other read models in the store's database. A node that never
 //! saw an intent (down at the time) owes nothing for it; the nodes that did
 //! carry it.

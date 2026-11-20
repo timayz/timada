@@ -90,8 +90,8 @@ journaling and the network to every write: these are the floor, and
 | 0 | 1,113 | 2.5 | 2.2 ms |
 | 47 | 1,047 | 2.6 | 2.5 ms |
 
-A node runs 47 workers (more with `server.also_serves` and
-`server.also_serves_no_region`, one more copy of each saga per region served).
+A node runs 47 workers (more with `server.also_works_for` and
+`server.also_works_for_ungrouped`, one more copy of each saga per work group served).
 A write now wakes only the subscriptions that follow one of its events
 (timayz/evento#531, in `b03d06d`); before, every write woke them all, and 47
 of them doing nothing cost 37 ms of processor per command and cut the
@@ -117,7 +117,7 @@ The figures below are from `b03d06d`, when they cost over a core.
   does: 0, 79 and 260 commands of 100,000 took over a second in three runs
   with the looks, 0 and 20 in two runs without.
 - On `b03d06d` that was one core per node under load, and again per extra
-  region served; on `11a31fd` count a tenth of one.
+  work group served; on `11a31fd` count a tenth of one.
 
 ## Three nodes
 

@@ -200,13 +200,13 @@ impl Aliexpress {
         (self.share)(Among::All)
     }
 
-    /// Which of the nodes up that see `region`'s events this one is: which of
+    /// Which of the nodes up that see `work_group`'s events this one is: which of
     /// the items and orders a saga is told about it reads. The sagas follow
-    /// the node's region, so an event of `region` reaches the nodes serving
-    /// it alone (one written without a region, the nodes without one), and
+    /// the node's work group, so an event of `work_group` reaches the nodes serving
+    /// it alone (one written without a work group, the nodes without one), and
     /// its item must fall to one of them.
-    pub fn share_in(&self, region: Option<&str>) -> Share {
-        (self.share)(Among::Region(region))
+    pub fn share_in(&self, work_group: Option<&str>) -> Share {
+        (self.share)(Among::WorkGroup(work_group))
     }
 
     /// Whether companies can connect here: the platform has an app and can

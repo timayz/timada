@@ -161,10 +161,10 @@ Each imported product, and each order placed on AliExpress, belongs to one of th
 nodes up, by a hash of its stream's id over the nodes heard from in the last 30
 seconds, so one node sweeps it and one node answers a request for it, and the app's
 quota is spent once. A request (a cart add, a push) is answered
-among the nodes that see it: those serving its region or, for one written without a
-region, the nodes without one and those that say `server.also_serves_no_region`
-(what a deployment given regions later sets on a node, so the links and orders
-from before are still read), each counted once the regions it serves came in with
+among the nodes that see it: those serving its work group or, for one written without a
+work group, the nodes without one and those that say `server.also_works_for_ungrouped`
+(what a deployment given work groups later sets on a node, so the links and orders
+from before are still read), each counted once the work groups it serves came in with
 its gossip. A node that stops is left out once it has been silent that long:
 what it held and had not read yet is shared out to the others, and the sweep finds it
 still due. Two nodes that disagree for a moment read one twice or leave it for later,

@@ -10,7 +10,7 @@
 //! sweep ([`PendingPayments`](super::PendingPayments)). Replayed, a request
 //! finds the money settled, and does nothing.
 //!
-//! The pass serves every tenant of the region, so only the store's own
+//! The pass serves every tenant of the work group, so only the store's own
 //! faults fail it (`saga_fault`). A fault of the order's own is recorded on
 //! it (`Order::CaptureFailed`, when this node's request stands; the merchant
 //! takes the payment again from the order page) or left to the sweep (a
@@ -48,9 +48,9 @@ pub fn order_payments_subscription<E: Executor>(
         .handler(on_placed())
         .handler(on_placed_on_aliexpress())
         .handler(on_cancellation_requested())
-        // A saga: it follows the node's own region (the executor's default
-        // routing key), so a region's nodes do its work and the other
-        // regions' nodes leave it to them.
+        // A saga: it follows the node's own work group (the executor's default
+        // routing key), so a work group's nodes do its work and the other
+        // work groups' nodes leave it to them.
         .retry(5)
         // An order's own fault gives the event up: a dead letter, and the
         // pass goes on to the other tenants.

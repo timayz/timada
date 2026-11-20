@@ -6,7 +6,7 @@
 //! after it fell due ([`HELP_AFTER_SECS`]: that node stopped, or the nodes
 //! disagreed for a moment on who is up). Any node can move any run: what a
 //! move reads (the run, the scenario's state and its versions) follows
-//! every region. Every move is written against the version the run was
+//! every work group. Every move is written against the version the run was
 //! loaded at and folded into the node's copy: a node that loses a race
 //! writes nothing and leaves the run to the winner, which goes on without
 //! reading the run back.
@@ -179,7 +179,7 @@ pub struct Runner<E = Executor> {
     /// How long, in seconds, the others leave a node its part of the work.
     help_after: u64,
     /// This node's place among the nodes up (all of them, or those that see
-    /// a region's events): which runs it moves, which checkouts it looks at.
+    /// a work group's events): which runs it moves, which checkouts it looks at.
     place: ShareOf,
     definitions: Definitions,
 }
@@ -343,7 +343,7 @@ impl<E: Store> Runner<E> {
         after: Option<&DueRun>,
         limit: u32,
     ) -> anyhow::Result<Vec<DueRun>> {
-        // The read model holds every region's runs, and any node moves any
+        // The read model holds every work group's runs, and any node moves any
         // run: the share is among all the nodes up.
         let share = (self.place)(Among::All);
         let help_before = now.saturating_sub(self.help_after);
@@ -369,8 +369,8 @@ impl<E: Store> Runner<E> {
                 return Ok(looked);
             }
             // From the read model of the scenarios, which every node keeps
-            // whatever its region: the listeners are the trigger
-            // subscription's, which follows the node's region alone.
+            // whatever its work group: the listeners are the trigger
+            // subscription's, which follows the node's work group alone.
             match scenario_status(&self.db, &tenant.id, &run.scenario_id).await? {
                 Some(ScenarioStatus::Active) => {}
                 Some(ScenarioStatus::Archived) => {
@@ -1025,8 +1025,8 @@ impl<E: Store> Runner<E> {
     }
 
     /// Records the checkouts no order followed within the delay: each one
-    /// starts the scenarios on that trigger. Only the nodes of the region a
-    /// checkout was asked in (without one, the nodes without a region)
+    /// starts the scenarios on that trigger. Only the nodes of the work group a
+    /// checkout was asked in (without one, the nodes without a work group)
     /// follow it, and each looks at its own part of them, then at any
     /// another node left for a while ([`HELP_AFTER_SECS`]).
     async fn find_left_checkouts(&self, now: u64) -> anyhow::Result<()> {
@@ -1037,8 +1037,8 @@ impl<E: Store> Runner<E> {
         let mut shares: HashMap<Option<String>, Share> = HashMap::new();
         for left in left_checkouts(&self.db, from, to, self.runs_per_look).await? {
             let share = *shares
-                .entry(left.region.clone())
-                .or_insert_with(|| (self.place)(Among::Region(left.region.as_deref())));
+                .entry(left.work_group.clone())
+                .or_insert_with(|| (self.place)(Among::WorkGroup(left.work_group.as_deref())));
             if !share.owns(&left.cart_id) && left.requested_at as u64 > help_before {
                 continue;
             }
@@ -1054,17 +1054,17 @@ impl<E: Store> Runner<E> {
             if cart.order_id.is_some() || latest != Some(left.request_id.as_str()) {
                 continue;
             }
-            // Written in the request's region, whose nodes follow the
+            // Written in the request's work group, whose nodes follow the
             // checkout: they all see it found, whichever of them found it.
             let automations = timada_automations::Command::new(self.store.clone(), &left.tenant_id);
-            let detected = match &left.region {
-                Some(region) => {
+            let detected = match &left.work_group {
+                Some(work_group) => {
                     automations
                         .detect_abandoned_checkout_with_routing(
                             AUTOMATION_ACTOR,
                             &left.cart_id,
                             &left.request_id,
-                            region,
+                            work_group,
                         )
                         .await?
                 }
@@ -1310,23 +1310,23 @@ mod tests {
     /// A share that owns nothing: another node has it all.
     const NONE: Share = Share { index: 1, of: 1 };
 
-    /// A node none of a region's work falls to (another node of the region
+    /// A node none of a work group's work falls to (another node of the work group
     /// has it all), though every run due among all the nodes up is its:
     /// what a start, and a look at the checkouts left, go by.
-    fn none_of_the_region() -> ShareOf {
+    fn none_of_the_work_group() -> ShareOf {
         Arc::new(|among| match among {
             Among::All => Share::ALONE,
-            Among::Region(_) => NONE,
+            Among::WorkGroup(_) => NONE,
         })
     }
 
     /// A node none of the runs due falls to among all the nodes up (another
-    /// node has them all), though a region's work is its: what the walk over
+    /// node has them all), though a work group's work is its: what the walk over
     /// the runs goes by.
     fn none_of_the_runs() -> ShareOf {
         Arc::new(|among| match among {
             Among::All => NONE,
-            Among::Region(_) => Share::ALONE,
+            Among::WorkGroup(_) => Share::ALONE,
         })
     }
 
@@ -1654,9 +1654,9 @@ mod tests {
         runner.sweep(now).await.unwrap();
         follow(&store, &db).await;
         assert!(the_run(&store, &db).await.is_none());
-        // The hour is over, but the request's region falls to another node:
+        // The hour is over, but the request's work group falls to another node:
         // left to it a while.
-        runner_at(&store, &db, &keys, none_of_the_region())
+        runner_at(&store, &db, &keys, none_of_the_work_group())
             .sweep(now + 3601)
             .await
             .unwrap();
@@ -1858,15 +1858,15 @@ mod tests {
         let (store, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         publish(&store, &welcome()).await;
-        follow_at(&store, &db, none_of_the_region()).await;
+        follow_at(&store, &db, none_of_the_work_group()).await;
         subscribe(&store, &keys, "ada@example.com").await;
-        follow_at(&store, &db, none_of_the_region()).await;
+        follow_at(&store, &db, none_of_the_work_group()).await;
         assert!(the_run(&store, &db).await.is_none(), "not this node's");
         let now = crate::auth::now();
         let owed = starts_owed(&db, now, 10).await.unwrap();
         assert_eq!(owed.len(), 1);
 
-        let runner = runner_at(&store, &db, &keys, none_of_the_region());
+        let runner = runner_at(&store, &db, &keys, none_of_the_work_group());
         // Its node has a while to start it.
         runner.sweep(now).await.unwrap();
         assert!(the_run(&store, &db).await.is_none());
@@ -1886,9 +1886,9 @@ mod tests {
         let (store, db) = store().await;
         let keys = Arc::new(MemoryKeys::default());
         publish(&store, &welcome()).await;
-        follow_at(&store, &db, none_of_the_region()).await;
+        follow_at(&store, &db, none_of_the_work_group()).await;
         subscribe(&store, &keys, "ada@example.com").await;
-        follow_at(&store, &db, none_of_the_region()).await;
+        follow_at(&store, &db, none_of_the_work_group()).await;
         let now = crate::auth::now();
         let owed = starts_owed(&db, now, 10).await.unwrap();
         let automations = Command::new(store.clone(), TENANT);
@@ -1901,7 +1901,7 @@ mod tests {
         );
         catch_up(&store, &db).await;
 
-        runner_at(&store, &db, &keys, none_of_the_region())
+        runner_at(&store, &db, &keys, none_of_the_work_group())
             .start_left_runs(now + HELP_AFTER_SECS)
             .await
             .unwrap();
@@ -1948,8 +1948,8 @@ mod tests {
         assert_eq!(due_ids(&slow, now + 4 * 60).await, due);
     }
 
-    /// A node outside the scenario's region has no listener for it (the
-    /// trigger subscription follows the node's region): it moves the run
+    /// A node outside the scenario's work group has no listener for it (the
+    /// trigger subscription follows the node's work group): it moves the run
     /// all the same, from the scenarios' read model.
     #[tokio::test]
     async fn a_run_moves_on_a_node_that_has_no_listener_for_it() {

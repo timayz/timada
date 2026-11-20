@@ -63,7 +63,7 @@ impl<E: Executor> super::Command<E> {
         actor: &str,
         routing_key: Option<String>,
     ) -> Result<bool, ReviewError> {
-        // Read first: on a cluster every node of the region tries this, so
+        // Read first: on a cluster every node of the work group tries this, so
         // the ones that lost are told by a read, not by a refused write.
         if self.load_review_request(order_id).await?.is_some() {
             return Ok(false);

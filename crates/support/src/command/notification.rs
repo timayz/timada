@@ -1,5 +1,5 @@
 //! The notice of a message's arrival, mailed to the shop's members by a
-//! subscription on every node of the region: the node that writes the claim
+//! subscription on every node of the work group: the node that writes the claim
 //! on the notice's stream first is the one that mails, then records how it
 //! went ([`timada_core::Sending`]), so the members are told once and a send
 //! the server fails is tried again later, by whichever node looks once the
