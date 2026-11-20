@@ -281,7 +281,6 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // What the balancer asks before sending traffic here, and what an
     // operator scrapes.
     let readiness = Arc::new(crate::readiness::Readiness::new(
-        db.clone(),
         cluster.clone(),
         workers.clone(),
         read_model_workers,

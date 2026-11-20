@@ -18,20 +18,15 @@
 //! through; a rolling update that waits for a restarted node to be ready
 //! must not take one that is not back among the others (#700).
 //!
-//! The lag of a read model is what its subscription recorded with its
-//! cursor the last time it acknowledged: how far the event it reached was
-//! behind the newest of the events it follows. A subscription acknowledges
-//! the events it follows and no others, so a cursor that has not moved
-//! since the store's newest event says nothing: the catalog's does not move
-//! for a user's event (#713).
-//!
-//! A worker that stopped acknowledging because it is stuck would go on
-//! showing the small figure it last wrote. That is taken from the
-//! supervisor instead (`workers.rs`): a read model's worker that failed and
-//! is being started again, or ended on its own, makes the node as far
-//! behind as the time since it did, whatever its cursor says, and so does
-//! one that runs again but not for a minute yet. What this does not see is
-//! a handler that never returns: its worker runs, and its cursor stays.
+//! The lag of a read model is how long the oldest event its subscriptions
+//! follow and have not applied yet has been waiting, asked of the store
+//! each time (`Worker::lag`, evento's `SubscriptionBuilder::lag`). It is
+//! found with the subscription's own filters, so an event a read model
+//! does not follow never counts, however new: a store nobody writes to
+//! leaves every read model at zero (#713). And no acknowledgement has to
+//! happen for it to move: a worker that failed and waits to be started
+//! again, one that stopped, and one whose handler does not return all read
+//! as far behind as the event they stand on is old.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,7 +41,7 @@ use topcoat::router::{
 };
 
 use crate::cluster::{self, Cluster, NodeHealth};
-use crate::db::{self, Db};
+use crate::db;
 use crate::store_api::StoreConnections;
 use crate::workers::{WorkerState, Workers};
 
@@ -57,11 +52,9 @@ const PER_NODE: &[(&str, &str)] = &[("pictures", crate::media::SUBSCRIPTION)];
 
 /// What answers `/ready` and feeds the metrics.
 pub struct Readiness {
-    db: Db,
     cluster: Arc<Cluster>,
     workers: Workers,
-    /// Those of them that fill the read models: one in trouble makes the
-    /// node behind.
+    /// Those of them that fill the read models: what the lag is asked of.
     read_model_workers: Workers,
     connections: Arc<StoreConnections>,
     /// The most a read model may trail the store for the node to be ready;
@@ -83,15 +76,11 @@ pub struct Report {
     /// one hears from, itself counted.
     pub nodes: usize,
     pub nodes_in_touch: usize,
-    /// The read model furthest behind the store, in seconds; `null` until
-    /// the subscriptions first ran.
+    /// The read model furthest behind the store, in seconds: for how long
+    /// the oldest event it has not applied yet has been waiting.
     pub lag_seconds: Option<i64>,
     /// Each read model, by the name `rebuild` knows it under.
     pub read_models: Vec<Lag>,
-    /// For how long the read-model worker longest in trouble has not been
-    /// doing its work, in seconds; `null` while they all run. Judged
-    /// against the same limit as the lag.
-    pub stuck_seconds: Option<i64>,
     /// This node's own copies (the pictures), reported apart.
     pub per_node: Vec<Lag>,
     /// The subscriptions this node runs, and how many of them run.
@@ -107,11 +96,13 @@ pub struct Lag {
     pub lag_seconds: Option<i64>,
 }
 
-/// A subscription's cursor row, as the store keeps it.
+/// Where one subscription stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cursor {
+    /// The key its cursor is kept under.
     pub key: String,
-    /// What the subscription recorded at its last acknowledgement.
+    /// For how long the oldest event it follows and has not acknowledged
+    /// yet has been waiting, in seconds; 0 when there is none.
     pub lag: i64,
 }
 
@@ -119,7 +110,6 @@ impl Readiness {
     /// `read_model_workers` are those of `workers` that fill the read
     /// models.
     pub fn new(
-        db: Db,
         cluster: Arc<Cluster>,
         workers: Workers,
         read_model_workers: Workers,
@@ -127,7 +117,6 @@ impl Readiness {
         max_lag: Option<Duration>,
     ) -> Self {
         Self {
-            db,
             cluster,
             workers,
             read_model_workers,
@@ -139,13 +128,17 @@ impl Readiness {
     /// The node's state now.
     pub async fn report(&self) -> Result<Report> {
         let health = self.cluster.health();
-        let cursors: Vec<(String, i64)> = self
-            .db
-            .fetch_all("SELECT key, lag FROM subscriber", ())
-            .await?;
-        let cursors: Vec<Cursor> = cursors
+        let cursors: Vec<Cursor> = self
+            .read_model_workers
+            .lags()
+            .await?
             .into_iter()
-            .map(|(key, lag)| Cursor { key, lag })
+            .filter_map(|(key, lag)| {
+                Some(Cursor {
+                    key: key?,
+                    lag: lag.waiting().as_secs() as i64,
+                })
+            })
             .collect();
         let read_models = db::read_models()
             .map(|read_model| Lag {
@@ -165,15 +158,9 @@ impl Readiness {
             .iter()
             .filter(|(_, state)| state.is_running())
             .count();
-        let stuck_seconds = self.read_model_workers.troubled_since().map(|since| {
-            (crate::auth::now() as i64)
-                .saturating_sub(since as i64)
-                .max(0)
-        });
         Ok(judge(
             &health,
             read_models,
-            stuck_seconds,
             per_node,
             states.len(),
             workers_running,
@@ -200,7 +187,7 @@ impl Readiness {
 /// How far behind the store the subscriptions under `keys` are, the
 /// furthest of them: a cursor's key is the subscription's own or that
 /// prefixed with the node's region (`eu.timada-catalog/read-models`).
-/// `None` when none of them has a cursor yet.
+/// `None` when no worker of this node runs one of them.
 pub fn lag_of(cursors: &[Cursor], keys: &[&str]) -> Option<i64> {
     cursors
         .iter()
@@ -212,20 +199,18 @@ pub fn lag_of(cursors: &[Cursor], keys: &[&str]) -> Option<i64> {
         .max()
 }
 
-/// Whether the node is ready, from what was measured: `stuck_seconds` is
-/// for how long a read model's worker has been in trouble, if one is.
+/// Whether the node is ready, from what was measured.
 pub fn judge(
     health: &NodeHealth,
     read_models: Vec<Lag>,
-    stuck_seconds: Option<i64>,
     per_node: Vec<Lag>,
     workers: usize,
     workers_running: usize,
     max_lag: Option<Duration>,
 ) -> Report {
     let lag_seconds = read_models.iter().filter_map(|lag| lag.lag_seconds).max();
-    let within = match (max_lag, lag_seconds.max(stuck_seconds)) {
-        (Some(limit), Some(behind)) => behind <= limit.as_secs() as i64,
+    let within = match (max_lag, lag_seconds) {
+        (Some(limit), Some(lag)) => lag <= limit.as_secs() as i64,
         _ => true,
     };
     let serving = health.serving() && cluster::reaches_majority(health);
@@ -241,7 +226,6 @@ pub fn judge(
             .count(),
         lag_seconds,
         read_models,
-        stuck_seconds,
         per_node,
         workers,
         workers_running,
@@ -345,43 +329,6 @@ mod tests {
         assert_eq!(lag_of(&cursors, &["timada-orders/read-models"]), None);
     }
 
-    /// A read model's worker in trouble makes the node as far behind as
-    /// the time it has been so, whatever the cursors recorded: past the
-    /// limit the node is not ready. A quiet store alone never does (#713):
-    /// nothing here looks at how old its newest event is.
-    #[test]
-    fn a_read_model_worker_in_trouble_counts_as_behind() {
-        let lags = || {
-            vec![Lag {
-                name: "catalog",
-                lag_seconds: Some(0),
-            }]
-        };
-        let limit = Some(Duration::from_secs(300));
-        let judged = |stuck: Option<i64>| {
-            judge(&health(true, false), lags(), stuck, Vec::new(), 4, 3, limit)
-        };
-        assert!(judged(None).ready);
-        assert!(judged(Some(40)).ready);
-        let stuck = judged(Some(301));
-        assert!(!stuck.ready);
-        assert_eq!(stuck.stuck_seconds, Some(301));
-        assert_eq!(stuck.lag_seconds, Some(0));
-        // Without a limit it is reported only.
-        assert!(
-            judge(
-                &health(true, false),
-                lags(),
-                Some(301),
-                Vec::new(),
-                4,
-                3,
-                None
-            )
-            .ready
-        );
-    }
-
     /// Ready takes a serving node within the limit; a node that must copy
     /// the store or trails past the limit is not, and without a limit the
     /// lag is reported only.
@@ -397,7 +344,6 @@ mod tests {
         let report = judge(
             &health(true, false),
             lags(Some(12)),
-            None,
             Vec::new(),
             4,
             4,
@@ -410,7 +356,6 @@ mod tests {
             !judge(
                 &health(true, false),
                 lags(Some(301)),
-                None,
                 Vec::new(),
                 4,
                 4,
@@ -422,7 +367,6 @@ mod tests {
             judge(
                 &health(true, false),
                 lags(Some(301)),
-                None,
                 Vec::new(),
                 4,
                 4,
@@ -430,34 +374,14 @@ mod tests {
             )
             .ready
         );
-        assert!(
-            judge(
-                &health(true, false),
-                lags(None),
-                None,
-                Vec::new(),
-                4,
-                4,
-                limit
-            )
-            .ready
-        );
-        let behind = judge(
-            &health(true, true),
-            lags(Some(0)),
-            None,
-            Vec::new(),
-            4,
-            4,
-            limit,
-        );
+        assert!(judge(&health(true, false), lags(None), Vec::new(), 4, 4, limit).ready);
+        let behind = judge(&health(true, true), lags(Some(0)), Vec::new(), 4, 4, limit);
         assert!(!behind.ready);
         assert_eq!(behind.node, "copy needed");
         assert!(
             !judge(
                 &health(false, false),
                 lags(Some(0)),
-                None,
                 Vec::new(),
                 4,
                 4,
@@ -475,20 +399,12 @@ mod tests {
     fn a_node_that_reaches_no_other_node_is_not_ready() {
         let mut alone = health(true, false);
         alone.peers = vec![peer(1, false), peer(2, false)];
-        let report = judge(&alone, Vec::new(), None, Vec::new(), 4, 4, None);
+        let report = judge(&alone, Vec::new(), Vec::new(), 4, 4, None);
         assert!(!report.ready && !report.serving);
         assert_eq!(report.node, "out of touch with most nodes");
         assert_eq!((report.nodes, report.nodes_in_touch), (3, 1));
 
-        let report = judge(
-            &health(true, false),
-            Vec::new(),
-            None,
-            Vec::new(),
-            4,
-            4,
-            None,
-        );
+        let report = judge(&health(true, false), Vec::new(), Vec::new(), 4, 4, None);
         assert!(report.ready && report.serving);
         assert_eq!((report.nodes, report.nodes_in_touch), (3, 2));
 

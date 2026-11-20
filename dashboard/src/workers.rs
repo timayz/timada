@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use evento::subscription::{StopReason, Subscription, SubscriptionBuilder};
+use evento::subscription::{Lag, StopReason, Subscription, SubscriptionBuilder};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -27,12 +27,6 @@ use crate::cluster::Executor;
 /// for longer than the longest delay counts as recovered.
 const FIRST_RESTART_DELAY: Duration = Duration::from_secs(1);
 const MAX_RESTART_DELAY: Duration = Duration::from_secs(5 * 60);
-
-/// How long a restarted worker must run before it no longer counts as in
-/// trouble ([`Worker::troubled_since`]): one that meets the same event again
-/// fails again well within it, and is not out of trouble for the moment it
-/// ran in between.
-const PROVEN_AFTER: Duration = Duration::from_secs(60);
 
 /// How a worker stands.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,26 +54,43 @@ impl WorkerState {
     }
 }
 
-/// A worker's trouble: since when it has not been doing its work (unix
-/// seconds), and since when it runs again, if it does.
-#[derive(Clone, Copy)]
-struct Trouble {
-    since: u64,
-    running_again: Option<std::time::Instant>,
-}
-
 /// A supervised subscription.
 pub struct Worker {
     name: String,
     state: Mutex<WorkerState>,
-    trouble: Mutex<Option<Trouble>>,
     stop: watch::Sender<bool>,
     supervisor: Mutex<Option<JoinHandle<()>>>,
+    /// What builds the subscription, and the store it runs on: what it is
+    /// started again from, and what says how far behind it is.
+    make: Make,
+    executor: Executor,
 }
+
+/// Builds a worker's subscription.
+type Make = Arc<dyn Fn() -> SubscriptionBuilder<Executor> + Send + Sync>;
 
 impl Worker {
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The key the subscription's cursor is kept under (behind the node's
+    /// routing key, when it has one), and how far the subscription is
+    /// behind the newest event it follows, now. Asked of the store, with
+    /// the subscription's own filters: it says the truth whether the worker
+    /// runs, waits to be started again, stopped, or sits in a handler that
+    /// does not return, and an event the subscription does not follow never
+    /// counts.
+    pub async fn lag(&self) -> Result<(Option<String>, Lag)> {
+        let mut builder = (self.make)();
+        let key = builder.storage_key(&self.executor);
+        let lag = builder.lag(&self.executor).await.with_context(|| {
+            format!(
+                "cannot tell how far behind the {} subscription is",
+                self.name
+            )
+        })?;
+        Ok((key, lag))
     }
 
     pub fn state(&self) -> WorkerState {
@@ -88,31 +99,6 @@ impl Worker {
 
     fn set(&self, state: WorkerState) {
         *self.state.lock().unwrap() = state;
-    }
-
-    /// Since when (unix seconds) this worker has not been doing its work:
-    /// it failed and waits to be started again, it runs again but not for
-    /// `proven_after` yet, or it ended on its own and nothing starts it
-    /// again. `None` for one that runs, and for one stopped with the node.
-    fn troubled_since_within(&self, proven_after: Duration) -> Option<u64> {
-        let trouble = (*self.trouble.lock().unwrap())?;
-        match trouble.running_again {
-            Some(at) if at.elapsed() >= proven_after => None,
-            _ => Some(trouble.since),
-        }
-    }
-
-    /// [`troubled_since_within`](Self::troubled_since_within)
-    /// [`PROVEN_AFTER`].
-    pub fn troubled_since(&self) -> Option<u64> {
-        self.troubled_since_within(PROVEN_AFTER)
-    }
-
-    fn set_trouble(&self, since: u64, running_again: Option<std::time::Instant>) {
-        *self.trouble.lock().unwrap() = Some(Trouble {
-            since,
-            running_again,
-        });
     }
 
     /// Signals the worker to stop, without waiting for it. The supervisor
@@ -139,6 +125,7 @@ where
     F: Fn() -> SubscriptionBuilder<Executor> + Send + Sync + 'static,
 {
     let name = name.into();
+    let make: Make = Arc::new(make);
     let handle = make()
         .start(executor)
         .await
@@ -147,14 +134,15 @@ where
     let worker = Arc::new(Worker {
         name,
         state: Mutex::new(WorkerState::Running),
-        trouble: Mutex::new(None),
         stop,
         supervisor: Mutex::new(None),
+        make: make.clone(),
+        executor: executor.clone(),
     });
     let supervisor = tokio::spawn(supervise(
         worker.clone(),
         handle,
-        make,
+        move || make(),
         executor.clone(),
         stop_rx,
     ));
@@ -210,8 +198,6 @@ async fn supervise<F>(
             worker.set(WorkerState::Stopped {
                 reason: reason.to_string(),
             });
-            // Nothing starts it again: what it fed goes stale from here.
-            worker.set_trouble(crate::auth::now(), None);
             return;
         }
         let error = reason.to_string();
@@ -229,7 +215,6 @@ async fn supervise<F>(
             since,
             attempts,
         });
-        worker.set_trouble(since, None);
 
         handle = loop {
             tokio::select! {
@@ -256,7 +241,6 @@ async fn supervise<F>(
         };
         restarted_at = Some(std::time::Instant::now());
         worker.set(WorkerState::Running);
-        worker.set_trouble(since, restarted_at);
         tracing::info!("the {name} subscription is running again");
     }
 }
@@ -278,13 +262,14 @@ impl Workers {
             .collect()
     }
 
-    /// Since when (unix seconds) the worker longest in trouble has not been
-    /// doing its work ([`Worker::troubled_since`]); `None` while all run.
-    pub fn troubled_since(&self) -> Option<u64> {
-        self.0
-            .iter()
-            .filter_map(|worker| worker.troubled_since())
-            .min()
+    /// Each worker's cursor key and how far behind it is now
+    /// ([`Worker::lag`]), in start order.
+    pub async fn lags(&self) -> Result<Vec<(Option<String>, Lag)>> {
+        let mut lags = Vec::with_capacity(self.0.len());
+        for worker in self.0.iter() {
+            lags.push(worker.lag().await?);
+        }
+        Ok(lags)
     }
 
     /// Stops every worker and waits for them.
@@ -390,7 +375,6 @@ mod tests {
         })
         .await;
         assert_eq!(worker.state(), WorkerState::Running);
-        assert_eq!(worker.troubled_since(), None);
 
         create(&store, "poison").await;
         create(&store, "last").await;
@@ -398,20 +382,12 @@ mod tests {
             matches!(worker.state(), WorkerState::Restarting { attempts: 1, .. })
         })
         .await;
-        let WorkerState::Restarting { since, .. } = worker.state() else {
-            unreachable!()
-        };
-        assert_eq!(worker.troubled_since(), Some(since));
         eventually(
             "the worker runs again and gets past the event",
             async || seen.names.lock().unwrap().len() == 3,
         )
         .await;
         assert_eq!(worker.state(), WorkerState::Running);
-        // Running again is not yet out of trouble: it may meet the same
-        // event again. It is once it ran long enough.
-        assert!(worker.troubled_since().is_some());
-        assert_eq!(worker.troubled_since_within(Duration::ZERO), None);
         assert_eq!(
             *seen.names.lock().unwrap(),
             ["first", "poison", "last"],
@@ -470,6 +446,66 @@ mod tests {
             "1 s then 2 s of waiting, not 1 s twice"
         );
         assert_eq!(worker.state(), WorkerState::Running);
+        worker.stop();
+        worker.stopped().await;
+    }
+
+    /// How far behind a worker is, is asked of the store with what the
+    /// subscription follows (#713): an event of another kind, however new,
+    /// leaves it caught up, and the event its handler fails on keeps it
+    /// behind while the worker waits to be started again, until it got past
+    /// it.
+    #[tokio::test]
+    async fn a_worker_is_behind_by_the_events_it_follows_alone() {
+        use evento::Executor as _;
+
+        let store = Evento::new(Turso::in_memory_concurrent().await.unwrap());
+        let seen = Seen::default();
+        seen.failures_left.store(usize::MAX, Ordering::SeqCst);
+        let worker = start(
+            "created",
+            {
+                let seen = seen.clone();
+                move || builder(seen.clone())
+            },
+            &store,
+        )
+        .await
+        .unwrap();
+        let (key, lag) = worker.lag().await.unwrap();
+        assert_eq!(key.as_deref(), Some("test/created"));
+        assert!(lag.is_caught_up());
+
+        // Nothing the subscription follows: its cursor does not move, and
+        // it is not behind.
+        store
+            .write(vec![evento::Event {
+                id: ulid::Ulid::generate(),
+                aggregate_type: "test/Other".into(),
+                aggregate_id: "other".into(),
+                version: 1,
+                name: "Happened".into(),
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(worker.lag().await.unwrap().1.is_caught_up());
+
+        create(&store, "poison").await;
+        eventually("the worker is seen restarting", async || {
+            matches!(worker.state(), WorkerState::Restarting { .. })
+        })
+        .await;
+        let behind = worker.lag().await.unwrap().1;
+        assert!(behind.pending_since.is_some(), "{behind:?}");
+
+        seen.failures_left.store(0, Ordering::SeqCst);
+        eventually("the worker gets past the event", async || {
+            worker.lag().await.unwrap().1.is_caught_up()
+        })
+        .await;
+        assert_eq!(*seen.names.lock().unwrap(), ["poison"]);
         worker.stop();
         worker.stopped().await;
     }

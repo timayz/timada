@@ -119,12 +119,6 @@ fn render(readiness: &Readiness, report: &Report) -> String {
             );
         }
     }
-    let _ = writeln!(out, "# TYPE timada_read_model_stuck_seconds gauge");
-    let _ = writeln!(
-        out,
-        "timada_read_model_stuck_seconds{{node=\"{node}\"}} {}",
-        report.stuck_seconds.unwrap_or(0)
-    );
     let _ = writeln!(out, "# TYPE timada_workers gauge");
     let states = readiness.worker_states();
     for (word, matches) in [
