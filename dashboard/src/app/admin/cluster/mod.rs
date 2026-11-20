@@ -1,31 +1,89 @@
 //! `/admin/cluster`: this node, as its consensus engine sees it, and the
 //! subscriptions it runs. Every node shows its own view; open the page on
 //! each node of a cluster.
+//!
+//! The members of the cluster are changed from here too (#710): a node
+//! started over an empty store is added, a node that left is removed. Any
+//! member decides it with the others; none is restarted.
+
+pub mod add;
+pub mod remove;
 
 use std::sync::Arc;
 
 use topcoat::{
     Result,
     context::{Cx, context},
-    router::page,
+    router::{href, page, query_params},
     view::{View, attributes, view},
 };
 
 use crate::app::admin::require_admin;
-use crate::cluster::{Cluster, Executor, NodeHealth, PeerState};
+use crate::app::auth::Flash;
+use crate::cluster::{Cluster, Executor, NodeHealth, NodeId, PeerState};
 use crate::components::alert::{AlertVariant, alert, alert_description};
+use crate::components::button::{ButtonVariant, button};
+use crate::components::field::{field, field_label};
+use crate::components::input::input;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
+use crate::config::Config;
 use crate::mailroom::{self, OwedMail};
 use crate::saga_fault;
 use crate::store_api::StoreConnections;
 use crate::ui::{
-    Shell, Tone, document, empty_row, fact, facts, icons, page_header, section_card, status_badge,
+    Shell, Tone, document, empty_row, fact, facts, icons, notice, page_header, section_card,
+    status_badge,
 };
 use crate::workers::{WorkerState, Workers};
 use evento::DeadLetter;
 use topcoat::icon::icon;
+
+#[topcoat::router::query_params(error = bad_request)]
+struct ClusterQuery {
+    error: Option<String>,
+    message: Option<String>,
+}
+
+/// The page, with what an action on it has to say.
+pub fn cluster_url(cx: &Cx, error: Option<&str>, message: Option<&str>) -> String {
+    href!(index).query(Flash { error, message }).resolve(cx)
+}
+
+/// What a change of members still waits for, in words.
+fn waits_label(waits_for: &[evento::cluster::Wait]) -> String {
+    use evento::cluster::Wait;
+    let waits: Vec<String> = waits_for
+        .iter()
+        .map(|wait| match wait {
+            Wait::Drain => "the writes in flight to finish".to_owned(),
+            Wait::Copy(node) => format!("node {} to copy the store", node.0),
+        })
+        .collect();
+    if waits.is_empty() {
+        "nothing more: it is about to be done".to_owned()
+    } else {
+        waits.join(", and ")
+    }
+}
+
+/// The node an administrator most likely adds next, and where it would be
+/// reached: the first number past the members, at the address this node's
+/// configuration lists for it, or else this node's own address with the
+/// number changed (`timada-1.timada-headless:7000` gives
+/// `timada-3.timada-headless:7000`), which is how a chart names its pods.
+fn next_node(members: &[NodeId], me: NodeId, peers: &[evento::cluster::PeerAddr]) -> (u64, String) {
+    let next = members.iter().map(|node| node.0 + 1).max().unwrap_or(0);
+    let listed = peers.get(next as usize).map(ToString::to_string);
+    let guessed = || {
+        let own = peers.get(me.0 as usize)?.to_string();
+        let number = format!("-{}.", me.0);
+        own.contains(&number)
+            .then(|| own.replacen(&number, &format!("-{next}."), 1))
+    };
+    (next, listed.or_else(guessed).unwrap_or_default())
+}
 
 /// The most mails given up on the page lists.
 const FAILED_MAILS_SHOWN: i64 = 50;
@@ -125,7 +183,22 @@ fn state(health: &NodeHealth) -> (&'static str, Tone) {
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
     require_admin(cx).await?;
+    let query = query_params::<ClusterQuery>(cx)?;
     let health = context::<Arc<Cluster>>(cx).health();
+    // The members the cluster agreed on, and the change of them in progress.
+    let cluster = context::<Arc<Cluster>>(cx);
+    let me = cluster.id();
+    let members = cluster.members();
+    let changing = members.change.as_ref().map(|change| {
+        let to: Vec<String> = change.to.iter().map(|node| node.0.to_string()).collect();
+        (to.join(", "), waits_label(&change.waits_for))
+    });
+    // Only a node of a cluster takes another: one that runs alone has no
+    // `[cluster]` section to list the others in.
+    let adds = context::<Config>(cx)
+        .cluster
+        .as_ref()
+        .map(|config| next_node(&members.nodes, me, &config.peers));
     let connections = context::<Arc<StoreConnections>>(cx).by_tenant();
     let storefronts: usize = connections.values().sum();
     let (label, tone) = state(&health);
@@ -215,6 +288,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 subtitle: Some("The store on this node, and the other nodes as it sees them. Each node shows its own view."),
                 status_badge(tone: tone, attrs: attributes! { data-node-state="" }, (label))
             )
+            notice(error: query.error.as_deref(), message: query.message.as_deref())
+
+            if let Some((to, waits)) = &changing {
+                alert(
+                    variant: AlertVariant::Warning,
+                    attrs: attributes! { role="status" class="mb-6" data-members-changing="" },
+                    icon(data: icons::WARNING)
+                    alert_description(
+                        "The members are changing to nodes " (to) ". It waits for " (waits) ". Writes may be refused for a few seconds meanwhile."
+                    )
+                )
+            }
 
             if health.rolled_back {
                 alert(
@@ -376,23 +461,112 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             table_row(
                                 table_head("Node")
                                 table_head("Standing")
+                                table_head("")
                             )
                         )
                         table_body(
                             if health.peers.is_empty() {
-                                empty_row(colspan: 2, text: "No other node.")
+                                empty_row(colspan: 3, text: "No other node.")
                             }
                             for peer in &health.peers {
                                 table_row(
                                     attrs: attributes! { data-node=(peer.id.0) data-given-up=(if peer.given_up { "true" } else { "false" }) },
                                     table_cell("Node " (peer.id.0))
                                     table_cell((peer_label(peer)))
+                                    table_cell(
+                                        // Removing is for a node that left for good, or is about to:
+                                        // the box is what keeps a slip of the hand from doing it.
+                                        <form method="post" action=(href!(remove::remove)) class="flex flex-wrap items-center justify-end gap-3">
+                                            <input type="hidden" name="node" value=(peer.id.0)>
+                                            <label class="flex items-center gap-2 text-sm">
+                                                <input type="checkbox" required="" name="sure" value="yes">
+                                                "Node " (peer.id.0) " leaves for good"
+                                            </label>
+                                            button(variant: ButtonVariant::Destructive, attrs: attributes! { type="submit" data-remove-node=(peer.id.0) }, "Remove")
+                                        </form>
+                                    )
                                 )
                             }
                         )
                     )
                 )
             }
+
+            if let Some((next, address)) = &adds {
+                section_card(
+                    title: Some("Add a node"),
+                    description: Some("Start the new node first, over an empty store, with its number and the others' addresses in its configuration: it waits to be added here, copies the store from a member, then serves. From then on it counts: a majority is one of the members with it."),
+                    <form method="post" action=(href!(add::add)) class="flex flex-wrap items-end gap-3">
+                        field(
+                            attrs: attributes! { class="w-28" },
+                            field_label(attrs: attributes! { for="add-node" }, "Node")
+                            input(attrs: attributes! { id="add-node" name="node" type="number" min="0" step="1" inputmode="numeric" required="" value=(*next) })
+                        )
+                        field(
+                            attrs: attributes! { class="grow sm:max-w-md" },
+                            field_label(attrs: attributes! { for="add-address" }, "Address the members reach it at")
+                            input(attrs: attributes! { id="add-address" name="address" type="text" required="" placeholder="host:port" value=(address.as_str()) })
+                        )
+                        button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" }, "Add to the cluster")
+                    </form>
+                )
+            }
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn peers(addresses: &[&str]) -> Vec<evento::cluster::PeerAddr> {
+        addresses
+            .iter()
+            .map(|address| address.parse().unwrap())
+            .collect()
+    }
+
+    /// The node offered to add is the first number past the members, at
+    /// the address the configuration lists for it; where the configuration
+    /// stops at the members (the pods of a chart before they are restarted
+    /// on the longer list), at this node's own address with the number
+    /// changed; and at nothing where neither says.
+    #[test]
+    fn the_next_node_is_offered_at_the_address_it_would_have() {
+        let members = [NodeId(0), NodeId(1), NodeId(2)];
+        let listed = peers(&[
+            "10.0.0.1:7000",
+            "10.0.0.2:7000",
+            "10.0.0.3:7000",
+            "10.0.0.4:7000",
+        ]);
+        assert_eq!(
+            next_node(&members, NodeId(1), &listed),
+            (3, "10.0.0.4:7000".to_owned())
+        );
+        let pods = peers(&[
+            "timada-0.timada-headless:7000",
+            "timada-1.timada-headless:7000",
+            "timada-2.timada-headless:7000",
+        ]);
+        assert_eq!(
+            next_node(&members, NodeId(1), &pods),
+            (3, "timada-3.timada-headless:7000".to_owned())
+        );
+        let bare = peers(&["10.0.0.1:7000", "10.0.0.2:7000", "10.0.0.3:7000"]);
+        assert_eq!(next_node(&members, NodeId(0), &bare), (3, String::new()));
+        // A node that left keeps its number: the next one is past the
+        // highest member, not in the gap.
+        assert_eq!(next_node(&[NodeId(0), NodeId(2)], NodeId(0), &bare).0, 3);
+    }
+
+    #[test]
+    fn a_change_says_what_it_waits_for() {
+        use evento::cluster::Wait;
+        assert_eq!(
+            waits_label(&[Wait::Drain, Wait::Copy(NodeId(3))]),
+            "the writes in flight to finish, and node 3 to copy the store"
+        );
+        assert_eq!(waits_label(&[]), "nothing more: it is about to be done");
+    }
 }

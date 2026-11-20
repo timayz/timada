@@ -61,7 +61,9 @@ written as the server's file) and the secrets as `TIMADA__…` variables
 (`timada-<i>.timada-headless`), its ordinal is its `node_id`, and
 `TIMADA__CLUSTER__SECRET` must be among the secrets. The pods start together and are
 updated one at a time, each serving a few seconds more (`preStopSeconds`) while the
-Service stops sending it requests. Choose the count before the first install. `zones`
+Service stops sending it requests. A cluster takes a node more while it runs: `founders`
+says how many it started with, the new pod waits over its empty volume, and a platform
+administrator adds it on the cluster page (`values.yaml` has the steps). `zones`
 names the zones to run in instead, one node in each. Each pod takes its own name as its
 `server.work_group`, so the background work on what a node created is done by that node
 alone; `config.server.work_group` gives them all the same one.

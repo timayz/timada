@@ -366,6 +366,14 @@ dir = "data/shopper-keys"
 # # Each node as `ip:port` or `host:port`. A name is looked up each time the
 # # node is dialled, so a node that comes back at another address is found.
 # peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]
+# # How many of `peers`, the first ones, the cluster was founded with; left
+# # out, all of them. To add a node to a cluster that runs: list it after the
+# # others here on every node, say here how many there were at the start,
+# # start it over an empty store, then add it on the cluster page (Platform,
+# # This node). It waits until then, copies the store from a member, and
+# # serves. Never change the number afterwards: a cluster founded with three
+# # nodes says 3 however many it has now.
+# founders = 3
 # # Bind address for inbound peer traffic; defaults to peers[node_id] when
 # # that is an IP address, and is required when it is a name.
 # listen = "0.0.0.0:7000"

@@ -930,6 +930,15 @@ pub struct ClusterConfig {
     /// Each is `ip:port` or `host:port`; a name is looked up each time the node
     /// is dialled, so a node that comes back at another address is found again.
     pub peers: Vec<evento::cluster::PeerAddr>,
+    /// How many of `peers`, the first ones, the cluster was founded with;
+    /// absent, all of them. A node listed after them is no member until an
+    /// administrator adds it on the cluster page (`Cluster::add_node`):
+    /// started over an empty store, it waits for that, then copies the store
+    /// from a member, and founds nothing. The same on every node, for as
+    /// long as the cluster lives: one founded with three nodes says 3
+    /// however many it has now.
+    #[serde(default)]
+    pub founders: Option<u64>,
     /// Address to bind for inbound Accord traffic. Defaults to `peers[node_id]`
     /// when that is an address, and is required when it is a name; set it to
     /// `0.0.0.0:<port>` in a container.
@@ -1190,9 +1199,7 @@ impl ClusterConfig {
         evento::cluster::Settings {
             node_id: self.node_id,
             peers: self.peers.clone(),
-            // Every node listed founds the cluster: adding one to a cluster that
-            // runs is not something this configuration does yet (#710).
-            founders: None,
+            founders: self.founders,
             listen: self.listen,
             absent_after_secs: self.absent_after_secs,
             write_backlog: self.write_backlog,
@@ -1505,6 +1512,7 @@ mod tests {
     fn cluster(nodes: usize, web_peers: &[&str], secret: Option<&str>) -> ClusterConfig {
         ClusterConfig {
             node_id: 0,
+            founders: None,
             peers: (0..nodes)
                 .map(|i| format!("127.0.0.1:{}", 7000 + i).parse().unwrap())
                 .collect(),
