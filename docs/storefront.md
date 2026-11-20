@@ -75,9 +75,9 @@ copied: they are loaded from the store's own address. One file per replica of th
 other out of the subscription, nothing accumulates on the store, and a restarted replica
 resumes from its own cursor.
 
-If the store is away long enough for the subscription to give up, the store's supervisor
-restarts it from the local cursor with a growing delay (1 s to 30 s). Pages keep serving
-the rows they have.
+If the store is away long enough for a pass of the subscription to give up, the
+subscription goes on from the local cursor by itself after a growing delay (1 s to 30 s;
+it is started supervised). Pages keep serving the rows they have.
 
 ## When timada is away
 
@@ -99,9 +99,11 @@ shopper, not this.
 
 A shop started while the store API is away opens all the same: `Store::connect` logs a
 warning, `GET {prefix}/status` answers 503 with `"connected": false` and
-`"subscription": {"state": "connecting", ...}`, and the supervisor connects after a growing
-delay (1 s to 30 s), then follows the catalog from the local cursor. A key the store
-refuses still fails `connect` at once: nothing would ever work.
+`"subscription": {"state": "connecting", ...}`, and the connection is dialled again in the
+background after a growing delay; the catalog is followed from the local cursor once the
+store answers. A key the store refuses still fails `connect` at once: nothing would ever
+work. Refused only once the store answers (the shop had opened without it), it is no
+longer tried: the status says `"state": "stopped"` with the reason.
 
 The example shop (`storefront/`) shows the host's side: a request layer
 (`app::indisponible::UnavailablePage`) rewrites a page that failed this way to
