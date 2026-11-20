@@ -1203,6 +1203,19 @@ async fn a_saga_runs_on_the_nodes_of_its_region_and_where_it_is_also_served() {
             .await
             .unwrap(),
     );
+    // Each node tells the others the regions its sagas follow.
+    eventually("node 0 hears what the others serve", async || {
+        let live = nodes[0].cluster.live(cluster::LIVE_WITHIN);
+        let keys = |id: u64| {
+            live.iter()
+                .find(|node| node.id.0 == id)
+                .and_then(|node| node.keys.clone())
+        };
+        keys(0) == Some(vec![Some("eu".to_owned())])
+            && keys(1) == Some(vec![Some("us".to_owned())])
+            && keys(2) == Some(vec![Some("eu".to_owned()), Some("us".to_owned())])
+    })
+    .await;
 
     let acme = create_everywhere(&nodes, "acme").await;
     Command(nodes[1].store.clone())
@@ -1229,6 +1242,200 @@ async fn a_saga_runs_on_the_nodes_of_its_region_and_where_it_is_also_served() {
 
     for saga in sagas {
         saga.shutdown().await.unwrap();
+    }
+    for node in nodes {
+        node.stop().await;
+    }
+}
+
+/// What a node runs to take on the regions without a node, as `serve` does
+/// with its sagas: the test saga, looking five times a second for a region
+/// silent eight seconds (above the silences between two nodes that are both
+/// up, which reach seconds while the tests share a disk), under a lease of
+/// six.
+fn cover(node: &Node, seen: &Seen) -> evento::cluster::Covering {
+    let seen = seen.clone();
+    node.cluster
+        .cover(node.local.0.clone())
+        .after(Duration::from_secs(8))
+        .every(Duration::from_millis(200))
+        .lease(Duration::from_secs(6))
+        .subscription("test saga", move |_region: &str| saga(&seen))
+        .start()
+}
+
+/// The regions whose sagas a node runs for a node that is away.
+fn covered(covering: &evento::cluster::Covering) -> Vec<String> {
+    covering
+        .covered()
+        .into_iter()
+        .map(|covered| covered.key)
+        .collect()
+}
+
+/// Issue #709: each node has a region of its own (`a`, `b`, `c`), as the
+/// chart's pods do, set on the wrapper around its executor and told to the
+/// others (`cluster::open`). Node 1 goes away: one of the two left, and one
+/// only, takes `b` on and sees what is written to `b`'s tenant meanwhile.
+/// Node 1 comes back: its own saga goes on from where it stopped, the other
+/// node stops following `b`, and what is written to the tenant afterwards
+/// is node 1's alone again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_region_whose_node_is_away_is_taken_on_by_one_of_the_others() {
+    let root = temp_root("cover");
+    let addrs = free_addrs().await;
+    let tuning = Tuning::default();
+    let (n0, n1, n2) = tokio::join!(
+        Node::start_in(&root, 0, &addrs, tuning, Some("a"), &[], false),
+        Node::start_in(&root, 1, &addrs, tuning, Some("b"), &[], false),
+        Node::start_in(&root, 2, &addrs, tuning, Some("c"), &[], false),
+    );
+    let seen: [Seen; 3] = Default::default();
+    let saga_0 = saga(&seen[0]).start(&n0.store).await.unwrap();
+    let saga_1 = saga(&seen[1]).start(&n1.store).await.unwrap();
+    let saga_2 = saga(&seen[2]).start(&n2.store).await.unwrap();
+    let cover_0 = cover(&n0, &seen[0]);
+    let cover_1 = cover(&n1, &seen[1]);
+    let cover_2 = cover(&n2, &seen[2]);
+
+    let globex = Command(n1.store.clone())
+        .create_tenant(CreateTenant {
+            name: "globex".into(),
+            owner_user_id: "bob".into(),
+        })
+        .await
+        .unwrap();
+    eventually("node 1 sees its tenant", async || {
+        seen[1].names() == ["globex"]
+    })
+    .await;
+    // Longer than a region goes silent before it is taken on: every region
+    // has its node, so nothing is.
+    tokio::time::sleep(Duration::from_secs(9)).await;
+    assert!(covered(&cover_0).is_empty() && covered(&cover_2).is_empty());
+    assert!(seen[0].names().is_empty() && seen[2].names().is_empty());
+
+    cover_1.shutdown().await;
+    saga_1.shutdown().await.unwrap();
+    n1.stop().await;
+    let through_0 = Command(n0.store.clone());
+    through_0
+        .rename_tenant("bob", &globex.id, "globex while away")
+        .await
+        .unwrap();
+    let away = "globex while away".to_owned();
+    eventually("one node takes region b on", async || {
+        seen[0].names().contains(&away) || seen[2].names().contains(&away)
+    })
+    .await;
+    // Enough looks for the other node to have taken it on too.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (taker, other) = if seen[0].names().contains(&away) {
+        (0, 2)
+    } else {
+        (2, 0)
+    };
+    assert!(
+        seen[other].names().is_empty(),
+        "one node only takes it on: the other saw {:?}",
+        seen[other].names()
+    );
+    let (taking, idle) = if taker == 0 {
+        (&cover_0, &cover_2)
+    } else {
+        (&cover_2, &cover_0)
+    };
+    assert_eq!(covered(taking), ["b"]);
+    assert!(covered(idle).is_empty());
+
+    let n1 = Node::start_in(&root, 1, &addrs, tuning, Some("b"), &[], false).await;
+    let saga_1 = saga(&seen[1]).start(&n1.store).await.unwrap();
+    let cover_1 = cover(&n1, &seen[1]);
+    eventually("node 1 sees what it missed", async || {
+        seen[1].names() == ["globex", "globex while away"]
+    })
+    .await;
+    eventually("region b is handed back", async || {
+        covered(taking).is_empty()
+    })
+    .await;
+    let seen_while_away = seen[taker].names();
+    through_0
+        .rename_tenant("bob", &globex.id, "globex back")
+        .await
+        .unwrap();
+    eventually("node 1 sees its tenant renamed", async || {
+        seen[1].names() == ["globex", "globex back", "globex while away"]
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(seen[taker].names(), seen_while_away);
+    assert!(
+        seen[other].names().is_empty(),
+        "the other node saw {:?}",
+        seen[other].names()
+    );
+
+    for covering in [cover_0, cover_1, cover_2] {
+        covering.shutdown().await;
+    }
+    for saga in [saga_0, saga_1, saga_2] {
+        saga.shutdown().await.unwrap();
+    }
+    for node in [n0, n1, n2] {
+        node.stop().await;
+    }
+}
+
+/// Issue #712: a value is claimed by creating its index stream, under the
+/// region of whoever claims. Three nodes of three regions claim the same
+/// slug at the same moment, as a form posted twice lands on two pods: one
+/// gets it, the others are refused and take a suffixed one, and every node
+/// reads the slug as the winner's afterwards. (Two creations of one stream
+/// under two routing keys were both taken once, and the stream was read by
+/// no one from then on: timayz/evento#563.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slug_claimed_at_once_through_three_regions_goes_to_one() {
+    let root = temp_root("claims");
+    let addrs = free_addrs().await;
+    let tuning = Tuning::default();
+    let (n0, n1, n2) = tokio::join!(
+        Node::start_in(&root, 0, &addrs, tuning, Some("a"), &[], false),
+        Node::start_in(&root, 1, &addrs, tuning, Some("b"), &[], false),
+        Node::start_in(&root, 2, &addrs, tuning, Some("c"), &[], false),
+    );
+    let nodes = [n0, n1, n2];
+    // The nodes hear each other before the claims race.
+    create_everywhere(&nodes, "first").await;
+
+    for round in 0..5 {
+        let name = format!("shop{round}");
+        let create = async |node: &Node| {
+            Command(node.store.clone())
+                .create_tenant(CreateTenant {
+                    name: name.clone(),
+                    owner_user_id: "alice".into(),
+                })
+                .await
+        };
+        let (a, b, c) = tokio::join!(create(&nodes[0]), create(&nodes[1]), create(&nodes[2]));
+        let tenants = [a.unwrap(), b.unwrap(), c.unwrap()];
+        let winners: Vec<_> = tenants.iter().filter(|t| t.slug == name).collect();
+        assert_eq!(winners.len(), 1, "round {round}: one tenant holds the slug");
+        let slugs: std::collections::BTreeSet<_> = tenants.iter().map(|t| &t.slug).collect();
+        assert_eq!(
+            slugs.len(),
+            3,
+            "round {round}: each tenant has a slug of its own"
+        );
+        for node in &nodes {
+            let held = Command(node.store.clone())
+                .load_tenant_by_slug(&name)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(held.id, winners[0].id, "round {round}");
+        }
     }
     for node in nodes {
         node.stop().await;

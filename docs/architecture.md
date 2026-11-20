@@ -1256,7 +1256,7 @@ a move does not orphan snapshots.
 `config/default.toml` is the full shape with its defaults; a file given with
 `--config` (or `TIMADA_CONFIG`) overrides it, and `TIMADA__<SECTION>__<KEY>`
 environment variables override both. Sections: `server` (URL, bind, region, the regions whose background
-work this node also takes on and whether it takes on the work on data created without one, trusted proxies), `database` (the one file), `auth` (secret, session
+work this node also takes on and whether it takes on the work on data created without one, trusted proxies; a region whose nodes are all away has its sagas run by another node meanwhile, under a lease: `Cluster::cover` in `serve`), `database` (the one file), `auth` (secret, session
 lifetime, sign-in limits, OIDC providers), `mail` (the platform's server), `secrets`
 (the one key the shops' secrets are sealed under; omit it and no shop can connect
 payments, mail servers or shopper accounts), `media` (the pictures' directory and
