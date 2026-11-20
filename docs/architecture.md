@@ -258,8 +258,10 @@ by construction.
    `GET /ready` (`readiness.rs`) tells the balancer whether to send traffic here:
    200 while the node takes writes and no read model trails the store by more
    than `monitoring.ready_lag_secs`, 503 otherwise, the body saying how far each
-   read model trails (its subscription's recorded lag, raised to the age of the
-   store's newest event when a worker stopped acknowledging). Taking writes means
+   read model trails: for how long the oldest event it follows and has not applied yet has
+   been waiting, asked of the store with the subscription's own filters (a store nobody
+   writes to leaves it at zero; a worker that stopped, or whose handler does not return,
+   reads as far behind as that event is old). Taking writes means
    that nothing ended the node's part in the cluster and that it hears from most of
    the nodes, itself counted (`cluster::reaches_majority`: a peer counts once it said
    something since this node started, and while it was heard from within 10 seconds);

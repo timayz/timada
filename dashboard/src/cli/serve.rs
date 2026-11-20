@@ -117,10 +117,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     let mut all_workers = vec![
         workers::start(
             "store connections",
-            {
-                let connections = connections.clone();
-                move || store_api::closing_subscription(connections.clone())
-            },
+            store_api::closing_subscription(connections.clone()),
             &local,
         )
         .await?,
@@ -252,11 +249,18 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             tracing::warn!(%err, "cannot remove the catch-up mark; the next start catches up again");
         }
     }
-    for (name, _kind, make) in planned {
-        let deps = deps.clone();
-        all_workers.push(workers::start(name, move || make(&deps), &local).await?);
+    // Those that fill the read models, apart: one of them in trouble is
+    // what makes the node's pages stale.
+    let mut read_model_workers = Vec::new();
+    for (name, kind, make) in planned {
+        let worker = workers::start(name, make(&deps), &local).await?;
+        if kind == Kind::ReadModel {
+            read_model_workers.push(worker.clone());
+        }
+        all_workers.push(worker);
     }
     let workers = Workers::new(all_workers);
+    let read_model_workers = Workers::new(read_model_workers);
     // The sagas of a work group whose node is away are run from here, and handed
     // back when it returns (#709): a node with a work group of its own may be
     // its only one, and a stream keeps the work group it was created in. One of
@@ -272,7 +276,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             if *kind == Kind::Sharded {
                 let deps = deps.clone();
                 let make = *make;
-                cover = cover.subscription(*name, move |_work_group: &str| make(&deps));
+                // Supervised, as this node's own: one that fails goes on by
+                // itself and the work group stays where it is.
+                cover =
+                    cover.subscription(*name, move |_work_group: &str| make(&deps).supervised());
             }
         }
         cover.start()
@@ -293,9 +300,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // What the balancer asks before sending traffic here, and what an
     // operator scrapes.
     let readiness = Arc::new(crate::readiness::Readiness::new(
-        db.clone(),
         cluster.clone(),
         workers.clone(),
+        read_model_workers,
         connections.clone(),
         config.monitoring.ready_lag(),
     ));
@@ -529,8 +536,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     Ok(())
 }
 
-/// What the subscriptions are built from. Cloned into each worker's
-/// factory, so a worker that failed is built again from the same parts.
+/// What the subscriptions are built from.
 pub struct Deps {
     /// The read models in the store's database.
     pub db: db::Db,
