@@ -1,6 +1,6 @@
 //! Starts the runs: every event that is a trigger starts a run of each
 //! published scenario of the shop listening to it. The nodes of the event's
-//! region (for an event written without one, the nodes without a region)
+//! work group (for an event written without one, the nodes without a work group)
 //! all run this subscription and share the runs out: each starts the ones
 //! whose id falls to it among them ([`timada_core::Share`]), with one
 //! write and no read, and keeps the others in `automations_starts`, where
@@ -34,13 +34,13 @@ pub const TRIGGER_WINDOW_SECS: u64 = 60 * 60;
 struct TenantStore(Evento);
 
 /// This node's place among the nodes up that see an event (those of its
-/// region, or without one): which runs it starts.
+/// work group, or without one): which runs it starts.
 #[derive(Clone)]
 struct Place(ShareOf);
 
 /// Follows every tenant's trigger events. `db` is the read-model
 /// database, which must be allowed to write (the listeners live there);
-/// `place` says which of the runs an event of a region starts are this
+/// `place` says which of the runs an event of a work group starts are this
 /// node's to start.
 pub fn subscription<E: Executor>(db: Db, store: Evento, place: ShareOf) -> SubscriptionBuilder<E> {
     listener_subscription(db)
@@ -58,15 +58,15 @@ pub fn subscription<E: Executor>(db: Db, store: Evento, place: ShareOf) -> Subsc
         .handler(on_checkout_requested())
         .handler(on_cart_checked_out())
         .handler(on_checkout_abandoned())
-        // A saga: it follows the node's own region (the executor's default
-        // routing key), so a region's nodes do its work and the other
-        // regions' nodes leave it to them.
+        // A saga: it follows the node's own work group (the executor's default
+        // routing key), so a work group's nodes do its work and the other
+        // work groups' nodes leave it to them.
         .retry(5)
 }
 
 /// Starts a run of every scenario of the tenant listening to `trigger`:
-/// the ones that fall to this node among the nodes of `region` (the
-/// event's routing key; `None`, the nodes without a region) now, the others
+/// the ones that fall to this node among the nodes of `work_group` (the
+/// event's routing key; `None`, the nodes without a work group) now, the others
 /// kept for the runner to start if their node does not. Only a store
 /// failure is an error: it is retried.
 async fn start<E: Executor>(
@@ -76,7 +76,7 @@ async fn start<E: Executor>(
     event_id: String,
     subject_id: &str,
     at: u64,
-    region: Option<&str>,
+    work_group: Option<&str>,
 ) -> anyhow::Result<()> {
     if crate::auth::now().saturating_sub(at) > TRIGGER_WINDOW_SECS {
         return Ok(());
@@ -88,7 +88,7 @@ async fn start<E: Executor>(
     }
     let store: TenantStore = context.extract();
     let place: Place = context.extract();
-    let share = (place.0)(Among::Region(region));
+    let share = (place.0)(Among::WorkGroup(work_group));
     let automations = timada_automations::Command::new(store.0.clone(), tenant);
     for listener in listeners {
         // Published after the event (the same second, in another order).

@@ -237,11 +237,11 @@ pub struct ReadModel {
     /// sagas' own bookkeeping).
     pub name: Option<&'static str>,
     /// The cursor keys of the subscriptions that fill its tables, as the
-    /// crates name them (a node with a region prefixes them with it).
+    /// crates name them (a node with a work group prefixes them with it).
     pub subscriptions: &'static [&'static str],
     /// The cursor keys of the sagas that keep tables of their own among its
     /// tables: forgotten with the others when it is rebuilt, but no measure
-    /// of how far behind it is, as a saga follows its region alone.
+    /// of how far behind it is, as a saga follows its work group alone.
     pub sagas: &'static [&'static str],
     migrations: &'static Migrations<'static>,
     tables: &'static [&'static str],
@@ -453,7 +453,7 @@ async fn reset_read_model(conn: &mut Connection, read_model: &ReadModel) -> Resu
 /// fill it, so their next run goes through the store from the start and
 /// fills it again: what the `rebuild` command does with the server stopped,
 /// after a change to the tables or a handler. The cursors go whatever
-/// region prefixed them (`{region}.{key}`).
+/// work group prefixed them (`{work_group}.{key}`).
 pub async fn rebuild_read_model(store: &Store, read_model: &ReadModel) -> Result<()> {
     let mut conn = store.connect()?;
     reset_read_model(&mut conn, read_model).await?;
@@ -561,7 +561,7 @@ mod tests {
     }
 
     /// A rebuilt read model is empty and its subscription, cursor forgotten
-    /// (region prefix and all), fills it again from the start of the store.
+    /// (work group prefix and all), fills it again from the start of the store.
     #[tokio::test]
     async fn a_rebuilt_read_model_is_filled_again_from_the_start() {
         use evento::Evento;
@@ -593,7 +593,7 @@ mod tests {
         assert_eq!(
             cursors(key.clone()).await,
             1,
-            "the cursor carries the region"
+            "the cursor carries the work group"
         );
 
         rebuild_read_model(&turso, read_model("tenancy").unwrap())

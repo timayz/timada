@@ -70,7 +70,7 @@ Sign-in codes (the platform's and the shops'), invitations, newsletter
 confirmations, the shops' mails about their orders and the notices of a message's
 arrival are mailed by the dashboard's sagas, not by the request that asked for them:
 the command records the intent on the stream, a subscription on every node of the
-region sees it, and the node that first writes a claim on the stream sends (an order
+work group sees it, and the node that first writes a claim on the stream sends (an order
 mail or a message notice has a stream of its own for that, `OrderMail` per order and
 mail, `MessageNotification` per message, opened by the first claim). The
 send itself happens off the subscription's cursor, in the node's **mailroom**

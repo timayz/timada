@@ -34,7 +34,7 @@ const FAILED_MAILS_SHOWN: i64 = 50;
 const GIVEN_UP_SHOWN: usize = 50;
 
 /// The saga an event given up on belongs to, as a person reads it: its
-/// subscription's key without the region and the crate (`invoicing` for
+/// subscription's key without the work group and the crate (`invoicing` for
 /// `eu.timada-dashboard/invoicing`).
 fn saga_label(letter: &DeadLetter) -> &str {
     letter

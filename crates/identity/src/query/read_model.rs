@@ -20,7 +20,7 @@ use crate::command::{SessionState, UserState, session_projection, user_projectio
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-identity/read-models";
 
 /// Builds the subscription over every routing key of the platform tenant
-/// (administrators see every region; users live in the default tenant).
+/// (administrators see every work group; users live in the default tenant).
 /// Start it with `.start(&executor)` and keep the handle for shutdown.
 pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)

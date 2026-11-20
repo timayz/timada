@@ -197,9 +197,9 @@ pub fn clear_catch_up_mark(store: &Path) -> Result<()> {
 }
 
 /// Opens the node over the store at `store_path` and starts it. Single node
-/// when `cluster` is `None`. `region`, when set, is the default routing key
-/// stamped on every new aggregate this node writes; with `also_serves`, the
-/// regions whose work this node does, and with `also_serves_no_region` it
+/// when `cluster` is `None`. `work_group`, when set, is the default routing key
+/// stamped on every new aggregate this node writes; with `also_works_for`, the
+/// work groups whose work this node does, and with `also_works_for_ungrouped` it
 /// does the work on what was written without one too. It tells the other
 /// nodes which they are, or that it has none ([`label`]).
 ///
@@ -213,9 +213,9 @@ pub fn clear_catch_up_mark(store: &Path) -> Result<()> {
 /// (behind a read barrier with peers) and as [`LocalReads`].
 pub async fn open(
     cluster: Option<&ClusterConfig>,
-    region: Option<&str>,
-    also_serves: &[String],
-    also_serves_no_region: bool,
+    work_group: Option<&str>,
+    also_works_for: &[String],
+    also_works_for_ungrouped: bool,
     store_path: &Path,
     store: Store,
 ) -> Result<(Arc<Cluster>, Executor, LocalReads)> {
@@ -225,15 +225,15 @@ pub async fn open(
     let mut builder = Cluster::builder(store)
         .settings(cluster.map(ClusterConfig::settings))
         .state_dir(state_dir(store_path))
-        .label(label(region, also_serves, also_serves_no_region));
-    // The regions are routing keys set on the wrapper below, which the node
+        .label(label(work_group, also_works_for, also_works_for_ungrouped));
+    // The work groups are routing keys set on the wrapper below, which the node
     // does not see: it is told what its subscriptions follow. Without a
-    // region it works that out for itself (the events written without a
+    // work group it works that out for itself (the events written without a
     // key).
-    if let Some(region) = region {
-        builder =
-            builder.serves(std::iter::once(region).chain(also_serves.iter().map(String::as_str)));
-        if also_serves_no_region {
+    if let Some(work_group) = work_group {
+        builder = builder
+            .serves(std::iter::once(work_group).chain(also_works_for.iter().map(String::as_str)));
+        if also_works_for_ungrouped {
             builder = builder.serves_no_key();
         }
     }
@@ -247,10 +247,10 @@ pub async fn open(
         .await?;
     let mut local = Evento::new(executor.local_reads());
     let mut executor = Evento::new(executor);
-    if let Some(region) = region {
-        tracing::info!(region, "default routing key");
-        executor = executor.default_routing_key(region);
-        local = local.default_routing_key(region);
+    if let Some(work_group) = work_group {
+        tracing::info!(work_group, "default routing key");
+        executor = executor.default_routing_key(work_group);
+        local = local.default_routing_key(work_group);
     }
     Ok((cluster, executor, LocalReads(local)))
 }
@@ -288,45 +288,49 @@ pub fn node_name(cluster: &Cluster) -> String {
 }
 
 /// What a node tells the other nodes about itself with its gossip: the
-/// regions whose events its sagas follow, its own first (`eu us`, one word
-/// each as `Config::load` makes sure). A node without a region follows the
+/// work groups whose events its sagas follow, its own first (`eu us`, one word
+/// each as `Config::load` makes sure). A node without a work group follows the
 /// events written without one, which a label names with the empty word: it
-/// says the empty label. A node with a region that follows them too
-/// (`also_serves_no_region`) ends its label with the empty word (`eu us `).
+/// says the empty label. A node with a work group that follows them too
+/// (`also_works_for_ungrouped`) ends its label with the empty word (`eu us `).
 /// Every node says a label, so a node whose label has not come in yet is
-/// never taken for a node without a region.
-pub fn label(region: Option<&str>, also_serves: &[String], also_serves_no_region: bool) -> String {
-    let mut label = region.unwrap_or_default().to_owned();
-    for served in also_serves {
+/// never taken for a node without a work group.
+pub fn label(
+    work_group: Option<&str>,
+    also_works_for: &[String],
+    also_works_for_ungrouped: bool,
+) -> String {
+    let mut label = work_group.unwrap_or_default().to_owned();
+    for served in also_works_for {
         label.push(' ');
         label.push_str(served);
     }
-    if also_serves_no_region && region.is_some() {
+    if also_works_for_ungrouped && work_group.is_some() {
         label.push(' ');
     }
     label
 }
 
 /// Whether a node whose label is `label` sees the events written under
-/// `region` (`None`: without one), and so does their work.
-pub fn serves(label: &str, region: Option<&str>) -> bool {
-    let region = region.unwrap_or_default();
-    label.split(' ').any(|served| served == region)
+/// `work_group` (`None`: without one), and so does their work.
+pub fn serves(label: &str, work_group: Option<&str>) -> bool {
+    let work_group = work_group.unwrap_or_default();
+    label.split(' ').any(|served| served == work_group)
 }
 
 /// Which nodes a piece of work is shared out among.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Among<'a> {
     /// Every node up: the work over the read models (the sweeps), which
-    /// every node keeps whole, whatever its region.
+    /// every node keeps whole, whatever its work group.
     All,
-    /// The nodes up that see the events written under this region (`None`:
-    /// without one, which the nodes without a region see, and those with
+    /// The nodes up that see the events written under this work group (`None`:
+    /// without one, which the nodes without a work group see, and those with
     /// one that also serve them): the work a saga
     /// is told about, which must fall to a node that sees its event, as the
-    /// sagas follow their node's region. A node whose label has not come in
-    /// yet counts for no region until it does.
-    Region(Option<&'a str>),
+    /// sagas follow their node's work group. A node whose label has not come in
+    /// yet counts for no work group until it does.
+    WorkGroup(Option<&'a str>),
 }
 
 /// `me`'s place among the nodes of `live` that `among` names, and how many
@@ -339,10 +343,10 @@ pub fn place_among(me: NodeId, live: &[LiveNode], among: Among<'_>) -> (u64, u64
         let counts = node.id == me
             || match among {
                 Among::All => true,
-                Among::Region(region) => node
+                Among::WorkGroup(work_group) => node
                     .label
                     .as_deref()
-                    .is_some_and(|label| serves(label, region)),
+                    .is_some_and(|label| serves(label, work_group)),
             };
         if !counts {
             continue;
@@ -514,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn a_label_names_the_regions_a_node_serves() {
+    fn a_label_names_the_work_groups_a_node_serves() {
         assert_eq!(label(None, &[], false), "");
         assert_eq!(label(Some("eu"), &[], false), "eu");
         assert_eq!(
@@ -525,7 +529,7 @@ mod tests {
         assert!(serves("eu us ap", Some("ap")));
         assert!(!serves("eu us ap", Some("a")));
         assert!(!serves("eu", Some("us")));
-        // A node without a region sees the events written without one, and
+        // A node without a work group sees the events written without one, and
         // those alone.
         assert!(serves("", None));
         assert!(!serves("", Some("us")));
@@ -533,7 +537,7 @@ mod tests {
     }
 
     #[test]
-    fn a_node_with_a_region_says_when_it_serves_the_events_without_one() {
+    fn a_node_with_a_work_group_says_when_it_serves_the_events_without_one() {
         let keyless = label(Some("eu"), &[], true);
         assert_eq!(keyless, "eu ");
         assert!(serves(&keyless, None));
@@ -542,24 +546,24 @@ mod tests {
         let more = label(Some("eu"), &["us".to_owned()], true);
         assert_eq!(more, "eu us ");
         assert!(serves(&more, None) && serves(&more, Some("us")));
-        // A node without a region says the empty label either way.
+        // A node without a work group says the empty label either way.
         assert_eq!(label(None, &[], true), "");
 
-        // Every node has a region now, and node 2 took the work on what was
+        // Every node has a work group now, and node 2 took the work on what was
         // written before: it does all of it, and its part of eu's.
         let all = live(&[(0, Some("eu")), (1, Some("eu")), (2, Some("eu "))]);
-        assert_eq!(place_among(NodeId(2), &all, Among::Region(None)), (0, 1));
+        assert_eq!(place_among(NodeId(2), &all, Among::WorkGroup(None)), (0, 1));
         assert_eq!(
-            place_among(NodeId(2), &all, Among::Region(Some("eu"))),
+            place_among(NodeId(2), &all, Among::WorkGroup(Some("eu"))),
             (2, 3)
         );
     }
 
     #[test]
-    fn a_region_s_work_is_shared_among_the_nodes_serving_it() {
+    fn a_work_group_s_work_is_shared_among_the_nodes_serving_it() {
         // Node 0 serves eu, node 1 us, node 2 eu and also us.
         let all = live(&[(0, Some("eu")), (1, Some("us")), (2, Some("eu us"))]);
-        let (eu, us) = (Among::Region(Some("eu")), Among::Region(Some("us")));
+        let (eu, us) = (Among::WorkGroup(Some("eu")), Among::WorkGroup(Some("us")));
         assert_eq!(place_among(NodeId(0), &all, eu), (0, 2));
         assert_eq!(place_among(NodeId(2), &all, eu), (1, 2));
         assert_eq!(place_among(NodeId(1), &all, us), (0, 2));
@@ -573,16 +577,16 @@ mod tests {
     }
 
     #[test]
-    fn the_work_on_events_without_a_region_falls_to_the_nodes_without_one() {
-        // Halfway through giving the nodes a region: nodes 0 and 2 have none
-        // yet, node 1 serves eu. The events written without a region reach
+    fn the_work_on_events_without_a_work_group_falls_to_the_nodes_without_one() {
+        // Halfway through giving the nodes a work group: nodes 0 and 2 have none
+        // yet, node 1 serves eu. The events written without a work group reach
         // nodes 0 and 2 alone, eu's node 1 alone.
         let all = live(&[(0, Some("")), (1, Some("eu")), (2, Some(""))]);
-        let keyless = Among::Region(None);
+        let keyless = Among::WorkGroup(None);
         assert_eq!(place_among(NodeId(0), &all, keyless), (0, 2));
         assert_eq!(place_among(NodeId(2), &all, keyless), (1, 2));
         assert_eq!(
-            place_among(NodeId(1), &all, Among::Region(Some("eu"))),
+            place_among(NodeId(1), &all, Among::WorkGroup(Some("eu"))),
             (0, 1)
         );
         // The work over the read models is still every node's.
@@ -590,15 +594,15 @@ mod tests {
     }
 
     #[test]
-    fn a_node_whose_label_has_not_come_in_counts_for_no_region() {
+    fn a_node_whose_label_has_not_come_in_counts_for_no_work_group() {
         // Node 1 was heard from, but not its label: nobody knows yet whether
-        // it sees eu's events or those written without a region.
+        // it sees eu's events or those written without a work group.
         let all = live(&[(0, Some("eu")), (1, None), (2, Some(""))]);
         assert_eq!(
-            place_among(NodeId(0), &all, Among::Region(Some("eu"))),
+            place_among(NodeId(0), &all, Among::WorkGroup(Some("eu"))),
             (0, 1)
         );
-        assert_eq!(place_among(NodeId(2), &all, Among::Region(None)), (0, 1));
+        assert_eq!(place_among(NodeId(2), &all, Among::WorkGroup(None)), (0, 1));
         // It keeps the read models whole, as every node does.
         assert_eq!(place_among(NodeId(2), &all, Among::All), (2, 3));
     }
@@ -606,16 +610,16 @@ mod tests {
     #[test]
     fn a_node_counts_itself_whatever_it_saw() {
         // Node 0 is asked about a us event it does not serve (kept from
-        // before its region changed, say): it is still placed, among the us
+        // before its work group changed, say): it is still placed, among the us
         // nodes. Node 1 does not count it and takes every us piece: node 0's
         // part is taken twice, which the work bears, and none is dropped.
         let all = live(&[(0, Some("eu")), (1, Some("us")), (2, Some(""))]);
-        let us = Among::Region(Some("us"));
+        let us = Among::WorkGroup(Some("us"));
         assert_eq!(place_among(NodeId(0), &all, us), (0, 2));
         assert_eq!(place_among(NodeId(1), &all, us), (0, 1));
         // A node alone, or one not yet in its own list, owns everything.
         assert_eq!(
-            place_among(NodeId(0), &[], Among::Region(Some("eu"))),
+            place_among(NodeId(0), &[], Among::WorkGroup(Some("eu"))),
             (0, 1)
         );
         assert_eq!(

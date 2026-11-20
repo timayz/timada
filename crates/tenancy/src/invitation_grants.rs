@@ -33,9 +33,9 @@ pub fn invitation_grants_subscription<E: Executor>(store: Evento) -> Subscriptio
     SubscriptionBuilder::new(INVITATION_GRANTS_SUBSCRIPTION)
         .data(Store(store))
         .handler(on_accepted())
-        // A saga: it follows the node's own region (the executor's default
-        // routing key), so a region's nodes do its work and the other
-        // regions' nodes leave it to them.
+        // A saga: it follows the node's own work group (the executor's default
+        // routing key), so a work group's nodes do its work and the other
+        // work groups' nodes leave it to them.
         .tenant("")
         .retry(5)
 }

@@ -61,7 +61,7 @@ config:
     url: "https://timada.app"
     host: "0.0.0.0"
     port: 3000
-    # `region` is left out on purpose: each pod then takes its own name for
+    # `work_group` is left out on purpose: each pod then takes its own name for
     # it (`timada-0`), so the background work on what a node created
     # (payments, supplier orders, invoices, mails) is done by that node, and
     # a node more is that much more of it done at once. A node down for a

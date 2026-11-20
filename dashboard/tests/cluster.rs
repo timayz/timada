@@ -91,17 +91,17 @@ impl Node {
         Self::start_in(root, id, peers, tuning, None, &[], false).await
     }
 
-    /// [`start`](Self::start) for a node serving `region`, and doing the
-    /// work of the regions of `also_serves` too, and with `no_region` the
+    /// [`start`](Self::start) for a node serving `work_group`, and doing the
+    /// work of the work groups of `also_works_for` too, and with `ungrouped` the
     /// work on what was written without one.
     async fn start_in(
         root: &Path,
         id: u64,
         peers: &[SocketAddr],
         tuning: Tuning,
-        region: Option<&str>,
-        also_serves: &[&str],
-        no_region: bool,
+        work_group: Option<&str>,
+        also_works_for: &[&str],
+        ungrouped: bool,
     ) -> Self {
         let dir = root.join(format!("node{id}"));
         std::fs::create_dir_all(&dir).unwrap();
@@ -118,12 +118,12 @@ impl Node {
                 absent_after_secs: tuning.absent_after_secs,
                 write_backlog: tuning.write_backlog,
             }),
-            region,
-            &also_serves
+            work_group,
+            &also_works_for
                 .iter()
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>(),
-            no_region,
+            ungrouped,
             &path,
             store,
         )
@@ -886,7 +886,7 @@ async fn sees(node: &Node, among: cluster::Among<'_>, place: (u64, u64)) {
 
 /// Work spread over the nodes goes by who is up: idle nodes still hear from
 /// each other, so each has its place among all three; one that stops is left
-/// out once it has been silent long enough. A region's work is shared among
+/// out once it has been silent long enough. A work group's work is shared among
 /// the nodes serving it, which each node learns from the others' gossip
 /// (#442): node 0 serves `eu`, node 1 `us`, node 2 `eu` and also `us`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -901,7 +901,7 @@ async fn the_nodes_up_share_out_what_they_do() {
         Node::start_in(&root, 1, &addrs, tuning, Some("us"), &[], false),
         Node::start_in(&root, 2, &addrs, tuning, Some("eu"), &["us"], false),
     );
-    let (eu, us) = (Among::Region(Some("eu")), Among::Region(Some("us")));
+    let (eu, us) = (Among::WorkGroup(Some("eu")), Among::WorkGroup(Some("us")));
 
     // Nothing is written: gossip alone keeps them in sight of each other.
     tokio::time::sleep(LIVE_WITHIN + Duration::from_secs(1)).await;
@@ -958,12 +958,12 @@ async fn a_node_reaches_a_majority_only_while_it_hears_another() {
     n0.stop().await;
 }
 
-/// While some nodes have no region yet (#512): they alone see the events
+/// While some nodes have no work group yet (#512): they alone see the events
 /// written without one, and share out that work among themselves, which
-/// each node learns from their empty label; a region's work stays with the
-/// nodes serving it. Nodes 0 and 2 have no region, node 1 serves `eu`.
+/// each node learns from their empty label; a work group's work stays with the
+/// nodes serving it. Nodes 0 and 2 have no work group, node 1 serves `eu`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_nodes_without_a_region_share_the_work_on_events_without_one() {
+async fn the_nodes_without_a_work_group_share_the_work_on_events_without_one() {
     use cluster::Among;
 
     let root = temp_root("keyless");
@@ -974,17 +974,17 @@ async fn the_nodes_without_a_region_share_the_work_on_events_without_one() {
         Node::start_in(&root, 1, &addrs, tuning, Some("eu"), &[], false),
         Node::start_in(&root, 2, &addrs, tuning, None, &[], false),
     );
-    let (keyless, eu) = (Among::Region(None), Among::Region(Some("eu")));
+    let (keyless, eu) = (Among::WorkGroup(None), Among::WorkGroup(Some("eu")));
 
     tokio::time::sleep(LIVE_WITHIN + Duration::from_secs(1)).await;
     sees(&n0, keyless, (0, 2)).await;
     sees(&n2, keyless, (1, 2)).await;
-    // Node 1 alone sees eu's events: the nodes without a region never do.
+    // Node 1 alone sees eu's events: the nodes without a work group never do.
     sees(&n1, eu, (0, 1)).await;
     sees(&n1, Among::All, (1, 3)).await;
 
     n2.stop().await;
-    // Node 0 does the work on the events without a region alone now.
+    // Node 0 does the work on the events without a work group alone now.
     sees(&n0, keyless, (0, 1)).await;
     sees(&n0, Among::All, (0, 2)).await;
 
@@ -1072,8 +1072,8 @@ async fn on_renamed<E: evento::Executor>(
 }
 
 /// A saga as `serve` builds one: no routing key of its own, so it follows the
-/// node's region; `.routing_key(r)` for a region the node also serves, and
-/// `.no_routing_key()` for the events written without a region.
+/// node's work group; `.routing_key(r)` for a work group the node also serves, and
+/// `.no_routing_key()` for the events written without a work group.
 fn saga(seen: &Seen) -> SubscriptionBuilder<Executor> {
     SubscriptionBuilder::new("test/created-saga")
         .data(seen.clone())
@@ -1081,15 +1081,15 @@ fn saga(seen: &Seen) -> SubscriptionBuilder<Executor> {
         .handler(on_renamed())
 }
 
-/// Giving regions to a cluster that ran without them (#517). A stream keeps
+/// Giving work groups to a cluster that ran without them (#517). A stream keeps
 /// the key it was created with, even none, so a tenant created before is
-/// still written to without a region afterwards. All three nodes come back
-/// serving `eu`, and node 2 also serves what has no region: its copy of the
+/// still written to without a work group afterwards. All three nodes come back
+/// serving `eu`, and node 2 also serves what has no work group: its copy of the
 /// saga sees the old tenant's rename, from where the saga stopped before the
-/// regions (the creation is not seen again), and no region's saga does.
+/// work groups (the creation is not seen again), and no work group's saga does.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_node_with_a_region_follows_the_streams_created_without_one() {
-    let root = temp_root("no-region");
+async fn a_node_with_a_work_group_follows_the_streams_created_without_one() {
+    let root = temp_root("no-work group");
     let addrs = free_addrs().await;
     let tuning = Tuning::default();
     let (n0, n1, n2) = tokio::join!(
@@ -1102,7 +1102,7 @@ async fn a_node_with_a_region_follows_the_streams_created_without_one() {
     let saga_before = saga(&before).start(&nodes[2].store).await.unwrap();
     let acme = create_everywhere(&nodes, "acme").await;
     eventually(
-        "node 2 sees the tenant created without a region",
+        "node 2 sees the tenant created without a work group",
         async || before.names() == ["acme"],
     )
     .await;
@@ -1118,20 +1118,20 @@ async fn a_node_with_a_region_follows_the_streams_created_without_one() {
     );
     let nodes = [n0, n1, n2];
     let seen: [Seen; 3] = Default::default();
-    let no_region = Seen::default();
+    let ungrouped = Seen::default();
     let mut sagas = Vec::new();
     for (node, seen) in nodes.iter().zip(&seen) {
         sagas.push(saga(seen).start(&node.store).await.unwrap());
     }
     sagas.push(
-        saga(&no_region)
+        saga(&ungrouped)
             .no_routing_key()
             .start(&nodes[2].store)
             .await
             .unwrap(),
     );
 
-    // The old tenant's stream has no region; the new tenant is eu's.
+    // The old tenant's stream has no work group; the new tenant is eu's.
     // The nodes just came back together: a first write can come before
     // they hear each other.
     let tenancy = Command(nodes[0].store.clone());
@@ -1144,7 +1144,7 @@ async fn a_node_with_a_region_follows_the_streams_created_without_one() {
     .await;
     create_everywhere(&nodes, "globex").await;
     eventually("node 2 sees the old tenant renamed", async || {
-        no_region.names() == ["acme again"]
+        ungrouped.names() == ["acme again"]
     })
     .await;
     eventually("every node sees eu's tenant", async || {
@@ -1154,7 +1154,7 @@ async fn a_node_with_a_region_follows_the_streams_created_without_one() {
     // Enough passes for a wrongly routed event to have shown up.
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(
-        no_region.names(),
+        ungrouped.names(),
         ["acme again"],
         "the rename alone, from where the saga stopped"
     );
@@ -1175,13 +1175,13 @@ async fn a_node_with_a_region_follows_the_streams_created_without_one() {
 }
 
 /// Decision 1 of the CQRS review: a saga runs on the nodes of the event's
-/// region. Node 0 serves `eu`, node 1 `us`, node 2 `eu` and also `us` (the
-/// `also_serves` copy, filtered on `us` with a cursor of its own). A tenant
+/// work group. Node 0 serves `eu`, node 1 `us`, node 2 `eu` and also `us` (the
+/// `also_works_for` copy, filtered on `us` with a cursor of its own). A tenant
 /// created through node 0 is `eu`'s, one through node 1 `us`'s: node 0's saga
 /// sees the first, node 1's the second, node 2's both, and nothing twice.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_saga_runs_on_the_nodes_of_its_region_and_where_it_is_also_served() {
-    let root = temp_root("regions");
+async fn a_saga_runs_on_the_nodes_of_its_work_group_and_where_it_is_also_served() {
+    let root = temp_root("work groups");
     let addrs = free_addrs().await;
     let tuning = Tuning::default();
     let (n0, n1, n2) = tokio::join!(
@@ -1203,7 +1203,7 @@ async fn a_saga_runs_on_the_nodes_of_its_region_and_where_it_is_also_served() {
             .await
             .unwrap(),
     );
-    // Each node tells the others the regions its sagas follow.
+    // Each node tells the others the work groups its sagas follow.
     eventually("node 0 hears what the others serve", async || {
         let live = nodes[0].cluster.live(cluster::LIVE_WITHIN);
         let keys = |id: u64| {
@@ -1225,7 +1225,7 @@ async fn a_saga_runs_on_the_nodes_of_its_region_and_where_it_is_also_served() {
         })
         .await
         .unwrap();
-    eventually("node 2 sees both regions' tenants", async || {
+    eventually("node 2 sees both work groups' tenants", async || {
         seen[2].names() == ["acme", "globex"]
     })
     .await;
@@ -1248,8 +1248,8 @@ async fn a_saga_runs_on_the_nodes_of_its_region_and_where_it_is_also_served() {
     }
 }
 
-/// What a node runs to take on the regions without a node, as `serve` does
-/// with its sagas: the test saga, looking five times a second for a region
+/// What a node runs to take on the work groups without a node, as `serve` does
+/// with its sagas: the test saga, looking five times a second for a work group
 /// silent eight seconds (above the silences between two nodes that are both
 /// up, which reach seconds while the tests share a disk), under a lease of
 /// six.
@@ -1260,11 +1260,11 @@ fn cover(node: &Node, seen: &Seen) -> evento::cluster::Covering {
         .after(Duration::from_secs(8))
         .every(Duration::from_millis(200))
         .lease(Duration::from_secs(6))
-        .subscription("test saga", move |_region: &str| saga(&seen))
+        .subscription("test saga", move |_work_group: &str| saga(&seen))
         .start()
 }
 
-/// The regions whose sagas a node runs for a node that is away.
+/// The work groups whose sagas a node runs for a node that is away.
 fn covered(covering: &evento::cluster::Covering) -> Vec<String> {
     covering
         .covered()
@@ -1273,7 +1273,7 @@ fn covered(covering: &evento::cluster::Covering) -> Vec<String> {
         .collect()
 }
 
-/// Issue #709: each node has a region of its own (`a`, `b`, `c`), as the
+/// Issue #709: each node has a work group of its own (`a`, `b`, `c`), as the
 /// chart's pods do, set on the wrapper around its executor and told to the
 /// others (`cluster::open`). Node 1 goes away: one of the two left, and one
 /// only, takes `b` on and sees what is written to `b`'s tenant meanwhile.
@@ -1281,7 +1281,7 @@ fn covered(covering: &evento::cluster::Covering) -> Vec<String> {
 /// node stops following `b`, and what is written to the tenant afterwards
 /// is node 1's alone again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_region_whose_node_is_away_is_taken_on_by_one_of_the_others() {
+async fn a_work_group_whose_node_is_away_is_taken_on_by_one_of_the_others() {
     let root = temp_root("cover");
     let addrs = free_addrs().await;
     let tuning = Tuning::default();
@@ -1309,7 +1309,7 @@ async fn a_region_whose_node_is_away_is_taken_on_by_one_of_the_others() {
         seen[1].names() == ["globex"]
     })
     .await;
-    // Longer than a region goes silent before it is taken on: every region
+    // Longer than a work group goes silent before it is taken on: every work group
     // has its node, so nothing is.
     tokio::time::sleep(Duration::from_secs(9)).await;
     assert!(covered(&cover_0).is_empty() && covered(&cover_2).is_empty());
@@ -1324,7 +1324,7 @@ async fn a_region_whose_node_is_away_is_taken_on_by_one_of_the_others() {
         .await
         .unwrap();
     let away = "globex while away".to_owned();
-    eventually("one node takes region b on", async || {
+    eventually("one node takes work group b on", async || {
         seen[0].names().contains(&away) || seen[2].names().contains(&away)
     })
     .await;
@@ -1355,7 +1355,7 @@ async fn a_region_whose_node_is_away_is_taken_on_by_one_of_the_others() {
         seen[1].names() == ["globex", "globex while away"]
     })
     .await;
-    eventually("region b is handed back", async || {
+    eventually("work group b is handed back", async || {
         covered(taking).is_empty()
     })
     .await;
@@ -1388,14 +1388,14 @@ async fn a_region_whose_node_is_away_is_taken_on_by_one_of_the_others() {
 }
 
 /// Issue #712: a value is claimed by creating its index stream, under the
-/// region of whoever claims. Three nodes of three regions claim the same
+/// work group of whoever claims. Three nodes of three work groups claim the same
 /// slug at the same moment, as a form posted twice lands on two pods: one
 /// gets it, the others are refused and take a suffixed one, and every node
 /// reads the slug as the winner's afterwards. (Two creations of one stream
 /// under two routing keys were both taken once, and the stream was read by
 /// no one from then on: timayz/evento#563.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_slug_claimed_at_once_through_three_regions_goes_to_one() {
+async fn a_slug_claimed_at_once_through_three_work_groups_goes_to_one() {
     let root = temp_root("claims");
     let addrs = free_addrs().await;
     let tuning = Tuning::default();

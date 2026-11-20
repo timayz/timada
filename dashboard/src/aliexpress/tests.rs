@@ -318,9 +318,9 @@ struct Shop {
     payments: Arc<Payments>,
     /// Which of the nodes up this one is: what the sweeps go by.
     share: Arc<Mutex<Share>>,
-    /// Which of the nodes up that see an event's region this one is: what
+    /// Which of the nodes up that see an event's work group this one is: what
     /// the sagas go by.
-    region_share: Arc<Mutex<Share>>,
+    work_group_share: Arc<Mutex<Share>>,
     tenant: TenantState,
     link_id: String,
     product_id: String,
@@ -353,8 +353,8 @@ impl Shop {
         let store = Evento::new(turso);
         let stand_in = StandIn::new();
         let share = Arc::new(Mutex::new(Share::ALONE));
-        let region_share = Arc::new(Mutex::new(Share::ALONE));
-        let (all, region) = (share.clone(), region_share.clone());
+        let work_group_share = Arc::new(Mutex::new(Share::ALONE));
+        let (all, work_group) = (share.clone(), work_group_share.clone());
         let quota = Arc::new(crate::media::Quota::new(db.clone(), None));
         let aliexpress = Aliexpress::new(
             Some(Sealer::new("aliexpress-test", "secret")),
@@ -377,7 +377,7 @@ impl Shop {
             quota,
             Arc::new(move |among| match among {
                 Among::All => *all.lock().unwrap(),
-                Among::Region(_) => *region.lock().unwrap(),
+                Among::WorkGroup(_) => *work_group.lock().unwrap(),
             }),
             Arc::new({
                 let mut rates = timada_invoicing::rates::RateTable::default();
@@ -514,7 +514,7 @@ impl Shop {
             provider,
             payments,
             share,
-            region_share,
+            work_group_share,
             tenant,
             link_id,
             product_id: imported.product_id,
@@ -1743,7 +1743,7 @@ async fn a_cart_add_reads_an_item_not_tried_lately_once() {
     let version = shop.version().await;
 
     // Not this node's: left to the other.
-    *shop.region_share.lock().unwrap() = shop.elsewhere();
+    *shop.work_group_share.lock().unwrap() = shop.elsewhere();
     shop.add_to_cart().await;
     shop.follow_carts().await;
     assert_eq!(shop.version().await, version);
@@ -1751,7 +1751,7 @@ async fn a_cart_add_reads_an_item_not_tried_lately_once() {
 
     // This node's: read, and nothing on the item's stream but what the read
     // found (nothing new).
-    *shop.region_share.lock().unwrap() = Share::ALONE;
+    *shop.work_group_share.lock().unwrap() = Share::ALONE;
     shop.add_to_cart().await;
     shop.follow_carts().await;
     assert_eq!(shop.stand_in.reads(), 1);
@@ -2992,12 +2992,12 @@ async fn a_push_is_read_by_the_node_its_order_belongs_to() {
     let shop = Shop::new().await;
     let forward_id = shop.placed_on_aliexpress().await;
 
-    *shop.region_share.lock().unwrap() = share_without(&forward_id);
+    *shop.work_group_share.lock().unwrap() = share_without(&forward_id);
     shop.push("8100000000000001", "OrderShipped").await;
     shop.follow_pushes().await;
     assert_eq!(shop.stand_in.reads(), 0);
 
-    *shop.region_share.lock().unwrap() = Share::ALONE;
+    *shop.work_group_share.lock().unwrap() = Share::ALONE;
     shop.push("8100000000000001", "OrderConfirmed").await;
     shop.follow_pushes().await;
     assert_eq!(shop.stand_in.reads(), 1);

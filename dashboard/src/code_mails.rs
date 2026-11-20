@@ -51,7 +51,7 @@ pub fn platform_subscription<E: Executor>(room: Arc<Mailroom>) -> SubscriptionBu
         .handler(on_email_mail_deferred())
         .handler(on_email_mail_failed())
         // The routing key stays the executor's: this node mails the codes
-        // of its own region.
+        // of its own work group.
         .tenant("")
         .retry(5)
 }
@@ -68,7 +68,7 @@ pub fn shopper_subscription<E: Executor>(room: Arc<Mailroom>) -> SubscriptionBui
         .handler(on_shopper_mail_deferred())
         .handler(on_shopper_mail_failed())
         // The routing key stays the executor's: this node mails the codes
-        // of its own region.
+        // of its own work group.
         .retry(5)
 }
 

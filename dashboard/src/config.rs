@@ -165,42 +165,42 @@ pub struct ServerConfig {
     pub url: String,
     pub host: String,
     pub port: u16,
-    /// Region this node serves, e.g. `eu-west-1`. Used as evento's default
+    /// Work group this node serves, e.g. `eu-west-1`. Used as evento's default
     /// routing key: stamped on every new aggregate written here and inherited
     /// by this node's subscriptions. The read models and the per-node effects
     /// (this node's copies of pictures and keys, its store connections) call
-    /// `.any_routing_key()` and see every region; the sagas (payments,
+    /// `.any_routing_key()` and see every work group; the sagas (payments,
     /// forwards, invoices, mails, releases, usage) inherit the key and run on
-    /// the nodes of the region alone, so a region's work is done by its own
+    /// the nodes of the work group alone, so a work group's work is done by its own
     /// nodes and not N times across the cluster; the AliExpress reads a
-    /// region's events ask for are shared out among those nodes, which tell
-    /// each other the regions they serve. One word. Absent: no routing key;
+    /// work group's events ask for are shared out among those nodes, which tell
+    /// each other the work groups they serve. One word. Absent: no routing key;
     /// the sagas follow the events written without one (every event, in a
-    /// cluster that never had regions), and the nodes without a region
+    /// cluster that never had work groups), and the nodes without a work group
     /// share that work. A stream keeps the key it was created with: the
-    /// work on the streams created before the nodes had a region stays with
+    /// work on the streams created before the nodes had a work group stays with
     /// the nodes without one, and with the nodes that say
-    /// `also_serves_no_region`.
+    /// `also_works_for_ungrouped`.
     #[serde(default)]
-    pub region: Option<String>,
-    /// Regions whose background work this node also takes on, e.g. while
-    /// that region's nodes are down. Each one gets a copy of every saga
-    /// subscription, filtered on that region's key (`.routing_key(r)`) with a
+    pub work_group: Option<String>,
+    /// Work groups whose background work this node also takes on, e.g. while
+    /// that work group's nodes are down. Each one gets a copy of every saga
+    /// subscription, filtered on that work group's key (`.routing_key(r)`) with a
     /// cursor of its own (`{r}.{key}`), started where this node left that
-    /// region last: the first time, it goes through the region's whole
+    /// work group last: the first time, it goes through the work group's whole
     /// history for it (the sagas skip what is settled or too old). Needs
-    /// `region`.
+    /// `work_group`.
     #[serde(default)]
-    pub also_serves: Vec<String>,
+    pub also_works_for: Vec<String>,
     /// Whether this node also takes on the background work on the data
-    /// created without a region: what a cluster that ran without regions
+    /// created without a work group: what a cluster that ran without work groups
     /// holds from before its nodes got one (#517). It gets a copy of every
     /// saga subscription, filtered on no key (`.no_routing_key()`) under
     /// the saga's bare cursor key: the cursor this node had while it was
-    /// without a region, so it goes on from where it stopped then. What
-    /// those sagas create is written in this node's region. Needs `region`.
+    /// without a work group, so it goes on from where it stopped then. What
+    /// those sagas create is written in this node's work group. Needs `work_group`.
     #[serde(default)]
-    pub also_serves_no_region: bool,
+    pub also_works_for_ungrouped: bool,
     /// Reverse proxies allowed to report the client's address through
     /// `X-Forwarded-For`, as IP addresses or CIDR networks. Empty: the
     /// connection's peer address is the client.
@@ -1077,37 +1077,37 @@ impl ServerConfig {
                 )));
             }
         }
-        if let Some(region) = &self.region
-            && (region.is_empty() || region.contains(char::is_whitespace))
+        if let Some(work_group) = &self.work_group
+            && (work_group.is_empty() || work_group.contains(char::is_whitespace))
         {
             return Err(ConfigError::Message(format!(
-                "server.region: '{region}' is empty or has spaces in it; a region is one word"
+                "server.work_group: '{work_group}' is empty or has spaces in it; a work group is one word"
             )));
         }
-        if !self.also_serves.is_empty() && self.region.is_none() {
+        if !self.also_works_for.is_empty() && self.work_group.is_none() {
             return Err(ConfigError::Message(
-                "server.also_serves needs server.region: a node takes on other regions' work besides its own region's".into(),
+                "server.also_works_for needs server.work_group: a node takes on other work groups' work besides its own work group's".into(),
             ));
         }
-        if self.also_serves_no_region && self.region.is_none() {
+        if self.also_works_for_ungrouped && self.work_group.is_none() {
             return Err(ConfigError::Message(
-                "server.also_serves_no_region needs server.region: a node without a region already does the work on the data created without one".into(),
+                "server.also_works_for_ungrouped needs server.work_group: a node without a work group already does the work on the data created without one".into(),
             ));
         }
-        for (i, served) in self.also_serves.iter().enumerate() {
+        for (i, served) in self.also_works_for.iter().enumerate() {
             if served.is_empty() || served.contains(char::is_whitespace) {
                 return Err(ConfigError::Message(format!(
-                    "server.also_serves: '{served}' is empty or has spaces in it; a region is one word"
+                    "server.also_works_for: '{served}' is empty or has spaces in it; a work group is one word"
                 )));
             }
-            if self.region.as_deref() == Some(served.as_str()) {
+            if self.work_group.as_deref() == Some(served.as_str()) {
                 return Err(ConfigError::Message(format!(
-                    "server.also_serves: '{served}' is this node's own region"
+                    "server.also_works_for: '{served}' is this node's own work group"
                 )));
             }
-            if self.also_serves[..i].contains(served) {
+            if self.also_works_for[..i].contains(served) {
                 return Err(ConfigError::Message(format!(
-                    "server.also_serves: '{served}' is listed twice"
+                    "server.also_works_for: '{served}' is listed twice"
                 )));
             }
         }
@@ -1244,51 +1244,53 @@ mod tests {
             url: "https://timada.localhost".into(),
             host: "0.0.0.0".into(),
             port: 3000,
-            region: None,
-            also_serves: Vec::new(),
-            also_serves_no_region: false,
+            work_group: None,
+            also_works_for: Vec::new(),
+            also_works_for_ungrouped: false,
             trusted_proxies: trusted_proxies.iter().map(|s| s.to_string()).collect(),
         }
     }
 
-    fn regions(region: Option<&str>, also_serves: &[&str]) -> ServerConfig {
+    fn work_groups(work_group: Option<&str>, also_works_for: &[&str]) -> ServerConfig {
         ServerConfig {
-            region: region.map(str::to_owned),
-            also_serves: also_serves.iter().map(|s| s.to_string()).collect(),
+            work_group: work_group.map(str::to_owned),
+            also_works_for: also_works_for.iter().map(|s| s.to_string()).collect(),
             ..server(&[])
         }
     }
 
     #[test]
-    fn also_served_regions_need_a_region_and_name_other_ones_once() {
-        assert!(regions(None, &[]).validate().is_ok());
-        assert!(regions(Some("eu"), &[]).validate().is_ok());
-        assert!(regions(Some("eu"), &["us", "ap"]).validate().is_ok());
-        let err = regions(None, &["us"]).validate().unwrap_err();
-        assert!(err.to_string().contains("server.region"), "{err}");
-        let err = regions(Some("eu"), &["eu"]).validate().unwrap_err();
-        assert!(err.to_string().contains("own region"), "{err}");
-        let err = regions(Some("eu"), &["us", "us"]).validate().unwrap_err();
+    fn also_served_work_groups_need_a_work_group_and_name_other_ones_once() {
+        assert!(work_groups(None, &[]).validate().is_ok());
+        assert!(work_groups(Some("eu"), &[]).validate().is_ok());
+        assert!(work_groups(Some("eu"), &["us", "ap"]).validate().is_ok());
+        let err = work_groups(None, &["us"]).validate().unwrap_err();
+        assert!(err.to_string().contains("server.work_group"), "{err}");
+        let err = work_groups(Some("eu"), &["eu"]).validate().unwrap_err();
+        assert!(err.to_string().contains("own work group"), "{err}");
+        let err = work_groups(Some("eu"), &["us", "us"])
+            .validate()
+            .unwrap_err();
         assert!(err.to_string().contains("twice"), "{err}");
-        assert!(regions(Some("eu"), &[" "]).validate().is_err());
-        assert!(regions(Some("eu"), &[" us"]).validate().is_err());
-        // A region is one word: it names a routing key and travels in the
+        assert!(work_groups(Some("eu"), &[" "]).validate().is_err());
+        assert!(work_groups(Some("eu"), &[" us"]).validate().is_err());
+        // A work group is one word: it names a routing key and travels in the
         // node's gossip with the others it serves.
-        let err = regions(Some("eu west"), &[]).validate().unwrap_err();
+        let err = work_groups(Some("eu west"), &[]).validate().unwrap_err();
         assert!(err.to_string().contains("one word"), "{err}");
-        assert!(regions(Some(""), &[]).validate().is_err());
-        assert!(regions(Some("eu"), &["us east"]).validate().is_err());
+        assert!(work_groups(Some(""), &[]).validate().is_err());
+        assert!(work_groups(Some("eu"), &["us east"]).validate().is_err());
     }
 
     #[test]
-    fn serving_the_data_without_a_region_needs_a_region() {
-        let no_region = |region: Option<&str>| ServerConfig {
-            also_serves_no_region: true,
-            ..regions(region, &[])
+    fn serving_the_data_without_a_work_group_needs_a_work_group() {
+        let ungrouped = |work_group: Option<&str>| ServerConfig {
+            also_works_for_ungrouped: true,
+            ..work_groups(work_group, &[])
         };
-        assert!(no_region(Some("eu")).validate().is_ok());
-        let err = no_region(None).validate().unwrap_err();
-        assert!(err.to_string().contains("server.region"), "{err}");
+        assert!(ungrouped(Some("eu")).validate().is_ok());
+        let err = ungrouped(None).validate().unwrap_err();
+        assert!(err.to_string().contains("server.work_group"), "{err}");
     }
 
     #[test]
