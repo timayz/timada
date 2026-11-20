@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use evento::subscription::{StopReason, Subscription, SubscriptionBuilder};
+use evento::subscription::{Lag, StopReason, Subscription, SubscriptionBuilder};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -60,11 +60,37 @@ pub struct Worker {
     state: Mutex<WorkerState>,
     stop: watch::Sender<bool>,
     supervisor: Mutex<Option<JoinHandle<()>>>,
+    /// What builds the subscription, and the store it runs on: what it is
+    /// started again from, and what says how far behind it is.
+    make: Make,
+    executor: Executor,
 }
+
+/// Builds a worker's subscription.
+type Make = Arc<dyn Fn() -> SubscriptionBuilder<Executor> + Send + Sync>;
 
 impl Worker {
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The key the subscription's cursor is kept under (behind the node's
+    /// routing key, when it has one), and how far the subscription is
+    /// behind the newest event it follows, now. Asked of the store, with
+    /// the subscription's own filters: it says the truth whether the worker
+    /// runs, waits to be started again, stopped, or sits in a handler that
+    /// does not return, and an event the subscription does not follow never
+    /// counts.
+    pub async fn lag(&self) -> Result<(Option<String>, Lag)> {
+        let mut builder = (self.make)();
+        let key = builder.storage_key(&self.executor);
+        let lag = builder.lag(&self.executor).await.with_context(|| {
+            format!(
+                "cannot tell how far behind the {} subscription is",
+                self.name
+            )
+        })?;
+        Ok((key, lag))
     }
 
     pub fn state(&self) -> WorkerState {
@@ -99,6 +125,7 @@ where
     F: Fn() -> SubscriptionBuilder<Executor> + Send + Sync + 'static,
 {
     let name = name.into();
+    let make: Make = Arc::new(make);
     let handle = make()
         .start(executor)
         .await
@@ -109,11 +136,13 @@ where
         state: Mutex::new(WorkerState::Running),
         stop,
         supervisor: Mutex::new(None),
+        make: make.clone(),
+        executor: executor.clone(),
     });
     let supervisor = tokio::spawn(supervise(
         worker.clone(),
         handle,
-        make,
+        move || make(),
         executor.clone(),
         stop_rx,
     ));
@@ -231,6 +260,16 @@ impl Workers {
             .iter()
             .map(|worker| (worker.name().to_owned(), worker.state()))
             .collect()
+    }
+
+    /// Each worker's cursor key and how far behind it is now
+    /// ([`Worker::lag`]), in start order.
+    pub async fn lags(&self) -> Result<Vec<(Option<String>, Lag)>> {
+        let mut lags = Vec::with_capacity(self.0.len());
+        for worker in self.0.iter() {
+            lags.push(worker.lag().await?);
+        }
+        Ok(lags)
     }
 
     /// Stops every worker and waits for them.
@@ -407,6 +446,66 @@ mod tests {
             "1 s then 2 s of waiting, not 1 s twice"
         );
         assert_eq!(worker.state(), WorkerState::Running);
+        worker.stop();
+        worker.stopped().await;
+    }
+
+    /// How far behind a worker is, is asked of the store with what the
+    /// subscription follows (#713): an event of another kind, however new,
+    /// leaves it caught up, and the event its handler fails on keeps it
+    /// behind while the worker waits to be started again, until it got past
+    /// it.
+    #[tokio::test]
+    async fn a_worker_is_behind_by_the_events_it_follows_alone() {
+        use evento::Executor as _;
+
+        let store = Evento::new(Turso::in_memory_concurrent().await.unwrap());
+        let seen = Seen::default();
+        seen.failures_left.store(usize::MAX, Ordering::SeqCst);
+        let worker = start(
+            "created",
+            {
+                let seen = seen.clone();
+                move || builder(seen.clone())
+            },
+            &store,
+        )
+        .await
+        .unwrap();
+        let (key, lag) = worker.lag().await.unwrap();
+        assert_eq!(key.as_deref(), Some("test/created"));
+        assert!(lag.is_caught_up());
+
+        // Nothing the subscription follows: its cursor does not move, and
+        // it is not behind.
+        store
+            .write(vec![evento::Event {
+                id: ulid::Ulid::generate(),
+                aggregate_type: "test/Other".into(),
+                aggregate_id: "other".into(),
+                version: 1,
+                name: "Happened".into(),
+                ..Default::default()
+            }])
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(worker.lag().await.unwrap().1.is_caught_up());
+
+        create(&store, "poison").await;
+        eventually("the worker is seen restarting", async || {
+            matches!(worker.state(), WorkerState::Restarting { .. })
+        })
+        .await;
+        let behind = worker.lag().await.unwrap().1;
+        assert!(behind.pending_since.is_some(), "{behind:?}");
+
+        seen.failures_left.store(0, Ordering::SeqCst);
+        eventually("the worker gets past the event", async || {
+            worker.lag().await.unwrap().1.is_caught_up()
+        })
+        .await;
+        assert_eq!(*seen.names.lock().unwrap(), ["poison"]);
         worker.stop();
         worker.stopped().await;
     }
