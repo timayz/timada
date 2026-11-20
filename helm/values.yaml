@@ -9,8 +9,8 @@ image:
 # its ordinal as its `node_id`) and needs TIMADA__CLUSTER__SECRET below;
 # `config.cluster` may still set `absent_after_secs` and `write_backlog`.
 # Needs Kubernetes 1.28 or later (the pod's ordinal as a label).
-# Choose it before the first install: going from one count to another on a
-# store that exists is not something this chart does.
+# A cluster takes nodes more while it runs: see `founders`. A node that runs
+# alone stays alone: start with three where there may be more one day.
 replicas: 1
 
 # The zones the nodes run in, as the machines' `topology.kubernetes.io/zone`
@@ -21,6 +21,25 @@ replicas: 1
 # see `persistence.storageClassName`. Empty: `replicas` nodes, wherever they
 # fit.
 zones: []
+
+# How many nodes the cluster was founded with, to set once it is given more:
+# left out, every node founds it, which is right for a first install and
+# wrong ever after. To add a node to a cluster that runs:
+#   1. set `founders` to the count the cluster started with (and never change
+#      it again: a cluster founded with three nodes says 3 however many it
+#      has now), and add a zone at the end of `zones`, or raise `replicas`;
+#   2. the new pod starts over its empty volume and waits, not ready; the
+#      other pods are restarted onto the longer list only once it is, so
+#      nothing else moves yet;
+#   3. as a platform administrator, open "This node" on any node and add the
+#      node there (the form offers its number and address): it copies the
+#      store, becomes ready, and the others restart one at a time.
+# To take the last node away: remove it on that page first, from another
+# node, then drop its zone or lower `replicas`, and delete its volume claim
+# (`data-timada-<n>`): a node that was removed does not start again over its
+# old files. Only the last node can go this way, as the pods are numbered.
+# An even count gains nothing in what may be down: go from three to five.
+# founders: 3
 
 # Extra environment variables injected from the managed Secret. Every key of
 # the configuration can be set as TIMADA__<SECTION>__<KEY>, which wins over
