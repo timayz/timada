@@ -250,7 +250,9 @@ pub fn judge(
 
 /// The node's state in a word or two: the cluster page's words.
 pub fn node_state(health: &NodeHealth) -> &'static str {
-    if health.rolled_back {
+    if !health.member {
+        "removed from the cluster"
+    } else if health.rolled_back {
         "journal rolled back"
     } else if health.founded_apart {
         "of another cluster"
@@ -304,6 +306,7 @@ mod tests {
             silent_for: Duration::from_secs(2),
             given_up: false,
             label: heard.then(String::new),
+            keys: None,
         }
     }
 
@@ -321,6 +324,7 @@ mod tests {
             copy_pending: false,
             joined_at_start: false,
             founded_at_start: false,
+            member: true,
         }
     }
 
