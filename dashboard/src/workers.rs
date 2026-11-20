@@ -3,39 +3,29 @@
 //! A subscription's worker ends for good on its own once a pass kept failing
 //! past its retries: the store was away longer than that, or a handler
 //! cannot deal with one event. Left there, what it feeds goes stale on this
-//! node for every tenant, silently. So every worker runs under a supervisor
-//! that starts it again from its saved cursor after a growing delay (it
-//! resumes at the event that failed: a cursor is acknowledged only past the
-//! handlers that ran) and records how it stands, for `/admin/cluster`. The
-//! delay keeps growing while the restarted worker fails again soon after
-//! (the same event, still poison): the wait and the count are forgotten
-//! only once a restart lived longer than the longest delay. Ported from the
-//! storefront's catalog supervisor (`crates/storefront/src/store.rs`).
+//! node for every tenant, silently. So every worker is started supervised
+//! (evento's `SubscriptionBuilder::supervised`): it goes on from its saved
+//! cursor after a growing delay (at the event that failed: a cursor is
+//! acknowledged only past the handlers that ran), one second doubling up to
+//! five minutes while it fails again soon after, the wait and the count
+//! forgotten once it went on that long without failing. How each stands is
+//! read from here for `/admin/cluster`, the metrics and `/ready`.
 
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use evento::subscription::{Lag, StopReason, Subscription, SubscriptionBuilder};
-use tokio::sync::watch;
-use tokio::task::JoinHandle;
+use evento::subscription::{Lag, State, Subscription, SubscriptionBuilder};
 
 use crate::cluster::Executor;
-
-/// The wait before the first restart of a worker that failed, doubling up to
-/// [`MAX_RESTART_DELAY`] while it keeps failing. A restarted worker that ran
-/// for longer than the longest delay counts as recovered.
-const FIRST_RESTART_DELAY: Duration = Duration::from_secs(1);
-const MAX_RESTART_DELAY: Duration = Duration::from_secs(5 * 60);
 
 /// How a worker stands.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkerState {
     Running,
-    /// The worker ended on a failure and is started again from its cursor
-    /// after a delay. `since` is when it first failed (unix seconds) and
-    /// `attempts` how many restarts were tried since, the one being waited
-    /// for included; a restart that failed again soon after counts on.
+    /// A pass failed and the worker goes on from its cursor after a delay.
+    /// `since` is when it first failed (unix seconds) and `attempts` how
+    /// many restarts were tried since, the one being waited for included; a
+    /// restart that failed again soon after counts on.
     Restarting {
         error: String,
         since: u64,
@@ -57,97 +47,83 @@ impl WorkerState {
 /// A supervised subscription.
 pub struct Worker {
     name: String,
-    state: Mutex<WorkerState>,
-    stop: watch::Sender<bool>,
-    supervisor: Mutex<Option<JoinHandle<()>>>,
-    /// What builds the subscription, and the store it runs on: what it is
-    /// started again from, and what says how far behind it is.
-    make: Make,
-    executor: Executor,
+    /// The key its cursor is kept under: its own behind the node's routing
+    /// key, when it has one.
+    key: Option<String>,
+    handle: Subscription,
 }
-
-/// Builds a worker's subscription.
-type Make = Arc<dyn Fn() -> SubscriptionBuilder<Executor> + Send + Sync>;
 
 impl Worker {
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// The key the subscription's cursor is kept under (behind the node's
-    /// routing key, when it has one), and how far the subscription is
-    /// behind the newest event it follows, now. Asked of the store, with
-    /// the subscription's own filters: it says the truth whether the worker
-    /// runs, waits to be started again, stopped, or sits in a handler that
-    /// does not return, and an event the subscription does not follow never
-    /// counts.
+    /// The key the subscription's cursor is kept under, and how far the
+    /// subscription is behind the newest event it follows, now. Asked of
+    /// the store, with the subscription's own filters: it says the truth
+    /// whether the worker runs, waits to go on, stopped, or sits in a
+    /// handler that does not return, and an event the subscription does not
+    /// follow never counts.
     pub async fn lag(&self) -> Result<(Option<String>, Lag)> {
-        let mut builder = (self.make)();
-        let key = builder.storage_key(&self.executor);
-        let lag = builder.lag(&self.executor).await.with_context(|| {
+        let lag = self.handle.lag().await.with_context(|| {
             format!(
                 "cannot tell how far behind the {} subscription is",
                 self.name
             )
         })?;
-        Ok((key, lag))
+        Ok((self.key.clone(), lag))
     }
 
     pub fn state(&self) -> WorkerState {
-        self.state.lock().unwrap().clone()
-    }
-
-    fn set(&self, state: WorkerState) {
-        *self.state.lock().unwrap() = state;
-    }
-
-    /// Signals the worker to stop, without waiting for it. The supervisor
-    /// holds the worker, so dropping the handles alone stops nothing: stop
-    /// it.
-    pub fn stop(&self) {
-        let _ = self.stop.send(true);
-    }
-
-    /// Waits for the worker to exit; [`stop`](Self::stop) first.
-    pub async fn stopped(&self) {
-        let supervisor = self.supervisor.lock().unwrap().take();
-        if let Some(supervisor) = supervisor {
-            let _ = supervisor.await;
+        match self.handle.state() {
+            State::Running => WorkerState::Running,
+            State::Restarting {
+                error,
+                since,
+                attempts,
+            } => WorkerState::Restarting {
+                error: format!("{error:#}"),
+                since,
+                attempts,
+            },
+            State::Stopped(reason) => WorkerState::Stopped {
+                reason: reason.to_string(),
+            },
+            // A state evento names later: shown as it says it.
+            other => WorkerState::Stopped {
+                reason: other.to_string(),
+            },
         }
+    }
+
+    /// Signals the worker to stop, without waiting for it.
+    pub fn stop(&self) {
+        self.handle.stop();
+    }
+
+    /// Waits for the worker to be done with the event in hand and stop;
+    /// [`stop`](Self::stop) first.
+    pub async fn stopped(&self) {
+        self.handle.stopped().await;
     }
 }
 
-/// Starts the subscription `make` builds and keeps it running under the name
-/// `name`. The first start failing is an error: the node does not serve
-/// without its workers. Later failures restart it.
-pub async fn start<F>(name: impl Into<String>, make: F, executor: &Executor) -> Result<Arc<Worker>>
-where
-    F: Fn() -> SubscriptionBuilder<Executor> + Send + Sync + 'static,
-{
+/// Starts the subscription `builder` supervised, under the name `name`. The
+/// first start failing is an error: the node does not serve without its
+/// workers. Later failures are gone on from.
+pub async fn start(
+    name: impl Into<String>,
+    builder: SubscriptionBuilder<Executor>,
+    executor: &Executor,
+) -> Result<Arc<Worker>> {
     let name = name.into();
-    let make: Make = Arc::new(make);
-    let handle = make()
+    let mut builder = builder.supervised();
+    let key = builder.storage_key(executor);
+    let handle = builder
         .start(executor)
         .await
         .with_context(|| format!("cannot start the {name} subscription"))?;
-    let (stop, stop_rx) = watch::channel(false);
-    let worker = Arc::new(Worker {
-        name,
-        state: Mutex::new(WorkerState::Running),
-        stop,
-        supervisor: Mutex::new(None),
-        make: make.clone(),
-        executor: executor.clone(),
-    });
-    let supervisor = tokio::spawn(supervise(
-        worker.clone(),
-        handle,
-        move || make(),
-        executor.clone(),
-        stop_rx,
-    ));
-    *worker.supervisor.lock().unwrap() = Some(supervisor);
-    Ok(worker)
+    Ok(Arc::new(Worker { name, key, handle }))
 }
 
 /// Runs the subscription `builder` over everything the store holds for it,
@@ -166,83 +142,6 @@ pub async fn catch_up(
         .run_once(executor)
         .await
         .with_context(|| format!("the {name} subscription cannot catch up"))
-}
-
-async fn supervise<F>(
-    worker: Arc<Worker>,
-    mut handle: Subscription,
-    make: F,
-    executor: Executor,
-    mut stop: watch::Receiver<bool>,
-) where
-    F: Fn() -> SubscriptionBuilder<Executor>,
-{
-    let name = worker.name.clone();
-    let mut delay = FIRST_RESTART_DELAY;
-    // The first failure of the current run of failures, and how many
-    // restarts it took so far; forgotten once a restart held up.
-    let mut since = 0;
-    let mut attempts = 0;
-    let mut restarted_at: Option<std::time::Instant> = None;
-    loop {
-        let reason = tokio::select! {
-            _ = stop.changed() => {
-                handle.shutdown().await.ok();
-                worker.set(WorkerState::Stopped { reason: StopReason::Shutdown.to_string() });
-                return;
-            }
-            reason = handle.stopped() => reason,
-        };
-        if !reason.is_failure() {
-            tracing::info!(%reason, "the {name} subscription stopped");
-            worker.set(WorkerState::Stopped {
-                reason: reason.to_string(),
-            });
-            return;
-        }
-        let error = reason.to_string();
-        tracing::error!(%error, "the {name} subscription stopped; restarting it");
-        if restarted_at.is_none_or(|at| at.elapsed() >= MAX_RESTART_DELAY) {
-            // Fresh trouble, or the last restart held up long enough to
-            // count as recovered: the wait starts short again.
-            delay = FIRST_RESTART_DELAY;
-            since = crate::auth::now();
-            attempts = 0;
-        }
-        attempts += 1;
-        worker.set(WorkerState::Restarting {
-            error,
-            since,
-            attempts,
-        });
-
-        handle = loop {
-            tokio::select! {
-                _ = stop.changed() => {
-                    worker.set(WorkerState::Stopped { reason: StopReason::Shutdown.to_string() });
-                    return;
-                }
-                _ = tokio::time::sleep(delay) => {}
-            }
-            delay = (delay * 2).min(MAX_RESTART_DELAY);
-            match make().start(&executor).await {
-                Ok(handle) => break handle,
-                Err(err) => {
-                    let error = format!("{err:#}");
-                    tracing::warn!(%error, "the {name} subscription cannot restart yet");
-                    attempts += 1;
-                    worker.set(WorkerState::Restarting {
-                        error,
-                        since,
-                        attempts,
-                    });
-                }
-            }
-        };
-        restarted_at = Some(std::time::Instant::now());
-        worker.set(WorkerState::Running);
-        tracing::info!("the {name} subscription is running again");
-    }
 }
 
 /// Every worker of the node, for the cluster page.
@@ -285,7 +184,9 @@ impl Workers {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     use evento::metadata::Event;
     use evento::subscription::Context;
@@ -360,16 +261,9 @@ mod tests {
         let seen = Seen::default();
         seen.failures_left.store(1, Ordering::SeqCst);
         create(&store, "first").await;
-        let worker = start(
-            "created",
-            {
-                let seen = seen.clone();
-                move || builder(seen.clone())
-            },
-            &store,
-        )
-        .await
-        .unwrap();
+        let worker = start("created", builder(seen.clone()), &store)
+            .await
+            .unwrap();
         eventually("the first event is seen", async || {
             seen.names.lock().unwrap().len() == 1
         })
@@ -412,16 +306,9 @@ mod tests {
         let store = Evento::new(Turso::in_memory_concurrent().await.unwrap());
         let seen = Seen::default();
         seen.failures_left.store(2, Ordering::SeqCst);
-        let worker = start(
-            "created",
-            {
-                let seen = seen.clone();
-                move || builder(seen.clone())
-            },
-            &store,
-        )
-        .await
-        .unwrap();
+        let worker = start("created", builder(seen.clone()), &store)
+            .await
+            .unwrap();
         create(&store, "poison").await;
         let first = tokio::time::Instant::now();
         eventually("the first failure is seen", async || {
@@ -462,16 +349,9 @@ mod tests {
         let store = Evento::new(Turso::in_memory_concurrent().await.unwrap());
         let seen = Seen::default();
         seen.failures_left.store(usize::MAX, Ordering::SeqCst);
-        let worker = start(
-            "created",
-            {
-                let seen = seen.clone();
-                move || builder(seen.clone())
-            },
-            &store,
-        )
-        .await
-        .unwrap();
+        let worker = start("created", builder(seen.clone()), &store)
+            .await
+            .unwrap();
         let (key, lag) = worker.lag().await.unwrap();
         assert_eq!(key.as_deref(), Some("test/created"));
         assert!(lag.is_caught_up());
@@ -517,16 +397,9 @@ mod tests {
         let seen = Seen::default();
         seen.failures_left.store(usize::MAX, Ordering::SeqCst);
         let workers = Workers::new(vec![
-            start(
-                "created",
-                {
-                    let seen = seen.clone();
-                    move || builder(seen.clone())
-                },
-                &store,
-            )
-            .await
-            .unwrap(),
+            start("created", builder(seen.clone()), &store)
+                .await
+                .unwrap(),
         ]);
         create(&store, "poison").await;
         eventually("the worker is seen restarting", async || {
