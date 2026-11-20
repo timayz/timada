@@ -63,7 +63,9 @@ written as the server's file) and the secrets as `TIMADA__…` variables
 updated one at a time, each serving a few seconds more (`preStopSeconds`) while the
 Service stops sending it requests. A cluster takes a node more while it runs: `founders`
 says how many it started with, the new pod waits over its empty volume, and a platform
-administrator adds it on the cluster page (`values.yaml` has the steps). `zones`
+administrator adds it on the cluster page (`values.yaml` has the steps). One cluster may also run over
+several Kubernetes clusters, a release in each: `peers` and `webPeers` then name every node
+as the others reach it, and `firstNodeId` numbers this release's pods among them. `zones`
 names the zones to run in instead, one node in each. Each pod takes its own name as its
 `server.work_group`, so the background work on what a node created is done by that node
 alone; `config.server.work_group` gives them all the same one.

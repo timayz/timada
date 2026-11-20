@@ -41,6 +41,46 @@ zones: []
 # An even count gains nothing in what may be down: go from three to five.
 # founders: 3
 
+# For one cluster whose nodes run in several Kubernetes clusters, a release
+# of this chart in each (one a region, say, three zones in each): the nodes
+# of all the releases are one store, every one holding all of it, and each
+# must reach every other, from one Kubernetes cluster to another, on port
+# 7000 (the store) and 3000 (pictures, keys and limits between nodes). The
+# names below are whatever does that for a single pod where you run: a
+# headless Service exported between the clusters gives one per pod. That
+# traffic is not encrypted here: the link between the clusters must be.
+#
+# `peers` is every node of the cluster as the others dial it, in the order of
+# their numbers, and `webPeers` their web addresses in the same order: the
+# same two lists in every release. `firstNodeId` is the number of this
+# release's first pod: with three pods a release, 0 in the first, 3 in the
+# second, 6 in the third; its pods are then named `timada-3`, `timada-4`,
+# `timada-5`, and are at those places in the lists. Left out, the chart
+# writes the lists itself for a cluster inside this one release.
+#
+# To start such a cluster: install every release with the lists of all the
+# nodes (they become ready once most of them are up), or install the first
+# with `founders` at its own count in every release and add the nodes of the
+# others on the cluster page as they start, as above.
+# firstNodeId: 3
+# peers:
+#   - timada-0.timada-headless.timada.svc.eu-west-1.example:7000
+#   - timada-1.timada-headless.timada.svc.eu-west-1.example:7000
+#   - timada-2.timada-headless.timada.svc.eu-west-1.example:7000
+#   - timada-3.timada-headless.timada.svc.eu-west-3.example:7000
+#   - timada-4.timada-headless.timada.svc.eu-west-3.example:7000
+#   - timada-5.timada-headless.timada.svc.eu-west-3.example:7000
+# webPeers:
+#   - http://timada-0.timada-headless.timada.svc.eu-west-1.example:3000
+#   - http://timada-1.timada-headless.timada.svc.eu-west-1.example:3000
+#   - http://timada-2.timada-headless.timada.svc.eu-west-1.example:3000
+#   - http://timada-3.timada-headless.timada.svc.eu-west-3.example:3000
+#   - http://timada-4.timada-headless.timada.svc.eu-west-3.example:3000
+#   - http://timada-5.timada-headless.timada.svc.eu-west-3.example:3000
+firstNodeId: 0
+peers: []
+webPeers: []
+
 # Extra environment variables injected from the managed Secret. Every key of
 # the configuration can be set as TIMADA__<SECTION>__<KEY>, which wins over
 # `config` below: use it for what must not sit in a ConfigMap. A deployment
