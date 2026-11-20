@@ -222,10 +222,22 @@ pub async fn open(
     // The read models are derived data in the same file: dropped with the
     // store's rows, filled again by the subscriptions from the copied events.
     let read_models = store.clone();
-    let (cluster, executor) = Cluster::builder(store)
+    let mut builder = Cluster::builder(store)
         .settings(cluster.map(ClusterConfig::settings))
         .state_dir(state_dir(store_path))
-        .label(label(region, also_serves, also_serves_no_region))
+        .label(label(region, also_serves, also_serves_no_region));
+    // The regions are routing keys set on the wrapper below, which the node
+    // does not see: it is told what its subscriptions follow. Without a
+    // region it works that out for itself (the events written without a
+    // key).
+    if let Some(region) = region {
+        builder =
+            builder.serves(std::iter::once(region).chain(also_serves.iter().map(String::as_str)));
+        if also_serves_no_region {
+            builder = builder.serves_no_key();
+        }
+    }
+    let (cluster, executor) = builder
         .before_copy(move || async move {
             crate::db::reset_store_read_models(&read_models)
                 .await
@@ -410,6 +422,7 @@ mod tests {
             .map(|(id, label)| LiveNode {
                 id: NodeId(*id),
                 label: label.map(str::to_owned),
+                keys: None,
             })
             .collect()
     }
@@ -420,6 +433,7 @@ mod tests {
             silent_for: Duration::from_secs(silent_secs),
             given_up,
             label: label.map(str::to_owned),
+            keys: None,
         }
     }
 
@@ -436,6 +450,7 @@ mod tests {
             copy_pending: false,
             joined_at_start: false,
             founded_at_start: false,
+            member: true,
         }
     }
 

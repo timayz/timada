@@ -13,10 +13,13 @@ port = 3000
 # their lists see every region. Omit for a single-region deployment, where
 # every node does all the work. Data keeps the region it was created in: the
 # background work on data created without one is done by the nodes without
-# one, and by those that say `also_serves_no_region`.
+# one, and by those that say `also_serves_no_region`. A region none of whose
+# nodes was heard from for a minute has its work taken on by one of the nodes
+# up that have a region, until one of its own is back: a node may be the
+# only one of its region.
 # region = "eu-west-1"
-# Regions whose background work this node also takes on, e.g. while that
-# region's nodes are down. Needs `region`.
+# Regions whose background work this node takes on all the time, besides its
+# own. Needs `region`.
 # also_serves = ["us-east-3"]
 # Also take on the background work on the data created without a region. Set
 # it on at least one node when giving regions to a deployment that ran

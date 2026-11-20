@@ -64,10 +64,10 @@ config:
     # `region` is left out on purpose: each pod then takes its own name for
     # it (`timada-0`), so the background work on what a node created
     # (payments, supplier orders, invoices, mails) is done by that node, and
-    # a node more is that much more of it done at once. While a node is down
-    # that work waits for it; pages and writes go on through the others. Set
-    # it here to give every node the same one instead: each then does all of
-    # that work, and none of it waits on one node.
+    # a node more is that much more of it done at once. A node down for a
+    # minute has that work taken on by one of the others until it is back;
+    # pages and writes go on through the others all along. Set it here to
+    # give every node the same one instead: each then does all of that work.
     # The gateway's addresses, as IP addresses or CIDR networks: without
     # them the sign-in history and the limits see the gateway instead of the
     # visitor. Set it to the cluster's pod network.
