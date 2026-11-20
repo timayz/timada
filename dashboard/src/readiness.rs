@@ -300,6 +300,7 @@ mod tests {
             silent_for: Duration::from_secs(2),
             given_up: false,
             label: heard.then(String::new),
+            keys: None,
         }
     }
 
