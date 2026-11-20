@@ -252,11 +252,19 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             tracing::warn!(%err, "cannot remove the catch-up mark; the next start catches up again");
         }
     }
-    for (name, _kind, make) in planned {
+    // Those that fill the read models, apart: one of them in trouble is
+    // what makes the node's pages stale.
+    let mut read_model_workers = Vec::new();
+    for (name, kind, make) in planned {
         let deps = deps.clone();
-        all_workers.push(workers::start(name, move || make(&deps), &local).await?);
+        let worker = workers::start(name, move || make(&deps), &local).await?;
+        if kind == Kind::ReadModel {
+            read_model_workers.push(worker.clone());
+        }
+        all_workers.push(worker);
     }
     let workers = Workers::new(all_workers);
+    let read_model_workers = Workers::new(read_model_workers);
     let mailroom_sends = mailroom.start();
     let picture_fetches = fetcher.clone().start();
     // This node's picture files against the store, once a day.
@@ -276,6 +284,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         db.clone(),
         cluster.clone(),
         workers.clone(),
+        read_model_workers,
         connections.clone(),
         config.monitoring.ready_lag(),
     ));

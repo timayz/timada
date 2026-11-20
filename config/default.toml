@@ -403,8 +403,9 @@ log_line_number = true
 # polling it keeps traffic off a node catching up after a night away, a copy
 # of the store or a `rebuild`. A node of a cluster takes writes while it
 # hears from most of the nodes, itself counted: one that heard nothing from
-# the others for 10 seconds, or never since it started, answers 503. A read model whose worker is stuck reads as
-# far behind as the store moved on since. Mind that every node runs the same
+# the others for 10 seconds, or never since it started, answers 503. A read model's worker that failed
+# and is being started again counts as that long behind, whatever it last
+# recorded. Mind that every node runs the same
 # read models: a fault that stops one everywhere takes every node out at
 # once. 0 reports the lag and never judges it.
 # ready_lag_secs = 300
