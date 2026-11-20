@@ -23,6 +23,8 @@ mod db;
 mod mailroom;
 #[path = "../src/media/schema.rs"]
 mod media;
+#[path = "common/ports.rs"]
+mod ports;
 #[path = "../src/read_only_store.rs"]
 mod read_only_store;
 #[path = "../src/store_api.rs"]
@@ -160,12 +162,9 @@ impl Node {
     }
 }
 
+/// Three addresses for the nodes of a test to talk on.
 async fn free_addrs() -> Vec<SocketAddr> {
-    let mut listeners = Vec::new();
-    for _ in 0..3 {
-        listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
-    }
-    listeners.iter().map(|l| l.local_addr().unwrap()).collect()
+    ports::free_addrs(3)
 }
 
 /// One number out of a node's store file: Turso keeps one database per path
@@ -1235,6 +1234,13 @@ async fn a_saga_runs_on_the_nodes_of_its_work_group_and_where_it_is_also_served(
         seen[2].names() == ["acme", "globex"]
     })
     .await;
+    // Each of the two others saw its own: only what must not come is left to
+    // wait for.
+    eventually(
+        "nodes 0 and 1 see their own work group's tenant",
+        async || seen[0].names() == ["acme"] && seen[1].names() == ["globex"],
+    )
+    .await;
     // Enough passes for a wrongly routed event to have shown up.
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(seen[0].names(), ["acme"], "node 0 serves eu alone");
@@ -1457,12 +1463,7 @@ async fn a_slug_claimed_at_once_through_three_work_groups_goes_to_one() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_node_is_added_to_a_running_cluster_then_removed() {
     let root = temp_root("members");
-    let mut listeners = Vec::new();
-    for _ in 0..4 {
-        listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap());
-    }
-    let addrs: Vec<SocketAddr> = listeners.iter().map(|l| l.local_addr().unwrap()).collect();
-    drop(listeners);
+    let addrs = ports::free_addrs(4);
     let tuning = Tuning {
         founders: Some(3),
         ..Tuning::default()

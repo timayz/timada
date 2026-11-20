@@ -40,6 +40,8 @@ mod db;
 mod mailroom;
 #[path = "../src/media/schema.rs"]
 mod media;
+#[path = "common/ports.rs"]
+mod ports;
 #[path = "../src/store_copy.rs"]
 mod store_copy;
 
@@ -383,10 +385,7 @@ async fn another_node(id: u64) {
 
 /// Three addresses nothing listens on, for the nodes to talk on.
 fn free_addrs() -> Vec<SocketAddr> {
-    let listeners: Vec<_> = (0..3)
-        .map(|_| std::net::TcpListener::bind("127.0.0.1:0").unwrap())
-        .collect();
-    listeners.iter().map(|l| l.local_addr().unwrap()).collect()
+    ports::free_addrs(3)
 }
 
 /// Takes a copy of the store of node `on` to `to` while it serves, and
