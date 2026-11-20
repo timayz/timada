@@ -1203,6 +1203,19 @@ async fn a_saga_runs_on_the_nodes_of_its_region_and_where_it_is_also_served() {
             .await
             .unwrap(),
     );
+    // Each node tells the others the regions its sagas follow.
+    eventually("node 0 hears what the others serve", async || {
+        let live = nodes[0].cluster.live(cluster::LIVE_WITHIN);
+        let keys = |id: u64| {
+            live.iter()
+                .find(|node| node.id.0 == id)
+                .and_then(|node| node.keys.clone())
+        };
+        keys(0) == Some(vec![Some("eu".to_owned())])
+            && keys(1) == Some(vec![Some("us".to_owned())])
+            && keys(2) == Some(vec![Some("eu".to_owned()), Some("us".to_owned())])
+    })
+    .await;
 
     let acme = create_everywhere(&nodes, "acme").await;
     Command(nodes[1].store.clone())
