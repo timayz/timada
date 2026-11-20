@@ -1,5 +1,5 @@
 {{- $config := deepCopy .Values.config }}
-{{- if gt (int .Values.replicas) 1 }}
+{{- if gt (include "timada.nodes" . | int) 1 }}
 {{- /*
 The `[cluster]` section of several nodes: each pod's name under the headless
 Service, in the order of the pods' ordinals, so a pod's ordinal is its
@@ -8,7 +8,7 @@ sets besides (`absent_after_secs`, `write_backlog`) is kept.
 */}}
 {{- $peers := list }}
 {{- $webPeers := list }}
-{{- range $i := until (int .Values.replicas) }}
+{{- range $i := until (include "timada.nodes" $ | int) }}
 {{- $peers = append $peers (printf "timada-%d.timada-headless:7000" $i) }}
 {{- $webPeers = append $webPeers (printf "http://timada-%d.timada-headless:3000" $i) }}
 {{- end }}

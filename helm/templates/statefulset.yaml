@@ -1,3 +1,6 @@
+{{- if ne (len (.Values.zones | default list | uniq)) (len (.Values.zones | default list)) }}
+{{- fail "zones names a zone twice: one node runs in each zone named" }}
+{{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -6,7 +9,7 @@ metadata:
     app: timada
 spec:
   serviceName: timada-headless
-  replicas: {{ .Values.replicas }}
+  replicas: {{ include "timada.nodes" . }}
   # Every pod starts at once: a node takes writes, and so becomes ready, once
   # a majority of them is up, which one pod waiting for the one before it to
   # be ready would never see.
@@ -34,10 +37,22 @@ spec:
         fsGroup: 10001
         fsGroupChangePolicy: OnRootMismatch
         runAsNonRoot: true
-      {{- if gt (int .Values.replicas) 1 }}
-      # Each node on a machine of its own where there are enough of them: two
-      # on the one that fails would leave no majority.
+      {{- if or .Values.zones (gt (include "timada.nodes" . | int) 1) }}
       affinity:
+        {{- with .Values.zones }}
+        # Only in the zones named.
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: topology.kubernetes.io/zone
+                    operator: In
+                    values:
+                      {{- toYaml . | nindent 22 }}
+        {{- end }}
+        {{- if gt (include "timada.nodes" . | int) 1 }}
+        # Each node on a machine of its own where there are enough of them: two
+        # on the one that fails would leave no majority.
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
@@ -46,6 +61,20 @@ spec:
                 labelSelector:
                   matchLabels:
                     app: timada
+        {{- end }}
+      {{- end }}
+      {{- with .Values.zones }}
+      # One node a zone. A zone that has no machine left keeps its node
+      # waiting (`minDomains`): it does not go and double another zone, which
+      # going down would then take two nodes away.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          minDomains: {{ len . }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: timada
       {{- end }}
       {{- if .Values.database.migrate }}
       initContainers:
@@ -98,7 +127,7 @@ spec:
             - name: store-api
               containerPort: 4321
             {{- end }}
-            {{- if gt (int .Values.replicas) 1 }}
+            {{- if gt (include "timada.nodes" . | int) 1 }}
             - name: cluster
               containerPort: 7000
             {{- end }}

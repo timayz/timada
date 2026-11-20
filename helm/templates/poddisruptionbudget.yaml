@@ -1,4 +1,4 @@
-{{- if gt (int .Values.replicas) 1 }}
+{{- if gt (include "timada.nodes" . | int) 1 }}
 # A machine being emptied takes one node away at a time: the others are still
 # a majority, and go on taking writes.
 apiVersion: policy/v1
