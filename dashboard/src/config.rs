@@ -1204,6 +1204,8 @@ impl ClusterConfig {
             absent_after_secs: self.absent_after_secs,
             write_backlog: self.write_backlog,
             linearizable_reads: None,
+            // In clear between the nodes, as before: #726.
+            tls: None,
         }
     }
 

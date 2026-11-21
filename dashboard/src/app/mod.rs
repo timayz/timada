@@ -13,6 +13,7 @@ pub mod stripe;
 pub mod t;
 pub mod tenants;
 pub mod ui;
+pub mod unavailable;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -227,6 +228,9 @@ pub fn router(services: Services) -> Router {
         .with(config)
         .assets(assets)
         .layer(RuntimeLayer::new())
+        // A read this node could not confirm is a 503 to try again after,
+        // not a failure (`unavailable.rs`).
+        .layer(unavailable::StoreAway)
         // Outside every other layer, so it sees what any of them failed with.
         .layer(server_errors::LogServerErrors)
         .build()

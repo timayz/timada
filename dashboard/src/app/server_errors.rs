@@ -2,8 +2,8 @@
 //!
 //! The router turns an error it does not know into "internal server error"
 //! and drops it, so without this a failed write leaves nothing behind to say
-//! why. The errors it does know (not found, forbidden, a redirect, …) are
-//! answers, not failures, and pass through unlogged.
+//! why. The errors it does know (not found, forbidden, a redirect, a
+//! rewrite, …) are answers, not failures, and pass through unlogged.
 
 use topcoat::{
     context::Cx,
@@ -11,8 +11,8 @@ use topcoat::{
         Body, Layer, LayerFuture, Next, Path,
         error::{
             BadRequestError, ContentTooLargeError, ForbiddenError, MethodNotAllowedError,
-            NotFoundError, RedirectError, SeeOther, ServiceUnavailableError, TooManyRequestsError,
-            UnauthorizedError,
+            NotFoundError, RedirectError, RewriteError, SeeOther, ServiceUnavailableError,
+            TooManyRequestsError, UnauthorizedError,
         },
         request::{method, uri},
     },
@@ -54,6 +54,7 @@ fn is_an_answer(error: &topcoat::Error) -> bool {
         || error.is::<ContentTooLargeError>()
         || error.is::<MethodNotAllowedError>()
         || error.is::<RedirectError>()
+        || error.is::<RewriteError>()
         || error.is::<SeeOther>()
         || error.is::<ServiceUnavailableError>()
         || error.is::<TooManyRequestsError>()
@@ -61,7 +62,8 @@ fn is_an_answer(error: &topcoat::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use topcoat::router::error::{forbidden, not_found};
+    use topcoat::router::Body;
+    use topcoat::router::error::{forbidden, not_found, rewrite, service_unavailable};
 
     use super::is_an_answer;
 
@@ -69,6 +71,9 @@ mod tests {
     fn only_what_becomes_a_bare_500_is_a_failure() {
         assert!(is_an_answer(&not_found().into()));
         assert!(is_an_answer(&forbidden().into()));
+        // What the store-away layer answers a read left unconfirmed with.
+        assert!(is_an_answer(&service_unavailable(5).into()));
+        assert!(is_an_answer(&rewrite("/unavailable", Body::empty()).into()));
         assert!(!is_an_answer(&topcoat::Error::from_anyhow(
             anyhow::anyhow!("database is locked")
         )));

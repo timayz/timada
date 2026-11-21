@@ -435,6 +435,8 @@ mod tests {
         PeerState {
             id: NodeId(id),
             silent_for: Duration::from_secs(silent_secs),
+            reached: true,
+            refused: None,
             given_up,
             label: label.map(str::to_owned),
             keys: None,
