@@ -2128,7 +2128,13 @@ test("the shop shows what a merchant translated, at the slugs of each language",
   await expect(async () => {
     expect((await request.get(`${SHOP}/en/cats/cat-tree`)).status()).toBe(200);
     expect((await request.get(`${SHOP}/en/cats`)).status()).toBe(200);
-    expect((await request.get(`${SHOP}/en/legal-notice`)).status()).toBe(200);
+    // The page's translation is the last thing written, and its address
+    // answers without it: the shop's copy has caught up once it reads it.
+    const notice = await request.get(`${SHOP}/en/legal-notice`);
+    expect(notice.status()).toBe(200);
+    const read = await notice.text();
+    expect(read).toContain("Legal notice");
+    expect(read).toContain("The site is published by Acme.");
   }).toPass({ timeout: 15_000 });
 
   // The listing in English: the translated product under its English
@@ -2311,10 +2317,17 @@ test("the shop words its options, its facts and its filters once, for every prod
   const key = await mintKey(page, slug, true);
   await app.start(request, key, 2);
   // Under /en a product's menu and its table read the words; a value with
-  // none stays as the main language writes it.
+  // none stays as the main language writes it. The four words were saved
+  // with one click and reach the shop one after the other: all are waited
+  // for.
   await expect(async () => {
     await page.goto(`${SHOP}/en/p/collier`);
     await expect(page.getByLabel("Colour", { exact: true })).toBeVisible({ timeout: 1000 });
+    await expect(page.getByLabel("Colour", { exact: true }).locator("option")).toHaveText(["Pink", "Bleu"], {
+      timeout: 1000,
+    });
+    await expect(page.locator("[data-attributes]")).toContainText("Material", { timeout: 1000 });
+    await expect(page.locator("[data-attributes]")).toContainText("Leather", { timeout: 1000 });
   }).toPass({ timeout: 15_000 });
   await expect(page.getByLabel("Colour", { exact: true }).locator("option")).toHaveText(["Pink", "Bleu"]);
   await expect(page.locator("[data-attributes]")).toContainText("Material");
