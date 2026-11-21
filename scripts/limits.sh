@@ -37,6 +37,8 @@ rate="${LIMITS_RATE:-200}"
 
 topcoat asset bundle -p timada-dashboard --profile "$profile"
 cargo build --profile "$profile" -p timada-dashboard -p timada-loadtest
+# The nodes' certificate (config/load-node*.toml).
+scripts/cluster-cert.sh
 # What the build wrote goes to the disk now, not during a case.
 sync
 

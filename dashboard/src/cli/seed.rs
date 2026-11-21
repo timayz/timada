@@ -135,8 +135,11 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     super::migrate(config.clone()).await?;
 
     let store = db::open_store(&config.database.path).await?;
+    // One certificate for the node and the pictures copied to the others.
+    let tls = cluster::node_tls(config.cluster.as_ref())?;
     let (cluster, platform, _) = cluster::open(
         config.cluster.as_ref(),
+        tls.clone(),
         config.server.work_group.as_deref(),
         &config.server.also_works_for,
         config.server.also_works_for_ungrouped,
@@ -145,7 +148,8 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
     )
     .await?;
     let store_db = db::Db::from(store);
-    let peers = crate::peers::Peers::from_cluster(config.cluster.as_ref())?.map(Arc::new);
+    let peers =
+        crate::peers::Peers::from_cluster(config.cluster.as_ref(), tls.as_ref())?.map(Arc::new);
     let media = Arc::new(Media::new(&config.media, peers));
 
     cluster.until_confirmed(PEERS_WAIT).await?;

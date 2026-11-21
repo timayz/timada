@@ -56,6 +56,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use evento::Evento;
+use evento::cluster::NodeTls;
 use evento::cluster::host::RejoinMark;
 // The test harnesses include this module and use only `open`.
 #[allow(unused_imports)]
@@ -196,8 +197,26 @@ pub fn clear_catch_up_mark(store: &Path) -> Result<()> {
     }
 }
 
+/// This node's certificate for the other nodes (`cluster.tls`), read from
+/// its files; `None` for a node alone. Given to [`open`], whose node reads
+/// it again every few seconds, so a renewal reaches every clone of it: the
+/// requests this node makes of the others and the port it answers them on
+/// ([`crate::peers`], [`crate::peer_port`]) present the same certificate as
+/// the store's port.
+pub fn node_tls(cluster: Option<&ClusterConfig>) -> Result<Option<NodeTls>> {
+    cluster
+        .filter(|cluster| cluster.peers.len() > 1)
+        .and_then(|cluster| cluster.tls.as_ref())
+        .map(|files| {
+            NodeTls::from_files(files).context("cannot read the node's certificate (cluster.tls)")
+        })
+        .transpose()
+}
+
 /// Opens the node over the store at `store_path` and starts it. Single node
-/// when `cluster` is `None`. `work_group`, when set, is the default routing key
+/// when `cluster` is `None`. With `tls` (from [`node_tls`]), the node talks
+/// to the others over it, and follows its renewals; without, over the files
+/// `cluster.tls` names, as read here. `work_group`, when set, is the default routing key
 /// stamped on every new aggregate this node writes; with `also_works_for`, the
 /// work groups whose work this node does, and with `also_works_for_ungrouped` it
 /// does the work on what was written without one too. It tells the other
@@ -213,6 +232,7 @@ pub fn clear_catch_up_mark(store: &Path) -> Result<()> {
 /// (behind a read barrier with peers) and as [`LocalReads`].
 pub async fn open(
     cluster: Option<&ClusterConfig>,
+    tls: Option<NodeTls>,
     work_group: Option<&str>,
     also_works_for: &[String],
     also_works_for_ungrouped: bool,
@@ -226,6 +246,9 @@ pub async fn open(
         .settings(cluster.map(ClusterConfig::settings))
         .state_dir(state_dir(store_path))
         .label(label(work_group, also_works_for, also_works_for_ungrouped));
+    if let Some(tls) = tls {
+        builder = builder.tls(tls);
+    }
     // The work groups are routing keys set on the wrapper below, which the node
     // does not see: it is told what its subscriptions follow. Without a
     // work group it works that out for itself (the events written without a

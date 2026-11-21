@@ -139,13 +139,13 @@ impl Node {
             listen: None,
             web_peers: Vec::new(),
             web_listen: None,
-            secret: None,
+            tls: None,
             // The settings' own defaults.
             absent_after_secs: 24 * 3600,
             write_backlog: 100_000,
         });
         let (cluster, executor, _) =
-            cluster::open(config.as_ref(), None, &[], false, path, store.clone())
+            cluster::open(config.as_ref(), None, None, &[], false, path, store.clone())
                 .await
                 .unwrap();
         Self {

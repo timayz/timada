@@ -113,6 +113,7 @@ async fn harness(tls: Option<(PathBuf, PathBuf)>) -> Harness {
     let (cluster, platform, local) = cluster::open(
         None,
         None,
+        None,
         &[],
         false,
         &dir.join("timada.db"),

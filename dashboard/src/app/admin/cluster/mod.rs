@@ -115,10 +115,13 @@ fn failed_mail_label(mail: &OwedMail) -> (String, String) {
     (kind, to)
 }
 
-/// How another node stands, for the table.
+/// How another node stands, for the table. A link a certificate keeps down
+/// is said as such: the node answers, and the file to look at is named.
 fn peer_label(peer: &PeerState) -> String {
     let silent = peer.silent_for.as_secs();
-    if peer.given_up {
+    if let Some(refused) = &peer.refused {
+        format!("link refused: {refused}")
+    } else if peer.given_up {
         format!(
             "no longer waited for, silent for {}",
             format_silence(silent)
@@ -558,6 +561,26 @@ mod tests {
         // A node that left keeps its number: the next one is past the
         // highest member, not in the gap.
         assert_eq!(next_node(&[NodeId(0), NodeId(2)], NodeId(0), &bare).0, 3);
+    }
+
+    #[test]
+    fn a_refused_link_is_not_a_node_away() {
+        let peer = |refused| PeerState {
+            id: NodeId(1),
+            silent_for: std::time::Duration::from_secs(600),
+            reached: true,
+            refused,
+            given_up: false,
+            label: None,
+            keys: None,
+        };
+        assert_eq!(peer_label(&peer(None)), "not heard from for 10 min");
+        assert_eq!(
+            peer_label(&peer(Some(evento::cluster::LinkRefusal::OwnCertificate(
+                "it answered UnknownCA".into()
+            )))),
+            "link refused: the peer does not accept this node's certificate: it answered UnknownCA"
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! them between them. `GET` lists the tenants this node keeps keys for, to a
 //! node that joined and copies them all
 //! ([`KeyVault::copy_from_peers`](crate::key_vault::KeyVault::copy_from_peers)).
-//! Only the nodes may: nothing outside the cluster ever reads a key.
+//! Only the nodes reach it: nothing outside the cluster ever reads a key.
 
 pub mod tenant_id;
 
@@ -12,10 +12,8 @@ use topcoat::{
     Result,
     context::{Cx, context},
     router::{
-        StatusCode,
         content::Json,
-        header::{AUTHORIZATION, CACHE_CONTROL},
-        request::headers,
+        header::CACHE_CONTROL,
         response::{IntoResponse, Response},
         route,
     },
@@ -23,18 +21,10 @@ use topcoat::{
 
 use crate::key_vault::KeyVault;
 
-/// Whether the request carries the cluster's secret.
-pub fn authorized(cx: &Cx, vault: &KeyVault) -> bool {
-    vault.authorizes(headers(cx).get(AUTHORIZATION).map(|value| value.as_bytes()))
-}
-
-/// The tenants this node keeps keys for. 401 without the cluster's secret.
+/// The tenants this node keeps keys for.
 #[route(GET)]
 pub async fn get(cx: &Cx) -> Result<Response> {
     let vault = context::<Arc<KeyVault>>(cx);
-    if !authorized(cx, vault) {
-        return StatusCode::UNAUTHORIZED.into_response(cx);
-    }
     let tenants = vault.tenants().await.map_err(topcoat::Error::from_anyhow)?;
     ([(CACHE_CONTROL, "no-store")], Json(tenants)).into_response(cx)
 }

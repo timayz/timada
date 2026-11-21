@@ -384,15 +384,11 @@ dir = "data/shopper-keys"
 # # upload is copied to the other nodes and only saved once a majority of them
 # # hold it, and a node that missed one fetches it from the others. Required
 # # with more than one node.
-# web_peers = ["http://127.0.0.1:7100", "http://127.0.0.1:7101", "http://127.0.0.1:7102"]
+# web_peers = ["https://127.0.0.1:7100", "https://127.0.0.1:7101", "https://127.0.0.1:7102"]
 # # Bind address for what the other nodes ask of this one; defaults to its
 # # entry in web_peers when that is an IP address and a port, and is required
 # # when it is a name.
 # web_listen = "0.0.0.0:7100"
-# # Shared by every node, at least 32 characters: a node only takes a picture
-# # from a peer presenting it. Set it through TIMADA__CLUSTER__SECRET rather
-# # than in this file. Required with more than one node.
-# secret = ""
 # # Every finished write is kept on the other nodes until the node that missed
 # # it has it too. A node not heard from for this long is no longer waited
 # # for: the others tidy up without it, and when it returns it is told so and
@@ -406,6 +402,18 @@ dir = "data/shopper-keys"
 # # refuses new writes until the node returns or is given up. The node's page
 # # under Platform shows what it keeps, and the log warns at four fifths.
 # write_backlog = 100000
+# # The nodes talk over mutual TLS, on both ports, and let each other in by
+# # their certificates: the authority every node's is issued by, this node's
+# # certificate and its key, in PEM (the three files of a cert-manager
+# # secret). A node is who its certificate names: it must be valid for the
+# # host, or the address, the node has in `peers` and `web_peers`. The files
+# # are read again every few seconds: a certificate is renewed by replacing
+# # them. Required with more than one node; scripts/cluster-cert.sh makes a
+# # set for nodes on this machine.
+# [cluster.tls]
+# ca = "data/cluster-tls/ca.crt"
+# cert = "data/cluster-tls/tls.crt"
+# key = "data/cluster-tls/tls.key"
 
 [monitoring]
 # What gets logged: a level, then overrides per component. The default keeps

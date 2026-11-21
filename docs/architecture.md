@@ -277,7 +277,8 @@ by construction.
    night away, or one that is catching up after a copy or a `rebuild`, is left
    out until it reads low. `monitoring.metrics_listen` adds an internal port
    with `/metrics` (`metrics.rs`: Prometheus text with the same figures, the
-   workers by state, the writes kept for absent nodes, the peers in touch (`timada_peers_in_touch`), the store connections by
+   workers by state, the writes kept for absent nodes, the peers in touch (`timada_peers_in_touch`) and those whose link a
+   certificate keeps down (`timada_peers_refused`, which the cluster page says too), the store connections by
    tenant, the size of the store's three files (`timada_store_bytes`) and evento's counters, every series labelled by node) and `/ready`. The
    `rejoin` command sets the same mark by hand, for a lost store file (delete the
    file first, and run `migrate` after it for `serve` to have a store to start on: an empty journal comes back under the node's own id through evento's
@@ -441,8 +442,7 @@ by construction.
    `too_many_logins` past them), so a password cannot be guessed by trying. Like every
    limit here (`rate_limit.rs`), it holds across the cluster: each node keeps the passes
    it let through and, before letting one more through, asks the other nodes for theirs
-   (`POST /cluster/limits` on their `cluster.web_peers` address, under `cluster.secret`,
-   the keys hashed). A node that does not answer within two seconds counts for nothing,
+   (`POST /cluster/limits` on their `cluster.web_peers` address, the keys hashed). A node that does not answer within two seconds counts for nothing,
    and two nodes deciding at the same moment may each let the last pass through, so the
    limit holds to within a moment's requests.
 8. **Pages** (`app/`). The topcoat router; the module tree is the URL tree.
@@ -466,8 +466,18 @@ by construction.
    `cluster.web_peers` gives each node): `/cluster/media/*` (a picture copied to a node
    before it is recorded, or fetched by a node that lacks it), `/cluster/keys/*` (the
    same for the personal-data keys) and `/cluster/limits` (what a node let through
-   the limits), each under `cluster.secret`. The public port serves none of it, so no
-   request from outside the cluster reaches these routes.
+   the limits). The public port serves none of it, so no request from outside the
+   cluster reaches these routes. Both of the nodes' ports are mutual TLS with one
+   certificate a node (`[cluster.tls]`: the authority, the node's certificate, its key),
+   required with more than one node: on the store's, evento's host lets a node in as
+   the node its certificate names; on this one, a connection whose certificate, issued
+   by the authority, names no member as the store's port dials it ends at the handshake
+   (`Members`), so a node removed is refused from its next connection on and a node
+   added is let in once the cluster has its address. The certificate is read once (`cluster::node_tls`) and
+   given to the node, which reads its files again every few seconds: a renewal reaches
+   both ports and the requests this node makes, with no restart. A link a certificate
+   keeps down is said on the cluster page and in `timada_peers_refused`, not taken for
+   a node away. No secret travels between the nodes.
 
 Shutdown stops the HTTP server, then the store API, the nodes' port, the sweeps, the
 subscriptions, the node and finally the pools.
@@ -829,8 +839,8 @@ tenant's API keys page for its storefront to be configured with.
 With several nodes, every node keeps every picture, so a node going down takes none
 with it and `media.public_url` can point at any of them or at a balancer in front.
 The node taking an upload stores the renditions, copies each to the other nodes
-(`PUT /cluster/media/<tenant>/<400|1200>/<file>` on their `cluster.web_peers` address,
-with `cluster.secret` as a bearer token; a copy is taken only if it is WebP and no
+(`PUT /cluster/media/<tenant>/<400|1200>/<file>` on their `cluster.web_peers` address;
+a copy is taken only if it is WebP and no
 heavier than a rendition gets) and commits only once a majority of the cluster holds
 both, the same majority the commit itself needs; short of that the upload is refused
 and the copies are left unreferenced. Each node of that majority syncs the files to its
@@ -844,7 +854,7 @@ catalog, the pages and the reviews, `timada-dashboard/mail-logos` for the tenant
 what references it, the same on every node; and `media_wanted`, the node's own list
 of files to fetch, which a per-node fetcher (`dashboard/src/media/fetcher.rs`) works
 off the subscription's cursor, several files at once (`GET
-/cluster/media/<tenant>/<400|1200>/<file>` on the peers, with `cluster.secret`),
+/cluster/media/<tenant>/<400|1200>/<file>` on the peers),
 keeping a copy only if its size and digest are the ones recorded. A file every peer lacks is dropped with a warning
 (gone for good); a file some peer could not be asked for waits, longer each time, and
 is given up on after twelve hours, which `/admin/cluster` shows for a week. So a
@@ -957,12 +967,12 @@ the support messages use them too (below). The dashboard keeps the keys in
 `[secrets] key` (no section, no shopper accounts and no contact messages): a key id is
 random, so a tenant's keys spread evenly over 64 directories, some sixteen thousand
 files in each at a million accounts. Like a picture, a key is on a majority of the
-cluster before `Registered` commits (`PUT /cluster/keys/<tenant>/<key id>`, with
-`cluster.secret`), and each node of that majority syncs it to its disk, name and all,
+cluster before `Registered` commits (`PUT /cluster/keys/<tenant>/<key id>` on the
+nodes' port), and each node of that majority syncs it to its disk, name and all,
 before it answers (`dashboard/src/disk.rs`), as the store syncs each write: a power cut
 across the cluster keeps the key with the event.
 Nothing serves these files to the outside: a node lacking a key asks
-all its peers at once on the same route, with a `GET` carrying the secret, and takes a
+all its peers at once on the same route, with a `GET`, and takes a
 peer that has not answered within two seconds for out of reach. Each node follows the
 tenants' `Shopper` streams (`timada-dashboard/shopper-keys`) to fetch the keys of new
 accounts and destroy those of deleted ones. Destroying puts an empty file, the
