@@ -273,6 +273,58 @@ on the same 12-core machine.
   node stayed that way: 32 sign-ins a second for 64 senders, each 2.0 s, and
   at 200 arriving a second the node asked held 900 files open.
 
+## Nine nodes in three regions
+
+One cluster over three regions, three nodes in each (#728): every node holds
+the whole store, and a write waits for five of the nine, so it always crosses
+a region. `make wan` (`scripts/wan.sh`) stands the nine up on one machine,
+three releases of the chart in three namespaces of one kind cluster, and puts
+a delay between the pods of different regions with `tc netem`: 10 ms there
+and back between the two regions of Europe, 80 ms between either and the far
+one (what `ping` then says from one pod to another). The requests are asked
+of one node of each region by a pod no delay applies to, twenty of each. The
+figures are from 2026-11-21 (#725), evento `2116fcd`, three runs; a range is
+the medians of the three.
+
+| Median | No delay | With the delays, asked in Europe | asked in the far region | The far region cut off, asked in Europe |
+|---|---|---|---|---|
+| An account registered (several writes) | 75 to 210 ms | 285 to 355 ms | 670 to 675 ms | 150 to 245 ms |
+| A sign-in refused for its password | 20 to 130 ms | 95 to 115 ms | 100 to 120 ms | 8 to 25 ms |
+| `/ready` | 16 to 70 ms | 20 to 85 ms | 25 to 45 ms | 16 to 20 ms |
+
+- **Nothing was refused and no node gave a peer up** at these delays: the
+  timeouts of a cluster on one network held, and no setting had to change.
+  The figures without a delay are those of nine nodes on one disk, and move
+  a good deal from one run to the next; the slowest of twenty was often one
+  to two seconds, with or without a delay.
+- **A write costs every region the ocean**, the far one most: an account
+  registered there takes three to nine times what it takes on one network.
+- **A sign-in waits for the furthest node**: the limits are asked of every
+  other node at once and the slowest answer is waited for
+  (`rate_limit.rs`), so each attempt costs one trip across the ocean,
+  wherever it is asked. With the far region cut off, one attempt waits the
+  two seconds a silent node is given, and the following ones no longer ask
+  it.
+- **The far region cut off** (every packet to and from it dropped): its nodes
+  answer `/ready` with 503 after 10 s (three runs: 10, 10 and 11 s). Until
+  then a request through one of them waits five seconds and fails (#730).
+  Europe goes on taking writes, a little faster than with the far region
+  there. Past the minute, one node of Europe takes on the work group of each
+  node cut off (three of three taken 75 s after the minute in one run, two
+  in another, the third following); they are handed back within 30 s of the
+  link coming back.
+- **The link put back** (nine times, after one to two minutes cut off): the node
+  answers `/ready` with 200 after 0.4 to 3.6 s. A request through it at that
+  moment went through in six (0.7 to 4.3 s) and failed in three, twice after
+  5 s and once after 15 s; asked again, it went through each time
+  (timayz/evento#603: the node hears the others a moment before its own
+  connections to them are back).
+- **With 1 % of the packets lost** between regions, two runs: an account
+  registered took 220 to 320 ms in Europe and 650 to 705 ms in the far
+  region at the median, with the slowest of twenty at 0.8 to 3.8 s. In the
+  third run, where the request after the link came back had failed for
+  15 s just before, it took 670 to 850 ms everywhere.
+
 ## Not measured
 
 - Three nodes on three machines, each with its own disk and a network
@@ -283,3 +335,8 @@ on the same 12-core machine.
 - The storefront connections: the store API tells every connection of every
   write, whatever its shop, before `b03d06d`; a connection that serves one
   shop is now told of that shop's writes alone.
+- Nine nodes in three regions that are really apart: `make wan` is one
+  machine and one disk with a delay put on the packets. A picture uploaded
+  and a personal-data key fetched from a node of another region, which go
+  over the nodes' web addresses like the limits, were not timed, nor a shop's
+  pages and checkout, nor more than twenty requests of a kind.

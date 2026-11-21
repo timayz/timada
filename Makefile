@@ -1,4 +1,4 @@
-.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate stripe.listen aliexpress.tunnel e2e e2e.cluster loadtest limits lint fmt-check fmt test machete l10n check
+.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate stripe.listen aliexpress.tunnel e2e e2e.cluster loadtest limits wan lint fmt-check fmt test machete l10n check
 
 # What `make seed` writes and `make storefront` reads: the key and the addresses
 # of the seeded shop. Git ignores it.
@@ -148,6 +148,13 @@ loadtest:
 # one of three (docs/sizing.md has the figures).
 limits:
 	scripts/limits.sh
+
+# Nine nodes in three regions on one machine, a delay between the regions:
+# what a write, a sign-in and `/ready` take, and what a region cut off does
+# (docs/sizing.md has the figures). Needs docker, kind, helm and kubectl:
+#   nix shell nixpkgs#kind nixpkgs#kubernetes-helm nixpkgs#kubectl --command make wan
+wan:
+	scripts/wan.sh
 
 # Run Clippy linter for code quality
 lint:
