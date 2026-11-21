@@ -74,6 +74,9 @@ struct Tuning {
     write_backlog: usize,
     /// `founders`: how many of the peers found the cluster; `None`, all.
     founders: Option<u64>,
+    /// Whether the nodes talk over mutual TLS, each with the certificate in
+    /// its `tls` directory ([`Authority::issue_to`]); in clear otherwise.
+    tls: bool,
 }
 
 impl Default for Tuning {
@@ -82,7 +85,49 @@ impl Default for Tuning {
             absent_after_secs: 0,
             write_backlog: 100_000,
             founders: None,
+            tls: false,
         }
+    }
+}
+
+/// The authority a test cluster's certificates are issued by.
+struct Authority {
+    params: rcgen::CertificateParams,
+    key: rcgen::KeyPair,
+    pem: String,
+}
+
+impl Authority {
+    fn new() -> Self {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let pem = params.self_signed(&key).unwrap().pem();
+        Self { params, key, pem }
+    }
+
+    /// Writes a certificate for `name` (a host, or an address) where node
+    /// `id` reads its own, in place of what was there.
+    fn issue_to(&self, root: &Path, id: u64, name: &str) {
+        let files = tls_files(root, id);
+        std::fs::create_dir_all(files.cert.parent().unwrap()).unwrap();
+        let key = rcgen::KeyPair::generate().unwrap();
+        let params = rcgen::CertificateParams::new(vec![name.to_owned()]).unwrap();
+        let issuer = rcgen::Issuer::from_params(&self.params, &self.key);
+        let cert = params.signed_by(&key, &issuer).unwrap();
+        std::fs::write(&files.ca, &self.pem).unwrap();
+        std::fs::write(&files.key, key.serialize_pem()).unwrap();
+        std::fs::write(&files.cert, cert.pem()).unwrap();
+    }
+}
+
+/// Where node `id` keeps its certificate, as `[cluster.tls]` names it.
+fn tls_files(root: &Path, id: u64) -> evento::cluster::TlsSettings {
+    let dir = root.join(format!("node{id}")).join("tls");
+    evento::cluster::TlsSettings {
+        ca: dir.join("ca.crt"),
+        cert: dir.join("tls.crt"),
+        key: dir.join("tls.key"),
     }
 }
 
@@ -113,18 +158,22 @@ impl Node {
         let path = Self::store_path(root, id);
         let store = db::migrate_store(&path).await.unwrap();
         let store_db = db::Db::from(store.clone());
+        let config = ClusterConfig {
+            node_id: id,
+            peers: peers.iter().copied().map(Into::into).collect(),
+            founders: tuning.founders,
+            listen: None,
+            web_peers: Vec::new(),
+            web_listen: None,
+            tls: tuning.tls.then(|| tls_files(root, id)),
+            absent_after_secs: tuning.absent_after_secs,
+            write_backlog: tuning.write_backlog,
+        };
+        // As `serve` does: the certificate read once, and given to the node.
+        let tls = cluster::node_tls(Some(&config)).unwrap();
         let (cluster, store, local) = cluster::open(
-            Some(&ClusterConfig {
-                node_id: id,
-                peers: peers.iter().copied().map(Into::into).collect(),
-                founders: tuning.founders,
-                listen: None,
-                web_peers: Vec::new(),
-                web_listen: None,
-                secret: None,
-                absent_after_secs: tuning.absent_after_secs,
-                write_backlog: tuning.write_backlog,
-            }),
+            Some(&config),
+            tls,
             work_group,
             &also_works_for
                 .iter()
@@ -337,6 +386,95 @@ async fn a_tenants_write_lands_on_every_node_in_its_own_streams() {
     }
 }
 
+/// The nodes talk over mutual TLS with the certificates the configuration
+/// names (#726). A node whose certificate names no node is refused, and its
+/// peers say so instead of taking it for away; once its files are replaced,
+/// it is let in and catches up, nothing restarted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_nodes_let_each_other_in_by_their_certificates() {
+    let root = temp_root("tls");
+    let addrs = free_addrs().await;
+    let authority = Authority::new();
+    authority.issue_to(&root, 0, "127.0.0.1");
+    authority.issue_to(&root, 1, "127.0.0.1");
+    authority.issue_to(&root, 2, "stranger.example");
+    let tuning = Tuning {
+        tls: true,
+        ..Tuning::default()
+    };
+    // Nodes 0 and 1 are the majority. Node 2 runs bare: a read model of its
+    // own could not start before a majority hears it.
+    let (n0, n1, n2) = tokio::join!(
+        Node::start(&root, 0, &addrs, tuning),
+        Node::start(&root, 1, &addrs, tuning),
+        bare_node(&root, 2, &addrs),
+    );
+    Command(n0.store.clone())
+        .create_tenant(CreateTenant {
+            name: "acme".into(),
+            owner_user_id: "alice".into(),
+        })
+        .await
+        .unwrap();
+    let written = events_in(&Node::store_path(&root, 0), None).await;
+    eventually("node 0 says node 2's certificate is refused", async || {
+        n0.cluster
+            .health()
+            .peers
+            .iter()
+            .any(|peer| peer.id == NodeId(2) && peer.refused.is_some())
+    })
+    .await;
+    assert!(events_in(&Node::store_path(&root, 2), None).await < written);
+
+    // Node 2's files replaced: it is let in, and catches up.
+    authority.issue_to(&root, 2, "127.0.0.1");
+    await_events(
+        &Node::store_path(&root, 2),
+        None,
+        written,
+        "node 2, let in, catches up",
+    )
+    .await;
+    eventually("node 0 no longer says node 2 is refused", async || {
+        n0.cluster
+            .health()
+            .peers
+            .iter()
+            .any(|peer| peer.id == NodeId(2) && peer.refused.is_none())
+    })
+    .await;
+
+    for node in [n0, n1] {
+        node.stop().await;
+    }
+    n2.shutdown().await;
+}
+
+/// Node `id` of `peers` over mutual TLS with its certificate, and nothing
+/// else: no read model behind it.
+async fn bare_node(root: &Path, id: u64, peers: &[SocketAddr]) -> Arc<Cluster> {
+    let path = Node::store_path(root, id);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let store = db::migrate_store(&path).await.unwrap();
+    let config = ClusterConfig {
+        node_id: id,
+        peers: peers.iter().copied().map(Into::into).collect(),
+        founders: None,
+        listen: None,
+        web_peers: Vec::new(),
+        web_listen: None,
+        tls: Some(tls_files(root, id)),
+        absent_after_secs: 0,
+        write_backlog: 100_000,
+    };
+    let tls = cluster::node_tls(Some(&config)).unwrap();
+    let (cluster, _, _) = cluster::open(Some(&config), tls, None, &[], false, &path, store)
+        .await
+        .unwrap();
+    cluster
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_node_that_missed_writes_catches_up_when_it_returns() {
     let root = temp_root("catch-up");
@@ -372,8 +510,7 @@ async fn a_node_away_too_long_copies_the_store_back_at_its_next_start() {
     let addrs = free_addrs().await;
     let tuning = Tuning {
         absent_after_secs: 2,
-        write_backlog: 100_000,
-        founders: None,
+        ..Tuning::default()
     };
     let nodes = start_all(&root, &addrs, tuning).await;
     let acme = create_everywhere(&nodes, "acme").await;
@@ -427,9 +564,8 @@ async fn a_node_at_its_write_backlog_refuses_writes() {
     let root = temp_root("backlog");
     let addrs = free_addrs().await;
     let tuning = Tuning {
-        absent_after_secs: 0,
         write_backlog: 3,
-        founders: None,
+        ..Tuning::default()
     };
     let nodes = start_all(&root, &addrs, tuning).await;
     let acme = create_everywhere(&nodes, "acme").await;
@@ -1014,7 +1150,7 @@ async fn concurrent_writers_never_see_stale_versions() {
     let root = temp_root("stress");
     let path = root.join("timada.db");
     let store = db::migrate_store(&path).await.unwrap();
-    let (cluster, store, _) = cluster::open(None, None, &[], false, &path, store)
+    let (cluster, store, _) = cluster::open(None, None, None, &[], false, &path, store)
         .await
         .unwrap();
     let mut tasks = tokio::task::JoinSet::new();

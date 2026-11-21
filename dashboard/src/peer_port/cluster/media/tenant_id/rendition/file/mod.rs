@@ -10,9 +10,8 @@ use topcoat::{
     context::{Cx, context},
     router::{
         StatusCode,
-        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE},
+        header::{CACHE_CONTROL, CONTENT_TYPE},
         module_param,
-        request::headers,
         response::{IntoResponse, Response},
         route,
     },
@@ -24,19 +23,11 @@ use crate::media::Media;
 
 module_param!(pub file);
 
-/// Whether the request carries the cluster's secret.
-fn authorized(cx: &Cx, media: &Media) -> bool {
-    media.authorizes(headers(cx).get(AUTHORIZATION).map(|value| value.as_bytes()))
-}
-
-/// Stores the copy. 401 without the cluster's secret, 422 for a name or
-/// bytes that are not a rendition of a picture.
+/// Stores the copy. 422 for a name or bytes that are not a rendition of a
+/// picture.
 #[route(PUT)]
 pub async fn put(cx: &Cx, bytes: Bytes) -> Result<StatusCode> {
     let media = context::<Arc<Media>>(cx);
-    if !authorized(cx, media) {
-        return Ok(StatusCode::UNAUTHORIZED);
-    }
     let tenant_id = tenant_id(cx);
     let rendition = rendition(cx);
     let file = file(cx);
@@ -51,14 +42,11 @@ pub async fn put(cx: &Cx, bytes: Bytes) -> Result<StatusCode> {
     })
 }
 
-/// The file, for a peer that lacks it. 401 without the cluster's secret,
-/// 404 when this node does not hold it.
+/// The file, for a peer that lacks it. 404 when this node does not hold
+/// it.
 #[route(GET)]
 pub async fn get(cx: &Cx) -> Result<Response> {
     let media = context::<Arc<Media>>(cx);
-    if !authorized(cx, media) {
-        return StatusCode::UNAUTHORIZED.into_response(cx);
-    }
     let copy = media
         .copy_of(tenant_id(cx), rendition(cx), file(cx))
         .await

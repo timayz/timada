@@ -7,7 +7,8 @@
 # refused, `/ready`; with no delay, with it, with the far region cut off and
 # healed, and with 1 % of the packets lost. docs/sizing.md has the figures.
 #
-# Needs docker, and kind, helm and kubectl on the path:
+# Needs docker, and kind, helm and kubectl on the path, and quay.io for the
+# charts of cert-manager and its CSI driver (the nodes' certificates):
 #   nix shell nixpkgs#kind nixpkgs#kubernetes-helm nixpkgs#kubectl --command make wan
 # WAN_IMAGE names an image already built (timayz/timada:<tag>); WAN_KEEP=1
 # leaves the cluster up; WAN_COUNT is how many of each request (20).
@@ -33,6 +34,25 @@ kind create cluster --name "$NAME" >/dev/null 2>&1
 kind load docker-image "timayz/timada:$WAN_IMAGE" --name "$NAME" >/dev/null 2>&1
 kubectl wait --for=condition=Ready nodes --all --timeout=120s >/dev/null
 
+# cert-manager and its CSI driver give each pod its certificate for the
+# other nodes, under one authority the three releases share, as three
+# Kubernetes clusters would: the same secret created in each.
+charts=oci://quay.io/jetstack/charts
+helm install cert-manager "$charts/cert-manager" -n cert-manager --create-namespace \
+  --set crds.enabled=true --wait >/dev/null
+helm install cert-manager-csi-driver "$charts/cert-manager-csi-driver" -n cert-manager --wait >/dev/null
+# Its webhook answers a moment after its pod is ready: asked until it does.
+for _ in $(seq 60); do
+  kubectl apply --dry-run=server -f - >/dev/null 2>&1 <<'ISSUER' && break
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata: {name: asked, namespace: default}
+spec: {selfSigned: {}}
+ISSUER
+  sleep 2
+done
+scripts/cluster-cert.sh "$DIR/authority"
+
 # The whole cluster's list, the same in every release: each pod by its
 # namespace's name for it.
 peers=()
@@ -51,11 +71,13 @@ extraSecretEnv:
   TIMADA__AUTH__SECRET_KEY: "0123456789abcdef0123456789abcdef-auth"
   TIMADA__SECRETS__KEY: "0123456789abcdef0123456789abcdef-secr"
   TIMADA__MAIL__SMTP_URL: "smtp://127.0.0.1:1025"
-  TIMADA__CLUSTER__SECRET: "0123456789abcdef0123456789abcdef-clus"
 peers: [$(join "${peers[@]}")]
+clusterCa: {secretName: timada-cluster-ca}
 VALUES
 for region in 0 1 2; do
   kubectl create namespace "r$region" >/dev/null
+  kubectl -n "r$region" create secret tls timada-cluster-ca \
+    --cert="$DIR/authority/ca.crt" --key="$DIR/authority/ca.key" >/dev/null
   # Without the gateway's route and certificate: nothing is served outside,
   # and the certificate has one name for every release.
   helm template timada helm -n "r$region" -f "$DIR/values.yaml" --set "firstNodeId=$((region * 3))" |

@@ -9,10 +9,16 @@
 //! ([`crate::rate_limit`]).
 //!
 //! They are asked on the port each keeps for it (`cluster.web_listen`),
-//! where nothing else is served ([`crate::peer_port`]).
+//! where nothing else is served ([`crate::peer_port`]), over mutual TLS with
+//! this node's certificate: a node is let in as the node its certificate
+//! names, as on the store's port, and no secret travels.
 
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
+use anyhow::Context;
+use evento::cluster::NodeTls;
+use evento::cluster::tls::tokio_rustls::rustls::ClientConfig;
 use openidconnect::reqwest;
 
 use crate::config::ClusterConfig;
@@ -23,20 +29,42 @@ const PEER_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct Peers {
     /// Web addresses of the other nodes, no trailing slash.
     urls: Vec<String>,
-    /// `Bearer <cluster.secret>`.
-    authorization: String,
     /// Copies the other nodes must acknowledge before a file is recorded:
     /// with this node's own, a majority of the cluster.
     quorum: usize,
+    client: Client,
+}
+
+/// What the requests to the other nodes go through.
+enum Client {
+    /// Mutual TLS with this node's certificate, built again once the
+    /// certificate is renewed, which the node reads again as it runs.
+    Tls { tls: NodeTls, built: RwLock<Built> },
+    /// Plain HTTP, to the tests' stand-in peers.
+    #[cfg(test)]
+    Plain(reqwest::Client),
+}
+
+/// A client, and the TLS it was built with.
+struct Built {
+    config: Arc<ClientConfig>,
     client: reqwest::Client,
 }
 
 impl Peers {
-    /// The other nodes, or `None` for a single node.
-    pub fn from_cluster(cluster: Option<&ClusterConfig>) -> anyhow::Result<Option<Self>> {
+    /// The other nodes, reached with this node's certificate `tls`, or
+    /// `None` for a single node.
+    pub fn from_cluster(
+        cluster: Option<&ClusterConfig>,
+        tls: Option<&NodeTls>,
+    ) -> anyhow::Result<Option<Self>> {
         let Some(cluster) = cluster.filter(|cluster| cluster.peers.len() > 1) else {
             return Ok(None);
         };
+        // Required by `Config::load` with more than one node.
+        let tls = tls
+            .context("the nodes of a cluster talk over TLS: cluster.tls")?
+            .clone();
         let urls = cluster
             .web_peers
             .iter()
@@ -44,16 +72,15 @@ impl Peers {
             .filter(|(index, _)| *index as u64 != cluster.node_id)
             .map(|(_, url)| url.clone())
             .collect();
-        // Validated by `Config::load`.
-        let secret = cluster.secret.as_deref().unwrap_or_default();
+        let config = tls.connector().config().clone();
+        let client = build(&config)?;
         Ok(Some(Self {
             urls,
-            authorization: format!("Bearer {secret}"),
             quorum: cluster.peers.len() / 2,
-            client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(PEER_TIMEOUT)
-                .build()?,
+            client: Client::Tls {
+                tls,
+                built: RwLock::new(Built { config, client }),
+            },
         }))
     }
 
@@ -61,13 +88,36 @@ impl Peers {
         &self.urls
     }
 
-    pub fn client(&self) -> &reqwest::Client {
-        &self.client
-    }
-
-    /// The `Authorization` header a request to a peer carries.
-    pub fn authorization(&self) -> &str {
-        &self.authorization
+    /// The client a request to a peer goes through, presenting this node's
+    /// certificate as it stands.
+    pub fn client(&self) -> reqwest::Client {
+        match &self.client {
+            Client::Tls { tls, built } => {
+                let config = tls.connector().config().clone();
+                {
+                    let built = built.read().unwrap_or_else(PoisonError::into_inner);
+                    if Arc::ptr_eq(&built.config, &config) {
+                        return built.client.clone();
+                    }
+                }
+                // Renewed: the requests from now on present the new one.
+                let mut built = built.write().unwrap_or_else(PoisonError::into_inner);
+                if !Arc::ptr_eq(&built.config, &config) {
+                    match build(&config) {
+                        Ok(client) => built.client = client,
+                        Err(err) => tracing::warn!(
+                            error = %format!("{err:#}"),
+                            "cannot reach the other nodes with the renewed certificate; the requests go on with the one before"
+                        ),
+                    }
+                    // Once a renewal: a failure is not tried again each time.
+                    built.config = config;
+                }
+                built.client.clone()
+            }
+            #[cfg(test)]
+            Client::Plain(client) => client.clone(),
+        }
     }
 
     /// PUTs `body` at `path` on every other node, returning once a majority
@@ -82,12 +132,9 @@ impl Peers {
         what: &'static str,
     ) -> anyhow::Result<()> {
         let (tx, mut rx) = tokio::sync::mpsc::channel(self.urls.len());
+        let client = self.client();
         for url in &self.urls {
-            let request = self
-                .client
-                .put(format!("{url}{path}"))
-                .header(reqwest::header::AUTHORIZATION, &self.authorization)
-                .body(body.clone());
+            let request = client.put(format!("{url}{path}")).body(body.clone());
             let (tx, url) = (tx.clone(), url.clone());
             tokio::spawn(async move {
                 let copied = match request.send().await {
@@ -123,27 +170,16 @@ impl Peers {
             self.quorum
         )
     }
-
-    /// Whether a request carries the cluster's secret.
-    pub fn authorizes(&self, header: Option<&[u8]>) -> bool {
-        let Some(header) = header else {
-            return false;
-        };
-        let expected = self.authorization.as_bytes();
-        // Constant time, so the answer says nothing about how close a guess was.
-        header.len() == expected.len()
-            && header
-                .iter()
-                .zip(expected)
-                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-                == 0
-    }
 }
 
-/// Whether a request carries the cluster's secret. Without peers no request
-/// does: a single node takes no copies.
-pub fn authorizes(peers: Option<&Peers>, header: Option<&[u8]>) -> bool {
-    peers.is_some_and(|peers| peers.authorizes(header))
+/// A client presenting this node's certificate, as `config` holds it.
+fn build(config: &ClientConfig) -> anyhow::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .use_preconfigured_tls(config.clone())
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(PEER_TIMEOUT)
+        .build()
+        .context("cannot build the client for the other nodes")
 }
 
 /// A tenant, picture or key id: letters, digits, `-` and `_`, so it names one
@@ -162,17 +198,28 @@ pub(crate) mod test_support {
 
     use super::*;
 
-    /// The secret the peers built by [`Peers::for_test`] share.
-    pub const SECRET: &str = "Bearer a-secret-shared-by-every-node-of-it";
-
     impl Peers {
-        /// These peers, in a cluster of `nodes`.
+        /// These peers, in a cluster of `nodes`, over plain HTTP.
         pub fn for_test(urls: Vec<String>, nodes: usize) -> Self {
             Self {
                 urls,
-                authorization: SECRET.into(),
                 quorum: nodes / 2,
-                client: reqwest::Client::new(),
+                client: Client::Plain(reqwest::Client::new()),
+            }
+        }
+
+        /// These peers, in a cluster of `nodes`, reached over mutual TLS with
+        /// `tls`.
+        pub fn for_test_over(urls: Vec<String>, nodes: usize, tls: NodeTls) -> Self {
+            let config = tls.connector().config().clone();
+            let client = build(&config).unwrap();
+            Self {
+                urls,
+                quorum: nodes / 2,
+                client: Client::Tls {
+                    tls,
+                    built: RwLock::new(Built { config, client }),
+                },
             }
         }
     }
@@ -298,19 +345,6 @@ mod tests {
             5,
         );
         assert!(put(five_short).await.is_err());
-    }
-
-    #[test]
-    fn a_request_needs_the_secret() {
-        let peers = Peers::for_test(vec![], 3);
-        assert!(authorizes(Some(&peers), Some(SECRET.as_bytes())));
-        assert!(!authorizes(
-            Some(&peers),
-            Some(b"Bearer a-secret-shared-by-every-node-of-iX")
-        ));
-        assert!(!authorizes(Some(&peers), Some(b"Bearer ")));
-        assert!(!authorizes(Some(&peers), None));
-        assert!(!authorizes(None, Some(SECRET.as_bytes())));
     }
 
     #[test]

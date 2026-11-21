@@ -99,6 +99,11 @@ spec:
               mountPath: /etc/timada
             - name: data
               mountPath: /var/lib/timada
+            {{- if include "timada.clustered" . }}
+            - name: cluster-tls
+              readOnly: true
+              mountPath: /etc/cluster/tls
+            {{- end }}
           envFrom:
             - secretRef:
                 name: timada-env
@@ -120,6 +125,11 @@ spec:
               mountPath: /etc/timada
             - name: data
               mountPath: /var/lib/timada
+            {{- if include "timada.clustered" . }}
+            - name: cluster-tls
+              readOnly: true
+              mountPath: /etc/cluster/tls
+            {{- end }}
           envFrom:
             - secretRef:
                 name: timada-env
@@ -172,6 +182,25 @@ spec:
         - name: config
           configMap:
             name: timada-config
+        {{- if include "timada.clustered" . }}
+        # This pod's certificate for the other nodes: issued by cert-manager's
+        # CSI driver as the pod starts, for the name the others dial it at, and
+        # renewed in place, which the node picks up without a restart. Its key
+        # is made on the machine the pod runs on, for this pod alone, and kept
+        # in memory there: no Secret holds it, and no other pod can speak as
+        # this one.
+        - name: cluster-tls
+          csi:
+            driver: csi.cert-manager.io
+            readOnly: true
+            volumeAttributes:
+              csi.cert-manager.io/issuer-name: timada-cluster
+              csi.cert-manager.io/issuer-kind: Issuer
+              csi.cert-manager.io/dns-names: {{ include "timada.dialledAs" . | quote }}
+              csi.cert-manager.io/key-algorithm: ECDSA
+              csi.cert-manager.io/key-usages: "digital signature,server auth,client auth"
+              csi.cert-manager.io/fs-group: "10001"
+        {{- end }}
 
   volumeClaimTemplates:
     - metadata:

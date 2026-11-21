@@ -75,7 +75,7 @@ use topcoat::router::{
 use crate::config::MediaConfig;
 use crate::db::Db;
 use crate::disk::{self, Durability};
-use crate::peers::{self, Peers, is_id};
+use crate::peers::{Peers, is_id};
 
 pub mod fetcher;
 pub mod quota;
@@ -390,7 +390,6 @@ impl Media {
             let response = peers
                 .client()
                 .get(format!("{url}{PEER_ROUTE}/{tenant_id}/{file}"))
-                .header(reqwest::header::AUTHORIZATION, peers.authorization())
                 .send()
                 .await;
             let response = match response {
@@ -435,12 +434,6 @@ impl Media {
             Some(reason) => Fetch::Unreachable(reason),
             None => Fetch::Gone,
         })
-    }
-
-    /// Whether a request carries the cluster's secret. Without peers no
-    /// request does: a single node takes no copies.
-    pub fn authorizes(&self, header: Option<&[u8]>) -> bool {
-        peers::authorizes(self.peers.as_deref(), header)
     }
 
     /// A rendition this node holds, for a peer that lacks it: the file at
@@ -793,7 +786,7 @@ pub(crate) mod tests {
 
     const GIF: &[u8] = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xFF\xFF\xFF";
 
-    use crate::peers::test_support::{SECRET, answering, down, peer};
+    use crate::peers::test_support::{answering, down, peer};
 
     /// A miss names a file the store knows or it stays a miss: only then is
     /// a peer asked, and the file fetched is served and kept.
@@ -980,6 +973,15 @@ pub(crate) mod tests {
         }
     }
 
+    /// A media store in a fresh directory, copying to and fetching from
+    /// `peers`.
+    pub(crate) fn media_over(peers: Peers) -> Media {
+        Media {
+            peers: Some(Arc::new(peers)),
+            ..media(vec![], 1)
+        }
+    }
+
     pub(crate) fn alone(media: Media) -> Media {
         Media {
             peers: None,
@@ -1092,13 +1094,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_copy_needs_the_secret_and_a_name_inside_the_directory() {
-        let media = media(vec![], 1);
-        assert!(media.authorizes(Some(SECRET.as_bytes())));
-        assert!(!media.authorizes(None));
-        let single = alone(media);
-        assert!(!single.authorizes(Some(SECRET.as_bytes())));
-
+    async fn a_copy_needs_a_name_inside_the_directory() {
         let upload = rendered(&png(20, 20, [1, 2, 3, 255]));
         let webp = upload.listing.to_vec();
         let media = super::tests::media(vec![], 3);

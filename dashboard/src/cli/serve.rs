@@ -20,11 +20,16 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // recreates the read models, so their pools open afterwards. Write pool
     // before read pool: it creates the file a read-only connection cannot.
     let store = db::open_store(&config.database.path).await?;
+    // The node's certificate for the other nodes: the store's port, the
+    // requests this node makes of the others and the port it answers them on
+    // present it, as the node reads it again once renewed (#726).
+    let tls = cluster::node_tls(config.cluster.as_ref())?;
     // The store twice over the same node: as the node reads it (behind a
     // read barrier with peers), for the pages; and from this node's file as
     // it stands, for the subscriptions and the storefronts (#466).
     let (cluster, executor, local) = cluster::open(
         config.cluster.as_ref(),
+        tls.clone(),
         config.server.work_group.as_deref(),
         &config.server.also_works_for,
         config.server.also_works_for_ungrouped,
@@ -35,7 +40,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // The read models in the store's database.
     let db = db::Db::from(store.clone());
 
-    let peers = crate::peers::Peers::from_cluster(config.cluster.as_ref())?.map(Arc::new);
+    let peers =
+        crate::peers::Peers::from_cluster(config.cluster.as_ref(), tls.as_ref())?.map(Arc::new);
     let media = Arc::new(crate::media::Media::new(&config.media, peers.clone()));
     // The pictures this node lacks are fetched off the subscriptions'
     // cursors (#468).
@@ -62,16 +68,23 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // What the other nodes ask of this one, on the port they keep for it,
     // from now on: they copy their pictures and keys here, and ask the
     // limits, while this node catches up. Validated by `Config::load`.
-    let peer_server = match config
+    let listen = config
         .cluster
         .as_ref()
-        .filter(|cluster| cluster.peers.len() > 1)
-        .and_then(crate::config::ClusterConfig::web_listen_addr)
-    {
-        Some(listen) => Some(
-            crate::peer_port::serve(listen, media.clone(), keys.clone(), limits.clone()).await?,
+        .and_then(crate::config::ClusterConfig::web_listen_addr);
+    let peer_server = match (tls, listen) {
+        (Some(tls), Some(listen)) => Some(
+            crate::peer_port::serve(
+                listen,
+                tls,
+                cluster.clone(),
+                media.clone(),
+                keys.clone(),
+                limits.clone(),
+            )
+            .await?,
         ),
-        None => None,
+        _ => None,
     };
     let gateway = Arc::new(crate::payments::StripeGateway::new(
         config
