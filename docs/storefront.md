@@ -92,8 +92,9 @@ codes, for a page wording it.
 
 What counts as the dashboard being away: the HTTP connection failing, timing out or
 breaking; a proxy in front of it answering 502, 503 or 504 with a page of its own (a load
-balancer's "no available server"); the store API not connected yet, or a read on it
-failing. A 503 the dashboard itself wrote (`{"error":"writes_paused"}`, or
+balancer's "no available server"), or the dashboard answering 503 with no code for a
+read its node could not confirm with the others; the store API not connected yet, or a
+read on it failing. A 503 the dashboard itself wrote (`{"error":"writes_paused"}`, or
 `{"error":"write_not_taken"}` for one write it did not take) is a refusal to show the
 shopper, not this.
 
