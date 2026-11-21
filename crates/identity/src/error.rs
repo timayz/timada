@@ -42,6 +42,8 @@ pub enum IdentityError {
     WeakPassword,
     #[error("the current password is wrong")]
     WrongPassword,
+    #[error("the password hash is not an argon2 hash")]
+    MalformedPasswordHash,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -83,7 +85,7 @@ impl IdentityError {
             Self::WeakPassword => "weak_password",
             Self::WrongPassword => "wrong_password",
             Self::Write(err) => return timada_core::write_refusal(err),
-            Self::InvalidState | Self::Other(_) => return None,
+            Self::InvalidState | Self::MalformedPasswordHash | Self::Other(_) => return None,
         })
     }
 }

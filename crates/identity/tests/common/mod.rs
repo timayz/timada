@@ -10,7 +10,7 @@ use evento::{
 use timada_core::db::Db;
 use timada_identity::{
     AddPasskey, ChallengePurpose, Command, CompleteOAuth2, LoginContext, OAuth2Mode,
-    RegisterWithPassword, SignInPasskey, VerifiedPasskey, hash_password,
+    RegisterWithPassword, RootAccount, SignInPasskey, SignInRoot, VerifiedPasskey, hash_password,
 };
 use tokio::sync::Notify;
 use ulid::Ulid;
@@ -20,6 +20,41 @@ pub const NOW: u64 = 1_700_000_000;
 
 /// A password that passes the policy.
 pub const PASSWORD: &str = "correct horse battery";
+
+/// The root account of the tests' configuration.
+pub const ROOT_EMAIL: &str = "root@example.com";
+pub const ROOT_PASSWORD: &str = "root test password";
+
+/// The root account as a configuration defines it: [`ROOT_EMAIL`] and the
+/// hash of [`ROOT_PASSWORD`].
+pub fn root_account() -> RootAccount {
+    RootAccount::new(
+        ROOT_EMAIL,
+        "$argon2id$v=19$m=19456,t=2,p=1$diXOV+PTSdOCfHj2wDAlMA$iVEeQUJsww/h81mHmrcmcJRWuZs2mY3bopNrchI/yog",
+    )
+    .unwrap()
+}
+
+pub fn root_sign_in(email: &str, password: &str, session_user_id: Option<&str>) -> SignInRoot {
+    SignInRoot {
+        email: email.to_owned(),
+        password: password.to_owned(),
+        session_user_id: session_user_id.map(str::to_owned),
+        context: context(),
+    }
+}
+
+/// Signs root in, which writes its account the first time, and returns its
+/// id.
+pub async fn sign_in_root<E: Executor>(cmd: &Command<E>) -> String {
+    cmd.sign_in_root(
+        &root_account(),
+        root_sign_in(ROOT_EMAIL, ROOT_PASSWORD, None),
+    )
+    .await
+    .unwrap()
+    .user_id
+}
 
 /// A fresh in-memory event store.
 pub async fn executor() -> evento::Turso {

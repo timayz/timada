@@ -12,11 +12,15 @@ pub mod login;
 pub mod resend;
 pub mod verify;
 
-use timada_identity::IdentityError;
-use topcoat::{Result, context::Cx};
+use timada_identity::{ChallengePurpose, IdentityError};
+use topcoat::{
+    Result,
+    context::{Cx, context},
+};
 
 use crate::app::auth::error_code;
 use crate::auth::{cookies::EmailFlowKind, identity, now};
+use crate::config::Config;
 
 /// What [`start_challenge`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,12 +44,18 @@ impl Started {
 
 /// Issues a code for `email`; the subscription that follows the challenge
 /// mails it. `Err` is the error code to show; infrastructure failures
-/// propagate.
+/// propagate. Root's address is taken, though no account claimed it: nobody
+/// registers it or adds it to their account.
 pub async fn start_challenge(
     cx: &Cx,
     email: &str,
     kind: EmailFlowKind,
 ) -> Result<Result<Started, &'static str>> {
+    if kind.purpose() == ChallengePurpose::Register
+        && context::<Config>(cx).auth.root.has_email(email)
+    {
+        return Ok(Err(error_code(&IdentityError::AlreadyRegistered)));
+    }
     match identity(cx)
         .issue_email_code(email, kind.purpose(), now())
         .await

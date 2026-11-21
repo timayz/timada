@@ -42,6 +42,11 @@ carts_per_key = 1000000
 [auth]
 secret_key = "load-only-secret-key-never-used-outside-the-load-test"
 
+# The password is "root load password".
+[auth.root]
+email = "root-load@example.com"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$FBcLN/kTrP1QHFpVqMNMpw$9yDMP0CZPVzAwrHHO6tTPThsnWqUxjpzACg7jhIYkAA"
+
 [mail]
 from = "Timada <no-reply@timada.localhost>"
 smtp_url = "smtp://localhost:1025"

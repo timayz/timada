@@ -16,8 +16,7 @@ pub(crate) struct SignInFacts {
 }
 
 impl<E: Executor> Command<E> {
-    /// Records a sign-in on the user and repairs a missing first-user admin
-    /// grant. The session itself is started by the caller once it holds a
+    /// Records a sign-in on the user. The session itself is started by the caller once it holds a
     /// token hash.
     pub(crate) async fn record_sign_in(
         &self,
@@ -26,7 +25,7 @@ impl<E: Executor> Command<E> {
         routing_key: Option<String>,
     ) -> Result<UserState, IdentityError> {
         let user = self
-            .append_user(user_id, routing_key.clone(), |_, builder| {
+            .append_user(user_id, routing_key, |_, builder| {
                 let method = match facts.kind {
                     SignInKind::OAuth2 => SignInMethod::OAuth2,
                     SignInKind::Passkey => SignInMethod::Passkey,
@@ -48,7 +47,6 @@ impl<E: Executor> Command<E> {
                 Ok(())
             })
             .await?;
-        self.grant_admin_if_first(&user, routing_key).await?;
         Ok(user)
     }
 }

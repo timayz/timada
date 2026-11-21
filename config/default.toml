@@ -61,6 +61,24 @@ rp_name = "Timada"
 # login_attempts_per_email = 10
 # login_window_secs = 900
 
+# The root account: above every user, and out of their reach. Required. It is
+# defined here and nowhere else: nobody registers it, and no page changes its
+# address or its password. It signs in on the login page with this address
+# and this password alone (no code is mailed, so it gets in while no mail
+# leaves). It is an administrator nobody can demote, delete or sign out, the
+# only one who makes and unmakes administrators or deletes one, and it opens
+# every shop as an owner. Nobody else registers with its address.
+# The password is kept as its hash, which
+#   timada-dashboard hash-password
+# prints for the password it reads on its standard input; set it through
+# TIMADA__AUTH__ROOT__PASSWORD_HASH in production rather than in this file,
+# the same on every node. A change takes effect at the next start; the
+# browsers root is signed in on stay so until root signs them out (its
+# account page).
+# [auth.root]
+# email = "root@example.com"
+# password_hash = "$argon2id$v=19$m=19456,t=2,p=1$..."
+
 # Sign-in providers (OpenID Connect). One table per provider; the table key is
 # the name used in URLs (/auth/oauth2/<name>): lowercase letters, digits, - and _.
 # Register "<server.url>/auth/oauth2/<name>/callback" as the redirect URI at the

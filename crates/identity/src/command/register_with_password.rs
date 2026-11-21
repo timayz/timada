@@ -35,7 +35,7 @@ pub struct PasswordRegistration {
 impl<E: Executor> super::Command<E> {
     /// Burns the registration code, then creates the user: the user stream
     /// first (an unreachable stub if the index race is lost), then the index
-    /// entry, then the first-user claim. The new user is signed in.
+    /// entry. The new user is signed in.
     pub async fn register_with_password(
         &self,
         cmd: RegisterWithPassword,
@@ -86,7 +86,6 @@ impl<E: Executor> super::Command<E> {
             Err(err) => return Err(err),
         }
 
-        self.claim_first_user(&user_id, routing_key).await?;
         Ok(PasswordRegistration {
             user_id,
             label: email,

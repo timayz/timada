@@ -21,7 +21,10 @@ async fn create_user_or_login_registers_then_signs_in() {
     assert_eq!(user.sign_in_methods(), 1);
     assert_eq!(user.sign_ins.len(), 1);
     assert_eq!(user.last_sign_in().unwrap().method, SignInKind::OAuth2);
-    assert!(user.is_admin, "the first user administers the instance");
+    assert!(
+        !user.is_admin,
+        "registering first makes nobody an administrator"
+    );
 
     let again = cmd
         .complete_oauth2(oauth2(OAuth2Mode::CreateUserOrLogin, None, "google", "1"))
@@ -38,15 +41,6 @@ async fn create_user_or_login_registers_then_signs_in() {
         .unwrap()
         .unwrap();
     assert_eq!(index.user_id, first.user_id);
-}
-
-#[tokio::test]
-async fn second_user_is_not_admin() {
-    let cmd = command().await;
-    let first = register_via_oauth2(&cmd, "google", "1").await;
-    let second = register_via_oauth2(&cmd, "google", "2").await;
-    assert!(cmd.load_user(&first).await.unwrap().unwrap().is_admin);
-    assert!(!cmd.load_user(&second).await.unwrap().unwrap().is_admin);
 }
 
 #[tokio::test]
@@ -289,7 +283,6 @@ async fn deterministic_ids_ignore_the_default_routing_key() {
         .await
         .unwrap();
     assert_eq!(outcome.user_id, user_id);
-    assert!(cmd.load_user(&user_id).await.unwrap().unwrap().is_admin);
 }
 
 #[tokio::test]

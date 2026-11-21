@@ -104,6 +104,9 @@ enum Commands {
     Snapshot(cli::SnapshotArgs),
     /// Read AliExpress's lists of places again, into the file the build embeds
     AliexpressPlaces(cli::AliexpressPlacesArgs),
+    /// Read a password on the standard input and print its hash, for
+    /// `auth.root.password_hash` (needs no configuration)
+    HashPassword,
     /// Drop the databases and recreate them from scratch (debug builds only)
     #[cfg(debug_assertions)]
     Reset,
@@ -112,6 +115,10 @@ enum Commands {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Makes a value the configuration needs, so it runs without one.
+    if matches!(cli.command, Some(Commands::HashPassword)) {
+        return cli::hash_password().await;
+    }
     let config = Config::load(cli.config.as_deref())?;
 
     init_tracing(&config.monitoring)?;
@@ -127,6 +134,7 @@ async fn main() -> Result<()> {
         Commands::Seed(args) => cli::seed(config, args).await,
         Commands::Snapshot(args) => cli::snapshot(config, args).await,
         Commands::AliexpressPlaces(args) => cli::aliexpress_places(config, args).await,
+        Commands::HashPassword => cli::hash_password().await,
         #[cfg(debug_assertions)]
         Commands::Reset => cli::reset(config).await,
     }

@@ -69,6 +69,9 @@ replicas: 3
 persistence: {storageClassName: standard, longhornCritical: false, size: 1Gi}
 extraSecretEnv:
   TIMADA__AUTH__SECRET_KEY: "0123456789abcdef0123456789abcdef-auth"
+  TIMADA__AUTH__ROOT__EMAIL: "root-wan@example.com"
+  # The password is "root load password".
+  TIMADA__AUTH__ROOT__PASSWORD_HASH: "\$argon2id\$v=19\$m=19456,t=2,p=1\$FBcLN/kTrP1QHFpVqMNMpw\$9yDMP0CZPVzAwrHHO6tTPThsnWqUxjpzACg7jhIYkAA"
   TIMADA__SECRETS__KEY: "0123456789abcdef0123456789abcdef-secr"
   TIMADA__MAIL__SMTP_URL: "smtp://127.0.0.1:1025"
 peers: [$(join "${peers[@]}")]

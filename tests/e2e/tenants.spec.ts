@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
-import { ADMIN_STATE } from "./fixtures";
+import { ADMIN_NAME, ADMIN_STATE } from "./fixtures";
 import { invite } from "./invitations";
 import { createTenant, uniqueTenant } from "./tenants";
 
@@ -72,6 +72,37 @@ test("only members see a tenant", async ({ browser }) => {
 
   await ownerContext.close();
   await strangerContext.close();
+});
+
+test("root opens a tenant it is no member of, as an owner", async ({ browser }) => {
+  const ownerContext = await browser.newContext();
+  const owner = await ownerContext.newPage();
+  const ownerName = uniqueEmail("owner");
+  await registerWithEmail(owner, ownerName);
+  const { name, slug } = uniqueTenant("Open Shop");
+  await createTenant(owner, name);
+  await expect(owner).toHaveURL(new RegExp(`/t/${slug}`));
+
+  const rootContext = await browser.newContext({ storageState: ADMIN_STATE });
+  const root = await rootContext.newPage();
+  expect((await root.goto(`/t/${slug}`))?.status()).toBe(200);
+  await expect(root.getByRole("heading", { name })).toBeVisible();
+  await expect(root.locator("dd", { hasText: "owner" })).toBeVisible();
+
+  // It holds no seat: the members are the shop's own.
+  // The owner's name comes from the read model, which trails the store.
+  await expect(async () => {
+    expect((await root.goto(`/t/${slug}/members`))?.status()).toBe(200);
+    await expect(root.getByRole("row", { name: ownerName })).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(root.getByRole("row", { name: ADMIN_NAME })).toHaveCount(0);
+
+  // What an owner does, root does.
+  expect((await root.goto(`/t/${slug}/roles`))?.status()).toBe(200);
+  await expect(root.getByRole("button", { name: "Define role" })).toBeVisible();
+
+  await ownerContext.close();
+  await rootContext.close();
 });
 
 test("the administrator sees a tenant active, suspends and resumes it", async ({ browser }) => {

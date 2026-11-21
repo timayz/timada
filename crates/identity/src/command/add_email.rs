@@ -57,6 +57,10 @@ impl<E: Executor> super::Command<E> {
         let Some(user) = self.load_user(&user_id).await? else {
             return Err(IdentityError::UserNotFound);
         };
+        // Root's address is the configuration's.
+        if user.is_root() {
+            return Err(IdentityError::Forbidden);
+        }
         if user.password.is_some() {
             return Err(IdentityError::InvalidState);
         }

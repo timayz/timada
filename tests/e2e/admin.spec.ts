@@ -1,10 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { PASSWORD, registerWithEmail, uniqueEmail } from "./email";
 import { ADMIN_NAME, ADMIN_STATE } from "./fixtures";
 import { expectSignedInAs } from "./shell";
 
-// The administrator's pages. The admin is the first registered user, created
-// by admin.setup.ts on a fresh database (`make e2e`).
+// The administrator's pages. The admin is the root account of
+// config/e2e.toml, which admin.setup.ts signs in as.
 
 test("members get no admin pages", async ({ page }) => {
   await registerWithEmail(page, uniqueEmail("member"));
@@ -25,7 +25,7 @@ test("the administrator lists, signs out, promotes and deletes users", async ({ 
   await expectSignedInAs(admin, ADMIN_NAME);
   await admin.getByRole("link", { name: "Users" }).click();
   await expect(admin).toHaveURL(/\/admin\/users$/);
-  await expect(admin.getByRole("cell", { name: "Administrator" }).first()).toBeVisible();
+  await expect(admin.getByRole("row", { name: ADMIN_NAME }).getByRole("cell", { name: "Root", exact: true })).toBeVisible();
 
   // Search finds the member once the read model has caught up (it follows
   // the event stream with a short delay).
@@ -108,4 +108,75 @@ test("the node says it is ready, and how far its read models trail", async ({ re
   const names = body.read_models.map((lag: { name: string }) => lag.name);
   expect(names).toContain("catalog");
   expect(names).toContain("orders");
+});
+
+test("only root makes administrators, and nobody acts on root", async ({ browser }) => {
+  const aliceName = uniqueEmail("alice");
+  const aliceContext = await browser.newContext();
+  const alice = await aliceContext.newPage();
+  await registerWithEmail(alice, aliceName);
+  const bobName = uniqueEmail("bob");
+  const bobContext = await browser.newContext();
+  await registerWithEmail(await bobContext.newPage(), bobName);
+
+  /// Opens a user's page from the list, once the read model lists them.
+  const openUser = async (page: Page, name: string) => {
+    await page.goto("/admin/users");
+    await expect(async () => {
+      await page.getByLabel("Search users").fill(name);
+      await page.getByRole("button", { name: "Search" }).click();
+      await expect(page.getByRole("row", { name })).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await page.getByRole("row", { name }).getByRole("link", { name }).click();
+    await expect(page.getByRole("heading", { name })).toBeVisible();
+  };
+
+  // Root makes Alice an administrator.
+  const rootContext = await browser.newContext({ storageState: ADMIN_STATE });
+  const root = await rootContext.newPage();
+  await openUser(root, aliceName);
+  await root.getByRole("button", { name: "Make administrator" }).click();
+  await expect(root.getByRole("status")).toContainText("granted");
+
+  // Alice administers: she deletes members, and makes no administrator.
+  await alice.goto("/");
+  await expect(alice.getByRole("link", { name: "Users" })).toBeVisible();
+  await openUser(alice, bobName);
+  await expect(alice.getByText("Only the root account makes an administrator.")).toBeVisible();
+  await expect(alice.getByRole("button", { name: "Make administrator" })).toHaveCount(0);
+  await expect(alice.getByRole("button", { name: "Delete account" })).toBeVisible();
+
+  // Root is out of her reach.
+  await openUser(alice, ADMIN_NAME);
+  await expect(alice.locator("dd").filter({ hasText: /^Root$/ })).toBeVisible();
+  await expect(alice.getByText("nobody changes its role, signs it out or deletes it")).toBeVisible();
+  await expect(alice.getByRole("button", { name: "Sign out everywhere" })).toHaveCount(0);
+  await expect(alice.getByRole("button", { name: "Revoke administrator" })).toHaveCount(0);
+  await expect(alice.getByRole("button", { name: "Delete account" })).toHaveCount(0);
+
+  // Root's own account is the configuration's: nothing to change, nothing to add.
+  await root.goto("/auth/account");
+  await expect(root.getByText("This is the root account")).toBeVisible();
+  await expect(root.locator("dd").filter({ hasText: /^Root$/ })).toBeVisible();
+  await expect(root.getByRole("button", { name: "Change password" })).toHaveCount(0);
+  await expect(root.getByRole("button", { name: "Add a passkey" })).toHaveCount(0);
+
+  // Nobody registers with root's address.
+  const visitor = await (await browser.newContext()).newPage();
+  await visitor.goto("/auth/register");
+  await visitor.getByLabel("E-mail address").fill(ADMIN_NAME);
+  await visitor.getByLabel("Password", { exact: true }).fill(PASSWORD);
+  await visitor.getByRole("button", { name: "Create account" }).click();
+  await expect(visitor).toHaveURL(/\/auth\/register\?.*error=already_registered/);
+
+  // Root unmakes her.
+  await openUser(root, aliceName);
+  await root.getByRole("button", { name: "Revoke administrator" }).click();
+  await expect(root.getByRole("status")).toContainText("revoked");
+  expect((await alice.goto("/admin/users"))?.status()).toBe(403);
+
+  await aliceContext.close();
+  await bobContext.close();
+  await rootContext.close();
+  await visitor.context().close();
 });

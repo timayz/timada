@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use config::{ConfigError, Environment, File};
 use serde::Deserialize;
+use timada_identity::{IdentityError, RootAccount};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
@@ -95,7 +96,38 @@ pub struct AuthConfig {
     /// The window both limits count over, in seconds.
     #[serde(default = "default_login_window_secs")]
     pub login_window_secs: u64,
+    /// The root account: an address and the hash of a password, above every
+    /// user and out of their reach. It signs in with that pair alone, so it
+    /// gets in while no mail leaves; only it makes administrators.
+    #[serde(deserialize_with = "root_account")]
+    pub root: RootAccount,
 }
+
+/// `[auth.root]` as written.
+#[derive(Deserialize)]
+struct RootConfig {
+    email: String,
+    password_hash: String,
+}
+
+fn root_account<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<RootAccount, D::Error> {
+    let root = RootConfig::deserialize(deserializer)?;
+    RootAccount::new(&root.email, &root.password_hash).map_err(|err| {
+        serde::de::Error::custom(match err {
+            IdentityError::InvalidEmail => {
+                format!("auth.root.email: '{}' is not an e-mail address", root.email)
+            }
+            _ => format!(
+                "auth.root.password_hash is not the hash of a password; {ROOT_PASSWORD_HINT}"
+            ),
+        })
+    })
+}
+
+/// How the operator makes `auth.root.password_hash`.
+const ROOT_PASSWORD_HINT: &str = "make one with `timada-dashboard hash-password`";
 
 fn default_login_attempts_per_ip() -> u32 {
     30
@@ -1056,11 +1088,21 @@ impl Config {
             builder = builder.add_source(File::with_name(path).required(true));
         }
 
-        // Mutable: a few sections tidy a value as they check it.
-        let mut config: Self = builder
+        let built = builder
             .add_source(Environment::with_prefix("timada").separator("__"))
-            .build()?
-            .try_deserialize()?;
+            .build()?;
+        // Said here, in the operator's words, rather than as a missing field.
+        for key in ["auth.root.email", "auth.root.password_hash"] {
+            if built.get_string(key).is_err() {
+                return Err(ConfigError::Message(format!(
+                    "{key} is not set: the root account is defined in the configuration \
+                     (auth.root.email, and auth.root.password_hash, \
+                     TIMADA__AUTH__ROOT__PASSWORD_HASH in production; {ROOT_PASSWORD_HINT})"
+                )));
+            }
+        }
+        // Mutable: a few sections tidy a value as they check it.
+        let mut config: Self = built.try_deserialize()?;
 
         if let Some(cluster) = &mut config.cluster {
             cluster.validate()?;
@@ -1728,5 +1770,42 @@ mod tests {
             by_name.web_listen_addr(),
             Some("0.0.0.0:7001".parse().unwrap())
         );
+    }
+
+    #[test]
+    fn the_root_account_is_read_and_checked() {
+        const HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$diXOV+PTSdOCfHj2wDAlMA$iVEeQUJsww/h81mHmrcmcJRWuZs2mY3bopNrchI/yog";
+        #[derive(Debug, Deserialize)]
+        struct Auth {
+            #[serde(deserialize_with = "root_account")]
+            root: RootAccount,
+        }
+        let read = |email: &str, password_hash: &str| {
+            let toml = format!("[root]\nemail = '{email}'\npassword_hash = '{password_hash}'\n");
+            config::Config::builder()
+                .add_source(File::from_str(&toml, config::FileFormat::Toml))
+                .build()
+                .unwrap()
+                .try_deserialize::<Auth>()
+                .map(|auth| auth.root)
+        };
+
+        let root = read("Root@Example.com", HASH).unwrap();
+        assert_eq!(root.email(), "root@example.com");
+
+        let err = read("root", HASH).unwrap_err();
+        assert!(err.to_string().contains("auth.root.email"), "{err}");
+        // A password typed where its hash goes is told how to make one, and
+        // not repeated.
+        let err = read("root@example.com", "correct horse battery").unwrap_err();
+        assert!(err.to_string().contains("hash-password"), "{err}");
+        assert!(!err.to_string().contains("correct horse"), "{err}");
+    }
+
+    #[test]
+    fn the_browser_suite_configuration_loads() {
+        let path = format!("{}/../config/e2e.toml", env!("CARGO_MANIFEST_DIR"));
+        let config = Config::load(Some(&path)).unwrap();
+        assert_eq!(config.auth.root.email(), "root-e2e@example.com");
     }
 }

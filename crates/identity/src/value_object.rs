@@ -165,8 +165,8 @@ pub fn normalize_email(email: &str) -> Result<String, IdentityError> {
     timada_core::normalize_email(email).ok_or(IdentityError::InvalidEmail)
 }
 
-/// Aggregate id of the singleton that remembers who registered first.
-pub const REGISTRY_ID: &str = "registry";
+/// The id of the root account's stream.
+pub use timada_core::ROOT_USER_ID;
 
 /// Longest address accepted (RFC 5321's path limit).
 pub use timada_core::MAX_EMAIL_LEN;

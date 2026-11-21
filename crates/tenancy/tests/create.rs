@@ -1,6 +1,7 @@
 mod common;
 
 use common::*;
+use timada_core::ROOT_USER_ID;
 use timada_tenancy::{CreateTenant, MAX_SLUG_LEN, ROLE_OWNER, SLUG_SUFFIX_LEN, TenancyError};
 
 #[tokio::test]
@@ -25,6 +26,39 @@ async fn creating_a_tenant_makes_its_creator_the_owner() {
     let by_slug = cmd.load_tenant_by_slug("acme-shop").await.unwrap().unwrap();
     assert_eq!(by_slug, tenant);
     assert_eq!(cmd.load_tenant(&tenant.id).await.unwrap(), Some(tenant));
+}
+
+#[tokio::test]
+async fn root_owns_every_tenant_without_a_seat() {
+    let cmd = command().await;
+    let alice = new_id();
+    let stranger = new_id();
+    let tenant = create_tenant(&cmd, "Acme", &alice).await;
+
+    assert!(tenant.is_owner(ROOT_USER_ID));
+    assert!(tenant.can(ROOT_USER_ID, "members:manage"));
+    assert!(tenant.may_hand_out(ROOT_USER_ID, ROLE_OWNER));
+    assert_eq!(tenant.role_of(ROOT_USER_ID), None, "no seat");
+    assert_eq!(tenant.owners(), 1, "nor counted as an owner");
+    assert!(!tenant.is_owner(&stranger));
+
+    let err = cmd
+        .rename_tenant(&stranger, &tenant.id, "Theirs")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::Forbidden), "{err}");
+    cmd.rename_tenant(ROOT_USER_ID, &tenant.id, "Acme Shop")
+        .await
+        .unwrap();
+    // What only an owner does, root does too: the last owner still stays.
+    let err = cmd
+        .change_member_role(ROOT_USER_ID, &tenant.id, &alice, "support")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, TenancyError::UnknownRole), "{err}");
+    let tenant = cmd.load_tenant(&tenant.id).await.unwrap().unwrap();
+    assert_eq!(tenant.name, "Acme Shop");
+    assert_eq!(tenant.members.len(), 1);
 }
 
 #[tokio::test]
