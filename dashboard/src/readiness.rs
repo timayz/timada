@@ -18,6 +18,13 @@
 //! through; a rolling update that waits for a restarted node to be ready
 //! must not take one that is not back among the others (#700).
 //!
+//! There is one answer, not one for reads and one for writes (#727). A
+//! balancer cannot tell a cluster that lost its majority from one region cut
+//! off from the others, and a node ready to read alone would keep that
+//! region's visitors on a side that falls behind and refuses every write
+//! while the other side serves. The body says `serving`, `nodes_in_touch`
+//! and each lag apart for whoever needs to tell.
+//!
 //! The lag of a read model is how long the oldest event its subscriptions
 //! follow and have not applied yet has been waiting, asked of the store
 //! each time (`Worker::lag`, evento's `SubscriptionBuilder::lag`). It is
