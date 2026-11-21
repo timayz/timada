@@ -3,11 +3,10 @@
 pub mod admin;
 pub mod aliexpress;
 pub mod auth;
-pub mod cluster;
 pub mod companies;
 pub mod feeds;
 pub mod invitations;
-mod server_errors;
+pub(crate) mod server_errors;
 pub mod store;
 pub mod stripe;
 pub mod t;
@@ -46,9 +45,9 @@ use crate::components::button::{ButtonSize, ButtonVariant, button_variants};
 use crate::components::card::CARD;
 use crate::config::Config;
 use crate::db::Db;
-use crate::key_vault::{self, KeyVault};
+use crate::key_vault::KeyVault;
 use crate::mail::PlatformMailer;
-use crate::media::{MEDIA_ROUTE, Media, MediaCache, PEER_ROUTE};
+use crate::media::{MEDIA_ROUTE, Media, MediaCache};
 use crate::rate_limit::RateLimiter;
 use crate::store_api::StoreConnections;
 use crate::ui::chrome::initials;
@@ -169,10 +168,6 @@ pub fn router(services: Services) -> Router {
         .serve_dir(MEDIA_ROUTE, media.dir().to_path_buf())
         .layer(MediaCache::new(media.clone(), db.clone()))
         .layer(body_limit("/t", UPLOAD_LIMIT))
-        // A picture another node copies here: the file alone.
-        .layer(body_limit(PEER_ROUTE, UPLOAD_LIMIT))
-        // A key another node copies here.
-        .layer(body_limit(key_vault::PEER_ROUTE, key_vault::MAX_SEALED_LEN))
         .layer(body_limit("/store/reviews", REVIEW_LIMIT))
         // Absolute URLs (the OIDC redirect URI) follow the public address.
         // Validated by `Config::load`.

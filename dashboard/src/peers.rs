@@ -7,6 +7,9 @@
 //! whatever the events survive, a power cut across the cluster included. The
 //! rate limits ask the same nodes what they let through
 //! ([`crate::rate_limit`]).
+//!
+//! They are asked on the port each keeps for it (`cluster.web_listen`),
+//! where nothing else is served ([`crate::peer_port`]).
 
 use std::time::Duration;
 

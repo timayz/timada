@@ -62,7 +62,7 @@ fi
 ports=(3000 3001 3002 3457 3458 3459 3460 3461 4321 12112 12113 12114 12115)
 if [ "$nodes" = 3 ]; then
   # The other nodes' store API, and what the nodes talk to one another on.
-  ports+=(4322 4323 7000 7001 7002)
+  ports+=(4322 4323 7000 7001 7002 7100 7101 7102)
 fi
 # The other servers' store API, and the fakes their workers start, 100 ports
 # further on for each next server.
@@ -106,7 +106,7 @@ if [ "$nodes" = 3 ]; then
 # Added by scripts/e2e.sh: the three nodes of the run, all on this machine.
 [cluster]
 peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]
-web_peers = ["http://127.0.0.1:3000", "http://127.0.0.1:3001", "http://127.0.0.1:3002"]
+web_peers = ["http://127.0.0.1:7100", "http://127.0.0.1:7101", "http://127.0.0.1:7102"]
 secret = "e2e-only-cluster-secret-never-used-outside-the-test-suite"
 EOF
   } >data/e2e/cluster.toml

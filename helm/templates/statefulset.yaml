@@ -136,6 +136,8 @@ spec:
             {{- if include "timada.clustered" . }}
             - name: cluster
               containerPort: 7000
+            - name: cluster-web
+              containerPort: 7001
             {{- end }}
           {{- if gt (int .Values.preStopSeconds) 0 }}
           # A pod told to stop goes on serving while the Service and the

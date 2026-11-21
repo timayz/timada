@@ -107,7 +107,7 @@ serve() {
 declare -A node_pid
 
 # A server left from an earlier run would take the ports and answer instead.
-for port in 3000 3001 3002 3457 4321 4322 4323 7000 7001 7002 12112; do
+for port in 3000 3001 3002 3457 4321 4322 4323 7000 7001 7002 7100 7101 7102 12112; do
   if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
     echo "port $port is in use: stop what listens there first" >&2
     exit 1

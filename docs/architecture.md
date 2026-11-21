@@ -458,14 +458,19 @@ by construction.
    accounts*), `/store/contact` (a storefront handing in a message from its contact
    form, see *Support messages*), `/store/newsletter/*` (sign-ups and their links, see
    *Newsletter*), `/store/automations/opt-out` (a customer declining a shop's
-   automated mails), `/cluster/media/*`, `/cluster/keys/*` and `/cluster/limits` (the
-   nodes copying pictures and keys to one another and asking what the others let
-   through the limits, under `cluster.secret`), `/invitations/{token}`,
+   automated mails), `/invitations/{token}`,
    `/admin/*` (users, tenants, companies, this node's cluster view). `ui/` holds the
    shared furniture: the chrome, the page helpers, the theme, the icons.
+9. **The nodes' port** (`peer_port/`). What the nodes ask of each other besides the store,
+   on a port they keep for it (`cluster.web_listen`, reached at the address
+   `cluster.web_peers` gives each node): `/cluster/media/*` (a picture copied to a node
+   before it is recorded, or fetched by a node that lacks it), `/cluster/keys/*` (the
+   same for the personal-data keys) and `/cluster/limits` (what a node let through
+   the limits), each under `cluster.secret`. The public port serves none of it, so no
+   request from outside the cluster reaches these routes.
 
-Shutdown stops the HTTP server, then the store API, the sweeps, the subscriptions,
-the node and finally the pools.
+Shutdown stops the HTTP server, then the store API, the nodes' port, the sweeps, the
+subscriptions, the node and finally the pools.
 
 ## One write, end to end
 
@@ -838,8 +843,9 @@ catalog, the pages and the reviews, `timada-dashboard/mail-logos` for the tenant
 `media_files`, one row per rendition file the store knows with its size, digest and
 what references it, the same on every node; and `media_wanted`, the node's own list
 of files to fetch, which a per-node fetcher (`dashboard/src/media/fetcher.rs`) works
-off the subscription's cursor, several files at once, keeping a copy only if its size
-and digest are the ones recorded. A file every peer lacks is dropped with a warning
+off the subscription's cursor, several files at once (`GET
+/cluster/media/<tenant>/<400|1200>/<file>` on the peers, with `cluster.secret`),
+keeping a copy only if its size and digest are the ones recorded. A file every peer lacks is dropped with a warning
 (gone for good); a file some peer could not be asked for waits, longer each time, and
 is given up on after twelve hours, which `/admin/cluster` shows for a week. So a
 picture missing everywhere never stalls the subscription (#468, from #464). The

@@ -377,13 +377,18 @@ dir = "data/shopper-keys"
 # # Bind address for inbound peer traffic; defaults to peers[node_id] when
 # # that is an IP address, and is required when it is a name.
 # listen = "0.0.0.0:7000"
-# # Each node's web address (server.port) as the other nodes reach it, in the
-# # order of `peers`; the limits under [auth] and [store] are also asked of
+# # Each node's web address as the other nodes reach it, in the order of
+# # `peers`: the port each keeps for the other nodes, not server.port, which
+# # serves none of it. The limits under [auth] and [store] are also asked of
 # # the other nodes here. Every node keeps a copy of every product picture: an
 # # upload is copied to the other nodes and only saved once a majority of them
 # # hold it, and a node that missed one fetches it from the others. Required
 # # with more than one node.
-# web_peers = ["http://127.0.0.1:3000", "http://127.0.0.1:3001", "http://127.0.0.1:3002"]
+# web_peers = ["http://127.0.0.1:7100", "http://127.0.0.1:7101", "http://127.0.0.1:7102"]
+# # Bind address for what the other nodes ask of this one; defaults to its
+# # entry in web_peers when that is an IP address and a port, and is required
+# # when it is a name.
+# web_listen = "0.0.0.0:7100"
 # # Shared by every node, at least 32 characters: a node only takes a picture
 # # from a peer presenting it. Set it through TIMADA__CLUSTER__SECRET rather
 # # than in this file. Required with more than one node.

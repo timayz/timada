@@ -40,7 +40,7 @@ cargo build --profile "$profile" -p timada-dashboard -p timada-loadtest
 # What the build wrote goes to the disk now, not during a case.
 sync
 
-for port in 3000 3001 3002 4321 4322 4323 7000 7001 7002; do
+for port in 3000 3001 3002 4321 4322 4323 7000 7001 7002 7100 7101 7102; do
   if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
     echo "port $port is in use: stop what listens there first" >&2
     exit 1

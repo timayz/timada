@@ -2,37 +2,36 @@
 {{- $nodes := include "timada.nodes" . | int }}
 {{- $first := int (.Values.firstNodeId | default 0) }}
 {{- if and (gt $first 0) (not .Values.peers) }}
-{{- fail "firstNodeId is for a cluster whose other nodes run elsewhere: give `peers` and `webPeers`, the whole cluster's lists" }}
+{{- fail "firstNodeId is for a cluster whose other nodes run elsewhere: give `peers`, the whole cluster's list" }}
 {{- end }}
 {{- if include "timada.clustered" . }}
 {{- /*
 The `[cluster]` section. Inside one release: each pod's name under the
 headless Service, in the order of the pods' ordinals, so a pod's ordinal is
 its `node_id` (set in its environment by the StatefulSet). With `peers`, the
-lists given, which are the whole cluster's, the nodes of other releases
-included: this release's pods are those numbered from `firstNodeId`. What
-`config.cluster` sets besides (`absent_after_secs`, `write_backlog`) is kept.
-`founders` says how many of the nodes the cluster started with, once it was
-given more.
+list given, which is the whole cluster's, the nodes of other releases
+included: this release's pods are those numbered from `firstNodeId`. Each
+node is reached on port 7001 under the same name, for what the nodes ask of
+each other besides the store (`web_peers`). What `config.cluster` sets
+besides (`absent_after_secs`, `write_backlog`) is kept. `founders` says how
+many of the nodes the cluster started with, once it was given more.
 */}}
 {{- $peers := list }}
-{{- $webPeers := list }}
 {{- if .Values.peers }}
 {{- $peers = .Values.peers }}
-{{- $webPeers = .Values.webPeers | default list }}
-{{- if ne (len $peers) (len $webPeers) }}
-{{- fail (printf "webPeers must give the web address of each of the %d peers, in the same order" (len $peers)) }}
-{{- end }}
 {{- if gt (add $first $nodes) (len $peers) }}
 {{- fail (printf "this release's nodes are numbered %d to %d, and peers lists %d: every node of the cluster is in the list, at its number" $first (sub (add $first $nodes) 1) (len $peers)) }}
 {{- end }}
 {{- else }}
 {{- range $i := until $nodes }}
 {{- $peers = append $peers (printf "timada-%d.timada-headless:7000" $i) }}
-{{- $webPeers = append $webPeers (printf "http://timada-%d.timada-headless:3000" $i) }}
 {{- end }}
 {{- end }}
-{{- $generated := dict "peers" $peers "web_peers" $webPeers "listen" "0.0.0.0:7000" }}
+{{- $webPeers := list }}
+{{- range $peer := $peers }}
+{{- $webPeers = append $webPeers (printf "http://%s:7001" (regexReplaceAll ":[0-9]+$" $peer "")) }}
+{{- end }}
+{{- $generated := dict "peers" $peers "web_peers" $webPeers "listen" "0.0.0.0:7000" "web_listen" "0.0.0.0:7001" }}
 {{- with .Values.founders }}
 {{- if or (lt (int .) 2) (gt (int .) (len $peers)) }}
 {{- fail "founders is how many nodes the cluster started with: at least 2, and no more than the nodes there are now" }}
