@@ -10,6 +10,7 @@ use crate::components::button::{ButtonVariant, button};
 use crate::components::card::CARD;
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
+use crate::config::Config;
 use crate::ui::{LINK, auth_document, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -25,6 +26,14 @@ pub async fn login(cx: &Cx) -> Result<impl View> {
     }
     let query = query_params::<LoginQuery>(cx)?;
     let providers = context::<Providers>(cx);
+    // Closed, the page creates no account: no link to the form, and a
+    // provider only signs in.
+    let signup_open = context::<Config>(cx).auth.signup.is_open();
+    let provider_mode = if signup_open {
+        "create_user_or_login"
+    } else {
+        "login"
+    };
 
     Ok(view! {
         auth_document(
@@ -52,8 +61,10 @@ pub async fn login(cx: &Cx) -> Result<impl View> {
                     button(attrs: attributes! { class="w-full" }, "Sign in")
                     <p class="text-center text-sm text-muted-foreground">
                         <a class=(LINK) href=(href!(super::forgot_password::forgot_password))>"Forgot password?"</a>
-                        " · New here? "
-                        <a class=(LINK) href=(href!(super::register::register))>"Create an account"</a>
+                        if signup_open {
+                            " · New here? "
+                            <a class=(LINK) href=(href!(super::register::register))>"Create an account"</a>
+                        }
                     </p>
                 </form>
 
@@ -62,7 +73,7 @@ pub async fn login(cx: &Cx) -> Result<impl View> {
                     <div class="flex flex-col gap-2">
                         for provider in providers.iter() {
                             <form method="post" action=(href!(super::oauth2::provider::start, super::oauth2::provider::provider: provider.name.clone()))>
-                                <input type="hidden" name="mode" value="create_user_or_login">
+                                <input type="hidden" name="mode" value=(provider_mode)>
                                 button(variant: ButtonVariant::Secondary, attrs: attributes! { class="w-full" },
                                     "Continue with " (&provider.label)
                                 )
@@ -84,6 +95,9 @@ pub async fn login(cx: &Cx) -> Result<impl View> {
                     )
                     <p class="text-xs text-muted-foreground">"Passkeys are added from your account page once you are signed in."</p>
                 </div>
+                if !signup_open {
+                    <p class="text-center text-xs text-muted-foreground" data-signup="invitation">"Accounts are created by invitation."</p>
+                }
             </div>
         )
     })

@@ -42,6 +42,12 @@ pub enum IdentityError {
     WeakPassword,
     #[error("the current password is wrong")]
     WrongPassword,
+    #[error("this invitation is no longer valid")]
+    InvitationInvalid,
+    #[error("this invitation is for another e-mail address")]
+    InvitationForOtherAddress,
+    #[error("accounts are created by invitation")]
+    SignupClosed,
     #[error("the password hash is not an argon2 hash")]
     MalformedPasswordHash,
     #[error(transparent)]
@@ -84,6 +90,9 @@ impl IdentityError {
             Self::InvalidEmail => "invalid_email",
             Self::WeakPassword => "weak_password",
             Self::WrongPassword => "wrong_password",
+            Self::InvitationInvalid => "invitation_invalid",
+            Self::InvitationForOtherAddress => "invitation_other_address",
+            Self::SignupClosed => "signup_closed",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::InvalidState | Self::MalformedPasswordHash | Self::Other(_) => return None,
         })

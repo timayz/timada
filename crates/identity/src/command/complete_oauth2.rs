@@ -4,9 +4,10 @@ use ulid::Ulid;
 use crate::aggregator::{OAuth2AccountLinked, Registered, SignedIn};
 use crate::error::IdentityError;
 use crate::value_object::{
-    LoginContext, OAuth2Mode, ProviderIdentity, ROOT_USER_ID, SignInKind, SignInMethod,
+    Admission, LoginContext, OAuth2Mode, ProviderIdentity, ROOT_USER_ID, SignInKind, SignInMethod,
 };
 
+use super::invitation::Proof;
 use super::oauth2_index::free_oauth2_index;
 use super::sign_in::SignInFacts;
 use super::{UserState, surely_not_written};
@@ -20,6 +21,8 @@ pub struct CompleteOAuth2 {
     pub session_user_id: Option<String>,
     pub identity: ProviderIdentity,
     pub context: LoginContext,
+    /// What lets this callback create an account, should it come to that.
+    pub admission: Admission,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +45,10 @@ impl<E: Executor> super::Command<E> {
     /// browser: by mode, by whether a session exists, and by whether the
     /// identity is already registered. Signing in to a registered identity
     /// while signed in as someone else switches accounts; creating an account
-    /// while signed in is refused.
+    /// while signed in is refused. An account is created only as
+    /// [`CompleteOAuth2::admission`] lets it: with sign-up closed, through
+    /// root's invitation of the address the provider verified, which this
+    /// uses up.
     pub async fn complete_oauth2(
         &self,
         cmd: CompleteOAuth2,
@@ -102,8 +108,22 @@ impl<E: Executor> super::Command<E> {
                 Err(IdentityError::UnexpectedlyAuthorized)
             }
             (OAuth2Mode::CreateUser | OAuth2Mode::CreateUserOrLogin, None, None) => {
-                let user_id = self
-                    .register_oauth2(&cmd.identity, &cmd.context, routing_key)
+                let user_id = Ulid::generate().to_string();
+                match &cmd.admission {
+                    Admission::Open => {}
+                    Admission::Closed => return Err(IdentityError::SignupClosed),
+                    Admission::Invited { token, now } => {
+                        self.use_account_invitation(
+                            token,
+                            Proof::Provider(cmd.identity.verified_email().as_deref()),
+                            &user_id,
+                            *now,
+                            routing_key.clone(),
+                        )
+                        .await?;
+                    }
+                }
+                self.register_oauth2(&user_id, &cmd.identity, &cmd.context, routing_key)
                     .await?;
                 Ok(OAuth2Outcome {
                     user_id,
@@ -122,12 +142,12 @@ impl<E: Executor> super::Command<E> {
     /// unreachable stub if the index race is lost), then the index entry.
     async fn register_oauth2(
         &self,
+        user_id: &str,
         identity: &ProviderIdentity,
         context: &LoginContext,
         routing_key: Option<String>,
-    ) -> Result<String, IdentityError> {
-        let user_id = Ulid::generate().to_string();
-        evento::append(&user_id)
+    ) -> Result<(), IdentityError> {
+        evento::append(user_id)
             .original_version(0)
             .routing_key_opt(routing_key.clone())
             .event(&Registered {
@@ -153,7 +173,7 @@ impl<E: Executor> super::Command<E> {
             .await?;
 
         match self
-            .link_oauth2_index(identity, &user_id, routing_key.clone())
+            .link_oauth2_index(identity, user_id, routing_key.clone())
             .await
         {
             Ok(()) => {}
@@ -168,7 +188,7 @@ impl<E: Executor> super::Command<E> {
             Err(err) => return Err(err),
         }
 
-        Ok(user_id)
+        Ok(())
     }
 
     /// Links a provider identity to an existing user: index first (the

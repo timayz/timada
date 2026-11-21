@@ -88,6 +88,8 @@ pub enum Kind {
     ShopperCode,
     /// A link to join a tenant (`Invitation`).
     Invitation,
+    /// Root's link to create an account (`AccountInvitation`).
+    AccountInvitation,
     /// A shop's double opt-in link (`Subscriber`).
     NewsletterConfirmation,
     /// A shop's mail to the shopper of an order (`Order`, then `OrderMail`):
@@ -113,6 +115,7 @@ impl Kind {
             Self::PlatformCode => "platform_code",
             Self::ShopperCode => "shopper_code",
             Self::Invitation => "invitation",
+            Self::AccountInvitation => "account_invitation",
             Self::NewsletterConfirmation => "newsletter_confirmation",
             Self::OrderMail(mail) => mail.key(),
             Self::MessageNotice => "message_notice",
@@ -124,6 +127,7 @@ impl Kind {
             "platform_code" => Self::PlatformCode,
             "shopper_code" => Self::ShopperCode,
             "invitation" => Self::Invitation,
+            "account_invitation" => Self::AccountInvitation,
             "newsletter_confirmation" => Self::NewsletterConfirmation,
             "message_notice" => Self::MessageNotice,
             _ => Self::OrderMail(*Self::ORDER_MAILS.iter().find(|mail| mail.key() == value)?),
@@ -136,6 +140,7 @@ impl Kind {
             Self::PlatformCode => "sign-in code",
             Self::ShopperCode => "shopper sign-in code",
             Self::Invitation => "invitation",
+            Self::AccountInvitation => "invitation to create an account",
             Self::NewsletterConfirmation => "newsletter confirmation",
             Self::OrderMail(ShopMailKind::OrderPaid) => "order payment mail",
             Self::OrderMail(ShopMailKind::OrderShipped) => "order shipping mail",
@@ -546,6 +551,9 @@ impl Mailroom {
             Some(Kind::PlatformCode) => crate::code_mails::send_platform(self, owed, now).await,
             Some(Kind::ShopperCode) => crate::code_mails::send_shopper(self, owed, now).await,
             Some(Kind::Invitation) => crate::invitation_mails::send(self, owed, now).await,
+            Some(Kind::AccountInvitation) => {
+                crate::account_invitation_mails::send(self, owed, now).await
+            }
             Some(Kind::NewsletterConfirmation) => {
                 crate::newsletter_confirmations::send(self, owed, now).await
             }

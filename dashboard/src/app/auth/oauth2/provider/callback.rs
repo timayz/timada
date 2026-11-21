@@ -1,4 +1,4 @@
-use timada_identity::{CompleteOAuth2, OAuth2Mode};
+use timada_identity::{Admission, CompleteOAuth2, OAuth2Mode};
 use topcoat::{
     Result,
     context::{Cx, context},
@@ -9,6 +9,7 @@ use topcoat::{
 };
 
 use super::provider;
+use crate::app::auth::invitation::token::invitation_url;
 use crate::app::auth::{account_url, error_code, login_url, signed_in_url};
 use crate::auth::{
     cookies::{is_fresh, oidc_flow},
@@ -16,6 +17,7 @@ use crate::auth::{
     oidc::Providers,
     sign_in_as,
 };
+use crate::config::Config;
 
 #[topcoat::router::query_params(error = bad_request)]
 struct CallbackQuery {
@@ -53,8 +55,19 @@ pub async fn callback(cx: &Cx) -> Result<SeeOther> {
     let Some(mode) = OAuth2Mode::parse(&flow.mode) else {
         return Ok(see_other(login_url(cx, Some("failed"))));
     };
-    let failure_url = |code: &str| match mode {
-        OAuth2Mode::AddToUser => account_url(cx, Some(code), None),
+    // What lets the callback create an account: root's invitation, when
+    // the flow started on its page; else whether sign-up is open.
+    let admission = match &flow.invitation {
+        Some(token) => Admission::Invited {
+            token: token.clone(),
+            now: now(),
+        },
+        None if context::<Config>(cx).auth.signup.is_open() => Admission::Open,
+        None => Admission::Closed,
+    };
+    let failure_url = |code: &str| match (mode, &flow.invitation) {
+        (OAuth2Mode::AddToUser, _) => account_url(cx, Some(code), None),
+        (_, Some(token)) => invitation_url(cx, token, Some(code)),
         _ => login_url(cx, Some(code)),
     };
 
@@ -93,6 +106,7 @@ pub async fn callback(cx: &Cx) -> Result<SeeOther> {
             session_user_id,
             identity: identity_claims,
             context: login_context(cx),
+            admission,
         })
         .await;
     match outcome {

@@ -60,6 +60,14 @@ rp_name = "Timada"
 # login_attempts_per_ip = 30
 # login_attempts_per_email = 10
 # login_window_secs = 900
+# Who creates an account. "open": anyone, from the login page, with an e-mail
+# address and a password or through a sign-in provider. "invitation": nobody
+# on their own; the root account (below) has a link mailed to an address from
+# the page of users, valid for 7 days, and the link creates the account of
+# that address and no other. An invitation to join a shop then lets an
+# account in, and creates none. Root invites whichever value is set; the
+# accounts that exist sign in as before. The same on every node.
+# signup = "open"
 
 # The root account: above every user, and out of their reach. Required. It is
 # defined here and nowhere else: nobody registers it, and no page changes its

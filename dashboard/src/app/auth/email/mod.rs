@@ -45,15 +45,18 @@ impl Started {
 /// Issues a code for `email`; the subscription that follows the challenge
 /// mails it. `Err` is the error code to show; infrastructure failures
 /// propagate. Root's address is taken, though no account claimed it: nobody
-/// registers it or adds it to their account.
+/// registers it or adds it to their account. With sign-up closed, no code
+/// is issued to register: the link of root's invitation is the proof then.
 pub async fn start_challenge(
     cx: &Cx,
     email: &str,
     kind: EmailFlowKind,
 ) -> Result<Result<Started, &'static str>> {
-    if kind.purpose() == ChallengePurpose::Register
-        && context::<Config>(cx).auth.root.has_email(email)
-    {
+    let config = context::<Config>(cx);
+    if kind == EmailFlowKind::Register && !config.auth.signup.is_open() {
+        return Ok(Err(error_code(&IdentityError::SignupClosed)));
+    }
+    if kind.purpose() == ChallengePurpose::Register && config.auth.root.has_email(email) {
         return Ok(Err(error_code(&IdentityError::AlreadyRegistered)));
     }
     match identity(cx)

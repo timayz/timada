@@ -27,6 +27,7 @@ use crate::components::button::button;
 use crate::components::card::CARD;
 use crate::components::field::{field, field_label};
 use crate::components::input::input;
+use crate::config::Config;
 use crate::ui::{LINK, auth_document, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -180,6 +181,15 @@ pub async fn submit(cx: &Cx, Form(form): Form<VerifyForm>) -> Result<SeeOther> {
 
     let outcome: std::result::Result<Completed, IdentityError> = match kind {
         EmailFlowKind::Register => {
+            // A flow started before sign-up was closed creates nothing.
+            if !topcoat::context::context::<Config>(cx)
+                .auth
+                .signup
+                .is_open()
+            {
+                email_flow(cx).remove();
+                return Ok(see_other(login_url(cx, Some("signup_closed"))));
+            }
             let Some(password_hash) = flow.password_hash.clone() else {
                 return Ok(see_other(register_url(cx, Some("expired"), Some(&email))));
             };

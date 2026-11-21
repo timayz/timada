@@ -101,6 +101,36 @@ pub struct AuthConfig {
     /// gets in while no mail leaves; only it makes administrators.
     #[serde(deserialize_with = "root_account")]
     pub root: RootAccount,
+    /// Who creates an account: anyone, or only the people root invites.
+    #[serde(default, deserialize_with = "signup")]
+    pub signup: Signup,
+}
+
+/// `auth.signup`: who creates an account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Signup {
+    /// Anyone, from the login page.
+    #[default]
+    Open,
+    /// Only through the link root has mailed to an address.
+    Invitation,
+}
+
+impl Signup {
+    pub fn is_open(self) -> bool {
+        self == Self::Open
+    }
+}
+
+fn signup<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Signup, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    match value.as_str() {
+        "open" => Ok(Signup::Open),
+        "invitation" => Ok(Signup::Invitation),
+        _ => Err(serde::de::Error::custom(format!(
+            "auth.signup is \"open\" or \"invitation\", not '{value}'"
+        ))),
+    }
 }
 
 /// `[auth.root]` as written.
@@ -1800,6 +1830,34 @@ mod tests {
         let err = read("root@example.com", "correct horse battery").unwrap_err();
         assert!(err.to_string().contains("hash-password"), "{err}");
         assert!(!err.to_string().contains("correct horse"), "{err}");
+    }
+
+    #[test]
+    fn sign_up_is_open_unless_the_configuration_closes_it() {
+        #[derive(Debug, Deserialize)]
+        struct Auth {
+            #[serde(default, deserialize_with = "signup")]
+            signup: Signup,
+        }
+        let read = |toml: &str| {
+            config::Config::builder()
+                .add_source(File::from_str(toml, config::FileFormat::Toml))
+                .build()
+                .unwrap()
+                .try_deserialize::<Auth>()
+                .map(|auth| auth.signup)
+        };
+
+        assert_eq!(read("").unwrap(), Signup::Open);
+        assert_eq!(read("signup = 'open'").unwrap(), Signup::Open);
+        assert_eq!(read("signup = 'invitation'").unwrap(), Signup::Invitation);
+        assert!(!Signup::Invitation.is_open());
+        let err = read("signup = 'closed'").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("auth.signup is \"open\" or \"invitation\", not 'closed'"),
+            "{err}"
+        );
     }
 
     #[test]

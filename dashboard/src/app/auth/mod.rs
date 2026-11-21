@@ -4,6 +4,7 @@
 pub mod account;
 pub mod email;
 pub mod forgot_password;
+pub mod invitation;
 pub mod login;
 pub mod logout;
 pub mod oauth2;

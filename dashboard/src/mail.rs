@@ -1,6 +1,7 @@
 //! The e-mails this application sends: a code that proves an address, an
-//! invitation to join a tenant, a notice to a shop's members that a contact
-//! message arrived, and, speaking for a shop, its shoppers' sign-in codes,
+//! invitation to join a tenant or to create an account, a notice to a shop's
+//! members that a contact message arrived, and, speaking for a shop, its
+//! shoppers' sign-in codes,
 //! order confirmations, requests for a review and the links that confirm a
 //! subscription to its news.
 
@@ -89,6 +90,29 @@ pub async fn send_invitation(
                 <p><a href=(link)>"Accept the invitation"</a></p>
                 <p>"Or open this address: " (link)</p>
                 <p>"The link is valid for 7 days. If you do not know this tenant, you can ignore this message."</p>
+            },
+        )
+        .await?
+        .build()?;
+    send(cx, mail).await?;
+    Ok(())
+}
+
+/// Mails the link of root's invitation to create an account. `link` is
+/// absolute (the recipient is not on this site yet).
+pub async fn send_account_invitation(cx: &Cx, to: &str, link: &str) -> Result<()> {
+    let from = context::<MailSender>(cx).0.clone();
+    let mail = Mail::builder()
+        .from(from)
+        .to([Mailbox::new(to)?])
+        .subject("You are invited to create your Timada account")
+        .html(
+            cx,
+            view! {
+                <p>"You are invited to create an account on Timada for " <strong>(to)</strong> "."</p>
+                <p><a href=(link)>"Create your account"</a></p>
+                <p>"Or open this address: " (link)</p>
+                <p>"The link is valid for 7 days and works once. If you did not expect this message, you can ignore it."</p>
             },
         )
         .await?

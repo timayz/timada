@@ -8,7 +8,7 @@ pub mod accept;
 use timada_tenancy::{InvitationState, TenantState};
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, context},
     icon::icon,
     router::{href, module_param, page, query_params},
     view::{View, attributes, class, view},
@@ -23,6 +23,7 @@ use crate::auth::{
 };
 use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::card::CARD;
+use crate::config::Config;
 use crate::ui::{LINK, auth_document, icons, notice};
 
 module_param!(pub token);
@@ -116,6 +117,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         (Some(invitation), Some(tenant)) => role_label(tenant, &invitation.role),
         _ => String::new(),
     };
+    let signup_open = context::<Config>(cx).auth.signup.is_open();
     let tenant_name = tenant.as_ref().map(|t| t.name.clone()).unwrap_or_default();
     let state = match offer {
         Offer::Invalid => "invalid",
@@ -167,11 +169,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     }
                     Offer::SignIn { email } => {
-                        <p class="text-center text-sm">"Create an account or sign in to accept; you will come back here."</p>
-                        <div class="flex flex-col gap-2">
-                            <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Md)) href=(register_url(cx, None, Some(&email)))>"Create an account"</a>
-                            <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Md)) href=(login_url(cx, None))>icon(data: icons::LOG_IN) "Sign in"</a>
-                        </div>
+                        if signup_open {
+                            <p class="text-center text-sm">"Create an account or sign in to accept; you will come back here."</p>
+                            <div class="flex flex-col gap-2">
+                                <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Md)) href=(register_url(cx, None, Some(&email)))>"Create an account"</a>
+                                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Md)) href=(login_url(cx, None))>icon(data: icons::LOG_IN) "Sign in"</a>
+                            </div>
+                        } else {
+                            <p class="text-center text-sm">"Sign in to accept; you will come back here."</p>
+                            <a class=(button_variants(ButtonVariant::Primary, ButtonSize::Md)) href=(login_url(cx, None))>icon(data: icons::LOG_IN) "Sign in"</a>
+                            <p class="text-center text-xs text-muted-foreground" data-signup="invitation">"No account yet? Accounts are created by invitation here: ask the person who runs this platform for one, then open this link again."</p>
+                        }
                     }
                 }
             </section>

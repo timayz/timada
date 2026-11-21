@@ -9,7 +9,7 @@ use evento::{
 };
 use timada_core::db::Db;
 use timada_identity::{
-    AddPasskey, ChallengePurpose, Command, CompleteOAuth2, LoginContext, OAuth2Mode,
+    AddPasskey, Admission, ChallengePurpose, Command, CompleteOAuth2, LoginContext, OAuth2Mode,
     RegisterWithPassword, RootAccount, SignInPasskey, SignInRoot, VerifiedPasskey, hash_password,
 };
 use tokio::sync::Notify;
@@ -88,6 +88,7 @@ pub fn identity(provider: &str, sub: &str) -> timada_identity::ProviderIdentity 
         provider: provider.to_owned(),
         provider_user_id: sub.to_owned(),
         email: Some(format!("{sub}@example.com")),
+        email_verified: true,
         name: Some(format!("User {sub}")),
         picture: None,
     }
@@ -111,6 +112,7 @@ pub fn oauth2(
         session_user_id: session_user_id.map(str::to_owned),
         identity: identity(provider, sub),
         context: context(),
+        admission: Admission::Open,
     }
 }
 
