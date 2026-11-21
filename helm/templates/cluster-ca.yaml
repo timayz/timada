@@ -1,0 +1,49 @@
+{{- if include "timada.clustered" . }}
+{{- /*
+The authority the nodes' certificates are issued by, and the issuer that
+gives each pod its own as it starts (cert-manager's CSI driver, see the
+StatefulSet's `cluster-tls` volume). A release that is the whole cluster
+makes its own authority. The releases of one cluster (`peers`) share one:
+the same secret, made once and created in each, named by
+`clusterCa.secretName`.
+*/}}
+{{- $caSecret := .Values.clusterCa.secretName }}
+{{- if not $caSecret }}
+{{- if .Values.peers }}
+{{- fail "with `peers`, the releases of one cluster share one authority: create its secret in each (kubectl create secret tls) and name it in clusterCa.secretName" }}
+{{- end }}
+{{- $caSecret = "timada-cluster-ca" }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: timada-cluster-bootstrap
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: timada-cluster-ca
+spec:
+  isCA: true
+  commonName: timada cluster
+  secretName: timada-cluster-ca
+  # Ten years: renewing the authority means the old and the new one side by
+  # side in every node's `ca.crt` for a while (cert-manager's trust bundle).
+  duration: 87600h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    kind: Issuer
+    name: timada-cluster-bootstrap
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: timada-cluster
+spec:
+  ca:
+    secretName: {{ $caSecret | quote }}
+{{- end }}

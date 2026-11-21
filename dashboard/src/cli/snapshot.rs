@@ -597,7 +597,7 @@ mod tests {
     ) {
         let store = crate::db::migrate_store(path).await.unwrap();
         let (cluster, executor, _) =
-            crate::cluster::open(None, None, &[], false, path, store.clone())
+            crate::cluster::open(None, None, None, &[], false, path, store.clone())
                 .await
                 .unwrap();
         let catalog = read_model_subscription::<Executor>(Db::from(store.clone()))

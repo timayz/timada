@@ -58,7 +58,7 @@ use tokio::task::JoinSet;
 
 use crate::config::DataKeysConfig;
 use crate::disk::{self, Durability};
-use crate::peers::{self, Peers, is_id};
+use crate::peers::{Peers, is_id};
 use crate::seal::Sealer;
 
 /// The route a node takes and hands out copies of a key on, below
@@ -163,12 +163,6 @@ impl KeyVault {
             vault: self.clone(),
             tenant_id: tenant_id.to_owned(),
         })
-    }
-
-    /// Whether a request carries the cluster's secret. Without peers no
-    /// request does: a single node shares no keys.
-    pub fn authorizes(&self, header: Option<&[u8]>) -> bool {
-        peers::authorizes(self.peers.as_deref(), header)
     }
 
     /// Takes a copy a peer sends: checks the names cannot leave the
@@ -279,12 +273,8 @@ impl KeyVault {
 
     /// Copies what is left of `copy` from the peer at `url`.
     async fn copy_from(&self, peers: &Peers, url: &str, copy: &mut Progress) -> anyhow::Result<()> {
-        let ask = |path: String| {
-            peers
-                .client()
-                .get(format!("{url}{PEER_ROUTE}{path}"))
-                .header(reqwest::header::AUTHORIZATION, peers.authorization())
-        };
+        let client = peers.client();
+        let ask = |path: String| client.get(format!("{url}{PEER_ROUTE}{path}"));
         if copy.tenants.is_none() {
             let listed: Tenants = ask_json(ask(String::new())).await?;
             copy.tenants = Some(listed.tenants.into_iter().filter(|t| is_id(t)).collect());
@@ -400,11 +390,10 @@ impl KeyVault {
             return Ok(None);
         };
         let mut asks = JoinSet::new();
+        let client = peers.client();
         for url in peers.urls() {
-            let request = peers
-                .client()
+            let request = client
                 .get(format!("{url}{PEER_ROUTE}/{tenant_id}/{key_id}"))
-                .header(reqwest::header::AUTHORIZATION, peers.authorization())
                 .timeout(self.fetch_timeout);
             let url = url.clone();
             asks.spawn(async move { (url, ask_for_key(request).await) });
@@ -692,7 +681,7 @@ mod tests {
 
     use super::*;
     use crate::disk::test_support::Syncs;
-    use crate::peers::test_support::{SECRET, answering, down, peer, silent};
+    use crate::peers::test_support::{answering, down, peer, silent};
 
     const OPERATOR_SECRET: &str = "a-test-secret-of-thirty-two-chars!!";
 
@@ -926,11 +915,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_copy_needs_the_secret_a_name_inside_the_directory_and_a_key() {
+    async fn a_copy_needs_a_name_inside_the_directory_and_a_key() {
         let vault = vault(Some(Peers::for_test(vec![], 3)));
-        assert!(vault.authorizes(Some(SECRET.as_bytes())));
-        assert!(!vault.authorizes(None));
-        assert!(!super::tests::vault(None).authorizes(Some(SECRET.as_bytes())));
 
         let sealed = sealer()
             .seal_bytes_for("t1/k1", Key::generate().as_bytes())

@@ -945,11 +945,11 @@ pub struct ClusterConfig {
     #[serde(default)]
     pub listen: Option<SocketAddr>,
     /// Every node's web address as the other nodes reach it, in `peers`
-    /// order, e.g. `http://10.0.0.2:7001`: the port each keeps for the
-    /// other nodes (`web_listen`), not `server.port`. Product pictures and
-    /// shopper keys are copied between nodes through it, and the rate
-    /// limits ask the other nodes through it. Required with more than one
-    /// node.
+    /// order, e.g. `https://10.0.0.2:7001`: the port each keeps for the
+    /// other nodes (`web_listen`), not `server.port`, over the TLS of
+    /// `tls`. Product pictures and shopper keys are copied between nodes
+    /// through it, and the rate limits ask the other nodes through it.
+    /// Required with more than one node.
     #[serde(default)]
     pub web_peers: Vec<String>,
     /// Address to bind for what the other nodes ask of this one: the port of
@@ -959,11 +959,16 @@ pub struct ClusterConfig {
     /// container.
     #[serde(default)]
     pub web_listen: Option<SocketAddr>,
-    /// Shared by every node: a node only accepts a picture copied from a
-    /// peer that presents it. At least 32 characters; required with more
-    /// than one node.
+    /// Mutual TLS between the nodes, on both of their ports: the authority
+    /// every node's certificate is issued by, this node's certificate and
+    /// its key (`ca`, `cert`, `key`: PEM files, as a cert-manager secret
+    /// holds them). A node is let in as the node its certificate names: it
+    /// must be valid for the host, or the address, the node's entry in
+    /// `peers` gives, and in `web_peers`. The files are read again every few
+    /// seconds, so a certificate is renewed by replacing them. Required with
+    /// more than one node.
     #[serde(default)]
-    pub secret: Option<String>,
+    pub tls: Option<evento::cluster::TlsSettings>,
     /// A node not heard from for this long is no longer waited for: the
     /// others tidy up finished writes without it. When it returns it is told
     /// so, and comes back by copying the store from a peer (`rejoin`, then
@@ -1202,8 +1207,8 @@ impl MailConfig {
 
 impl ClusterConfig {
     /// The node's settings, as evento's host takes them: everything here but
-    /// the web addresses and the secret, which are this application's own
-    /// channel between the nodes.
+    /// the web addresses, which are this application's own channel between
+    /// the nodes.
     pub fn settings(&self) -> evento::cluster::Settings {
         evento::cluster::Settings {
             node_id: self.node_id,
@@ -1213,8 +1218,7 @@ impl ClusterConfig {
             absent_after_secs: self.absent_after_secs,
             write_backlog: self.write_backlog,
             linearizable_reads: None,
-            // In clear between the nodes, as before: #726.
-            tls: None,
+            tls: self.tls.clone(),
         }
     }
 
@@ -1247,9 +1251,9 @@ impl ClusterConfig {
         }
         for url in &mut self.web_peers {
             let trimmed = url.trim_end_matches('/');
-            if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+            if !trimmed.starts_with("https://") {
                 return Err(ConfigError::Message(format!(
-                    "cluster.web_peers: '{url}' must start with http:// or https://"
+                    "cluster.web_peers: '{url}' must start with https://: the nodes talk over TLS"
                 )));
             }
             *url = trimmed.to_owned();
@@ -1260,14 +1264,22 @@ impl ClusterConfig {
                 self.web_peers[self.node_id as usize]
             )));
         }
-        if self
-            .secret
-            .as_deref()
-            .is_none_or(|secret| secret.len() < 32)
-        {
+        let Some(tls) = &self.tls else {
             return Err(ConfigError::Message(
-                "cluster.secret must be at least 32 characters with more than one node".into(),
+                "cluster.tls is required with more than one node: the nodes let each other in by their certificates (ca, cert and key)".into(),
             ));
+        };
+        for (name, path) in [
+            ("cluster.tls.ca", &tls.ca),
+            ("cluster.tls.cert", &tls.cert),
+            ("cluster.tls.key", &tls.key),
+        ] {
+            if !path.is_file() {
+                return Err(ConfigError::Message(format!(
+                    "{name}: '{}' is not a readable file",
+                    path.display()
+                )));
+            }
         }
         Ok(())
     }
@@ -1539,7 +1551,11 @@ mod tests {
         assert!(err.to_string().contains("'traefik'"), "{err}");
     }
 
-    fn cluster(nodes: usize, web_peers: &[&str], secret: Option<&str>) -> ClusterConfig {
+    fn cluster(
+        nodes: usize,
+        web_peers: &[&str],
+        tls: Option<evento::cluster::TlsSettings>,
+    ) -> ClusterConfig {
         ClusterConfig {
             node_id: 0,
             founders: None,
@@ -1549,10 +1565,23 @@ mod tests {
             listen: None,
             web_peers: web_peers.iter().map(|s| s.to_string()).collect(),
             web_listen: None,
-            secret: secret.map(str::to_owned),
+            tls,
             absent_after_secs: default_absent_after_secs(),
             write_backlog: default_write_backlog(),
         }
+    }
+
+    /// Three files where `[cluster.tls]` looks for them; what they hold is
+    /// read when the node opens, not here.
+    fn tls_files() -> evento::cluster::TlsSettings {
+        let dir = std::env::temp_dir().join(format!("timada-tls-{}", ulid::Ulid::generate()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let [ca, cert, key] = ["ca.crt", "tls.crt", "tls.key"].map(|name| {
+            let path = dir.join(name);
+            std::fs::write(&path, "").unwrap();
+            path
+        });
+        evento::cluster::TlsSettings { ca, cert, key }
     }
 
     #[test]
@@ -1607,7 +1636,7 @@ mod tests {
             .add_source(File::from_str(
                 "[cluster]\nlisten = \"0.0.0.0:7000\"\nweb_listen = \"0.0.0.0:7001\"\nwrite_backlog = 5000.0\n\
                  peers = [\"timada-0.timada-headless:7000\", \"timada-1.timada-headless:7000\", \"timada-2.timada-headless:7000\"]\n\
-                 web_peers = [\"http://timada-0.timada-headless:7001\", \"http://timada-1.timada-headless:7001\", \"http://timada-2.timada-headless:7001\"]\n",
+                 web_peers = [\"https://timada-0.timada-headless:7001\", \"https://timada-1.timada-headless:7001\", \"https://timada-2.timada-headless:7001\"]\n",
                 config::FileFormat::Toml,
             ))
             .add_source(env)
@@ -1615,56 +1644,68 @@ mod tests {
             .unwrap()
             .try_deserialize()
             .unwrap();
-        config.cluster.secret = Some("0123456789abcdef0123456789abcdef".into());
+        config.cluster.tls = Some(tls_files());
         assert!(config.cluster.validate().is_ok());
         assert_eq!(config.cluster.node_id, 2);
         assert_eq!(config.cluster.write_backlog, 5000);
     }
 
     #[test]
-    fn several_nodes_need_their_web_addresses_and_a_secret() {
-        const SECRET: &str = "0123456789abcdef0123456789abcdef";
+    fn several_nodes_need_their_web_addresses_and_their_certificates() {
+        // Alone, a node talks to nobody.
         assert!(cluster(1, &[], None).validate().is_ok());
 
         let mut three = cluster(
             3,
-            &["http://a:7001/", "http://b:7001", "https://c"],
-            Some(SECRET),
+            &["https://a:7001/", "https://b:7001", "https://c"],
+            Some(tls_files()),
         );
         three.web_listen = Some("0.0.0.0:7001".parse().unwrap());
         assert!(three.validate().is_ok());
-        assert_eq!(three.web_peers[0], "http://a:7001");
+        assert_eq!(three.web_peers[0], "https://a:7001");
+        assert_eq!(three.settings().tls, three.tls);
 
-        assert!(
-            cluster(3, &["http://a", "http://b"], Some(SECRET))
-                .validate()
-                .is_err()
-        );
-        assert!(
-            cluster(3, &["http://a", "b:3000", "http://c"], Some(SECRET))
-                .validate()
-                .is_err()
-        );
-        for secret in [None, Some("short")] {
-            let mut config = cluster(3, &["http://a", "http://b", "http://c"], secret);
+        let refused = |mut config: ClusterConfig, says: &str| {
             config.web_listen = Some("0.0.0.0:7001".parse().unwrap());
             let err = config.validate().unwrap_err();
-            assert!(err.to_string().contains("cluster.secret"), "{err}");
-        }
+            assert!(err.to_string().contains(says), "{says}: {err}");
+        };
+        refused(
+            cluster(3, &["https://a", "https://b"], Some(tls_files())),
+            "each of the 3 peers",
+        );
+        refused(
+            cluster(3, &["https://a", "b:7001", "https://c"], Some(tls_files())),
+            "https://",
+        );
+        // Never in clear between the nodes.
+        refused(
+            cluster(3, &["http://a", "http://b", "http://c"], Some(tls_files())),
+            "https://",
+        );
+        refused(
+            cluster(3, &["https://a", "https://b", "https://c"], None),
+            "cluster.tls is required",
+        );
+        let mut missing = tls_files();
+        missing.key = missing.key.with_file_name("gone.key");
+        refused(
+            cluster(3, &["https://a", "https://b", "https://c"], Some(missing)),
+            "cluster.tls.key",
+        );
     }
 
     #[test]
     fn a_node_takes_the_other_nodes_requests_at_its_own_web_address() {
-        const SECRET: &str = "0123456789abcdef0123456789abcdef";
         // An address and a port: bound as it is.
         let mut by_address = cluster(
             3,
             &[
-                "http://127.0.0.1:7100/",
-                "http://127.0.0.1:7101",
-                "http://127.0.0.1:7102",
+                "https://127.0.0.1:7100/",
+                "https://127.0.0.1:7101",
+                "https://127.0.0.1:7102",
             ],
-            Some(SECRET),
+            Some(tls_files()),
         );
         by_address.node_id = 1;
         assert!(by_address.validate().is_ok());
@@ -1676,8 +1717,8 @@ mod tests {
         // A name: the address to bind is given.
         let mut by_name = cluster(
             3,
-            &["http://a:7001", "http://b:7001", "http://c:7001"],
-            Some(SECRET),
+            &["https://a:7001", "https://b:7001", "https://c:7001"],
+            Some(tls_files()),
         );
         let err = by_name.validate().unwrap_err();
         assert!(err.to_string().contains("cluster.web_listen"), "{err}");

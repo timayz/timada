@@ -55,5 +55,11 @@ log_level = "info,tantivy=warn,turso_core::mvcc=warn"
 [cluster]
 node_id = 2
 peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]
-web_peers = ["http://127.0.0.1:7100", "http://127.0.0.1:7101", "http://127.0.0.1:7102"]
-secret = "load-only-cluster-secret-shared-by-the-three-nodes"
+web_peers = ["https://127.0.0.1:7100", "https://127.0.0.1:7101", "https://127.0.0.1:7102"]
+
+# Made by scripts/cluster-cert.sh, which the scripts run first: one
+# certificate for 127.0.0.1, which the three nodes share.
+[cluster.tls]
+ca = "data/cluster-tls/ca.crt"
+cert = "data/cluster-tls/tls.crt"
+key = "data/cluster-tls/tls.key"

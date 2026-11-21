@@ -30,14 +30,11 @@ struct PageQuery {
 }
 
 /// Up to [`PAGE_LEN`](crate::key_vault::PAGE_LEN) of the tenant's keys,
-/// destroyed ones included, in their ids' order after `after`. 401 without
-/// the cluster's secret, 400 for a name that is not an id.
+/// destroyed ones included, in their ids' order after `after`. 400 for a
+/// name that is not an id.
 #[route(GET)]
 pub async fn get(cx: &Cx) -> Result<Response> {
     let vault = context::<Arc<KeyVault>>(cx);
-    if !super::authorized(cx, vault) {
-        return StatusCode::UNAUTHORIZED.into_response(cx);
-    }
     let after = query_params::<PageQuery>(cx)?.after.as_deref();
     let tenant_id = tenant_id(cx);
     if !is_id(tenant_id) || after.is_some_and(|after| !is_id(after)) {

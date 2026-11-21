@@ -145,6 +145,14 @@ fn render(readiness: &Readiness, report: &Report) -> String {
     let given_up = health.peers.iter().filter(|peer| peer.given_up).count();
     let _ = writeln!(out, "# TYPE timada_peers_given_up gauge");
     let _ = writeln!(out, "timada_peers_given_up{{node=\"{node}\"}} {given_up}");
+    // A link a certificate keeps down: the peer answers, a file is wrong.
+    let refused = health
+        .peers
+        .iter()
+        .filter(|peer| peer.refused.is_some())
+        .count();
+    let _ = writeln!(out, "# TYPE timada_peers_refused gauge");
+    let _ = writeln!(out, "timada_peers_refused{{node=\"{node}\"}} {refused}");
     let in_touch = health
         .peers
         .iter()

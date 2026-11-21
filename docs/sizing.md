@@ -292,6 +292,13 @@ the medians of the three.
 | A sign-in refused for its password | 20 to 130 ms | 95 to 115 ms | 100 to 120 ms | 8 to 25 ms |
 | `/ready` | 16 to 70 ms | 20 to 85 ms | 25 to 45 ms | 16 to 20 ms |
 
+- **Over TLS it is the same** (#726: each pod with a certificate of its own,
+  evento `afa92d6`, one run on 2026-11-21). The medians fell inside the
+  ranges above or up to 26 ms under them, but for an account registered with
+  the far region cut off (258 ms through one node, 13 ms over), and inside
+  those below with 1 % of the packets lost. Nothing was refused, the node
+  asked in the region cut off answered `/ready` with 503 after 10 s, and the
+  region's three work groups were taken on and handed back.
 - **Nothing was refused and no node gave a peer up** at these delays: the
   timeouts of a cluster on one network held, and no setting had to change.
   The figures without a delay are those of nine nodes on one disk, and move
@@ -336,6 +343,10 @@ the medians of the three.
 - The storefront connections: the store API tells every connection of every
   write, whatever its shop, before `b03d06d`; a connection that serves one
   shop is now told of that shop's writes alone.
+- The limits over TLS (#726): the table above is from before it, with the
+  nodes in clear. On three nodes of one machine a node at rest costs the same
+  either way, and a write reaches a storefront's copy as soon (1.7 s at the
+  median of sixty writes).
 - Nine nodes in three regions that are really apart: `make wan` is one
   machine and one disk with a delay put on the packets. A picture uploaded
   and a personal-data key fetched from a node of another region, which go

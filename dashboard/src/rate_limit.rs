@@ -1,7 +1,7 @@
 //! How often a client may do something: a sliding window per key, held
 //! across the cluster. Each node keeps in memory the passes it let through;
 //! before letting one more through it asks the other nodes for theirs
-//! (`POST /cluster/limits`, under `cluster.secret`) and counts them with its
+//! (`POST /cluster/limits`, on the nodes' own port) and counts them with its
 //! own, so a client spread over a balancer is held to one limit, not one per
 //! node. A node that does not answer in time counts for nothing: its share
 //! is given up rather than the request held back, and it is not waited for
@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::config::{AuthConfig, StoreConfig};
-use crate::peers::{self, Peers};
+use crate::peers::Peers;
 
 /// How long a node waits for a peer's counts before counting it for nothing.
 const PEER_TIMEOUT: Duration = Duration::from_secs(2);
@@ -155,11 +155,6 @@ impl RateLimiter {
         })
     }
 
-    /// Whether a request carries the cluster's secret.
-    pub fn authorizes(&self, header: Option<&[u8]>) -> bool {
-        peers::authorizes(self.peers.as_deref(), header)
-    }
-
     /// Answers a peer's question (the body of its `POST /cluster/limits`)
     /// with this node's own passes. `Err` for a body that is not a question.
     pub fn answer(&self, body: &[u8]) -> anyhow::Result<Counted> {
@@ -195,11 +190,10 @@ impl RateLimiter {
         .expect("a question serializes");
         let now = Instant::now();
         let mut asks = Vec::new();
+        let client = peers.client();
         for url in peers.urls() {
-            let request = peers
-                .client()
+            let request = client
                 .post(format!("{url}/cluster/limits"))
-                .header(reqwest::header::AUTHORIZATION, peers.authorization())
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .timeout(PEER_TIMEOUT)
                 .body(body.clone());
@@ -578,7 +572,7 @@ async fn allow_from_storefront(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::peers::test_support::{SECRET, answering, down, peer};
+    use crate::peers::test_support::{answering, down, peer};
 
     const MINUTE: Duration = Duration::from_secs(60);
 
@@ -800,20 +794,11 @@ mod tests {
     }
 
     /// A node serving `POST /cluster/limits` from `limiter`, as the route
-    /// does: the secret, then the answer.
+    /// does.
     async fn node(limiter: Arc<RateLimiter>) -> String {
-        answering(move |head, body| {
-            let authorization = head
-                .lines()
-                .find_map(|line| line.strip_prefix("authorization: "))
-                .map(str::as_bytes);
-            if !limiter.authorizes(authorization) {
-                return (401, Vec::new());
-            }
-            match limiter.answer(body) {
-                Ok(counted) => (200, serde_json::to_vec(&counted).unwrap()),
-                Err(_) => (400, Vec::new()),
-            }
+        answering(move |_, body| match limiter.answer(body) {
+            Ok(counted) => (200, serde_json::to_vec(&counted).unwrap()),
+            Err(_) => (400, Vec::new()),
         })
         .await
     }
@@ -954,8 +939,5 @@ mod tests {
                 .answer(&serde_json::to_vec(&too_many).unwrap())
                 .is_err()
         );
-        // The limiter without peers authorizes nobody: a single node is
-        // asked by no one.
-        assert!(!limiter.authorizes(Some(SECRET.as_bytes())));
     }
 }

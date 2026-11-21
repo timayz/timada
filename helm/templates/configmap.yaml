@@ -12,9 +12,11 @@ its `node_id` (set in its environment by the StatefulSet). With `peers`, the
 list given, which is the whole cluster's, the nodes of other releases
 included: this release's pods are those numbered from `firstNodeId`. Each
 node is reached on port 7001 under the same name, for what the nodes ask of
-each other besides the store (`web_peers`). What `config.cluster` sets
-besides (`absent_after_secs`, `write_backlog`) is kept. `founders` says how
-many of the nodes the cluster started with, once it was given more.
+each other besides the store (`web_peers`). Both ports are mutual TLS, with
+the certificate cert-manager's CSI driver gives the pod (`tls`). What
+`config.cluster` sets besides (`absent_after_secs`, `write_backlog`) is
+kept. `founders` says how many of the nodes the cluster started with, once
+it was given more.
 */}}
 {{- $peers := list }}
 {{- if .Values.peers }}
@@ -29,9 +31,10 @@ many of the nodes the cluster started with, once it was given more.
 {{- end }}
 {{- $webPeers := list }}
 {{- range $peer := $peers }}
-{{- $webPeers = append $webPeers (printf "http://%s:7001" (regexReplaceAll ":[0-9]+$" $peer "")) }}
+{{- $webPeers = append $webPeers (printf "https://%s:7001" (regexReplaceAll ":[0-9]+$" $peer "")) }}
 {{- end }}
-{{- $generated := dict "peers" $peers "web_peers" $webPeers "listen" "0.0.0.0:7000" "web_listen" "0.0.0.0:7001" }}
+{{- $tls := dict "ca" "/etc/cluster/tls/ca.crt" "cert" "/etc/cluster/tls/tls.crt" "key" "/etc/cluster/tls/tls.key" }}
+{{- $generated := dict "peers" $peers "web_peers" $webPeers "listen" "0.0.0.0:7000" "web_listen" "0.0.0.0:7001" "tls" $tls }}
 {{- with .Values.founders }}
 {{- if or (lt (int .) 2) (gt (int .) (len $peers)) }}
 {{- fail "founders is how many nodes the cluster started with: at least 2, and no more than the nodes there are now" }}

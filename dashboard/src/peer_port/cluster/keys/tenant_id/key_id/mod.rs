@@ -1,6 +1,6 @@
 //! One key personal data is sealed under: a peer stores it here before
 //! recording what it seals, and a peer lacking it asks for it here. Only the
-//! nodes may: nothing outside the cluster ever reads a key.
+//! nodes reach it: nothing outside the cluster ever reads a key.
 
 use std::sync::Arc;
 
@@ -19,18 +19,14 @@ use topcoat::{
 
 use super::tenant_id;
 use crate::key_vault::KeyVault;
-use crate::peer_port::cluster::keys::authorized;
 
 module_param!(pub key_id);
 
-/// Stores the copy. 401 without the cluster's secret, 422 for a name or
-/// bytes that are not a key, or a key this node destroyed.
+/// Stores the copy. 422 for a name or bytes that are not a key, or a key
+/// this node destroyed.
 #[route(PUT)]
 pub async fn put(cx: &Cx, bytes: Bytes) -> Result<StatusCode> {
     let vault = context::<Arc<KeyVault>>(cx);
-    if !authorized(cx, vault) {
-        return Ok(StatusCode::UNAUTHORIZED);
-    }
     let stored = vault
         .accept(tenant_id(cx), key_id(cx), &bytes)
         .await
@@ -42,14 +38,10 @@ pub async fn put(cx: &Cx, bytes: Bytes) -> Result<StatusCode> {
     })
 }
 
-/// The sealed key. 401 without the cluster's secret, 404 when this node
-/// does not hold it.
+/// The sealed key. 404 when this node does not hold it.
 #[route(GET)]
 pub async fn get(cx: &Cx) -> Result<Response> {
     let vault = context::<Arc<KeyVault>>(cx);
-    if !authorized(cx, vault) {
-        return StatusCode::UNAUTHORIZED.into_response(cx);
-    }
     let sealed = vault
         .sealed(tenant_id(cx), key_id(cx))
         .await

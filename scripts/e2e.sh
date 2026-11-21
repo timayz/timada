@@ -99,15 +99,21 @@ if [ "$nodes" = 3 ]; then
   # takes what differs between them, its ports and its files, from the
   # environment, which wins over the file.
   mkdir -p data/e2e
+  scripts/cluster-cert.sh
   {
     cat config/e2e.toml
     cat <<'EOF'
 
-# Added by scripts/e2e.sh: the three nodes of the run, all on this machine.
+# Added by scripts/e2e.sh: the three nodes of the run, all on this machine,
+# sharing one certificate for 127.0.0.1 (scripts/cluster-cert.sh).
 [cluster]
 peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]
-web_peers = ["http://127.0.0.1:7100", "http://127.0.0.1:7101", "http://127.0.0.1:7102"]
-secret = "e2e-only-cluster-secret-never-used-outside-the-test-suite"
+web_peers = ["https://127.0.0.1:7100", "https://127.0.0.1:7101", "https://127.0.0.1:7102"]
+
+[cluster.tls]
+ca = "data/cluster-tls/ca.crt"
+cert = "data/cluster-tls/tls.crt"
+key = "data/cluster-tls/tls.key"
 EOF
   } >data/e2e/cluster.toml
   for i in 0 1 2; do

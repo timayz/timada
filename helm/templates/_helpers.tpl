@@ -20,6 +20,35 @@ true
 {{- end -}}
 
 {{/*
+The name the other nodes dial a pod of this release at, which its
+certificate holds, as cert-manager's CSI driver takes it (`${POD_NAME}`
+stands for the pod's name): `timada-<i>.timada-headless` inside one release,
+and with `peers` the release's entries, which must all be
+`timada-<i>.<one rest>`.
+*/}}
+{{- define "timada.dialledAs" -}}
+{{- if .Values.peers -}}
+{{- $first := int (.Values.firstNodeId | default 0) -}}
+{{- $prefix := printf "timada-%d." $first -}}
+{{- $host := regexReplaceAll ":[0-9]+$" (index .Values.peers $first) "" -}}
+{{- if not (hasPrefix $prefix $host) -}}
+{{- fail (printf "peers[%d] is %s: this release's pods are dialled as timada-<number>.<a name the same for each>, which their certificates hold" $first $host) -}}
+{{- end -}}
+{{- $rest := trimPrefix $prefix $host -}}
+{{- range $i := until (include "timada.nodes" $ | int) -}}
+{{- $id := add $first $i -}}
+{{- $host := regexReplaceAll ":[0-9]+$" (index $.Values.peers $id) "" -}}
+{{- if ne $host (printf "timada-%d.%s" $id $rest) -}}
+{{- fail (printf "peers[%d] is %s, where this release's pod %d is timada-%d.%s, as the others of the release: a pod's certificate holds its own name and that rest" $id $host $id $id $rest) -}}
+{{- end -}}
+{{- end -}}
+${POD_NAME}.{{ $rest }}
+{{- else -}}
+${POD_NAME}.timada-headless
+{{- end -}}
+{{- end -}}
+
+{{/*
 What a pod alone knows of itself: every pod reads the same configuration
 file, so it comes from its environment. Its name is its work group, unless
 `config.server.work_group` gives every node the same one: the background work on

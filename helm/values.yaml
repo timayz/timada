@@ -6,9 +6,10 @@ image:
 # keeps the whole store on a volume of its own, and they go on taking writes
 # while a majority of them is up, so one of three may be down or restarting.
 # The chart then writes the `[cluster]` section itself (each pod by its name,
-# its ordinal as its `node_id`) and needs TIMADA__CLUSTER__SECRET below;
-# `config.cluster` may still set `absent_after_secs` and `write_backlog`.
-# Needs Kubernetes 1.28 or later (the pod's ordinal as a label).
+# its ordinal as its `node_id`); `config.cluster` may still set
+# `absent_after_secs` and `write_backlog`. The nodes talk over mutual TLS,
+# each with a certificate of its own: see `clusterCa`. Needs Kubernetes 1.28
+# or later (the pod's ordinal as a label).
 # A cluster takes nodes more while it runs: see `founders`. A node that runs
 # alone stays alone: start with three where there may be more one day.
 replicas: 1
@@ -48,16 +49,18 @@ zones: []
 # 7000 (the store) and 7001 (pictures, keys and limits between the nodes),
 # under one name a pod. The names below are whatever does that for a single
 # pod where you run: a headless Service exported between the clusters gives
-# one per pod. That traffic is not encrypted here: the link between the
-# clusters must be.
+# one per pod. Both ports are mutual TLS: each pod's certificate holds the
+# name it has here, and the releases share one authority (`clusterCa`).
 #
 # `peers` is every node of the cluster as the others dial it, in the order of
 # their numbers, the same list in every release; each node is reached on
 # 7001 under the same name. `firstNodeId` is the number of this release's
 # first pod: with three pods a release, 0 in the first, 3 in the second, 6 in
 # the third; its pods are then named `timada-3`, `timada-4`, `timada-5`, and
-# are at those places in the list. Left out, the chart writes the list itself
-# for a cluster inside this one release.
+# are at those places in the list. A release's pods must be
+# `timada-<number>.<one rest>` in it, which is what their certificates hold.
+# Left out, the chart writes the list itself for a cluster inside this one
+# release.
 #
 # To start such a cluster: install every release with the lists of all the
 # nodes (they become ready once most of them are up), or install the first
@@ -74,6 +77,28 @@ zones: []
 firstNodeId: 0
 peers: []
 
+# The nodes of a cluster let each other in by their certificates: every pod
+# gets one of its own as it starts, for the name the others dial it at, from
+# cert-manager's CSI driver (csi.cert-manager.io), which must run in the
+# Kubernetes cluster beside cert-manager. Its key is made on the machine the
+# pod runs on and never leaves it; the certificate is renewed in place, with
+# no restart. A node presenting a certificate the others do not accept is
+# said so on the cluster page and in `timada_peers_refused`, not taken for a
+# node that is away.
+#
+# They are issued by an authority of the cluster's own. Left empty, a release
+# makes one (a self-signed CA, in the `timada-cluster-ca` secret). The
+# releases of one cluster over several Kubernetes clusters (`peers`) must
+# share one: make it once, and create the same secret in each before
+# installing, e.g.
+#   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+#     -keyout ca.key -out ca.crt -days 3650 -subj "/CN=timada cluster" \
+#     -addext basicConstraints=critical,CA:TRUE \
+#     -addext keyUsage=critical,keyCertSign,cRLSign
+#   kubectl -n timada create secret tls timada-cluster-ca --cert=ca.crt --key=ca.key
+clusterCa:
+  secretName: ""
+
 # Extra environment variables injected from the managed Secret. Every key of
 # the configuration can be set as TIMADA__<SECTION>__<KEY>, which wins over
 # `config` below: use it for what must not sit in a ConfigMap. A deployment
@@ -81,8 +106,6 @@ peers: []
 #   TIMADA__AUTH__SECRET_KEY   at least 32 characters
 #   TIMADA__SECRETS__KEY       at least 32 characters; never change it
 #   TIMADA__MAIL__SMTP_URL     smtps://user:pass@host:465
-# and with several nodes
-#   TIMADA__CLUSTER__SECRET    at least 32 characters, shared by the nodes
 extraSecretEnv: {}
 
 database:

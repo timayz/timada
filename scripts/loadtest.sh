@@ -49,6 +49,8 @@ fi
 
 topcoat asset bundle -p timada-dashboard --profile "$profile"
 cargo build --profile "$profile" -p timada-dashboard -p storefront -p timada-loadtest
+# The nodes' certificate (config/load-node*.toml).
+scripts/cluster-cert.sh
 
 node() {
   "$bin/timada-dashboard" --config "config/load-node$1.toml" "${@:2}"
