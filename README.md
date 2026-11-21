@@ -74,3 +74,16 @@ alone; `config.server.work_group` gives them all the same one.
 
 Every change goes through a branch and a pull request; `make check` must be green
 before one is opened.
+
+## License
+
+Timada is source-available, in two parts:
+
+- **The libraries and the shop to start from** (`crates/`, `storefront/`) are under
+  [MIT](crates/LICENSE-MIT) or [Apache 2.0](crates/LICENSE-APACHE), as you prefer: a
+  shop built on them is yours.
+- **Everything else** (the dashboard, the chart, the tests and the tooling) is under
+  the [Business Source License 1.1](LICENSE). You may read it, change it, and run it
+  in production for shops you own, as many as you like. Offering it to others as a
+  hosted or managed service needs a commercial license. Four years after a version
+  is published, that version becomes AGPL-3.0-or-later.
