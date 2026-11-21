@@ -3,13 +3,13 @@ License text copyright © 2017 MariaDB Corporation Ab, All Rights Reserved.
 
 Parameters
 
-Licensor:             Jonathan Lapiquonne (timayz)
+Licensor:             Timada
 
 Licensed Work:        Timada: everything in this repository except the
-                      directories `crates/` and `storefront/`, which are
-                      licensed under MIT OR Apache-2.0 (see the license
-                      files in each).
-                      The Licensed Work is © 2026 Jonathan Lapiquonne.
+                      directories `crates/storefront/` and `storefront/`,
+                      which are licensed under MIT OR Apache-2.0 (see the
+                      license files in each).
+                      The Licensed Work is © 2026 Timada.
 
 Additional Use Grant: You may make production use of the Licensed Work to
                       run shops that you own and sell from, or that a

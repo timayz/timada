@@ -3,7 +3,7 @@ name = "timada-storefront"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
-license.workspace = true
+license = "MIT OR Apache-2.0"
 description = "Headless storefront library: connects a merchant's topcoat app to its timada store"
 
 [dependencies]

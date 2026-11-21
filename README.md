@@ -79,11 +79,12 @@ before one is opened.
 
 Timada is source-available, in two parts:
 
-- **The libraries and the shop to start from** (`crates/`, `storefront/`) are under
-  [MIT](crates/LICENSE-MIT) or [Apache 2.0](crates/LICENSE-APACHE), as you prefer: a
-  shop built on them is yours.
-- **Everything else** (the dashboard, the chart, the tests and the tooling) is under
-  the [Business Source License 1.1](LICENSE). You may read it, change it, and run it
-  in production for shops you own, as many as you like. Offering it to others as a
-  hosted or managed service needs a commercial license. Four years after a version
-  is published, that version becomes AGPL-3.0-or-later.
+- **The storefront library and the shop to start from** (`crates/storefront/`,
+  `storefront/`) are under [MIT](storefront/LICENSE-MIT) or
+  [Apache 2.0](storefront/LICENSE-APACHE), as you prefer: the shop you write from
+  them is yours. They build on the crates below, which you may run for your own shop.
+- **Everything else** (the dashboard, the other crates, the chart, the tests and the
+  tooling) is under the [Business Source License 1.1](LICENSE). You may read it,
+  change it, and run it in production for shops you own, as many as you like.
+  Offering it to others as a hosted or managed service needs a commercial license.
+  Four years after a version is published, that version becomes AGPL-3.0-or-later.
