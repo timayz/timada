@@ -120,6 +120,7 @@ impl Node {
                 founders: tuning.founders,
                 listen: None,
                 web_peers: Vec::new(),
+                web_listen: None,
                 secret: None,
                 absent_after_secs: tuning.absent_after_secs,
                 write_backlog: tuning.write_backlog,

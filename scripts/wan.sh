@@ -33,14 +33,13 @@ kind create cluster --name "$NAME" >/dev/null 2>&1
 kind load docker-image "timayz/timada:$WAN_IMAGE" --name "$NAME" >/dev/null 2>&1
 kubectl wait --for=condition=Ready nodes --all --timeout=120s >/dev/null
 
-# The whole cluster's lists, the same in every release: each pod by its
+# The whole cluster's list, the same in every release: each pod by its
 # namespace's name for it.
-peers=() web=()
+peers=()
 for region in 0 1 2; do
   for pod in 0 1 2; do
     id=$((region * 3 + pod))
     peers+=("timada-$id.timada-headless.r$region.svc.cluster.local:7000")
-    web+=("\"http://timada-$id.timada-headless.r$region.svc.cluster.local:3000\"")
   done
 done
 join() { local IFS=,; echo "$*"; }
@@ -54,7 +53,6 @@ extraSecretEnv:
   TIMADA__MAIL__SMTP_URL: "smtp://127.0.0.1:1025"
   TIMADA__CLUSTER__SECRET: "0123456789abcdef0123456789abcdef-clus"
 peers: [$(join "${peers[@]}")]
-webPeers: [$(join "${web[@]}")]
 VALUES
 for region in 0 1 2; do
   kubectl create namespace "r$region" >/dev/null

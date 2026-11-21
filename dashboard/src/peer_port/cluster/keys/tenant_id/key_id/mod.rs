@@ -18,8 +18,8 @@ use topcoat::{
 };
 
 use super::tenant_id;
-use crate::app::cluster::keys::authorized;
 use crate::key_vault::KeyVault;
+use crate::peer_port::cluster::keys::authorized;
 
 module_param!(pub key_id);
 

@@ -59,6 +59,20 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     // The sign-in, code, contact and sign-up limits, held with the other
     // nodes.
     let limits = Arc::new(crate::rate_limit::RateLimiter::new(peers));
+    // What the other nodes ask of this one, on the port they keep for it,
+    // from now on: they copy their pictures and keys here, and ask the
+    // limits, while this node catches up. Validated by `Config::load`.
+    let peer_server = match config
+        .cluster
+        .as_ref()
+        .filter(|cluster| cluster.peers.len() > 1)
+        .and_then(crate::config::ClusterConfig::web_listen_addr)
+    {
+        Some(listen) => Some(
+            crate::peer_port::serve(listen, media.clone(), keys.clone(), limits.clone()).await?,
+        ),
+        None => None,
+    };
     let gateway = Arc::new(crate::payments::StripeGateway::new(
         config
             .payments
@@ -508,6 +522,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     }
     if let Some(metrics) = metrics {
         metrics.shutdown().await;
+    }
+    if let Some(peer_server) = peer_server {
+        peer_server.shutdown().await;
     }
     store_copies.shutdown().await;
     cluster_watch.abort();
