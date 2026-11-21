@@ -1,6 +1,6 @@
 # Gives each pod a name of its own (`timada-<i>.timada-headless`), which is
-# how the nodes of a cluster reach each other: a pod comes back at another
-# address, under the same name.
+# how the nodes of a cluster reach each other, on the ports below and no
+# other: a pod comes back at another address, under the same name.
 apiVersion: v1
 kind: Service
 metadata:
@@ -12,13 +12,15 @@ spec:
   # takes writes, which takes a majority of them.
   publishNotReadyAddresses: true
   ports:
-    - name: http
-      port: 3000
-      targetPort: 3000
-      protocol: TCP
+    # The store.
     - name: cluster
       port: 7000
       targetPort: 7000
+      protocol: TCP
+    # Pictures, keys and limits between the nodes.
+    - name: cluster-web
+      port: 7001
+      targetPort: 7001
       protocol: TCP
   selector:
     app: timada

@@ -389,7 +389,8 @@ impl Media {
         for url in peers.urls() {
             let response = peers
                 .client()
-                .get(format!("{url}{MEDIA_PATH}/{tenant_id}/{file}"))
+                .get(format!("{url}{PEER_ROUTE}/{tenant_id}/{file}"))
+                .header(reqwest::header::AUTHORIZATION, peers.authorization())
                 .send()
                 .await;
             let response = match response {
@@ -440,6 +441,29 @@ impl Media {
     /// request does: a single node takes no copies.
     pub fn authorizes(&self, header: Option<&[u8]>) -> bool {
         peers::authorizes(self.peers.as_deref(), header)
+    }
+
+    /// A rendition this node holds, for a peer that lacks it: the file at
+    /// `<dir>/<file>` below the tenant, or `None` when this node holds no
+    /// such file or the names are not a rendition's. The peer checks the
+    /// bytes against what the store recorded.
+    pub async fn copy_of(
+        &self,
+        tenant_id: &str,
+        dir: &str,
+        file: &str,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        let Ok((rendition, image_id)) = Self::parse_file(dir, file) else {
+            return Ok(None);
+        };
+        let Ok(path) = self.path_of(tenant_id, rendition, &image_id) else {
+            return Ok(None);
+        };
+        match tokio::fs::read(&path).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(anyhow::anyhow!("cannot read {}: {err}", path.display())),
+        }
     }
 
     /// Takes a copy a peer sends, at `<dir>/<file>` below the tenant: checks

@@ -55,5 +55,5 @@ log_level = "info,tantivy=warn,turso_core::mvcc=warn"
 [cluster]
 node_id = 2
 peers = ["127.0.0.1:7000", "127.0.0.1:7001", "127.0.0.1:7002"]
-web_peers = ["http://127.0.0.1:3000", "http://127.0.0.1:3001", "http://127.0.0.1:3002"]
+web_peers = ["http://127.0.0.1:7100", "http://127.0.0.1:7101", "http://127.0.0.1:7102"]
 secret = "load-only-cluster-secret-shared-by-the-three-nodes"

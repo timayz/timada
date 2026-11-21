@@ -138,6 +138,7 @@ impl Node {
             founders: None,
             listen: None,
             web_peers: Vec::new(),
+            web_listen: None,
             secret: None,
             // The settings' own defaults.
             absent_after_secs: 24 * 3600,
