@@ -36,6 +36,7 @@ mod newsletter_keys;
 mod newsletter_sends;
 mod order_mails;
 mod payments;
+mod peer_port;
 mod peers;
 mod rate_limit;
 mod read_only_store;

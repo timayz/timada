@@ -945,11 +945,20 @@ pub struct ClusterConfig {
     #[serde(default)]
     pub listen: Option<SocketAddr>,
     /// Every node's web address as the other nodes reach it, in `peers`
-    /// order, e.g. `http://10.0.0.2:3000`. Product pictures and shopper
-    /// keys are copied between nodes through it, and the rate limits ask
-    /// the other nodes through it. Required with more than one node.
+    /// order, e.g. `http://10.0.0.2:7001`: the port each keeps for the
+    /// other nodes (`web_listen`), not `server.port`. Product pictures and
+    /// shopper keys are copied between nodes through it, and the rate
+    /// limits ask the other nodes through it. Required with more than one
+    /// node.
     #[serde(default)]
     pub web_peers: Vec<String>,
+    /// Address to bind for what the other nodes ask of this one: the port of
+    /// its entry in `web_peers`, apart from `server.port`, which serves none
+    /// of it. Defaults to that entry when it gives an address and a port,
+    /// and is required when it is a name; set it to `0.0.0.0:<port>` in a
+    /// container.
+    #[serde(default)]
+    pub web_listen: Option<SocketAddr>,
     /// Shared by every node: a node only accepts a picture copied from a
     /// peer that presents it. At least 32 characters; required with more
     /// than one node.
@@ -1209,6 +1218,19 @@ impl ClusterConfig {
         }
     }
 
+    /// Where this node takes the other nodes' requests: `web_listen`, or the
+    /// address and port of its own entry in `web_peers`; `None` when neither
+    /// gives one.
+    pub fn web_listen_addr(&self) -> Option<SocketAddr> {
+        self.web_listen.or_else(|| {
+            let own = self.web_peers.get(usize::try_from(self.node_id).ok()?)?;
+            let rest = own
+                .strip_prefix("http://")
+                .or_else(|| own.strip_prefix("https://"))?;
+            rest.split('/').next()?.parse().ok()
+        })
+    }
+
     fn validate(&mut self) -> Result<(), ConfigError> {
         // The node's own checks (peers, node_id, write_backlog) are evento's.
         self.settings()
@@ -1231,6 +1253,12 @@ impl ClusterConfig {
                 )));
             }
             *url = trimmed.to_owned();
+        }
+        if self.web_listen_addr().is_none() {
+            return Err(ConfigError::Message(format!(
+                "cluster.web_listen is required: this node's entry in cluster.web_peers, '{}', gives no address to bind (0.0.0.0:<port> in a container)",
+                self.web_peers[self.node_id as usize]
+            )));
         }
         if self
             .secret
@@ -1520,6 +1548,7 @@ mod tests {
                 .collect(),
             listen: None,
             web_peers: web_peers.iter().map(|s| s.to_string()).collect(),
+            web_listen: None,
             secret: secret.map(str::to_owned),
             absent_after_secs: default_absent_after_secs(),
             write_backlog: default_write_backlog(),
@@ -1576,9 +1605,9 @@ mod tests {
         }
         let mut config: OnlyCluster = config::Config::builder()
             .add_source(File::from_str(
-                "[cluster]\nlisten = \"0.0.0.0:7000\"\nwrite_backlog = 5000.0\n\
+                "[cluster]\nlisten = \"0.0.0.0:7000\"\nweb_listen = \"0.0.0.0:7001\"\nwrite_backlog = 5000.0\n\
                  peers = [\"timada-0.timada-headless:7000\", \"timada-1.timada-headless:7000\", \"timada-2.timada-headless:7000\"]\n\
-                 web_peers = [\"http://timada-0.timada-headless:3000\", \"http://timada-1.timada-headless:3000\", \"http://timada-2.timada-headless:3000\"]\n",
+                 web_peers = [\"http://timada-0.timada-headless:7001\", \"http://timada-1.timada-headless:7001\", \"http://timada-2.timada-headless:7001\"]\n",
                 config::FileFormat::Toml,
             ))
             .add_source(env)
@@ -1599,11 +1628,12 @@ mod tests {
 
         let mut three = cluster(
             3,
-            &["http://a:3000/", "http://b:3000", "https://c"],
+            &["http://a:7001/", "http://b:7001", "https://c"],
             Some(SECRET),
         );
+        three.web_listen = Some("0.0.0.0:7001".parse().unwrap());
         assert!(three.validate().is_ok());
-        assert_eq!(three.web_peers[0], "http://a:3000");
+        assert_eq!(three.web_peers[0], "http://a:7001");
 
         assert!(
             cluster(3, &["http://a", "http://b"], Some(SECRET))
@@ -1615,15 +1645,47 @@ mod tests {
                 .validate()
                 .is_err()
         );
-        assert!(
-            cluster(3, &["http://a", "http://b", "http://c"], None)
-                .validate()
-                .is_err()
+        for secret in [None, Some("short")] {
+            let mut config = cluster(3, &["http://a", "http://b", "http://c"], secret);
+            config.web_listen = Some("0.0.0.0:7001".parse().unwrap());
+            let err = config.validate().unwrap_err();
+            assert!(err.to_string().contains("cluster.secret"), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_node_takes_the_other_nodes_requests_at_its_own_web_address() {
+        const SECRET: &str = "0123456789abcdef0123456789abcdef";
+        // An address and a port: bound as it is.
+        let mut by_address = cluster(
+            3,
+            &[
+                "http://127.0.0.1:7100/",
+                "http://127.0.0.1:7101",
+                "http://127.0.0.1:7102",
+            ],
+            Some(SECRET),
         );
-        assert!(
-            cluster(3, &["http://a", "http://b", "http://c"], Some("short"))
-                .validate()
-                .is_err()
+        by_address.node_id = 1;
+        assert!(by_address.validate().is_ok());
+        assert_eq!(
+            by_address.web_listen_addr(),
+            Some("127.0.0.1:7101".parse().unwrap())
+        );
+
+        // A name: the address to bind is given.
+        let mut by_name = cluster(
+            3,
+            &["http://a:7001", "http://b:7001", "http://c:7001"],
+            Some(SECRET),
+        );
+        let err = by_name.validate().unwrap_err();
+        assert!(err.to_string().contains("cluster.web_listen"), "{err}");
+        by_name.web_listen = Some("0.0.0.0:7001".parse().unwrap());
+        assert!(by_name.validate().is_ok());
+        assert_eq!(
+            by_name.web_listen_addr(),
+            Some("0.0.0.0:7001".parse().unwrap())
         );
     }
 }

@@ -47,9 +47,9 @@ http:
         - https
 
   services:
-    # The three nodes of the local cluster (`cluster.web_peers` in
-    # config/default.toml). Nodes that are not running fail the health check
-    # and are left out, so a single `make dev` on port 3000 still works.
+    # The three nodes of a local cluster, each on its own `server.port`.
+    # Nodes that are not running fail the health check and are left out, so
+    # a single `make dev` on port 3000 still works.
     timada-dev:
       loadBalancer:
         servers:
