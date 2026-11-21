@@ -272,7 +272,17 @@ by construction.
    read's counterpart of a refused write, and is answered as one
    (`app/unavailable.rs`): 503 with `Retry-After`, as a page saying to try again for
    a browser and alone for anything else, which a storefront takes as the store being
-   away (`store_unavailable`); it is logged as a warning, not as a failed request. A
+   away (`store_unavailable`); it is logged as a warning, not as a failed request.
+   `/ready` has one answer on purpose, not one for reads and one for writes (#727):
+   where no node reaches a majority (two regions of three lost), every node answers
+   503 and the back-office is away, the pages that only read included. A balancer
+   cannot tell that from one region cut off from the two others, and a node ready
+   to read alone would keep that region's visitors on a side that falls behind and
+   refuses every write while the other side takes orders; left out, the region's
+   traffic goes to the nodes that serve. Little is lost by it: a storefront serves
+   its catalog from its own copy either way, and what it asks of the dashboard (a
+   cart, a checkout, a sign-in) writes. The body says `serving`, `nodes_in_touch`
+   and each lag apart, for an operator who wants to tell the cases apart. A
    node back from a
    night away, or one that is catching up after a copy or a `rebuild`, is left
    out until it reads low. `monitoring.metrics_listen` adds an internal port
