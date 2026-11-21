@@ -640,6 +640,11 @@ mod tests {
             login_attempts_per_ip: per_ip,
             login_attempts_per_email: per_email,
             login_window_secs: 900,
+            root: timada_identity::RootAccount::new(
+                "root@example.com",
+                "$argon2id$v=19$m=19456,t=2,p=1$diXOV+PTSdOCfHj2wDAlMA$iVEeQUJsww/h81mHmrcmcJRWuZs2mY3bopNrchI/yog",
+            )
+            .unwrap(),
         }
     }
 

@@ -1,17 +1,20 @@
-import { test as setup } from "@playwright/test";
-import { registerWithEmail } from "./email";
+import { expect, test as setup } from "@playwright/test";
 import { ADMIN_EMAIL, ADMIN_PASSWORD, adminState } from "./fixtures";
 import { SHARDS, shardUrl } from "./shard";
 
-// Runs before every other test: registers the first user of each server, who
-// administers it, and saves their signed-in state for the admin tests. One
-// server after the other, as the code to enter is the newest one mailed to
-// the address they share.
+// Runs before every other test: signs in as the root account of each server
+// (config/e2e.toml), which administers it, and saves the signed-in state for
+// the admin tests. Root's password signs it in at once: no code is mailed.
 
-setup("register the administrator", async ({ browser }) => {
+setup("sign in as root", async ({ browser }) => {
   for (let shard = 0; shard < SHARDS; shard++) {
     const context = await browser.newContext({ baseURL: shardUrl(shard) });
-    await registerWithEmail(await context.newPage(), ADMIN_EMAIL, ADMIN_PASSWORD);
+    const page = await context.newPage();
+    await page.goto("/auth/login");
+    await page.getByLabel("E-mail address").fill(ADMIN_EMAIL);
+    await page.getByLabel("Password", { exact: true }).fill(ADMIN_PASSWORD);
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await expect(page).toHaveURL(/\/$/);
     await context.storageState({ path: adminState(shard) });
     await context.close();
   }

@@ -26,7 +26,9 @@ make e2e.cluster # the same suite on three nodes behind the balancer
 ```
 
 The dashboard reads `config/dev.local.toml` (gitignored; start from
-`config/default.toml`). To fill a shop with a real catalogue and run the storefront
+`config/default.toml`). It needs the root account, `[auth.root]`: an address and what
+`cargo run -p timada-dashboard -- hash-password` prints for a password typed on its
+standard input. Root signs in with that pair, and makes the administrators. To fill a shop with a real catalogue and run the storefront
 against it, see `seeds/README.md` and `docs/storefront.md`.
 
 ## Where things are

@@ -376,7 +376,7 @@ async fn a_link_on_its_way_keeps_the_identity_from_another_account() {
 async fn a_deletion_that_stopped_halfway_is_finished_by_the_subscription() {
     let store = executor().await;
     let cmd = Command::new(store.clone(), codes());
-    let root = register_via_oauth2(&cmd, "google", "root").await;
+    let root = sign_in_root(&cmd).await;
     let bob = register_via_oauth2(&cmd, "google", "bob").await;
     cmd.add_passkey(add_passkey(Some(&bob), &bob, "cred-bob"))
         .await
@@ -431,7 +431,7 @@ async fn a_deletion_that_stopped_halfway_is_finished_by_the_subscription() {
 async fn registering_again_after_a_halfway_deletion_leaves_no_stub() {
     let (store, pool) = executor_with_pool().await;
     let cmd = Command::new(store.clone(), codes());
-    let root = register_via_oauth2(&cmd, "google", "root").await;
+    let root = sign_in_root(&cmd).await;
     let bob = register_via_oauth2(&cmd, "google", "bob").await;
     let carol = register_via_email(&cmd, "carol@example.com").await;
     let stopping = refusing_command(

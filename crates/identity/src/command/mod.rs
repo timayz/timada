@@ -13,7 +13,6 @@ mod complete_oauth2;
 mod email_challenge;
 mod email_index;
 mod end_session;
-mod first_user;
 mod oauth2_index;
 mod passkey_index;
 mod refresh_session;
@@ -23,6 +22,7 @@ mod rename_passkey;
 mod reset_password;
 mod resolve_session;
 mod revoke_sessions;
+mod root;
 mod sign_in;
 mod sign_in_passkey;
 mod sign_in_with_password;
@@ -42,6 +42,7 @@ pub use email_challenge::*;
 pub use register_with_password::*;
 pub use reset_password::*;
 pub use resolve_session::*;
+pub use root::*;
 pub use sign_in_passkey::*;
 pub use sign_in_with_password::*;
 
@@ -56,15 +57,15 @@ use timada_core::{CodeVerifier, Sending};
 
 use crate::aggregator::{
     AdminGranted, AdminRevoked, AttemptFailed, Claimed, CodeIssued, Consumed, Created, Deleted,
-    EmailAdded, EmailRegistered, Ended, FirstUserClaimed, Linked, MailClaimed, MailDeferred,
-    MailFailed, MailSent, MailUndeliverable, OAuth2AccountLinked, OAuth2AccountUnlinked,
-    PasskeyAdded, PasskeyRemoved, PasskeyRenamed, PasswordChanged, ProfileUpdated, Refreshed,
-    Registered, Released, Removed, SessionsRevoked, SignedIn, SignedInWithPassword, SignedOut,
-    Started, Unlinked, Updated,
+    EmailAdded, EmailRegistered, Ended, Linked, MailClaimed, MailDeferred, MailFailed, MailSent,
+    MailUndeliverable, OAuth2AccountLinked, OAuth2AccountUnlinked, PasskeyAdded, PasskeyRemoved,
+    PasskeyRenamed, PasswordChanged, ProfileUpdated, Refreshed, Registered, Released, Removed,
+    RootEstablished, SessionsRevoked, SignedIn, SignedInWithPassword, SignedOut, Started, Unlinked,
+    Updated,
 };
 use crate::error::IdentityError;
 use crate::value_object::{
-    ChallengePurpose, REGISTRY_ID, SignInKind, email_account_id, email_challenge_id,
+    ChallengePurpose, ROOT_USER_ID, SignInKind, email_account_id, email_challenge_id,
     oauth2_account_id, passkey_credential_id, session_id,
 };
 
@@ -222,10 +223,8 @@ pub struct UserState {
     pub id: String,
     pub account: String,
     pub label: String,
+    /// Root made this user an administrator; root itself always is one.
     pub is_admin: bool,
-    /// An administrator decided the role (granted or revoked). Until then the
-    /// first-user rule may still grant it.
-    pub role_assigned: bool,
     pub oauth2_accounts: Vec<LinkedOAuth2Account>,
     pub passkeys: Vec<LinkedPasskey>,
     pub password: Option<PasswordMethod>,
@@ -239,6 +238,13 @@ pub struct UserState {
 }
 
 impl UserState {
+    /// Whether this is the root account, the one the host's configuration
+    /// defines: an administrator nobody else can demote, delete or sign out,
+    /// and the only one who makes administrators.
+    pub fn is_root(&self) -> bool {
+        self.id == ROOT_USER_ID
+    }
+
     /// How many ways this user can still sign in. Unlinking the last one would
     /// lock them out.
     pub fn sign_in_methods(&self) -> usize {
@@ -270,6 +276,7 @@ impl UserState {
 pub fn user_projection<E: Executor>() -> Projection<E, UserState> {
     Projection::new::<crate::aggregator::User>()
         .handler(on_registered())
+        .handler(on_root_established())
         .handler(on_profile_updated())
         .handler(on_admin_granted())
         .handler(on_admin_revoked())
@@ -299,6 +306,21 @@ async fn on_registered(event: Event<Registered>, user: &mut UserState) -> anyhow
 }
 
 #[evento::handler]
+async fn on_root_established(
+    event: Event<RootEstablished>,
+    user: &mut UserState,
+) -> anyhow::Result<()> {
+    if user.id.is_empty() {
+        user.id = event.aggregate_id.to_owned();
+        user.registered_at = event.timestamp;
+    }
+    user.account = event.data.email.to_owned();
+    user.label = event.data.email.to_owned();
+    user.is_admin = true;
+    Ok(())
+}
+
+#[evento::handler]
 async fn on_profile_updated(
     event: Event<ProfileUpdated>,
     user: &mut UserState,
@@ -311,14 +333,12 @@ async fn on_profile_updated(
 #[evento::handler]
 async fn on_admin_granted(_event: Event<AdminGranted>, user: &mut UserState) -> anyhow::Result<()> {
     user.is_admin = true;
-    user.role_assigned = true;
     Ok(())
 }
 
 #[evento::handler]
 async fn on_admin_revoked(_event: Event<AdminRevoked>, user: &mut UserState) -> anyhow::Result<()> {
     user.is_admin = false;
-    user.role_assigned = true;
     Ok(())
 }
 
@@ -853,34 +873,6 @@ async fn on_session_ended(_event: Event<Ended>, state: &mut SessionState) -> any
 }
 
 // =============================================================================
-// Registry
-// =============================================================================
-
-#[evento::projection(id = id, name = "timada-identity/RegistryState")]
-#[evento::snapshot(none)]
-#[derive(Debug, PartialEq, Eq)]
-pub struct RegistryState {
-    pub id: String,
-    pub first_user_id: String,
-}
-
-pub fn registry_projection<E: Executor>() -> Projection<E, RegistryState> {
-    Projection::new::<crate::aggregator::Registry>()
-        .handler(on_first_user_claimed())
-        .strict()
-}
-
-#[evento::handler]
-async fn on_first_user_claimed(
-    event: Event<FirstUserClaimed>,
-    state: &mut RegistryState,
-) -> anyhow::Result<()> {
-    state.id = event.aggregate_id.to_owned();
-    state.first_user_id = event.data.user_id.to_owned();
-    Ok(())
-}
-
-// =============================================================================
 // Loads and shared write helpers
 // =============================================================================
 
@@ -1102,13 +1094,6 @@ impl<E: Executor> Command<E> {
     ) -> anyhow::Result<Option<SessionState>> {
         session_projection()
             .load(session_id(token_hash))
-            .execute(&self.executor)
-            .await
-    }
-
-    pub async fn load_registry(&self) -> anyhow::Result<Option<RegistryState>> {
-        registry_projection()
-            .load(REGISTRY_ID)
             .execute(&self.executor)
             .await
     }

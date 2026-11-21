@@ -61,7 +61,10 @@ async fn registering_proves_the_address_and_signs_in() {
     assert_eq!(user.sign_in_methods(), 1);
     assert_eq!(user.sign_ins.len(), 1);
     assert_eq!(user.last_sign_in().unwrap().method, SignInKind::Password);
-    assert!(user.is_admin, "first user");
+    assert!(
+        !user.is_admin,
+        "registering first makes nobody an administrator"
+    );
     assert_eq!(
         cmd.load_email_account("alice@example.com")
             .await
@@ -86,9 +89,6 @@ async fn registering_proves_the_address_and_signs_in() {
         .await
         .unwrap_err();
     assert!(matches!(err, IdentityError::AlreadyRegistered), "{err}");
-
-    let other = register_via_email(&cmd, "bob@example.com").await;
-    assert!(!cmd.load_user(&other).await.unwrap().unwrap().is_admin);
 }
 
 #[tokio::test]

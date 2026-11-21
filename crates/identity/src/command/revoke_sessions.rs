@@ -2,13 +2,14 @@ use evento::Executor;
 
 use crate::aggregator::SessionsRevoked;
 use crate::error::IdentityError;
-use crate::value_object::session_id;
+use crate::value_object::{ROOT_USER_ID, session_id};
 
 #[evento::command]
 impl<E: Executor> super::Command<E> {
     /// Voids every session of `user_id` started up to now, except the one
     /// presenting `except_token_hash` (the browser asking to sign out
-    /// everywhere else). `actor_id` is the user themself or an administrator.
+    /// everywhere else). `actor_id` is the user themself or an administrator;
+    /// only root signs root out.
     /// Sessions started afterwards are unaffected, so the user can sign in
     /// again right away. A session a newer revocation already ended cannot
     /// spare itself (a stolen one asking just after a reset): `Unauthorized`.
@@ -21,7 +22,7 @@ impl<E: Executor> super::Command<E> {
     ) -> Result<(), IdentityError> {
         if actor_id != user_id {
             let actor = self.load_user(actor_id).await?;
-            if !actor.is_some_and(|actor| actor.is_admin) {
+            if user_id == ROOT_USER_ID || !actor.is_some_and(|actor| actor.is_admin) {
                 return Err(IdentityError::Forbidden);
             }
         }

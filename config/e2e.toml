@@ -1,6 +1,6 @@
 # End-to-end test configuration, used by `make e2e` (scripts/e2e.sh): a
-# throwaway database that is reset before every run, so the first user the
-# tests register is the administrator. scripts/e2e.sh runs three servers on
+# throwaway database that is reset before every run, with the root account
+# the tests administer it as. scripts/e2e.sh runs three servers on
 # it, each taking its own ports, files and address from TIMADA__* variables,
 # and the stand-ins below 100 ports further on for each next server.
 # Everything in here is a test fixture; nothing is a secret.
@@ -100,6 +100,11 @@ per_account = 10000
 
 [auth]
 secret_key = "e2e-only-secret-key-never-used-outside-the-test-suite"
+
+# The suite signs in as root with "root e2e password" (tests/e2e/fixtures.ts).
+[auth.root]
+email = "root-e2e@example.com"
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$+IKabEeK+GG1eYkDTHfYqg$+KNJCjGFTZT/3qJMR6dkSZp2jyHik2V5G8XSr+4jhkE"
 
 # The dex container from compose.yml; see .docker/dex/config.yaml.
 [auth.providers.dex]

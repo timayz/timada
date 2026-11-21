@@ -19,7 +19,7 @@ async fn catch_up(executor: &evento::Turso, pool: &Db) {
 async fn users_and_sessions_are_listed_and_stay_idempotent() {
     let (executor, pool) = executor_with_pool().await;
     let cmd = Command::new(executor.clone(), codes());
-    let root = register_via_oauth2(&cmd, "google", "root").await;
+    let root = sign_in_root(&cmd).await;
     let alice = register_via_oauth2(&cmd, "google", "alice").await;
     cmd.add_passkey(add_passkey(Some(&alice), &alice, "cred-alice"))
         .await
@@ -44,15 +44,18 @@ async fn users_and_sessions_are_listed_and_stay_idempotent() {
     assert_eq!(rows[0].email.as_deref(), Some("carol@example.com"));
     assert!(rows[0].has_password);
     assert_eq!(rows[0].oauth2_count, 0);
-    assert_eq!(rows[1].label, "User alice");
-    assert_eq!(rows[1].oauth2_count, 1);
-    assert_eq!(rows[1].passkey_count, 1);
+    assert_eq!(rows[1].id, root);
+    assert_eq!(rows[1].label, ROOT_EMAIL);
+    assert!(rows[1].is_admin, "root administers");
+    assert!(!rows[1].has_password, "its password is the configuration's");
     assert_eq!(rows[1].sign_in_count, 1);
-    assert_eq!(rows[1].email, None);
-    assert!(!rows[1].has_password);
-    assert!(!rows[1].is_admin);
-    assert!(rows[2].is_admin, "root registered first");
-    assert_eq!(rows[2].id, root);
+    assert_eq!(rows[2].label, "User alice");
+    assert_eq!(rows[2].oauth2_count, 1);
+    assert_eq!(rows[2].passkey_count, 1);
+    assert_eq!(rows[2].sign_in_count, 1);
+    assert_eq!(rows[2].email, None);
+    assert!(!rows[2].has_password);
+    assert!(!rows[2].is_admin);
     assert_eq!(
         list_users(&pool, Some("ALICE@"), 0, 50)
             .await
@@ -98,7 +101,7 @@ async fn users_and_sessions_are_listed_and_stay_idempotent() {
 async fn revocations_deletions_and_sign_outs_show_up() {
     let (executor, pool) = executor_with_pool().await;
     let cmd = Command::new(executor.clone(), codes());
-    let root = register_via_oauth2(&cmd, "google", "root").await;
+    let root = sign_in_root(&cmd).await;
     let alice = register_via_oauth2(&cmd, "google", "alice").await;
     let laptop = [1u8; 32];
     let phone = [2u8; 32];

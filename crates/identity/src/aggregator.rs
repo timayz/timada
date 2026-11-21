@@ -12,6 +12,13 @@ pub enum User {
         label: String,
         method: SignInMethod,
     },
+    /// The root account ([`timada_core::ROOT_USER_ID`]) as the host's
+    /// configuration defines it: written when root first signs in, and again
+    /// when the configured address changed. Its password stays in the
+    /// configuration and never enters the store.
+    RootEstablished {
+        email: String,
+    },
     ProfileUpdated {
         account: String,
         label: String,
@@ -122,13 +129,6 @@ pub enum Session {
         expires_at: u64,
     },
     Ended,
-}
-
-/// Singleton (id [`crate::REGISTRY_ID`]) whose first event names the first
-/// registered user, who becomes the administrator.
-#[evento::aggregate(name = "timada-identity/Registry")]
-pub enum Registry {
-    FirstUserClaimed { user_id: String },
 }
 
 /// Index entry: one e-mail address → one user, for the password sign-in.

@@ -159,6 +159,10 @@ pub async fn seed(config: Config, args: SeedArgs) -> Result<()> {
         timada_identity::Command::new(platform.clone(), crate::seal::email_codes(&config).0);
     let email = timada_identity::normalize_email(&args.owner)
         .map_err(|_| anyhow::anyhow!("{:?} is not an e-mail address", args.owner))?;
+    ensure!(
+        !config.auth.root.has_email(&email),
+        "{email} is the root account's address: a shop is owned by a registered user"
+    );
     // The first read waits for a quorum, which a node just opened may not
     // reach until it hears from its peers.
     let started = tokio::time::Instant::now();

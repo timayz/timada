@@ -104,6 +104,12 @@ clusterCa:
 # `config` below: use it for what must not sit in a ConfigMap. A deployment
 # needs at least
 #   TIMADA__AUTH__SECRET_KEY   at least 32 characters
+#   TIMADA__AUTH__ROOT__EMAIL  the root account's address: above every user,
+#                              it signs in with this address and the password
+#                              below, and makes the administrators
+#   TIMADA__AUTH__ROOT__PASSWORD_HASH
+#                              what `timada-dashboard hash-password` prints
+#                              for that password, read on its standard input
 #   TIMADA__SECRETS__KEY       at least 32 characters; never change it
 #   TIMADA__MAIL__SMTP_URL     smtps://user:pass@host:465
 extraSecretEnv: {}

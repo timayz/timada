@@ -1,5 +1,7 @@
 //! Identity bounded context: users, their sign-in methods (OIDC accounts,
-//! passkeys, e-mail + password) and their sessions, all event-sourced.
+//! passkeys, e-mail + password) and their sessions, all event-sourced. Above
+//! them is the root account, which the host's configuration defines
+//! ([`RootAccount`]).
 //!
 //! The crate is pure domain code: it knows nothing about HTTP, cookies, OIDC
 //! token exchange or WebAuthn ceremonies. The web layer verifies the protocol
@@ -25,6 +27,7 @@ mod error;
 mod index_release;
 mod password;
 mod query;
+mod root;
 mod value_object;
 
 pub use command::*;
@@ -32,5 +35,6 @@ pub use error::*;
 pub use index_release::*;
 pub use password::*;
 pub use query::*;
+pub use root::*;
 pub use timada_core::{CodeVerifier, HmacCodeVerifier};
 pub use value_object::*;

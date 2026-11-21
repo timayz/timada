@@ -2,7 +2,7 @@
 
 pub mod user_id;
 
-use timada_identity::{count_users, list_users};
+use timada_identity::{ROOT_USER_ID, count_users, list_users};
 use topcoat::{
     Result,
     context::{Cx, context},
@@ -54,9 +54,15 @@ pub fn users_url(cx: &Cx, message: Option<&str>) -> String {
         .resolve(cx)
 }
 
-/// "Administrator" or "Member".
-pub fn role_label(is_admin: bool) -> &'static str {
-    if is_admin { "Administrator" } else { "Member" }
+/// "Root", "Administrator" or "Member".
+pub fn role_label(user_id: &str, is_admin: bool) -> &'static str {
+    if user_id == ROOT_USER_ID {
+        "Root"
+    } else if is_admin {
+        "Administrator"
+    } else {
+        "Member"
+    }
 }
 
 /// "password, 2 providers, 1 passkey": how the account signs in.
@@ -135,8 +141,14 @@ pub async fn users(cx: &Cx) -> Result<impl View> {
                                     </span>
                                     <span class="block text-xs text-muted-foreground">(&row.account)</span>
                                 )
-                                table_cell((role_label(row.is_admin)))
-                                table_cell((methods_label(row.has_password, row.oauth2_count, row.passkey_count)))
+                                table_cell((role_label(&row.id, row.is_admin)))
+                                table_cell(
+                                    if row.id == ROOT_USER_ID {
+                                        "password, in the configuration"
+                                    } else {
+                                        (methods_label(row.has_password, row.oauth2_count, row.passkey_count))
+                                    }
+                                )
                                 table_cell(
                                     if let Some(at) = row.last_sign_in_at {
                                         <time datetime=(at)>(format_time(at as u64))</time>

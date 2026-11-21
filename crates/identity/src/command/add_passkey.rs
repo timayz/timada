@@ -52,6 +52,10 @@ impl<E: Executor> super::Command<E> {
         let Some(user) = self.load_user(user_id).await? else {
             return Err(IdentityError::UserNotFound);
         };
+        // Root signs in with the configured password and nothing else.
+        if user.is_root() {
+            return Err(IdentityError::Forbidden);
+        }
         if user.passkeys.len() >= MAX_PASSKEYS_PER_USER {
             return Err(IdentityError::TooManyPasskeys);
         }

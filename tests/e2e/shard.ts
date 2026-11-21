@@ -1,7 +1,7 @@
 // Which server a worker drives. `make e2e` (scripts/e2e.sh) starts E2E_SHARDS
 // servers, each on its own database and ports, and Playwright runs as many
 // workers (playwright.config.ts): worker N drives server N alone, so two spec
-// files never share the first registered user or the ports of the fake
+// files never share a server's users or the ports of the fake
 // Stripe, VIES and AliExpress. Playwright numbers the workers that run at the
 // same time from 0 (TEST_PARALLEL_INDEX), and sets it before a worker loads
 // the config and the specs.

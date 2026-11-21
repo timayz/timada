@@ -56,6 +56,12 @@ pub use slug::{
 pub use sql::like_contains;
 pub use time::unix_now;
 
+/// The id of the root account: the one the host's configuration defines,
+/// above every other. Never a generated id, so no registration can take it.
+/// Shared here because several contexts know it: identity keeps its stream,
+/// and a tenant lets it in as an owner.
+pub const ROOT_USER_ID: &str = "root";
+
 /// The refusal code pages and the store API carry when a tenant is not
 /// taking writes for the moment: a node of the cluster is away and the
 /// tenant keeps its writes for it up to the backlog, or this node is being

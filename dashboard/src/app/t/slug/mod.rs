@@ -87,9 +87,10 @@ module_param!(pub slug);
 /// The tenant of the request and the member looking at it.
 pub struct TenantAccess {
     pub tenant: TenantState,
-    /// The signed-in member.
+    /// The signed-in member, or the root account.
     pub user_id: String,
-    /// The role the signed-in user holds in it.
+    /// The role the signed-in user holds in it; root is an owner of every
+    /// tenant, member or not.
     pub role: String,
     /// The store, while the tenant is not suspended.
     store: Option<Executor>,
@@ -130,8 +131,8 @@ impl TenantAccess {
     }
 }
 
-/// The tenant named in the URL, for a signed-in member: 404 for an unknown
-/// slug, 403 for everyone else.
+/// The tenant named in the URL, for a signed-in member or the root account:
+/// 404 for an unknown slug, 403 for everyone else.
 ///
 /// Every tenant page asks, so the tenant is read as the session is
 /// ([`crate::reads::first`]): from this node's file, and from the cluster
@@ -146,7 +147,7 @@ pub async fn require_tenant(cx: &Cx) -> Result<TenantAccess> {
         |store| async move { Command(store).load_tenant_by_slug(slug).await },
         |tenant| {
             matches!(tenant, Ok(Some(tenant))
-                if tenant.role_of(&user.id).is_some() && !tenant.is_suspended())
+                if role_in(tenant, user).is_some() && !tenant.is_suspended())
         },
     )
     .await
@@ -154,7 +155,7 @@ pub async fn require_tenant(cx: &Cx) -> Result<TenantAccess> {
     let Some(tenant) = tenant else {
         return Err(not_found().into());
     };
-    let Some(role) = tenant.role_of(&user.id) else {
+    let Some(role) = role_in(&tenant, user) else {
         return Err(forbidden().into());
     };
     let role = role.to_owned();
@@ -165,6 +166,15 @@ pub async fn require_tenant(cx: &Cx) -> Result<TenantAccess> {
         role,
         store,
     })
+}
+
+/// The role `user` acts with in `tenant`: their seat's, or an owner's for the
+/// root account, which needs none.
+fn role_in<'a>(tenant: &'a TenantState, user: &timada_identity::UserState) -> Option<&'a str> {
+    if user.is_root() {
+        return Some(ROLE_OWNER);
+    }
+    tenant.role_of(&user.id)
 }
 
 /// How a role is shown: its label for a custom role, the name otherwise.

@@ -67,6 +67,10 @@ pub async fn user(cx: &Cx) -> Result<impl View> {
         .collect();
     let providers = context::<Providers>(cx);
     let is_me = user.id == me.id;
+    // As the commands decide: root alone makes, unmakes and deletes
+    // administrators, and nobody acts on root or on themself here.
+    let may_set_role = me.is_root() && !is_me;
+    let may_delete = !is_me && !user.is_root() && (me.is_root() || !user.is_admin);
     let title = format!("{} · Users", user.label);
     // The last section is the administration one; a deleted account has
     // nothing left to administer.
@@ -95,7 +99,7 @@ pub async fn user(cx: &Cx) -> Result<impl View> {
                     attrs: attributes! { id="profile" class="scroll-mt-20" },
                     facts(
                         fact(term: "Account", (&user.account))
-                        fact(term: "Role", (role_label(user.is_admin)))
+                        fact(term: "Role", (role_label(&user.id, user.is_admin)))
                         fact(term: "Registered", <time datetime=(user.registered_at)>(format_time(user.registered_at))</time>)
                         fact(term: "Sign-ins", (user.sign_ins.len()))
                     )
@@ -104,7 +108,9 @@ pub async fn user(cx: &Cx) -> Result<impl View> {
                 section_card(
                     title: Some("Sign-in methods"),
                     attrs: attributes! { id="methods" class="scroll-mt-20" },
-                    if user.sign_in_methods() == 0 {
+                    if user.is_root() {
+                        <p class="text-sm text-muted-foreground">"The address and the password set in the server's configuration."</p>
+                    } else if user.sign_in_methods() == 0 {
                         <p class="text-sm text-muted-foreground">"None."</p>
                     }
                     <ul class="divide-y divide-border text-sm">
@@ -143,7 +149,7 @@ pub async fn user(cx: &Cx) -> Result<impl View> {
                             }
                         </ul>
                     }
-                    if !user.deleted {
+                    if !user.deleted && (is_me || !user.is_root()) {
                         <form method="post" action=(href!(sign_out::sign_out, user_id: user.id.clone())) class="mt-4">
                             button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" class="text-destructive-text" }, "Sign out everywhere")
                         </form>
@@ -177,21 +183,31 @@ pub async fn user(cx: &Cx) -> Result<impl View> {
                         title: Some("Administration"),
                         description: Some(if is_me {
                             "You cannot change your own role or delete your own account."
-                        } else {
+                        } else if user.is_root() {
+                            "The root account is set in the server's configuration: nobody changes its role, signs it out or deletes it."
+                        } else if !may_delete {
+                            "Only the root account changes an administrator's role or deletes one."
+                        } else if may_set_role {
                             "Deleting signs the user out everywhere and frees their sign-in methods; the person can register again."
+                        } else {
+                            "Deleting signs the user out everywhere and frees their sign-in methods; the person can register again. Only the root account makes an administrator."
                         }),
                         attrs: attributes! { id="administration" class="scroll-mt-20 border-destructive/30" },
-                        if !is_me {
+                        if may_set_role || may_delete {
                             <div class="flex flex-wrap gap-2">
-                                <form method="post" action=(href!(role::role, user_id: user.id.clone()))>
-                                    <input type="hidden" name="admin" value=(if user.is_admin { "false" } else { "true" })>
-                                    button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" },
-                                        (if user.is_admin { "Revoke administrator" } else { "Make administrator" })
-                                    )
-                                </form>
-                                <form method="post" action=(href!(delete::delete, user_id: user.id.clone()))>
-                                    button(variant: ButtonVariant::Destructive, attrs: attributes! { type="submit" }, "Delete account")
-                                </form>
+                                if may_set_role {
+                                    <form method="post" action=(href!(role::role, user_id: user.id.clone()))>
+                                        <input type="hidden" name="admin" value=(if user.is_admin { "false" } else { "true" })>
+                                        button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" },
+                                            (if user.is_admin { "Revoke administrator" } else { "Make administrator" })
+                                        )
+                                    </form>
+                                }
+                                if may_delete {
+                                    <form method="post" action=(href!(delete::delete, user_id: user.id.clone()))>
+                                        button(variant: ButtonVariant::Destructive, attrs: attributes! { type="submit" }, "Delete account")
+                                    </form>
+                                }
                             </div>
                         }
                     )

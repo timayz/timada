@@ -3,7 +3,9 @@ use ulid::Ulid;
 
 use crate::aggregator::{OAuth2AccountLinked, Registered, SignedIn};
 use crate::error::IdentityError;
-use crate::value_object::{LoginContext, OAuth2Mode, ProviderIdentity, SignInKind, SignInMethod};
+use crate::value_object::{
+    LoginContext, OAuth2Mode, ProviderIdentity, ROOT_USER_ID, SignInKind, SignInMethod,
+};
 
 use super::oauth2_index::free_oauth2_index;
 use super::sign_in::SignInFacts;
@@ -59,6 +61,10 @@ impl<E: Executor> super::Command<E> {
 
         match (cmd.mode, cmd.session_user_id.as_deref(), existing) {
             (OAuth2Mode::AddToUser, Some(user_id), existing) => {
+                // Root signs in with the configured password and nothing else.
+                if user_id == ROOT_USER_ID {
+                    return Err(IdentityError::Forbidden);
+                }
                 if let Some(existing) = &existing
                     && existing.user_id != user_id
                 {
@@ -162,7 +168,6 @@ impl<E: Executor> super::Command<E> {
             Err(err) => return Err(err),
         }
 
-        self.claim_first_user(&user_id, routing_key).await?;
         Ok(user_id)
     }
 

@@ -37,7 +37,7 @@ pub use payments::*;
 pub use role::*;
 
 use evento::{Executor, Projection, metadata::Event};
-use timada_core::Sending;
+use timada_core::{ROOT_USER_ID, Sending};
 
 use crate::aggregator::api_key::{
     Created as ApiKeyCreated, Revoked as ApiKeyRevoked, Scoped as ApiKeyScoped,
@@ -311,12 +311,17 @@ impl TenantState {
         self.suspended.is_some()
     }
 
+    /// The role of the seat `user_id` holds here, if they are a member.
     pub fn role_of(&self, user_id: &str) -> Option<&str> {
         self.members.get(user_id).map(String::as_str)
     }
 
+    /// Whether `user_id` acts here as an owner: a member with that role, or
+    /// the root account ([`ROOT_USER_ID`]), which owns every tenant and
+    /// needs no seat for it (without one it is not listed, counted or
+    /// mailed as a member).
     pub fn is_owner(&self, user_id: &str) -> bool {
-        self.role_of(user_id) == Some(ROLE_OWNER)
+        user_id == ROOT_USER_ID || self.role_of(user_id) == Some(ROLE_OWNER)
     }
 
     /// Whether `role` can be granted: `owner` or a defined custom role.
@@ -324,12 +329,14 @@ impl TenantState {
         role == ROLE_OWNER || self.roles.contains_key(role)
     }
 
-    /// Whether `user_id` holds `permission` here: owners hold every one,
-    /// other members what their role grants (`manage` implying `read`),
-    /// non-members nothing.
+    /// Whether `user_id` holds `permission` here: owners (root among them)
+    /// hold every one, other members what their role grants (`manage`
+    /// implying `read`), non-members nothing.
     pub fn can(&self, user_id: &str, permission: &str) -> bool {
+        if self.is_owner(user_id) {
+            return true;
+        }
         match self.role_of(user_id) {
-            Some(ROLE_OWNER) => true,
             Some(role) => self
                 .roles
                 .get(role)

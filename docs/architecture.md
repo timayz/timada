@@ -15,7 +15,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 
 | Path | Package | Role |
 |---|---|---|
-| `crates/identity` | `timada-identity` | Users, sign-in methods (OIDC, passkeys, e-mail + password), sessions |
+| `crates/identity` | `timada-identity` | Users, sign-in methods (OIDC, passkeys, e-mail + password), sessions, and the root account the configuration defines |
 | `crates/tenancy` | `timada-tenancy` | Tenants, custom roles, members, invitations, API keys |
 | `crates/catalog` | `timada-catalog` | Products, their pictures, variants and categories: the first context living in a tenant's own streams |
 | `crates/catalog-import` | `timada-catalog-import` | Fills a catalog from a snapshot directory (`seeds/`, catalogue + pictures), and takes one from a WooCommerce shop (`woo-snapshot`) |
@@ -446,7 +446,15 @@ by construction.
    no wider than its holder's.
 7. **Auth glue** (`auth/`). The web side of the identity context: OIDC discovery and
    token exchange, WebAuthn ceremonies, mailed one-time codes, the private cookies that
-   carry a sign-in attempt between steps, and the session cookie. A password sign-in
+   carry a sign-in attempt between steps, and the session cookie. Above the users is
+   the root account, which the configuration defines (`[auth.root]`: an address and a
+   password's hash, from `timada-dashboard hash-password`) and no page changes. The
+   login form signs it in on that pair alone, with no mailed code, so it gets in while
+   no mail leaves; its stream (`ROOT_USER_ID`, written at its first sign-in) never
+   holds the password, and it takes no passkey or provider. Registering makes nobody
+   an administrator: root makes and unmakes them and deletes them, administrators
+   delete members, nobody demotes, deletes or signs out root, and a tenant counts root
+   as an owner without a seat (`TenantState::is_owner`). A password sign-in
    is counted before the password is looked at, per browser address and per account
    (`[auth] login_attempts_per_ip`, `login_attempts_per_email`, `login_window_secs`;
    `too_many_logins` past them), so a password cannot be guessed by trying. Like every
@@ -1321,7 +1329,8 @@ itself: it refuses to start on one with migrations to apply, naming them (so doe
 before each new version starts (the helm chart does, in an init container); `reset` (debug builds) drops and recreates it; `rejoin` marks the
 store for a copy from a peer at the next start (see *The runtime*); `seed` loads a
 catalogue snapshot into a tenant and prints a storefront's settings for it (see
-`docs/storefront.md`); `snapshot save` keeps the platform (the database, pictures,
+`docs/storefront.md`); `hash-password` prints the hash of the password it reads on its
+standard input, for `auth.root.password_hash`, and needs no configuration; `snapshot save` keeps the platform (the database, pictures,
 keys, and with `--also` a storefront's own file) in a directory, and
 `snapshot restore` puts one back: on a cluster, every node from its own copy, all
 taken together (`--all-nodes`), or one node's copy on every node (`--from-one-node`).

@@ -132,7 +132,7 @@ async fn revoking_sessions_spares_the_asking_browser_and_later_sign_ins() {
 #[tokio::test]
 async fn only_the_user_or_an_admin_revokes_sessions() {
     let cmd = command().await;
-    let admin = register_via_oauth2(&cmd, "google", "1").await;
+    let admin = sign_in_root(&cmd).await;
     let alice = register_via_oauth2(&cmd, "google", "alice").await;
     let bob = register_via_oauth2(&cmd, "google", "bob").await;
     let hash = [1u8; 32];
@@ -158,4 +158,11 @@ async fn only_the_user_or_an_admin_revokes_sessions() {
         .await
         .unwrap_err();
     assert!(matches!(err, IdentityError::UserNotFound), "{err}");
+
+    // An administrator signs members out, never root; root signs itself out.
+    cmd.set_admin(&admin, &bob, true).await.unwrap();
+    cmd.revoke_sessions(&bob, &alice, None).await.unwrap();
+    let err = cmd.revoke_sessions(&bob, &admin, None).await.unwrap_err();
+    assert!(matches!(err, IdentityError::Forbidden), "{err}");
+    cmd.revoke_sessions(&admin, &admin, None).await.unwrap();
 }

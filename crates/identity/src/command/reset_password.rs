@@ -71,7 +71,6 @@ impl<E: Executor> super::Command<E> {
                 Ok(())
             })
             .await?;
-        self.grant_admin_if_first(&user, routing_key).await?;
         Ok(PasswordReset {
             user_id: user.id,
             label: user.label,
