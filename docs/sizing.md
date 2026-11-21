@@ -307,7 +307,8 @@ the medians of the three.
   it.
 - **The far region cut off** (every packet to and from it dropped): its nodes
   answer `/ready` with 503 after 10 s (three runs: 10, 10 and 11 s). Until
-  then a request through one of them waits five seconds and fails (#730).
+  then a request through one of them waits five seconds and is answered 503
+  to try again (a page saying so for a browser; a bare 500 before #730).
   Europe goes on taking writes, a little faster than with the far region
   there. Past the minute, one node of Europe takes on the work group of each
   node cut off (three of three taken 75 s after the minute in one run, two

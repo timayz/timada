@@ -45,7 +45,7 @@ use evento::subscription::{Context, SubscriptionBuilder};
 use timada_catalog::{CreateProduct, ProductState};
 use timada_tenancy::aggregator::{Created, Renamed};
 use timada_tenancy::{
-    Command, CreateApiKey, CreateTenant, SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenancyError,
+    Command, CreateApiKey, CreateTenant, SCOPE_STORE_READ, SCOPE_STORE_WRITE,
     read_model_subscription,
 };
 
@@ -845,12 +845,15 @@ async fn a_node_alone_checks_keys_and_serves_storefronts_from_its_own_file() {
         store_carts::request(&orders, &n1.local, &cart_id, "no-such-request"),
         store_carts::order_of_cart(&orders, &n1.local, "01J00000000000000000000000"),
     );
+    // A failure with a name: the node could not confirm the read, which a
+    // request answers as the store being away for a moment (#730).
+    let unconfirmed = through_store.expect_err("a read through the store waits for a quorum");
     assert!(
-        through_store.is_err(),
-        "a read through the store waits for a quorum"
+        timada_core::is_read_unconfirmed(unconfirmed.as_ref()),
+        "{unconfirmed:#}"
     );
     assert!(
-        matches!(&unknown, Err(err) if !matches!(err, TenancyError::ApiKeyInvalid)),
+        matches!(&unknown, Err(err) if timada_core::is_read_unconfirmed(err)),
         "an unknown key is asked of the cluster before it is refused: {:?}",
         unknown.map(|access| access.key.id)
     );

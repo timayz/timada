@@ -288,6 +288,8 @@ mod tests {
         PeerState {
             id: NodeId(id),
             silent_for: Duration::from_secs(2),
+            reached: true,
+            refused: None,
             given_up: false,
             label: heard.then(String::new),
             keys: None,

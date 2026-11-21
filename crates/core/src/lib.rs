@@ -138,6 +138,21 @@ pub fn is_store_write_fault(err: &WriteError) -> bool {
     )
 }
 
+/// Whether `err` is a read the store could not confirm for the moment
+/// (evento's [`ReadUnconfirmed`](evento::cluster::ReadUnconfirmed)): this
+/// node reaches no majority of the cluster, is just back from being cut
+/// off, or is joining. The read's counterpart of a refused write
+/// ([`write_refusal`]): nothing is wrong with what was asked, and asked
+/// again in a moment, or of another node, it is answered. Anything else a
+/// read fails with is a failure.
+///
+/// Looked for along `err`'s sources, where it stays in sight behind the
+/// domain errors that carry a read's failure transparently.
+pub fn is_read_unconfirmed(err: &(dyn std::error::Error + 'static)) -> bool {
+    std::iter::successors(Some(err), |err| err.source())
+        .any(|err| err.is::<evento::cluster::ReadUnconfirmed>())
+}
+
 /// The primary subtag of a language tag or of an `Accept-Language` value,
 /// lowercased: `"fr-FR,fr;q=0.9,en;q=0.8"` and `"EN_us"` give `"fr"` and
 /// `"en"`. Only the first entry counts, and only when it is two or three
@@ -265,5 +280,42 @@ mod tests {
             assert_eq!(write_refusal(&err), Some(code));
         }
         assert!(refused_write("failed").is_none());
+    }
+
+    /// A domain error over a read's failure, as `#[error(transparent)]`
+    /// makes it: its sources are the wrapped error's, not the error itself.
+    #[derive(Debug)]
+    struct Domain(anyhow::Error);
+
+    impl std::fmt::Display for Domain {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.fmt(f)
+        }
+    }
+
+    impl std::error::Error for Domain {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.0.source()
+        }
+    }
+
+    /// A read the node could not confirm is told from a failure, on the
+    /// error the store gave and behind what a domain made of it.
+    #[test]
+    fn a_read_the_node_cannot_confirm_is_told_from_a_failure() {
+        use evento::cluster::ReadUnconfirmed;
+
+        let unconfirmed = || {
+            anyhow::Error::new(ReadUnconfirmed::NoQuorum)
+                .context("read barrier quorum not reached for Key(\"acme\")")
+        };
+        assert!(is_read_unconfirmed(unconfirmed().as_ref()));
+        assert!(is_read_unconfirmed(&Domain(unconfirmed())));
+        let through_a_page = anyhow::Error::new(Domain(unconfirmed())).context("loading the page");
+        assert!(is_read_unconfirmed(through_a_page.as_ref()));
+
+        let broken = anyhow::anyhow!("database is locked");
+        assert!(!is_read_unconfirmed(broken.as_ref()));
+        assert!(!is_read_unconfirmed(&Domain(broken)));
     }
 }

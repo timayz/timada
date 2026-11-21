@@ -266,7 +266,14 @@ by construction.
    the nodes, itself counted (`cluster::reaches_majority`: a peer counts once it said
    something since this node started, and while it was heard from within 10 seconds);
    a node cut off from the others answers 503 (`out of touch with most nodes`), as no
-   write it takes can go through. A node back from a
+   write it takes can go through. Until the balancer turns away, such a node still
+   gets requests, and a read it must confirm with a majority fails after five seconds
+   (evento's `ReadUnconfirmed`, `timada_core::is_read_unconfirmed`). That is the
+   read's counterpart of a refused write, and is answered as one
+   (`app/unavailable.rs`): 503 with `Retry-After`, as a page saying to try again for
+   a browser and alone for anything else, which a storefront takes as the store being
+   away (`store_unavailable`); it is logged as a warning, not as a failed request. A
+   node back from a
    night away, or one that is catching up after a copy or a `rebuild`, is left
    out until it reads low. `monitoring.metrics_listen` adds an internal port
    with `/metrics` (`metrics.rs`: Prometheus text with the same figures, the
