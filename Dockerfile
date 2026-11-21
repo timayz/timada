@@ -22,6 +22,8 @@ COPY --from=builder /etc/group /etc/group
 COPY --from=builder /app/target/release/timada-dashboard /usr/bin/timada-dashboard
 # The binary looks for its bundle in the `assets` directory beside itself.
 COPY --from=builder /app/target/release/assets /usr/bin/assets
+# The license asks to be shown on every copy of the dashboard.
+COPY --from=builder /app/LICENSE /usr/share/licenses/timada/LICENSE
 # /tmp, and /var/lib/timada: where the built-in configuration keeps the store,
 # the pictures and the keys (`data/…` under the working directory); mount a
 # volume here, or name other paths in the configuration.

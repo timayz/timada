@@ -3,6 +3,7 @@ name = "timada-discounts"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 
 [dependencies]
 timada-catalog = { path = "../catalog" }

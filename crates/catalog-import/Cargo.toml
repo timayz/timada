@@ -3,6 +3,7 @@ name = "timada-catalog-import"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 description = "Loads a catalogue snapshot into a tenant's catalog, and takes one from a WooCommerce shop"
 
 [dependencies]

@@ -3,6 +3,7 @@ name = "timada-invoicing"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 
 [features]
 # Renders the documents as PDF (Typst, with its own fonts compiled in).

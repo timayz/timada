@@ -3,6 +3,7 @@ name = "storefront"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
+license = "MIT OR Apache-2.0"
 publish = false
 description = "A shop on timada-storefront with no brand and no colours: the structure to start your own from"
 

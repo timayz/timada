@@ -3,6 +3,7 @@ name = "timada-loadtest"
 version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
 publish = false
 description = "Drives a storefront with crowds of random shoppers over plain HTTP, pays through a stand-in for Stripe, and reports latency, throughput and anomalies"
 
