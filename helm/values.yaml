@@ -133,6 +133,18 @@ database:
 
 hostname: "timada.app"
 
+# What each node asks of the machine and may take from it, as Kubernetes
+# writes it, e.g.
+#   resources:
+#     requests: { cpu: 500m, memory: 256Mi }
+#     limits: { cpu: "1" }
+# Set at least a CPU request where the machine is shared: on a machine short
+# of CPU a pod that asks for none is served after every pod that does, and
+# the nodes of a cluster that answer each other seconds late take no write
+# (each round has a deadline) and never become ready. A CPU limit set too low
+# does the same.
+resources: {}
+
 # Time allowed for the pod to shut down gracefully on a rolling update. Must be
 # long enough to drain HTTP and the store API, stop every worker and close the
 # store.
