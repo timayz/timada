@@ -594,7 +594,6 @@ pub fn describe_permission(permission: &str) -> &'static str {
 pub fn describe_api_key_scope(scope: &str) -> &'static str {
     match scope {
         "store:read" => "Read the events and run subscriptions over them",
-        "store:write" => "Write events (includes reading)",
         "store:checkout" => "Fill carts and place orders, nothing else",
         _ => "Unknown scope",
     }

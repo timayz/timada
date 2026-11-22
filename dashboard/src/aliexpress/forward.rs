@@ -8,8 +8,8 @@
 //! and the shop's order is fulfilled with them.
 //!
 //! An order is placed on AliExpress, on the company's account, for a
-//! payment the provider holds: one a `store:write` key forged in the shop's
-//! store names no payment the provider knows as the shop's, and is refused
+//! payment the provider holds: one written into the shop's store by other
+//! means than the checkout names no payment the provider knows as the shop's, and is refused
 //! (timada #431).
 
 use std::collections::BTreeMap;

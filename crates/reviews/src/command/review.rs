@@ -95,8 +95,7 @@ pub fn check_draft(
     Ok(())
 }
 
-/// Every photo's record describes a file; a key with `store:write` could
-/// otherwise record what it likes.
+/// Every photo's record describes a file, whatever handed it in.
 fn check_photos(photos: &[ReviewPhoto]) -> Result<(), ReviewError> {
     if photos
         .iter()

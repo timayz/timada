@@ -1,8 +1,8 @@
 //! The store API end to end on one node: a storefront connects with a key
 //! and is served its tenant's store only; the connection leases the tenant;
 //! a revoked key is cut off; a suspended tenant and bad keys are refused; a
-//! key without `store:write` reads what a storefront loads and never a cart
-//! or an order; the same over TLS.
+//! key reads what a storefront loads, never a cart or an order, and writes
+//! nothing; the same over TLS.
 //!
 //! The dashboard is a binary crate, so the modules are reached through the
 //! binary's own test harness (`#[path]` includes), which drags in items this
@@ -34,8 +34,8 @@ use evento::cursor::{Args, Value};
 use evento::remote::{Client, ServerHandle};
 use timada_tenancy::aggregator::Renamed;
 use timada_tenancy::{
-    Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, SCOPE_STORE_WRITE,
-    TenantState, read_model_subscription,
+    Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenantState,
+    read_model_subscription,
 };
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -149,7 +149,7 @@ impl Harness {
     }
 
     async fn key(&self, tenant: &TenantState) -> (String, String) {
-        self.key_with(tenant, SCOPE_STORE_WRITE).await
+        self.key_with(tenant, SCOPE_STORE_READ).await
     }
 
     async fn key_with(&self, tenant: &TenantState, scope: &str) -> (String, String) {
@@ -216,22 +216,26 @@ impl Harness {
     }
 }
 
-/// Writes a probe event through `client` (the tenancy events double as a
-/// payload) and returns how many events the store holds.
-async fn probe(client: &Client, stream: &str, version: u16) -> usize {
-    evento::append(stream)
-        .original_version(version)
-        .event(&Renamed {
-            name: "probe".into(),
-        })
-        .commit(client)
+/// Adds a product to `tenant`'s catalog through the dashboard's own store, as
+/// a page would (no key writes), and returns how many events `client` then
+/// reads: a storefront reads the catalog.
+async fn add_product(h: &Harness, tenant: &TenantState, client: &Client, name: &str) -> usize {
+    timada_catalog::Command::new(h.platform.0.clone(), &tenant.id)
+        .create_product(
+            "alice",
+            timada_catalog::CreateProduct {
+                name: name.into(),
+                slug: None,
+            },
+        )
         .await
         .unwrap();
     count(client).await.unwrap()
 }
 
-/// Writes a probe event in `tenant`'s streams through the dashboard's own
-/// store, as a page would.
+/// Writes a probe event in `tenant`'s own streams (the tenancy events double
+/// as a payload), which no storefront reads, through the dashboard's own
+/// store.
 async fn probe_as(h: &Harness, tenant: &TenantState, stream: &str, version: u16) {
     evento::append(stream)
         .tenant(&tenant.id)
@@ -295,18 +299,20 @@ async fn a_store_connects_with_its_key_and_leases_its_tenant() {
 
     let client = h.connect(&acme_token).await.unwrap();
     assert_eq!(h.connected(&acme), 1);
-    assert_eq!(probe(&client, "s1", 0).await, 1);
-    assert_eq!(probe(&client, "s1", 1).await, 2);
+    let one = add_product(&h, &acme, &client, "Mug").await;
+    assert!(one >= 1);
+    let two = add_product(&h, &acme, &client, "Cup").await;
+    assert!(two > one);
 
-    // Another tenant's key sees its own, empty, store: the same stream id
-    // there is a stream of its own, starting at version 0.
+    // Another tenant's key sees its own, empty, store, and what is added
+    // there stays there.
     let other = h.connect(&zeta_token).await.unwrap();
     assert_eq!(count(&other).await.unwrap(), 0);
     assert_eq!(h.connected(&zeta), 1);
-    assert_eq!(probe(&other, "s1", 0).await, 1);
+    assert_eq!(add_product(&h, &zeta, &other, "Mug").await, one);
     assert_eq!(
         count(&client).await.unwrap(),
-        2,
+        two,
         "acme's store is untouched"
     );
     drop(other);
@@ -317,7 +323,7 @@ async fn a_store_connects_with_its_key_and_leases_its_tenant() {
         probe_as(&h, &filler, "f", 0).await;
     }
     assert_eq!(h.connected(&acme), 1, "the store is still connected");
-    assert_eq!(count(&client).await.unwrap(), 2);
+    assert_eq!(count(&client).await.unwrap(), two);
 
     // Disconnected: the registry forgets it.
     drop(client);
@@ -326,7 +332,7 @@ async fn a_store_connects_with_its_key_and_leases_its_tenant() {
 
     // Reconnecting finds the events again.
     let again = h.connect(&acme_token).await.unwrap();
-    assert_eq!(count(&again).await.unwrap(), 2);
+    assert_eq!(count(&again).await.unwrap(), two);
     drop(again);
     h.finish().await;
 }
@@ -363,7 +369,7 @@ async fn revoking_a_key_ends_its_connections() {
     let (token, key_id) = h.key(&acme).await;
 
     let client = h.connect(&token).await.unwrap();
-    assert_eq!(probe(&client, "s1", 0).await, 1);
+    assert!(add_product(&h, &acme, &client, "Mug").await >= 1);
     assert_eq!(h.connections.count(&key_id), 1);
 
     h.platform
@@ -408,21 +414,35 @@ async fn revoking_a_key_ends_its_connections() {
     h.finish().await;
 }
 
+/// Every event of every tenant in the dashboard's own store.
+async fn everything(h: &Harness) -> usize {
+    h.platform
+        .0
+        .read(
+            None,
+            None,
+            evento::TenantFilter::All,
+            Args::forward(1000, None),
+            None,
+        )
+        .await
+        .unwrap()
+        .edges
+        .len()
+}
+
 #[tokio::test]
-async fn a_read_only_key_cannot_change_the_store() {
+async fn a_key_cannot_change_the_store() {
     let h = harness(None).await;
     let acme = h.create("acme").await;
-    let (writer_token, _) = h.key(&acme).await;
-    let (token, key_id) = h.key_with(&acme, SCOPE_STORE_READ).await;
-    let writer = h.connect(&writer_token).await.unwrap();
-    assert_eq!(probe(&writer, "s1", 0).await, 1);
+    let (token, key_id) = h.key(&acme).await;
+    probe_as(&h, &acme, "s1", 0).await;
 
     let client = h.connect(&token).await.unwrap();
     // It reads the catalog and nothing else: the tenant's own stream, where
     // the probe went, is not a storefront's business.
     assert_eq!(count(&client).await.unwrap(), 0, "the probe is not catalog");
-    let merchant = evento::Evento::new(h.connect(&writer_token).await.unwrap());
-    let mug = timada_catalog::Command::new(merchant.clone(), &acme.id)
+    let mug = timada_catalog::Command::new(h.platform.0.clone(), &acme.id)
         .create_product(
             "alice",
             timada_catalog::CreateProduct {
@@ -435,7 +455,7 @@ async fn a_read_only_key_cannot_change_the_store() {
     let product_type = <timada_catalog::aggregator::Product as evento::Aggregate>::aggregate_type();
     assert_eq!(
         count(&client).await.unwrap(),
-        read_type(&writer, product_type).await.unwrap(),
+        read_type(&h.platform.0, product_type).await.unwrap(),
         "it reads the catalog: every product event, nothing else"
     );
     assert!(count(&client).await.unwrap() >= 1);
@@ -457,7 +477,7 @@ async fn a_read_only_key_cannot_change_the_store() {
         format!("{refused:#}").contains("may not read"),
         "a cart is not catalog: {refused:#}"
     );
-    let total = count(&writer).await.unwrap();
+    let total = everything(&h).await;
     let err = evento::append("s1")
         .original_version(1)
         .event(&Renamed {
@@ -466,14 +486,20 @@ async fn a_read_only_key_cannot_change_the_store() {
         .commit(&client)
         .await
         .unwrap_err();
-    // Refused for the stream before the scope: a tenant's own stream is
+    // Refused for the stream before the write: a tenant's own stream is
     // not one it reads, so the version lookup the append starts with fails.
     let message = format!("{err:#}");
     assert!(
-        message.contains("may not read") || message.contains("store:write"),
+        message.contains("may not read") || message.contains("may not write"),
         "{message}"
     );
-    assert_eq!(count(&writer).await.unwrap(), total, "nothing was written");
+    // A stream it reads is no more its to write: a product's.
+    let err = timada_catalog::Command::unscoped(evento::Evento::new(client.clone()))
+        .price_product("mallory", &mug.id, 1, "EUR")
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("may not write"), "{err:#}");
+    assert_eq!(everything(&h).await, total, "nothing was written");
 
     // A snapshot it saves is dropped, not refused.
     client
@@ -489,9 +515,10 @@ async fn a_read_only_key_cannot_change_the_store() {
         .await
         .unwrap();
     assert!(
-        writer
+        h.platform
+            .0
             .get_snapshot(
-                String::new(),
+                acme.id.clone(),
                 "t".into(),
                 "p".into(),
                 "1".into(),
@@ -514,25 +541,42 @@ async fn a_read_only_key_cannot_change_the_store() {
         format!("{refused:#}").contains("subscriptions are not served"),
         "{refused:#}"
     );
-    let refused = writer
-        .upsert_subscriber("read-models".into(), its_worker)
-        .await
-        .unwrap_err();
-    assert!(
-        format!("{refused:#}").contains("subscriptions are not served"),
-        "{refused:#}"
-    );
 
-    // Granted write, the key's connections end and the reconnect writes.
+    // No scope writes: with every scope there is, the key's connections end
+    // and the reconnect still appends nothing.
     h.platform
-        .change_api_key_scopes("alice", &key_id, vec![SCOPE_STORE_WRITE.into()], NOW + 1)
+        .change_api_key_scopes(
+            "alice",
+            &key_id,
+            timada_tenancy::API_KEY_SCOPES
+                .iter()
+                .map(|scope| (*scope).to_owned())
+                .collect(),
+            NOW + 1,
+        )
         .await
         .unwrap();
     assert_eq!(h.connections.close_key(&key_id), 1);
     drop(client);
+    let total = everything(&h).await;
     let client = h.connect(&token).await.unwrap();
-    assert_eq!(probe(&client, "s1", 1).await, total + 1);
-    drop((client, writer, merchant));
+    let err = timada_catalog::Command::unscoped(evento::Evento::new(client.clone()))
+        .price_product("mallory", &mug.id, 1, "EUR")
+        .await
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("may not write"), "{err:#}");
+    assert_eq!(everything(&h).await, total, "nothing was written");
+    // The scope it once took to write is no scope any more.
+    let err = h
+        .platform
+        .change_api_key_scopes("alice", &key_id, vec!["store:write".into()], NOW + 2)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, timada_tenancy::TenancyError::InvalidApiKeyScopes),
+        "{err}"
+    );
+    drop(client);
     h.finish().await;
 }
 
@@ -540,11 +584,11 @@ async fn a_read_only_key_cannot_change_the_store() {
 async fn a_checkout_key_reads_how_the_shop_sells_and_never_a_cart_or_order() {
     let h = harness(None).await;
     let acme = h.create("acme").await;
-    let (writer_token, _) = h.key(&acme).await;
     let (token, _) = h
         .key_with_scopes(&acme, &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT])
         .await;
-    let merchant = evento::Evento::new(h.connect(&writer_token).await.unwrap());
+    // The dashboard's own store: what a page of the back office writes with.
+    let merchant = h.platform.0.clone();
     let catalog = timada_catalog::Command::new(merchant.clone(), &acme.id);
     let mug = catalog
         .create_product(
@@ -624,7 +668,7 @@ async fn a_checkout_key_reads_how_the_shop_sells_and_never_a_cart_or_order() {
         .await
         .unwrap_err();
     assert!(
-        format!("{refused:#}").contains("store:write"),
+        format!("{refused:#}").contains("may not write"),
         "{refused:#}"
     );
     let refused = orders
@@ -633,7 +677,7 @@ async fn a_checkout_key_reads_how_the_shop_sells_and_never_a_cart_or_order() {
         .unwrap_err();
     let message = format!("{refused:#}");
     assert!(
-        message.contains("may not read") || message.contains("store:write"),
+        message.contains("may not read") || message.contains("may not write"),
         "{message}"
     );
     // Not the shop's shoppers' sign-in challenges, which the same store
@@ -700,7 +744,7 @@ async fn the_store_api_serves_over_tls() {
         .connect()
         .await
         .unwrap();
-    assert_eq!(probe(&client, "s1", 0).await, 1);
+    assert!(add_product(&h, &acme, &client, "Mug").await >= 1);
     assert_eq!(h.connected(&acme), 1);
 
     // Plaintext does not get in.

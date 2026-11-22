@@ -1,12 +1,12 @@
 //! The store API: the listener a merchant's storefront connects to with one
-//! of its tenant's API keys, to read and write that tenant's events.
+//! of its tenant's API keys, to read that tenant's events.
 //!
 //! Every connection opens with the key's token. The resolver authenticates
 //! it against the platform's streams and serves the connection in the key's
 //! tenant and nothing else: every request on it acts in that tenant, whatever
 //! it names, and the subscriber calls are refused (a storefront keeps its
-//! cursors in a store of its own). Read-only unless the key holds
-//! `store:write` (see [`read_only_store`](crate::read_only_store)). Revoking
+//! cursors in a store of its own). Read-only, whatever the key holds (see
+//! [`read_only_store`](crate::read_only_store)): no key appends. Revoking
 //! a key or changing its scopes ends its live connections through
 //! [`StoreConnections`] (a reconnect gets the new scopes); suspending the
 //! tenant ends every connection of the tenant, and their reconnects are
@@ -33,9 +33,7 @@ use evento::remote::{
 use evento::subscription::{Context, SubscriptionBuilder};
 use timada_tenancy::aggregator::Suspended;
 use timada_tenancy::aggregator::api_key::{Revoked, Scoped};
-use timada_tenancy::{
-    ApiKeyAccess, Command, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenancyError,
-};
+use timada_tenancy::{ApiKeyAccess, Command, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenancyError};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
@@ -218,12 +216,9 @@ impl Resolver for StoreResolver {
             tracing::warn!(peer = %hello.peer, key = %access.key.hint, "store connection refused: the key may not read");
             return Err(Rejection::Unauthorized);
         }
-        let can_write = access.key.allows(SCOPE_STORE_WRITE);
         let can_sell = access.key.allows(SCOPE_STORE_CHECKOUT);
         let store = self.local.0.clone();
-        let executor = if can_write {
-            store
-        } else if can_sell {
+        let executor = if can_sell {
             crate::read_only_store::checkout_only(store)
         } else {
             crate::read_only_store::read_only(store)
@@ -238,7 +233,6 @@ impl Resolver for StoreResolver {
         tracing::info!(
             tenant = %access.tenant.slug,
             key = %access.key.hint,
-            can_write,
             can_sell,
             peer = %hello.peer,
             "store connected"

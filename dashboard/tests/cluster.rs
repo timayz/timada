@@ -45,7 +45,7 @@ use evento::subscription::{Context, SubscriptionBuilder};
 use timada_catalog::{CreateProduct, ProductState};
 use timada_tenancy::aggregator::{Created, Renamed};
 use timada_tenancy::{
-    Command, CreateApiKey, CreateTenant, SCOPE_STORE_READ, SCOPE_STORE_WRITE,
+    Command, CreateApiKey, CreateTenant, SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ,
     read_model_subscription,
 };
 
@@ -692,15 +692,15 @@ async fn eventually(what: &str, mut ok: impl AsyncFnMut() -> bool) {
     }
 }
 
-/// What reading the tenant's own streams through `client` says: a key that
-/// may write reads them, one that may only read is told it may not.
-async fn reads_tenant_streams(client: &Client) -> Result<usize, String> {
+/// What reading how the shop takes payment through `client` says: a key that
+/// may sell reads it, one that may only read the catalog is told it may not.
+async fn reads_how_the_shop_sells(client: &Client) -> Result<usize, String> {
     use evento::{Aggregate as _, Executor as _};
-    let tenant = timada_tenancy::aggregator::Tenant::aggregate_type();
+    let payment_method = timada_orders::aggregator::PaymentMethod::aggregate_type();
     client
         .read(
             Some(Arc::from(vec![evento::EventFilter {
-                aggregate_type: tenant.to_owned(),
+                aggregate_type: payment_method.to_owned(),
                 aggregate_id: None,
                 name: None,
             }])),
@@ -725,14 +725,14 @@ async fn a_key_cut_off_through_one_node_ends_its_connections_on_another() {
     let acme = create_everywhere(&nodes, "acme").await;
     let api = StoreApi::start(&nodes[1]).await;
     let platform = Command(nodes[0].store.clone());
-    let new_key = async |scope: &str| {
+    let new_key = async |scopes: &[&str]| {
         platform
             .create_api_key(
                 "alice",
                 CreateApiKey {
                     tenant_id: acme.id.clone(),
                     label: "Shop".into(),
-                    scopes: vec![scope.to_owned()],
+                    scopes: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
                 },
                 1_800_000_000,
             )
@@ -740,44 +740,47 @@ async fn a_key_cut_off_through_one_node_ends_its_connections_on_another() {
             .unwrap()
     };
 
-    let writer = new_key(SCOPE_STORE_WRITE).await;
-    let client = api.connect(&writer.token).await;
-    assert_eq!(api.connections.count(&writer.key.id), 1);
-    assert_eq!(reads_tenant_streams(&client).await, Ok(0));
+    let seller = new_key(&[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT]).await;
+    let client = api.connect(&seller.token).await;
+    assert_eq!(api.connections.count(&seller.key.id), 1);
+    assert_eq!(reads_how_the_shop_sells(&client).await, Ok(0));
 
     // Narrowed to reading on node 0: node 1 ends the connection, and the
     // store comes back under the new scopes.
     platform
         .change_api_key_scopes(
             "alice",
-            &writer.key.id,
+            &seller.key.id,
             vec![SCOPE_STORE_READ.into()],
             1_800_000_001,
         )
         .await
         .unwrap();
-    eventually("the connection comes back read-only", async || {
-        reads_tenant_streams(&client)
-            .await
-            .is_err_and(|err| err.contains("may not read"))
-    })
+    eventually(
+        "the connection comes back under the new scopes",
+        async || {
+            reads_how_the_shop_sells(&client)
+                .await
+                .is_err_and(|err| err.contains("may not read"))
+        },
+    )
     .await;
 
     // Revoked on node 0: node 1 ends the connection for good.
     platform
-        .revoke_api_key("alice", &writer.key.id, 1_800_000_002)
+        .revoke_api_key("alice", &seller.key.id, 1_800_000_002)
         .await
         .unwrap();
     eventually("node 1 ends the revoked key's connection", async || {
-        api.connections.count(&writer.key.id) == 0
+        api.connections.count(&seller.key.id) == 0
     })
     .await;
     drop(client);
-    let err = api.refused(&writer.token).await;
+    let err = api.refused(&seller.token).await;
     assert!(err.contains("unauthorized"), "{err}");
 
     // Suspended on node 0: node 1 ends every connection of the tenant.
-    let reader = new_key(SCOPE_STORE_READ).await;
+    let reader = new_key(&[SCOPE_STORE_READ]).await;
     let client = api.connect(&reader.token).await;
     assert_eq!(api.connections.count_tenant(&acme.id), 1);
     platform.suspend_tenant(&acme.id, "unpaid").await.unwrap();

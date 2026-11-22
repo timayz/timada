@@ -113,7 +113,7 @@ inviter can invite again; an order's page shows each of its mails the same way.
 
 An order mail the platform's server would send is checked against the payment
 provider before it is claimed: an order whose payment the provider does not know as
-the shop's is passed over (a `store:write` key could forge one), and a provider that
+the shop's is passed over (the checkout alone places the orders it mails about), and a provider that
 does not answer is asked again at the next look. A payment mail of an order settled
 outside timada is passed over too.
 

@@ -374,7 +374,7 @@ What is bought:
 
 Before anything is bought, Stripe is asked whether it holds the payment the order
 names, opened for this shop's cart: an order written into the shop's store by other
-means than the checkout (a `store:write` key's) is refused with *it was not placed
+means than the checkout is refused with *it was not placed
 through the shop's checkout*, a hold that went back meanwhile is refused too, and
 Stripe not answering fails the forward to try again.
 

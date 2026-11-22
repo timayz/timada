@@ -98,9 +98,8 @@ impl RenditionFile {
             .collect()
     }
 
-    /// Whether the record describes a file at all: a key with `store:write`
-    /// can record what it likes, and a zero-byte or zero-pixel file is not
-    /// a picture.
+    /// Whether the record describes a file at all: a zero-byte or zero-pixel
+    /// file is not a picture.
     pub fn is_valid(&self) -> bool {
         self.width > 0 && self.height > 0 && self.size > 0
     }
