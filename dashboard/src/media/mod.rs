@@ -47,9 +47,8 @@
 //! off a page, or a page deleted, takes its files with it.
 //!
 //! Every file name is checked before it touches the disk ([`Media::path_of`]):
-//! the ids come from events, and a key with `store:write` can put anything in
-//! a tenant's stream, so a name is never trusted to stay inside the tenant's
-//! directory.
+//! the ids come from events, so a name is never trusted to stay inside the
+//! tenant's directory.
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -217,8 +216,7 @@ impl Media {
     /// Where a rendition's file is, once its names are checked: the tenant
     /// and the picture are ids ([`is_id`]: one directory entry each, nothing
     /// above). Everything that touches the disk goes through here, because
-    /// the names come from events and a key with `store:write` writes what
-    /// it likes there.
+    /// the names come from events.
     pub fn path_of(
         &self,
         tenant_id: &str,
@@ -1136,9 +1134,8 @@ pub(crate) mod tests {
         assert!(!media.dir.join("t1/400/i1.webp").exists());
     }
 
-    /// The names come from events, which a key with `store:write` fills as
-    /// it likes: none of them gets a file written, read or deleted outside
-    /// the tenant's directory.
+    /// The names come from events: none of them, whatever it says, gets a
+    /// file written, read or deleted outside the tenant's directory.
     #[tokio::test]
     async fn a_name_from_the_store_cannot_leave_the_tenant_directory() {
         let upload = rendered(&png(20, 20, [1, 2, 3, 255]));

@@ -3027,7 +3027,7 @@ async fn a_closing_push_closes_the_order_through_the_subscription() {
     assert_eq!(asked.reason, super::forward::CLOSED_BY_ALIEXPRESS);
 }
 
-/// An order a `store:write` key forged in the shop's store names no payment
+/// An order forged in the shop's store names no payment
 /// the provider knows as the shop's: nothing is bought for it on the
 /// company's account (timada #431). The provider not answering refuses the
 /// forward too, to try again.

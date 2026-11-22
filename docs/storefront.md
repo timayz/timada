@@ -31,11 +31,12 @@ store.shutdown().await;
   and what the shopper does is written. Neither scope appends anything over the
   store API, and neither reads a cart, an order or an invoice series: those streams
   are every shopper's. Nothing else in the tenant's store is readable through either;
-  a read naming another stream fails. `store:write` appends and reads any event (it
-  implies `store:checkout`); a storefront should not hold it. What such a key forges in
-  the shop's store spends nothing of the platform's: the platform's mail server writes
-  to a shopper about an order, and the forwarder buys an order on AliExpress, only once
-  Stripe says it holds the payment the order names, opened for that shop's cart.
+  a read naming another stream fails. No scope writes: only the dashboard appends to a
+  shop's store, and every append over the store API is refused. Should an order reach
+  the shop's store by other means than the checkout all the same, it spends nothing of
+  the platform's: the platform's mail server writes to a shopper about an order, and
+  the forwarder buys an order on AliExpress, only once Stripe says it holds the payment
+  the order names, opened for that shop's cart.
 - The **address** is one node's store API, or a `host:port` in front of several (a
   load balancer, a geo-routed name). A name is looked up again on every reconnect, so
   when a node goes away the storefront follows the name to one that answers; any

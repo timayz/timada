@@ -19,7 +19,7 @@
 //!
 //! A shop with no mail server of its own sends through the platform's. That
 //! server mails about the orders the checkout placed and no other: an order
-//! a `store:write` key forged in the shop's store would have the platform
+//! written into the shop's store by other means would have the platform
 //! mail any address, so one whose payment the provider does not know as the
 //! shop's is passed over (timada #431). A shop's own server is the shop's
 //! to spend.
@@ -615,7 +615,7 @@ mod tests {
                     capture_before: None,
                 },
                 supplier: None,
-                placed_by: "store:write".to_owned(),
+                placed_by: "forged".to_owned(),
             })
             .commit(&Evento::new(store.clone()))
             .await

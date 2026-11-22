@@ -104,15 +104,12 @@ pub const PERMISSION_AUTOMATIONS_MANAGE: &str = "automations:manage";
 pub const PERMISSION_PAGES_READ: &str = "pages:read";
 pub const PERMISSION_PAGES_MANAGE: &str = "pages:manage";
 
-/// Every scope a store API key can hold, as `resource:action`. The list only
-/// grows: a stored key may name any of them. `write` on a resource implies
-/// `read` on it, and `store:write` implies `store:checkout` (see
-/// [`api_key_scope_implies`]).
-pub const API_KEY_SCOPES: &[&str] = &[SCOPE_STORE_READ, SCOPE_STORE_WRITE, SCOPE_STORE_CHECKOUT];
+/// Every scope a store API key can hold, as `resource:action`. None appends
+/// to the store: only the dashboard writes a tenant's events. A stored key may
+/// name a scope that is no longer one (`store:write` was); it grants nothing.
+pub const API_KEY_SCOPES: &[&str] = &[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT];
 /// Read the tenant's events and run subscriptions over them.
 pub const SCOPE_STORE_READ: &str = "store:read";
-/// Append events to the tenant's store.
-pub const SCOPE_STORE_WRITE: &str = "store:write";
 /// Append what a shopper does and nothing else: carts and the orders placed
 /// from them. What a storefront needs to sell, without the power to change
 /// the catalog or an order once placed.
@@ -251,17 +248,10 @@ pub fn generate_invitation_token() -> String {
 }
 
 /// The stream of a store API key, from the token a storefront presents.
-/// Whether holding the scope `held` grants `wanted`: the same scope,
-/// `write` on the resource `wanted` only reads, or `store:write` for the
-/// narrower `store:checkout`.
+/// Whether holding the scope `held` grants `wanted`: the same scope, and one
+/// a key can still hold.
 pub fn api_key_scope_implies(held: &str, wanted: &str) -> bool {
-    if held == wanted || (held == SCOPE_STORE_WRITE && wanted == SCOPE_STORE_CHECKOUT) {
-        return true;
-    }
-    match (held.split_once(':'), wanted.split_once(':')) {
-        (Some((resource, "write")), Some((wanted_resource, "read"))) => resource == wanted_resource,
-        _ => false,
-    }
+    held == wanted && API_KEY_SCOPES.contains(&held)
 }
 
 /// Deduplicates and checks a scope list against [`API_KEY_SCOPES`]; a key
@@ -382,26 +372,31 @@ mod tests {
     }
 
     #[test]
-    fn api_key_scopes_are_checked_and_write_implies_read() {
-        let set = normalize_api_key_scopes([" store:write ", "store:read", "store:write"]).unwrap();
+    fn api_key_scopes_are_checked_and_none_implies_another() {
+        let set =
+            normalize_api_key_scopes([" store:checkout ", "store:read", "store:checkout"]).unwrap();
         assert_eq!(set.len(), 2);
         assert!(normalize_api_key_scopes(Vec::<String>::new()).is_err());
         assert!(normalize_api_key_scopes(["store:delete"]).is_err());
-        assert!(api_key_scope_implies(SCOPE_STORE_WRITE, SCOPE_STORE_READ));
-        assert!(!api_key_scope_implies(SCOPE_STORE_READ, SCOPE_STORE_WRITE));
-        assert!(!api_key_scope_implies("catalog:write", SCOPE_STORE_READ));
-        assert!(api_key_scope_implies(
-            SCOPE_STORE_WRITE,
-            SCOPE_STORE_CHECKOUT
-        ));
-        assert!(!api_key_scope_implies(
-            SCOPE_STORE_CHECKOUT,
-            SCOPE_STORE_WRITE
-        ));
+        assert!(api_key_scope_implies(SCOPE_STORE_READ, SCOPE_STORE_READ));
         assert!(!api_key_scope_implies(
             SCOPE_STORE_CHECKOUT,
             SCOPE_STORE_READ
         ));
+        assert!(!api_key_scope_implies(
+            SCOPE_STORE_READ,
+            SCOPE_STORE_CHECKOUT
+        ));
+    }
+
+    /// A key stored when `store:write` was a scope: nobody asks for it any
+    /// more, and it opens neither reading nor selling.
+    #[test]
+    fn the_former_write_scope_is_refused_and_grants_nothing() {
+        assert!(normalize_api_key_scopes(["store:write"]).is_err());
+        assert!(!api_key_scope_implies("store:write", "store:write"));
+        assert!(!api_key_scope_implies("store:write", SCOPE_STORE_READ));
+        assert!(!api_key_scope_implies("store:write", SCOPE_STORE_CHECKOUT));
     }
 
     #[test]
