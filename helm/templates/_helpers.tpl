@@ -49,17 +49,38 @@ ${POD_NAME}.timada-headless
 {{- end -}}
 
 {{/*
-What a pod alone knows of itself: every pod reads the same configuration
-file, so it comes from its environment. Its name is its work group, unless
-`config.server.work_group` gives every node the same one: the background work on
-what a node created is then done by that node, and not once by each of them.
-In a cluster its ordinal is its place, which starts at `firstNodeId`.
+The configuration file a pod reads: the one of its own name where
+`workGroups` gives each pod a work group (`$(POD_NAME)` is the pod's name,
+from its environment), the same for all otherwise.
+*/}}
+{{- define "timada.configFile" -}}
+{{- if .Values.workGroups -}}
+/etc/timada/$(POD_NAME).toml
+{{- else -}}
+/etc/timada/config.toml
+{{- end -}}
+{{- end -}}
+
+{{/*
+What a pod alone knows of itself, which comes from its environment. Its name
+is its work group, unless `config.server.work_group` gives every node the
+same one or `workGroups` names each pod's (its name then picks its
+configuration file): the background work on what a node created is then done
+by that node, and not once by each of them. In a cluster its ordinal is its
+place, which starts at `firstNodeId`.
 */}}
 {{- define "timada.nodeEnv" -}}
-{{- $ownGroup := not (dig "server" "work_group" "" .Values.config) -}}
+{{- $named := .Values.workGroups -}}
+{{- $ownGroup := and (not $named) (not (dig "server" "work_group" "" .Values.config)) -}}
 {{- $clustered := include "timada.clustered" . -}}
-{{- if or $ownGroup $clustered -}}
+{{- if or $ownGroup $clustered $named -}}
 env:
+  {{- if $named }}
+  - name: POD_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+  {{- end }}
   {{- if $ownGroup }}
   - name: TIMADA__SERVER__WORK_GROUP
     valueFrom:
