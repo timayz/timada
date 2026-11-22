@@ -1,14 +1,14 @@
 [package]
 name = "timada-catalog-import"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Loads a catalogue snapshot into a tenant's catalog, and takes one from a WooCommerce shop"
 
 [dependencies]
-timada-catalog = { path = "../catalog", version = "0.1.0" }
-timada-core = { path = "../core", version = "0.1.0" }
+timada-catalog = { path = "../catalog", version = "0.1.1" }
+timada-core = { path = "../core", version = "0.1.1" }
 evento.workspace = true
 serde.workspace = true
 serde_json.workspace = true

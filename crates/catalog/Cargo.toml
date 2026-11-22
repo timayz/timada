@@ -1,13 +1,13 @@
 [package]
 name = "timada-catalog"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [dependencies]
 evento.workspace = true
-timada-core = { path = "../core", version = "0.1.0" }
+timada-core = { path = "../core", version = "0.1.1" }
 bitcode.workspace = true
 serde.workspace = true
 rand.workspace = true

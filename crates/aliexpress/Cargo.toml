@@ -1,17 +1,17 @@
 [package]
 name = "timada-aliexpress"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
 [dependencies]
 evento.workspace = true
-timada-core = { path = "../core", version = "0.1.0" }
-timada-catalog = { path = "../catalog", version = "0.1.0" }
-timada-catalog-import = { path = "../catalog-import", version = "0.1.0" }
-timada-tenancy = { path = "../tenancy", version = "0.1.0" }
-timada-orders = { path = "../orders", version = "0.1.0" }
+timada-core = { path = "../core", version = "0.1.1" }
+timada-catalog = { path = "../catalog", version = "0.1.1" }
+timada-catalog-import = { path = "../catalog-import", version = "0.1.1" }
+timada-tenancy = { path = "../tenancy", version = "0.1.1" }
+timada-orders = { path = "../orders", version = "0.1.1" }
 bitcode.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true

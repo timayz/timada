@@ -1,6 +1,6 @@
 [package]
 name = "timada-dashboard"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -14,7 +14,7 @@ webp.workspace = true
 bytes.workspace = true
 http-body.workspace = true
 evento.workspace = true
-timada-core = { path = "../crates/core", version = "0.1.0" }
+timada-core = { path = "../crates/core", version = "0.1.1" }
 jiff.workspace = true
 serde.workspace = true
 anyhow.workspace = true
@@ -22,20 +22,20 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true
 config.workspace = true
-timada-identity = { path = "../crates/identity", version = "0.1.0" }
-timada-tenancy = { path = "../crates/tenancy", version = "0.1.0" }
-timada-aliexpress = { path = "../crates/aliexpress", version = "0.1.0" }
-timada-catalog = { path = "../crates/catalog", version = "0.1.0" }
-timada-catalog-import = { path = "../crates/catalog-import", version = "0.1.0" }
-timada-orders = { path = "../crates/orders", version = "0.1.0" }
-timada-discounts = { path = "../crates/discounts", version = "0.1.0" }
-timada-reviews = { path = "../crates/reviews", version = "0.1.0" }
-timada-support = { path = "../crates/support", version = "0.1.0" }
-timada-newsletter = { path = "../crates/newsletter", version = "0.1.0" }
-timada-pages = { path = "../crates/pages", version = "0.1.0" }
-timada-automations = { path = "../crates/automations", version = "0.1.0" }
-timada-shoppers = { path = "../crates/shoppers", version = "0.1.0" }
-timada-invoicing = { path = "../crates/invoicing", features = ["pdf"], version = "0.1.0" }
+timada-identity = { path = "../crates/identity", version = "0.1.1" }
+timada-tenancy = { path = "../crates/tenancy", version = "0.1.1" }
+timada-aliexpress = { path = "../crates/aliexpress", version = "0.1.1" }
+timada-catalog = { path = "../crates/catalog", version = "0.1.1" }
+timada-catalog-import = { path = "../crates/catalog-import", version = "0.1.1" }
+timada-orders = { path = "../crates/orders", version = "0.1.1" }
+timada-discounts = { path = "../crates/discounts", version = "0.1.1" }
+timada-reviews = { path = "../crates/reviews", version = "0.1.1" }
+timada-support = { path = "../crates/support", version = "0.1.1" }
+timada-newsletter = { path = "../crates/newsletter", version = "0.1.1" }
+timada-pages = { path = "../crates/pages", version = "0.1.1" }
+timada-automations = { path = "../crates/automations", version = "0.1.1" }
+timada-shoppers = { path = "../crates/shoppers", version = "0.1.1" }
+timada-invoicing = { path = "../crates/invoicing", features = ["pdf"], version = "0.1.1" }
 openidconnect.workspace = true
 webauthn-rs.workspace = true
 webauthn-rs-proto.workspace = true

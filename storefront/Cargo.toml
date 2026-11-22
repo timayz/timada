@@ -1,6 +1,6 @@
 [package]
 name = "storefront"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 license = "MIT OR Apache-2.0"
@@ -12,7 +12,7 @@ name = "storefront"
 path = "src/main.rs"
 
 [dependencies]
-timada-storefront = { path = "../crates/storefront", version = "0.1.0" }
+timada-storefront = { path = "../crates/storefront", version = "0.1.1" }
 topcoat = { version = "=0.12.1", features = ["anyhow", "multipart", "l10n-fluent"] }
 tokio.workspace = true
 anyhow.workspace = true

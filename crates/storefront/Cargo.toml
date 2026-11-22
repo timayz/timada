@@ -1,6 +1,6 @@
 [package]
 name = "timada-storefront"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 authors.workspace = true
 license = "MIT OR Apache-2.0"
@@ -12,7 +12,7 @@ topcoat-router.workspace = true
 topcoat-view.workspace = true
 topcoat-view-macro.workspace = true
 evento.workspace = true
-timada-core = { path = "../core", version = "0.1.0" }
+timada-core = { path = "../core", version = "0.1.1" }
 tokio.workspace = true
 tokio-rustls.workspace = true
 serde.workspace = true
@@ -20,15 +20,15 @@ serde_json.workspace = true
 anyhow.workspace = true
 deunicode.workspace = true
 tracing.workspace = true
-timada-catalog = { path = "../catalog", version = "0.1.0" }
-timada-orders = { path = "../orders", version = "0.1.0" }
-timada-reviews = { path = "../reviews", version = "0.1.0" }
-timada-shoppers = { path = "../shoppers", version = "0.1.0" }
-timada-newsletter = { path = "../newsletter", version = "0.1.0" }
-timada-support = { path = "../support", version = "0.1.0" }
-timada-pages = { path = "../pages", version = "0.1.0" }
+timada-catalog = { path = "../catalog", version = "0.1.1" }
+timada-orders = { path = "../orders", version = "0.1.1" }
+timada-reviews = { path = "../reviews", version = "0.1.1" }
+timada-shoppers = { path = "../shoppers", version = "0.1.1" }
+timada-newsletter = { path = "../newsletter", version = "0.1.1" }
+timada-support = { path = "../support", version = "0.1.1" }
+timada-pages = { path = "../pages", version = "0.1.1" }
 reqwest.workspace = true
 bytes.workspace = true
-timada-invoicing = { path = "../invoicing", features = ["pdf"], version = "0.1.0" }
+timada-invoicing = { path = "../invoicing", features = ["pdf"], version = "0.1.1" }
 rand.workspace = true
 sha2.workspace = true
