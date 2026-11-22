@@ -305,8 +305,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
                 let make = *make;
                 // Supervised, as this node's own: one that fails goes on by
                 // itself and the work group stays where it is.
-                cover =
-                    cover.subscription(*name, move |_work_group: &str| make(&deps).supervised());
+                cover = cover.subscription(*name, move |_work_group: &str| {
+                    make(&deps).supervised().poll_interval(workers::LOOK_EVERY)
+                });
             }
         }
         cover.start()

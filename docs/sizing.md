@@ -118,6 +118,35 @@ The figures below are from `b03d06d`, when they cost over a core.
   with the looks, 0 and 20 in two runs without.
 - On `b03d06d` that was one core per node under load, and again per extra
   work group served; on `11a31fd` count a tenth of one.
+- **A node's workers now look every 5 s, not every 250 ms**
+  (`workers::LOOK_EVERY`, #745): a write wakes the workers that follow it as
+  it lands, from another node too, so the look is only for a command run
+  beside the server. The figures above are of subscriptions looking at
+  evento's 250 ms.
+
+## A node with nothing to do
+
+One node, an empty store, no visitor, on `dfa2b0d`, read from
+`/proc/<pid>/stat` over 30 to 60 s once it is ready:
+
+| | Processor of the node |
+|---|---|
+| The `0.1.0` image in kind, as the chart runs it (looks every 250 ms) | 104 % of a core |
+| The same image in plain docker, no work group, no store API | 56 % |
+| A dev build, with a work group and the store API | 26.5 % |
+| The same dev build, looks every 5 s | 2 % (2.3 and 1.9, two readings of 40 s) |
+
+- Each of a node's workers compiled its queries anew at every look, four
+  times a second: that was the whole of it, spread evenly over the runtime's
+  threads. Three such nodes on a six-core machine that ran other things took
+  what was left of it, answered each other past the store's deadlines and
+  never became ready (the first production install, timayz/evento#610).
+- The image costs about twice the dev build for the same work (its
+  dependencies are optimised alike, its allocator is musl's): not measured
+  again with the longer look, and not looked into yet.
+- The browser suite on three nodes passes with the longer look (151 passed,
+  3 skipped): a page answered by a node that did not take the write is no
+  later than before.
 
 ## Three nodes
 
