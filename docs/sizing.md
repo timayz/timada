@@ -136,15 +136,19 @@ One node, an empty store, no visitor, on `dfa2b0d`, read from
 | A dev build, with a work group and the store API | 26.5 % |
 | The same dev build, looks every 5 s | 2 % (2.3 and 1.9, two readings of 40 s) |
 | A dev build on evento `8cdfb4f`, which looks every 5 s by itself and keeps its queries compiled | 1.2 % (1.3 and 1.1) |
+| The `0.1.1` image on the production machine, each of three nodes over mutual TLS (`kubectl top pods`, 2026-11-22) | 2.6 to 2.7 % (26, 26 and 27 millicores), 26 to 34 MiB of memory |
 
 - Each of a node's workers compiled its queries anew at every look, four
   times a second: that was the whole of it, spread evenly over the runtime's
   threads. Three such nodes on a six-core machine that ran other things took
   what was left of it, answered each other past the store's deadlines and
   never became ready (the first production install, timayz/evento#610).
-- The image costs about twice the dev build for the same work (its
-  dependencies are optimised alike, its allocator is musl's): not measured
-  again with the longer look, and not looked into yet.
+- The image cost about twice the dev build for the same work (its
+  dependencies are optimised alike, its allocator is musl's), and still does
+  with the longer look: 2.6 % a node in production against 1.2 % for the dev
+  build, though that node is one of three and the dev build stood alone, so
+  the two are not the same work. Why the image costs more is not looked into;
+  at this size it does not matter.
 - The browser suite on three nodes passes with the longer look, set by hand
   on `dfa2b0d` and evento's own on `8cdfb4f` (151 passed, 3 skipped, each
   time): a page answered by a node that did not take the write is no later
