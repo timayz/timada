@@ -74,7 +74,8 @@ reach it (on 7000 for the store, 7001 for the rest), `firstNodeId` numbers this
 release's pods among them, and `clusterCa.secretName` gives them all one authority. `zones`
 names the zones to run in instead, one node in each. Each pod takes its own name as its
 `server.work_group`, so the background work on what a node created is done by that node
-alone; `config.server.work_group` gives them all the same one.
+alone; `workGroups` names each pod's instead, and `config.server.work_group` gives them
+all the same one.
 
 Every change goes through a branch and a pull request; `make check` must be green
 before one is opened.
