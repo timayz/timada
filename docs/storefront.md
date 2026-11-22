@@ -1289,10 +1289,9 @@ tenant: with another tenant's key, `rm storefront.db*` first, or the shop keeps 
 the old tenant's products. `make reset` removes the copy and the settings with the store.
 
 `make storefront.prod` runs the same shop on a tenant of the production platform
-(`https://timada.co`), with a key of that tenant in `config/storefront.prod.local.env`
-and the platform's store API forwarded to port 4322
-(`kubectl -n timada port-forward svc/timada 4322:4321`). It keeps its own copy of the
-catalogue (`storefront.prod.db`); its carts, orders and payments are real ones.
+(`https://timada.co`, its store API at `timada.co:4321` over TLS), with a key of that
+tenant in `config/storefront.prod.local.env`. It keeps its own copy of the catalogue
+(`storefront.prod.db`); its carts, orders and payments are real ones.
 
 ### Making it your own
 

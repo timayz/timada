@@ -101,9 +101,6 @@ storefront:
 # carts, orders and payments. The key is one of the tenant's API keys page
 # there, kept in $(STOREFRONT_PROD_SETTINGS), which git ignores:
 #   echo STORE_TOKEN=... > config/storefront.prod.local.env
-# Production's store API is not reachable from outside its cluster, so forward
-# it first, on a port the dev server does not hold, and leave that running:
-#   kubectl -n timada port-forward svc/timada 4322:4321
 # The copy of the catalogue is kept apart from the dev shop's (storefront.prod.db),
 # and so are the shopper cookies. A setting in the environment wins over the file.
 STOREFRONT_PROD_SETTINGS := config/storefront.prod.local.env
@@ -113,7 +110,8 @@ storefront.prod:
 	eval "$$keep"; \
 	: "$${STORE_TOKEN:?set it, or write it to $(STOREFRONT_PROD_SETTINGS)}"; \
 	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} \
-	STORE_ADDR=$${STORE_ADDR-127.0.0.1:4322} STORE_DB=$${STORE_DB-storefront.prod.db} \
+	STORE_ADDR=$${STORE_ADDR-timada.co:4321} STORE_TLS_CA=$${STORE_TLS_CA-/etc/ssl/certs/ca-certificates.crt} \
+	STORE_DB=$${STORE_DB-storefront.prod.db} \
 	STORE_API_URL=$${STORE_API_URL-https://timada.co} STORE_MEDIA_URL=$${STORE_MEDIA_URL-https://timada.co/media} \
 	PUBLIC_URL=$${PUBLIC_URL-https://storefront.localhost} \
 	STORE_COOKIE_KEY=$$(printf 'local-prod-cookie-key-%.0s' 1 2) cargo run -p storefront
