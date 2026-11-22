@@ -3,7 +3,7 @@ mod common;
 use common::*;
 use timada_tenancy::{
     API_KEY_PREFIX, Command, CreateApiKey, DefineRole, PERMISSION_API_KEYS_MANAGE,
-    SCOPE_STORE_READ, SCOPE_STORE_WRITE, TenancyError, api_key_hint, api_key_id,
+    SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ, TenancyError, api_key_hint, api_key_id,
     api_keys_of_tenant, read_model_subscription,
 };
 
@@ -227,7 +227,7 @@ async fn a_key_holds_the_scopes_it_was_created_with() {
     let alice = new_id();
     let tenant = create_tenant(&cmd, "Acme", &alice).await;
 
-    for bad in [&[][..], &["store:delete"][..]] {
+    for bad in [&[][..], &["store:delete"][..], &["store:write"][..]] {
         let err = cmd
             .create_api_key(&alice, create_scoped(&tenant.id, "Shop", bad), NOW)
             .await
@@ -241,19 +241,22 @@ async fn a_key_holds_the_scopes_it_was_created_with() {
         .unwrap();
     assert_eq!(reader.key.scopes.len(), 1);
     assert!(reader.key.allows(SCOPE_STORE_READ));
-    assert!(!reader.key.allows(SCOPE_STORE_WRITE));
+    assert!(!reader.key.allows(SCOPE_STORE_CHECKOUT));
 
-    let writer = cmd
+    let seller = cmd
         .create_api_key(
             &alice,
-            create_scoped(&tenant.id, "Writer", &[SCOPE_STORE_WRITE]),
+            create_scoped(&tenant.id, "Seller", &[SCOPE_STORE_CHECKOUT]),
             NOW,
         )
         .await
         .unwrap();
-    let access = cmd.authenticate_api_key(&writer.token).await.unwrap();
-    assert!(access.key.allows(SCOPE_STORE_WRITE));
-    assert!(access.key.allows(SCOPE_STORE_READ), "write implies read");
+    let access = cmd.authenticate_api_key(&seller.token).await.unwrap();
+    assert!(access.key.allows(SCOPE_STORE_CHECKOUT));
+    assert!(
+        !access.key.allows(SCOPE_STORE_READ),
+        "no scope implies another"
+    );
 }
 
 #[tokio::test]
@@ -269,7 +272,7 @@ async fn a_manager_changes_the_scopes_of_an_active_key() {
     let id = &created.key.id;
 
     let err = cmd
-        .change_api_key_scopes(&stranger, id, scopes(&[SCOPE_STORE_WRITE]), NOW + 1)
+        .change_api_key_scopes(&stranger, id, scopes(&[SCOPE_STORE_CHECKOUT]), NOW + 1)
         .await
         .unwrap_err();
     assert!(matches!(err, TenancyError::Forbidden), "{err}");
@@ -292,19 +295,19 @@ async fn a_manager_changes_the_scopes_of_an_active_key() {
     cmd.change_api_key_scopes(
         &alice,
         id,
-        scopes(&[SCOPE_STORE_READ, SCOPE_STORE_WRITE]),
+        scopes(&[SCOPE_STORE_READ, SCOPE_STORE_CHECKOUT]),
         NOW + 1,
     )
     .await
     .unwrap();
     let access = cmd.authenticate_api_key(&created.token).await.unwrap();
-    assert!(access.key.allows(SCOPE_STORE_WRITE));
+    assert!(access.key.allows(SCOPE_STORE_CHECKOUT));
 
     // The same set again records nothing.
     cmd.change_api_key_scopes(
         &alice,
         id,
-        scopes(&[SCOPE_STORE_WRITE, SCOPE_STORE_READ]),
+        scopes(&[SCOPE_STORE_CHECKOUT, SCOPE_STORE_READ]),
         NOW + 2,
     )
     .await

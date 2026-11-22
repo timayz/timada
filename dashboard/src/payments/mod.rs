@@ -59,7 +59,7 @@ pub const METADATA_CART: &str = "cart_id";
 
 /// What the provider says of the payment an order says it was placed with.
 /// A `Placed` the checkout wrote names a payment the provider opened for
-/// the tenant's cart; one a `store:write` key forged in the tenant's store
+/// the tenant's cart; one written into the tenant's store by other means
 /// names none the provider knows as this cart's, so this tells the orders
 /// the checkout placed from the rest (timada #431).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

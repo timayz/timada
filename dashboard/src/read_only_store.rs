@@ -1,4 +1,4 @@
-//! The executor a key without `store:write` is served: the store, with
+//! The executor every key is served: the store, with
 //! every way of changing it taken away, and only the streams a storefront
 //! has business reading.
 //!
@@ -166,7 +166,7 @@ impl ReadOnly {
     /// The refusal every append meets.
     fn check(&self, _events: &[Event]) -> Result<(), WriteError> {
         Err(WriteError::Unknown(anyhow::anyhow!(
-            "this API key may not write events (it lacks the store:write scope)"
+            "this API key may not write events: no key does, the dashboard writes what a storefront asks for"
         )))
     }
 }

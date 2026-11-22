@@ -325,8 +325,8 @@ by construction.
    node's file, asked of the cluster before a refusal) and serves the connection,
    reading from the node's file, in the key's tenant (`Session::tenant`): every request acts in that
    tenant whatever it names, the events it reads come back as from a store of its own,
-   and the subscriber calls are refused (a storefront keeps its cursors locally). A
-   key without the `store:write` scope gets the store wrapped by `read_only_store.rs`:
+   and the subscriber calls are refused (a storefront keeps its cursors locally). Every
+   key gets the store wrapped by `read_only_store.rs`, since no scope writes:
    appends refused, snapshot saves dropped, and reads confined to what a storefront
    loads (`store:read`: products, categories, stock, reviews, pages; `store:checkout`
    adds the payment method, shipping, business buyers, discounts, offers, review

@@ -187,7 +187,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             section_card(
                 title: Some("Keys"),
-                description: Some("A key reads this tenant's event store; one with store:write also writes to it. Give a storefront that only shows the catalogue a read-only key, and one that sells store:read with store:checkout, which lets it fill carts and place orders and nothing else. Changing a key's scopes reconnects the stores using it. Revoke a key the moment it may have leaked."),
+                description: Some("A key reads this tenant's event store and never writes to it. Give a storefront that only shows the catalogue a read-only key, and one that sells store:read with store:checkout, which lets it fill carts and place orders and nothing else. Changing a key's scopes reconnects the stores using it. Revoke a key the moment it may have leaked."),
                 table(
                     table_header(
                         table_row(
