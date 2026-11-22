@@ -23,6 +23,19 @@ replicas: 1
 # fit.
 zones: []
 
+# A work group for each node, in the order of the pods, e.g.
+# [eu-west-1a, eu-west-1b, eu-west-1c]: one name a node, as many as there are
+# nodes. Data created through a node is tagged with its work group, and the
+# background work on it (payments, supplier orders, invoices, mails) is done
+# by that node. Empty: each pod takes its own name (`timada-0`), which does
+# the same under another name; see `config.server.work_group` to give every
+# node one group instead. Data keeps the group it was created in, so the
+# names are chosen once: the work on the data of a group no node answers for
+# any more falls to one of the other nodes. The names say nothing of
+# where a pod runs: `zones` does, and does not promise the first pod the
+# first zone.
+workGroups: []
+
 # How many nodes the cluster was founded with, to set once it is given more:
 # left out, every node founds it, which is right for a first install and
 # wrong ever after. To add a node to a cluster that runs:
@@ -149,6 +162,7 @@ config:
     # minute has that work taken on by one of the others until it is back;
     # pages and writes go on through the others all along. Set it here to
     # give every node the same one instead: each then does all of that work.
+    # `workGroups`, above, names each pod's instead of its pod name.
     # The gateway's addresses, as IP addresses or CIDR networks: without
     # them the sign-in history and the limits see the gateway instead of the
     # visitor. Set it to the cluster's pod network.

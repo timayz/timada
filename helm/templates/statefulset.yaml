@@ -90,7 +90,7 @@ spec:
           image: timayz/timada:{{ .Values.image.tag }}
           imagePullPolicy: IfNotPresent
           command:
-            ["timada-dashboard", "migrate", "--config", "/etc/timada/config.toml"]
+            ["timada-dashboard", "migrate", "--config", {{ include "timada.configFile" . | quote }}]
           securityContext:
             allowPrivilegeEscalation: false
           volumeMounts:
@@ -116,7 +116,7 @@ spec:
           image: timayz/timada:{{ .Values.image.tag }}
           imagePullPolicy: IfNotPresent
           command:
-            ["timada-dashboard", "serve", "--config", "/etc/timada/config.toml"]
+            ["timada-dashboard", "serve", "--config", {{ include "timada.configFile" . | quote }}]
           securityContext:
             allowPrivilegeEscalation: false
           volumeMounts:

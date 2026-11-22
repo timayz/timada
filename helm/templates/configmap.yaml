@@ -4,6 +4,14 @@
 {{- if and (gt $first 0) (not .Values.peers) }}
 {{- fail "firstNodeId is for a cluster whose other nodes run elsewhere: give `peers`, the whole cluster's list" }}
 {{- end }}
+{{- with .Values.workGroups }}
+{{- if ne (len .) $nodes }}
+{{- fail (printf "workGroups names %d work groups for %d nodes: one a node, in the order of the pods" (len .) $nodes) }}
+{{- end }}
+{{- if dig "server" "work_group" "" $config }}
+{{- fail "workGroups gives each node a work group and config.server.work_group gives them all the same one: set one of the two" }}
+{{- end }}
+{{- end }}
 {{- if include "timada.clustered" . }}
 {{- /*
 The `[cluster]` section. Inside one release: each pod's name under the
@@ -48,5 +56,18 @@ kind: ConfigMap
 metadata:
   name: timada-config
 data:
+{{- if .Values.workGroups }}
+  {{- /*
+  A file a pod, under the pod's name, the same but for its work group: each
+  pod reads its own (`timada.configFile`).
+  */}}
+  {{- range $i, $group := .Values.workGroups }}
+  {{- $own := deepCopy $config }}
+  {{- $_ := set $own "server" (merge (dict "work_group" $group) ($own.server | default dict)) }}
+  timada-{{ add $first $i }}.toml: |
+{{ $own | toToml | indent 4 }}
+  {{- end }}
+{{- else }}
   config.toml: |
 {{ $config | toToml | indent 4 }}
+{{- end }}
