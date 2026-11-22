@@ -98,9 +98,11 @@ storefront:
 
 # The same shop at https://storefront.localhost, selling a tenant of the
 # production platform (https://timada.co): its catalogue, its pictures, and real
-# carts, orders and payments. The key is one of the tenant's API keys page
-# there, kept in $(STOREFRONT_PROD_SETTINGS), which git ignores:
-#   echo STORE_TOKEN=... > config/storefront.prod.local.env
+# carts, orders and payments. The key and the picture address (it ends with the
+# tenant's id) are on the tenant's API keys page there, kept in
+# $(STOREFRONT_PROD_SETTINGS), which git ignores:
+#   STORE_TOKEN=tk_...
+#   STORE_MEDIA_URL=https://timada.co/media/<tenant id>
 # The copy of the catalogue is kept apart from the dev shop's (storefront.prod.db),
 # and so are the shopper cookies. A setting in the environment wins over the file.
 STOREFRONT_PROD_SETTINGS := config/storefront.prod.local.env
@@ -109,10 +111,11 @@ storefront.prod:
 	set -a; [ ! -f $(STOREFRONT_PROD_SETTINGS) ] || . "$(abspath $(STOREFRONT_PROD_SETTINGS))"; set +a; \
 	eval "$$keep"; \
 	: "$${STORE_TOKEN:?set it, or write it to $(STOREFRONT_PROD_SETTINGS)}"; \
+	: "$${STORE_MEDIA_URL:?set it to the picture address of the API keys page, or write it to $(STOREFRONT_PROD_SETTINGS)}"; \
 	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} \
 	STORE_ADDR=$${STORE_ADDR-timada.co:4321} STORE_TLS_CA=$${STORE_TLS_CA-/etc/ssl/certs/ca-certificates.crt} \
 	STORE_DB=$${STORE_DB-storefront.prod.db} \
-	STORE_API_URL=$${STORE_API_URL-https://timada.co} STORE_MEDIA_URL=$${STORE_MEDIA_URL-https://timada.co/media} \
+	STORE_API_URL=$${STORE_API_URL-https://timada.co} \
 	PUBLIC_URL=$${PUBLIC_URL-https://storefront.localhost} \
 	STORE_COOKIE_KEY=$$(printf 'local-prod-cookie-key-%.0s' 1 2) cargo run -p storefront
 
