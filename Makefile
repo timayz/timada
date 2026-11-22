@@ -1,4 +1,4 @@
-.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.migrate stripe.listen aliexpress.tunnel e2e e2e.cluster loadtest limits wan lint fmt-check fmt test machete l10n check
+.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.prod storefront.migrate stripe.listen aliexpress.tunnel e2e e2e.cluster loadtest limits wan lint fmt-check fmt test machete l10n check
 
 # What `make seed` writes and `make storefront` reads: the key and the addresses
 # of the seeded shop. Git ignores it.
@@ -95,6 +95,26 @@ storefront:
 	@$(load_settings); \
 	: "$${STORE_TOKEN:?run make seed first, or set it}"; \
 	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} STORE_API_URL=$${STORE_API_URL-https://timada.localhost} PUBLIC_URL=$${PUBLIC_URL-https://storefront.localhost} STORE_COOKIE_KEY=$$(printf 'local-dev-cookie-key-%.0s' 1 2) cargo run -p storefront
+
+# The same shop at https://storefront.localhost, selling a tenant of the
+# production platform (https://timada.co): its catalogue, its pictures, and real
+# carts, orders and payments. The key is one of the tenant's API keys page
+# there, kept in $(STOREFRONT_PROD_SETTINGS), which git ignores:
+#   echo STORE_TOKEN=... > config/storefront.prod.local.env
+# The copy of the catalogue is kept apart from the dev shop's (storefront.prod.db),
+# and so are the shopper cookies. A setting in the environment wins over the file.
+STOREFRONT_PROD_SETTINGS := config/storefront.prod.local.env
+storefront.prod:
+	@keep=$$(export -p | grep ' STORE_' || true); \
+	set -a; [ ! -f $(STOREFRONT_PROD_SETTINGS) ] || . "$(abspath $(STOREFRONT_PROD_SETTINGS))"; set +a; \
+	eval "$$keep"; \
+	: "$${STORE_TOKEN:?set it, or write it to $(STOREFRONT_PROD_SETTINGS)}"; \
+	HOST=0.0.0.0 PORT=3457 TRUSTED_PROXIES=$${TRUSTED_PROXIES-172.16.0.0/12} \
+	STORE_ADDR=$${STORE_ADDR-timada.co:4321} STORE_TLS_CA=$${STORE_TLS_CA-/etc/ssl/certs/ca-certificates.crt} \
+	STORE_DB=$${STORE_DB-storefront.prod.db} \
+	STORE_API_URL=$${STORE_API_URL-https://timada.co} STORE_MEDIA_URL=$${STORE_MEDIA_URL-https://timada.co/media} \
+	PUBLIC_URL=$${PUBLIC_URL-https://storefront.localhost} \
+	STORE_COOKIE_KEY=$$(printf 'local-prod-cookie-key-%.0s' 1 2) cargo run -p storefront
 
 storefront.migrate:
 	cargo run -p storefront -- migrate
