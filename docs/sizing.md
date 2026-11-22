@@ -118,11 +118,11 @@ The figures below are from `b03d06d`, when they cost over a core.
   with the looks, 0 and 20 in two runs without.
 - On `b03d06d` that was one core per node under load, and again per extra
   work group served; on `11a31fd` count a tenth of one.
-- **A node's workers now look every 5 s, not every 250 ms**
-  (`workers::LOOK_EVERY`, #745): a write wakes the workers that follow it as
-  it lands, from another node too, so the look is only for a command run
-  beside the server. The figures above are of subscriptions looking at
-  evento's 250 ms.
+- **A node's workers now look every 5 s, not every 250 ms** (evento
+  `8cdfb4f`, #745): a write wakes the workers that follow it as it lands,
+  from another node too, so the look is only a net under that. It is
+  evento's own pace over a store no other process writes; timada sets none.
+  The figures above are of subscriptions looking every 250 ms.
 
 ## A node with nothing to do
 
@@ -135,6 +135,7 @@ One node, an empty store, no visitor, on `dfa2b0d`, read from
 | The same image in plain docker, no work group, no store API | 56 % |
 | A dev build, with a work group and the store API | 26.5 % |
 | The same dev build, looks every 5 s | 2 % (2.3 and 1.9, two readings of 40 s) |
+| A dev build on evento `8cdfb4f`, which looks every 5 s by itself and keeps its queries compiled | 1.2 % (1.3 and 1.1) |
 
 - Each of a node's workers compiled its queries anew at every look, four
   times a second: that was the whole of it, spread evenly over the runtime's
@@ -144,9 +145,10 @@ One node, an empty store, no visitor, on `dfa2b0d`, read from
 - The image costs about twice the dev build for the same work (its
   dependencies are optimised alike, its allocator is musl's): not measured
   again with the longer look, and not looked into yet.
-- The browser suite on three nodes passes with the longer look (151 passed,
-  3 skipped): a page answered by a node that did not take the write is no
-  later than before.
+- The browser suite on three nodes passes with the longer look, set by hand
+  on `dfa2b0d` and evento's own on `8cdfb4f` (151 passed, 3 skipped, each
+  time): a page answered by a node that did not take the write is no later
+  than before.
 
 ## Three nodes
 

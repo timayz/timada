@@ -12,7 +12,6 @@
 //! read from here for `/admin/cluster`, the metrics and `/ready`.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use evento::subscription::{Lag, State, Subscription, SubscriptionBuilder};
@@ -109,15 +108,6 @@ impl Worker {
     }
 }
 
-/// How often a worker looks at the store when nothing woke it. A write wakes
-/// the workers that follow one of its events as it lands, whichever node
-/// took it, and a worker that found an event the cluster does not let it
-/// read yet looks again by itself: this look is only for what neither
-/// covers, another process writing the same file (a command run beside the
-/// server). At evento's 250 ms the looks alone, each compiling its queries
-/// anew, kept a node with nothing to do at half a core to a full one (#745).
-pub const LOOK_EVERY: Duration = Duration::from_secs(5);
-
 /// Starts the subscription `builder` supervised, under the name `name`. The
 /// first start failing is an error: the node does not serve without its
 /// workers. Later failures are gone on from.
@@ -127,7 +117,7 @@ pub async fn start(
     executor: &Executor,
 ) -> Result<Arc<Worker>> {
     let name = name.into();
-    let mut builder = builder.supervised().poll_interval(LOOK_EVERY);
+    let mut builder = builder.supervised();
     let key = builder.storage_key(executor);
     let handle = builder
         .start(executor)
