@@ -3183,11 +3183,17 @@ async fn a_store_shows_the_published_pages() {
     let db = h.local_db("acme-shop").await;
     let config = h.config(&token).media_url("https://cdn.example/media/acme");
     let store = Store::connect(config, db.clone()).await.unwrap();
+    // Both are waited for: the store orders two streams written in the same
+    // millisecond either way, so the page made last can be copied first.
     eventually("the published pages reach the local copy", async || {
         published_page(&db, "mentions-legales", None)
             .await
             .unwrap()
             .is_some()
+            && published_page(&db, "conditions-de-vente", None)
+                .await
+                .unwrap()
+                .is_some()
     })
     .await;
 
@@ -3239,6 +3245,10 @@ async fn a_store_shows_the_published_pages() {
     pages.rename_page("alice", &legal, "legal").await.unwrap();
     eventually("a moved page is found at its new slug", async || {
         published_page(&db, "legal", None).await.unwrap().is_some()
+            && published_page(&db, "conditions-de-vente", None)
+                .await
+                .unwrap()
+                .is_none()
     })
     .await;
     assert!(
