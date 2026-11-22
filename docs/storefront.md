@@ -1288,6 +1288,12 @@ sell, tick `store:checkout` on the key. The local copy of the catalog belongs to
 tenant: with another tenant's key, `rm storefront.db*` first, or the shop keeps showing
 the old tenant's products. `make reset` removes the copy and the settings with the store.
 
+`make storefront.prod` runs the same shop on a tenant of the production platform
+(`https://timada.co`), with a key of that tenant in `config/storefront.prod.local.env`
+and the platform's store API forwarded to port 4322
+(`kubectl -n timada port-forward svc/timada 4322:4321`). It keeps its own copy of the
+catalogue (`storefront.prod.db`); its carts, orders and payments are real ones.
+
 ### Making it your own
 
 - **Who you are:** `SHOP_NAME` and `CONTACT_EMAIL` at the top of
