@@ -7,8 +7,8 @@ license.workspace = true
 description = "Loads a catalogue snapshot into a tenant's catalog, and takes one from a WooCommerce shop"
 
 [dependencies]
-timada-catalog = { path = "../catalog" }
-timada-core = { path = "../core" }
+timada-catalog = { path = "../catalog", version = "0.1.0" }
+timada-core = { path = "../core", version = "0.1.0" }
 evento.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -17,11 +17,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio.workspace = true
 reqwest.workspace = true
-# The crypto provider reqwest's rustls needs installed, once per process.
 tokio-rustls.workspace = true
 flate2.workspace = true
 clap.workspace = true
-# Names a snapshot's picture files after their addresses.
 sha2.workspace = true
 bytes.workspace = true
 

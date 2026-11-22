@@ -5,10 +5,13 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["bitcode"]
+
 [dependencies]
-timada-orders = { path = "../orders" }
+timada-orders = { path = "../orders", version = "0.1.0" }
 evento.workspace = true
-timada-core = { path = "../core" }
+timada-core = { path = "../core", version = "0.1.0" }
 bitcode.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
@@ -17,8 +20,3 @@ base64.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
-
-# `#[evento::aggregate]` expands to `bitcode::` paths, so the crate must name the
-# dependency even though no source file mentions it.
-[package.metadata.cargo-machete]
-ignored = ["bitcode"]

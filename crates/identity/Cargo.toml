@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 evento.workspace = true
-timada-core = { path = "../core" }
+timada-core = { path = "../core", version = "0.1.0" }
 bitcode.workspace = true
 argon2.workspace = true
 tokio.workspace = true

@@ -5,19 +5,21 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["bitcode"]
+
 [features]
-# Renders the documents as PDF (Typst, with its own fonts compiled in).
 pdf = [
-    "dep:typst",
-    "dep:typst-as-lib",
-    "dep:typst-pdf",
-    "dep:typst-assets",
-    "dep:tokio",
+	"dep:typst",
+	"dep:typst-as-lib",
+	"dep:typst-pdf",
+	"dep:typst-assets",
+	"dep:tokio",
 ]
 
 [dependencies]
 evento.workspace = true
-timada-core = { path = "../core" }
+timada-core = { path = "../core", version = "0.1.0" }
 bitcode.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
@@ -33,8 +35,3 @@ tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio.workspace = true
-
-# `#[evento::aggregate]` expands to `bitcode::` paths, so the crate must name the
-# dependency even though no source file mentions it.
-[package.metadata.cargo-machete]
-ignored = ["bitcode"]

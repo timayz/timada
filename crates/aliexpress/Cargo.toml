@@ -7,11 +7,11 @@ license.workspace = true
 
 [dependencies]
 evento.workspace = true
-timada-core = { path = "../core" }
-timada-catalog = { path = "../catalog" }
-timada-catalog-import = { path = "../catalog-import" }
-timada-tenancy = { path = "../tenancy" }
-timada-orders = { path = "../orders" }
+timada-core = { path = "../core", version = "0.1.0" }
+timada-catalog = { path = "../catalog", version = "0.1.0" }
+timada-catalog-import = { path = "../catalog-import", version = "0.1.0" }
+timada-tenancy = { path = "../tenancy", version = "0.1.0" }
+timada-orders = { path = "../orders", version = "0.1.0" }
 bitcode.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
@@ -20,11 +20,9 @@ deunicode.workspace = true
 flate2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# Calls AliExpress's open platform; signs each call with the app's secret.
 reqwest.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
-
