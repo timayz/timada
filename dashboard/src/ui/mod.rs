@@ -77,6 +77,12 @@ pub fn describe_error(code: &str) -> &'static str {
         "provider" => "The sign-in provider returned an error.",
         "unknown_provider" => "Unknown sign-in provider.",
         "not_allowed" => "You are not allowed to do that.",
+        "signup_closed" => {
+            "Accounts are created by invitation here. Ask the person who runs this platform for one."
+        }
+        "invitation_other_address" => {
+            "This invitation is for another e-mail address: sign in at the provider with the address the invitation was sent to, one it has verified."
+        }
         "invalid_credentials" => "The e-mail address or the password is wrong.",
         "invalid_code" => "That code is not right. Check the latest e-mail and try again.",
         "code_expired" => "That code has expired. Please start again.",

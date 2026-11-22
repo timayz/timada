@@ -159,6 +159,9 @@ config:
 
   auth:
     rp_name: "Timada"
+    # "open": anyone creates an account from the login page. "invitation":
+    # only the people the root account invites, from the page of users.
+    signup: "open"
 
   mail:
     from: "Timada <no-reply@timada.app>"

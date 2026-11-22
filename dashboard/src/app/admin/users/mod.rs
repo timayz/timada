@@ -1,8 +1,12 @@
-//! `/admin/users`: everyone with an account.
+//! `/admin/users`: everyone with an account and, for root, the invitations
+//! to create one: sending them, and those still waiting.
 
 pub mod user_id;
 
-use timada_identity::{ROOT_USER_ID, count_users, list_users};
+use timada_core::MailStatus;
+use timada_identity::{
+    MAX_EMAIL_LEN, ROOT_USER_ID, count_users, list_users, open_account_invitations,
+};
 use topcoat::{
     Result,
     context::{Cx, context},
@@ -10,16 +14,19 @@ use topcoat::{
     view::{View, attributes, view},
 };
 
-use crate::app::admin::require_admin;
+use crate::app::admin::{invitations, require_admin};
+use crate::auth::now;
 use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::field::{field, field_label};
 use crate::components::input::input;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
+use crate::config::Config;
 use crate::db::Db;
 use crate::ui::{
-    LINK, Shell, Tone, document, empty_row, filter_bar, format_time, notice, page_header, pager,
-    section_card, status_badge,
+    LINK, Shell, Tone, document, empty_row, empty_state, filter_bar, format_time, icons, notice,
+    page_header, pager, section_card, status_badge,
 };
 
 const PAGE_SIZE: i64 = 50;
@@ -42,6 +49,8 @@ struct UsersLink<'a> {
     page: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'a str>,
 }
 
 pub fn users_url(cx: &Cx, message: Option<&str>) -> String {
@@ -50,8 +59,32 @@ pub fn users_url(cx: &Cx, message: Option<&str>) -> String {
             q: None,
             page: None,
             message,
+            error: None,
         })
         .resolve(cx)
+}
+
+/// The page, saying why an action on it was refused.
+pub fn users_error_url(cx: &Cx, error: &str) -> String {
+    href!(users)
+        .query(UsersLink {
+            q: None,
+            page: None,
+            message: None,
+            error: Some(error),
+        })
+        .resolve(cx)
+}
+
+/// How the row words where the invitation's mail stands.
+fn mail_state(mail: MailStatus) -> &'static str {
+    match mail {
+        MailStatus::Sending => "sending…",
+        MailStatus::Retrying => "not sent yet: the mail server did not answer, trying again",
+        MailStatus::Sent => "mailed",
+        MailStatus::Undeliverable => "could not be delivered: check the address",
+        MailStatus::Failed => "could not be sent: the mail server did not answer; invite again",
+    }
 }
 
 /// "Root", "Administrator" or "Member".
@@ -95,10 +128,21 @@ pub async fn users(cx: &Cx) -> Result<impl View> {
                 q,
                 page: Some(page),
                 message: None,
+                error: None,
             })
             .resolve(cx)
     };
     let summary = format!("{total} user{}", if total == 1 { "" } else { "s" });
+    // Root alone invites, so root alone sees the invitations.
+    let is_root = me.is_root();
+    let invitations = if is_root {
+        open_account_invitations(db, now())
+            .await
+            .map_err(topcoat::Error::from_anyhow)?
+    } else {
+        Vec::new()
+    };
+    let signup_open = context::<Config>(cx).auth.signup.is_open();
 
     Ok(view! {
         document(
@@ -167,6 +211,52 @@ pub async fn users(cx: &Cx) -> Result<impl View> {
                     next: (page_number < pages).then(|| page_link(page_number + 1)),
                 )
             )
+
+            if is_root {
+                section_card(
+                    title: Some("Invite someone"),
+                    description: Some(if signup_open {
+                        "The link in the e-mail is valid for 7 days and creates the account of this address. Sign-up is open: anyone can also create an account from the login page."
+                    } else {
+                        "The link in the e-mail is valid for 7 days and creates the account of this address. Sign-up is closed: this is the only way to get an account."
+                    }),
+                    <form method="post" action=(href!(invitations::send::send)) class="flex flex-wrap items-end gap-3">
+                        field(
+                            attrs: attributes! { class="grow" },
+                            field_label(attrs: attributes! { for="invite-email" }, "E-mail address")
+                            input(attrs: attributes! {
+                                id="invite-email" name="email" type="email" maxlength=(MAX_EMAIL_LEN) required=""
+                            })
+                        )
+                        button(attrs: attributes! { type="submit" }, "Send invitation")
+                    </form>
+                )
+
+                section_card(
+                    title: Some("Pending invitations"),
+                    if invitations.is_empty() {
+                        empty_state(title: "None.", symbol: Some(icons::INVITATIONS))
+                    } else {
+                        <ul class="divide-y divide-border text-sm">
+                            for invitation in &invitations {
+                                <li class="flex flex-wrap items-center justify-between gap-2 py-3" data-invitation-email=(&invitation.email)>
+                                    <span class="min-w-0">
+                                        <span class="font-medium">(&invitation.email)</span>
+                                        <span class="block text-xs text-muted-foreground">
+                                            "expires " <time datetime=(invitation.expires_at)>(format_time(invitation.expires_at as u64))</time>
+                                            " · " <span data-invitation-mail=(invitation.mail().as_str())>(mail_state(invitation.mail()))</span>
+                                        </span>
+                                    </span>
+                                    <form method="post" action=(href!(invitations::revoke::revoke))>
+                                        <input type="hidden" name="invitation_id" value=(&invitation.id)>
+                                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Withdraw")
+                                    </form>
+                                </li>
+                            }
+                        </ul>
+                    }
+                )
+            }
         )
     })
 }

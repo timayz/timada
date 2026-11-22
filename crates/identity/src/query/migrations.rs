@@ -6,9 +6,10 @@ use evento::turso::migrate::{Migration, Migrations};
 /// The app name under which these migrations are recorded.
 pub const MIGRATION_APP: &str = "identity";
 
-/// `identity_users` and `identity_sessions`, one row per aggregate, rewritten
-/// in full by the subscription whenever the aggregate changes, with what the
-/// administrator's search and list of users read.
+/// `identity_users`, `identity_sessions` and `identity_invitations`, one row
+/// per aggregate, rewritten in full by the subscription whenever the
+/// aggregate changes, with what the administrator's search and list of users
+/// read.
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
     &[Migration::up(
@@ -57,10 +58,28 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             user_agent TEXT,
             ip TEXT
         );
-        CREATE INDEX identity_sessions_user ON identity_sessions (user_id, ended, expires_at);",
+        CREATE INDEX identity_sessions_user ON identity_sessions (user_id, ended, expires_at);
+        CREATE TABLE identity_invitations (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL,
+            invited_by TEXT NOT NULL,
+            sent_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            accepted_by TEXT,
+            accepted_at INTEGER,
+            revoked INTEGER NOT NULL,
+            mail TEXT NOT NULL
+        );
+        CREATE INDEX identity_invitations_open
+            ON identity_invitations (revoked, expires_at);",
     )],
 );
 
 /// The tables the migrations create: what a node drops and creates again
 /// before copying its store from a peer, so the subscriptions fill them again.
-pub const TABLES: &[&str] = &["identity_users", "identity_totals", "identity_sessions"];
+pub const TABLES: &[&str] = &[
+    "identity_users",
+    "identity_totals",
+    "identity_sessions",
+    "identity_invitations",
+];

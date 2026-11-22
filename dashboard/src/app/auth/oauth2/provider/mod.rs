@@ -28,6 +28,8 @@ struct StartForm {
     mode: String,
     /// For `add_to_user`: the user the account page was rendered for.
     user_id: Option<String>,
+    /// For `create_user`, from the page of root's invitation: its token.
+    invitation: Option<String>,
 }
 
 /// Sends the browser to the provider. A POST so the router's origin policy
@@ -70,6 +72,7 @@ pub async fn start(cx: &Cx, Form(form): Form<StartForm>) -> Result<SeeOther> {
             nonce: authorization.nonce,
             pkce_verifier: authorization.pkce_verifier,
             bound_user_id,
+            invitation: form.invitation.filter(|_| mode == OAuth2Mode::CreateUser),
             issued_at: now(),
         })
         .commit()?;

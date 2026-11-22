@@ -8,6 +8,10 @@
 //! and hands the resulting facts (a provider identity, a verified credential,
 //! a session token hash) to [`Command`].
 //!
+//! Anyone creates an account, unless the host closed sign-up: then root's
+//! invitation of an address ([`invitation`]) is the only way in
+//! ([`Admission`]).
+//!
 //! Lookups that a relational store would index (`provider + subject → user`,
 //! `credential id → user`, `e-mail → user`, `session token → user`) are aggregates with a
 //! deterministic id (see [`value_object`]). Appending their first event at
@@ -25,6 +29,7 @@ pub mod aggregator;
 mod command;
 mod error;
 mod index_release;
+pub mod invitation;
 mod password;
 mod query;
 mod root;

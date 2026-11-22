@@ -822,7 +822,8 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     }),
     // The mails a command owes are handed to the mailroom from here, after
     // the intent is recorded, and sent off the cursor: the sign-in codes of
-    // the platform and of the shops, the invitations, the newsletter
+    // the platform and of the shops, the invitations (to join a shop, to
+    // create an account), the newsletter
     // confirmations, the shops' mails about their orders, the notices of a
     // message's arrival.
     ("platform code mails", Kind::Sharded, |d| {
@@ -833,6 +834,9 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     }),
     ("invitation mails", Kind::Sharded, |d| {
         crate::invitation_mails::subscription(d.mailroom.clone())
+    }),
+    ("account invitation mails", Kind::Sharded, |d| {
+        crate::account_invitation_mails::subscription(d.mailroom.clone())
     }),
     ("newsletter confirmations", Kind::Sharded, |d| {
         crate::newsletter_confirmations::subscription(d.mailroom.clone())

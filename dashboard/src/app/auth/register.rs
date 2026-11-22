@@ -1,11 +1,13 @@
 //! `/auth/register`: an account from an e-mail address and a password. The
-//! address is proven with a mailed code before anything is created.
+//! address is proven with a mailed code before anything is created. With
+//! sign-up closed (`auth.signup`), the page sends to the login page, which
+//! says accounts are created by invitation.
 
 use serde::Deserialize;
 use timada_identity::{hash_password, normalize_email};
 use topcoat::{
     Result,
-    context::Cx,
+    context::{Cx, context},
     router::{
         content::Form,
         error::{SeeOther, redirect, see_other},
@@ -14,7 +16,7 @@ use topcoat::{
     view::{View, attributes, class, view},
 };
 
-use crate::app::auth::{error_code, home_url, register_url, verify_url};
+use crate::app::auth::{error_code, home_url, login_url, register_url, verify_url};
 use crate::auth::{
     cookies::{EmailFlow, EmailFlowKind, email_flow},
     current_user, identity, now,
@@ -23,6 +25,7 @@ use crate::components::button::button;
 use crate::components::card::CARD;
 use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
+use crate::config::Config;
 use crate::ui::{LINK, auth_document, notice};
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -36,6 +39,9 @@ struct RegisterQuery {
 pub async fn register(cx: &Cx) -> Result<impl View> {
     if current_user(cx).await.is_some() {
         return Err(redirect(home_url(cx)).into());
+    }
+    if !context::<Config>(cx).auth.signup.is_open() {
+        return Err(redirect(login_url(cx, Some("signup_closed"))).into());
     }
     let query = query_params::<RegisterQuery>(cx)?;
 
@@ -86,6 +92,9 @@ struct RegisterForm {
 pub async fn submit(cx: &Cx, Form(form): Form<RegisterForm>) -> Result<SeeOther> {
     if current_user(cx).await.is_some() {
         return Ok(see_other(home_url(cx)));
+    }
+    if !context::<Config>(cx).auth.signup.is_open() {
+        return Ok(see_other(login_url(cx, Some("signup_closed"))));
     }
     let Ok(email) = normalize_email(&form.email) else {
         return Ok(see_other(register_url(cx, Some("invalid_email"), None)));

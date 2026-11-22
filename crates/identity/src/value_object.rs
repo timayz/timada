@@ -46,6 +46,30 @@ impl OAuth2Mode {
     }
 }
 
+/// What lets a request create an account. The host closes sign-up in its
+/// configuration; root's invitation of an address opens it for that address.
+/// Not persisted.
+#[derive(Clone, PartialEq, Eq)]
+pub enum Admission {
+    /// Sign-up is open: anyone creates an account.
+    Open,
+    /// Sign-up is closed, and the browser came with no invitation.
+    Closed,
+    /// The browser came from the link of root's invitation, whose token this
+    /// is, at `now` (unix seconds).
+    Invited { token: String, now: u64 },
+}
+
+impl std::fmt::Debug for Admission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Open => "Open",
+            Self::Closed => "Closed",
+            Self::Invited { .. } => "Invited(******)",
+        })
+    }
+}
+
 /// What a mailed one-time code proves. Persisted in events: add variants,
 /// never reorder or remove them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
@@ -105,6 +129,8 @@ pub struct ProviderIdentity {
     pub provider: String,
     pub provider_user_id: String,
     pub email: Option<String>,
+    /// The provider says it checked that the person reads `email`.
+    pub email_verified: bool,
     pub name: Option<String>,
     pub picture: Option<String>,
 }
@@ -115,6 +141,14 @@ impl ProviderIdentity {
         self.email
             .clone()
             .unwrap_or_else(|| format!("{}:{}", self.provider, self.provider_user_id))
+    }
+
+    /// The normalized address the provider verified, if it verified one.
+    pub fn verified_email(&self) -> Option<String> {
+        self.email
+            .as_deref()
+            .filter(|_| self.email_verified)
+            .and_then(timada_core::normalize_email)
     }
 
     /// The display name a new user gets from this identity.
@@ -159,6 +193,11 @@ pub fn email_challenge_id(email: &str) -> String {
     evento::hash_ids(vec!["email-challenge", email])
 }
 
+/// The stream of the invitation to create an account a link token opens.
+pub fn account_invitation_id(token: &str) -> String {
+    evento::hash_ids(vec!["account-invitation", token])
+}
+
 /// The canonical form of an address: trimmed, lower-cased, one `@` with
 /// something on both sides, nothing that is not printable.
 pub fn normalize_email(email: &str) -> Result<String, IdentityError> {
@@ -177,6 +216,10 @@ pub const CODE_TTL_SECS: u64 = 10 * 60;
 /// How long after a code is mailed another one may be requested for the
 /// same address, in seconds.
 pub const CODE_RESEND_AFTER_SECS: u64 = 60;
+
+/// How long the link of an invitation to create an account stays valid:
+/// seven days.
+pub const ACCOUNT_INVITATION_TTL_SECS: u64 = 7 * 24 * 3600;
 
 /// Wrong guesses after which a code is dead and a new one must be mailed.
 pub const CODE_MAX_ATTEMPTS: u32 = 5;

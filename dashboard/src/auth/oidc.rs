@@ -218,6 +218,7 @@ impl Providers {
             provider: provider.name.clone(),
             provider_user_id: claims.subject().as_str().to_owned(),
             email: claims.email().map(|e| e.as_str().to_owned()),
+            email_verified: claims.email_verified().unwrap_or(false),
             name: claims
                 .name()
                 .and_then(|n| n.get(None))

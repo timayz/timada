@@ -22,7 +22,7 @@ pub const INVITE_MAX_AGE_SECS: u64 = 60 * 60;
 pub const API_KEY_REVEAL_MAX_AGE_SECS: u64 = 5 * 60;
 
 /// An OIDC redirect in progress.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OidcFlow {
     pub provider: String,
     pub mode: String,
@@ -33,8 +33,22 @@ pub struct OidcFlow {
     /// The user signed in when the flow started, if any. For `add_to_user`
     /// the callback requires the same user to still be signed in.
     pub bound_user_id: Option<String>,
+    /// The token of root's invitation to create an account, when the flow
+    /// started on its page.
+    pub invitation: Option<String>,
     /// Unix seconds.
     pub issued_at: u64,
+}
+
+impl std::fmt::Debug for OidcFlow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OidcFlow")
+            .field("provider", &self.provider)
+            .field("mode", &self.mode)
+            .field("bound_user_id", &self.bound_user_id)
+            .field("issued_at", &self.issued_at)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A passkey registration ceremony in progress.

@@ -14,7 +14,11 @@ use evento::{
 use timada_core::db::{Db, execute, fetch_optional, search_key};
 
 use crate::aggregator::{Session, User};
-use crate::command::{SessionState, UserState, session_projection, user_projection};
+use crate::command::{
+    AccountInvitationState, SessionState, UserState, account_invitation_projection,
+    session_projection, user_projection,
+};
+use crate::invitation::AccountInvitation;
 
 /// The cursor identity of the read-model subscription. One per node.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-identity/read-models";
@@ -27,6 +31,7 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .data(db)
         .handler(on_user_event())
         .handler(on_session_event())
+        .handler(on_account_invitation_event())
         .any_routing_key()
         .tenant("")
 }
@@ -61,6 +66,22 @@ async fn on_session_event<E: Executor>(
         return Ok(());
     };
     upsert_session(&db, &session).await
+}
+
+#[evento::subscription_all]
+async fn on_account_invitation_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<AccountInvitation>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(invitation) = account_invitation_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    upsert_account_invitation(&db, &invitation).await
 }
 
 /// The user's row, what a search finds it by, and the sessions a revocation
@@ -159,6 +180,33 @@ async fn upsert_session(db: &Db, session: &SessionState) -> anyhow::Result<()> {
             session.ended,
             session.user_agent.as_deref(),
             session.ip.as_deref(),
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn upsert_account_invitation(
+    db: &Db,
+    invitation: &AccountInvitationState,
+) -> anyhow::Result<()> {
+    db.execute(
+        "INSERT INTO identity_invitations (id, email, invited_by, sent_at, expires_at,
+            accepted_by, accepted_at, revoked, mail)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT (id) DO UPDATE SET
+            accepted_by = excluded.accepted_by, accepted_at = excluded.accepted_at,
+            revoked = excluded.revoked, mail = excluded.mail",
+        (
+            invitation.id.as_str(),
+            invitation.email.as_str(),
+            invitation.invited_by.as_str(),
+            invitation.sent_at as i64,
+            invitation.expires_at as i64,
+            invitation.accepted_by.as_deref(),
+            invitation.accepted_at.map(|at| at as i64),
+            invitation.revoked,
+            timada_core::MailStatus::of(&invitation.mail).as_str(),
         ),
     )
     .await?;

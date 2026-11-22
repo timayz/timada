@@ -15,7 +15,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 
 | Path | Package | Role |
 |---|---|---|
-| `crates/identity` | `timada-identity` | Users, sign-in methods (OIDC, passkeys, e-mail + password), sessions, and the root account the configuration defines |
+| `crates/identity` | `timada-identity` | Users, sign-in methods (OIDC, passkeys, e-mail + password), sessions, root's invitations to create an account, and the root account the configuration defines |
 | `crates/tenancy` | `timada-tenancy` | Tenants, custom roles, members, invitations, API keys |
 | `crates/catalog` | `timada-catalog` | Products, their pictures, variants and categories: the first context living in a tenant's own streams |
 | `crates/catalog-import` | `timada-catalog-import` | Fills a catalog from a snapshot directory (`seeds/`, catalogue + pictures), and takes one from a WooCommerce shop (`woo-snapshot`) |
@@ -454,7 +454,21 @@ by construction.
    holds the password, and it takes no passkey or provider. Registering makes nobody
    an administrator: root makes and unmakes them and deletes them, administrators
    delete members, nobody demotes, deletes or signs out root, and a tenant counts root
-   as an owner without a seat (`TenantState::is_owner`). A password sign-in
+   as an owner without a seat (`TenantState::is_owner`). Anyone creates an account
+   from the login page unless the configuration closes sign-up (`[auth] signup =
+   "invitation"`): then the register form, the mailed code that proves a new address
+   and a provider's first sign-in all create nothing (`signup_closed`), and root's
+   invitation is the only way in. Root has a link mailed to an address from the page
+   of users (`AccountInvitation`, mailed by its own saga through the mailroom like a
+   shop's invitation, the token derived from a nonce under `auth.secret_key`, valid
+   seven days), and `/auth/invitation/{token}` creates the account of that address and
+   no other: with a password, the link itself being the proof of the address, or
+   through a provider that says it verified that same address
+   (`invitation_other_address` otherwise, the link kept). Marking the invitation
+   accepted, at the version read, is the link's one use (`Admission` is what the
+   domain is told lets a callback create an account). An invitation to a shop then
+   lets an existing account in and creates none. Root invites whether sign-up is
+   open or closed. A password sign-in
    is counted before the password is looked at, per browser address and per account
    (`[auth] login_attempts_per_ip`, `login_attempts_per_email`, `login_window_secs`;
    `too_many_logins` past them), so a password cannot be guessed by trying. Like every
@@ -476,8 +490,10 @@ by construction.
    accounts*), `/store/contact` (a storefront handing in a message from its contact
    form, see *Support messages*), `/store/newsletter/*` (sign-ups and their links, see
    *Newsletter*), `/store/automations/opt-out` (a customer declining a shop's
-   automated mails), `/invitations/{token}`,
-   `/admin/*` (users, tenants, companies, this node's cluster view). `ui/` holds the
+   automated mails), `/invitations/{token}` (joining a shop), `/auth/invitation/{token}`
+   (creating an account root invited),
+   `/admin/*` (users and root's invitations, tenants, companies, this node's cluster
+   view). `ui/` holds the
    shared furniture: the chrome, the page helpers, the theme, the icons.
 9. **The nodes' port** (`peer_port/`). What the nodes ask of each other besides the store,
    on a port they keep for it (`cluster.web_listen`, reached at the address
