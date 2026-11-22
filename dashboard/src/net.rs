@@ -291,6 +291,14 @@ mod tests {
         let (accepted, _) = tokio::join!(
             async {
                 let (mut socket, _) = listener.accept().await.unwrap();
+                // The request is read whole before it is answered: a client
+                // handed an answer to a request it has not sent yet takes it
+                // for a broken connection.
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let byte = tokio::io::AsyncReadExt::read_u8(&mut socket).await.unwrap();
+                    request.push(byte);
+                }
                 tokio::io::AsyncWriteExt::write_all(
                     &mut socket,
                     b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\n\r\n",
