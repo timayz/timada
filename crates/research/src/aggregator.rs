@@ -82,6 +82,53 @@ pub enum Study {
         reason: String,
         failed_by: String,
     },
+    /// What the owner says of the niche, whole: one typical sale, the words
+    /// that drop a keyword, and what they looked up by hand. It replaces
+    /// what an earlier one said. The study is scored from it and from its
+    /// keywords, without a fetch.
+    InputsSet {
+        /// ISO 4217, uppercase: the currency of the sale's amounts.
+        currency: String,
+        /// The average price a shopper would pay, VAT included; `None`
+        /// until said.
+        price_cents: Option<u64>,
+        /// What the supplier charges; `None` until said.
+        cost_cents: Option<u64>,
+        shipping_cents: u64,
+        import_cents: u64,
+        /// The VAT rate in the price, in basis points.
+        vat_bps: u32,
+        fixed_cents: u64,
+        payment_fee_bps: u32,
+        payment_fee_cents: u64,
+        /// Brands whose keywords are dropped.
+        brands: Vec<String>,
+        /// Words that drop the keywords that hold them.
+        excluded_words: Vec<String>,
+        /// How many good products the owner found at the supplier; `None`
+        /// until they looked.
+        supplier_products: Option<u32>,
+        /// Whether a specialist shop holds the first results; `None` until
+        /// the owner looked.
+        specialist_first: Option<bool>,
+        /// What one unit of `currency` was worth in millionths of a US
+        /// dollar when this was said, to read a cost per click in it;
+        /// `None` when no rate was known, or none is needed.
+        usd_micros: Option<u64>,
+        set_by: String,
+    },
+    /// The owner dropped `keyword`, as its row spells it, whatever the
+    /// filters say; it is no longer one they brought back.
+    KeywordDropped {
+        keyword: String,
+        dropped_by: String,
+    },
+    /// The owner brought `keyword` back: kept whatever the filters say, and
+    /// no longer one they dropped.
+    KeywordRestored {
+        keyword: String,
+        restored_by: String,
+    },
     /// Gone for its owner; the stream stays.
     Deleted {
         deleted_by: String,

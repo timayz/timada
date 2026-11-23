@@ -24,6 +24,20 @@ pub const MAX_KEYWORD_LEN: usize = 200;
 /// The longest reason a failed fetch keeps, in characters.
 pub const MAX_REASON_LEN: usize = 500;
 
+/// How many brands, and how many excluded words, a study lists at most.
+pub const MAX_LISTED_WORDS: usize = 200;
+
+/// The longest brand or excluded word, in characters.
+pub const MAX_WORD_LEN: usize = 80;
+
+/// How many keywords a study's owner drops by hand at most, and brings
+/// back at most.
+pub const MAX_HAND_SET: usize = 2_000;
+
+/// How many events a study takes before it refuses what its owner changes:
+/// a stream holds 65,535, and the fetches still on their way need room.
+pub const MAX_STUDY_EVENTS: u16 = 60_000;
+
 /// How long a fetch may run before the owner may ask again: a node that
 /// took it on and stopped leaves it there.
 pub const FETCH_STALE_SECS: u64 = 10 * 60;
@@ -94,6 +108,30 @@ pub fn normalize_seeds<S: AsRef<str>>(seeds: &[S]) -> Result<Vec<String>, Resear
     }
     if kept.len() > MAX_SEEDS {
         return Err(ResearchError::TooManySeeds);
+    }
+    Ok(kept)
+}
+
+/// A list of brands or of excluded words as the owner typed it: each
+/// trimmed, its spaces single, a blank one passed over, one given twice
+/// kept once. [`MAX_LISTED_WORDS`] at most, each of [`MAX_WORD_LEN`]
+/// characters at most.
+pub fn normalize_words<S: AsRef<str>>(words: &[S]) -> Result<Vec<String>, ResearchError> {
+    let mut kept: Vec<String> = Vec::new();
+    for word in words {
+        let word = collapse(word.as_ref());
+        if word.is_empty() {
+            continue;
+        }
+        if word.chars().count() > MAX_WORD_LEN || word.chars().any(char::is_control) {
+            return Err(ResearchError::InvalidWord);
+        }
+        if !kept.contains(&word) {
+            kept.push(word);
+        }
+    }
+    if kept.len() > MAX_LISTED_WORDS {
+        return Err(ResearchError::TooManyWords);
     }
     Ok(kept)
 }

@@ -54,7 +54,47 @@ mod tests {
                 "{plan:#?}"
             );
         }
-        let plan = plan(&db, super::studies::STUDIES_OF_USER, ("user", 10)).await;
+        for down in [true, false] {
+            let plan = plan(
+                &db,
+                &super::keywords::outcome_statement(down),
+                ("study", "main", 0, "", 10),
+            )
+            .await;
+            assert!(
+                plan.iter().all(|step| step.starts_with("SEARCH")
+                    && step.contains("research_keywords_outcome")
+                    && !step.contains("TEMP B-TREE")),
+                "{plan:#?}"
+            );
+        }
+        let counts = plan(&db, super::keywords::OUTCOME_COUNTS, ("study",)).await;
+        assert!(
+            counts.iter().all(|step| step.starts_with("SEARCH")
+                && step.contains("research_keywords_outcome")
+                && !step.contains("TEMP B-TREE")),
+            "{counts:#?}"
+        );
+        let all = plan(&db, super::read_model::ALL_KEYWORDS, ("study",)).await;
+        let set = plan(
+            &db,
+            super::read_model::SET_OUTCOME,
+            ("study", "id", "main", ""),
+        )
+        .await;
+        for plan in [all, set] {
+            assert!(
+                plan.iter()
+                    .all(|step| step.starts_with("SEARCH") && !step.contains("TEMP B-TREE")),
+                "{plan:#?}"
+            );
+        }
+        let plan = plan(
+            &db,
+            &super::studies::studies_of_user_statement(),
+            ("user", 10),
+        )
+        .await;
         assert!(
             plan.iter().all(|step| step.starts_with("SEARCH")
                 && step.contains("research_studies_owner")

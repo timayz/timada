@@ -19,6 +19,11 @@ pub struct KeywordRecord {
     /// 0 (easy) to 100.
     pub difficulty: Option<i64>,
     pub intent: Option<String>,
+    /// What the score made of it: `main`, `long_tail`, `variant`, the
+    /// reason it was dropped, [`DUPLICATE`], or empty until it is scored.
+    pub outcome: String,
+    /// The keyword a variant counts under.
+    pub variant_of: Option<String>,
     /// The volume, 0 without one: what the list is read by.
     pub sort_volume: i64,
     /// Unix seconds of the fetch that gave it.
@@ -26,7 +31,11 @@ pub struct KeywordRecord {
 }
 
 const KEYWORD_COLUMNS: &str = "SELECT study_id, id, seed, keyword, volume, cpc_usd_cents, \
-     difficulty, intent, sort_volume, fetched_at";
+     difficulty, intent, outcome, variant_of, sort_volume, fetched_at";
+
+/// The outcome of a row whose keyword another seed gave too, with as many
+/// searches or more: the keyword is scored once, on that other row.
+pub const DUPLICATE: &str = "duplicate";
 
 /// The statement of a page of the list: the rows on one side of a cursor
 /// (`?2`, `?3`), down for the less searched ones, as the list reads, or up,
@@ -74,4 +83,59 @@ pub async fn keywords_of_study(
         db.fetch_all::<KeywordRecord>(statement, (study_id.to_owned(), at, id, n))
     };
     read_page(from, limit, read, cursor_of).await
+}
+
+/// The statement of a page of the keywords of one outcome (`?2`), on one
+/// side of a cursor (`?3`, `?4`).
+pub(super) fn outcome_statement(down: bool) -> String {
+    let tail = if down {
+        "sort_volume <= ?3 AND (sort_volume < ?3 OR id < ?4)
+         ORDER BY sort_volume DESC, id DESC LIMIT ?5"
+    } else {
+        "sort_volume >= ?3 AND (sort_volume > ?3 OR id > ?4)
+         ORDER BY sort_volume ASC, id ASC LIMIT ?5"
+    };
+    format!(
+        "{KEYWORD_COLUMNS} FROM research_keywords INDEXED BY research_keywords_outcome
+         WHERE study_id = ?1 AND outcome = ?2 AND {tail}"
+    )
+}
+
+/// A page of the keywords of a study the score gave `outcome` to (a
+/// [`Tier`](crate::Tier)'s or a [`DropReason`](crate::DropReason)'s
+/// `as_str`, or [`VARIANT`](crate::VARIANT)), the most searched first.
+pub async fn keywords_of_outcome(
+    db: &Db,
+    study_id: &str,
+    outcome: &str,
+    from: PageFrom<'_>,
+    limit: i64,
+) -> anyhow::Result<Page<KeywordRecord>> {
+    let down = outcome_statement(true);
+    let up = outcome_statement(false);
+    let read = |side: Side, cursor: Option<Cursor>, n: i64| {
+        let statement = match side {
+            Side::Older => down.as_str(),
+            Side::Newer => up.as_str(),
+        };
+        let (at, id) = cursor
+            .map(|cursor| (cursor.at, cursor.id))
+            .unwrap_or((i64::MAX, String::new()));
+        db.fetch_all::<KeywordRecord>(
+            statement,
+            (study_id.to_owned(), outcome.to_owned(), at, id, n),
+        )
+    };
+    read_page(from, limit, read, cursor_of).await
+}
+
+/// The statement of [`outcome_counts`].
+pub(super) const OUTCOME_COUNTS: &str =
+    "SELECT outcome, COUNT(*) FROM research_keywords INDEXED BY research_keywords_outcome
+     WHERE study_id = ?1 GROUP BY outcome";
+
+/// How many keywords of a study each outcome holds; one that holds none is
+/// not listed.
+pub async fn outcome_counts(db: &Db, study_id: &str) -> anyhow::Result<Vec<(String, i64)>> {
+    db.fetch_all(OUTCOME_COUNTS, (study_id,)).await
 }

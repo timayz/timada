@@ -126,9 +126,9 @@ calls, beside the caps. It reads a table kept from the charges, a moment behind 
 
 A list of a thousand keywords does not say whether a niche is worth a shop. The tests
 that decide are arithmetic (`crates/research/src/score.rs`), worked out from the rows a
-study fetched and from what its owner says of it. Nothing of it is stored: a study is
-scored again whenever one of its numbers changes, without a fetch. The page that shows
-the score and edits its numbers is #680.
+study fetched and from what its owner says of it. A study is scored again whenever one
+of the two changes: a fetch lands, the owner saves their numbers, drops a keyword or
+brings one back. No fetch is made for it.
 
 **Which keywords count.** A keyword is kept or dropped, with the first reason that
 drops it, in this order:
@@ -171,10 +171,12 @@ click; the study as a whole is judged on the cost per click averaged by volume. 
 that leaves nothing pays for no ad: every keyword is SEO only.
 
 **Dollars.** The cost per click is in US dollars and the price in the study's
-currency. The score converts: whoever asks gives what one unit of the currency is
-worth in dollars (the euro reference rates timada already reads for invoices), and a
-price in dollars needs none. Without a rate the two are compared as they are, the
-score says so (`cpc_converted`), and the page must.
+currency. The score converts with what one unit of the currency is worth in dollars,
+from the euro reference rates timada already reads for invoices; a price in dollars
+needs none. The rate is the day's when the owner saves their numbers, and is kept with
+them on the study, so every node scores it alike and a rebuilt read model gives the
+same verdict; saving again takes the new day's rate. When the rates could not be read
+the two are compared as they are, and the page says so until the owner saves again.
 
 **The tests and the verdict.**
 
@@ -193,8 +195,71 @@ every test passes, **no-go** when one fails, **incomplete** otherwise.
 
 **Settings.** The highest difficulty kept, how many main and long-tail keywords are
 enough, the safety and the conversion rate are settings with these defaults
-(`Thresholds`). The 35 is Semrush's figure, taken because DataForSEO's score runs over
+(`Thresholds`); nothing sets them yet, so every study is scored with the defaults. The 35 is Semrush's figure, taken because DataForSEO's score runs over
 the same 0 to 100; it is a placeholder until the comparison below is made.
+
+## The report
+
+A study's page shows, under its seeds:
+
+- **the verdict** and the six tests, each passed, failed or not checked, with the
+  numbers behind it;
+- **one sale**: the price line by line down to what it leaves, the break-even return on
+  ad spend, the price / CPC it needs and the highest cost per click that allows, then
+  the cost per click of the kept keywords averaged by volume and the study's own
+  price / CPC;
+- **what the score reads**, in one form: the currency, the price and the costs, the
+  brands to drop and the words to exclude (one a line, 200 of each at most), how many
+  good products were found at the supplier and whether a specialist holds the first
+  results. A field left empty is nothing said: the two looked up by hand stay *not
+  checked* until filled. Saving scores the study again from the keywords it holds;
+- **the keywords**, the most searched first, by list: all of them, the main ones, the
+  long tail, the spellings that count under another, then the dropped ones by reason.
+  Each row has its volume, difficulty, cost per click (the source's, in dollars), the
+  sale's price over it, *ads* or *SEO only* for a kept keyword, and a button: *Drop* on
+  a kept keyword, *Bring back* on a dropped one, whatever dropped it. 2,000 keywords at
+  most are dropped by hand, and as many brought back; past that, exclude a word.
+
+A keyword two seeds gave is scored once, on its most searched row; the other row reads
+*under another seed* in the list of all and is in no other list.
+
+*Research* lists a user's studies **side by side**: verdict, main and long-tail counts,
+searches a month over the kept keywords, the break-even, the price / CPC and what is
+needed.
+
+What each keyword became (`research_keywords.outcome`) and what they come to with the
+verdict (`research_studies`) are kept by the read model, a moment behind the study: the
+lists and the comparison read them off an index. The page runs the tests again over
+what the owner says now, so a save shows at once while the keyword lists catch up.
+Scoring reads every keyword of the study (20,000 at the most) and rewrites the rows
+whose outcome changed. A study scored before this existed is scored at its next change.
+The thresholds are the defaults below; nothing sets them yet.
+
+### The export
+
+*Export the keywords with their score* gives the study's owner a CSV file of its
+keywords, one line each: the outcome, the keyword it counts under, volume, difficulty,
+cost per click in dollars and in the sale's currency, price / CPC, the channel and the
+intent.
+
+DataForSEO's terms were read for it on 2026-11-23:
+
+- the Terms of Service (updated 12 June 2026) have no clause on redistribution, raw
+  data, exports or what is shown to a product's users. Their one limit on use (7.1) is
+  that data from search engines is not used to compete with those engines;
+- DataForSEO's own answers to legal questions, which are not part of the terms, say
+  that they "do not address or restrict how a customer selects, stores or exports
+  individual records inside their own workspace, including CSV export of derived
+  analysis", and that what needs a separate agreement is "onward distribution of our
+  datasets as an untransformed standalone feed, database dump, public endpoint, or raw
+  API service".
+
+So the export is kept on the allowed side by what it is: one study at a time, to its
+owner only, behind sign-in, each line with the score's own columns, the rows bounded by
+what that user's fetches gave (20 seeds of 1,000). There is no export over several
+studies, no address that serves it without a session, and none must be added without
+reading the terms again. The answers page is DataForSEO's reading, not a contract: a
+written confirmation from them would settle it, and has not been asked for.
 
 ## When a call fails
 

@@ -107,6 +107,9 @@ pub struct Services {
     pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
     /// Where the studies' keywords come from, when the operator set a source.
     pub keywords: crate::keywords::Keywords,
+    /// The euro reference rates, for a study to read a cost per click in
+    /// its sale's currency.
+    pub euro_rates: Arc<dyn crate::ecb::EuroRates>,
     /// The live store connections, so revoking a key ends them.
     pub store: Arc<StoreConnections>,
     /// The subscriptions this node runs, for the cluster page.
@@ -139,6 +142,7 @@ pub fn router(services: Services) -> Router {
         shop_mail,
         aliexpress,
         keywords,
+        euro_rates,
         store,
         workers,
         checkouts,
@@ -204,6 +208,7 @@ pub fn router(services: Services) -> Router {
         .with(payments)
         .with(aliexpress)
         .with(keywords)
+        .with(euro_rates)
         .with(store)
         .with(workers)
         .with(checkouts)
