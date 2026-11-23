@@ -44,6 +44,16 @@ store.shutdown().await;
   the cluster nodes' store APIs (`.docker/traefik/dynamic.yaml`).
 - **TLS** is optional in the library and in the dashboard's `[store_api]` section; without
   it the token travels in clear text, so plain TCP is for trusted networks only.
+- A store API **open to the internet** needs two things in front of it: TLS, where the
+  nodes do not encrypt themselves, and a cap on the connections held at once. A node
+  bounds what a connection costs before it has given its key: its first message is the
+  key and at most 16 KiB, and a node holds at most 1024 connections that have not been
+  accepted yet (16 MiB at worst), closing any further one as it arrives. It does not
+  cap the connections it has accepted, one per replica of a storefront, and a crowd of
+  silent connections that fills those 1024 places keeps storefronts from connecting
+  while it lasts (a place is held 10 s at most; connections already accepted go on).
+  The cap in front is therefore how many storefronts can be connected, and what keeps
+  one address from taking every place.
 - The **dashboard address** (`StoreConfig::api_url`, shown on the API keys page) is
   where a storefront sells: its cart, the request to pay and the order it becomes are
   answered one at a time by their id under `/store/carts/*` and `/store/orders/*`,
@@ -74,7 +84,8 @@ Events stay on the store. The app's database file holds the subscription cursor 
 (`storefront_reviews`). Picture files are not
 copied: they are loaded from the store's own address. One file per replica of the app: replicas never fence each
 other out of the subscription, nothing accumulates on the store, and a restarted replica
-resumes from its own cursor.
+resumes from its own cursor. The app asks the store for what is new every second, so a
+change made on the dashboard shows on the shop within about a second.
 
 If the store is away long enough for a pass of the subscription to give up, the
 subscription goes on from the local cursor by itself after a growing delay (1 s to 30 s;

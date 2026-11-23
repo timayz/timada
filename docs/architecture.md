@@ -321,7 +321,9 @@ by construction.
    A handler takes the tenant from `event.tenant` and builds the gateway it writes
    back with from it. Adding a tenant-scoped context means adding one entry there.
 3. **Store API** (`store_api.rs`). An evento-remote listener. Each connection opens
-   with an API key token; the resolver loads the key by the token's hash (from the
+   with an API key token, 16 KiB at most, and at most 1024 connections wait to be
+   accepted at once; nothing caps the accepted ones (`docs/storefront.md` says what
+   a public store API needs in front of it). The resolver loads the key by the token's hash (from the
    node's file, asked of the cluster before a refusal) and serves the connection,
    reading from the node's file, in the key's tenant (`Session::tenant`): every request acts in that
    tenant whatever it names, the events it reads come back as from a store of its own,
