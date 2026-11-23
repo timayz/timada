@@ -370,7 +370,8 @@ dir = "data/shopper-keys"
 # public_addr = "timada.localhost:4321"
 # # PEM files; with both set, connections are encrypted. Without them a key
 # # travels in clear text: only on a private network or behind a proxy that
-# # terminates TLS.
+# # terminates TLS. Open to the internet, put a cap on the connections held
+# # at once in front of it too (docs/storefront.md).
 # tls_cert = "/etc/timada/store-api.crt"
 # tls_key = "/etc/timada/store-api.key"
 

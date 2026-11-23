@@ -202,6 +202,10 @@ config:
   # Where storefronts connect, on the Service's port 4321. Without the
   # certificate files a key travels in clear text: fine inside the cluster,
   # not beyond it. Remove the section to not expose the store API.
+  # Open to the internet, it needs TLS and a cap on the connections held at
+  # once in front of it (a gateway): a node bounds what a connection costs
+  # before it gives its key (16 KiB each, 1024 of them at most), not how many
+  # it accepts. See docs/storefront.md.
   store_api:
     listen: "0.0.0.0:4321"
     # Address shown on the API keys page for storefronts to connect to.
