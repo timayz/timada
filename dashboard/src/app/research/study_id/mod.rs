@@ -1,25 +1,30 @@
 //! `/research/{study_id}`: one study, for its owner: its seeds and where
 //! the fetch of each stands, the verdict and the tests behind it, what one
 //! sale leaves, the numbers the score reads, and the keywords with what the
-//! score made of each. Where a fetch stands and what the owner said are
-//! read from the study's stream; the keywords and what they come to are
-//! the shared read model's, a moment behind.
+//! score made of each, and who holds the first results of its main
+//! keywords. Where a fetch stands, what the owner said and how they marked
+//! a site are read from the streams; the keywords, what they come to and
+//! the sites found are the shared read model's, a moment behind.
 
+pub mod competition;
 pub mod delete;
 pub mod drop;
 pub mod export;
 pub mod fetch;
 pub mod inputs;
+pub mod mark;
 pub mod rename;
 pub mod restore;
 pub mod seeds;
 
 use timada_core::page::{Cursor, PageFrom};
 use timada_research::{
-    CPC_CURRENCY, Channel, Command, DUPLICATE, DropReason, ENOUGH_PRODUCTS, FetchStatus, Judgement,
-    KeywordRecord, MAX_SEEDS, ResearchError, SeedState, SpendCap, StudyState, Tally, Test,
-    TestState, Thresholds, Tier, VARIANT, Verdict, judge, keywords_of_outcome, keywords_of_study,
-    outcome_counts, spend_day, spend_day_ends, study_row,
+    CPC_CURRENCY, Channel, Command, Competition, DUPLICATE, DomainRow, DropReason, ENOUGH_PRODUCTS,
+    FetchStatus, Judgement, KeywordRecord, MAX_CHECKED_KEYWORDS, MAX_SEEDS, ResearchError,
+    SEVERAL_KEYWORDS, SeedState, SpendCap, StudyState, Tally, Test, TestState, Thresholds, Tier,
+    VARIANT, Verdict, competition as judge_competition, domains_of_study, judge,
+    keywords_of_outcome, keywords_of_study, main_keywords, outcome_counts, spend_day,
+    spend_day_ends, study_row,
 };
 use topcoat::{
     Result,
@@ -95,6 +100,16 @@ pub fn study_url(cx: &Cx, study_id: &str, error: Option<&str>, message: Option<&
             message,
         })
         .resolve(cx)
+}
+
+/// The study's page at who holds the first results.
+pub(crate) fn competition_url(
+    cx: &Cx,
+    study_id: &str,
+    error: Option<&str>,
+    message: Option<&str>,
+) -> String {
+    format!("{}#competition", study_url(cx, study_id, error, message))
 }
 
 /// The study's page on one of its keyword lists, at the keywords.
@@ -181,10 +196,22 @@ struct TestLine {
     numbers: String,
 }
 
+/// Who holds the first results, as the page counts it.
+struct Held {
+    /// How many main keywords have their first results looked at.
+    mains: usize,
+    /// How many of them have theirs, and how many are still without, as
+    /// the sites found were last worked out.
+    searched: i64,
+    owed: i64,
+    stands: Competition,
+}
+
 /// The six tests with the numbers behind each.
 fn test_lines(
     study: &StudyState,
     tally: &Tally,
+    held: &Held,
     judgement: &Judgement,
     thresholds: &Thresholds,
 ) -> Vec<TestLine> {
@@ -266,10 +293,30 @@ fn test_lines(
                 ),
                 Test::NoSpecialist => (
                     "No specialist ahead",
-                    match study.inputs.specialist_first {
-                        Some(true) => "A specialist shop holds the first results.".to_owned(),
-                        Some(false) => "No specialist shop holds the first results.".to_owned(),
-                        None => "Look at the first results and say below.".to_owned(),
+                    if held.stands.specialists > 0 {
+                        format!(
+                            "{} found in the first results of {SEVERAL_KEYWORDS} main keywords or more.",
+                            counted(held.stands.specialists as usize, "specialist shop")
+                        )
+                    } else if held.mains == 0 {
+                        "No main keyword yet.".to_owned()
+                    } else if held.searched == 0 {
+                        "Search the first results of the main keywords below.".to_owned()
+                    } else if held.owed > 0 {
+                        format!(
+                            "{} still without {} first results.",
+                            counted(held.owed as usize, "main keyword"),
+                            if held.owed == 1 { "its" } else { "their" }
+                        )
+                    } else if held.stands.unmarked > 0 {
+                        format!(
+                            "{} found for {SEVERAL_KEYWORDS} main keywords or more to mark below.",
+                            counted(held.stands.unmarked as usize, "site")
+                        )
+                    } else {
+                        format!(
+                            "No specialist shop in the first results of {SEVERAL_KEYWORDS} main keywords or more."
+                        )
                     },
                 ),
             };
@@ -283,6 +330,43 @@ fn test_lines(
             }
         })
         .collect()
+}
+
+/// `1 site`, `3 sites`.
+fn counted(count: usize, what: &str) -> String {
+    format!("{count} {what}{}", if count == 1 { "" } else { "s" })
+}
+
+/// A site found in the first results, as the page words it.
+struct SiteLine {
+    domain: String,
+    keywords: i64,
+    positions: String,
+    /// `specialist`, `generalist`, or empty until marked.
+    mark: &'static str,
+    label: &'static str,
+    tone: Tone,
+    /// Whether it was found for enough keywords to decide.
+    decides: bool,
+}
+
+impl SiteLine {
+    fn of(row: &DomainRow, specialist: Option<bool>) -> Self {
+        let (mark, label, tone) = match specialist {
+            Some(true) => ("specialist", "Specialist", Tone::Danger),
+            Some(false) => ("generalist", "Generalist", Tone::Success),
+            None => ("", "Not marked", Tone::Neutral),
+        };
+        Self {
+            domain: row.domain.clone(),
+            keywords: row.keywords,
+            positions: row.positions.clone(),
+            mark,
+            label,
+            tone,
+            decides: row.keywords >= i64::from(SEVERAL_KEYWORDS),
+        }
+    }
 }
 
 /// The economics of one sale, line by line; nothing until the price and
@@ -522,13 +606,64 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map_err(topcoat::Error::from_anyhow)?;
     // What the keywords come to is the read model's; the tests are run
     // again here over what the owner says now, so a save shows at once.
-    let tally = study_row(db, &study.id)
+    let scored = study_row(db, &study.id)
         .await
-        .map_err(topcoat::Error::from_anyhow)?
-        .map(|row| row.tally())
-        .unwrap_or_default();
+        .map_err(topcoat::Error::from_anyhow)?;
+    let tally = scored.as_ref().map(|row| row.tally()).unwrap_or_default();
+    let now = crate::auth::now();
+    // Who holds the first results: the sites found are the read model's,
+    // and how the owner marked them is read from their own stream, so a
+    // mark shows at once.
+    let mains = main_keywords(db, &study.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let found = domains_of_study(db, &study.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let marks = research(cx)
+        .load_marks(&user_id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let sites: Vec<SiteLine> = found
+        .iter()
+        .map(|row| SiteLine::of(row, marks.specialist(&row.domain)))
+        .collect();
+    let (searched, still_owed) = scored.as_ref().map_or((0, mains.len() as i64), |row| {
+        (row.searched_count, row.owed_count)
+    });
+    let held = Held {
+        mains: mains.len(),
+        searched,
+        owed: still_owed,
+        stands: judge_competition(
+            searched as u32,
+            still_owed as u32,
+            found
+                .iter()
+                .map(|row| (row.keywords as u32, marks.specialist(&row.domain))),
+        ),
+    };
+    // Where each search stands is the study's own to say.
+    let searching = mains
+        .iter()
+        .filter(|keyword| {
+            study
+                .check(keyword)
+                .is_some_and(|check| check.is_fetching(now))
+        })
+        .count();
+    let to_search = mains
+        .iter()
+        .filter(|keyword| study.check(keyword).is_none_or(|check| check.is_owed(now)))
+        .count();
+    let mut search_errors: Vec<String> = mains
+        .iter()
+        .filter_map(|keyword| study.check(keyword)?.last_error.clone())
+        .collect();
+    search_errors.dedup();
+    search_errors.truncate(3);
     let thresholds = Thresholds::default();
-    let judgement = judge(&tally, &study.inputs, &thresholds);
+    let judgement = judge(&tally, held.stands.state, &study.inputs, &thresholds);
     let (verdict, verdict_tone, verdict_text) = match judgement.verdict {
         Verdict::Go => ("Go", Tone::Success, "Every test passes."),
         Verdict::NoGo => ("No-go", Tone::Danger, "One test at least fails."),
@@ -538,7 +673,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             "No test fails, and one at least is not checked yet.",
         ),
     };
-    let tests = test_lines(&study, &tally, &judgement, &thresholds);
+    let tests = test_lines(&study, &tally, &held, &judgement, &thresholds);
     let economics = sale_lines(&study, &tally, &judgement, &thresholds);
     let said = &study.inputs;
     let amount = timada_core::format_amount;
@@ -565,7 +700,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .supplier_products
         .map(|products| products.to_string())
         .unwrap_or_default();
-    let specialist = said.specialist_first;
     // How the costs per click, which the source gives in US dollars, stand
     // against the sale's price.
     let rate_text = if never_said || said.sale.currency == CPC_CURRENCY {
@@ -588,10 +722,31 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let unconverted = !never_said && !judgement.cpc_converted;
     let source = &context::<Keywords>(cx).0;
     let enabled = source.is_some();
-    let now = crate::auth::now();
+    // What the searches asked for now would cost at the most.
+    let search_cost = |keywords: usize| {
+        source.as_ref().map_or_else(String::new, |source| {
+            format_usd(source.most_results_usd_micros() * keywords as u64)
+        })
+    };
+    let search_owed = format!(
+        "Search the first results of {}",
+        counted(to_search, "main keyword")
+    );
+    let search_owed_cost = format!(
+        "One paid search each: {} at the most.",
+        search_cost(to_search)
+    );
+    let search_again_cost = format!(
+        "Every main keyword has its first results. Searching the {} again costs {} at the most.",
+        mains.len(),
+        search_cost(mains.len())
+    );
+    let competition_description = format!(
+        "The sites in the first page of a search for each main keyword (the {MAX_CHECKED_KEYWORDS} most searched at the most), in the study's country and language. A niche whose first results are marketplaces and department stores can be taken by a specialist shop; one a specialist already holds is hard. Say of each site found for {SEVERAL_KEYWORDS} keywords or more which it is: a mark is kept for your other studies."
+    );
     let config = &context::<Config>(cx).research;
     let spending = Spending::new(config);
-    // What the day's fetches cost the user so far, and the cap the next one
+    // What the day's calls cost the user so far, and the cap the next fetch
     // would pass: read from this node's file, as the saga that decides
     // reads it again through the cluster.
     let (spent, capped) = match source {
@@ -619,7 +774,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     });
     let spent_text = spent.map(|spent| {
         format!(
-            "Your fetches cost {} today (UTC), of the {} a day may cost.",
+            "Your fetches and searches cost {} today (UTC), of the {} a day may cost.",
             format_usd(spent),
             format_usd(spending.caps.user_usd_micros)
         )
@@ -904,26 +1059,91 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         textarea(attrs: attributes! { id="study-excluded" name="excluded_words" rows="4" aria-describedby="study-excluded-hint" }, (&form_excluded))
                         field_description(attrs: attributes! { id="study-excluded-hint" }, "A keyword that holds one is none of the niche's.")
                     )
-                    <div class="flex flex-col gap-4">
-                        field(
-                            field_label(attrs: attributes! { for="study-products" }, "Good products found at the supplier")
-                            input(attrs: attributes! { id="study-products" name="supplier_products" type="text" inputmode="numeric" aria-describedby="study-products-hint" value=(&form_products) })
-                            field_description(attrs: attributes! { id="study-products-hint" }, "Empty until you counted them.")
-                        )
-                        field(
-                            field_label(attrs: attributes! { for="study-specialist" }, "A specialist shop holds the first results")
-                            select(
-                                attrs: attributes! { id="study-specialist" name="specialist_first" },
-                                <option value="" selected=(specialist.is_none())>"Not looked at yet"</option>
-                                <option value="no" selected=(specialist == Some(false))>"No"</option>
-                                <option value="yes" selected=(specialist == Some(true))>"Yes"</option>
-                            )
-                        )
-                    </div>
+                    field(
+                        field_label(attrs: attributes! { for="study-products" }, "Good products found at the supplier")
+                        input(attrs: attributes! { id="study-products" name="supplier_products" type="text" inputmode="numeric" aria-describedby="study-products-hint" value=(&form_products) })
+                        field_description(attrs: attributes! { id="study-products-hint" }, "Empty until you counted them.")
+                    )
                     <div class="sm:col-span-2 lg:col-span-3">
                         button(attrs: attributes! { type="submit" }, "Save and score again")
                     </div>
                 </form>
+            )
+
+            section_card(
+                title: Some("Who holds the first results"),
+                description: Some(&competition_description),
+                attrs: attributes! { id="competition" data-competition=(held.stands.state.as_str()) data-competition-searched=(held.searched) data-competition-searching=(searching) },
+                if searching > 0 {
+                    <p class="px-6 text-sm text-muted-foreground" data-competition-on-its-way="">
+                        "The first results of " (counted(searching, "main keyword")) " are being searched, a few seconds each. "
+                        <a class=(LINK) href=(competition_url(cx, &id, None, None))>"Look again"</a>
+                    </p>
+                }
+                for error in &search_errors {
+                    <p class="px-6 text-sm whitespace-normal text-destructive-text" data-competition-error="">(error)</p>
+                }
+                if mains.is_empty() {
+                    <p class="px-6 text-sm text-muted-foreground" data-competition-empty="">"No main keyword yet: the first results are searched for the kept keywords with 1,000 searches a month or more."</p>
+                } else {
+                    table(
+                        table_header(
+                            table_row(
+                                table_head("Site")
+                                table_head("Main keywords")
+                                table_head("Places")
+                                table_head("What it is")
+                                table_head(<span class="sr-only">"Mark"</span>)
+                            )
+                        )
+                        table_body(
+                            if sites.is_empty() {
+                                empty_row(colspan: 5, text: "No first results yet.")
+                            }
+                            for site in &sites {
+                                table_row(
+                                    attrs: attributes! { data-site=(&site.domain) data-site-mark=(site.mark) data-site-decides=(if site.decides { "yes" } else { "no" }) },
+                                    table_cell(attrs: attributes! { class="font-medium" },
+                                        <a class=(LINK) href=(format!("https://{}", site.domain)) rel="noopener noreferrer" target="_blank">(&site.domain)</a>
+                                    )
+                                    table_cell(attrs: attributes! { class="tabular-nums" data-site-keywords=(site.keywords) }, (site.keywords) " of " (held.searched))
+                                    table_cell(attrs: attributes! { class="tabular-nums whitespace-normal" data-site-places="" }, (&site.positions))
+                                    table_cell(status_badge(tone: site.tone, (site.label)))
+                                    table_cell(
+                                        attrs: attributes! { class="text-right" },
+                                        <div class="flex justify-end gap-2">
+                                            for (value, label) in [("yes", "Specialist"), ("no", "Generalist")] {
+                                                if site.mark != label.to_lowercase() {
+                                                    <form method="post" action=(href!(mark::mark, study_id: id.clone()))>
+                                                        <input type="hidden" name="domain" value=(&site.domain)>
+                                                        <input type="hidden" name="specialist" value=(value)>
+                                                        button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" },
+                                                            (label)
+                                                            <span class="sr-only">": " (&site.domain)</span>
+                                                        )
+                                                    </form>
+                                                }
+                                            }
+                                        </div>
+                                    )
+                                )
+                            }
+                        )
+                    )
+                    <p class="px-6 text-sm text-muted-foreground">"A site found for one main keyword decides nothing, marked or not."</p>
+                    if enabled && to_search > 0 {
+                        <form method="post" action=(href!(competition::check, study_id: id.clone())) class="flex flex-wrap items-center gap-3 px-6">
+                            button(attrs: attributes! { type="submit" data-search-owed=(to_search) }, (&search_owed))
+                            <span class="text-sm text-muted-foreground" data-search-cost="">(&search_owed_cost)</span>
+                        </form>
+                    } else if enabled && searching == 0 {
+                        <form method="post" action=(href!(competition::check, study_id: id.clone())) class="flex flex-wrap items-center gap-3 px-6">
+                            <input type="hidden" name="again" value="yes">
+                            button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" data-search-again="" }, "Search them all again")
+                            <span class="text-sm text-muted-foreground" data-search-cost="">(&search_again_cost)</span>
+                        </form>
+                    }
+                }
             )
 
             section_card(

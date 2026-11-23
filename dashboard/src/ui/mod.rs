@@ -533,6 +533,13 @@ pub fn describe_error(code: &str) -> &'static str {
             "A study holds at most 2,000 keywords dropped by hand, and as many brought back: exclude a word instead."
         }
         "study_changed_too_often" => "This study was changed too many times: start another.",
+        "no_main_keyword" => "The study has no main keyword yet: fetch its keywords first.",
+        "too_many_checked_keywords" => "The first results of at most 50 keywords are looked at.",
+        "nothing_to_check" => {
+            "Every main keyword has its first results, or they are being searched."
+        }
+        "invalid_domain" => "A site is named by its domain, like example.com.",
+        "too_many_marks" => "At most 2,000 sites are marked: no more can be.",
         "keywords_disabled" => {
             "Keyword research is not set up on this platform: the operator has to give it a keyword source."
         }

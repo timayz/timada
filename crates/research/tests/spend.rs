@@ -33,7 +33,7 @@ async fn hold(research: &Research, user_id: &str, caps: SpendCaps) -> Room {
             Call {
                 user_id,
                 study_id: "study",
-                seed: "griffoir",
+                query: "griffoir",
                 most_usd_micros: MOST,
             },
             caps,
@@ -148,7 +148,7 @@ async fn charge_on(executor: &evento::Turso, day: &str, version: u16, user_id: &
             hold: hold.clone(),
             user_id: user_id.to_owned(),
             study_id: "study".to_owned(),
-            seed: "griffoir".to_owned(),
+            query: "griffoir".to_owned(),
             most_usd_micros: MOST,
             held_by: RESEARCH_ACTOR.to_owned(),
         })
@@ -156,7 +156,7 @@ async fn charge_on(executor: &evento::Turso, day: &str, version: u16, user_id: &
             hold,
             user_id: user_id.to_owned(),
             study_id: "study".to_owned(),
-            seed: "griffoir".to_owned(),
+            query: "griffoir".to_owned(),
             cost_usd_micros: cost,
             charged_by: RESEARCH_ACTOR.to_owned(),
         })

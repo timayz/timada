@@ -18,6 +18,17 @@ pub struct KeywordRow {
     pub intent: Option<String>,
 }
 
+/// One of the first organic results of a search, as the source gave it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct ResultRow {
+    /// Its place among the organic results, from 1.
+    pub position: u8,
+    /// The site, lowercase and without `www.`.
+    pub domain: String,
+    pub url: String,
+    pub title: String,
+}
+
 /// A niche study. Its id is a fresh [`new_study_id`](crate::new_study_id),
 /// and it lives in the platform's tenant: it exists before any shop does.
 #[evento::aggregate(name = "timada-research/Study")]
@@ -108,9 +119,6 @@ pub enum Study {
         /// How many good products the owner found at the supplier; `None`
         /// until they looked.
         supplier_products: Option<u32>,
-        /// Whether a specialist shop holds the first results; `None` until
-        /// the owner looked.
-        specialist_first: Option<bool>,
         /// What one unit of `currency` was worth in millionths of a US
         /// dollar when this was said, to read a cost per click in it;
         /// `None` when no rate was known, or none is needed.
@@ -128,6 +136,35 @@ pub enum Study {
     KeywordRestored {
         keyword: String,
         restored_by: String,
+    },
+    /// The owner asked who holds the first results of a search for
+    /// `keyword`, one of the study's main keywords; the host fetches them.
+    ResultsRequested {
+        keyword: String,
+        requested_by: String,
+    },
+    /// One node took the search on, so no other pays for a second call.
+    ResultsStarted {
+        keyword: String,
+        started_by: String,
+    },
+    /// The first organic results of a search for `keyword` in the study's
+    /// country and language, replacing what an earlier search of it gave:
+    /// [`MAX_RESULTS`](crate::MAX_RESULTS) at most, in their order.
+    ResultsFetched {
+        keyword: String,
+        results: Vec<ResultRow>,
+        /// What the source charged for the call, in millionths of a US
+        /// dollar.
+        cost_usd_micros: u64,
+        fetched_by: String,
+    },
+    /// The source gave nothing; `reason` says why, for the owner. The
+    /// results of an earlier search stay.
+    ResultsFailed {
+        keyword: String,
+        reason: String,
+        failed_by: String,
     },
     /// Gone for its owner; the stream stays.
     Deleted {
@@ -148,7 +185,9 @@ pub enum SpendDay {
         hold: String,
         user_id: String,
         study_id: String,
-        seed: String,
+        /// What the source is asked about: a seed for its keywords, or a
+        /// keyword for its first results.
+        query: String,
         most_usd_micros: u64,
         held_by: String,
     },
@@ -158,10 +197,25 @@ pub enum SpendDay {
         hold: String,
         user_id: String,
         study_id: String,
-        seed: String,
+        query: String,
         cost_usd_micros: u64,
         charged_by: String,
     },
     /// The call gave nothing and cost nothing: its room is free again.
     Released { hold: String, released_by: String },
+}
+
+/// What one user says of the sites that hold the first results: which are
+/// specialist shops and which are generalists (marketplaces, department
+/// stores). Its id is the user's, and it lives in the platform's tenant: a
+/// mark made on one study counts on every study of the user.
+#[evento::aggregate(name = "timada-research/DomainMarks")]
+pub enum DomainMarks {
+    /// `domain` is a specialist shop, or a generalist; it replaces what the
+    /// user said of it before.
+    DomainMarked {
+        domain: String,
+        specialist: bool,
+        marked_by: String,
+    },
 }

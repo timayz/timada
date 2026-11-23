@@ -795,6 +795,11 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
             d.spending,
         )
     }),
+    // Who holds the first results of a study's main keywords, searched one
+    // keyword at a time.
+    ("first results", Kind::Sharded, |d| {
+        crate::research::results_subscription(d.keywords.clone(), d.store.clone(), d.spending)
+    }),
     ("pictures", Kind::ReadModel, |d| {
         crate::media::subscription(d.fetcher.clone())
     }),

@@ -145,9 +145,6 @@ pub struct StudyInputs {
     /// How many good products the owner found at the supplier; `None`
     /// until they looked.
     pub supplier_products: Option<u32>,
-    /// Whether a specialist shop holds the first results; `None` until the
-    /// owner looked.
-    pub specialist_first: Option<bool>,
     /// What one unit of the sale's currency is worth in millionths of a US
     /// dollar, to read a cost per click in that currency. `None` when no
     /// rate is known: the two are then compared as they are, and
@@ -380,7 +377,8 @@ pub enum Test {
     PricePerClick,
     /// [`ENOUGH_PRODUCTS`] products at the supplier; entered by hand.
     SupplierProducts,
-    /// No specialist shop in the first results; entered by hand.
+    /// No specialist shop in the first results of several main keywords
+    /// ([`competition`]).
     NoSpecialist,
 }
 
@@ -429,6 +427,15 @@ impl TestState {
             Self::NotChecked => "not_checked",
         }
     }
+
+    /// What [`as_str`](Self::as_str) said; anything else is not checked.
+    pub fn parse(text: &str) -> Self {
+        match text {
+            "passed" => Self::Passed,
+            "failed" => Self::Failed,
+            _ => Self::NotChecked,
+        }
+    }
 }
 
 /// What the tests say together.
@@ -449,6 +456,82 @@ impl Verdict {
             Self::NoGo => "no_go",
             Self::Incomplete => "incomplete",
         }
+    }
+
+    /// What [`as_str`](Self::as_str) said; anything else is incomplete.
+    pub fn parse(text: &str) -> Self {
+        match text {
+            "go" => Self::Go,
+            "no_go" => Self::NoGo,
+            _ => Self::Incomplete,
+        }
+    }
+
+    /// The verdict of these tests and one more, which stands at `state`.
+    pub fn with(self, state: TestState) -> Self {
+        match (self, state) {
+            (Self::NoGo, _) | (_, TestState::Failed) => Self::NoGo,
+            (Self::Go, TestState::Passed) => Self::Go,
+            _ => Self::Incomplete,
+        }
+    }
+}
+
+/// From how many main keywords a specialist shop found in their first
+/// results holds the niche.
+pub const SEVERAL_KEYWORDS: u32 = 2;
+
+/// Who holds the first results of a study's main keywords.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Competition {
+    pub state: TestState,
+    /// How many sites were found for [`SEVERAL_KEYWORDS`] main keywords or
+    /// more: the ones that decide.
+    pub recurring: u32,
+    /// How many of those the owner has not marked yet.
+    pub unmarked: u32,
+    /// How many of those are specialist shops.
+    pub specialists: u32,
+}
+
+/// The competition test. `searched` main keywords have their first results
+/// and `owed` are still without; `sites` are the sites found, each with how
+/// many of the searched keywords it appears for and what the owner said of
+/// it (`true` for a specialist shop).
+///
+/// One specialist found for [`SEVERAL_KEYWORDS`] keywords or more fails it,
+/// whatever is left to look at. It passes once every main keyword was
+/// searched and every site found for several is marked, none a specialist.
+/// A site found for one keyword decides nothing, so it needs no mark.
+pub fn competition(
+    searched: u32,
+    owed: u32,
+    sites: impl IntoIterator<Item = (u32, Option<bool>)>,
+) -> Competition {
+    let (mut recurring, mut unmarked, mut specialists) = (0u32, 0u32, 0u32);
+    for (keywords, specialist) in sites {
+        if keywords < SEVERAL_KEYWORDS {
+            continue;
+        }
+        recurring += 1;
+        match specialist {
+            Some(true) => specialists += 1,
+            Some(false) => {}
+            None => unmarked += 1,
+        }
+    }
+    let state = if specialists > 0 {
+        TestState::Failed
+    } else if searched == 0 || owed > 0 || unmarked > 0 {
+        TestState::NotChecked
+    } else {
+        TestState::Passed
+    };
+    Competition {
+        state,
+        recurring,
+        unmarked,
+        specialists,
     }
 }
 
@@ -490,10 +573,16 @@ impl Judgement {
     }
 }
 
-/// Runs the tests over what a study's keywords come to. A page that keeps
-/// the tally reads the verdict again from it when the owner's numbers
-/// change, without the keywords.
-pub fn judge(tally: &Tally, inputs: &StudyInputs, thresholds: &Thresholds) -> Judgement {
+/// Runs the tests over what a study's keywords come to, with where the
+/// competition test stands ([`competition`]). A page that keeps the tally
+/// reads the verdict again from it when the owner's numbers change, without
+/// the keywords.
+pub fn judge(
+    tally: &Tally,
+    competition: TestState,
+    inputs: &StudyInputs,
+    thresholds: &Thresholds,
+) -> Judgement {
     let sale = inputs.sale_score(thresholds);
     let price_per_click = sale
         .zip(tally.avg_cpc_millis)
@@ -539,14 +628,7 @@ pub fn judge(tally: &Tally, inputs: &StudyInputs, thresholds: &Thresholds) -> Ju
                     TestState::of(products >= ENOUGH_PRODUCTS)
                 }),
         ),
-        (
-            Test::NoSpecialist,
-            inputs
-                .specialist_first
-                .map_or(TestState::NotChecked, |specialist| {
-                    TestState::of(!specialist)
-                }),
-        ),
+        (Test::NoSpecialist, competition),
     ];
     let verdict = if tests.iter().any(|(_, state)| *state == TestState::Failed) {
         Verdict::NoGo
@@ -745,11 +827,13 @@ fn filter(
 
 /// Scores a study: `rows` are the keywords of all its seeds, searched in
 /// `language` (`fr`). A keyword two seeds gave is scored once, with the
-/// larger of its volumes.
+/// larger of its volumes. `competition` is where the competition test
+/// stands, which reads more than the rows.
 pub fn score(
     rows: impl IntoIterator<Item = KeywordRow>,
     language: &str,
     inputs: &StudyInputs,
+    competition: TestState,
     thresholds: &Thresholds,
 ) -> Score {
     let mut distinct: Vec<KeywordRow> = Vec::new();
@@ -848,7 +932,7 @@ pub fn score(
         kept_volume,
         avg_cpc_millis,
     };
-    let judgement = judge(&tally, inputs, thresholds);
+    let judgement = judge(&tally, competition, inputs, thresholds);
 
     Score {
         keywords,
@@ -911,7 +995,13 @@ mod tests {
     }
 
     fn scored(rows: Vec<KeywordRow>, inputs: &StudyInputs) -> Score {
-        score(rows, "fr", inputs, &Thresholds::default())
+        score(
+            rows,
+            "fr",
+            inputs,
+            TestState::NotChecked,
+            &Thresholds::default(),
+        )
     }
 
     fn outcome<'a>(score: &'a Score, keyword: &str) -> &'a ScoredKeyword {
@@ -1050,12 +1140,24 @@ mod tests {
         assert!(informational(&french, "quel griffoir choisir"));
         assert!(!informational(&french, "how to build a scratching post"));
 
-        let english = score(rows(), "en-gb", &inputs(), &Thresholds::default());
+        let english = score(
+            rows(),
+            "en-gb",
+            &inputs(),
+            TestState::NotChecked,
+            &Thresholds::default(),
+        );
         assert!(informational(&english, "how to build a scratching post"));
         assert!(!informational(&english, "quel griffoir choisir"));
 
         // A language with no list is left to what the source says.
-        let german = score(rows(), "de", &inputs(), &Thresholds::default());
+        let german = score(
+            rows(),
+            "de",
+            &inputs(),
+            TestState::NotChecked,
+            &Thresholds::default(),
+        );
         assert!(german.keywords.iter().all(|k| k.tier().is_some()));
     }
 
@@ -1202,7 +1304,13 @@ mod tests {
     }
 
     fn score_with(thresholds: &Thresholds) -> Score {
-        score(Vec::new(), "fr", &inputs(), thresholds)
+        score(
+            Vec::new(),
+            "fr",
+            &inputs(),
+            TestState::NotChecked,
+            thresholds,
+        )
     }
 
     #[test]
@@ -1329,10 +1437,18 @@ mod tests {
     fn a_study_is_a_go_when_every_test_passes() {
         let checked = StudyInputs {
             supplier_products: Some(200),
-            specialist_first: Some(false),
             ..inputs()
         };
-        let score = scored(enough_rows(), &checked);
+        let all = |inputs: &StudyInputs, competition: TestState| {
+            score(
+                enough_rows(),
+                "fr",
+                inputs,
+                competition,
+                &Thresholds::default(),
+            )
+        };
+        let score = all(&checked, TestState::Passed);
         assert_eq!((score.main, score.long_tail), (3, 10));
         assert_eq!(
             score.tests.map(|(test, _)| test),
@@ -1349,7 +1465,8 @@ mod tests {
         );
         assert_eq!(score.verdict, Verdict::Go);
 
-        // What is entered by hand is not checked until it is.
+        // What is counted by hand is not checked until it is, nor the
+        // competition until the first results are looked at.
         let unchecked = scored(enough_rows(), &inputs());
         assert_eq!(
             unchecked.test(Test::SupplierProducts),
@@ -1359,31 +1476,33 @@ mod tests {
         assert_eq!(unchecked.verdict, Verdict::Incomplete);
 
         // One failure is a no-go, whatever else is missing.
-        for failing in [
-            StudyInputs {
-                supplier_products: Some(199),
-                ..checked.clone()
-            },
-            StudyInputs {
-                specialist_first: Some(true),
-                supplier_products: None,
-                ..checked.clone()
-            },
-        ] {
-            assert_eq!(scored(enough_rows(), &failing).verdict, Verdict::NoGo);
-        }
+        let few = StudyInputs {
+            supplier_products: Some(199),
+            ..checked.clone()
+        };
+        assert_eq!(all(&few, TestState::Passed).verdict, Verdict::NoGo);
+        assert_eq!(all(&inputs(), TestState::Failed).verdict, Verdict::NoGo);
+        assert_eq!(
+            all(&checked, TestState::NotChecked).verdict,
+            Verdict::Incomplete
+        );
     }
 
     #[test]
     fn enough_keywords_is_a_setting() {
         let checked = StudyInputs {
             supplier_products: Some(500),
-            specialist_first: Some(false),
             ..inputs()
         };
         let mut rows = enough_rows();
         rows.pop();
-        let short = scored(rows.clone(), &checked);
+        let short = score(
+            rows.clone(),
+            "fr",
+            &checked,
+            TestState::Passed,
+            &Thresholds::default(),
+        );
         assert_eq!(short.test(Test::MainKeywords), TestState::Passed);
         assert_eq!(short.test(Test::LongTail), TestState::Failed);
         assert_eq!(short.verdict, Verdict::NoGo);
@@ -1393,7 +1512,7 @@ mod tests {
             ..Thresholds::default()
         };
         assert_eq!(
-            score(rows.clone(), "fr", &checked, &lenient).verdict,
+            score(rows.clone(), "fr", &checked, TestState::Passed, &lenient).verdict,
             Verdict::Go
         );
 
@@ -1406,9 +1525,56 @@ mod tests {
             difficulty: Some(11),
             ..row
         });
-        let none = score(rows, "fr", &checked, &strict);
+        let none = score(rows, "fr", &checked, TestState::Passed, &strict);
         assert_eq!((none.main, none.long_tail), (0, 0));
         assert_eq!(none.test(Test::MainKeywords), TestState::Failed);
+    }
+
+    /// A specialist found for several main keywords holds the niche; a
+    /// site found for one decides nothing, marked or not.
+    #[test]
+    fn a_specialist_for_several_main_keywords_fails_the_competition() {
+        // Nothing searched yet.
+        assert_eq!(competition(0, 3, []).state, TestState::NotChecked);
+        // amazon for three keywords, a specialist for one, a blog for one.
+        let sites = |amazon: Option<bool>, shop: Option<bool>| [(3, amazon), (1, shop), (1, None)];
+        let unmarked = competition(3, 0, sites(None, None));
+        assert_eq!(unmarked.state, TestState::NotChecked);
+        assert_eq!((unmarked.recurring, unmarked.unmarked), (1, 1));
+        let generalist = competition(3, 0, sites(Some(false), Some(true)));
+        assert_eq!(generalist.state, TestState::Passed);
+        assert_eq!((generalist.unmarked, generalist.specialists), (0, 0));
+        // A main keyword still without its results keeps it open.
+        assert_eq!(
+            competition(3, 1, sites(Some(false), None)).state,
+            TestState::NotChecked
+        );
+        // A specialist for two fails it, whatever is left to look at.
+        let held = competition(2, 5, [(2, Some(true)), (2, None)]);
+        assert_eq!(held.state, TestState::Failed);
+        assert_eq!((held.recurring, held.unmarked, held.specialists), (2, 1, 1));
+        // Searched, and no site comes back twice: nobody holds it.
+        assert_eq!(
+            competition(2, 0, [(1, None), (1, None)]).state,
+            TestState::Passed
+        );
+    }
+
+    #[test]
+    fn one_more_test_joins_a_verdict() {
+        use TestState::{Failed, NotChecked, Passed};
+        assert_eq!(Verdict::Go.with(Passed), Verdict::Go);
+        assert_eq!(Verdict::Go.with(NotChecked), Verdict::Incomplete);
+        assert_eq!(Verdict::Go.with(Failed), Verdict::NoGo);
+        assert_eq!(Verdict::Incomplete.with(Passed), Verdict::Incomplete);
+        assert_eq!(Verdict::Incomplete.with(Failed), Verdict::NoGo);
+        assert_eq!(Verdict::NoGo.with(Passed), Verdict::NoGo);
+        for verdict in [Verdict::Go, Verdict::NoGo, Verdict::Incomplete] {
+            assert_eq!(Verdict::parse(verdict.as_str()), verdict);
+        }
+        for state in [Passed, Failed, NotChecked] {
+            assert_eq!(TestState::parse(state.as_str()), state);
+        }
     }
 
     #[test]

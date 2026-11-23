@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { FakeDataforseo, keywordsFor } from "./dataforseo";
+import { FakeDataforseo, keywordsFor, sitesFor } from "./dataforseo";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { ADMIN_STATE } from "./fixtures";
 
@@ -19,6 +19,11 @@ import { ADMIN_STATE } from "./fixtures";
 // (a word excluded, a keyword dropped or brought back) without a fetch. The
 // list sets the studies side by side, and the keywords export with their
 // score.
+//
+// Who holds the first results of the main keywords is searched off the page
+// too, one paid search a keyword: the page lists the sites found, the owner
+// marks each as a specialist shop or a generalist, and the competition test
+// follows. A mark is the user's: the next study knows it.
 
 /// Reloads the study's page until the seed's fetch stands at `status`.
 async function seedStands(page: Page, seed: string, status: string) {
@@ -134,13 +139,13 @@ test("a user studies a niche from its keywords", async ({ page, browser }) => {
     await seedStands(page, litter, "fetched");
     await spentToday(page, 37440);
     const capped = page.locator('[data-spend-capped="user"]');
-    await expect(capped).toContainText("You have reached the most keyword fetches may cost in a day. It frees on");
+    await expect(capped).toContainText("You have reached the most keyword research may cost in a day. It frees on");
     await expect(capped).toContainText("00:00:00 UTC");
     await expect(capped).toContainText("A seed fetched in the last 30 days is still answered.");
     await addSeed(bowl);
     await seedStands(page, bowl, "failed");
     await expect(page.locator(`[data-seed="${bowl}"] [data-seed-error]`)).toContainText(
-      "You have reached the most keyword fetches may cost in a day. It frees on",
+      "You have reached the most keyword research may cost in a day. It frees on",
     );
     expect(callsFor(bowl)).toBe(0);
     expect(callsFor(cats)).toBe(1);
@@ -283,7 +288,6 @@ test("a study is scored, corrected by its owner and compared", async ({ page, br
     await page.getByLabel("Payment fee, for each payment").fill("0.25");
     await page.getByLabel("Words to exclude, one a line").fill("Pas  cher\n");
     await page.getByLabel("Good products found at the supplier").fill("240");
-    await page.getByLabel("A specialist shop holds the first results").selectOption("no");
     await page.getByRole("button", { name: "Save and score again" }).click();
     await expect(page.getByRole("status")).toContainText("Saved: the study is scored again.");
 
@@ -294,7 +298,7 @@ test("a study is scored, corrected by its owner and compared", async ({ page, br
     await expect(page.locator('[data-sale-line="highest-cpc"]')).toHaveText("0.308 EUR");
     await expect(page.locator('[data-test="margin"]')).toHaveAttribute("data-test-state", "passed");
     await expect(page.locator('[data-test="supplier_products"]')).toHaveAttribute("data-test-state", "passed");
-    await expect(page.locator('[data-test="no_specialist"]')).toHaveAttribute("data-test-state", "passed");
+    await expect(page.locator('[data-test="no_specialist"]')).toHaveAttribute("data-test-state", "not_checked");
     await expect(page.locator("[data-cpc-converted]")).toBeVisible();
     await expect(page.getByLabel("Words to exclude, one a line")).toHaveValue("Pas cher");
     await expect(page.getByLabel("Average price, VAT included")).toHaveValue("60.00");
@@ -343,6 +347,104 @@ test("a study is scored, corrected by its owner and compared", async ({ page, br
     await expect(row.locator("[data-study-volume]")).toHaveText("15000");
     await expect(row.locator("[data-study-break-even]")).toHaveText("2.52");
     await expect(row.locator("[data-study-needed]")).toHaveText("194.67");
+  } finally {
+    await source.stop();
+  }
+});
+
+/// Reloads the study's page until it lists `count` sites found in the first
+/// results: they come from the read model, a moment behind the searches.
+async function sitesListed(page: Page, count: number) {
+  await expect(async () => {
+    await page.reload();
+    await expect(page.locator("[data-site]")).toHaveCount(count, { timeout: 1000 });
+  }).toPass({ timeout: 20_000 });
+}
+
+test("the first results say whether a specialist holds the niche", async ({ page }) => {
+  const source = new FakeDataforseo();
+  await source.start();
+  const tag = Date.now().toString(36);
+  const seed = `litière ${tag}`;
+  const cheap = `${seed} pas cher`;
+  const best = `meilleur ${seed}`;
+  const start = async (name: string, seed: string) => {
+    await page.goto("/research/new");
+    await page.getByLabel("Name").fill(name);
+    await page.getByLabel("Seed keywords, one a line").fill(seed);
+    await page.getByRole("button", { name: "Start the study" }).click();
+    await expect(page.getByRole("status")).toContainText("Study started.");
+    await page.getByRole("button", { name: "Fetch the keywords of 1 seed" }).click();
+    await seedStands(page, seed, "fetched");
+    await keywordsListed(page, 5);
+  };
+  try {
+    await registerWithEmail(page, uniqueEmail("rival"));
+    await start(`Litters ${Date.now()}`, seed);
+
+    // Nothing is searched until asked for, and the cost is said before.
+    const competition = page.locator("#competition");
+    await testStands(page, "main_keywords", "failed");
+    await expect(competition).toHaveAttribute("data-competition", "not_checked");
+    await expect(competition.locator("[data-site]")).toHaveCount(0);
+    await expect(competition.locator("[data-search-cost]")).toContainText("One paid search each: $0.0040 at the most.");
+    expect(source.searches).toHaveLength(0);
+    await competition.getByRole("button", { name: "Search the first results of 2 main keywords" }).click();
+    await expect(page.getByRole("status")).toContainText("The first results are being searched.");
+
+    // The two every search finds, and one of each keyword's own; the ad is
+    // not a result.
+    await sitesListed(page, 4);
+    expect(source.searches).toHaveLength(2);
+    expect(source.searches).toContainEqual({ keyword: cheap, locationCode: 2250, languageCode: "fr" });
+    const amazon = page.locator('[data-site="amazon.fr"]');
+    const zooplus = page.locator('[data-site="zooplus.fr"]');
+    await expect(page.locator("[data-site]").first()).toHaveAttribute("data-site", "amazon.fr");
+    await expect(amazon.locator("[data-site-keywords]")).toHaveText("2 of 2");
+    await expect(amazon.locator("[data-site-places]")).toHaveText("1, 1");
+    await expect(zooplus.locator("[data-site-places]")).toHaveText("2, 2");
+    await expect(amazon).toHaveAttribute("data-site-decides", "yes");
+    const own = page.locator(`[data-site="${sitesFor(best)[2]}"]`);
+    await expect(own).toHaveAttribute("data-site-decides", "no");
+    await expect(own.locator("[data-site-places]")).toHaveText("3");
+    await expect(page.locator('[data-site="ads.example"]')).toHaveCount(0);
+    // Both searches were paid, beside the fetch.
+    await spentToday(page, 12480 + 4000);
+
+    // Until the sites found for both keywords are marked, nothing is said.
+    const test = page.locator('[data-test="no_specialist"]');
+    await expect(test).toHaveAttribute("data-test-state", "not_checked");
+    await expect(test.locator("[data-test-numbers]")).toContainText("2 sites found for 2 main keywords or more to mark");
+    await amazon.getByRole("button", { name: "Generalist" }).click();
+    await expect(page).toHaveURL(/#competition$/);
+    await expect(amazon).toHaveAttribute("data-site-mark", "generalist");
+    await expect(amazon.getByRole("button", { name: "Generalist" })).toHaveCount(0);
+    await expect(test).toHaveAttribute("data-test-state", "not_checked");
+
+    // A specialist for both keywords holds the niche; a generalist does not.
+    await zooplus.getByRole("button", { name: "Specialist" }).click();
+    await expect(test).toHaveAttribute("data-test-state", "failed");
+    await expect(test.locator("[data-test-numbers]")).toContainText("1 specialist shop found");
+    await expect(competition).toHaveAttribute("data-competition", "failed");
+    await zooplus.getByRole("button", { name: "Generalist" }).click();
+    await expect(test).toHaveAttribute("data-test-state", "passed");
+    await zooplus.getByRole("button", { name: "Specialist" }).click();
+    await expect(test).toHaveAttribute("data-test-state", "failed");
+
+    // Every keyword searched: asking again is offered, with its cost.
+    await expect(competition.getByRole("button", { name: "Search them all again" })).toBeVisible();
+    await expect(competition.locator("[data-search-cost]")).toContainText("costs $0.0040 at the most");
+
+    // The marks are the user's: the next study knows both sites.
+    const other = `gamelle ${tag}`;
+    await start(`Bowls ${Date.now()}`, other);
+    await testStands(page, "main_keywords", "failed");
+    await page.locator("#competition").getByRole("button", { name: "Search the first results of 2 main keywords" }).click();
+    await sitesListed(page, 4);
+    await expect(page.locator('[data-site="amazon.fr"]')).toHaveAttribute("data-site-mark", "generalist");
+    await expect(page.locator('[data-site="zooplus.fr"]')).toHaveAttribute("data-site-mark", "specialist");
+    await expect(page.locator('[data-test="no_specialist"]')).toHaveAttribute("data-test-state", "failed");
+    expect(source.searches).toHaveLength(4);
   } finally {
     await source.stop();
   }

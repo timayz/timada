@@ -1313,6 +1313,17 @@ the page reads them by study, the most searched first, a page at a time off an i
 The write model keeps where each seed's fetch stands and how many rows it gave,
 never the rows.
 
+Who holds the first results of a study's main keywords goes the same way: the page
+writes one `ResultsRequested` per main keyword, which it reads from the read model
+(the score is there, not in the write model), and the `timada-dashboard/first-results`
+saga claims each, searches and records `ResultsFetched` with the ten first results, or
+`ResultsFailed`. Which sites are specialist shops is the user's to say and counts on
+all their studies, so the marks are a stream per user (`DomainMarks`, id the user's)
+beside the studies. The competition test reads two streams, whose events reach a node
+in either order: the read model works it out again from its tables at each of them
+(`research_checks`, `research_domain_marks`), which ends on the same rows whatever the
+order.
+
 ## The storefront side
 
 `timada-storefront` runs inside the merchant's app. Its executor is a `Sidecar`:

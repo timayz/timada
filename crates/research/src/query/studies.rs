@@ -38,6 +38,13 @@ pub struct StudyRow {
     pub price_per_click: Option<i64>,
     /// What that ratio must reach for an ad to pay, in hundredths.
     pub needed_price_per_click: Option<i64>,
+    /// Where the competition test stood when it was last worked out:
+    /// `passed`, `failed` or `not_checked`.
+    pub competition: String,
+    /// How many of its main keywords have their first results.
+    pub searched_count: i64,
+    /// How many are still without.
+    pub owed_count: i64,
 }
 
 impl StudyRow {
@@ -56,7 +63,8 @@ impl StudyRow {
 const STUDY_COLUMNS: &str =
     "SELECT id, owner_id, name, country, language, seed_count, keyword_count, created_at,
         updated_at, verdict, scored_keywords, main_count, long_tail_count, kept_volume,
-        avg_cpc_millis, currency, break_even_roas, price_per_click, needed_price_per_click
+        avg_cpc_millis, currency, break_even_roas, price_per_click, needed_price_per_click,
+        competition, searched_count, owed_count
      FROM research_studies";
 
 /// The statement of [`studies_of_user`].

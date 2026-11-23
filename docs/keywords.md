@@ -53,6 +53,23 @@ Prices read on 2026-11-18. The code does not reckon what a call cost: it reads t
 which is what the caps count. The prices are only used for the most a call not made
 yet may cost (0.132 USD), the room a cap keeps for it; see *What a day may cost*.
 
+A second call asks who holds the first results of a search: the first page Google
+gives for one keyword from one country in one language, on a desktop (DataForSEO SERP,
+`serp/google/organic/live/regular`). Only the organic results are kept, ten at the
+most, each with its place, its site, its address and its title; ads and Google's own
+boxes are passed over.
+
+| | |
+|---|---|
+| a search, answered at once (the one made) | 0.002 USD |
+| the same in DataForSEO's queue, answered in about five minutes | 0.0006 USD |
+| in the queue's priority lane, about a minute | 0.0012 USD |
+
+Prices read on 2026-11-23, for a page of ten results. The queue costs a third but
+answers later through a second call; the search is made live so the pass that asks
+records the answer, as a seed's fetch does. Moving to the queue is a change to
+`DataforseoClient::first_results` and to the saga that waits for it.
+
 The cost per click is in US dollars whatever the country. A figure DataForSEO has
 nothing for stays empty; it is never shown as zero.
 
@@ -79,7 +96,8 @@ source did not answer. The owner asks again. A fetch whose node stopped in the m
 shows "No answer" after ten minutes and can be asked again too; the rows of that one
 call, if it was made, are lost.
 
-What each study spent is kept on it (`cost_usd_micros`, summed from its fetches).
+What each study spent is kept on it (`cost_usd_micros`, summed from its fetches and
+its searches).
 
 ## What a day may cost
 
@@ -101,7 +119,8 @@ fetch. Two users who ask for a new seed in the same second may both pay for it: 
 second does not know of the first yet.
 
 **The caps.** A day runs from midnight to midnight UTC. Before a call is made, room is
-held for it at the most it may cost (0.132 USD); a call that no longer fits under the
+held for it at the most it may cost (0.132 USD for a seed's keywords, 0.002 for a
+search); a call that no longer fits under the
 user's cap or the platform's is not made, and the seed fails saying which cap was
 reached and when it frees. Once the source answered, what it says the call cost takes
 the place of what was held. Three things follow:
@@ -187,16 +206,61 @@ the two are compared as they are, and the page says so until the owner saves aga
 | margin | a sale leaves more than zero |
 | price / CPC | at or above what the sale needs |
 | supplier | 200 products or more, entered by hand |
-| competition | no specialist shop in the first results, entered by hand |
+| competition | no specialist shop in the first results of 2 main keywords or more (see *Who holds the first results*) |
 
 A test whose numbers are not there yet is *not checked*: nothing fetched, no price, no
-cost per click on any kept keyword, a figure not entered. The verdict is **go** when
+cost per click on any kept keyword, a figure not entered, a site not marked. The verdict is **go** when
 every test passes, **no-go** when one fails, **incomplete** otherwise.
 
 **Settings.** The highest difficulty kept, how many main and long-tail keywords are
 enough, the safety and the conversion rate are settings with these defaults
 (`Thresholds`); nothing sets them yet, so every study is scored with the defaults. The 35 is Semrush's figure, taken because DataForSEO's score runs over
 the same 0 to 100; it is a placeholder until the comparison below is made.
+
+## Who holds the first results
+
+A niche whose first results are marketplaces and department stores can be taken by a
+specialist shop; one a specialist already holds is hard. The study's page answers it
+under *Who holds the first results*.
+
+**The searches.** *Search the first results* asks for the first page of each main
+keyword, the 50 most searched at the most, in the study's country and language. The
+button says how many searches that is and the most they cost before it is pressed.
+Each is one paid call made in the background, a few seconds each, one after the other,
+by a saga of its own (`first results`) so that a study's searches do not keep another
+study's keywords waiting. They go through the day's caps as a fetch does, held at
+0.002 USD each; a search past a cap or one the source failed says why on the page and
+is asked again with the same button, which only asks for the keywords still without
+their results. Once every main keyword has its own, *Search them all again* pays for
+all of them anew. A keyword that stops being a main one keeps its results: brought
+back, it is not paid for twice. There is no reuse across studies.
+
+**The sites.** The page lists the sites found: for how many of the main keywords each
+appears and at what places, the ones found for the most keywords first. A site is its
+host without `www.`; a subdomain is a site of its own. A site with two results for one
+keyword counts once, at its best place.
+
+**The marks.** The owner marks a site as a *specialist* or a *generalist*. A mark
+belongs to the user, not to the study (`DomainMarks`, one stream per user): Amazon
+marked once is known on every study of theirs, and a mark changed changes them all.
+2,000 sites at the most.
+
+**The test.**
+
+- it **fails** as soon as one specialist is found for 2 main keywords or more,
+  whatever is left to search or to mark;
+- it **passes** when every main keyword looked at has its results and every site found
+  for 2 of them or more is marked, none a specialist;
+- it is **not checked** otherwise.
+
+A site found for one main keyword decides nothing, so it needs no mark: a study of
+thirty keywords asks for a handful of marks, not three hundred. The 2 is `SEVERAL_KEYWORDS`.
+
+The results of each search (`research_checks`), the marks (`research_domain_marks`) and
+what they come to for a study (`research_domains`, and the competition on
+`research_studies`) are kept by the read model, worked out again whenever the main
+keywords, a search or a mark changes. The page reads the marks from the user's own
+stream, so a mark shows at once.
 
 ## The report
 
@@ -209,10 +273,11 @@ A study's page shows, under its seeds:
   the cost per click of the kept keywords averaged by volume and the study's own
   price / CPC;
 - **what the score reads**, in one form: the currency, the price and the costs, the
-  brands to drop and the words to exclude (one a line, 200 of each at most), how many
-  good products were found at the supplier and whether a specialist holds the first
-  results. A field left empty is nothing said: the two looked up by hand stay *not
-  checked* until filled. Saving scores the study again from the keywords it holds;
+  brands to drop and the words to exclude (one a line, 200 of each at most) and how
+  many good products were found at the supplier. A field left empty is nothing said:
+  the supplier test stays *not checked* until filled. Saving scores the study again
+  from the keywords it holds;
+- **who holds the first results** of the main keywords, with the sites to mark;
 - **the keywords**, the most searched first, by list: all of them, the main ones, the
   long tail, the spellings that count under another, then the dropped ones by reason.
   Each row has its volume, difficulty, cost per click (the source's, in dollars), the
@@ -273,7 +338,17 @@ A failure is one of two kinds, and what asks decides what to do with each:
 
 ## Not confirmed yet
 
-Both need a live call, which the `keywords` command makes:
+They need a live call, which the `keywords` command makes:
+
+- that a search takes the country code the keywords do. The countries are read from
+  DataForSEO Labs (`locations_and_languages`) and a search is sent the same
+  `location_code` (2250 for France); DataForSEO's pages do not say the two lists share
+  their codes, though every code seen does. One search settles it and prints who
+  holds the first results, for 0.002 USD:
+
+  ```sh
+  timada-dashboard keywords "arbre à chat" --country FR --language fr --results
+  ```
 
 - that France in French returns a difficulty. The last line of the command's output
   counts the rows that have one;

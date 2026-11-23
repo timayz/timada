@@ -5,8 +5,8 @@ use timada_core::db::Db;
 use timada_core::page::PageFrom;
 use timada_research::aggregator::KeywordRow;
 use timada_research::{
-    DUPLICATE, MAX_LISTED_WORDS, ResearchError, Sale, SetInputs, Thresholds, Verdict, judge,
-    keywords_of_outcome, outcome_counts, read_model_subscription, study_row,
+    DUPLICATE, MAX_LISTED_WORDS, ResearchError, Sale, SetInputs, TestState, Thresholds, Verdict,
+    judge, keywords_of_outcome, outcome_counts, read_model_subscription, study_row,
 };
 
 async fn catch_up(executor: &evento::Turso, db: &Db) {
@@ -72,7 +72,6 @@ async fn the_owner_says_what_the_study_is_scored_from() {
         ],
         excluded_words: vec!["diy".into()],
         supplier_products: Some(240),
-        specialist_first: Some(false),
         usd_micros: Some(1_085_000),
         ..inputs()
     };
@@ -86,7 +85,6 @@ async fn the_owner_says_what_the_study_is_scored_from() {
     assert_eq!(loaded.inputs.brands, ["Trixie", "trixie"]);
     assert_eq!(loaded.inputs.excluded_words, ["diy"]);
     assert_eq!(loaded.inputs.supplier_products, Some(240));
-    assert_eq!(loaded.inputs.specialist_first, Some(false));
     assert_eq!(loaded.inputs.usd_micros, Some(1_085_000));
     assert!(loaded.inputs_set_at.is_some());
 
@@ -316,7 +314,12 @@ async fn a_fetch_scores_the_study_and_saving_scores_it_again_without_one() {
     assert!(row.price_per_click.is_some());
 
     // The page reads the tests again from the row and the study.
-    let judgement = judge(&row.tally(), &after.inputs, &Thresholds::default());
+    let judgement = judge(
+        &row.tally(),
+        TestState::parse(&row.competition),
+        &after.inputs,
+        &Thresholds::default(),
+    );
     assert_eq!(judgement.verdict, Verdict::NoGo);
     assert_eq!(
         judgement.price_per_click.map(|ratio| ratio as i64),
