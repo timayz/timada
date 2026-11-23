@@ -8111,6 +8111,7 @@ dependencies = [
  "bitcode",
  "evento",
  "thiserror 2.0.21",
+ "timada-catalog",
  "timada-core",
  "tokio",
  "ulid",

@@ -122,6 +122,80 @@ most, whatever the caps: past it the platform's cap reads as reached.
 (`/admin/research`), lists the day's and the month's spend by user, with the number of
 calls, beside the caps. It reads a table kept from the charges, a moment behind them.
 
+## How a study is scored
+
+A list of a thousand keywords does not say whether a niche is worth a shop. The tests
+that decide are arithmetic (`crates/research/src/score.rs`), worked out from the rows a
+study fetched and from what its owner says of it. Nothing of it is stored: a study is
+scored again whenever one of its numbers changes, without a fetch. The page that shows
+the score and edits its numbers is #680.
+
+**Which keywords count.** A keyword is kept or dropped, with the first reason that
+drops it, in this order:
+
+| reason | when |
+|---|---|
+| excluded | dropped by hand, or it holds a word the owner excluded |
+| brand | it holds a brand the owner listed |
+| informational | the source says so, or it holds a question word |
+| too difficult | its difficulty is above the highest kept (35) |
+| volume too low | fewer than 150 searches a month, or no volume |
+
+A brand or an excluded word is matched as whole words, whatever the case and the
+accents: `nike` drops `chaussures nike`, not `nikel`. Question words are listed for
+French and English; another language is left to the source's intent. A keyword without
+a difficulty is not held to be difficult. A keyword the owner brings back is kept
+whatever the filters say.
+
+Two kept keywords that differ only by accents, hyphens or a plural `s` or `x`
+(`arbres à chat`, `arbre a chats`) are one search: they count once, under the one
+searched more, and its volume alone is counted.
+
+A kept keyword is **main** from 1,000 searches a month and **long tail** below.
+
+**One typical sale.** From the study's own numbers: the average price with VAT, the
+supplier's cost, shipping, import charges, the VAT rate, the share of fixed costs, the
+payment fee. The margin and the break-even return on ad spend are worked out by the
+catalog's margin arithmetic, the one a shop's products use. Until a price and a
+supplier cost are both said, nothing is.
+
+**What a click may cost.** An ad pays when the price over the cost per click is at
+least
+
+    (break-even + safety) / conversion rate
+
+with a safety of 0.4 and a conversion rate of 1.5 % unless set. A sale at 60.00 that
+leaves 23.85 breaks even at 2.52, needs a price / CPC of 194.67, and so bears a click
+of 0.308 at the most. Each kept keyword is *ads* or *SEO only* by its own cost per
+click; the study as a whole is judged on the cost per click averaged by volume. A sale
+that leaves nothing pays for no ad: every keyword is SEO only.
+
+**Dollars.** The cost per click is in US dollars and the price in the study's
+currency. The score converts: whoever asks gives what one unit of the currency is
+worth in dollars (the euro reference rates timada already reads for invoices), and a
+price in dollars needs none. Without a rate the two are compared as they are, the
+score says so (`cpc_converted`), and the page must.
+
+**The tests and the verdict.**
+
+| test | passes when |
+|---|---|
+| main keywords | 3 or more |
+| long tail | 10 or more |
+| margin | a sale leaves more than zero |
+| price / CPC | at or above what the sale needs |
+| supplier | 200 products or more, entered by hand |
+| competition | no specialist shop in the first results, entered by hand |
+
+A test whose numbers are not there yet is *not checked*: nothing fetched, no price, no
+cost per click on any kept keyword, a figure not entered. The verdict is **go** when
+every test passes, **no-go** when one fails, **incomplete** otherwise.
+
+**Settings.** The highest difficulty kept, how many main and long-tail keywords are
+enough, the safety and the conversion rate are settings with these defaults
+(`Thresholds`). The 35 is Semrush's figure, taken because DataForSEO's score runs over
+the same 0 to 100; it is a placeholder until the comparison below is made.
+
 ## When a call fails
 
 A failure is one of two kinds, and what asks decides what to do with each:
@@ -140,4 +214,5 @@ Both need a live call, which the `keywords` command makes:
   counts the rows that have one;
 - how DataForSEO's difficulty compares with the Ahrefs and Semrush scores the usual
   thresholds are written for. Fetch a few keywords whose scores in those tools are
-  known and record the comparison here.
+  known and record the comparison here. The score's default of 35 for the highest
+  difficulty kept waits on it.
