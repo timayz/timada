@@ -1291,7 +1291,8 @@ the old tenant's products. `make reset` removes the copy and the settings with t
 
 `make storefront.prod` runs the same shop on a tenant of the production platform
 (`https://timada.co`, its store API at `timada.co:4321` over TLS), with a key of that
-tenant in `config/storefront.prod.local.env`. It keeps its own copy of the catalogue
+tenant and its picture address (`STORE_TOKEN` and `STORE_MEDIA_URL`, both on its API
+keys page) in `config/storefront.prod.local.env`. It keeps its own copy of the catalogue
 (`storefront.prod.db`); its carts, orders and payments are real ones.
 
 ### Making it your own
