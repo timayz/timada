@@ -92,6 +92,12 @@ read_fresh_secs = 0
 import_duty_cents = 0
 import_fee_cents = 0
 
+# Keywords come from a stand-in for DataForSEO (tests/e2e/dataforseo.ts).
+[dataforseo]
+login = "keywords-e2e@example.com"
+password = "dataforseo-e2e-s3cret"
+api_url = "http://127.0.0.1:12116"
+
 # Every spec invites from a handful of accounts, so the limits on invitations
 # are far above what the suite sends.
 [invitations]

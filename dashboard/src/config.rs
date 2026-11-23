@@ -63,6 +63,9 @@ pub struct Config {
     /// Products imported from AliExpress; every setting has a default.
     #[serde(default)]
     pub aliexpress: AliexpressConfig,
+    /// Where keyword data is read from; without a login, nothing reads any.
+    #[serde(default)]
+    pub dataforseo: DataforseoConfig,
     pub auth: AuthConfig,
     pub mail: MailConfig,
     pub monitoring: MonitoringConfig,
@@ -883,6 +886,42 @@ impl Default for AliexpressConfig {
     }
 }
 
+/// Keyword data (how often a query is searched, what a click costs, how hard
+/// it is to rank for), read from DataForSEO under the platform's own login
+/// and paid by the call. Without the login keyword research is off.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct DataforseoConfig {
+    /// The API login and password of the platform's DataForSEO account (its
+    /// API Access page; the password is not the account's own).
+    #[serde(default)]
+    pub login: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    /// Where DataForSEO's API is reached; its own address when unset. Tests
+    /// point it at a stand-in.
+    #[serde(default)]
+    pub api_url: Option<String>,
+}
+
+impl DataforseoConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        let set = |value: &Option<String>| value.as_deref().is_some_and(|v| !v.is_empty());
+        if set(&self.login) != set(&self.password) {
+            return Err(ConfigError::Message(
+                "dataforseo.login and dataforseo.password go together: set both or neither".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The login and the password, when both are set.
+    pub fn credentials(&self) -> Option<(&str, &str)> {
+        let login = self.login.as_deref().filter(|v| !v.is_empty())?;
+        let password = self.password.as_deref().filter(|v| !v.is_empty())?;
+        Some((login, password))
+    }
+}
+
 /// Invoices.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct InvoicingConfig {
@@ -1152,6 +1191,7 @@ impl Config {
         if let Some(payments) = &config.payments {
             payments.validate(config.secrets.as_ref())?;
         }
+        config.dataforseo.validate()?;
         config.auth.validate()?;
         config.mail.validate()?;
 
@@ -1446,6 +1486,35 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn the_keyword_login_and_password_go_together() {
+        let none = DataforseoConfig::default();
+        assert!(none.validate().is_ok());
+        assert!(none.credentials().is_none());
+        let both = DataforseoConfig {
+            login: Some("ops@example.com".into()),
+            password: Some("s3cret".into()),
+            api_url: None,
+        };
+        assert!(both.validate().is_ok());
+        assert_eq!(both.credentials(), Some(("ops@example.com", "s3cret")));
+        // An empty value is one left unset, as an environment variable is.
+        for half in [
+            DataforseoConfig {
+                password: None,
+                ..both.clone()
+            },
+            DataforseoConfig {
+                login: Some(String::new()),
+                ..both.clone()
+            },
+        ] {
+            let err = half.validate().unwrap_err();
+            assert!(err.to_string().contains("go together"), "{err}");
+            assert!(half.credentials().is_none());
+        }
     }
 
     #[test]
@@ -1865,5 +1934,6 @@ mod tests {
         let path = format!("{}/../config/e2e.toml", env!("CARGO_MANIFEST_DIR"));
         let config = Config::load(Some(&path)).unwrap();
         assert_eq!(config.auth.root.email(), "root-e2e@example.com");
+        assert!(config.dataforseo.credentials().is_some());
     }
 }

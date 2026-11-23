@@ -1,4 +1,4 @@
-.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places storefront storefront.prod storefront.migrate stripe.listen aliexpress.tunnel e2e e2e.cluster loadtest limits wan lint fmt-check fmt test machete l10n check
+.PHONY: start cert cert.install up stop down dev reset migrate seed snapshot.chatounette aliexpress.places keywords storefront storefront.prod storefront.migrate stripe.listen aliexpress.tunnel e2e e2e.cluster loadtest limits wan lint fmt-check fmt test machete l10n check
 
 # What `make seed` writes and `make storefront` reads: the key and the addresses
 # of the seeded shop. Git ignores it.
@@ -70,6 +70,15 @@ seed:
 # app's key) into crates/aliexpress/places.bin, which the next build embeds.
 aliexpress.places:
 	cargo run -p timada-dashboard -- --config config/dev.local.toml aliexpress-places
+
+# Asks the keyword source for one seed (one paid call) and prints its keywords
+# with what the call cost; without a seed, the countries it has keywords for:
+#   SEED="arbre à chat" make keywords
+#   SEED="cat tree" COUNTRY=US LANGUAGE=en LIMIT=200 make keywords
+keywords:
+	cargo run -p timada-dashboard -- --config config/dev.local.toml keywords \
+		$${SEED:+"$$SEED"} $${COUNTRY:+--country "$$COUNTRY"} \
+		$${LANGUAGE:+--language "$$LANGUAGE"} $${LIMIT:+--limit "$$LIMIT"}
 
 # Takes the snapshot from the live shop, pictures included (see
 # seeds/README.md); run again, it fetches only the pictures not there yet.
