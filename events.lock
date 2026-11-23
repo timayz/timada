@@ -381,6 +381,9 @@ event timada-research/Study::Deleted { deleted_by: String }
 event timada-research/Study::FetchFailed { seed: String, reason: String, failed_by: String }
 event timada-research/Study::FetchRequested { seed: String, requested_by: String }
 event timada-research/Study::FetchStarted { seed: String, started_by: String }
+event timada-research/Study::InputsSet { currency: String, price_cents: Option<u64>, cost_cents: Option<u64>, shipping_cents: u64, import_cents: u64, vat_bps: u32, fixed_cents: u64, payment_fee_bps: u32, payment_fee_cents: u64, brands: Vec<String>, excluded_words: Vec<String>, supplier_products: Option<u32>, specialist_first: Option<bool>, usd_micros: Option<u64>, set_by: String }
+event timada-research/Study::KeywordDropped { keyword: String, dropped_by: String }
+event timada-research/Study::KeywordRestored { keyword: String, restored_by: String }
 event timada-research/Study::KeywordsFetched { seed: String, rows: Vec<KeywordRow>, cost_usd_micros: u64, fetched_by: String }
 event timada-research/Study::KeywordsReused { seed: String, rows: Vec<KeywordRow>, from_study: String, fetched_at: u64, reused_by: String }
 event timada-research/Study::Renamed { name: String, renamed_by: String }

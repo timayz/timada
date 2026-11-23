@@ -226,6 +226,164 @@ pub fn format_usd(usd_micros: u64) -> String {
     }
 }
 
+/// How long a save waits for the euro rates before going on without one.
+const RATE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// What one unit of `currency` is worth on `day` (`YYYY-MM-DD`) in
+/// millionths of a US dollar, by the euro reference rates: what a study
+/// reads a cost per click with. `None` for the dollar itself, which needs
+/// none, and when the rates do not say.
+pub async fn usd_worth(
+    rates: &dyn crate::ecb::EuroRates,
+    currency: &str,
+    day: &str,
+) -> Option<u64> {
+    use crate::ecb::RateAnswer;
+    if currency == timada_research::CPC_CURRENCY {
+        return None;
+    }
+    let per_euro = async |currency: &str| match rates.rate_on(currency, day).await {
+        RateAnswer::Rate(rate) => rate.per_euro_micros().filter(|micros| *micros > 0),
+        RateAnswer::NoSuchCurrency | RateAnswer::Unavailable(_) => None,
+    };
+    let read = async {
+        let dollars = per_euro(timada_research::CPC_CURRENCY).await?;
+        if currency == "EUR" {
+            return Some(dollars);
+        }
+        let units = per_euro(currency).await?;
+        let worth = (u128::from(dollars) * 1_000_000 + u128::from(units) / 2) / u128::from(units);
+        u64::try_from(worth).ok().filter(|worth| *worth > 0)
+    };
+    tokio::time::timeout(RATE_WAIT, read).await.ok().flatten()
+}
+
+/// A figure in hundredths (a return on ad spend, a price over a cost per
+/// click) as `194.67`.
+pub fn format_ratio(hundredths: u64) -> String {
+    timada_core::format_amount(hundredths)
+}
+
+/// A cost per click in thousandths of a cent, to the tenth of a cent, in
+/// `currency`: `0.308 EUR`. A click is priced finer than a cent.
+pub fn format_click(millis: u64, currency: &str) -> String {
+    let tenths = (millis + 50) / 100;
+    format!("{}.{:03} {currency}", tenths / 1_000, tenths % 1_000)
+}
+
+/// The columns of a study's export.
+pub const EXPORT_COLUMNS: [&str; 11] = [
+    "keyword",
+    "outcome",
+    "counts_under",
+    "searches_a_month",
+    "difficulty",
+    "cost_per_click_usd",
+    "cost_per_click",
+    "currency",
+    "price_per_click",
+    "channel",
+    "intent",
+];
+
+/// How many keywords of a study one read of its export takes.
+const EXPORT_PAGE: i64 = 500;
+
+/// A study's keywords with what the score made of each, the most searched
+/// first, as a CSV file: one line per keyword, a keyword two seeds gave
+/// once. `judgement` is the study's, for what a click is worth against its
+/// sale. The file is the owner's own report, read from the read model a
+/// page at a time.
+pub fn study_csv(
+    db: Db,
+    study: StudyState,
+    judgement: timada_research::Judgement,
+) -> topcoat::router::Body {
+    use timada_core::page::{Cursor, PageFrom};
+    use timada_research::{DUPLICATE, keywords_of_study};
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, crate::feed::Broken>>(2);
+    tokio::spawn(async move {
+        let mut head = String::from("\u{feff}");
+        crate::export::csv_line(&mut head, &EXPORT_COLUMNS);
+        if tx.send(Ok(head.into())).await.is_err() {
+            return;
+        }
+        let currency = if judgement.cpc_converted {
+            study.inputs.sale.currency.as_str()
+        } else {
+            timada_research::CPC_CURRENCY
+        };
+        let mut after: Option<Cursor> = None;
+        loop {
+            let from = match &after {
+                Some(cursor) => PageFrom::Older(cursor),
+                None => PageFrom::First,
+            };
+            let page = match keywords_of_study(&db, &study.id, from, EXPORT_PAGE).await {
+                Ok(page) => page,
+                Err(err) => {
+                    tracing::error!(study = %study.id, error = %err, "a study's export stopped");
+                    let _ = tx.send(Err(err.into())).await;
+                    return;
+                }
+            };
+            let mut text = String::new();
+            for row in &page.rows {
+                if row.outcome == DUPLICATE {
+                    continue;
+                }
+                let click = row
+                    .cpc_usd_cents
+                    .map(|cents| study.inputs.cpc_millis(cents as u64));
+                let kept = matches!(row.outcome.as_str(), "main" | "long_tail");
+                let figure = |value: Option<i64>| value.map(|v| v.to_string()).unwrap_or_default();
+                crate::export::csv_line(
+                    &mut text,
+                    &[
+                        crate::export::typed(&row.keyword),
+                        row.outcome.clone(),
+                        crate::export::typed(row.variant_of.as_deref().unwrap_or_default()),
+                        figure(row.volume),
+                        figure(row.difficulty),
+                        row.cpc_usd_cents
+                            .map(|cents| timada_core::format_amount(cents as u64))
+                            .unwrap_or_default(),
+                        click
+                            .map(|millis| {
+                                let tenths = (millis + 50) / 100;
+                                format!("{}.{:03}", tenths / 1_000, tenths % 1_000)
+                            })
+                            .unwrap_or_default(),
+                        currency.to_owned(),
+                        judgement
+                            .sale
+                            .zip(click)
+                            .and_then(|(sale, click)| sale.price_per_click(click))
+                            .map(format_ratio)
+                            .unwrap_or_default(),
+                        judgement
+                            .sale
+                            .filter(|_| kept)
+                            .and_then(|sale| sale.channel(click))
+                            .map(|channel| channel.as_str().to_owned())
+                            .unwrap_or_default(),
+                        row.intent.clone().unwrap_or_default(),
+                    ],
+                );
+            }
+            if !text.is_empty() && tx.send(Ok(text.into())).await.is_err() {
+                return;
+            }
+            match page.older {
+                Some(cursor) => after = Some(cursor),
+                None => return,
+            }
+        }
+    });
+    topcoat::router::Body::new(crate::feed::Pages::of(rx))
+}
+
 /// Whether a request made at `requested_at` is history at `now` (both unix
 /// seconds).
 fn is_history(now: u64, requested_at: u64) -> bool {
@@ -280,6 +438,32 @@ mod tests {
         },
         reuse_secs: 0,
     };
+
+    #[tokio::test]
+    async fn a_currency_is_worth_dollars_by_the_euro_rates() {
+        let rates = timada_invoicing::rates::RateTable::from_ecb_xml(
+            "<Envelope><Cube>
+            <Cube time='2026-10-14'><Cube currency='USD' rate='1.0850'/></Cube>
+            <Cube time='2026-10-13'><Cube currency='USD' rate='1.0900'/><Cube currency='GBP' rate='0.86'/></Cube>
+            </Cube></Envelope>",
+        )
+        .unwrap();
+        assert_eq!(
+            usd_worth(&rates, "EUR", "2026-10-14").await,
+            Some(1_085_000)
+        );
+        // 1.09 dollars a euro over 0.86 pounds a euro.
+        assert_eq!(
+            usd_worth(&rates, "GBP", "2026-10-13").await,
+            Some(1_267_442)
+        );
+        assert_eq!(usd_worth(&rates, "USD", "2026-10-14").await, None);
+        assert_eq!(usd_worth(&rates, "CHF", "2026-10-14").await, None);
+        let none = timada_invoicing::rates::RateTable::default();
+        assert_eq!(usd_worth(&none, "EUR", "2026-10-14").await, None);
+        assert_eq!(format_click(30_821, "EUR"), "0.308 EUR");
+        assert_eq!(format_click(123_456, "USD"), "1.235 USD");
+    }
 
     thread_local! {
         /// The read models of the test's store: a test runs on a thread of

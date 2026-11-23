@@ -10,6 +10,10 @@ pub const MIGRATION_APP: &str = "research";
 /// `research_keywords`: one row per keyword a seed's last fetch gave, read
 /// by study from the most searched down (`sort_volume` is the volume, 0
 /// when the source has none; `id` orders the rows of one volume).
+/// A keyword's `outcome` is what the score made of it (`main`, `long_tail`,
+/// `variant`, a reason it was dropped, `duplicate` for a row another seed
+/// gave too, empty until scored), and `variant_of` the keyword it counts
+/// under; a study's row keeps what its keywords come to and the verdict.
 /// `research_fetches`: the last paid fetch of a seed in a country and a
 /// language, over every study: where a new fetch of it looks first.
 /// `research_spend`: what a user's calls cost on a day (UTC); `version` is
@@ -68,6 +72,23 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             version INTEGER NOT NULL,
             PRIMARY KEY (day, user_id)
         );",
+        ),
+        Migration::up(
+            "0003_score",
+            "ALTER TABLE research_keywords ADD COLUMN outcome TEXT NOT NULL DEFAULT '';
+        ALTER TABLE research_keywords ADD COLUMN variant_of TEXT;
+        CREATE INDEX research_keywords_outcome ON research_keywords
+            (study_id, outcome, sort_volume DESC, id DESC);
+        ALTER TABLE research_studies ADD COLUMN verdict TEXT NOT NULL DEFAULT 'incomplete';
+        ALTER TABLE research_studies ADD COLUMN scored_keywords INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE research_studies ADD COLUMN main_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE research_studies ADD COLUMN long_tail_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE research_studies ADD COLUMN kept_volume INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE research_studies ADD COLUMN avg_cpc_millis INTEGER;
+        ALTER TABLE research_studies ADD COLUMN currency TEXT NOT NULL DEFAULT '';
+        ALTER TABLE research_studies ADD COLUMN break_even_roas INTEGER;
+        ALTER TABLE research_studies ADD COLUMN price_per_click INTEGER;
+        ALTER TABLE research_studies ADD COLUMN needed_price_per_click INTEGER;",
         ),
     ],
 );

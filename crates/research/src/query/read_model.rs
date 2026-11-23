@@ -13,15 +13,20 @@
 //! version of the day's stream it was last moved at, and a charge at or
 //! under it was counted already.
 
+use std::collections::{HashMap, HashSet};
+
 use evento::{
     Executor,
     metadata::{Event, RawEvent},
     subscription::{Context, SubscriptionBuilder},
 };
-use timada_core::db::{Db, Value, execute, params_from_iter};
+use timada_core::db::{Db, FromRow, Value, execute, params_from_iter};
 
 use crate::aggregator::{Charged, KeywordRow, Study, StudyEvent};
 use crate::command::{StudyState, study_projection};
+use crate::score::{Score, Thresholds, score};
+
+use super::keywords::DUPLICATE;
 
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-research/read-models";
@@ -64,24 +69,38 @@ async fn on_study_event<E: Executor>(
     if study.deleted {
         return delete_study(&db, &study.id).await;
     }
-    let (seed, rows, fetched_at) = match &decoded {
+    let fetch = match &decoded {
         StudyEvent::KeywordsFetched(fetched) => {
-            (&fetched.seed, &fetched.rows, event.timestamp as i64)
+            Some((&fetched.seed, &fetched.rows, event.timestamp as i64))
         }
         StudyEvent::KeywordsReused(reused) => {
-            (&reused.seed, &reused.rows, reused.fetched_at as i64)
+            Some((&reused.seed, &reused.rows, reused.fetched_at as i64))
         }
-        _ => return upsert_study(&db, &study).await,
+        _ => None,
     };
-    let fetch = Fetch {
-        study_id: &study.id,
-        seed,
-        event_id: event.id.to_string(),
-        fetched_at,
-        rows,
-    };
-    replace_keywords(&db, &fetch).await?;
-    upsert_study(&db, &study).await
+    if let Some((seed, rows, fetched_at)) = fetch {
+        let fetch = Fetch {
+            study_id: &study.id,
+            seed,
+            event_id: event.id.to_string(),
+            fetched_at,
+            rows,
+        };
+        replace_keywords(&db, &fetch).await?;
+    }
+    upsert_study(&db, &study).await?;
+    // What the score reads changed: new rows, or what the owner said.
+    let scores = fetch.is_some()
+        || matches!(
+            decoded,
+            StudyEvent::InputsSet(_)
+                | StudyEvent::KeywordDropped(_)
+                | StudyEvent::KeywordRestored(_)
+        );
+    if scores {
+        rescore(&db, &study).await?;
+    }
+    Ok(())
 }
 
 /// Notes where `seed` was last paid for in the study's country and
@@ -167,6 +186,140 @@ async fn upsert_study(db: &Db, study: &StudyState) -> anyhow::Result<()> {
             study.keywords() as i64,
             study.created_at as i64,
             study.updated_at as i64,
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+/// One keyword of a study, with what the last score made of it.
+#[derive(FromRow)]
+struct Scored {
+    id: String,
+    keyword: String,
+    volume: Option<i64>,
+    cpc_usd_cents: Option<i64>,
+    difficulty: Option<i64>,
+    intent: Option<String>,
+    outcome: String,
+    variant_of: Option<String>,
+}
+
+/// Every keyword of a study, the most searched first.
+pub(super) const ALL_KEYWORDS: &str =
+    "SELECT id, keyword, volume, cpc_usd_cents, difficulty, intent, outcome, variant_of
+     FROM research_keywords INDEXED BY research_keywords_volume
+     WHERE study_id = ?1 ORDER BY sort_volume DESC, id DESC";
+
+/// Writes what the score made of one keyword.
+pub(super) const SET_OUTCOME: &str =
+    "UPDATE research_keywords INDEXED BY sqlite_autoindex_research_keywords_1
+     SET outcome = ?3, variant_of = ?4 WHERE study_id = ?1 AND id = ?2";
+
+/// How many keywords one transaction rewrites the outcome of.
+const OUTCOMES_PER_WRITE: usize = 200;
+
+/// The rows of a study whose outcome changed.
+struct Outcomes<'a> {
+    study_id: &'a str,
+    rows: &'a [(String, &'static str, Option<String>)],
+}
+
+/// Scores the study from the keywords the read model holds and from what
+/// its owner said, and writes what changed: each keyword's outcome, and on
+/// the study's row what they come to and the verdict. The thresholds are
+/// the defaults. A keyword two seeds gave is scored on its most searched
+/// row, the others being [`DUPLICATE`]s.
+async fn rescore(db: &Db, study: &StudyState) -> anyhow::Result<()> {
+    let stored: Vec<Scored> = db.fetch_all(ALL_KEYWORDS, (study.id.as_str(),)).await?;
+    let mut first: HashSet<&str> = HashSet::with_capacity(stored.len());
+    let mut scored_at: Vec<bool> = Vec::with_capacity(stored.len());
+    let mut rows: Vec<KeywordRow> = Vec::with_capacity(stored.len());
+    for row in &stored {
+        let scored = first.insert(row.keyword.as_str());
+        scored_at.push(scored);
+        if scored {
+            rows.push(KeywordRow {
+                keyword: row.keyword.clone(),
+                volume: row.volume.map(|volume| volume as u64),
+                cpc_usd_cents: row.cpc_usd_cents.map(|cents| cents as u64),
+                difficulty: row
+                    .difficulty
+                    .map(|difficulty| difficulty.clamp(0, 100) as u8),
+                intent: row.intent.clone(),
+            });
+        }
+    }
+    let score = score(rows, &study.language, &study.inputs, &Thresholds::default());
+    let made: HashMap<&str, (&'static str, Option<&str>)> = score
+        .keywords
+        .iter()
+        .map(|keyword| {
+            let of = match &keyword.outcome {
+                crate::score::Outcome::Variant { of } => Some(of.as_str()),
+                _ => None,
+            };
+            (keyword.row.keyword.as_str(), (keyword.outcome.as_str(), of))
+        })
+        .collect();
+    let mut changed: Vec<(String, &'static str, Option<String>)> = Vec::new();
+    for (row, scored) in stored.iter().zip(scored_at) {
+        let (outcome, of) = if scored {
+            made.get(row.keyword.as_str())
+                .copied()
+                .unwrap_or((DUPLICATE, None))
+        } else {
+            (DUPLICATE, None)
+        };
+        if row.outcome != outcome || row.variant_of.as_deref() != of {
+            changed.push((row.id.clone(), outcome, of.map(str::to_owned)));
+        }
+    }
+    for rows in changed.chunks(OUTCOMES_PER_WRITE) {
+        let outcomes = Outcomes {
+            study_id: &study.id,
+            rows,
+        };
+        db.write(&outcomes, |tx, outcomes| {
+            Box::pin(async move {
+                for (id, outcome, of) in outcomes.rows {
+                    execute(
+                        tx,
+                        SET_OUTCOME,
+                        (outcomes.study_id, id.as_str(), *outcome, of.clone()),
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await?;
+    }
+    set_score(db, study, &score).await
+}
+
+/// Writes what a study's keywords come to and its verdict on its row.
+async fn set_score(db: &Db, study: &StudyState, score: &Score) -> anyhow::Result<()> {
+    let sale = score.sale;
+    db.execute(
+        "UPDATE research_studies SET verdict = ?2, scored_keywords = ?3, main_count = ?4,
+            long_tail_count = ?5, kept_volume = ?6, avg_cpc_millis = ?7, currency = ?8,
+            break_even_roas = ?9, price_per_click = ?10, needed_price_per_click = ?11
+         WHERE id = ?1",
+        (
+            study.id.as_str(),
+            score.verdict.as_str(),
+            score.keywords.len() as i64,
+            i64::from(score.main),
+            i64::from(score.long_tail),
+            score.kept_volume as i64,
+            score.avg_cpc_millis.map(|millis| millis as i64),
+            study.inputs.sale.currency.as_str(),
+            sale.and_then(|sale| sale.margin.break_even_roas())
+                .map(|roas| roas as i64),
+            score.price_per_click.map(|ratio| ratio as i64),
+            sale.and_then(|sale| sale.needed_price_per_click)
+                .map(|ratio| ratio as i64),
         ),
     )
     .await?;

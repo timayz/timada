@@ -1,6 +1,8 @@
 use evento::WriteError;
 
-use crate::value_object::{MAX_NAME_LEN, MAX_SEED_LEN, MAX_SEEDS};
+use crate::value_object::{
+    MAX_HAND_SET, MAX_LISTED_WORDS, MAX_NAME_LEN, MAX_SEED_LEN, MAX_SEEDS, MAX_WORD_LEN,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ResearchError {
@@ -24,6 +26,24 @@ pub enum ResearchError {
     Fetching,
     #[error("every seed keyword has its keywords, or is being fetched")]
     NothingToFetch,
+    #[error("the sale is in a currency the platform does not know")]
+    InvalidCurrency,
+    #[error("a rate is between 0 and 100 %")]
+    InvalidRate,
+    #[error("a brand or an excluded word is 1 to {MAX_WORD_LEN} characters")]
+    InvalidWord,
+    #[error(
+        "a study lists at most {MAX_LISTED_WORDS} brands and {MAX_LISTED_WORDS} excluded words"
+    )]
+    TooManyWords,
+    #[error("no such keyword")]
+    InvalidKeyword,
+    #[error(
+        "a study holds at most {MAX_HAND_SET} keywords dropped by hand, and as many brought back"
+    )]
+    TooManyHandSet,
+    #[error("the study was changed too many times: start another")]
+    TooManyChanges,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -65,6 +85,13 @@ impl ResearchError {
             Self::UnknownSeed => "unknown_seed",
             Self::Fetching => "keywords_fetching",
             Self::NothingToFetch => "nothing_to_fetch",
+            Self::InvalidCurrency => "invalid_study_currency",
+            Self::InvalidRate => "invalid_study_rate",
+            Self::InvalidWord => "invalid_study_word",
+            Self::TooManyWords => "too_many_study_words",
+            Self::InvalidKeyword => "invalid_keyword",
+            Self::TooManyHandSet => "too_many_hand_set_keywords",
+            Self::TooManyChanges => "study_changed_too_often",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })

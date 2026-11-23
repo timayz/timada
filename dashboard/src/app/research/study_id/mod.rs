@@ -1,17 +1,25 @@
 //! `/research/{study_id}`: one study, for its owner: its seeds and where
-//! the fetch of each stands, and the keywords the fetches gave, the most
-//! searched first. Where a fetch stands is read from the study's stream;
-//! the keywords come from the shared read model, a moment behind.
+//! the fetch of each stands, the verdict and the tests behind it, what one
+//! sale leaves, the numbers the score reads, and the keywords with what the
+//! score made of each. Where a fetch stands and what the owner said are
+//! read from the study's stream; the keywords and what they come to are
+//! the shared read model's, a moment behind.
 
 pub mod delete;
+pub mod drop;
+pub mod export;
 pub mod fetch;
+pub mod inputs;
 pub mod rename;
+pub mod restore;
 pub mod seeds;
 
 use timada_core::page::{Cursor, PageFrom};
 use timada_research::{
-    Command, FetchStatus, MAX_SEEDS, ResearchError, SeedState, SpendCap, StudyState,
-    keywords_of_study, spend_day, spend_day_ends,
+    CPC_CURRENCY, Channel, Command, DUPLICATE, DropReason, ENOUGH_PRODUCTS, FetchStatus, Judgement,
+    KeywordRecord, MAX_SEEDS, ResearchError, SeedState, SpendCap, StudyState, Tally, Test,
+    TestState, Thresholds, Tier, VARIANT, Verdict, judge, keywords_of_outcome, keywords_of_study,
+    outcome_counts, spend_day, spend_day_ends, study_row,
 };
 use topcoat::{
     Result,
@@ -26,20 +34,23 @@ use crate::auth::require_user;
 use crate::cluster::LocalReads;
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
 use crate::components::pagination::{
     pagination, pagination_content, pagination_item, pagination_next, pagination_previous,
 };
+use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
+use crate::components::textarea::textarea;
 use crate::config::Config;
 use crate::db::Db;
 use crate::keywords::Keywords;
-use crate::research::{Spending, cap_reached, format_usd};
+use crate::research::{Spending, cap_reached, format_click, format_ratio, format_usd};
 use crate::ui::{
-    Shell, Tone, document, empty_row, format_date, icons, notice, page_header, section_card,
-    status_badge,
+    LINK, PageTab, Shell, Tone, document, empty_row, fact, facts, format_date, icons, notice,
+    page_header, page_tabs, section_card, signed_money, status_badge,
 };
 
 module_param!(pub study_id);
@@ -49,6 +60,9 @@ const PAGE_SIZE: i64 = 100;
 
 #[topcoat::router::query_params(error = bad_request)]
 struct StudyQuery {
+    /// Which of the keyword lists is shown ([`LISTS`]); all of them
+    /// without one.
+    list: Option<String>,
     /// The cursor of the row the page starts after (less searched keywords).
     after: Option<String>,
     /// The cursor of the row the page ends before (more searched keywords).
@@ -59,6 +73,8 @@ struct StudyQuery {
 
 #[derive(serde::Serialize)]
 struct StudyLink<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    list: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     after: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -72,12 +88,346 @@ struct StudyLink<'a> {
 pub fn study_url(cx: &Cx, study_id: &str, error: Option<&str>, message: Option<&str>) -> String {
     href!(index, study_id: study_id.to_owned())
         .query(StudyLink {
+            list: None,
             after: None,
             before: None,
             error,
             message,
         })
         .resolve(cx)
+}
+
+/// The study's page on one of its keyword lists, at the keywords.
+pub(crate) fn list_url(
+    cx: &Cx,
+    study_id: &str,
+    list: Option<&str>,
+    error: Option<&str>,
+    message: Option<&str>,
+) -> String {
+    let url = href!(index, study_id: study_id.to_owned())
+        .query(StudyLink {
+            list: list_of(list).filter(|list| *list != ALL),
+            after: None,
+            before: None,
+            error,
+            message,
+        })
+        .resolve(cx);
+    format!("{url}#keywords")
+}
+
+/// A keyword's row asks to drop it or to bring it back.
+#[derive(serde::Deserialize)]
+pub struct KeywordForm {
+    keyword: String,
+    /// The list the row was on, to come back to.
+    #[serde(default)]
+    list: Option<String>,
+}
+
+/// The list of every keyword, whatever the score made of it.
+const ALL: &str = "all";
+
+/// The lists a study's keywords are read by: all of them, the kept ones by
+/// tier, the spellings that count under another, then the dropped ones by
+/// reason. Each key but the first is an outcome of the read model.
+const LISTS: [(&str, &str); 9] = [
+    (ALL, "All"),
+    ("main", "Main"),
+    ("long_tail", "Long tail"),
+    (VARIANT, "Other spellings"),
+    ("excluded", "Excluded"),
+    ("brand", "Brand"),
+    ("informational", "Informational"),
+    ("too_difficult", "Too difficult"),
+    ("low_volume", "Volume too low"),
+];
+
+/// The key of the list a parameter names, when it names one.
+fn list_of(list: Option<&str>) -> Option<&'static str> {
+    LISTS
+        .iter()
+        .map(|(key, _)| *key)
+        .find(|key| Some(*key) == list)
+}
+
+/// How a keyword's outcome reads in the list of all of them.
+fn outcome_label(outcome: &str) -> (&'static str, Tone) {
+    match outcome {
+        "main" => ("Main", Tone::Success),
+        "long_tail" => ("Long tail", Tone::Success),
+        VARIANT => ("Other spelling", Tone::Neutral),
+        "excluded" => ("Excluded", Tone::Warning),
+        "brand" => ("Brand", Tone::Warning),
+        "informational" => ("Informational", Tone::Warning),
+        "too_difficult" => ("Too difficult", Tone::Warning),
+        "low_volume" => ("Volume too low", Tone::Warning),
+        DUPLICATE => ("Under another seed", Tone::Neutral),
+        _ => ("Not scored yet", Tone::Neutral),
+    }
+}
+
+/// One test of the verdict, as the page words it.
+struct TestLine {
+    /// The test's key, which a test of the page reads.
+    key: &'static str,
+    name: &'static str,
+    /// `passed`, `failed` or `not_checked`.
+    state: &'static str,
+    label: &'static str,
+    tone: Tone,
+    /// The numbers behind it.
+    numbers: String,
+}
+
+/// The six tests with the numbers behind each.
+fn test_lines(
+    study: &StudyState,
+    tally: &Tally,
+    judgement: &Judgement,
+    thresholds: &Thresholds,
+) -> Vec<TestLine> {
+    let fetched = tally.keywords > 0;
+    let currency = study.inputs.sale.currency.as_str();
+    Test::ALL
+        .into_iter()
+        .map(|test| {
+            let state = judgement.test(test);
+            let (label, tone) = match state {
+                TestState::Passed => ("Passed", Tone::Success),
+                TestState::Failed => ("Failed", Tone::Danger),
+                TestState::NotChecked => ("Not checked", Tone::Neutral),
+            };
+            let (name, numbers) = match test {
+                Test::MainKeywords => (
+                    "Main keywords",
+                    if fetched {
+                        format!(
+                            "{} kept with 1,000 searches a month or more; {} are needed.",
+                            tally.main, thresholds.enough_main
+                        )
+                    } else {
+                        "No keyword fetched yet.".to_owned()
+                    },
+                ),
+                Test::LongTail => (
+                    "Long-tail keywords",
+                    if fetched {
+                        format!(
+                            "{} kept with 150 to 999 searches a month; {} are needed.",
+                            tally.long_tail, thresholds.enough_long_tail
+                        )
+                    } else {
+                        "No keyword fetched yet.".to_owned()
+                    },
+                ),
+                Test::Margin => (
+                    "Margin",
+                    match judgement.sale {
+                        Some(sale) => format!(
+                            "A sale at {} leaves {}.",
+                            timada_core::format_money(sale.margin.price_cents, currency),
+                            signed_money(sale.margin.margin_cents(), currency)
+                        ),
+                        None => "Say the price and the supplier's cost below.".to_owned(),
+                    },
+                ),
+                Test::PricePerClick => (
+                    "Price / CPC",
+                    match (judgement.sale, judgement.price_per_click) {
+                        (None, _) => "Say the price and the supplier's cost below.".to_owned(),
+                        (Some(sale), _) if sale.needed_price_per_click.is_none() => {
+                            "The sale leaves nothing: no ad pays for itself.".to_owned()
+                        }
+                        (Some(sale), Some(ratio)) => format!(
+                            "{} over the kept keywords, by volume; {} is needed.",
+                            format_ratio(ratio),
+                            sale.needed_price_per_click
+                                .map(format_ratio)
+                                .unwrap_or_default()
+                        ),
+                        (Some(_), None) if tally.avg_cpc_millis.is_some() => {
+                            "A click on the kept keywords costs nothing.".to_owned()
+                        }
+                        (Some(_), None) => {
+                            "No kept keyword has both a volume and a cost per click.".to_owned()
+                        }
+                    },
+                ),
+                Test::SupplierProducts => (
+                    "Products at the supplier",
+                    match study.inputs.supplier_products {
+                        Some(products) => {
+                            format!("{products} found; {ENOUGH_PRODUCTS} are needed.")
+                        }
+                        None => "Count the good products at the supplier and say below.".to_owned(),
+                    },
+                ),
+                Test::NoSpecialist => (
+                    "No specialist ahead",
+                    match study.inputs.specialist_first {
+                        Some(true) => "A specialist shop holds the first results.".to_owned(),
+                        Some(false) => "No specialist shop holds the first results.".to_owned(),
+                        None => "Look at the first results and say below.".to_owned(),
+                    },
+                ),
+            };
+            TestLine {
+                key: test.as_str(),
+                name,
+                state: state.as_str(),
+                label,
+                tone,
+                numbers,
+            }
+        })
+        .collect()
+}
+
+/// The economics of one sale, line by line; nothing until the price and
+/// the supplier's cost are both said.
+fn sale_lines(
+    study: &StudyState,
+    tally: &Tally,
+    judgement: &Judgement,
+    thresholds: &Thresholds,
+) -> Vec<(&'static str, &'static str, String)> {
+    let Some(sale) = judgement.sale else {
+        return Vec::new();
+    };
+    let currency = study.inputs.sale.currency.as_str();
+    // What the costs per click are in: the sale's currency once converted.
+    let click_currency = if judgement.cpc_converted {
+        currency
+    } else {
+        CPC_CURRENCY
+    };
+    let money = |cents: u64| timada_core::format_money(cents, currency);
+    let margin = sale.margin;
+    let mut lines = vec![
+        ("price", "Price, VAT included", money(margin.price_cents)),
+        ("vat", "VAT", money(margin.vat_cents)),
+        ("cost", "Supplier", money(margin.cost_cents)),
+        ("shipping", "Sending", money(margin.shipping_cents)),
+        ("import", "At the border", money(margin.import_cents)),
+        ("fixed", "Fixed costs", money(margin.fixed_cents)),
+        ("fee", "Payment fee", money(margin.payment_fee_cents)),
+        (
+            "margin",
+            "What the sale leaves",
+            match margin.rate_bps() {
+                Some(rate) => format!(
+                    "{} ({}{} % of the price)",
+                    signed_money(margin.margin_cents(), currency),
+                    if rate < 0 { "-" } else { "" },
+                    timada_core::format_amount(rate.unsigned_abs())
+                ),
+                None => signed_money(margin.margin_cents(), currency),
+            },
+        ),
+        (
+            "break-even",
+            "Break-even return on ad spend",
+            margin
+                .break_even_roas()
+                .map_or_else(|| "None: no ad pays for itself".to_owned(), format_ratio),
+        ),
+    ];
+    if let Some(needed) = sale.needed_price_per_click {
+        lines.push((
+            "needed",
+            "Price / CPC needed",
+            format!(
+                "{} (break-even + {}, at a conversion rate of {} %)",
+                format_ratio(needed),
+                format_ratio(u64::from(thresholds.safety)),
+                timada_core::format_amount(u64::from(thresholds.conversion_bps))
+            ),
+        ));
+    }
+    if let Some(highest) = sale.highest_cpc_millis {
+        lines.push((
+            "highest-cpc",
+            "Highest cost per click it allows",
+            format_click(highest, currency),
+        ));
+    }
+    if let Some(average) = tally.avg_cpc_millis {
+        lines.push((
+            "average-cpc",
+            "Cost per click of the kept keywords, by volume",
+            format_click(average, click_currency),
+        ));
+    }
+    if let Some(ratio) = judgement.price_per_click {
+        lines.push(("ratio", "Price / CPC of the study", format_ratio(ratio)));
+    }
+    lines
+}
+
+/// One keyword's row, as the page words it.
+struct KeywordLine {
+    keyword: String,
+    volume: String,
+    difficulty: String,
+    /// As the source gives it, in US dollars.
+    cpc: Option<String>,
+    /// The sale's price over its cost per click.
+    ratio: Option<String>,
+    /// `ads` or `seo_only`, for a kept keyword once the sale is known.
+    channel: Option<Channel>,
+    intent: String,
+    outcome: String,
+    status: &'static str,
+    tone: Tone,
+    /// The keyword it counts under.
+    variant_of: Option<String>,
+    /// Whether its row offers to drop it (`Some(true)`), to bring it back
+    /// (`Some(false)`), or neither.
+    drops: Option<bool>,
+}
+
+impl KeywordLine {
+    fn of(row: &KeywordRecord, study: &StudyState, judgement: &Judgement) -> Self {
+        let click = row
+            .cpc_usd_cents
+            .map(|cents| study.inputs.cpc_millis(cents as u64));
+        let kept = [Tier::Main.as_str(), Tier::LongTail.as_str()].contains(&row.outcome.as_str());
+        let dropped = DropReason::ALL
+            .iter()
+            .any(|reason| reason.as_str() == row.outcome);
+        let (status, tone) = outcome_label(&row.outcome);
+        Self {
+            keyword: row.keyword.clone(),
+            volume: figure(row.volume),
+            difficulty: figure(row.difficulty),
+            cpc: row
+                .cpc_usd_cents
+                .map(|cents| format!("${}", timada_core::format_amount(cents as u64))),
+            ratio: judgement
+                .sale
+                .zip(click)
+                .and_then(|(sale, click)| sale.price_per_click(click))
+                .map(format_ratio),
+            channel: judgement
+                .sale
+                .filter(|_| kept)
+                .and_then(|sale| sale.channel(click)),
+            intent: row.intent.clone().unwrap_or_else(|| "–".to_owned()),
+            outcome: row.outcome.clone(),
+            status,
+            tone,
+            variant_of: row.variant_of.clone(),
+            drops: if kept || row.outcome == VARIANT {
+                Some(true)
+            } else if dropped {
+                Some(false)
+            } else {
+                None
+            },
+        }
+    }
 }
 
 /// The study in the URL and the signed-in user, who must own it (else 404:
@@ -158,14 +508,84 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let query = query_params::<StudyQuery>(cx)?;
     let after = query.after.as_deref().and_then(Cursor::parse);
     let before = query.before.as_deref().and_then(Cursor::parse);
-    let listed = keywords_of_study(
-        context::<Db>(cx),
-        &study.id,
-        PageFrom::of(after.as_ref(), before.as_ref()),
-        PAGE_SIZE,
-    )
-    .await
+    let db = context::<Db>(cx);
+    let list = list_of(query.list.as_deref()).unwrap_or(ALL);
+    let from = PageFrom::of(after.as_ref(), before.as_ref());
+    let listed = if list == ALL {
+        keywords_of_study(db, &study.id, from, PAGE_SIZE).await
+    } else {
+        keywords_of_outcome(db, &study.id, list, from, PAGE_SIZE).await
+    }
     .map_err(topcoat::Error::from_anyhow)?;
+    let counts = outcome_counts(db, &study.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    // What the keywords come to is the read model's; the tests are run
+    // again here over what the owner says now, so a save shows at once.
+    let tally = study_row(db, &study.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .map(|row| row.tally())
+        .unwrap_or_default();
+    let thresholds = Thresholds::default();
+    let judgement = judge(&tally, &study.inputs, &thresholds);
+    let (verdict, verdict_tone, verdict_text) = match judgement.verdict {
+        Verdict::Go => ("Go", Tone::Success, "Every test passes."),
+        Verdict::NoGo => ("No-go", Tone::Danger, "One test at least fails."),
+        Verdict::Incomplete => (
+            "Incomplete",
+            Tone::Neutral,
+            "No test fails, and one at least is not checked yet.",
+        ),
+    };
+    let tests = test_lines(&study, &tally, &judgement, &thresholds);
+    let economics = sale_lines(&study, &tally, &judgement, &thresholds);
+    let said = &study.inputs;
+    let amount = timada_core::format_amount;
+    let optional = |cents: Option<u64>| cents.map(amount).unwrap_or_default();
+    let never_said = study.inputs_set_at.is_none();
+    // A study nothing was said of yet shows empty fields, not zeros.
+    let or_empty = |value: String| if never_said { String::new() } else { value };
+    let currency = if said.sale.currency.is_empty() {
+        timada_core::CURRENCIES[0].to_owned()
+    } else {
+        said.sale.currency.clone()
+    };
+    let form_price = optional(said.sale.price_cents);
+    let form_cost = optional(said.sale.cost_cents);
+    let form_shipping = or_empty(amount(said.sale.shipping_cents));
+    let form_import = or_empty(amount(said.sale.import_cents));
+    let form_vat = or_empty(amount(u64::from(said.sale.vat_bps)));
+    let form_fixed = or_empty(amount(said.sale.fixed_cents));
+    let form_fee_percent = or_empty(amount(u64::from(said.sale.payment_fee_bps)));
+    let form_fee_fixed = or_empty(amount(said.sale.payment_fee_cents));
+    let form_brands = said.brands.join("\n");
+    let form_excluded = said.excluded_words.join("\n");
+    let form_products = said
+        .supplier_products
+        .map(|products| products.to_string())
+        .unwrap_or_default();
+    let specialist = said.specialist_first;
+    // How the costs per click, which the source gives in US dollars, stand
+    // against the sale's price.
+    let rate_text = if never_said || said.sale.currency == CPC_CURRENCY {
+        None
+    } else {
+        Some(match said.usd_micros {
+            Some(micros) => format!(
+                "A cost per click is in US dollars: it is read at 1 {} = ${}.{:04}, the euro reference rate of {}, when you last saved.",
+                said.sale.currency,
+                micros / 1_000_000,
+                (micros % 1_000_000) / 100,
+                study.inputs_set_at.map(format_date).unwrap_or_default()
+            ),
+            None => format!(
+                "No exchange rate could be read when you last saved: a cost per click in US dollars stands against a price in {} as it is. Save again later to convert it.",
+                said.sale.currency
+            ),
+        })
+    };
+    let unconverted = !never_said && !judgement.cpc_converted;
     let source = &context::<Keywords>(cx).0;
     let enabled = source.is_some();
     let now = crate::auth::now();
@@ -212,6 +632,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let page_link = |after: Option<&str>, before: Option<&str>| {
         href!(index, study_id: id.clone())
             .query(StudyLink {
+                list: Some(list).filter(|list| *list != ALL),
                 after,
                 before,
                 error: None,
@@ -228,7 +649,32 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .as_ref()
         .map(|cursor| page_link(Some(&cursor.param()), None));
     let paged = more_searched.is_some() || less_searched.is_some();
-    let rows = listed.rows;
+    let rows: Vec<KeywordLine> = listed
+        .rows
+        .iter()
+        .map(|row| KeywordLine::of(row, &study, &judgement))
+        .collect();
+    let tabs: Vec<PageTab> = LISTS
+        .iter()
+        .map(|(key, label)| PageTab {
+            label,
+            href: list_url(cx, &study.id, Some(key), None, None),
+            count: Some(if *key == ALL {
+                study.keywords() as usize
+            } else {
+                counts
+                    .iter()
+                    .find(|(outcome, _)| outcome == key)
+                    .map_or(0, |(_, count)| *count as usize)
+            }),
+            current: *key == list,
+        })
+        .collect();
+    let empty_list = if list == ALL {
+        "No keyword yet: fetch the keywords of a seed."
+    } else {
+        "No keyword in this list."
+    };
     let seeds: Vec<SeedLine> = study
         .seeds
         .iter()
@@ -354,41 +800,192 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             )
 
             section_card(
+                title: Some("Verdict"),
+                description: Some("A niche is a go when every test passes, a no-go when one fails. The thresholds are the method's own."),
+                attrs: attributes! { id="score" data-verdict=(judgement.verdict.as_str()) },
+                <p class="flex flex-wrap items-center gap-3 px-6 text-sm">
+                    status_badge(tone: verdict_tone, (verdict))
+                    <span class="text-muted-foreground">(verdict_text)</span>
+                </p>
+                table(
+                    table_header(
+                        table_row(
+                            table_head("Test")
+                            table_head("Result")
+                            table_head("The numbers behind it")
+                        )
+                    )
+                    table_body(
+                        for test in &tests {
+                            table_row(
+                                attrs: attributes! { data-test=(test.key) data-test-state=(test.state) },
+                                table_cell(attrs: attributes! { class="font-medium" }, (test.name))
+                                table_cell(status_badge(tone: test.tone, (test.label)))
+                                table_cell(attrs: attributes! { class="whitespace-normal" data-test-numbers="" }, (&test.numbers))
+                            )
+                        }
+                    )
+                )
+            )
+
+            section_card(
+                title: Some("One sale"),
+                description: Some("What one typical sale of the niche leaves, the return on ad spend at which an ad pays for itself, and the most a click may cost."),
+                attrs: attributes! { id="sale" },
+                if economics.is_empty() {
+                    <p class="px-6 text-sm text-muted-foreground" data-sale-unknown="">"Say the price and the supplier's cost below to work it out."</p>
+                } else {
+                    <div class="px-6">
+                        facts(
+                            for (key, term, value) in &economics {
+                                fact(term: term, attrs: attributes! { class="tabular-nums" data-sale-line=(*key) }, (value))
+                            }
+                        )
+                    </div>
+                }
+                if let Some(text) = &rate_text {
+                    <p class="px-6 text-sm text-muted-foreground" data-cpc-converted=(if unconverted { "no" } else { "yes" })>(text)</p>
+                }
+            )
+
+            section_card(
+                title: Some("What the score reads"),
+                description: Some("Saving scores the study again from the keywords it holds: nothing is fetched, and nothing is paid."),
+                attrs: attributes! { id="inputs" },
+                <form method="post" action=(href!(inputs::set, study_id: id.clone())) class="grid gap-4 px-6 sm:grid-cols-2 lg:grid-cols-3" data-study-inputs="">
+                    field(
+                        field_label(attrs: attributes! { for="sale-currency" }, "Currency")
+                        select(
+                            attrs: attributes! { id="sale-currency" name="currency" },
+                            for code in timada_core::CURRENCIES {
+                                <option value=(*code) selected=(*code == currency)>(*code)</option>
+                            }
+                        )
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="sale-price" }, "Average price, VAT included")
+                        input(attrs: attributes! { id="sale-price" name="price" type="text" inputmode="decimal" value=(&form_price) })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="sale-cost" }, "Supplier's cost")
+                        input(attrs: attributes! { id="sale-cost" name="cost" type="text" inputmode="decimal" value=(&form_cost) })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="sale-shipping" }, "Sending a parcel")
+                        input(attrs: attributes! { id="sale-shipping" name="shipping" type="text" inputmode="decimal" value=(&form_shipping) })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="sale-import" }, "At the border")
+                        input(attrs: attributes! { id="sale-import" name="import" type="text" inputmode="decimal" value=(&form_import) })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="sale-vat" }, "VAT in the price, in %")
+                        input(attrs: attributes! { id="sale-vat" name="vat_percent" type="text" inputmode="decimal" placeholder="20" value=(&form_vat) })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="sale-fixed" }, "Fixed costs, for each sale")
+                        input(attrs: attributes! { id="sale-fixed" name="fixed" type="text" inputmode="decimal" value=(&form_fixed) })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="sale-fee-percent" }, "Payment fee, in % of the price")
+                        input(attrs: attributes! { id="sale-fee-percent" name="fee_percent" type="text" inputmode="decimal" value=(&form_fee_percent) })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="sale-fee-fixed" }, "Payment fee, for each payment")
+                        input(attrs: attributes! { id="sale-fee-fixed" name="fee_fixed" type="text" inputmode="decimal" value=(&form_fee_fixed) })
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="study-brands" }, "Brands to drop, one a line")
+                        textarea(attrs: attributes! { id="study-brands" name="brands" rows="4" aria-describedby="study-brands-hint" }, (&form_brands))
+                        field_description(attrs: attributes! { id="study-brands-hint" }, "A keyword that holds one, as whole words, is another shop's.")
+                    )
+                    field(
+                        field_label(attrs: attributes! { for="study-excluded" }, "Words to exclude, one a line")
+                        textarea(attrs: attributes! { id="study-excluded" name="excluded_words" rows="4" aria-describedby="study-excluded-hint" }, (&form_excluded))
+                        field_description(attrs: attributes! { id="study-excluded-hint" }, "A keyword that holds one is none of the niche's.")
+                    )
+                    <div class="flex flex-col gap-4">
+                        field(
+                            field_label(attrs: attributes! { for="study-products" }, "Good products found at the supplier")
+                            input(attrs: attributes! { id="study-products" name="supplier_products" type="text" inputmode="numeric" aria-describedby="study-products-hint" value=(&form_products) })
+                            field_description(attrs: attributes! { id="study-products-hint" }, "Empty until you counted them.")
+                        )
+                        field(
+                            field_label(attrs: attributes! { for="study-specialist" }, "A specialist shop holds the first results")
+                            select(
+                                attrs: attributes! { id="study-specialist" name="specialist_first" },
+                                <option value="" selected=(specialist.is_none())>"Not looked at yet"</option>
+                                <option value="no" selected=(specialist == Some(false))>"No"</option>
+                                <option value="yes" selected=(specialist == Some(true))>"Yes"</option>
+                            )
+                        )
+                    </div>
+                    <div class="sm:col-span-2 lg:col-span-3">
+                        button(attrs: attributes! { type="submit" }, "Save and score again")
+                    </div>
+                </form>
+            )
+
+            section_card(
                 title: Some(&keywords_title),
-                description: Some("As the last fetch of each seed gave them, the most searched first. A figure the source has nothing for stays empty. The cost per click is in US dollars whatever the country."),
+                description: Some("As the last fetch of each seed gave them, the most searched first, with what the score made of each. A figure the source has nothing for stays empty. The cost per click is the source's, in US dollars; the price / CPC is the sale's price over it."),
                 attrs: attributes! { id="keywords" data-study-keywords=(total) },
+                <div class="px-6">
+                    page_tabs(label: "Keyword lists", tabs: &tabs)
+                </div>
                 table(
                     table_header(
                         table_row(
                             table_head("Keyword")
                             table_head("Searches a month")
-                            table_head("Cost per click")
                             table_head("Difficulty")
+                            table_head("Cost per click")
+                            table_head("Price / CPC")
+                            table_head("Ads")
                             table_head("Intent")
-                            table_head("Seed")
-                            table_head("Fetched")
+                            table_head("Score")
+                            table_head(<span class="sr-only">"Drop or bring back"</span>)
                         )
                     )
                     table_body(
                         if rows.is_empty() {
-                            empty_row(colspan: 7, text: "No keyword yet: fetch the keywords of a seed.")
+                            empty_row(colspan: 9, text: empty_list)
                         }
                         for row in &rows {
                             table_row(
-                                attrs: attributes! { data-keyword=(&row.keyword) },
-                                table_cell(attrs: attributes! { class="font-medium" }, (&row.keyword))
-                                table_cell(attrs: attributes! { class="tabular-nums" data-volume="" }, (figure(row.volume)))
-                                table_cell(attrs: attributes! { class="tabular-nums" data-cpc="" },
-                                    if let Some(cents) = row.cpc_usd_cents {
-                                        "$" (timada_core::format_amount(cents as u64))
-                                    } else {
-                                        "–"
+                                attrs: attributes! { data-keyword=(&row.keyword) data-outcome=(&row.outcome) },
+                                table_cell(attrs: attributes! { class="font-medium" },
+                                    (&row.keyword)
+                                    if let Some(of) = &row.variant_of {
+                                        <p class="text-xs font-normal text-muted-foreground" data-variant-of=(of)>"Counts under " (of)</p>
                                     }
                                 )
-                                table_cell(attrs: attributes! { class="tabular-nums" data-difficulty="" }, (figure(row.difficulty)))
-                                table_cell(attrs: attributes! { data-intent="" }, (row.intent.as_deref().unwrap_or("–")))
-                                table_cell(attrs: attributes! { class="text-muted-foreground" }, (&row.seed))
-                                table_cell(<time datetime=(format_date(row.fetched_at as u64))>(format_date(row.fetched_at as u64))</time>)
+                                table_cell(attrs: attributes! { class="tabular-nums" data-volume="" }, (&row.volume))
+                                table_cell(attrs: attributes! { class="tabular-nums" data-difficulty="" }, (&row.difficulty))
+                                table_cell(attrs: attributes! { class="tabular-nums" data-cpc="" }, (row.cpc.as_deref().unwrap_or("–")))
+                                table_cell(attrs: attributes! { class="tabular-nums" data-ratio="" }, (row.ratio.as_deref().unwrap_or("–")))
+                                table_cell(attrs: attributes! { data-channel=(row.channel.map_or("", Channel::as_str)) },
+                                    (match row.channel {
+                                        Some(Channel::Ads) => "Ads",
+                                        Some(Channel::SeoOnly) => "SEO only",
+                                        None => "–",
+                                    })
+                                )
+                                table_cell(attrs: attributes! { data-intent="" }, (&row.intent))
+                                table_cell(status_badge(tone: row.tone, (row.status)))
+                                table_cell(
+                                    attrs: attributes! { class="text-right" },
+                                    if let Some(drops) = row.drops {
+                                        <form method="post" action=(if drops { href!(drop::drop, study_id: id.clone()).resolve(cx) } else { href!(restore::restore, study_id: id.clone()).resolve(cx) })>
+                                            <input type="hidden" name="keyword" value=(&row.keyword)>
+                                            <input type="hidden" name="list" value=(list)>
+                                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" },
+                                                (if drops { "Drop" } else { "Bring back" })
+                                                <span class="sr-only">" " (&row.keyword)</span>
+                                            )
+                                        </form>
+                                    }
+                                )
                             )
                         }
                     )
@@ -405,6 +1002,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             }
                         )
                     )
+                }
+                if total > 0 {
+                    <p class="px-6 text-sm">
+                        <a class=(LINK) href=(href!(export::export, study_id: id.clone())) data-study-export="">"Export the keywords with their score (CSV)"</a>
+                    </p>
                 }
             )
 

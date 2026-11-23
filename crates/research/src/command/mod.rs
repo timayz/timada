@@ -12,6 +12,7 @@
 //! loads the study again and decides again ([`WRITE_ATTEMPTS`] times).
 
 mod fetch;
+mod inputs;
 mod spend;
 mod study;
 
@@ -20,14 +21,16 @@ use evento::{
 };
 
 pub use fetch::Reusable;
+pub use inputs::*;
 pub use spend::*;
 pub use study::*;
 
 use crate::aggregator::{
-    Created, Deleted, FetchFailed, FetchRequested, FetchStarted, KeywordsFetched, KeywordsReused,
-    Renamed, SeedAdded, Study,
+    Created, Deleted, FetchFailed, FetchRequested, FetchStarted, InputsSet, KeywordDropped,
+    KeywordRestored, KeywordsFetched, KeywordsReused, Renamed, SeedAdded, Study,
 };
 use crate::error::ResearchError;
+use crate::score::{Sale, StudyInputs};
 use crate::value_object::{FETCH_STALE_SECS, FetchStatus};
 
 /// The command gateway over the platform's streams. Cheap to clone when `E`
@@ -85,6 +88,12 @@ pub struct StudyState {
     pub seeds: Vec<SeedState>,
     /// What its fetches cost in all, in millionths of a US dollar.
     pub cost_usd_micros: u64,
+    /// What the owner said of the niche, and the keywords they dropped or
+    /// brought back by hand: what the study is scored from, with its rows.
+    pub inputs: StudyInputs,
+    /// Unix seconds of the last `InputsSet`: the day of the rate it
+    /// carries. `None` until the owner said anything.
+    pub inputs_set_at: Option<u64>,
     /// Unix seconds of `Created`.
     pub created_at: u64,
     /// Unix seconds of the last event.
@@ -121,6 +130,9 @@ pub fn study_projection<E: Executor>() -> Projection<E, StudyState> {
         .handler(on_keywords_fetched())
         .handler(on_keywords_reused())
         .handler(on_fetch_failed())
+        .handler(on_inputs_set())
+        .handler(on_keyword_dropped())
+        .handler(on_keyword_restored())
         .handler(on_deleted())
         .strict()
 }
@@ -221,6 +233,52 @@ async fn on_fetch_failed(event: Event<FetchFailed>, study: &mut StudyState) -> a
         seed.status = FetchStatus::Failed;
         seed.last_error = Some(event.data.reason.to_owned());
     }
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_inputs_set(event: Event<InputsSet>, study: &mut StudyState) -> anyhow::Result<()> {
+    let data = &event.data;
+    study.inputs.sale = Sale {
+        currency: data.currency.to_owned(),
+        price_cents: data.price_cents,
+        cost_cents: data.cost_cents,
+        shipping_cents: data.shipping_cents,
+        import_cents: data.import_cents,
+        vat_bps: data.vat_bps,
+        fixed_cents: data.fixed_cents,
+        payment_fee_bps: data.payment_fee_bps,
+        payment_fee_cents: data.payment_fee_cents,
+    };
+    study.inputs.brands = data.brands.to_owned();
+    study.inputs.excluded_words = data.excluded_words.to_owned();
+    study.inputs.supplier_products = data.supplier_products;
+    study.inputs.specialist_first = data.specialist_first;
+    study.inputs.usd_micros = data.usd_micros;
+    study.inputs_set_at = Some(event.timestamp);
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_keyword_dropped(
+    event: Event<KeywordDropped>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    study.inputs.restored.remove(&event.data.keyword);
+    study.inputs.dropped.insert(event.data.keyword.to_owned());
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_keyword_restored(
+    event: Event<KeywordRestored>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    study.inputs.dropped.remove(&event.data.keyword);
+    study.inputs.restored.insert(event.data.keyword.to_owned());
     study.updated_at = event.timestamp;
     Ok(())
 }

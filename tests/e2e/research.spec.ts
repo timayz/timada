@@ -12,6 +12,13 @@ import { ADMIN_STATE } from "./fixtures";
 // leaves room for three calls), a seed fetched before answers whoever asks
 // for it again without a call, and root reads what each user spent. The
 // seeds carry a tag of their own, so a run never reuses another's fetches.
+//
+// A study is scored from its keywords and from what its owner says of it:
+// the page gives the verdict with the tests behind it, what one sale leaves,
+// the keywords by what the score made of each, and the owner corrects it
+// (a word excluded, a keyword dropped or brought back) without a fetch. The
+// list sets the studies side by side, and the keywords export with their
+// score.
 
 /// Reloads the study's page until the seed's fetch stands at `status`.
 async function seedStands(page: Page, seed: string, status: string) {
@@ -193,6 +200,149 @@ test("a user studies a niche from its keywords", async ({ page, browser }) => {
       await expect(page.getByText("No study yet")).toBeVisible({ timeout: 1000 });
     }).toPass({ timeout: 15_000 });
     expect((await page.goto(studyUrl))?.status()).toBe(404);
+  } finally {
+    await source.stop();
+  }
+});
+
+/// Reloads the study's page until the test `key` of its verdict stands at
+/// `state`: what the keywords come to is the read model's, a moment behind.
+async function testStands(page: Page, key: string, state: string) {
+  await expect(async () => {
+    await page.reload();
+    await expect(page.locator(`[data-test="${key}"]`)).toHaveAttribute("data-test-state", state, { timeout: 1000 });
+  }).toPass({ timeout: 20_000 });
+}
+
+/// Opens one of the keyword lists and reloads it until it holds `keywords`,
+/// the most searched first.
+async function listHolds(page: Page, list: RegExp, keywords: string[]) {
+  await page.getByRole("navigation", { name: "Keyword lists" }).getByRole("link", { name: list }).click();
+  await expect(async () => {
+    await page.reload();
+    await expect(page.locator("[data-keyword]")).toHaveCount(keywords.length, { timeout: 1000 });
+    for (const [at, keyword] of keywords.entries()) {
+      await expect(page.locator("[data-keyword]").nth(at)).toHaveAttribute("data-keyword", keyword, { timeout: 1000 });
+    }
+  }).toPass({ timeout: 20_000 });
+}
+
+test("a study is scored, corrected by its owner and compared", async ({ page, browser }) => {
+  const source = new FakeDataforseo();
+  await source.start();
+  const tag = Date.now().toString(36);
+  const seed = `griffoir ${tag}`;
+  const cheap = `${seed} pas cher`;
+  const best = `meilleur ${seed}`;
+  try {
+    await registerWithEmail(page, uniqueEmail("scorer"));
+    await page.goto("/research/new");
+    const name = `Scratchers ${Date.now()}`;
+    await page.getByLabel("Name").fill(name);
+    await page.getByLabel("Seed keywords, one a line").fill(seed);
+    await page.getByRole("button", { name: "Start the study" }).click();
+    await expect(page.getByRole("status")).toContainText("Study started.");
+    const studyUrl = page.url().split("?")[0];
+
+    // Nothing fetched, nothing said: every test waits.
+    await expect(page.locator("[data-verdict]")).toHaveAttribute("data-verdict", "incomplete");
+    await expect(page.locator('[data-test-state="not_checked"]')).toHaveCount(6);
+    await expect(page.locator("[data-sale-unknown]")).toBeVisible();
+
+    await page.getByRole("button", { name: "Fetch the keywords of 1 seed" }).click();
+    await seedStands(page, seed, "fetched");
+    await keywordsListed(page, 5);
+
+    // The fetch scored it: two main keywords are not three. The seed's own
+    // is too difficult, two ask a question.
+    await testStands(page, "main_keywords", "failed");
+    await expect(page.locator("[data-verdict]")).toHaveAttribute("data-verdict", "no_go");
+    await expect(page.locator('[data-test="main_keywords"] [data-test-numbers]')).toContainText("2 kept");
+    await expect(page.locator('[data-test="margin"]')).toHaveAttribute("data-test-state", "not_checked");
+    await listHolds(page, /^Main/, [cheap, best]);
+    await listHolds(page, /^Informational/, [`${seed} avis`, `fabriquer un ${seed}`]);
+    await listHolds(page, /^Too difficult/, [seed]);
+
+    // Brought back by hand, it is kept whatever its difficulty.
+    await page.locator(`[data-keyword="${seed}"]`).getByRole("button", { name: "Bring back" }).click();
+    await expect(page.getByRole("status")).toContainText("Keyword brought back.");
+    await expect(page).toHaveURL(/list=too_difficult/);
+    await listHolds(page, /^Main/, [seed, cheap, best]);
+    await testStands(page, "main_keywords", "passed");
+    await testStands(page, "long_tail", "failed");
+
+    // What the owner says of the niche scores it again; no call is made.
+    const calls = source.calls.length;
+    await page.getByLabel("Average price, VAT included").fill("60");
+    await page.getByLabel("Supplier's cost").fill("15");
+    await page.getByLabel("Sending a parcel").fill("4");
+    await page.getByLabel("At the border").fill("5");
+    await page.getByLabel("VAT in the price, in %").fill("20");
+    await page.getByLabel("Fixed costs, for each sale").fill("1");
+    await page.getByLabel("Payment fee, in % of the price").fill("1.5");
+    await page.getByLabel("Payment fee, for each payment").fill("0.25");
+    await page.getByLabel("Words to exclude, one a line").fill("Pas  cher\n");
+    await page.getByLabel("Good products found at the supplier").fill("240");
+    await page.getByLabel("A specialist shop holds the first results").selectOption("no");
+    await page.getByRole("button", { name: "Save and score again" }).click();
+    await expect(page.getByRole("status")).toContainText("Saved: the study is scored again.");
+
+    // One sale, line by line: read from the study's own stream, at once.
+    await expect(page.locator('[data-sale-line="margin"]')).toContainText("23.85");
+    await expect(page.locator('[data-sale-line="break-even"]')).toHaveText("2.52");
+    await expect(page.locator('[data-sale-line="needed"]')).toContainText("194.67");
+    await expect(page.locator('[data-sale-line="highest-cpc"]')).toHaveText("0.308 EUR");
+    await expect(page.locator('[data-test="margin"]')).toHaveAttribute("data-test-state", "passed");
+    await expect(page.locator('[data-test="supplier_products"]')).toHaveAttribute("data-test-state", "passed");
+    await expect(page.locator('[data-test="no_specialist"]')).toHaveAttribute("data-test-state", "passed");
+    await expect(page.locator("[data-cpc-converted]")).toBeVisible();
+    await expect(page.getByLabel("Words to exclude, one a line")).toHaveValue("Pas cher");
+    await expect(page.getByLabel("Average price, VAT included")).toHaveValue("60.00");
+
+    // The excluded word drops its keyword; the kept ones say what a click
+    // is worth against the sale.
+    await listHolds(page, /^Excluded/, [cheap]);
+    await listHolds(page, /^Main/, [seed, best]);
+    const bestRow = page.locator(`[data-keyword="${best}"]`);
+    await expect(bestRow.locator("[data-ratio]")).toHaveText("109.09");
+    await expect(bestRow.locator("[data-channel]")).toHaveAttribute("data-channel", "seo_only");
+    await testStands(page, "price_per_click", "failed");
+
+    // Dropped from its row, then brought back.
+    await bestRow.getByRole("button", { name: "Drop" }).click();
+    await expect(page.getByRole("status")).toContainText("Keyword dropped.");
+    await listHolds(page, /^Excluded/, [cheap, best]);
+    await page.locator(`[data-keyword="${best}"]`).getByRole("button", { name: "Bring back" }).click();
+    await expect(page.getByRole("status")).toContainText("Keyword brought back.");
+    await listHolds(page, /^Main/, [seed, best]);
+    expect(source.calls).toHaveLength(calls);
+
+    // The keywords export with their score, for the owner only.
+    const exportUrl = await page.locator("[data-study-export]").getAttribute("href");
+    const file = await page.request.get(exportUrl!);
+    expect(file.status()).toBe(200);
+    expect(file.headers()["content-type"]).toContain("text/csv");
+    const lines = (await file.text()).split("\r\n");
+    expect(lines[0]).toContain("keyword,outcome,counts_under,searches_a_month,difficulty,cost_per_click_usd");
+    expect(lines).toContainEqual(expect.stringContaining(`${seed},main,,12100,38,0.42,`));
+    expect(lines).toContainEqual(expect.stringContaining(`${cheap},excluded,,5400,14,0.31,`));
+    expect(lines.filter((line) => line !== "")).toHaveLength(6);
+    const stranger = await (await browser.newContext()).newPage();
+    await registerWithEmail(stranger, uniqueEmail("stranger"));
+    expect((await stranger.request.get(exportUrl!)).status()).toBe(404);
+    expect((await stranger.goto(studyUrl))?.status()).toBe(404);
+
+    // The list sets the studies side by side.
+    const row = page.locator(`[data-study="${name}"]`);
+    await expect(async () => {
+      await page.goto("/research");
+      await expect(row.locator("[data-study-main]")).toHaveText("2", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await expect(row).toHaveAttribute("data-study-verdict", "no_go");
+    await expect(row.locator("[data-study-long-tail]")).toHaveText("0");
+    await expect(row.locator("[data-study-volume]")).toHaveText("15000");
+    await expect(row.locator("[data-study-break-even]")).toHaveText("2.52");
+    await expect(row.locator("[data-study-needed]")).toHaveText("194.67");
   } finally {
     await source.stop();
   }

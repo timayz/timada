@@ -522,6 +522,17 @@ pub fn describe_error(code: &str) -> &'static str {
         "unknown_seed" => "The study has no such seed keyword.",
         "keywords_fetching" => "These keywords are being fetched: look again in a moment.",
         "nothing_to_fetch" => "Every seed keyword has its keywords, or is being fetched.",
+        "invalid_study_currency" => "Pick the sale's currency from the list.",
+        "invalid_study_amount" => "Enter each amount like 60 or 59.90.",
+        "invalid_study_rate" => "A rate is between 0 and 100 %.",
+        "invalid_study_word" => "A brand or an excluded word is at most 80 characters.",
+        "too_many_study_words" => "A study lists at most 200 brands and 200 excluded words.",
+        "invalid_supplier_products" => "Enter the number of products as a whole number.",
+        "invalid_keyword" => "This keyword cannot be dropped or brought back.",
+        "too_many_hand_set_keywords" => {
+            "A study holds at most 2,000 keywords dropped by hand, and as many brought back: exclude a word instead."
+        }
+        "study_changed_too_often" => "This study was changed too many times: start another.",
         "keywords_disabled" => {
             "Keyword research is not set up on this platform: the operator has to give it a keyword source."
         }

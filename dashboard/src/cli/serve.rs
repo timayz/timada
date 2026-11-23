@@ -222,7 +222,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         vies: Arc::new(crate::vies::ViesClient::new(
             config.invoicing.vies_url.clone(),
         )),
-        euro_rates,
+        euro_rates: euro_rates.clone(),
         conversions: Arc::new(crate::meta_conversions::Conversions::new(
             crate::seal::meta_sealer(&config),
             Arc::new(crate::meta_conversions::MetaClient::new(
@@ -522,6 +522,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         shop_mail,
         aliexpress,
         keywords,
+        euro_rates,
         store: connections,
         workers: workers.clone(),
         checkouts,

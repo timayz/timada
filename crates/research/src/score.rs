@@ -155,6 +155,46 @@ pub struct StudyInputs {
     pub usd_micros: Option<u64>,
 }
 
+impl StudyInputs {
+    /// What one unit of the sale's currency is worth in US dollars, when
+    /// the two differ and a rate is known.
+    fn rate(&self) -> Option<u64> {
+        if self.sale.currency == CPC_CURRENCY {
+            None
+        } else {
+            self.usd_micros.filter(|rate| *rate > 0)
+        }
+    }
+
+    /// Whether a cost per click is read in the sale's currency: it is in US
+    /// dollars already, or a rate says what it is worth.
+    pub fn cpc_converted(&self) -> bool {
+        self.sale.currency == CPC_CURRENCY || self.rate().is_some()
+    }
+
+    /// A cost per click in US cents as thousandths of a cent of the sale's
+    /// currency; of a US cent when [`cpc_converted`](Self::cpc_converted)
+    /// is false.
+    pub fn cpc_millis(&self, cpc_usd_cents: u64) -> u64 {
+        cpc_millis(cpc_usd_cents, self.rate())
+    }
+
+    /// The economics of the sale under `thresholds`; `None` until its price
+    /// and its supplier cost are both said.
+    pub fn sale_score(&self, thresholds: &Thresholds) -> Option<SaleScore> {
+        let margin = self.sale.margin()?;
+        let needed = needed_ratio(&margin, thresholds);
+        Some(SaleScore {
+            margin,
+            needed_price_per_click: needed,
+            highest_cpc_millis: needed.map(|needed| {
+                let cpc = u128::from(margin.price_cents) * 100_000 / u128::from(needed.max(1));
+                u64::try_from(cpc).unwrap_or(u64::MAX)
+            }),
+        })
+    }
+}
+
 /// Why a keyword does not count. A keyword that several reasons would drop
 /// carries the first, in this order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -174,6 +214,15 @@ pub enum DropReason {
 }
 
 impl DropReason {
+    /// Every reason, in the order they are tried.
+    pub const ALL: [DropReason; 5] = [
+        DropReason::Excluded,
+        DropReason::Brand,
+        DropReason::Informational,
+        DropReason::TooDifficult,
+        DropReason::LowVolume,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Excluded => "excluded",
@@ -215,6 +264,20 @@ pub enum Outcome {
         of: String,
     },
 }
+
+impl Outcome {
+    /// `main`, `long_tail`, `variant`, or the reason it was dropped.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Kept(tier) => tier.as_str(),
+            Self::Dropped(reason) => reason.as_str(),
+            Self::Variant { .. } => VARIANT,
+        }
+    }
+}
+
+/// What [`Outcome::as_str`] says of a keyword that counts under another.
+pub const VARIANT: &str = "variant";
 
 /// Where a kept keyword can bring buyers from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -275,6 +338,32 @@ pub struct SaleScore {
     /// The most a click may cost at that ratio, in thousandths of a cent
     /// of the sale's currency.
     pub highest_cpc_millis: Option<u64>,
+}
+
+impl SaleScore {
+    /// The sale's price over a cost per click (in thousandths of a cent),
+    /// in hundredths; `None` when a click is free.
+    pub fn price_per_click(&self, cpc_millis: u64) -> Option<u64> {
+        ratio(self.margin.price_cents, cpc_millis)
+    }
+
+    /// Where a kept keyword whose click costs `cpc_millis` can bring buyers
+    /// from; `None` while its cost per click is not known.
+    pub fn channel(&self, cpc_millis: Option<u64>) -> Option<Channel> {
+        let Some(needed) = self.needed_price_per_click else {
+            return Some(Channel::SeoOnly);
+        };
+        cpc_millis.map(|cpc| {
+            if self
+                .price_per_click(cpc)
+                .is_none_or(|ratio| ratio >= needed)
+            {
+                Channel::Ads
+            } else {
+                Channel::SeoOnly
+            }
+        })
+    }
 }
 
 /// One of the tests a study passes to be a go.
@@ -363,6 +452,118 @@ impl Verdict {
     }
 }
 
+/// What the keywords of a study come to, once each is kept or dropped: all
+/// the tests read of them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Tally {
+    /// How many keywords the study holds, kept or not.
+    pub keywords: u64,
+    pub main: u32,
+    pub long_tail: u32,
+    /// Searches a month over the kept keywords, a variant's not counted.
+    pub kept_volume: u64,
+    /// The cost per click of the kept keywords averaged by volume, in the
+    /// unit of [`ScoredKeyword::cpc_millis`]; `None` when none has both a
+    /// cost per click and a volume.
+    pub avg_cpc_millis: Option<u64>,
+}
+
+/// What the tests say of a [`Tally`] and of what the owner said.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Judgement {
+    /// `None` until the sale's price and supplier cost are both said.
+    pub sale: Option<SaleScore>,
+    /// See [`Score::cpc_converted`].
+    pub cpc_converted: bool,
+    /// The sale's price over the average cost per click, in hundredths.
+    pub price_per_click: Option<u64>,
+    pub tests: [(Test, TestState); 6],
+    pub verdict: Verdict,
+}
+
+impl Judgement {
+    pub fn test(&self, test: Test) -> TestState {
+        self.tests
+            .iter()
+            .find(|(of, _)| *of == test)
+            .map_or(TestState::NotChecked, |(_, state)| *state)
+    }
+}
+
+/// Runs the tests over what a study's keywords come to. A page that keeps
+/// the tally reads the verdict again from it when the owner's numbers
+/// change, without the keywords.
+pub fn judge(tally: &Tally, inputs: &StudyInputs, thresholds: &Thresholds) -> Judgement {
+    let sale = inputs.sale_score(thresholds);
+    let price_per_click = sale
+        .zip(tally.avg_cpc_millis)
+        .and_then(|(sale, cpc)| sale.price_per_click(cpc));
+    let enough = |count: u32, enough: u32| {
+        if tally.keywords == 0 {
+            TestState::NotChecked
+        } else {
+            TestState::of(count >= enough)
+        }
+    };
+    let clicks = match (sale, tally.avg_cpc_millis) {
+        (None, _) => TestState::NotChecked,
+        (Some(sale), _) if sale.needed_price_per_click.is_none() => TestState::Failed,
+        (Some(_), None) => TestState::NotChecked,
+        (Some(sale), Some(_)) => TestState::of(
+            price_per_click
+                .zip(sale.needed_price_per_click)
+                .is_none_or(|(ratio, needed)| ratio >= needed),
+        ),
+    };
+    let tests = [
+        (
+            Test::MainKeywords,
+            enough(tally.main, thresholds.enough_main),
+        ),
+        (
+            Test::LongTail,
+            enough(tally.long_tail, thresholds.enough_long_tail),
+        ),
+        (
+            Test::Margin,
+            sale.map_or(TestState::NotChecked, |sale| {
+                TestState::of(sale.margin.margin_cents() > 0)
+            }),
+        ),
+        (Test::PricePerClick, clicks),
+        (
+            Test::SupplierProducts,
+            inputs
+                .supplier_products
+                .map_or(TestState::NotChecked, |products| {
+                    TestState::of(products >= ENOUGH_PRODUCTS)
+                }),
+        ),
+        (
+            Test::NoSpecialist,
+            inputs
+                .specialist_first
+                .map_or(TestState::NotChecked, |specialist| {
+                    TestState::of(!specialist)
+                }),
+        ),
+    ];
+    let verdict = if tests.iter().any(|(_, state)| *state == TestState::Failed) {
+        Verdict::NoGo
+    } else if tests.iter().all(|(_, state)| *state == TestState::Passed) {
+        Verdict::Go
+    } else {
+        Verdict::Incomplete
+    };
+    Judgement {
+        sale,
+        cpc_converted: inputs.cpc_converted(),
+        price_per_click,
+        tests,
+        verdict,
+    }
+}
+
 /// A study scored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Score {
@@ -389,6 +590,17 @@ pub struct Score {
 }
 
 impl Score {
+    /// What its keywords come to.
+    pub fn tally(&self) -> Tally {
+        Tally {
+            keywords: self.keywords.len() as u64,
+            main: self.main,
+            long_tail: self.long_tail,
+            kept_volume: self.kept_volume,
+            avg_cpc_millis: self.avg_cpc_millis,
+        }
+    }
+
     pub fn test(&self, test: Test) -> TestState {
         self.tests
             .iter()
@@ -558,24 +770,7 @@ pub fn score(
 
     let brands = phrases(&inputs.brands);
     let excluded = phrases(&inputs.excluded_words);
-    let cpc_converted = inputs.sale.currency == CPC_CURRENCY || inputs.usd_micros.is_some();
-    let rate = if inputs.sale.currency == CPC_CURRENCY {
-        None
-    } else {
-        inputs.usd_micros
-    };
-    let margin = inputs.sale.margin();
-    let sale = margin.map(|margin| {
-        let needed = needed_ratio(&margin, thresholds);
-        SaleScore {
-            margin,
-            needed_price_per_click: needed,
-            highest_cpc_millis: needed.map(|needed| {
-                let cpc = u128::from(margin.price_cents) * 100_000 / u128::from(needed.max(1));
-                u64::try_from(cpc).unwrap_or(u64::MAX)
-            }),
-        }
-    });
+    let sale = inputs.sale_score(thresholds);
 
     // The kept keyword each spelling counts under: the most searched of
     // its variants, the first in the alphabet between two as searched.
@@ -589,7 +784,7 @@ pub fn score(
         );
         let key = matches!(outcome, Outcome::Kept(_)).then(|| variant_key(&folded));
         keys.push(key);
-        let cpc = row.cpc_usd_cents.map(|cents| cpc_millis(cents, rate));
+        let cpc = row.cpc_usd_cents.map(|cents| inputs.cpc_millis(cents));
         keywords.push(ScoredKeyword {
             row,
             outcome,
@@ -623,13 +818,12 @@ pub fn score(
         }
     }
 
-    let price_cents = sale.map(|sale| sale.margin.price_cents);
     let (mut main, mut long_tail, mut kept_volume) = (0u32, 0u32, 0u64);
     let (mut weighed_cpc, mut weight) = (0u128, 0u128);
     for keyword in &mut keywords {
-        keyword.price_per_click = price_cents
+        keyword.price_per_click = sale
             .zip(keyword.cpc_millis)
-            .and_then(|(price, cpc)| ratio(price, cpc));
+            .and_then(|(sale, cpc)| sale.price_per_click(cpc));
         let Some(tier) = keyword.tier() else {
             continue;
         };
@@ -643,77 +837,18 @@ pub fn score(
             weighed_cpc += u128::from(cpc) * u128::from(volume);
             weight += u128::from(volume);
         }
-        keyword.channel = sale.and_then(|sale| match sale.needed_price_per_click {
-            None => Some(Channel::SeoOnly),
-            Some(needed) => keyword.cpc_millis.map(|cpc| {
-                if ratio(sale.margin.price_cents, cpc).is_none_or(|ratio| ratio >= needed) {
-                    Channel::Ads
-                } else {
-                    Channel::SeoOnly
-                }
-            }),
-        });
+        keyword.channel = sale.and_then(|sale| sale.channel(keyword.cpc_millis));
     }
     let avg_cpc_millis = (weight > 0)
         .then(|| u64::try_from((weighed_cpc + weight / 2) / weight).unwrap_or(u64::MAX));
-    let price_per_click = price_cents
-        .zip(avg_cpc_millis)
-        .and_then(|(price, cpc)| ratio(price, cpc));
-
-    let enough = |count: u32, enough: u32| {
-        if keywords.is_empty() {
-            TestState::NotChecked
-        } else {
-            TestState::of(count >= enough)
-        }
+    let tally = Tally {
+        keywords: keywords.len() as u64,
+        main,
+        long_tail,
+        kept_volume,
+        avg_cpc_millis,
     };
-    let clicks = match (sale, avg_cpc_millis) {
-        (None, _) => TestState::NotChecked,
-        (Some(sale), _) if sale.needed_price_per_click.is_none() => TestState::Failed,
-        (Some(_), None) => TestState::NotChecked,
-        (Some(sale), Some(_)) => TestState::of(
-            price_per_click
-                .zip(sale.needed_price_per_click)
-                .is_none_or(|(ratio, needed)| ratio >= needed),
-        ),
-    };
-    let tests = [
-        (Test::MainKeywords, enough(main, thresholds.enough_main)),
-        (
-            Test::LongTail,
-            enough(long_tail, thresholds.enough_long_tail),
-        ),
-        (
-            Test::Margin,
-            sale.map_or(TestState::NotChecked, |sale| {
-                TestState::of(sale.margin.margin_cents() > 0)
-            }),
-        ),
-        (Test::PricePerClick, clicks),
-        (
-            Test::SupplierProducts,
-            inputs
-                .supplier_products
-                .map_or(TestState::NotChecked, |products| {
-                    TestState::of(products >= ENOUGH_PRODUCTS)
-                }),
-        ),
-        (
-            Test::NoSpecialist,
-            inputs
-                .specialist_first
-                .map_or(TestState::NotChecked, |specialist| {
-                    TestState::of(!specialist)
-                }),
-        ),
-    ];
-    let verdict = if tests.iter().any(|(_, state)| *state == TestState::Failed) {
-        Verdict::NoGo
-    } else if tests.iter().all(|(_, state)| *state == TestState::Passed) {
-        Verdict::Go
-    } else {
-        Verdict::Incomplete
-    };
+    let judgement = judge(&tally, inputs, thresholds);
 
     Score {
         keywords,
@@ -721,11 +856,11 @@ pub fn score(
         long_tail,
         kept_volume,
         sale,
-        cpc_converted,
+        cpc_converted: judgement.cpc_converted,
         avg_cpc_millis,
-        price_per_click,
-        tests,
-        verdict,
+        price_per_click: judgement.price_per_click,
+        tests: judgement.tests,
+        verdict: judgement.verdict,
     }
 }
 
