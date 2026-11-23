@@ -7,6 +7,7 @@ use topcoat::icon::{IconData, iconify::iconify_icon};
 // Navigation.
 pub const DASHBOARD: IconData = iconify_icon!("lucide:layout-dashboard");
 pub const COMPANIES: IconData = iconify_icon!("lucide:building-2");
+pub const RESEARCH: IconData = iconify_icon!("lucide:telescope");
 pub const ACCOUNT: IconData = iconify_icon!("lucide:user-round");
 pub const TENANTS: IconData = iconify_icon!("lucide:store");
 pub const USERS: IconData = iconify_icon!("lucide:users");

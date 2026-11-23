@@ -6,6 +6,7 @@ pub mod auth;
 pub mod companies;
 pub mod feeds;
 pub mod invitations;
+pub mod research;
 pub(crate) mod server_errors;
 pub mod store;
 pub mod stripe;
@@ -104,6 +105,8 @@ pub struct Services {
     pub shop_mail: crate::shop_mail::ShopMail,
     /// The shops' own AliExpress apps.
     pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
+    /// Where the studies' keywords come from, when the operator set a source.
+    pub keywords: crate::keywords::Keywords,
     /// The live store connections, so revoking a key ends them.
     pub store: Arc<StoreConnections>,
     /// The subscriptions this node runs, for the cluster page.
@@ -135,6 +138,7 @@ pub fn router(services: Services) -> Router {
         payments,
         shop_mail,
         aliexpress,
+        keywords,
         store,
         workers,
         checkouts,
@@ -199,6 +203,7 @@ pub fn router(services: Services) -> Router {
         .with(invitation_tokens)
         .with(payments)
         .with(aliexpress)
+        .with(keywords)
         .with(store)
         .with(workers)
         .with(checkouts)

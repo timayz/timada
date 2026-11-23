@@ -141,6 +141,23 @@ pub trait KeywordSource: Send + Sync {
     async fn places(&self) -> Result<Vec<Place>, KeywordError>;
 }
 
+/// The keyword source as the pages and the sagas reach it; `None` inside
+/// when keyword research is off.
+#[derive(Clone)]
+pub struct Keywords(pub Option<Arc<dyn KeywordSource>>);
+
+impl Keywords {
+    /// The source the configuration sets.
+    pub fn new(config: &DataforseoConfig) -> Self {
+        Self(source(config))
+    }
+
+    /// Whether there is a source to ask.
+    pub fn enabled(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
 /// The source the configuration sets; `None` without a `[dataforseo]`
 /// login: keyword research is off.
 pub fn source(config: &DataforseoConfig) -> Option<Arc<dyn KeywordSource>> {

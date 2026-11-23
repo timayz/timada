@@ -44,6 +44,7 @@ mod rate_limit;
 mod read_only_store;
 mod readiness;
 mod reads;
+mod research;
 mod review_requests;
 mod saga_fault;
 mod scheduled_exports;

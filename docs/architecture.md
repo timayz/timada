@@ -29,6 +29,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/pages` | `timada-pages` | The shop's own pages (legal notice, terms, about) and its blog's articles in Markdown: drafts, publication, pictures; the storefront picks pages by slug and lists articles |
 | `crates/automations` | `timada-automations` | The scenarios a shop's team draws: a trigger, then a tree of steps, kept as a definition the editor works on (see `docs/automations.md`) |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
+| `crates/research` | `timada-research` | The niche studies a user keeps before any shop exists: seed keywords, a country and a language, and the keywords fetched for each seed, in the platform's own streams (see `docs/keywords.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/loadtest` | `timada-loadtest` | Crowds of random shoppers on a storefront over plain HTTP, paying through a stand-in for Stripe: latency, capacity and anomalies (see `docs/loadtest.md`) |
 | `crates/core` | `timada-core` | What every context shares and none owns: the paused-store refusal, languages and time zones, the personal-data keys (`keys`), the mailed-code MAC (`codes`), and the one form of an e-mail address, a slug, a currency, the clock, a calendar date, an amount and a `LIKE` pattern (`email`, `slug`, `currency`, `time`, `civil`, `money`, `sql`). Depends on evento only, never on a database driver or the web framework; every context depends on it |
@@ -486,7 +487,8 @@ by construction.
    messages, newsletter, automations, pages, payments, invoicing and the invoices,
    mail, AliExpress, the shop's name and time zone), `/companies` and
    `/companies/{id}` (the legal entities the shops sell as, their AliExpress buyer
-   account), `/aliexpress` (the platform app's callback), `/stripe/webhooks/{tenant_id}`,
+   account), `/research` and `/research/{id}` (a user's niche studies, see *Niche
+   studies*), `/aliexpress` (the platform app's callback), `/stripe/webhooks/{tenant_id}`,
    `/store/reviews` and `/store/reviews/revise` (a storefront handing in a review, see
    *Reviews*), `/store/shoppers/*` (a storefront signing its shoppers in, see *Shopper
    accounts*), `/store/contact` (a storefront handing in a message from its contact
@@ -1280,6 +1282,36 @@ call is made inside the pass with a five-second limit, as the VIES check is. A r
 on. No answer fails the pass, which is tried again while the order is younger than an
 hour; after that the sale is left to the browser's event, so one pixel Meta keeps
 failing on never holds the other shops' sales.
+
+## Niche studies
+
+A user chooses what to sell before any shop exists, so a study belongs to a user, as
+a company does, and its `Study` stream lives in the platform's tenant
+(`timada-research`): a name, up to 20 seed keywords, and the country and language
+they are searched in. `/research` lists a user's studies (the `research_studies` read
+model), `/research/new` starts one from the countries and languages the keyword
+source covers, and `/research/{id}` is the study's page, which only its owner opens
+(anyone else gets a 404).
+
+Fetching is asked on the page and done off it. The page writes `FetchRequested`, one
+per seed; the `timada-dashboard/keyword-fetches` saga, on the nodes of the study's
+work group, claims each (`FetchStarted`, written against the version it read, so one
+node pays for the call), asks the keyword source (`docs/keywords.md`) and records
+`KeywordsFetched` with the rows and what the call cost, or `FetchFailed` with a reason
+the owner reads. A failure of the source never fails the pass; only the store does. A
+request older than ten minutes is history and is left alone, and from then on the
+owner may ask again, as for a seed whose fetch failed. The owner and the saga write
+one stream at the same time, so every command decides again from a fresh load when
+its write lost to another.
+
+The rows of a fetch live in the event that records it, 1,000 at most (about 50 KB):
+a rebuilt read model and every node of a cluster hold the same rows, which a table
+outside the events would lose or let differ. A study has a handful of seeds and of
+fetches, so its stream stays short. The read model (`research_keywords`) keeps the
+rows of each seed's last fetch, replaced whole when the seed is fetched again, and
+the page reads them by study, the most searched first, a page at a time off an index.
+The write model keeps where each seed's fetch stands and how many rows it gave,
+never the rows.
 
 ## The storefront side
 
