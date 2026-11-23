@@ -67,6 +67,14 @@ pub enum ResearchError {
     NotInTree,
     #[error("a niche is named by at most {MAX_NICHE_WORDS} words")]
     TooManyNicheWords,
+    #[error("name the shop to create, or pick one of yours")]
+    InvalidShop,
+    #[error("this study's categories are created in the shop it is linked to")]
+    AnotherShop,
+    #[error("the categories are being created")]
+    CreationPending,
+    #[error("every category that can be created is")]
+    NothingToCreate,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -126,6 +134,10 @@ impl ResearchError {
             Self::TooManyParked => "too_many_parked_keywords",
             Self::NotInTree => "keyword_not_in_tree",
             Self::TooManyNicheWords => "too_many_niche_words",
+            Self::InvalidShop => "invalid_study_shop",
+            Self::AnotherShop => "study_has_another_shop",
+            Self::CreationPending => "categories_being_created",
+            Self::NothingToCreate => "nothing_to_create",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })

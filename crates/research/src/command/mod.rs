@@ -12,6 +12,7 @@
 //! nodes), so a write that lost to another is no verdict: every command
 //! loads the study again and decides again ([`WRITE_ATTEMPTS`] times).
 
+mod creation;
 mod fetch;
 mod inputs;
 mod marks;
@@ -24,12 +25,16 @@ use evento::{
     Executor, Projection, ProjectionAggregate, WriteBuilder, WriteError, metadata::Event,
 };
 
+pub use creation::*;
 pub use fetch::Reusable;
 pub use inputs::*;
 pub use marks::*;
 pub use spend::*;
 pub use study::*;
 
+use crate::aggregator::{
+    CategoryCreated, CategoryNotCreated, CreationFailed, CreationRequested, ShopLinked,
+};
 use crate::aggregator::{
     CategoryParked, CategoryPlaced, CategoryPriced, CategoryRemoved, Created, Deleted, FetchFailed,
     FetchRequested, FetchStarted, InputsSet, KeywordDropped, KeywordRestored, KeywordsFetched,
@@ -38,7 +43,7 @@ use crate::aggregator::{
 };
 use crate::error::ResearchError;
 use crate::score::{Sale, StudyInputs};
-use crate::tree::{Tree, TreeCategory};
+use crate::tree::{CreatedCategory, Creation, Tree, TreeCategory};
 use crate::value_object::{FETCH_STALE_SECS, FetchStatus};
 
 /// The command gateway over the platform's streams. Cheap to clone when `E`
@@ -140,6 +145,13 @@ pub struct StudyState {
     pub inputs_set_at: Option<u64>,
     /// The category tree the owner built from the kept keywords.
     pub tree: Tree,
+    /// The shop its categories are created in, once it has one.
+    pub shop: Option<String>,
+    /// The categories of the tree that exist in that shop, in the order
+    /// they were created.
+    pub created: Vec<CreatedCategory>,
+    /// The last time the owner asked for the tree to be created.
+    pub creation: Option<Creation>,
     /// Unix seconds of `Created`.
     pub created_at: u64,
     /// Unix seconds of the last event.
@@ -172,6 +184,18 @@ impl StudyState {
             .find(|state| state.keyword == keyword)
     }
 
+    /// The category of the tree's `keyword` in the study's shop, once it
+    /// is created there.
+    pub fn created_category(&self, keyword: &str) -> Option<&CreatedCategory> {
+        self.created
+            .iter()
+            .find(|created| created.keyword == keyword)
+    }
+
+    pub fn is_created(&self, keyword: &str) -> bool {
+        self.created_category(keyword).is_some()
+    }
+
     /// How many rows its seeds' last fetches gave together.
     pub fn keywords(&self) -> u64 {
         self.seeds.iter().map(|seed| u64::from(seed.keywords)).sum()
@@ -200,6 +224,11 @@ pub fn study_projection<E: Executor>() -> Projection<E, StudyState> {
         .handler(on_category_removed())
         .handler(on_category_priced())
         .handler(on_niche_words_set())
+        .handler(on_creation_requested())
+        .handler(on_shop_linked())
+        .handler(on_category_created())
+        .handler(on_category_not_created())
+        .handler(on_creation_failed())
         .handler(on_deleted())
         .strict()
 }
@@ -484,6 +513,88 @@ async fn on_niche_words_set(
     study: &mut StudyState,
 ) -> anyhow::Result<()> {
     study.tree.niche_words = Some(event.data.words.to_owned());
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_creation_requested(
+    event: Event<CreationRequested>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    study.creation = Some(Creation {
+        request: event.data.request.to_owned(),
+        tenant_id: event.data.tenant_id.to_owned(),
+        shop_name: event.data.shop_name.to_owned(),
+        requested_at: event.timestamp,
+        planned: event.data.categories.to_owned(),
+        ..Creation::default()
+    });
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_shop_linked(event: Event<ShopLinked>, study: &mut StudyState) -> anyhow::Result<()> {
+    study.shop = Some(event.data.tenant_id.to_owned());
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_created(
+    event: Event<CategoryCreated>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    if !study.is_created(&data.keyword) {
+        study.created.push(CreatedCategory {
+            keyword: data.keyword.to_owned(),
+            category_id: data.category_id.to_owned(),
+            slug: data.slug.to_owned(),
+        });
+    }
+    if let Some(creation) = &mut study.creation
+        && creation.request == data.request
+        && !creation.created.contains(&data.keyword)
+    {
+        creation.created.push(data.keyword.to_owned());
+    }
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_not_created(
+    event: Event<CategoryNotCreated>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    let data = &event.data;
+    if let Some(creation) = &mut study.creation
+        && creation.request == data.request
+        && !creation
+            .refused
+            .iter()
+            .any(|(keyword, _)| *keyword == data.keyword)
+    {
+        creation
+            .refused
+            .push((data.keyword.to_owned(), data.reason.to_owned()));
+    }
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_creation_failed(
+    event: Event<CreationFailed>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    if let Some(creation) = &mut study.creation
+        && creation.request == event.data.request
+    {
+        creation.failed = Some(event.data.reason.to_owned());
+    }
     study.updated_at = event.timestamp;
     Ok(())
 }

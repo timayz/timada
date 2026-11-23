@@ -55,6 +55,7 @@ mod shopper_keys;
 mod store_api;
 mod store_carts;
 mod store_copy;
+mod study_shop;
 mod ui;
 mod vies;
 mod workers;

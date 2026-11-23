@@ -31,16 +31,29 @@ impl<E: Executor> super::Command<E> {
         cmd: CreateTenant,
         routing_key: Option<String>,
     ) -> Result<TenantState, TenancyError> {
+        self.create_tenant_under_opt(&Ulid::generate().to_string(), cmd, routing_key)
+            .await
+    }
+
+    /// [`create_tenant`](Self::create_tenant) under an id its maker chose,
+    /// fresh to them: asked for again with the same id, the tenant is made
+    /// once and given back as it stands. What a saga that may be delivered
+    /// twice creates a shop with.
+    pub async fn create_tenant_under(
+        &self,
+        tenant_id: &str,
+        cmd: CreateTenant,
+        routing_key: Option<String>,
+    ) -> Result<TenantState, TenancyError> {
         let name = normalize_name(&cmd.name)?;
-        let tenant_id = Ulid::generate().to_string();
+        if let Some(made) = self.load_tenant(tenant_id).await? {
+            return Ok(made);
+        }
 
         let base = slugify(&name);
         let mut slug = base.clone();
         for attempt in 0..SLUG_ATTEMPTS {
-            match self
-                .claim_slug(&slug, &tenant_id, routing_key.clone())
-                .await
-            {
+            match self.claim_slug(&slug, tenant_id, routing_key.clone()).await {
                 Ok(()) => break,
                 Err(TenancyError::SlugTaken) if attempt + 1 < SLUG_ATTEMPTS => {
                     slug = suffixed_slug(&base);
@@ -49,7 +62,7 @@ impl<E: Executor> super::Command<E> {
             }
         }
 
-        evento::append(&tenant_id)
+        let made = evento::append(tenant_id)
             .original_version(0)
             .routing_key_opt(routing_key)
             .requested_by(cmd.owner_user_id.clone())
@@ -67,9 +80,14 @@ impl<E: Executor> super::Command<E> {
                 set_by: cmd.owner_user_id,
             })
             .commit(&self.0)
-            .await?;
+            .await;
+        match made {
+            // Another delivery made it between the look and the write.
+            Ok(_) | Err(evento::WriteError::InvalidOriginalVersion) => {}
+            Err(err) => return Err(err.into()),
+        }
 
-        self.load_tenant(&tenant_id)
+        self.load_tenant(tenant_id)
             .await?
             .ok_or(TenancyError::NotFound)
     }

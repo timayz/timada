@@ -122,6 +122,13 @@ mod tests {
                 "{plan:#?}"
             );
         }
+        let of_shop = plan(&db, &super::studies::study_of_shop_statement(), ("shop",)).await;
+        assert!(
+            of_shop.iter().all(|step| step.starts_with("SEARCH")
+                && step.contains("research_studies_shop")
+                && !step.contains("TEMP B-TREE")),
+            "{of_shop:#?}"
+        );
         let figures = plan(&db, &super::tree::figures_statement(2), ("study", "a", "b")).await;
         assert!(
             figures.iter().all(|step| !step.starts_with("SCAN")

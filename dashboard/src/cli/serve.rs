@@ -800,6 +800,11 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     ("first results", Kind::Sharded, |d| {
         crate::research::results_subscription(d.keywords.clone(), d.store.clone(), d.spending)
     }),
+    // The tree a study's owner asked for is created in a shop as draft
+    // categories, the shop first when it is to be made.
+    ("study categories", Kind::Sharded, |d| {
+        crate::study_shop::subscription(d.store.clone())
+    }),
     ("pictures", Kind::ReadModel, |d| {
         crate::media::subscription(d.fetcher.clone())
     }),
