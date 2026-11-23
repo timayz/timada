@@ -57,6 +57,9 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             "secrets.key is not set: no shopper can create an account and no contact message can be received"
         );
     }
+    if config.dataforseo.credentials().is_none() {
+        tracing::info!("dataforseo.login is not set: keyword research is off");
+    }
     let keys = Arc::new(crate::key_vault::KeyVault::new(
         &config.data_keys,
         keys_sealer,

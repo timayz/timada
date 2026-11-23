@@ -1,5 +1,6 @@
 mod aliexpress_places;
 mod hash_password;
+mod keywords;
 mod migrate;
 mod rebuild;
 mod rejoin;
@@ -9,6 +10,7 @@ mod snapshot;
 
 pub use aliexpress_places::*;
 pub use hash_password::*;
+pub use keywords::*;
 pub use migrate::*;
 pub use rebuild::*;
 pub use rejoin::*;

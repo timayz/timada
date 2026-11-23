@@ -20,6 +20,7 @@ mod idle_carts;
 mod invitation_mails;
 mod invoicing;
 mod key_vault;
+mod keywords;
 mod mail;
 mod mail_fault;
 mod mailroom;
@@ -105,6 +106,9 @@ enum Commands {
     Snapshot(cli::SnapshotArgs),
     /// Read AliExpress's lists of places again, into the file the build embeds
     AliexpressPlaces(cli::AliexpressPlacesArgs),
+    /// Ask the keyword source for a seed's keywords and print them with what
+    /// the call cost, or list the countries it has keywords for
+    Keywords(cli::KeywordsArgs),
     /// Read a password on the standard input and print its hash, for
     /// `auth.root.password_hash` (needs no configuration)
     HashPassword,
@@ -135,6 +139,7 @@ async fn main() -> Result<()> {
         Commands::Seed(args) => cli::seed(config, args).await,
         Commands::Snapshot(args) => cli::snapshot(config, args).await,
         Commands::AliexpressPlaces(args) => cli::aliexpress_places(config, args).await,
+        Commands::Keywords(args) => cli::keywords(config, args).await,
         Commands::HashPassword => cli::hash_password().await,
         #[cfg(debug_assertions)]
         Commands::Reset => cli::reset(config).await,

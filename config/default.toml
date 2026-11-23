@@ -360,6 +360,23 @@ dir = "data/shopper-keys"
 # api_url = "https://api-sg.aliexpress.com"
 # authorize_url = "https://api-sg.aliexpress.com/oauth/authorize"
 
+# Keyword data: how often a query is searched, what a click on it costs, how
+# hard it is to rank for. It is read from DataForSEO under the platform's own
+# account, which pays for every call: about 0.012 USD a call and 0.00012 USD
+# a keyword returned, 0.13 USD for the thousand a call returns at most. The
+# account is topped up ahead and a call is refused once it is spent.
+# Without this section keyword research is off.
+# `timada-dashboard keywords "<a keyword>"` makes one call and prints it:
+# the way to check the login.
+# [dataforseo]
+# # The API login and password, from the account's API Access page (the
+# # password is not the one the account signs in with); both or neither.
+# # In production: TIMADA__DATAFORSEO__PASSWORD.
+# login = ""
+# password = ""
+# # DataForSEO's own address, changed only for tests.
+# api_url = "https://api.dataforseo.com"
+
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that
 # tenant's events; a connection sees that tenant's streams and nothing else.

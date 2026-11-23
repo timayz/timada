@@ -41,7 +41,7 @@ against it, see `seeds/README.md` and `docs/storefront.md`.
 | `dashboard/` | the composition root: the web app, the store API, the subscriptions, the CLI (`serve`, `migrate`, `reset`, `seed`, `snapshot`) |
 | `storefront/` | a shop on the storefront library with no brand and no colours, to start your own from |
 | `tests/e2e` | the Playwright suite |
-| `docs/` | `architecture.md` first, then one file per area (`storefront`, `payments`, `invoicing`, `mail`, `automations`, `aliexpress`, `loadtest`) |
+| `docs/` | `architecture.md` first, then one file per area (`storefront`, `payments`, `invoicing`, `mail`, `automations`, `aliexpress`, `keywords`, `loadtest`) |
 
 ## Releasing
 
