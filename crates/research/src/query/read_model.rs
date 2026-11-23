@@ -1,5 +1,5 @@
-//! The subscription that keeps `research_studies` and `research_keywords`
-//! current.
+//! The subscription that keeps `research_studies`, `research_keywords`,
+//! `research_fetches` and `research_spend` current.
 //!
 //! The handler reloads the strict write model of the study and rewrites its
 //! row, so delivery may repeat (the subscription is at-least-once) without
@@ -8,15 +8,19 @@
 //! carries them, and its rows replace the seed's earlier ones, whole, in one
 //! transaction. Events of a stream come in order, so a fetch delivered again
 //! is followed by the ones after it and the seed ends on its last fetch.
+//!
+//! A charge adds to its user's row of the day, once: the row keeps the
+//! version of the day's stream it was last moved at, and a charge at or
+//! under it was counted already.
 
 use evento::{
     Executor,
-    metadata::RawEvent,
+    metadata::{Event, RawEvent},
     subscription::{Context, SubscriptionBuilder},
 };
 use timada_core::db::{Db, Value, execute, params_from_iter};
 
-use crate::aggregator::{KeywordRow, Study, StudyEvent};
+use crate::aggregator::{Charged, KeywordRow, Study, StudyEvent};
 use crate::command::{StudyState, study_projection};
 
 /// The cursor identity of the read-model subscription, in the store.
@@ -33,6 +37,7 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(READ_MODEL_SUBSCRIPTION)
         .data(db)
         .handler(on_study_event())
+        .handler(on_charged())
         .any_routing_key()
         .tenant("")
 }
@@ -50,20 +55,97 @@ async fn on_study_event<E: Executor>(
     else {
         return Ok(());
     };
+    let decoded = event.decode()?;
+    // A paid fetch answers later ones of its seed whatever becomes of the
+    // study: its rows stay in the stream.
+    if let StudyEvent::KeywordsFetched(fetched) = &decoded {
+        note_fetch(&db, &study, &fetched.seed, event.timestamp as i64).await?;
+    }
     if study.deleted {
         return delete_study(&db, &study.id).await;
     }
-    if let StudyEvent::KeywordsFetched(fetched) = event.decode()? {
-        let fetch = Fetch {
-            study_id: &study.id,
-            seed: &fetched.seed,
-            event_id: event.id.to_string(),
-            fetched_at: event.timestamp as i64,
-            rows: &fetched.rows,
-        };
-        replace_keywords(&db, &fetch).await?;
-    }
+    let (seed, rows, fetched_at) = match &decoded {
+        StudyEvent::KeywordsFetched(fetched) => {
+            (&fetched.seed, &fetched.rows, event.timestamp as i64)
+        }
+        StudyEvent::KeywordsReused(reused) => {
+            (&reused.seed, &reused.rows, reused.fetched_at as i64)
+        }
+        _ => return upsert_study(&db, &study).await,
+    };
+    let fetch = Fetch {
+        study_id: &study.id,
+        seed,
+        event_id: event.id.to_string(),
+        fetched_at,
+        rows,
+    };
+    replace_keywords(&db, &fetch).await?;
     upsert_study(&db, &study).await
+}
+
+/// Notes where `seed` was last paid for in the study's country and
+/// language; an older fetch delivered again changes nothing.
+async fn note_fetch(
+    db: &Db,
+    study: &StudyState,
+    seed: &str,
+    fetched_at: i64,
+) -> anyhow::Result<()> {
+    db.execute(
+        "INSERT INTO research_fetches (country, language, seed, study_id, fetched_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (country, language, seed) DO UPDATE SET
+            study_id = excluded.study_id, fetched_at = excluded.fetched_at
+         WHERE excluded.fetched_at >= research_fetches.fetched_at",
+        (
+            study.country.as_str(),
+            study.language.as_str(),
+            seed,
+            study.id.as_str(),
+            fetched_at,
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_charged<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<Charged>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    count_charge(
+        &db,
+        &event.aggregate_id,
+        &event.data.user_id,
+        event.data.cost_usd_micros,
+        event.version,
+    )
+    .await
+}
+
+/// Adds a charge to its user's row of the day, unless the row was already
+/// moved at `version` of the day's stream or a later one.
+pub(super) async fn count_charge(
+    db: &Db,
+    day: &str,
+    user_id: &str,
+    cost_usd_micros: u64,
+    version: u16,
+) -> anyhow::Result<()> {
+    db.execute(
+        "INSERT INTO research_spend (day, user_id, usd_micros, calls, version)
+         VALUES (?1, ?2, ?3, 1, ?4)
+         ON CONFLICT (day, user_id) DO UPDATE SET
+            usd_micros = usd_micros + excluded.usd_micros, calls = calls + 1,
+            version = excluded.version
+         WHERE excluded.version > research_spend.version",
+        (day, user_id, cost_usd_micros as i64, i64::from(version)),
+    )
+    .await?;
+    Ok(())
 }
 
 /// Writes the row of a study as the write model sees it.

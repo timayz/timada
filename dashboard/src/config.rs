@@ -66,6 +66,9 @@ pub struct Config {
     /// Where keyword data is read from; without a login, nothing reads any.
     #[serde(default)]
     pub dataforseo: DataforseoConfig,
+    /// What keyword research may spend; every setting has a default.
+    #[serde(default)]
+    pub research: ResearchConfig,
     pub auth: AuthConfig,
     pub mail: MailConfig,
     pub monitoring: MonitoringConfig,
@@ -922,6 +925,80 @@ impl DataforseoConfig {
     }
 }
 
+/// What keyword research may spend: every call to the keyword source is
+/// paid by the platform's account, whoever asks.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct ResearchConfig {
+    /// The most one user's calls may cost in a day (UTC), in US dollars.
+    #[serde(default = "default_research_daily_usd_per_user")]
+    pub daily_usd_per_user: f64,
+    /// The most every user's calls may cost together in a day (UTC), in US
+    /// dollars.
+    #[serde(default = "default_research_daily_usd")]
+    pub daily_usd: f64,
+    /// For how many days a seed's keywords answer anyone who asks for the
+    /// same seed, country and language again, at no cost; 0 pays for every
+    /// fetch.
+    #[serde(default = "default_research_reuse_days")]
+    pub reuse_days: u32,
+}
+
+impl Default for ResearchConfig {
+    fn default() -> Self {
+        Self {
+            daily_usd_per_user: default_research_daily_usd_per_user(),
+            daily_usd: default_research_daily_usd(),
+            reuse_days: default_research_reuse_days(),
+        }
+    }
+}
+
+fn default_research_daily_usd_per_user() -> f64 {
+    1.0
+}
+
+fn default_research_daily_usd() -> f64 {
+    10.0
+}
+
+fn default_research_reuse_days() -> u32 {
+    30
+}
+
+/// The most a cap may be set to, in US dollars: far above what a day of
+/// calls can cost.
+const MAX_RESEARCH_DAILY_USD: f64 = 1_000_000.0;
+
+impl ResearchConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        for (key, usd) in [
+            ("daily_usd_per_user", self.daily_usd_per_user),
+            ("daily_usd", self.daily_usd),
+        ] {
+            if !(0.0..=MAX_RESEARCH_DAILY_USD).contains(&usd) {
+                return Err(ConfigError::Message(format!(
+                    "research.{key}: {usd} is not an amount in US dollars from 0 to {MAX_RESEARCH_DAILY_USD}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The day's caps, in millionths of a US dollar.
+    pub fn caps(&self) -> timada_research::SpendCaps {
+        let micros = |usd: f64| (usd * 1_000_000.0).round() as u64;
+        timada_research::SpendCaps {
+            user_usd_micros: micros(self.daily_usd_per_user),
+            platform_usd_micros: micros(self.daily_usd),
+        }
+    }
+
+    /// For how long a seed's keywords answer a new fetch, in seconds.
+    pub fn reuse_secs(&self) -> u64 {
+        u64::from(self.reuse_days) * 86_400
+    }
+}
+
 /// Invoices.
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct InvoicingConfig {
@@ -1192,6 +1269,7 @@ impl Config {
             payments.validate(config.secrets.as_ref())?;
         }
         config.dataforseo.validate()?;
+        config.research.validate()?;
         config.auth.validate()?;
         config.mail.validate()?;
 
@@ -1486,6 +1564,36 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn the_research_caps_are_amounts_in_dollars() {
+        let default = ResearchConfig::default();
+        assert!(default.validate().is_ok());
+        assert_eq!(
+            default.caps(),
+            timada_research::SpendCaps {
+                user_usd_micros: 1_000_000,
+                platform_usd_micros: 10_000_000,
+            }
+        );
+        assert_eq!(default.reuse_secs(), 30 * 86_400);
+        let cents = ResearchConfig {
+            daily_usd_per_user: 0.16,
+            daily_usd: 0.0,
+            reuse_days: 0,
+        };
+        assert!(cents.validate().is_ok());
+        assert_eq!(cents.caps().user_usd_micros, 160_000);
+        assert_eq!(cents.caps().platform_usd_micros, 0);
+        assert_eq!(cents.reuse_secs(), 0);
+        for usd in [-1.0, f64::NAN, f64::INFINITY, 2_000_000.0] {
+            let bad = ResearchConfig {
+                daily_usd: usd,
+                ..ResearchConfig::default()
+            };
+            assert!(bad.validate().is_err(), "{usd}");
+        }
     }
 
     #[test]

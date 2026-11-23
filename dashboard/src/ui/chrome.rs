@@ -43,7 +43,7 @@ use crate::components::sidebar::{
 /// What the rail highlights: the key of the page being shown (one of the
 /// [`SECTIONS`] keys on a tenant page, `"dashboard"`, `"companies"`, `"research"`,
 /// `"account"`, `"admin_tenants"`, `"admin_users"`, `"admin_companies"`,
-/// `"admin_cluster"`, or
+/// `"admin_research"`, `"admin_cluster"`, or
 /// `""` for a page under none of them), and the tenant whose sections to
 /// list.
 #[derive(Clone, Copy)]
@@ -465,6 +465,7 @@ async fn rail_groups(cx: &Cx, user: Option<&UserState>, shell: Shell<'_>) -> Res
                         nav_item(href: href!(crate::app::admin::tenants::tenants).resolve(cx), label: "Tenants", symbol: icons::TENANTS, active: current == "admin_tenants")
                         nav_item(href: href!(crate::app::admin::users::users).resolve(cx), label: "Users", symbol: icons::USERS, active: current == "admin_users")
                         nav_item(href: href!(crate::app::admin::companies::index).resolve(cx), label: "All companies", symbol: icons::COMPANIES, active: current == "admin_companies")
+                        nav_item(href: href!(crate::app::admin::research::index).resolve(cx), label: "Research spend", symbol: icons::RESEARCH, active: current == "admin_research")
                         nav_item(href: href!(crate::app::admin::cluster::index).resolve(cx), label: "This node", symbol: icons::DASHBOARD, active: current == "admin_cluster")
                     )
                 )

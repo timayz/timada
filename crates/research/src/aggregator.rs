@@ -62,6 +62,19 @@ pub enum Study {
         cost_usd_micros: u64,
         fetched_by: String,
     },
+    /// The seed was fetched not long ago, for this study or another of the
+    /// same country and language: its rows are that fetch's, and nothing
+    /// was paid. They replace what an earlier fetch of the seed gave.
+    KeywordsReused {
+        seed: String,
+        rows: Vec<KeywordRow>,
+        /// The study whose fetch gave the rows; this one's own id when the
+        /// seed is fetched again too soon.
+        from_study: String,
+        /// Unix seconds of that fetch: how old the rows are.
+        fetched_at: u64,
+        reused_by: String,
+    },
     /// The source gave nothing; `reason` says why, for the owner. The rows
     /// of an earlier fetch stay.
     FetchFailed {
@@ -73,4 +86,35 @@ pub enum Study {
     Deleted {
         deleted_by: String,
     },
+}
+
+/// What the keyword source was paid on one day (UTC), over every user. Its
+/// id is the day ([`spend_day`](crate::spend_day), `2026-11-23`), and it
+/// lives in the platform's tenant. Every paid call goes through it, on
+/// whichever node makes it, so the day's caps hold over a cluster.
+#[evento::aggregate(name = "timada-research/SpendDay")]
+pub enum SpendDay {
+    /// Room kept for a call about to be made for `user_id`: the most it may
+    /// cost counts against the caps until the call is charged or let go.
+    Held {
+        /// A fresh id, which the charge or the release names.
+        hold: String,
+        user_id: String,
+        study_id: String,
+        seed: String,
+        most_usd_micros: u64,
+        held_by: String,
+    },
+    /// The call was made: what the source says it cost, in millionths of a
+    /// US dollar, takes the place of what was held for it.
+    Charged {
+        hold: String,
+        user_id: String,
+        study_id: String,
+        seed: String,
+        cost_usd_micros: u64,
+        charged_by: String,
+    },
+    /// The call gave nothing and cost nothing: its room is free again.
+    Released { hold: String, released_by: String },
 }

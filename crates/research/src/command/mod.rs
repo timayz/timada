@@ -12,17 +12,20 @@
 //! loads the study again and decides again ([`WRITE_ATTEMPTS`] times).
 
 mod fetch;
+mod spend;
 mod study;
 
 use evento::{
     Executor, Projection, ProjectionAggregate, WriteBuilder, WriteError, metadata::Event,
 };
 
+pub use fetch::Reusable;
+pub use spend::*;
 pub use study::*;
 
 use crate::aggregator::{
-    Created, Deleted, FetchFailed, FetchRequested, FetchStarted, KeywordsFetched, Renamed,
-    SeedAdded, Study,
+    Created, Deleted, FetchFailed, FetchRequested, FetchStarted, KeywordsFetched, KeywordsReused,
+    Renamed, SeedAdded, Study,
 };
 use crate::error::ResearchError;
 use crate::value_object::{FETCH_STALE_SECS, FetchStatus};
@@ -42,7 +45,8 @@ pub struct SeedState {
     pub status: FetchStatus,
     /// Unix seconds of the last `FetchRequested`; 0 when never asked for.
     pub requested_at: u64,
-    /// Unix seconds of the last fetch that gave its rows.
+    /// Unix seconds of the fetch its rows come from: its last one, or the
+    /// earlier one that answered in its place.
     pub fetched_at: Option<u64>,
     /// How many rows that fetch gave.
     pub keywords: u32,
@@ -115,6 +119,7 @@ pub fn study_projection<E: Executor>() -> Projection<E, StudyState> {
         .handler(on_fetch_requested())
         .handler(on_fetch_started())
         .handler(on_keywords_fetched())
+        .handler(on_keywords_reused())
         .handler(on_fetch_failed())
         .handler(on_deleted())
         .strict()
@@ -191,6 +196,21 @@ async fn on_keywords_fetched(
     study.cost_usd_micros = study
         .cost_usd_micros
         .saturating_add(event.data.cost_usd_micros);
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_keywords_reused(
+    event: Event<KeywordsReused>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    if let Some(seed) = study.seed_mut(&event.data.seed) {
+        seed.status = FetchStatus::Fetched;
+        seed.fetched_at = Some(event.data.fetched_at);
+        seed.keywords = event.data.rows.len() as u32;
+        seed.last_error = None;
+    }
     study.updated_at = event.timestamp;
     Ok(())
 }

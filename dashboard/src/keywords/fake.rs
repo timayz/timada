@@ -92,6 +92,10 @@ impl KeywordSource for FakeKeywords {
         })
     }
 
+    fn most_usd_micros(&self) -> u64 {
+        CALL_MICROS + ROW_MICROS * super::MAX_ROWS as u64
+    }
+
     async fn places(&self) -> Result<Vec<Place>, KeywordError> {
         self.answering()?;
         let language = |code: &str, name: &str| Language {

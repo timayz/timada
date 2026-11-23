@@ -377,6 +377,22 @@ dir = "data/shopper-keys"
 # # DataForSEO's own address, changed only for tests.
 # api_url = "https://api.dataforseo.com"
 
+# What keyword research may spend. Every call to the keyword source is paid
+# by the platform's account, whoever asks, so a day (UTC, midnight to
+# midnight) has two caps, in US dollars. They count what the source says each
+# call cost. A call is refused before it is made when the most it may cost
+# (0.132 USD) no longer fits under a cap, so a cap is never passed and the
+# last calls before it are refused while a little is left; a cap under 0.132
+# lets no call through. On a cluster the caps hold over every node.
+# [research]
+# # For one user's calls.
+# daily_usd_per_user = 1.0
+# # For every user's calls together.
+# daily_usd = 10.0
+# # For how many days a seed's keywords answer anyone who asks for the same
+# # seed, country and language again, at no cost. 0 pays for every fetch.
+# reuse_days = 30
+
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that
 # tenant's events; a connection sees that tenant's streams and nothing else.
