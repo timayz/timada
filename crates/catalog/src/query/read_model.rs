@@ -723,14 +723,16 @@ pub(crate) async fn upsert_category(
             execute(
                 tx,
                 "INSERT INTO catalog_categories (tenant_id, id, slug, name, description,
-                    parent_id, position, archived, in_menu, created_by, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                    parent_id, position, archived, in_menu, created_by, created_at, updated_at,
+                    draft, out_of_ads)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                  ON CONFLICT (tenant_id, id) DO UPDATE SET
                     slug = excluded.slug, name = excluded.name,
                     description = excluded.description,
                     parent_id = excluded.parent_id, position = excluded.position,
                     archived = excluded.archived, in_menu = excluded.in_menu,
-                    updated_at = excluded.updated_at",
+                    updated_at = excluded.updated_at, draft = excluded.draft,
+                    out_of_ads = excluded.out_of_ads",
                 (
                     *tenant_id,
                     category.id.as_str(),
@@ -744,6 +746,8 @@ pub(crate) async fn upsert_category(
                     category.created_by.as_str(),
                     category.created_at as i64,
                     category.updated_at as i64,
+                    category.draft,
+                    category.out_of_ads,
                 ),
             )
             .await?;

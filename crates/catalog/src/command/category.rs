@@ -4,14 +4,15 @@ use evento::{Executor, ProjectionAggregate};
 use ulid::Ulid;
 
 use crate::aggregator::category::{
-    Archived, BodyWritten, Created, Described, HiddenFromMenu, Moved, Positioned, ProductsPinned,
-    QuestionsSet, Renamed, SeoSet, ShownInMenu,
+    AllowedInAds, Archived, BodyWritten, Created, Described, HiddenFromMenu, KeptOutOfAds, Moved,
+    Positioned, ProductsPinned, Published, QuestionsSet, Renamed, SeoSet, ShownInMenu, Unpublished,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
     CategoryQuestion, FALLBACK_CATEGORY_SLUG, MAX_CATEGORY_DEPTH, MAX_PINNED_PRODUCTS,
-    normalize_category_body, normalize_category_description, normalize_category_name,
-    normalize_category_questions, normalize_seo, normalize_slug, slugify_or, suffixed_slug,
+    TranslationKind, is_reserved_slug, normalize_category_body, normalize_category_description,
+    normalize_category_name, normalize_category_questions, normalize_seo, normalize_slug,
+    slugify_or, suffixed_slug,
 };
 
 use super::CategoryState;
@@ -30,8 +31,162 @@ pub struct CreateCategory {
     pub parent_id: Option<String>,
 }
 
+/// A category to make as a draft, under an id its maker chose: asked for
+/// again with the same id, it is made once.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DraftCategory {
+    /// The id the category goes by, fresh to its maker.
+    pub id: String,
+    pub name: String,
+    /// The URL handle; one that is taken is refused.
+    pub slug: String,
+    /// The category above it, or `None` for a top-level one.
+    pub parent_id: Option<String>,
+    /// The title search engines show; empty for the name.
+    pub meta_title: String,
+    /// Campaigns are to leave its products out.
+    pub out_of_ads: bool,
+    /// Where it sorts among its siblings, lowest first.
+    pub position: u32,
+}
+
 #[evento::command]
 impl<E: Executor> super::Command<E> {
+    /// Creates a category kept back from shoppers, in one write: its
+    /// slug, its title for search engines and whether campaigns leave it
+    /// out. `false` when a category of this id is there already, which a
+    /// maker that asks twice (a saga delivered again) reads as done.
+    pub async fn create_draft_category(
+        &self,
+        actor: &str,
+        cmd: DraftCategory,
+        routing_key: Option<String>,
+    ) -> Result<bool, CatalogError> {
+        let id = cmd.id.trim();
+        if id.is_empty() || id.len() > 64 || id.chars().any(char::is_whitespace) {
+            return Err(CatalogError::CategoryNotFound);
+        }
+        if self.load_category(id).await?.is_some() {
+            return Ok(false);
+        }
+        let name = normalize_category_name(&cmd.name)?;
+        let slug = normalize_slug(&cmd.slug)?;
+        let (meta_title, meta_description) = normalize_seo(&cmd.meta_title, "")?;
+        let parent_id = cmd
+            .parent_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned);
+        if let Some(parent_id) = &parent_id {
+            let chain = self.parent_chain(parent_id).await?;
+            if chain.len() + 1 > MAX_CATEGORY_DEPTH {
+                return Err(CatalogError::CategoryTooDeep);
+            }
+        }
+        self.claim_category_slug(&slug, id, routing_key.clone())
+            .await?;
+        let mut write = evento::append(id);
+        write
+            .original_version(0)
+            .routing_key_opt(routing_key)
+            .event(&Created {
+                slug,
+                name,
+                parent_id,
+                created_by: actor.to_owned(),
+            })
+            .event(&Unpublished {
+                unpublished_by: actor.to_owned(),
+            });
+        if !meta_title.is_empty() {
+            write.event(&SeoSet {
+                meta_title,
+                meta_description,
+                set_by: actor.to_owned(),
+            });
+        }
+        if cmd.out_of_ads {
+            write.event(&KeptOutOfAds {
+                kept_by: actor.to_owned(),
+            });
+        }
+        if cmd.position > 0 {
+            write.event(&Positioned {
+                position: cmd.position,
+                positioned_by: actor.to_owned(),
+            });
+        }
+        match write.tenant(&self.tenant).commit(&self.executor).await {
+            Ok(_) => Ok(true),
+            Err(evento::WriteError::InvalidOriginalVersion) => Ok(false),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Shows the category to shoppers, or keeps it back as a draft; asking
+    /// for what it already is is a no-op. A category under a draft stays
+    /// one until the category above it is published.
+    pub async fn set_category_published(
+        &self,
+        actor: &str,
+        category_id: &str,
+        published: bool,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let category = self.require_live_category(category_id).await?;
+        if category.draft != published {
+            return Ok(());
+        }
+        if published && let Some(parent_id) = &category.parent_id {
+            let above = self.load_category(parent_id).await?;
+            if above.is_some_and(|above| above.draft && !above.archived) {
+                return Err(CatalogError::CategoryParentDraft);
+            }
+        }
+        let mut write = category.write()?;
+        let write = write.routing_key_opt(routing_key);
+        if published {
+            write.event(&Published {
+                published_by: actor.to_owned(),
+            });
+        } else {
+            write.event(&Unpublished {
+                unpublished_by: actor.to_owned(),
+            });
+        }
+        write.tenant(&self.tenant).commit(&self.executor).await?;
+        Ok(())
+    }
+
+    /// Lets campaigns advertise the category's products, or keeps them
+    /// out; asking for what it already is is a no-op.
+    pub async fn set_category_in_ads(
+        &self,
+        actor: &str,
+        category_id: &str,
+        in_ads: bool,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let category = self.require_live_category(category_id).await?;
+        if category.out_of_ads != in_ads {
+            return Ok(());
+        }
+        let mut write = category.write()?;
+        let write = write.routing_key_opt(routing_key);
+        if in_ads {
+            write.event(&AllowedInAds {
+                allowed_by: actor.to_owned(),
+            });
+        } else {
+            write.event(&KeptOutOfAds {
+                kept_by: actor.to_owned(),
+            });
+        }
+        write.tenant(&self.tenant).commit(&self.executor).await?;
+        Ok(())
+    }
+
     /// Creates a category: checks the parent leaves room below it, claims the
     /// slug, then appends `Created`. A creation that fails keeps the claim,
     /// as its write may land yet (the store could not tell): a claim whose
@@ -407,6 +562,24 @@ impl<E: Executor> super::Command<E> {
 }
 
 impl<E: Executor> super::Command<E> {
+    /// Whether a new category could not go by `slug`: a category or a
+    /// product holds it, in any language, or the shop keeps it for its own
+    /// pages. What a claim of it would find, asked without claiming.
+    pub async fn category_slug_taken(&self, slug: &str) -> anyhow::Result<bool> {
+        if is_reserved_slug(slug) {
+            return Ok(true);
+        }
+        if let Some(index) = self.load_category_slug_index(slug).await?
+            && !self.category_slug_let_go(&index).await?
+        {
+            return Ok(true);
+        }
+        Ok(self
+            .translation_slug_of_another(TranslationKind::Category, slug, "")
+            .await?
+            || self.slug_of_kind(TranslationKind::Product, slug).await?)
+    }
+
     /// A live parent and its ancestors, top-level first and the parent last,
     /// so its length is the depth a new child would sit at minus one.
     async fn parent_chain(&self, parent_id: &str) -> Result<Vec<CategoryState>, CatalogError> {

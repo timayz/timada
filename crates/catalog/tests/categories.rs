@@ -2,8 +2,8 @@ mod common;
 
 use common::*;
 use timada_catalog::{
-    CatalogError, CategoryQuestion, CreateCategory, MAX_CATEGORY_BODY_LEN, MAX_CATEGORY_DEPTH,
-    MAX_CATEGORY_QUESTIONS, MAX_PINNED_PRODUCTS, SLUG_SUFFIX_LEN,
+    CatalogError, CategoryQuestion, CreateCategory, DraftCategory, MAX_CATEGORY_BODY_LEN,
+    MAX_CATEGORY_DEPTH, MAX_CATEGORY_QUESTIONS, MAX_PINNED_PRODUCTS, SLUG_SUFFIX_LEN,
 };
 
 #[tokio::test]
@@ -476,4 +476,156 @@ async fn a_category_puts_the_products_it_is_told_first() {
         .unwrap();
     let category = cmd.load_category(&mats.id).await.unwrap().unwrap();
     assert!(category.pinned.is_empty());
+}
+
+fn draft(id: &str, name: &str, slug: &str, parent_id: Option<&str>) -> DraftCategory {
+    DraftCategory {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        slug: slug.to_owned(),
+        parent_id: parent_id.map(str::to_owned),
+        meta_title: format!("{name} for bikers"),
+        out_of_ads: false,
+        position: 0,
+    }
+}
+
+#[tokio::test]
+async fn a_draft_category_is_made_once_under_the_id_its_maker_chose() {
+    let cmd = command().await;
+    let gloves = draft("01GLOVES", "Biker gloves", "biker-gloves", None);
+    assert!(
+        cmd.create_draft_category(ALICE, gloves.clone())
+            .await
+            .unwrap()
+    );
+    let made = cmd.load_category("01GLOVES").await.unwrap().unwrap();
+    assert!(made.draft);
+    assert!(!made.out_of_ads);
+    assert_eq!(
+        (
+            made.name.as_str(),
+            made.slug.as_str(),
+            made.meta_title.as_str()
+        ),
+        ("Biker gloves", "biker-gloves", "Biker gloves for bikers")
+    );
+
+    // Asked for again, as a saga delivered twice does: nothing more.
+    assert!(!cmd.create_draft_category(ALICE, gloves).await.unwrap());
+    let same = cmd.load_category("01GLOVES").await.unwrap().unwrap();
+    assert_eq!(same.aggregate_version, made.aggregate_version);
+
+    // A child under it, kept out of ads from the start.
+    assert!(!cmd.category_slug_taken("summer-gloves").await.unwrap());
+    let summer = DraftCategory {
+        out_of_ads: true,
+        position: 2,
+        meta_title: String::new(),
+        ..draft(
+            "01SUMMER",
+            "Summer gloves",
+            "summer-gloves",
+            Some("01GLOVES"),
+        )
+    };
+    assert!(cmd.create_draft_category(ALICE, summer).await.unwrap());
+    let child = cmd.load_category("01SUMMER").await.unwrap().unwrap();
+    assert!(child.draft && child.out_of_ads);
+    assert_eq!(child.parent_id.as_deref(), Some("01GLOVES"));
+    assert_eq!(child.meta_title, "");
+    assert_eq!(child.position, 2);
+    for taken in ["summer-gloves", "biker-gloves", "blog"] {
+        assert!(cmd.category_slug_taken(taken).await.unwrap(), "{taken}");
+    }
+
+    // A slug another category holds is refused, and nothing is written.
+    assert!(matches!(
+        cmd.create_draft_category(ALICE, draft("01OTHER", "Other", "biker-gloves", None))
+            .await,
+        Err(CatalogError::SlugTaken)
+    ));
+    assert!(cmd.load_category("01OTHER").await.unwrap().is_none());
+    assert!(matches!(
+        cmd.create_draft_category(ALICE, draft("01LOST", "Lost", "lost", Some("01NOWHERE")))
+            .await,
+        Err(CatalogError::CategoryNotFound)
+    ));
+    assert!(matches!(
+        cmd.create_draft_category(ALICE, draft(" ", "No id", "no-id", None))
+            .await,
+        Err(CatalogError::CategoryNotFound)
+    ));
+}
+
+#[tokio::test]
+async fn a_category_is_published_from_the_top_down_and_kept_back_again() {
+    let cmd = command().await;
+    let live = create_category(&cmd, "Bedding").await;
+    assert!(!live.draft, "a category made by hand is shown to shoppers");
+    cmd.create_draft_category(ALICE, draft("01GLOVES", "Gloves", "gloves", None))
+        .await
+        .unwrap();
+    cmd.create_draft_category(
+        ALICE,
+        draft("01SUMMER", "Summer", "summer", Some("01GLOVES")),
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        cmd.set_category_published(ALICE, "01SUMMER", true).await,
+        Err(CatalogError::CategoryParentDraft)
+    ));
+    cmd.set_category_published(ALICE, "01GLOVES", true)
+        .await
+        .unwrap();
+    cmd.set_category_published(ALICE, "01SUMMER", true)
+        .await
+        .unwrap();
+    let published = cmd.load_category("01SUMMER").await.unwrap().unwrap();
+    assert!(!published.draft);
+    cmd.set_category_published(ALICE, "01SUMMER", true)
+        .await
+        .unwrap();
+    let same = cmd.load_category("01SUMMER").await.unwrap().unwrap();
+    assert_eq!(same.aggregate_version, published.aggregate_version);
+
+    cmd.set_category_published(ALICE, &live.id, false)
+        .await
+        .unwrap();
+    assert!(cmd.load_category(&live.id).await.unwrap().unwrap().draft);
+}
+
+#[tokio::test]
+async fn a_category_is_kept_out_of_ads_and_let_back_in() {
+    let cmd = command().await;
+    let category = create_category(&cmd, "Bedding").await;
+    assert!(!category.out_of_ads);
+    cmd.set_category_in_ads(ALICE, &category.id, true)
+        .await
+        .unwrap();
+    let same = cmd.load_category(&category.id).await.unwrap().unwrap();
+    assert_eq!(same.aggregate_version, category.aggregate_version);
+
+    cmd.set_category_in_ads(ALICE, &category.id, false)
+        .await
+        .unwrap();
+    assert!(
+        cmd.load_category(&category.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .out_of_ads
+    );
+    cmd.set_category_in_ads(ALICE, &category.id, true)
+        .await
+        .unwrap();
+    assert!(
+        !cmd.load_category(&category.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .out_of_ads
+    );
 }

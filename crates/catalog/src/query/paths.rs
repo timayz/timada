@@ -66,12 +66,13 @@ impl CategoryPaths {
     }
 }
 
-/// The paths of the tenant's live categories.
+/// The paths of the tenant's live categories: a draft has none, nor has
+/// what is under one.
 pub async fn category_paths(db: &Db, tenant_id: &str) -> Result<CategoryPaths> {
     let rows: Vec<(String, String, Option<String>)> = db
         .fetch_all(
             "SELECT id, slug, parent_id FROM catalog_categories
-             WHERE tenant_id = ?1 AND archived = 0",
+             WHERE tenant_id = ?1 AND archived = 0 AND draft = 0",
             (tenant_id,),
         )
         .await?;
@@ -90,7 +91,7 @@ pub async fn category_paths_in(db: &Db, tenant_id: &str, language: &str) -> Resu
     let mut rows: Vec<(String, String, Option<String>)> = db
         .fetch_all(
             "SELECT id, slug, parent_id FROM catalog_categories
-             WHERE tenant_id = ?1 AND archived = 0",
+             WHERE tenant_id = ?1 AND archived = 0 AND draft = 0",
             (tenant_id,),
         )
         .await?;

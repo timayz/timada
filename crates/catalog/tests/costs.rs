@@ -266,6 +266,32 @@ async fn a_shop_says_what_a_sale_costs_it_and_grades_its_margins() {
     let known = cmd.load_sale_costs().await.unwrap();
     assert_eq!(known.tiers(), tiers);
     assert!(known.costs.is_some(), "the costs stay");
+
+    // One label says one thing: what is kept out of ads takes another.
+    assert_eq!(cmd.load_feed_ads_label().await.unwrap(), None);
+    assert!(matches!(
+        cmd.set_feed_ads_label(ALICE, Some(4)).await,
+        Err(CatalogError::FeedLabelTaken)
+    ));
+    assert!(matches!(
+        cmd.set_feed_ads_label(ALICE, Some(5)).await,
+        Err(CatalogError::InvalidFeedLabel)
+    ));
+    cmd.set_feed_ads_label(ALICE, Some(3)).await.unwrap();
+    assert_eq!(cmd.load_feed_ads_label().await.unwrap(), Some(3));
+    assert!(matches!(
+        cmd.set_margin_tiers(
+            ALICE,
+            MarginTiers {
+                feed_label: Some(3),
+                ..tiers
+            }
+        )
+        .await,
+        Err(CatalogError::FeedLabelTaken)
+    ));
+    cmd.set_feed_ads_label(ALICE, None).await.unwrap();
+    assert_eq!(cmd.load_feed_ads_label().await.unwrap(), None);
     for refused in [
         MarginTiers {
             medium_from_bps: 3_000,

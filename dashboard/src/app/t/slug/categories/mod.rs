@@ -184,6 +184,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_cell(
                                     attrs: attributes! { class=(indent(row.depth)) },
                                     <a class=(LINK) href=(href!(category_id::index, slug: slug.clone(), category_id::category_id: row.category.id.clone()))>(&row.category.name)</a>
+                                    if row.category.draft {
+                                        " " badge(variant: BadgeVariant::Secondary, attrs: attributes! { data-category-draft="" }, "Draft")
+                                    }
+                                    if row.category.out_of_ads {
+                                        " " badge(variant: BadgeVariant::Secondary, attrs: attributes! { data-category-out-of-ads="" }, "Out of ads")
+                                    }
                                     if !row.category.in_menu {
                                         " " badge(variant: BadgeVariant::Secondary, attrs: attributes! { data-hidden-from-menu="" }, "Hidden from menu")
                                     }

@@ -93,6 +93,10 @@ pub const MAX_MPN_LEN: usize = 70;
 /// feed's `custom_label_0` to `custom_label_4`.
 pub const FEED_LABELS: usize = 5;
 pub const MAX_FEED_LABEL_LEN: usize = 100;
+
+/// What a feed's label says of a product whose main category is kept out
+/// of ads: the value a campaign excludes on.
+pub const OUT_OF_ADS_LABEL: &str = "no_ads";
 /// The longest category of Google's product taxonomy: its number (`2271`)
 /// or its full path (`Apparel & Accessories > Clothing > Dresses`).
 pub const MAX_GOOGLE_CATEGORY_LEN: usize = 750;

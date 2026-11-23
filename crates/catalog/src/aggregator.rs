@@ -383,6 +383,11 @@ pub mod feed {
         Opened { token: String, opened_by: String },
         /// The feed answers nowhere.
         Closed { closed_by: String },
+        /// Which of the feed's labels (from 0) says
+        /// [`OUT_OF_ADS_LABEL`](crate::OUT_OF_ADS_LABEL) on the products of
+        /// a category kept out of ads, in place of the merchant's own, so
+        /// campaigns exclude on it; `None` says it nowhere.
+        AdsLabelSet { label: Option<u8>, set_by: String },
     }
 }
 
@@ -532,6 +537,26 @@ pub mod category {
         ProductsPinned {
             product_ids: Vec<String>,
             pinned_by: String,
+        },
+        /// Kept back from shoppers: a draft. Its page answers nowhere, and
+        /// the shop's menu, its sitemap and its feeds leave it out. A
+        /// category made as a draft carries it in the write of `Created`.
+        Unpublished {
+            unpublished_by: String,
+        },
+        /// Shown to shoppers, as a category is unless it was kept back.
+        Published {
+            published_by: String,
+        },
+        /// Campaigns are to leave its products out: a click on what it is
+        /// searched by costs more than a sale of it can pay. The shop's
+        /// feeds say so on the products it is the main category of.
+        KeptOutOfAds {
+            kept_by: String,
+        },
+        /// Its products may be advertised again.
+        AllowedInAds {
+            allowed_by: String,
         },
     }
 

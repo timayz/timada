@@ -68,6 +68,16 @@ pub async fn shop_of(
         })
         .collect();
     let costs = timada_catalog::load_sale_costs(store, &tenant.id).await?;
+    let ads = match timada_catalog::Command::new(store.clone(), &tenant.id)
+        .load_feed_ads_label()
+        .await?
+    {
+        Some(label) => Some(timada_catalog::FeedAds {
+            label: usize::from(label),
+            categories: timada_catalog::categories_out_of_ads(db, &tenant.id).await?,
+        }),
+        None => None,
+    };
     Ok(Some(FeedShop {
         name: tenant.name.clone(),
         storefront_url,
@@ -76,6 +86,7 @@ pub async fn shop_of(
         shippings,
         delivery_days: default_delivery_days(db, &tenant.id).await?,
         margin: crate::margins::feed_margin(store, tenant, &costs).await?,
+        ads,
     }))
 }
 

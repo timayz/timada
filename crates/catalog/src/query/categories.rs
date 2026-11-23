@@ -22,6 +22,10 @@ pub struct CategoryRow {
     pub archived: bool,
     /// Shown in the shop's menu; a hidden one takes its subtree with it.
     pub in_menu: bool,
+    /// Kept back from shoppers until it is published.
+    pub draft: bool,
+    /// Campaigns leave its products out.
+    pub out_of_ads: bool,
     pub created_by: String,
     /// Unix seconds.
     pub created_at: i64,
@@ -337,7 +341,7 @@ pub async fn refresh_category_counts(conn: &Connection, tenant_id: &str) -> Resu
 pub async fn categories_of_tenant(db: &Db, tenant_id: &str) -> Result<Vec<CategoryRow>> {
     db.fetch_all(
         "SELECT tenant_id, id, slug, name, description, parent_id, position, archived, in_menu,
-            created_by, created_at, updated_at, product_count, subtree_count
+            draft, out_of_ads, created_by, created_at, updated_at, product_count, subtree_count
          FROM catalog_categories c
          WHERE tenant_id = ?1 AND archived = 0
          ORDER BY position, name, id",
@@ -350,7 +354,7 @@ pub async fn categories_of_tenant(db: &Db, tenant_id: &str) -> Result<Vec<Catego
 pub async fn category_by_id(db: &Db, tenant_id: &str, id: &str) -> Result<Option<CategoryRow>> {
     db.fetch_optional(
         "SELECT tenant_id, id, slug, name, description, parent_id, position, archived, in_menu,
-            created_by, created_at, updated_at, product_count, subtree_count
+            draft, out_of_ads, created_by, created_at, updated_at, product_count, subtree_count
          FROM catalog_categories c
          WHERE tenant_id = ?1 AND id = ?2",
         (tenant_id, id),
@@ -368,6 +372,31 @@ pub async fn live_child_count(db: &Db, tenant_id: &str, id: &str) -> Result<i64>
     .await
 }
 
+/// How many categories shown to shoppers sit directly under this one.
+pub async fn published_child_count(db: &Db, tenant_id: &str, id: &str) -> Result<i64> {
+    db.fetch_scalar(
+        "SELECT count(*) FROM catalog_categories
+         WHERE tenant_id = ?1 AND parent_id = ?2 AND archived = 0 AND draft = 0",
+        (tenant_id, id),
+    )
+    .await
+}
+
+/// The live categories of a tenant that campaigns leave out, by id.
+pub async fn categories_out_of_ads(
+    db: &Db,
+    tenant_id: &str,
+) -> Result<std::collections::BTreeSet<String>> {
+    let rows: Vec<(String,)> = db
+        .fetch_all(
+            "SELECT id FROM catalog_categories
+             WHERE tenant_id = ?1 AND archived = 0 AND out_of_ads = 1",
+            (tenant_id,),
+        )
+        .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 /// The categories a product is in. Live ones come first, in tree order;
 /// archived memberships come last, so a page can show them as such.
 pub async fn categories_of_product(
@@ -377,7 +406,7 @@ pub async fn categories_of_product(
 ) -> Result<Vec<CategoryRow>> {
     db.fetch_all(
         "SELECT c.tenant_id, c.id, c.slug, c.name, c.description, c.parent_id, c.position,
-            c.archived, c.in_menu, c.created_by, c.created_at, c.updated_at, c.product_count,
+            c.archived, c.in_menu, c.draft, c.out_of_ads, c.created_by, c.created_at, c.updated_at, c.product_count,
             c.subtree_count
          FROM catalog_categories c
          JOIN catalog_product_categories pc

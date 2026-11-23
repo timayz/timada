@@ -1,12 +1,14 @@
 //! `/t/{slug}/categories/{category_id}`: one category, read from its own
 //! stream (so an edit shows at once), with the forms that change it.
 
+pub mod ads;
 pub mod archive;
 pub mod describe;
 pub mod menu;
 pub mod move_to;
 pub mod pin;
 pub mod position;
+pub mod publish;
 pub mod questions;
 pub mod rename;
 pub mod seo;
@@ -237,6 +239,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 h1_attrs: attributes! { data-category-id=(&category.id) },
                 if category.archived {
                     badge(variant: BadgeVariant::Secondary, attrs: attributes! { data-category-archived="" }, "Archived")
+                } else if category.draft {
+                    badge(variant: BadgeVariant::Secondary, attrs: attributes! { data-category-draft="" }, "Draft")
                 }
                 if translated {
                     <a class=(LINK) href=(href!(translations::index, slug: slug.clone(), category_id: category.id.clone())) data-category-translations="">"Translations"</a>
@@ -290,6 +294,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                     fact(term: "Sub-categories", attrs: attributes! { data-category-children=(children) }, (children))
                     fact(term: "Position", (category.position))
+                    fact(
+                        term: "Shoppers",
+                        attrs: attributes! { data-category-published=(if category.draft { "no" } else { "yes" }) },
+                        if category.draft {
+                            "A draft: its page answers nowhere, and the menu, the sitemap and the feeds leave it out"
+                        } else {
+                            "Published"
+                        }
+                    )
+                    fact(
+                        term: "Ads",
+                        attrs: attributes! { data-category-ads=(if category.out_of_ads { "out" } else { "in" }) },
+                        if category.out_of_ads {
+                            "Kept out: the feed marks the products it is the main category of"
+                        } else {
+                            "Its products may be advertised"
+                        }
+                    )
                     fact(
                         term: "Shop menu",
                         attrs: attributes! { data-category-menu=(if category.hidden_from_menu { "hidden" } else { "shown" }) },
@@ -417,9 +439,26 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <p class="text-sm text-muted-foreground">"A hidden category takes its sub-categories out of the menu too. Its page and products stay reachable."</p>
                         <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save menu visibility")</div>
                     </form>
+                    <form method="post" action=(href!(ads::ads, slug: slug.clone(), category_id: category.id.clone())) class=(class!(CARD, "gap-4 px-6"))>
+                        label(
+                            checkbox(attrs: attributes! { name="out_of_ads" value="on" checked=(category.out_of_ads) })
+                            "Keep its products out of ads"
+                        )
+                        <p class="text-sm text-muted-foreground">"For a category whose clicks cost more than a sale can pay. The shopping feed marks the products it is the main category of, on the label chosen on the feed's page, so campaigns exclude them. Its page and its place in search results are untouched."</p>
+                        <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save ads")</div>
+                    </form>
                 </section>
 
                 <section class="flex flex-wrap items-center gap-3">
+                    <form method="post" action=(href!(publish::publish, slug: slug.clone(), category_id: category.id.clone()))>
+                        if category.draft {
+                            <input type="hidden" name="published" value="yes">
+                            button(size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Publish")
+                        } else {
+                            <input type="hidden" name="published" value="no">
+                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Keep back as a draft")
+                        }
+                    </form>
                     if children > 0 {
                         <p class="text-sm text-muted-foreground">"Archive or move its sub-categories before archiving it."</p>
                     } else {

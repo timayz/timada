@@ -77,6 +77,10 @@ pub enum CatalogError {
     CategoryCycle,
     #[error("categories nest at most three levels deep")]
     CategoryTooDeep,
+    #[error("the category above it is a draft: publish that one first")]
+    CategoryParentDraft,
+    #[error("this label of the feed already says something else")]
+    FeedLabelTaken,
     #[error(
         "a category answers at most twenty questions, each of at most 200 characters with an answer of at most 1500"
     )]
@@ -215,6 +219,8 @@ impl CatalogError {
             Self::CategoryArchived => "category_archived",
             Self::CategoryCycle => "category_cycle",
             Self::CategoryTooDeep => "category_too_deep",
+            Self::CategoryParentDraft => "category_parent_draft",
+            Self::FeedLabelTaken => "feed_label_taken",
             Self::InvalidCategoryQuestions => "category_invalid_questions",
             Self::TooManyPinnedProducts => "too_many_pinned_products",
             Self::TooManyListingFilters => "too_many_listing_filters",
