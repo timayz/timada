@@ -11,6 +11,12 @@
 //! call that would pass the user's cap or the platform's is not made, and
 //! the fetch fails saying which cap and when it frees.
 //!
+//! Who holds the first results of a study's main keywords is fetched the
+//! same way by a second subscription ([`results_subscription`]): one paid
+//! search per keyword, inside the same caps. It is apart from the first so
+//! that the searches of one study, some tens of them a few seconds each, do
+//! not keep another study's keywords waiting.
+//!
 //! A failure of the source is the fetch's outcome, not the pass's: it is
 //! recorded on the study with its reason, where the owner reads it and asks
 //! again. Only the store failing fails the pass. A node that stops between
@@ -22,18 +28,21 @@ use evento::{
     metadata::Event,
     subscription::{Context, SubscriptionBuilder},
 };
-use timada_research::aggregator::{FetchRequested, KeywordRow};
+use timada_research::aggregator::{FetchRequested, KeywordRow, ResultRow, ResultsRequested};
 use timada_research::{
     Call, Command, FETCH_STALE_SECS, RESEARCH_ACTOR, Reusable, Room, SpendCap, SpendCaps,
     StudyState, last_fetch,
 };
 
 use crate::db::Db;
-use crate::keywords::{Keyword, KeywordError, Keywords};
+use crate::keywords::{Keyword, KeywordError, Keywords, SearchResult};
 use crate::ui::format_time;
 
 /// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/keyword-fetches";
+
+/// The cursor identity of the subscription that searches, in the store.
+pub const RESULTS_SUBSCRIPTION: &str = "timada-dashboard/first-results";
 
 /// A request older than this is history being replayed (a node catching
 /// up): left alone, as the owner may ask again from then on.
@@ -129,7 +138,7 @@ async fn on_fetch_requested<E: Executor>(
             Call {
                 user_id: &event.data.requested_by,
                 study_id,
-                seed,
+                query: seed,
                 most_usd_micros: source.most_usd_micros(),
             },
             spending.caps,
@@ -179,6 +188,110 @@ async fn on_fetch_requested<E: Executor>(
     Ok(())
 }
 
+pub fn results_subscription<E: Executor>(
+    keywords: Keywords,
+    store: Evento,
+    spending: Spending,
+) -> SubscriptionBuilder<E> {
+    SubscriptionBuilder::new(RESULTS_SUBSCRIPTION)
+        .data(keywords)
+        .data(Store(store))
+        .data(spending)
+        .handler(on_results_requested())
+        // A saga, as the fetches are: it follows the node's own work group.
+        .tenant("")
+        .retry(5)
+}
+
+#[evento::subscription]
+async fn on_results_requested<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<ResultsRequested>,
+) -> anyhow::Result<()> {
+    let keywords: Keywords = context.extract();
+    let store: Store = context.extract();
+    let spending: Spending = context.extract();
+    if is_history(crate::auth::now(), event.timestamp) {
+        return Ok(());
+    }
+    let studies = Command(store.0);
+    let study_id = event.aggregate_id.as_str();
+    let keyword = event.data.keyword.as_str();
+    let Some(study) = studies.load_study(study_id).await? else {
+        return Ok(());
+    };
+    if !studies
+        .start_results(RESEARCH_ACTOR, study_id, keyword)
+        .await?
+    {
+        return Ok(());
+    }
+    let Some(source) = &keywords.0 else {
+        studies
+            .record_results_failure(RESEARCH_ACTOR, study_id, keyword, NO_SOURCE)
+            .await?;
+        return Ok(());
+    };
+    let room = studies
+        .hold_spend(
+            RESEARCH_ACTOR,
+            Call {
+                user_id: &event.data.requested_by,
+                study_id,
+                query: keyword,
+                most_usd_micros: source.most_results_usd_micros(),
+            },
+            spending.caps,
+        )
+        .await?;
+    let hold = match room {
+        Room::Held(hold) => hold,
+        Room::Refused { cap, frees_at } => {
+            tracing::info!(study = %study_id, %keyword, user = %event.data.requested_by, ?cap, "first results not fetched: the day's cap is reached");
+            studies
+                .record_results_failure(
+                    RESEARCH_ACTOR,
+                    study_id,
+                    keyword,
+                    &cap_reached(cap, frees_at),
+                )
+                .await?;
+            return Ok(());
+        }
+    };
+    match source
+        .first_results(keyword, &study.country, &study.language)
+        .await
+    {
+        Ok(found) => {
+            // The charge first: what was paid counts whatever becomes of
+            // the results.
+            studies
+                .charge_spend(RESEARCH_ACTOR, &hold, found.cost_usd_micros)
+                .await?;
+            let results = found.results.len();
+            studies
+                .record_results(
+                    RESEARCH_ACTOR,
+                    study_id,
+                    keyword,
+                    found.results.into_iter().map(result_of).collect(),
+                    found.cost_usd_micros,
+                )
+                .await?;
+            tracing::info!(study = %study_id, %keyword, results, cost_usd_micros = found.cost_usd_micros, "first results fetched");
+        }
+        Err(err) => {
+            let reason = reason_of(study_id, keyword, &err);
+            studies.release_spend(RESEARCH_ACTOR, &hold).await?;
+            studies
+                .record_results_failure(RESEARCH_ACTOR, study_id, keyword, &reason)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
 /// The rows a fetch of `seed` made within the reuse window gave, for the
 /// study's country and language, and the study that holds them. The index
 /// of the fetches is this node's read model, a moment behind: a fetch it
@@ -210,7 +323,7 @@ pub fn cap_reached(cap: SpendCap, frees_at: u64) -> String {
         SpendCap::Platform => "The platform has",
     };
     format!(
-        "{who} reached the most keyword fetches may cost in a day. It frees on {}.",
+        "{who} reached the most keyword research may cost in a day. It frees on {}.",
         format_time(frees_at)
     )
 }
@@ -390,11 +503,12 @@ fn is_history(now: u64, requested_at: u64) -> bool {
     now.saturating_sub(requested_at) > REQUEST_WINDOW_SECS
 }
 
-/// What the owner reads about why a fetch gave nothing. A refusal is kept
-/// in the source's words: it says what to put right (the balance, the
-/// country). Why the source could not answer is the operator's to read.
-fn reason_of(study_id: &str, seed: &str, err: &KeywordError) -> String {
-    tracing::warn!(study = %study_id, %seed, error = %err, "keywords not fetched");
+/// What the owner reads about why a call for `query` (a seed, or a keyword
+/// searched) gave nothing. A refusal is kept in the source's words: it says
+/// what to put right (the balance, the country). Why the source could not
+/// answer is the operator's to read.
+fn reason_of(study_id: &str, query: &str, err: &KeywordError) -> String {
+    tracing::warn!(study = %study_id, %query, error = %err, "the keyword source gave nothing");
     match err {
         KeywordError::Unavailable(_) => {
             "The keyword source did not answer; try again in a moment.".to_owned()
@@ -411,6 +525,16 @@ fn row_of(keyword: Keyword) -> KeywordRow {
         cpc_usd_cents: keyword.cpc_usd_cents,
         difficulty: keyword.difficulty,
         intent: keyword.intent.map(|intent| intent.as_str().to_owned()),
+    }
+}
+
+/// A result of the source as a study keeps it.
+fn result_of(result: SearchResult) -> ResultRow {
+    ResultRow {
+        position: result.position,
+        domain: result.domain,
+        url: result.url,
+        title: result.title,
     }
 }
 
@@ -797,7 +921,7 @@ mod tests {
         assert_eq!(
             reason,
             format!(
-                "You have reached the most keyword fetches may cost in a day. It frees on {frees}."
+                "You have reached the most keyword research may cost in a day. It frees on {frees}."
             )
         );
         assert!(frees.ends_with("00:00:00 UTC"), "{frees}");
@@ -838,7 +962,7 @@ mod tests {
         assert_eq!(refused.seeds[0].status, FetchStatus::Failed);
         assert!(
             refused.seeds[0].last_error.as_deref().unwrap().starts_with(
-                "The platform has reached the most keyword fetches may cost in a day."
+                "The platform has reached the most keyword research may cost in a day."
             )
         );
         assert_eq!(spent(&store, BOB).await, (0, 0));
@@ -903,6 +1027,127 @@ mod tests {
             reload(&store, &elsewhere).await.seeds[0].status,
             FetchStatus::Failed,
             "asked of the caps, which have no room"
+        );
+    }
+
+    /// One pass of the saga that searches.
+    async fn search_pass(store: &Evento, source: Option<&Arc<FakeKeywords>>, spending: Spending) {
+        let keywords = Keywords(source.map(|source| source.clone() as _));
+        results_subscription::<Evento>(keywords, store.clone(), spending)
+            .retry(0)
+            .run_once(store)
+            .await
+            .unwrap();
+    }
+
+    fn mains(keywords: &[&str]) -> Vec<String> {
+        keywords.iter().map(|keyword| keyword.to_string()).collect()
+    }
+
+    /// Each main keyword is one paid search in the study's country and
+    /// language, charged to who asked, its results recorded on the study.
+    #[tokio::test]
+    async fn the_first_results_asked_for_are_searched_and_recorded() {
+        let store = store().await;
+        let source = FakeKeywords::new();
+        source.find("griffoir", &["www.amazon.fr", "zooplus.fr"]);
+        let study = study(&store, &["griffoir"]).await;
+        let studies = Command(store.clone());
+        studies
+            .request_results(
+                ALICE,
+                &study.id,
+                &mains(&["griffoir", "griffoir chat"]),
+                false,
+            )
+            .await
+            .unwrap();
+        search_pass(&store, Some(&source), OPEN).await;
+
+        let asked = |keyword: &str| Asked {
+            seed: keyword.to_owned(),
+            country: "FR".to_owned(),
+            language: "fr".to_owned(),
+        };
+        assert_eq!(
+            source.searched(),
+            [asked("griffoir"), asked("griffoir chat")]
+        );
+        assert!(source.asked().is_empty(), "no keywords were fetched");
+        let after = reload(&store, &study).await;
+        assert!(
+            after
+                .checks
+                .iter()
+                .all(|check| check.status == FetchStatus::Fetched)
+        );
+        assert_eq!(after.checks[0].results, 2);
+        // A search nothing answers is searched all the same, and paid.
+        assert_eq!(after.checks[1].results, 0);
+        assert_eq!(after.cost_usd_micros, 4_000);
+        assert_eq!(spent(&store, ALICE).await, (4_000, 0));
+
+        // A second pass has nothing left to do.
+        search_pass(&store, Some(&source), OPEN).await;
+        assert_eq!(source.searched().len(), 2);
+    }
+
+    /// A search past the cap is not made, one the source fails costs
+    /// nothing, and both say why on the keyword, for the owner to ask again.
+    #[tokio::test]
+    async fn a_search_past_the_cap_or_failed_says_why() {
+        let store = store().await;
+        let source = FakeKeywords::new();
+        // Room for two searches at their most (2,000 each).
+        let capped = Spending {
+            caps: SpendCaps {
+                user_usd_micros: 4_000,
+                platform_usd_micros: 100_000_000,
+            },
+            reuse_secs: 0,
+        };
+        let study = study(&store, &["griffoir"]).await;
+        let studies = Command(store.clone());
+        let three = mains(&["griffoir", "griffoir chat", "griffoir mural"]);
+        studies
+            .request_results(ALICE, &study.id, &three, false)
+            .await
+            .unwrap();
+        search_pass(&store, Some(&source), capped).await;
+        let after = reload(&store, &study).await;
+        assert_eq!(source.searched().len(), 2, "the third was never made");
+        assert_eq!(after.checks[2].status, FetchStatus::Failed);
+        assert!(
+            after.checks[2]
+                .last_error
+                .as_deref()
+                .unwrap()
+                .starts_with("You have reached the most keyword research may cost in a day.")
+        );
+
+        // The source failing gives the room back.
+        source.fail(Some(KeywordError::Unavailable("timed out".to_owned())));
+        studies
+            .request_results(ALICE, &study.id, &three, false)
+            .await
+            .unwrap();
+        search_pass(&store, Some(&source), OPEN).await;
+        let failed = reload(&store, &study).await;
+        assert_eq!(
+            failed.checks[2].last_error.as_deref(),
+            Some("The keyword source did not answer; try again in a moment.")
+        );
+        assert_eq!(spent(&store, ALICE).await, (4_000, 0));
+
+        // Without a source the request is answered all the same.
+        studies
+            .request_results(ALICE, &study.id, &three, false)
+            .await
+            .unwrap();
+        search_pass(&store, None, OPEN).await;
+        assert_eq!(
+            reload(&store, &study).await.checks[2].last_error.as_deref(),
+            Some(NO_SOURCE)
         );
     }
 

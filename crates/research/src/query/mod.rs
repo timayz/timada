@@ -5,14 +5,18 @@
 //! `research_fetches` says where a seed was last fetched, for a new fetch
 //! to reuse, and `research_spend` what each user's calls cost by day, for
 //! the platform's administrators; what a cap decides on is the day's own
-//! stream, never these.
+//! stream, never these. `research_checks` keeps the first results of each
+//! keyword searched, `research_domain_marks` what each user said of a site,
+//! and `research_domains` what the two come to for a study's main keywords.
 
+mod competition;
 mod keywords;
 mod migrations;
 mod read_model;
 mod spend;
 mod studies;
 
+pub use competition::*;
 pub use keywords::*;
 pub use migrations::*;
 pub use read_model::*;
@@ -83,6 +87,31 @@ mod tests {
         )
         .await;
         for plan in [all, set] {
+            assert!(
+                plan.iter()
+                    .all(|step| step.starts_with("SEARCH") && !step.contains("TEMP B-TREE")),
+                "{plan:#?}"
+            );
+        }
+        let competition = [
+            plan(
+                &db,
+                super::competition::MAIN_KEYWORDS,
+                ("study", "main", 50),
+            )
+            .await,
+            plan(&db, super::competition::DOMAINS, ("study", 500)).await,
+            plan(&db, super::read_model::CHECKS, ("study",)).await,
+            plan(&db, super::read_model::MARKS, ("user",)).await,
+            plan(
+                &db,
+                super::read_model::STUDIES_WITH_DOMAIN,
+                ("user", "a.fr"),
+            )
+            .await,
+            plan(&db, super::read_model::DELETE_DOMAINS, ("study",)).await,
+        ];
+        for plan in competition {
             assert!(
                 plan.iter()
                     .all(|step| step.starts_with("SEARCH") && !step.contains("TEMP B-TREE")),

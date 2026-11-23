@@ -41,7 +41,7 @@ pub struct HoldState {
     pub id: String,
     pub user_id: String,
     pub study_id: String,
-    pub seed: String,
+    pub query: String,
     pub most_usd_micros: u64,
     /// Unix seconds of `Held`.
     pub held_at: u64,
@@ -147,7 +147,7 @@ async fn on_held(event: Event<Held>, day: &mut SpendDayState) -> anyhow::Result<
         id: event.data.hold.to_owned(),
         user_id: event.data.user_id.to_owned(),
         study_id: event.data.study_id.to_owned(),
-        seed: event.data.seed.to_owned(),
+        query: event.data.query.to_owned(),
         most_usd_micros: event.data.most_usd_micros,
         held_at: event.timestamp,
     });
@@ -175,7 +175,8 @@ pub struct Call<'a> {
     /// Who asked for it: the user whose cap it counts against.
     pub user_id: &'a str,
     pub study_id: &'a str,
-    pub seed: &'a str,
+    /// What the source is asked about: a seed, or a keyword.
+    pub query: &'a str,
     /// The most it may cost, in millionths of a US dollar.
     pub most_usd_micros: u64,
 }
@@ -277,7 +278,7 @@ impl<E: Executor> Command<E> {
                 hold: id.clone(),
                 user_id: call.user_id.to_owned(),
                 study_id: call.study_id.to_owned(),
-                seed: call.seed.to_owned(),
+                query: call.query.to_owned(),
                 most_usd_micros: call.most_usd_micros,
                 held_by: actor.to_owned(),
             });
@@ -307,7 +308,7 @@ impl<E: Executor> Command<E> {
                 hold: held.id.clone(),
                 user_id: held.user_id.clone(),
                 study_id: held.study_id.clone(),
-                seed: held.seed.clone(),
+                query: held.query.clone(),
                 cost_usd_micros,
                 charged_by: actor.to_owned(),
             });
@@ -354,7 +355,7 @@ mod tests {
             id: id.to_owned(),
             user_id: user_id.to_owned(),
             study_id: "study".to_owned(),
-            seed: "griffoir".to_owned(),
+            query: "griffoir".to_owned(),
             most_usd_micros: MOST,
             held_at,
         }

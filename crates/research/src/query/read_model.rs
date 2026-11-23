@@ -1,5 +1,6 @@
 //! The subscription that keeps `research_studies`, `research_keywords`,
-//! `research_fetches` and `research_spend` current.
+//! `research_fetches`, `research_spend` and the three tables of the
+//! competition current.
 //!
 //! The handler reloads the strict write model of the study and rewrites its
 //! row, so delivery may repeat (the subscription is at-least-once) without
@@ -8,6 +9,12 @@
 //! carries them, and its rows replace the seed's earlier ones, whole, in one
 //! transaction. Events of a stream come in order, so a fetch delivered again
 //! is followed by the ones after it and the seed ends on its last fetch.
+//!
+//! Who holds the first results is worked out from what the tables hold
+//! ([`recheck`]): a study's main keywords, the results of each and its
+//! owner's marks. The three change on two streams, the study's and the
+//! user's marks, whose events may reach a node in either order; working it
+//! out again from the tables at each of them ends on the same rows.
 //!
 //! A charge adds to its user's row of the day, once: the row keeps the
 //! version of the day's stream it was last moved at, and a charge at or
@@ -22,10 +29,11 @@ use evento::{
 };
 use timada_core::db::{Db, FromRow, Value, execute, params_from_iter};
 
-use crate::aggregator::{Charged, KeywordRow, Study, StudyEvent};
+use crate::aggregator::{Charged, DomainMarked, KeywordRow, ResultRow, Study, StudyEvent};
 use crate::command::{StudyState, study_projection};
-use crate::score::{Score, Thresholds, score};
+use crate::score::{Score, TestState, Thresholds, Verdict, competition, score};
 
+use super::competition::{DomainRow, domains_of_study, main_keywords};
 use super::keywords::DUPLICATE;
 
 /// The cursor identity of the read-model subscription, in the store.
@@ -43,6 +51,7 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .data(db)
         .handler(on_study_event())
         .handler(on_charged())
+        .handler(on_domain_marked())
         .any_routing_key()
         .tenant("")
 }
@@ -100,6 +109,242 @@ async fn on_study_event<E: Executor>(
     if scores {
         rescore(&db, &study).await?;
     }
+    let searched = match &decoded {
+        StudyEvent::ResultsFetched(fetched) => {
+            note_results(
+                &db,
+                &study.id,
+                &fetched.keyword,
+                &fetched.results,
+                event.timestamp as i64,
+            )
+            .await?;
+            true
+        }
+        _ => false,
+    };
+    // What the competition reads changed: the main keywords, their first
+    // results, or what the other tests say.
+    if scores || searched {
+        recheck(&db, &study.id, &study.owner).await?;
+    }
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_domain_marked<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<DomainMarked>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let user_id = event.aggregate_id.as_str();
+    db.execute(
+        "INSERT INTO research_domain_marks (user_id, domain, specialist) VALUES (?1, ?2, ?3)
+         ON CONFLICT (user_id, domain) DO UPDATE SET specialist = excluded.specialist",
+        (
+            user_id,
+            event.data.domain.as_str(),
+            i64::from(event.data.specialist),
+        ),
+    )
+    .await?;
+    // The mark counts on every study of the user where the site was found.
+    let studies: Vec<(String,)> = db
+        .fetch_all(STUDIES_WITH_DOMAIN, (user_id, event.data.domain.as_str()))
+        .await?;
+    for (study_id,) in studies {
+        recheck(&db, &study_id, user_id).await?;
+    }
+    Ok(())
+}
+
+/// The studies of a user (`?1`) where a site (`?2`) was found.
+pub(super) const STUDIES_WITH_DOMAIN: &str =
+    "SELECT study_id FROM research_domains INDEXED BY research_domains_owner
+     WHERE owner_id = ?1 AND domain = ?2";
+
+/// The keywords of a study whose first results are held.
+pub(super) const CHECKS: &str = "SELECT keyword, results FROM research_checks
+     INDEXED BY sqlite_autoindex_research_checks_1 WHERE study_id = ?1";
+
+/// What a user said of the sites they marked.
+pub(super) const MARKS: &str = "SELECT domain, specialist FROM research_domain_marks
+     INDEXED BY sqlite_autoindex_research_domain_marks_1 WHERE user_id = ?1";
+
+/// Drops the sites found for a study.
+pub(super) const DELETE_DOMAINS: &str = "DELETE FROM research_domains
+     INDEXED BY sqlite_autoindex_research_domains_1 WHERE study_id = ?1";
+
+/// Keeps the first results of a search for `keyword`, in place of what an
+/// earlier search of it gave: one line each, its place then its site.
+async fn note_results(
+    db: &Db,
+    study_id: &str,
+    keyword: &str,
+    results: &[ResultRow],
+    fetched_at: i64,
+) -> anyhow::Result<()> {
+    let lines: Vec<String> = results
+        .iter()
+        .map(|result| format!("{} {}", result.position, result.domain))
+        .collect();
+    db.execute(
+        "INSERT INTO research_checks (study_id, keyword, fetched_at, results)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (study_id, keyword) DO UPDATE SET
+            fetched_at = excluded.fetched_at, results = excluded.results",
+        (study_id, keyword, fetched_at, lines.join("\n")),
+    )
+    .await?;
+    Ok(())
+}
+
+/// The sites found for a study, to write in place of the ones held.
+struct Found<'a> {
+    study_id: &'a str,
+    owner_id: &'a str,
+    sites: &'a [DomainRow],
+}
+
+/// Works out who holds the first results of a study's main keywords from
+/// what the tables hold, and writes what changed: the sites found, each
+/// with for how many of the keywords and at what places, and on the study's
+/// row where the competition test stands and the verdict it gives with the
+/// other tests. The results of a keyword that is no longer a main one stay
+/// held and are not counted.
+async fn recheck(db: &Db, study_id: &str, owner_id: &str) -> anyhow::Result<()> {
+    let base: Vec<(String,)> = db
+        .fetch_all(
+            "SELECT base_verdict FROM research_studies WHERE id = ?1",
+            (study_id,),
+        )
+        .await?;
+    let Some((base,)) = base.into_iter().next() else {
+        return Ok(());
+    };
+    let mains = main_keywords(db, study_id).await?;
+    let checks: HashMap<String, String> = db
+        .fetch_all::<(String, String)>(CHECKS, (study_id,))
+        .await?
+        .into_iter()
+        .collect();
+    let (mut searched, mut owed) = (0u32, 0u32);
+    let mut places: HashMap<&str, Vec<u8>> = HashMap::new();
+    for keyword in &mains {
+        let Some(results) = checks.get(keyword) else {
+            owed += 1;
+            continue;
+        };
+        searched += 1;
+        // A site with two results for the keyword counts at its best.
+        let mut best: HashMap<&str, u8> = HashMap::new();
+        for line in results.lines() {
+            let Some((position, domain)) = line.split_once(' ') else {
+                continue;
+            };
+            let Ok(position) = position.parse::<u8>() else {
+                continue;
+            };
+            let held = best.entry(domain).or_insert(position);
+            *held = (*held).min(position);
+        }
+        for (domain, position) in best {
+            places.entry(domain).or_default().push(position);
+        }
+    }
+    let mut sites: Vec<DomainRow> = places
+        .into_iter()
+        .map(|(domain, mut positions)| {
+            positions.sort_unstable();
+            DomainRow {
+                domain: domain.to_owned(),
+                keywords: positions.len() as i64,
+                best: positions.first().copied().map_or(0, i64::from),
+                positions: positions
+                    .iter()
+                    .map(u8::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            }
+        })
+        .collect();
+    sites.sort_by(|a, b| {
+        (b.keywords, a.best, a.domain.as_str()).cmp(&(a.keywords, b.best, b.domain.as_str()))
+    });
+    let held = domains_of_study(db, study_id).await?;
+    if held != sites {
+        let found = Found {
+            study_id,
+            owner_id,
+            sites: &sites,
+        };
+        db.write(&found, |tx, found| {
+            Box::pin(async move {
+                execute(tx, DELETE_DOMAINS, (found.study_id,)).await?;
+                for chunk in found.sites.chunks(ROWS_PER_INSERT) {
+                    let mut values = Vec::with_capacity(chunk.len() * 6);
+                    let mut tuples = Vec::with_capacity(chunk.len());
+                    for (at, site) in chunk.iter().enumerate() {
+                        let n = at * 6;
+                        tuples.push(format!(
+                            "(?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
+                            n + 1,
+                            n + 2,
+                            n + 3,
+                            n + 4,
+                            n + 5,
+                            n + 6
+                        ));
+                        values.extend([
+                            Value::from(found.study_id),
+                            Value::from(site.domain.as_str()),
+                            Value::from(found.owner_id),
+                            Value::from(site.keywords),
+                            Value::from(site.best),
+                            Value::from(site.positions.as_str()),
+                        ]);
+                    }
+                    let statement = format!(
+                        "INSERT INTO research_domains (study_id, domain, owner_id, keywords,
+                            best, positions)
+                         VALUES {}",
+                        tuples.join(", ")
+                    );
+                    execute(tx, &statement, params_from_iter(values)).await?;
+                }
+                Ok(())
+            })
+        })
+        .await?;
+    }
+    let marks: HashMap<String, i64> = db
+        .fetch_all::<(String, i64)>(MARKS, (owner_id,))
+        .await?
+        .into_iter()
+        .collect();
+    let stands = competition(
+        searched,
+        owed,
+        sites.iter().map(|site| {
+            (
+                site.keywords as u32,
+                marks.get(&site.domain).map(|specialist| *specialist != 0),
+            )
+        }),
+    );
+    db.execute(
+        "UPDATE research_studies SET competition = ?2, searched_count = ?3, owed_count = ?4,
+            verdict = ?5
+         WHERE id = ?1",
+        (
+            study_id,
+            stands.state.as_str(),
+            i64::from(searched),
+            i64::from(owed),
+            Verdict::parse(&base).with(stands.state).as_str(),
+        ),
+    )
+    .await?;
     Ok(())
 }
 
@@ -227,7 +472,8 @@ struct Outcomes<'a> {
 
 /// Scores the study from the keywords the read model holds and from what
 /// its owner said, and writes what changed: each keyword's outcome, and on
-/// the study's row what they come to and the verdict. The thresholds are
+/// the study's row what they come to and what its tests say but for the
+/// competition, which [`recheck`] joins to them after. The thresholds are
 /// the defaults. A keyword two seeds gave is scored on its most searched
 /// row, the others being [`DUPLICATE`]s.
 async fn rescore(db: &Db, study: &StudyState) -> anyhow::Result<()> {
@@ -250,7 +496,14 @@ async fn rescore(db: &Db, study: &StudyState) -> anyhow::Result<()> {
             });
         }
     }
-    let score = score(rows, &study.language, &study.inputs, &Thresholds::default());
+    // Scored as if the competition passed: the verdict is the other tests'.
+    let score = score(
+        rows,
+        &study.language,
+        &study.inputs,
+        TestState::Passed,
+        &Thresholds::default(),
+    );
     let made: HashMap<&str, (&'static str, Option<&str>)> = score
         .keywords
         .iter()
@@ -298,11 +551,12 @@ async fn rescore(db: &Db, study: &StudyState) -> anyhow::Result<()> {
     set_score(db, study, &score).await
 }
 
-/// Writes what a study's keywords come to and its verdict on its row.
+/// Writes what a study's keywords come to and what its other tests say on
+/// its row.
 async fn set_score(db: &Db, study: &StudyState, score: &Score) -> anyhow::Result<()> {
     let sale = score.sale;
     db.execute(
-        "UPDATE research_studies SET verdict = ?2, scored_keywords = ?3, main_count = ?4,
+        "UPDATE research_studies SET base_verdict = ?2, scored_keywords = ?3, main_count = ?4,
             long_tail_count = ?5, kept_volume = ?6, avg_cpc_millis = ?7, currency = ?8,
             break_even_roas = ?9, price_per_click = ?10, needed_price_per_click = ?11
          WHERE id = ?1",
@@ -326,7 +580,7 @@ async fn set_score(db: &Db, study: &StudyState, score: &Score) -> anyhow::Result
     Ok(())
 }
 
-/// Drops a deleted study's row and its keywords.
+/// Drops a deleted study's row, its keywords and what was found for them.
 async fn delete_study(db: &Db, study_id: &str) -> anyhow::Result<()> {
     db.write(study_id, |tx, study_id| {
         Box::pin(async move {
@@ -337,6 +591,14 @@ async fn delete_study(db: &Db, study_id: &str) -> anyhow::Result<()> {
                 (study_id,),
             )
             .await?;
+            execute(
+                tx,
+                "DELETE FROM research_checks INDEXED BY sqlite_autoindex_research_checks_1
+                 WHERE study_id = ?1",
+                (study_id,),
+            )
+            .await?;
+            execute(tx, DELETE_DOMAINS, (study_id,)).await?;
             execute(
                 tx,
                 "DELETE FROM research_studies WHERE id = ?1",

@@ -1,5 +1,5 @@
 //! What the owner says of the niche beside its keywords: one typical sale,
-//! the brands and the words that drop a keyword, what they looked up by
+//! the brands and the words that drop a keyword, what they counted by
 //! hand, and the keywords they drop or bring back one by one. Nothing here
 //! fetches: the study is scored again from the rows it holds.
 
@@ -9,7 +9,7 @@ use timada_catalog::MAX_FEE_BPS;
 use crate::aggregator::{InputsSet, KeywordDropped, KeywordRestored};
 use crate::error::ResearchError;
 use crate::score::Sale;
-use crate::value_object::{MAX_HAND_SET, MAX_KEYWORD_LEN, MAX_STUDY_EVENTS, normalize_words};
+use crate::value_object::{MAX_HAND_SET, MAX_STUDY_EVENTS, normalize_keyword, normalize_words};
 
 use super::{Command, Step, StudyState};
 
@@ -21,25 +21,14 @@ pub struct SetInputs {
     pub brands: Vec<String>,
     pub excluded_words: Vec<String>,
     pub supplier_products: Option<u32>,
-    pub specialist_first: Option<bool>,
     /// What one unit of the sale's currency is worth today in millionths
     /// of a US dollar; `None` when the caller knows no rate. It is kept
     /// with the rest, so every node scores the study alike.
     pub usd_micros: Option<u64>,
 }
 
-/// A keyword as a row spells it: on one line, [`MAX_KEYWORD_LEN`]
-/// characters at most.
-fn keyword_of(keyword: &str) -> Result<String, ResearchError> {
-    let keyword = keyword.split_whitespace().collect::<Vec<_>>().join(" ");
-    if keyword.is_empty() || keyword.chars().count() > MAX_KEYWORD_LEN {
-        return Err(ResearchError::InvalidKeyword);
-    }
-    Ok(keyword)
-}
-
 /// Refuses a change to a study whose stream is nearly full.
-fn room_for_a_change(study: &StudyState) -> Result<(), ResearchError> {
+pub(super) fn room_for_a_change(study: &StudyState) -> Result<(), ResearchError> {
     if study.aggregate_version >= MAX_STUDY_EVENTS {
         return Err(ResearchError::TooManyChanges);
     }
@@ -78,7 +67,6 @@ impl<E: Executor> Command<E> {
                 && said.brands == brands
                 && said.excluded_words == excluded_words
                 && said.supplier_products == input.supplier_products
-                && said.specialist_first == input.specialist_first
                 && said.usd_micros == usd_micros
             {
                 return Ok(Step::Leave(()));
@@ -97,7 +85,6 @@ impl<E: Executor> Command<E> {
                 brands: brands.clone(),
                 excluded_words: excluded_words.clone(),
                 supplier_products: input.supplier_products,
-                specialist_first: input.specialist_first,
                 usd_micros,
                 set_by: actor_user_id.to_owned(),
             });
@@ -115,7 +102,7 @@ impl<E: Executor> Command<E> {
         keyword: &str,
         routing_key: Option<String>,
     ) -> Result<(), ResearchError> {
-        let keyword = keyword_of(keyword)?;
+        let keyword = normalize_keyword(keyword)?;
         self.settle_owned(actor_user_id, study_id, routing_key, |study, write| {
             if study.inputs.dropped.contains(&keyword) {
                 return Ok(Step::Leave(()));
@@ -142,7 +129,7 @@ impl<E: Executor> Command<E> {
         keyword: &str,
         routing_key: Option<String>,
     ) -> Result<(), ResearchError> {
-        let keyword = keyword_of(keyword)?;
+        let keyword = normalize_keyword(keyword)?;
         self.settle_owned(actor_user_id, study_id, routing_key, |study, write| {
             if study.inputs.restored.contains(&keyword) {
                 return Ok(Step::Leave(()));

@@ -38,6 +38,30 @@ pub const MAX_HAND_SET: usize = 2_000;
 /// a stream holds 65,535, and the fetches still on their way need room.
 pub const MAX_STUDY_EVENTS: u16 = 60_000;
 
+/// How many of a study's main keywords, the most searched, have their first
+/// results looked at: each is a paid search.
+pub const MAX_CHECKED_KEYWORDS: usize = 50;
+
+/// How many of a search's first organic results are kept: its first page.
+pub const MAX_RESULTS: usize = 10;
+
+/// The longest site name, in characters.
+pub const MAX_DOMAIN_LEN: usize = 253;
+
+/// The longest address of a result kept, in characters; a longer one is
+/// cut.
+pub const MAX_URL_LEN: usize = 500;
+
+/// The longest title of a result kept, in characters; a longer one is cut.
+pub const MAX_TITLE_LEN: usize = 200;
+
+/// How many sites one user marks at most.
+pub const MAX_MARKS: usize = 2_000;
+
+/// How many times a user's marks change before they are refused: a stream
+/// holds 65,535 events.
+pub const MAX_MARK_EVENTS: u16 = 60_000;
+
 /// How long a fetch may run before the owner may ask again: a node that
 /// took it on and stopped leaves it there.
 pub const FETCH_STALE_SECS: u64 = 10 * 60;
@@ -134,6 +158,38 @@ pub fn normalize_words<S: AsRef<str>>(words: &[S]) -> Result<Vec<String>, Resear
         return Err(ResearchError::TooManyWords);
     }
     Ok(kept)
+}
+
+/// A keyword as a row spells it: on one line, [`MAX_KEYWORD_LEN`]
+/// characters at most.
+pub fn normalize_keyword(keyword: &str) -> Result<String, ResearchError> {
+    let keyword = collapse(keyword);
+    if keyword.is_empty() || keyword.chars().count() > MAX_KEYWORD_LEN {
+        return Err(ResearchError::InvalidKeyword);
+    }
+    Ok(keyword)
+}
+
+/// A site as its marks and its results name it: the host, lowercase,
+/// without `www.` in front nor a dot behind (`WWW.Zooplus.fr` gives
+/// `zooplus.fr`). A subdomain is a site of its own: no list of public
+/// suffixes says where a name ends.
+pub fn normalize_domain(domain: &str) -> Result<String, ResearchError> {
+    let domain = domain.trim().trim_end_matches('.').to_lowercase();
+    let domain = domain.strip_prefix("www.").unwrap_or(&domain);
+    let label = |label: &str| {
+        !label.is_empty()
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label.chars().all(|c| c.is_alphanumeric() || c == '-')
+    };
+    if domain.chars().count() > MAX_DOMAIN_LEN
+        || !domain.contains('.')
+        || !domain.split('.').all(label)
+    {
+        return Err(ResearchError::InvalidDomain);
+    }
+    Ok(domain.to_owned())
 }
 
 /// A country as ISO 3166-1 alpha-2, uppercase: ` fr ` gives `FR`.
@@ -244,6 +300,32 @@ mod tests {
             MAX_SEED_LEN,
             "counted in characters, not bytes"
         );
+    }
+
+    #[test]
+    fn a_site_is_its_host_without_www() {
+        assert_eq!(normalize_domain(" WWW.Zooplus.fr. ").unwrap(), "zooplus.fr");
+        assert_eq!(
+            normalize_domain("fr.aliexpress.com").unwrap(),
+            "fr.aliexpress.com"
+        );
+        assert_eq!(
+            normalize_domain("étoile-du-chat.fr").unwrap(),
+            "étoile-du-chat.fr"
+        );
+        for domain in [
+            "",
+            "localhost",
+            "www.",
+            "a..fr",
+            "-a.fr",
+            "a b.fr",
+            "https://zooplus.fr",
+            "zooplus.fr/chats",
+        ] {
+            assert!(normalize_domain(domain).is_err(), "{domain:?}");
+        }
+        assert!(normalize_domain(&format!("{}.fr", "a".repeat(MAX_DOMAIN_LEN))).is_err());
     }
 
     #[test]

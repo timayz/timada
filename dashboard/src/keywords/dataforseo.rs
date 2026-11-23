@@ -1,10 +1,14 @@
-//! DataForSEO as the [`KeywordSource`]: its Labs API for Google, under the
-//! platform's own login (`[dataforseo]` in the configuration).
+//! DataForSEO as the [`KeywordSource`]: its Labs and SERP APIs for Google,
+//! under the platform's own login (`[dataforseo]` in the configuration).
 //!
-//! Two calls are made:
+//! Three calls are made:
 //!
 //! - `dataforseo_labs/google/keyword_suggestions/live`, paid: the keywords
 //!   that contain a seed's words, with what its database holds for each;
+//! - `serp/google/organic/live/regular`, paid: the first page of a search,
+//!   made as it is asked. DataForSEO also takes searches in a queue at a
+//!   third of the price and answers them minutes later; the live call is
+//!   the one made, since its answer is recorded by the pass that asked;
 //! - `dataforseo_labs/locations_and_languages`, free: the countries it has
 //!   keywords for. Read once a day ([`PLACES_FRESH_FOR`]) and kept, since a
 //!   suggestion call names its country by the code this list gives.
@@ -21,7 +25,10 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 
-use super::{Intent, Keyword, KeywordError, KeywordSource, Language, MAX_ROWS, Place, Suggestions};
+use super::{
+    FirstResults, Intent, Keyword, KeywordError, KeywordSource, Language, MAX_RESULTS, MAX_ROWS,
+    Place, SearchResult, Suggestions,
+};
 
 /// DataForSEO's API.
 pub const DATAFORSEO_API_URL: &str = "https://api.dataforseo.com";
@@ -50,6 +57,11 @@ const ROW_USD_MICROS: u64 = 120;
 
 /// The most one call may cost: 0.132 USD, for the thousand it may return.
 pub const MOST_USD_MICROS: u64 = CALL_USD_MICROS + ROW_USD_MICROS * MAX_ROWS as u64;
+
+/// What a live search of one page of ten results costs, in millionths of a
+/// US dollar, as read on 2026-11-23 (0.0006 in the queue, 0.0012 in its
+/// priority lane). A page is the unit: the ten asked for are one.
+pub const SEARCH_USD_MICROS: u64 = 2_000;
 
 const OK: u32 = 20000;
 /// "No search results": an answer, with no rows.
@@ -138,6 +150,22 @@ impl DataforseoClient {
         }
         Ok(held.located.clone())
     }
+
+    /// The code DataForSEO knows `country` by, when it holds `language`
+    /// for it; else the call is refused unasked.
+    async fn code_of(&self, country: &str, language: &str) -> Result<u32, KeywordError> {
+        let located = self.located().await?;
+        located
+            .iter()
+            .find(|located| located.place.country.eq_ignore_ascii_case(country.trim()))
+            .filter(|located| located.place.languages.iter().any(|l| l.code == language))
+            .map(|located| located.code)
+            .ok_or_else(|| {
+                KeywordError::Refused(format!(
+                    "no keywords for the country '{country}' in the language '{language}'"
+                ))
+            })
+    }
 }
 
 #[async_trait::async_trait]
@@ -152,18 +180,8 @@ impl KeywordSource for DataforseoClient {
         if seed.is_empty() {
             return Err(KeywordError::Refused("no seed keyword".to_owned()));
         }
-        let located = self.located().await?;
         let language = language.trim().to_lowercase();
-        let Some(code) = located
-            .iter()
-            .find(|located| located.place.country.eq_ignore_ascii_case(country.trim()))
-            .filter(|located| located.place.languages.iter().any(|l| l.code == language))
-            .map(|located| located.code)
-        else {
-            return Err(KeywordError::Refused(format!(
-                "no keywords for the country '{country}' in the language '{language}'"
-            )));
-        };
+        let code = self.code_of(country, &language).await?;
         // One task a call: DataForSEO refuses more.
         let body = json!([{
             "keyword": seed,
@@ -188,6 +206,41 @@ impl KeywordSource for DataforseoClient {
 
     fn most_usd_micros(&self) -> u64 {
         MOST_USD_MICROS
+    }
+
+    async fn first_results(
+        &self,
+        keyword: &str,
+        country: &str,
+        language: &str,
+    ) -> Result<FirstResults, KeywordError> {
+        let keyword = keyword.trim();
+        if keyword.is_empty() {
+            return Err(KeywordError::Refused("no keyword to search".to_owned()));
+        }
+        let language = language.trim().to_lowercase();
+        // The search API names a country by the code the keywords do.
+        let code = self.code_of(country, &language).await?;
+        let body = json!([{
+            "keyword": keyword,
+            "location_code": code,
+            "language_code": language,
+            "device": "desktop",
+            "depth": MAX_RESULTS,
+        }]);
+        let request = self
+            .client
+            .post(format!("{}/v3/serp/google/organic/live/regular", self.url))
+            .json(&body);
+        let answer = self.call::<SearchPage>(request).await?;
+        Ok(FirstResults {
+            results: results(answer.result),
+            cost_usd_micros: answer.cost_usd_micros,
+        })
+    }
+
+    fn most_results_usd_micros(&self) -> u64 {
+        SEARCH_USD_MICROS
     }
 
     async fn places(&self) -> Result<Vec<Place>, KeywordError> {
@@ -363,6 +416,56 @@ fn rows(result: Vec<SuggestionsResult>) -> Vec<Keyword> {
 }
 
 #[derive(Deserialize)]
+struct SearchPage {
+    items: Option<Vec<SearchItem>>,
+}
+
+#[derive(Deserialize)]
+struct SearchItem {
+    /// `organic`, `paid`, `featured_snippet`.
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    /// Its place among the items of its type.
+    rank_group: Option<f64>,
+    domain: Option<String>,
+    url: Option<String>,
+    title: Option<String>,
+}
+
+/// The organic results of a page in their order, [`MAX_RESULTS`] at most;
+/// ads and the search engine's own boxes are passed over.
+fn results(result: Vec<SearchPage>) -> Vec<SearchResult> {
+    let Some(page) = result.into_iter().next() else {
+        return Vec::new();
+    };
+    let mut organic: Vec<(u64, SearchItem)> = page
+        .items
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|item| item.kind.as_deref() == Some("organic"))
+        .filter_map(|item| {
+            let rank = item
+                .rank_group
+                .filter(|rank| rank.is_finite() && *rank >= 1.0)?;
+            Some((rank.round() as u64, item))
+        })
+        .collect();
+    organic.sort_by_key(|(rank, _)| *rank);
+    organic
+        .into_iter()
+        .filter_map(|(rank, item)| {
+            Some(SearchResult {
+                position: u8::try_from(rank).ok()?,
+                domain: item.domain.filter(|domain| !domain.trim().is_empty())?,
+                url: item.url.unwrap_or_default(),
+                title: item.title.unwrap_or_default(),
+            })
+        })
+        .take(MAX_RESULTS)
+        .collect()
+}
+
+#[derive(Deserialize)]
 struct LocationEntry {
     location_code: Option<u32>,
     location_name: Option<String>,
@@ -489,6 +592,119 @@ mod tests {
             }]
         }]
     }"#;
+
+    const SEARCH: &str = r#"{
+        "version": "0.1.20260101", "status_code": 20000, "status_message": "Ok.",
+        "time": "3.1 sec.", "cost": 0.002, "tasks_count": 1, "tasks_error": 0,
+        "tasks": [{
+            "id": "11231418-1535-0139-0000-8a36a3e3e2e1",
+            "status_code": 20000, "status_message": "Ok.", "cost": 0.002,
+            "result_count": 1,
+            "path": ["v3", "serp", "google", "organic", "live", "regular"],
+            "result": [{
+                "keyword": "arbre à chat", "type": "organic", "se_domain": "google.fr",
+                "location_code": 2250, "language_code": "fr",
+                "item_types": ["paid", "organic", "featured_snippet"],
+                "se_results_count": 85600000, "items_count": 5,
+                "items": [
+                    {"type": "paid", "rank_group": 1, "rank_absolute": 1,
+                     "domain": "www.ads.example", "title": "An ad", "url": "https://www.ads.example/"},
+                    {"type": "organic", "rank_group": 2, "rank_absolute": 4, "page": 1,
+                     "domain": "www.zooplus.fr", "title": "Arbres à chat pas chers",
+                     "description": "…", "url": "https://www.zooplus.fr/shop/chats/arbre_a_chat",
+                     "breadcrumb": "https://www.zooplus.fr › chats"},
+                    {"type": "featured_snippet", "rank_group": 1, "rank_absolute": 2,
+                     "domain": "www.wikipedia.org", "title": "Arbre à chat", "url": "https://fr.wikipedia.org/"},
+                    {"type": "organic", "rank_group": 1.0, "rank_absolute": 3, "page": 1,
+                     "domain": "www.amazon.fr", "title": "Arbre à chat : Amazon.fr",
+                     "url": "https://www.amazon.fr/arbre-chat/s?k=arbre+chat"},
+                    {"type": "organic", "rank_group": 3, "rank_absolute": 5,
+                     "domain": null, "title": "No site", "url": null}
+                ]
+            }]
+        }]
+    }"#;
+
+    #[test]
+    fn the_organic_results_are_kept_in_their_order() {
+        let answer = open::<SearchPage>(200, SEARCH.as_bytes()).unwrap();
+        assert_eq!(answer.cost_usd_micros, 2_000);
+        assert_eq!(
+            results(answer.result),
+            vec![
+                SearchResult {
+                    position: 1,
+                    domain: "www.amazon.fr".into(),
+                    url: "https://www.amazon.fr/arbre-chat/s?k=arbre+chat".into(),
+                    title: "Arbre à chat : Amazon.fr".into(),
+                },
+                SearchResult {
+                    position: 2,
+                    domain: "www.zooplus.fr".into(),
+                    url: "https://www.zooplus.fr/shop/chats/arbre_a_chat".into(),
+                    title: "Arbres à chat pas chers".into(),
+                },
+            ]
+        );
+        // A search nothing answers: a task with no result, or no items.
+        let none = body(40102, "No Search Results.");
+        let answer = open::<SearchPage>(200, none.as_bytes()).unwrap();
+        assert!(results(answer.result).is_empty());
+        let empty = r#"{"status_code": 20000, "cost": 0.002, "tasks": [{"status_code": 20000,
+            "cost": 0.002, "result": [{"items": null}]}]}"#;
+        let answer = open::<SearchPage>(200, empty.as_bytes()).unwrap();
+        assert_eq!(answer.cost_usd_micros, 2_000);
+        assert!(results(answer.result).is_empty());
+        // No more than the first page, whatever comes back.
+        let items: Vec<_> = (1..=15)
+            .map(|rank| json!({"type": "organic", "rank_group": rank, "domain": format!("site{rank}.fr")}))
+            .collect();
+        let long = json!({"status_code": 20000, "cost": 0.004, "tasks": [{"status_code": 20000,
+            "cost": 0.004, "result": [{"items": items}]}]})
+        .to_string();
+        let kept = results(open::<SearchPage>(200, long.as_bytes()).unwrap().result);
+        assert_eq!(kept.len(), MAX_RESULTS);
+        assert_eq!(kept[9].domain, "site10.fr");
+    }
+
+    #[tokio::test]
+    async fn a_search_is_asked_for_the_first_page_from_the_country() {
+        let (url, requests) = stand_in(SEARCH).await;
+        let client = DataforseoClient::new("ops@example.com", "s3cret", Some(url));
+        let found = client
+            .first_results(" arbre à chat ", "fr", "FR")
+            .await
+            .unwrap();
+        assert_eq!(found.results.len(), 2);
+        assert_eq!(found.cost_usd_micros, 2_000);
+        assert_eq!(client.most_results_usd_micros(), 2_000);
+
+        {
+            let requests = requests.lock().unwrap();
+            assert_eq!(
+                requests[1].line,
+                "POST /v3/serp/google/organic/live/regular HTTP/1.1"
+            );
+            let sent: serde_json::Value = serde_json::from_str(&requests[1].body).unwrap();
+            assert_eq!(
+                sent,
+                json!([{
+                    "keyword": "arbre à chat",
+                    "location_code": 2250,
+                    "language_code": "fr",
+                    "device": "desktop",
+                    "depth": 10,
+                }])
+            );
+        }
+        for (keyword, country, language) in [("griffoir", "ZZ", "fr"), (" ", "FR", "fr")] {
+            let err = client
+                .first_results(keyword, country, language)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, KeywordError::Refused(_)), "{err}");
+        }
+    }
 
     fn body(code: u32, message: &str) -> String {
         json!({

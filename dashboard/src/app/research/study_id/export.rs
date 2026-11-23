@@ -1,4 +1,4 @@
-use timada_research::{Thresholds, judge, study_row};
+use timada_research::{TestState, Thresholds, judge, study_row};
 use topcoat::{
     Result,
     context::{Cx, context},
@@ -17,12 +17,14 @@ use crate::research::study_csv;
 pub async fn export(cx: &Cx) -> Result<impl IntoResponse> {
     let (study, _) = require_owned(cx).await?;
     let db = context::<Db>(cx).clone();
-    let tally = study_row(&db, &study.id)
+    let row = study_row(&db, &study.id)
         .await
-        .map_err(topcoat::Error::from_anyhow)?
-        .map(|row| row.tally())
-        .unwrap_or_default();
-    let judgement = judge(&tally, &study.inputs, &Thresholds::default());
+        .map_err(topcoat::Error::from_anyhow)?;
+    let tally = row.as_ref().map(|row| row.tally()).unwrap_or_default();
+    let competition = row.map_or(TestState::NotChecked, |row| {
+        TestState::parse(&row.competition)
+    });
+    let judgement = judge(&tally, competition, &study.inputs, &Thresholds::default());
     let name = format!("study-{}.csv", study.id.to_lowercase());
     Ok((download_headers(&name), study_csv(db, study, judgement)))
 }

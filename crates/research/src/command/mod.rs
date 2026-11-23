@@ -3,7 +3,8 @@
 //! The write model folds *all* events of a study (`strict()`), so the
 //! version it observes, and `write()` sends as `original_version`, never
 //! goes stale. It keeps where each seed's fetch stands and how many rows it
-//! gave, never the rows themselves: those are the read model's. It is not
+//! gave, never the rows themselves: those are the read model's. The same
+//! goes for the main keywords whose first results were asked for. It is not
 //! snapshotted: a study is a handful of seeds and of fetches.
 //!
 //! A study's stream is written by its owner and by the host's saga at the
@@ -13,6 +14,8 @@
 
 mod fetch;
 mod inputs;
+mod marks;
+mod results;
 mod spend;
 mod study;
 
@@ -22,12 +25,14 @@ use evento::{
 
 pub use fetch::Reusable;
 pub use inputs::*;
+pub use marks::*;
 pub use spend::*;
 pub use study::*;
 
 use crate::aggregator::{
     Created, Deleted, FetchFailed, FetchRequested, FetchStarted, InputsSet, KeywordDropped,
-    KeywordRestored, KeywordsFetched, KeywordsReused, Renamed, SeedAdded, Study,
+    KeywordRestored, KeywordsFetched, KeywordsReused, Renamed, ResultsFailed, ResultsFetched,
+    ResultsRequested, ResultsStarted, SeedAdded, Study,
 };
 use crate::error::ResearchError;
 use crate::score::{Sale, StudyInputs};
@@ -73,6 +78,38 @@ impl SeedState {
     }
 }
 
+/// One keyword whose first results were asked for, and where the search
+/// stands.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CheckState {
+    pub keyword: String,
+    pub status: FetchStatus,
+    /// Unix seconds of the last `ResultsRequested`.
+    pub requested_at: u64,
+    /// Unix seconds of the last search that gave its results.
+    pub fetched_at: Option<u64>,
+    /// How many results that search gave.
+    pub results: u32,
+    /// Why the last search gave nothing; cleared by the next request.
+    pub last_error: Option<String>,
+}
+
+impl CheckState {
+    /// Whether a search is on its way at `now` (unix seconds): asked for
+    /// or taken on, and not so long ago that the node which took it on
+    /// must have stopped.
+    pub fn is_fetching(&self, now: u64) -> bool {
+        matches!(self.status, FetchStatus::Requested | FetchStatus::Fetching)
+            && now.saturating_sub(self.requested_at) < FETCH_STALE_SECS
+    }
+
+    /// Whether the keyword still wants its first results at `now`: its
+    /// last search failed or stalled.
+    pub fn is_owed(&self, now: u64) -> bool {
+        self.status != FetchStatus::Fetched && !self.is_fetching(now)
+    }
+}
+
 /// The write model of a study.
 #[evento::projection(id = id, name = "timada-research/StudyState")]
 #[evento::snapshot(none)]
@@ -86,7 +123,11 @@ pub struct StudyState {
     pub language: String,
     /// In the order they were added.
     pub seeds: Vec<SeedState>,
-    /// What its fetches cost in all, in millionths of a US dollar.
+    /// The keywords whose first results were asked for, in the order they
+    /// first were.
+    pub checks: Vec<CheckState>,
+    /// What its fetches and its searches cost in all, in millionths of a US
+    /// dollar.
     pub cost_usd_micros: u64,
     /// What the owner said of the niche, and the keywords they dropped or
     /// brought back by hand: what the study is scored from, with its rows.
@@ -114,6 +155,18 @@ impl StudyState {
         self.seeds.iter_mut().find(|state| state.seed == seed)
     }
 
+    /// Where the search for the first results of `keyword` stands; `None`
+    /// when they were never asked for.
+    pub fn check(&self, keyword: &str) -> Option<&CheckState> {
+        self.checks.iter().find(|state| state.keyword == keyword)
+    }
+
+    fn check_mut(&mut self, keyword: &str) -> Option<&mut CheckState> {
+        self.checks
+            .iter_mut()
+            .find(|state| state.keyword == keyword)
+    }
+
     /// How many rows its seeds' last fetches gave together.
     pub fn keywords(&self) -> u64 {
         self.seeds.iter().map(|seed| u64::from(seed.keywords)).sum()
@@ -133,6 +186,10 @@ pub fn study_projection<E: Executor>() -> Projection<E, StudyState> {
         .handler(on_inputs_set())
         .handler(on_keyword_dropped())
         .handler(on_keyword_restored())
+        .handler(on_results_requested())
+        .handler(on_results_started())
+        .handler(on_results_fetched())
+        .handler(on_results_failed())
         .handler(on_deleted())
         .strict()
 }
@@ -254,7 +311,6 @@ async fn on_inputs_set(event: Event<InputsSet>, study: &mut StudyState) -> anyho
     study.inputs.brands = data.brands.to_owned();
     study.inputs.excluded_words = data.excluded_words.to_owned();
     study.inputs.supplier_products = data.supplier_products;
-    study.inputs.specialist_first = data.specialist_first;
     study.inputs.usd_micros = data.usd_micros;
     study.inputs_set_at = Some(event.timestamp);
     study.updated_at = event.timestamp;
@@ -279,6 +335,69 @@ async fn on_keyword_restored(
 ) -> anyhow::Result<()> {
     study.inputs.dropped.remove(&event.data.keyword);
     study.inputs.restored.insert(event.data.keyword.to_owned());
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_results_requested(
+    event: Event<ResultsRequested>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    if study.check(&event.data.keyword).is_none() {
+        study.checks.push(CheckState {
+            keyword: event.data.keyword.to_owned(),
+            ..CheckState::default()
+        });
+    }
+    if let Some(check) = study.check_mut(&event.data.keyword) {
+        check.status = FetchStatus::Requested;
+        check.requested_at = event.timestamp;
+        check.last_error = None;
+    }
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_results_started(
+    event: Event<ResultsStarted>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    if let Some(check) = study.check_mut(&event.data.keyword) {
+        check.status = FetchStatus::Fetching;
+    }
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_results_fetched(
+    event: Event<ResultsFetched>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    if let Some(check) = study.check_mut(&event.data.keyword) {
+        check.status = FetchStatus::Fetched;
+        check.fetched_at = Some(event.timestamp);
+        check.results = event.data.results.len() as u32;
+        check.last_error = None;
+    }
+    study.cost_usd_micros = study
+        .cost_usd_micros
+        .saturating_add(event.data.cost_usd_micros);
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_results_failed(
+    event: Event<ResultsFailed>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    if let Some(check) = study.check_mut(&event.data.keyword) {
+        check.status = FetchStatus::Failed;
+        check.last_error = Some(event.data.reason.to_owned());
+    }
     study.updated_at = event.timestamp;
     Ok(())
 }

@@ -6,6 +6,10 @@
 //! one source there is, set in the configuration's `[dataforseo]` section.
 //! Without it there is no source and nothing here calls anyone.
 //!
+//! The source also says who holds the first results of a search for a
+//! keyword ([`KeywordSource::first_results`]): whether a niche is held by
+//! specialist shops is read from them.
+//!
 //! Every call costs money, so an answer carries what it cost for a cap to
 //! count, and a failure says which kind it is ([`KeywordError`]): asking
 //! again may do, or it will not.
@@ -83,6 +87,31 @@ pub struct Suggestions {
     pub cost_usd_micros: u64,
 }
 
+/// How many of a search's first organic results one call returns at most:
+/// its first page.
+pub const MAX_RESULTS: usize = 10;
+
+/// One organic result of a search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchResult {
+    /// Its place among the organic results, from 1: ads and the search
+    /// engine's own boxes are not counted.
+    pub position: u8,
+    /// The site's host, as the source names it (`www.example.com`).
+    pub domain: String,
+    pub url: String,
+    pub title: String,
+}
+
+/// The first results of a search, and what the call cost.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FirstResults {
+    /// In their order, [`MAX_RESULTS`] at most.
+    pub results: Vec<SearchResult>,
+    /// What the source charged for the call, in millionths of a US dollar.
+    pub cost_usd_micros: u64,
+}
+
 /// A language the source has keywords in, for a country.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Language {
@@ -140,6 +169,20 @@ pub trait KeywordSource: Send + Sync {
     /// millionths of a US dollar: the room a cap keeps for a call before it
     /// is made. What a call did cost is the answer's to say.
     fn most_usd_micros(&self) -> u64;
+
+    /// The first organic results of a search for `keyword` made from
+    /// `country` (`FR`) in `language` (`fr`), on a desktop. One paid call; a
+    /// search with no result gives none and still costs.
+    async fn first_results(
+        &self,
+        keyword: &str,
+        country: &str,
+        language: &str,
+    ) -> Result<FirstResults, KeywordError>;
+
+    /// The most one call of [`first_results`](Self::first_results) may
+    /// cost, in millionths of a US dollar.
+    fn most_results_usd_micros(&self) -> u64;
 
     /// The countries the source has keywords for, by name, each with its
     /// languages: what a form may offer. Free, and kept between calls.

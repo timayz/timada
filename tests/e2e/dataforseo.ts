@@ -6,6 +6,8 @@ import { standInPort } from "./shard";
 // keywords made from it. A seed that says "refused" is refused the way an
 // account out of funds is, one that says "unavailable" fails the way
 // DataForSEO's own servers do, and one that says "nothing" has no keywords.
+// A search for a keyword gives a first page of an ad and three sites: two
+// every search finds, and one of the keyword's own.
 // config/e2e.toml points the dashboard at it, and scripts/e2e.sh each next
 // server 100 ports further on.
 
@@ -47,6 +49,17 @@ export function keywordsFor(seed: string) {
   ];
 }
 
+/// The sites the stand-in finds for a search of `keyword`, in their order,
+/// as DataForSEO names them: what a spec expects to read on the page,
+/// without the `www.`.
+export function sitesFor(keyword: string) {
+  const own = keyword
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return ["www.amazon.fr", "www.zooplus.fr", `${own}.example`];
+}
+
 function item(row: ReturnType<typeof keywordsFor>[number]) {
   return {
     se_type: "google",
@@ -81,6 +94,8 @@ function envelope(taskCode: number, taskMessage: string, cost: number, result: u
 
 export class FakeDataforseo {
   readonly calls: KeywordCall[] = [];
+  /// The paid searches, as the dashboard sent them.
+  readonly searches: KeywordCall[] = [];
   private server?: http.Server;
 
   async start() {
@@ -127,6 +142,56 @@ export class FakeDataforseo {
                 ],
               })),
             ),
+          );
+          return;
+        }
+        if (req.method === "POST" && path === "/v3/serp/google/organic/live/regular") {
+          const [search] = JSON.parse(body || "[]") as {
+            keyword?: string;
+            location_code?: number;
+            language_code?: string;
+          }[];
+          const keyword = search?.keyword ?? "";
+          this.searches.push({
+            keyword,
+            locationCode: search?.location_code ?? 0,
+            languageCode: search?.language_code ?? "",
+          });
+          const organic = sitesFor(keyword).map((domain, at) => ({
+            type: "organic",
+            rank_group: at + 1,
+            rank_absolute: at + 2,
+            page: 1,
+            domain,
+            title: `${keyword} - ${domain}`,
+            description: null,
+            url: `https://${domain}/`,
+            breadcrumb: null,
+          }));
+          send(
+            200,
+            envelope(20000, "Ok.", 0.002, [
+              {
+                keyword,
+                type: "organic",
+                se_domain: "google.fr",
+                location_code: search?.location_code ?? null,
+                language_code: search?.language_code ?? null,
+                item_types: ["paid", "organic"],
+                items_count: organic.length + 1,
+                items: [
+                  {
+                    type: "paid",
+                    rank_group: 1,
+                    rank_absolute: 1,
+                    domain: "www.ads.example",
+                    title: "An ad",
+                    url: "https://www.ads.example/",
+                  },
+                  ...organic,
+                ],
+              },
+            ]),
           );
           return;
         }

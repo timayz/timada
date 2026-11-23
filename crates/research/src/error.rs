@@ -1,7 +1,8 @@
 use evento::WriteError;
 
 use crate::value_object::{
-    MAX_HAND_SET, MAX_LISTED_WORDS, MAX_NAME_LEN, MAX_SEED_LEN, MAX_SEEDS, MAX_WORD_LEN,
+    MAX_CHECKED_KEYWORDS, MAX_HAND_SET, MAX_LISTED_WORDS, MAX_MARKS, MAX_NAME_LEN, MAX_SEED_LEN,
+    MAX_SEEDS, MAX_WORD_LEN,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -44,6 +45,16 @@ pub enum ResearchError {
     TooManyHandSet,
     #[error("the study was changed too many times: start another")]
     TooManyChanges,
+    #[error("the study has no main keyword whose first results to look at")]
+    NoMainKeyword,
+    #[error("the first results of at most {MAX_CHECKED_KEYWORDS} keywords are looked at")]
+    TooManyChecked,
+    #[error("every main keyword has its first results, or they are being fetched")]
+    NothingToCheck,
+    #[error("a site is named by its domain, like example.com")]
+    InvalidDomain,
+    #[error("at most {MAX_MARKS} sites are marked: no more can be")]
+    TooManyMarks,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -92,6 +103,11 @@ impl ResearchError {
             Self::InvalidKeyword => "invalid_keyword",
             Self::TooManyHandSet => "too_many_hand_set_keywords",
             Self::TooManyChanges => "study_changed_too_often",
+            Self::NoMainKeyword => "no_main_keyword",
+            Self::TooManyChecked => "too_many_checked_keywords",
+            Self::NothingToCheck => "nothing_to_check",
+            Self::InvalidDomain => "invalid_domain",
+            Self::TooManyMarks => "too_many_marks",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })

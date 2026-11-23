@@ -373,20 +373,25 @@ event timada-pages/Translation::Dropped { dropped_by: String }
 event timada-pages/Translation::SeoSet { meta_title: String, meta_description: String, set_by: String }
 event timada-pages/Translation::Written { kind: String, subject_id: String, language: String, title: String, slug: String, summary: String, body: String, written_by: String }
 event timada-pages/TranslationSlug::Claimed { subject_id: String, version: u16 }
-event timada-research/SpendDay::Charged { hold: String, user_id: String, study_id: String, seed: String, cost_usd_micros: u64, charged_by: String }
-event timada-research/SpendDay::Held { hold: String, user_id: String, study_id: String, seed: String, most_usd_micros: u64, held_by: String }
+event timada-research/DomainMarks::DomainMarked { domain: String, specialist: bool, marked_by: String }
+event timada-research/SpendDay::Charged { hold: String, user_id: String, study_id: String, query: String, cost_usd_micros: u64, charged_by: String }
+event timada-research/SpendDay::Held { hold: String, user_id: String, study_id: String, query: String, most_usd_micros: u64, held_by: String }
 event timada-research/SpendDay::Released { hold: String, released_by: String }
 event timada-research/Study::Created { name: String, country: String, language: String, created_by: String }
 event timada-research/Study::Deleted { deleted_by: String }
 event timada-research/Study::FetchFailed { seed: String, reason: String, failed_by: String }
 event timada-research/Study::FetchRequested { seed: String, requested_by: String }
 event timada-research/Study::FetchStarted { seed: String, started_by: String }
-event timada-research/Study::InputsSet { currency: String, price_cents: Option<u64>, cost_cents: Option<u64>, shipping_cents: u64, import_cents: u64, vat_bps: u32, fixed_cents: u64, payment_fee_bps: u32, payment_fee_cents: u64, brands: Vec<String>, excluded_words: Vec<String>, supplier_products: Option<u32>, specialist_first: Option<bool>, usd_micros: Option<u64>, set_by: String }
+event timada-research/Study::InputsSet { currency: String, price_cents: Option<u64>, cost_cents: Option<u64>, shipping_cents: u64, import_cents: u64, vat_bps: u32, fixed_cents: u64, payment_fee_bps: u32, payment_fee_cents: u64, brands: Vec<String>, excluded_words: Vec<String>, supplier_products: Option<u32>, usd_micros: Option<u64>, set_by: String }
 event timada-research/Study::KeywordDropped { keyword: String, dropped_by: String }
 event timada-research/Study::KeywordRestored { keyword: String, restored_by: String }
 event timada-research/Study::KeywordsFetched { seed: String, rows: Vec<KeywordRow>, cost_usd_micros: u64, fetched_by: String }
 event timada-research/Study::KeywordsReused { seed: String, rows: Vec<KeywordRow>, from_study: String, fetched_at: u64, reused_by: String }
 event timada-research/Study::Renamed { name: String, renamed_by: String }
+event timada-research/Study::ResultsFailed { keyword: String, reason: String, failed_by: String }
+event timada-research/Study::ResultsFetched { keyword: String, results: Vec<ResultRow>, cost_usd_micros: u64, fetched_by: String }
+event timada-research/Study::ResultsRequested { keyword: String, requested_by: String }
+event timada-research/Study::ResultsStarted { keyword: String, started_by: String }
 event timada-research/Study::SeedAdded { seed: String, added_by: String }
 event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }
 event timada-reviews/Review::Published { published_by: String }
@@ -520,6 +525,7 @@ type timada_orders::value_object::OrderSource { first: Click, last: Click }
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String, capture_before: Option<u64> }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, region: Option<String>, country: String, phone: Option<String> }
 type timada_research::aggregator::KeywordRow { keyword: String, volume: Option<u64>, cpc_usd_cents: Option<u64>, difficulty: Option<u8>, intent: Option<String> }
+type timada_research::aggregator::ResultRow { position: u8, domain: String, url: String, title: String }
 type timada_reviews::value_object::ReviewPhoto { id: String, picture: timada_core::Picture }
 type timada_shoppers::value_object::NewsletterSubscription { subscriber_id: String, key_id: String }
 type timada_tenancy::command::MailLogo { id: String, picture: timada_core::Picture }

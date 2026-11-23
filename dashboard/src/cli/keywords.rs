@@ -3,7 +3,9 @@
 //! keywords for. It is how an operator checks the login, and how a figure
 //! is compared with the one another tool gives for the same keyword.
 //!
-//! A seed is one paid call, whatever `--limit` prints of it.
+//! A seed is one paid call, whatever `--limit` prints of it. With
+//! `--results` the call is a search instead: it prints who holds the first
+//! results for the keyword.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -11,7 +13,7 @@ use std::io::Write as _;
 use anyhow::{Context, Result};
 
 use crate::config::Config;
-use crate::keywords::{KeywordSource, Place, Suggestions};
+use crate::keywords::{FirstResults, KeywordSource, Place, Suggestions};
 
 #[derive(clap::Args)]
 pub struct KeywordsArgs {
@@ -26,6 +28,10 @@ pub struct KeywordsArgs {
     /// How many of the keywords to print, the most searched first
     #[arg(long, default_value_t = 50)]
     pub limit: usize,
+    /// Search the keyword and print its first results instead of the
+    /// keywords around it
+    #[arg(long)]
+    pub results: bool,
 }
 
 pub async fn keywords(config: Config, args: KeywordsArgs) -> Result<()> {
@@ -43,6 +49,11 @@ pub async fn keywords(config: Config, args: KeywordsArgs) -> Result<()> {
 
 async fn print(source: &dyn KeywordSource, args: &KeywordsArgs) -> Result<String> {
     Ok(match &args.seed {
+        Some(seed) if args.results => first_page(
+            &source
+                .first_results(seed, &args.country, &args.language)
+                .await?,
+        ),
         Some(seed) => table(
             &source
                 .suggestions(seed, &args.country, &args.language)
@@ -65,6 +76,25 @@ fn places(places: &[Place]) -> String {
             languages.join(" ")
         );
     }
+    out
+}
+
+/// The results in their order, then what the search cost.
+fn first_page(found: &FirstResults) -> String {
+    let mut out = String::new();
+    for result in &found.results {
+        let _ = writeln!(
+            out,
+            "{:>2}  {:<32} {}",
+            result.position, result.domain, result.title
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\n{} results\ncost of the call: {:.5} USD",
+        found.results.len(),
+        found.cost_usd_micros as f64 / 1_000_000.0
+    );
     out
 }
 
@@ -122,6 +152,7 @@ mod tests {
             country: "FR".into(),
             language: "fr".into(),
             limit: 2,
+            results: false,
         }
     }
 
@@ -166,6 +197,27 @@ mod tests {
         );
         assert!(
             printed.contains("cost of the call: 0.01236 USD"),
+            "{printed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_search_prints_who_holds_the_first_results() {
+        let source = FakeKeywords::new();
+        source.find("griffoir", &["www.amazon.fr", "zooplus.fr"]);
+        let searching = KeywordsArgs {
+            results: true,
+            ..args(Some("griffoir"))
+        };
+        let printed = print(source.as_ref(), &searching).await.unwrap();
+        assert!(source.asked().is_empty());
+        assert_eq!(source.searched().len(), 1);
+        assert!(
+            printed.contains(" 2  zooplus.fr                       griffoir - zooplus.fr\n"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("2 results\ncost of the call: 0.00200 USD"),
             "{printed}"
         );
     }

@@ -44,9 +44,6 @@ pub struct InputsForm {
     excluded_words: String,
     #[serde(default)]
     supplier_products: String,
-    /// `yes`, `no`, or empty for not looked at.
-    #[serde(default)]
-    specialist_first: String,
 }
 
 impl InputsForm {
@@ -83,11 +80,6 @@ impl InputsForm {
                     text.parse::<u32>()
                         .map_err(|_| "invalid_supplier_products")?,
                 ),
-            },
-            specialist_first: match self.specialist_first.as_str() {
-                "yes" => Some(true),
-                "no" => Some(false),
-                _ => None,
             },
             usd_micros: None,
         })
