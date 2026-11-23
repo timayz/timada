@@ -7,11 +7,19 @@
 //! it. A node that took a fetch on and stopped leaves the seed there until
 //! the request is [`FETCH_STALE_SECS`](crate::FETCH_STALE_SECS) old, when
 //! the owner may ask again.
+//!
+//! A seed fetched not long ago, for any study of the same country and
+//! language, is not paid for twice: the host finds that fetch, reads its
+//! rows back from the event that recorded them
+//! ([`fetched_rows`](Command::fetched_rows)) and records them on the study
+//! that asks ([`record_reuse`](Command::record_reuse)).
 
 use evento::Executor;
 use timada_core::unix_now;
 
-use crate::aggregator::{FetchFailed, FetchRequested, FetchStarted, KeywordRow, KeywordsFetched};
+use crate::aggregator::{
+    FetchFailed, FetchRequested, FetchStarted, KeywordRow, KeywordsFetched, KeywordsReused, Study,
+};
 use crate::error::ResearchError;
 use crate::value_object::{
     FetchStatus, INTENTS, MAX_FETCH_ROWS, MAX_KEYWORD_LEN, MAX_REASON_LEN, normalize_seed,
@@ -45,6 +53,43 @@ fn kept_rows(rows: Vec<KeywordRow>) -> Vec<KeywordRow> {
         })
         .take(MAX_FETCH_ROWS)
         .collect()
+}
+
+/// The rows an earlier fetch of a seed gave, to answer a new one with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reusable {
+    pub rows: Vec<KeywordRow>,
+    /// Unix seconds of the fetch.
+    pub fetched_at: u64,
+}
+
+impl<E: Executor> Command<E> {
+    /// What the last paid fetch of `seed` on `study_id` gave, when it was
+    /// made at `since` (unix seconds) or later. The study may be anyone's,
+    /// and deleted: the keywords of a seed are nobody's secret, and the
+    /// stream stays.
+    pub async fn fetched_rows(
+        &self,
+        study_id: &str,
+        seed: &str,
+        since: u64,
+    ) -> anyhow::Result<Option<Reusable>> {
+        let fetches = evento::read::<Study>(study_id)
+            .event::<KeywordsFetched>()
+            .execute(&self.0)
+            .await?;
+        for fetch in fetches.iter().rev() {
+            let fetched = evento::metadata::Event::<KeywordsFetched>::try_from(fetch)?;
+            if fetched.data.seed != seed {
+                continue;
+            }
+            return Ok((fetch.timestamp >= since).then_some(Reusable {
+                rows: fetched.data.rows,
+                fetched_at: fetch.timestamp,
+            }));
+        }
+        Ok(None)
+    }
 }
 
 #[evento::command]
@@ -143,6 +188,37 @@ impl<E: Executor> Command<E> {
                     rows: rows.clone(),
                     cost_usd_micros,
                     fetched_by: actor.to_owned(),
+                });
+                Ok(Step::Write(true))
+            })
+            .await?;
+        Ok(recorded.unwrap_or(false))
+    }
+
+    /// Records the rows an earlier fetch of `seed` gave, on `from_study` at
+    /// `fetched_at`, as this study's: nothing was paid. `false` when the
+    /// study is gone meanwhile.
+    pub async fn record_reuse(
+        &self,
+        actor: &str,
+        study_id: &str,
+        seed: &str,
+        reused: Reusable,
+        from_study: &str,
+        routing_key: Option<String>,
+    ) -> Result<bool, ResearchError> {
+        let rows = kept_rows(reused.rows);
+        let recorded = self
+            .settle(study_id, routing_key, |study, write| {
+                if study.seed(seed).is_none() {
+                    return Ok(Step::Leave(false));
+                }
+                write.event(&KeywordsReused {
+                    seed: seed.to_owned(),
+                    rows: rows.clone(),
+                    from_study: from_study.to_owned(),
+                    fetched_at: reused.fetched_at,
+                    reused_by: actor.to_owned(),
                 });
                 Ok(Step::Write(true))
             })

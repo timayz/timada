@@ -28,6 +28,11 @@ pub const MAX_REASON_LEN: usize = 500;
 /// took it on and stopped leaves it there.
 pub const FETCH_STALE_SECS: u64 = 10 * 60;
 
+/// How many calls a day may hold room for at most, whatever the caps say:
+/// each writes two events to the day's stream, which is read whole before
+/// every call and holds 65,535 events at most.
+pub const MAX_DAY_HOLDS: u32 = 20_000;
+
 /// Who writes what the host does on its own (the fetches).
 pub const RESEARCH_ACTOR: &str = "timada-research";
 
@@ -121,6 +126,35 @@ pub fn normalize_language(language: &str) -> Result<String, ResearchError> {
     Ok(language)
 }
 
+/// The day (UTC) `now` (unix seconds) falls on, as `2026-11-23`: the id of
+/// the stream that counts what the day's calls cost.
+pub fn spend_day(now: u64) -> String {
+    timada_core::civil::format_date(now)
+}
+
+/// Unix seconds of the midnight (UTC) that ends the day `now` falls on:
+/// when a day's cap frees.
+pub fn spend_day_ends(now: u64) -> u64 {
+    (now / 86_400 + 1) * 86_400
+}
+
+/// What the keyword source may be paid in a day (UTC), in millionths of a
+/// US dollar: for one user's calls, and for everyone's together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpendCaps {
+    pub user_usd_micros: u64,
+    pub platform_usd_micros: u64,
+}
+
+/// Which of the day's caps a call would pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpendCap {
+    /// The user's own.
+    User,
+    /// The platform's, over every user.
+    Platform,
+}
+
 /// Where the fetch of a seed stands.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FetchStatus {
@@ -202,6 +236,18 @@ mod tests {
         for language in ["", "f", "french", "fr-", "fr_FR", "1a", "fr-françai"] {
             assert!(normalize_language(language).is_err(), "{language:?}");
         }
+    }
+
+    #[test]
+    fn a_day_of_spending_ends_at_midnight_utc() {
+        // 2023-11-14 22:13:20 UTC.
+        let now = 1_700_000_000;
+        assert_eq!(spend_day(now), "2023-11-14");
+        let ends = spend_day_ends(now);
+        assert_eq!(ends, 1_700_006_400);
+        assert_eq!(spend_day(ends - 1), "2023-11-14");
+        assert_eq!(spend_day(ends), "2023-11-15");
+        assert_eq!(spend_day_ends(ends), ends + 86_400);
     }
 
     #[test]

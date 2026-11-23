@@ -98,6 +98,13 @@ login = "keywords-e2e@example.com"
 password = "dataforseo-e2e-s3cret"
 api_url = "http://127.0.0.1:12116"
 
+# A user's day has room for three of the stand-in's calls (0.01248 USD each,
+# held at 0.132 before they are made); the fourth is refused
+# (research.spec.ts). The platform's cap is out of the suite's reach.
+[research]
+daily_usd_per_user = 0.16
+daily_usd = 1000.0
+
 # Every spec invites from a handful of accounts, so the limits on invitations
 # are far above what the suite sends.
 [invitations]

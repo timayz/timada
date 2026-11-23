@@ -10,7 +10,8 @@ pub mod seeds;
 
 use timada_core::page::{Cursor, PageFrom};
 use timada_research::{
-    FetchStatus, MAX_SEEDS, ResearchError, SeedState, StudyState, keywords_of_study,
+    Command, FetchStatus, MAX_SEEDS, ResearchError, SeedState, SpendCap, StudyState,
+    keywords_of_study, spend_day, spend_day_ends,
 };
 use topcoat::{
     Result,
@@ -22,6 +23,7 @@ use topcoat::{
 
 use super::research;
 use crate::auth::require_user;
+use crate::cluster::LocalReads;
 use crate::components::alert::{AlertVariant, alert, alert_description};
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::input::input;
@@ -31,8 +33,10 @@ use crate::components::pagination::{
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
+use crate::config::Config;
 use crate::db::Db;
 use crate::keywords::Keywords;
+use crate::research::{Spending, cap_reached, format_usd};
 use crate::ui::{
     Shell, Tone, document, empty_row, format_date, icons, notice, page_header, section_card,
     status_badge,
@@ -100,17 +104,27 @@ struct SeedLine {
     fetched: Option<String>,
     error: Option<String>,
     /// What the button that asks for its keywords says; none while they are
-    /// on their way.
+    /// on their way, or so recent that asking again would give them back.
     action: Option<&'static str>,
 }
 
 impl SeedLine {
-    fn of(seed: &SeedState, now: u64) -> Self {
+    /// `reuse_secs`: for how long a seed's keywords answer a new fetch of
+    /// it.
+    fn of(seed: &SeedState, now: u64, reuse_secs: u64) -> Self {
+        let fresh = seed
+            .fetched_at
+            .is_some_and(|at| now.saturating_sub(at) < reuse_secs);
         let (state, label, tone, action) = if seed.is_fetching(now) {
             ("fetching", "Fetching…", Tone::Info, None)
         } else {
             match seed.status {
-                FetchStatus::Fetched => ("fetched", "Fetched", Tone::Success, Some("Fetch again")),
+                FetchStatus::Fetched => (
+                    "fetched",
+                    "Fetched",
+                    Tone::Success,
+                    (!fresh).then_some("Fetch again"),
+                ),
                 FetchStatus::Failed => ("failed", "Failed", Tone::Danger, Some("Try again")),
                 FetchStatus::Never => ("never", "Not fetched", Tone::Neutral, Some("Fetch")),
                 // Asked for long ago and never answered: the node that took
@@ -140,7 +154,7 @@ fn figure(value: Option<i64>) -> String {
 
 #[page]
 pub async fn index(cx: &Cx) -> Result<impl View> {
-    let (study, _) = require_owned(cx).await?;
+    let (study, user_id) = require_owned(cx).await?;
     let query = query_params::<StudyQuery>(cx)?;
     let after = query.after.as_deref().and_then(Cursor::parse);
     let before = query.before.as_deref().and_then(Cursor::parse);
@@ -152,8 +166,48 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     )
     .await
     .map_err(topcoat::Error::from_anyhow)?;
-    let enabled = context::<Keywords>(cx).enabled();
+    let source = &context::<Keywords>(cx).0;
+    let enabled = source.is_some();
     let now = crate::auth::now();
+    let config = &context::<Config>(cx).research;
+    let spending = Spending::new(config);
+    // What the day's fetches cost the user so far, and the cap the next one
+    // would pass: read from this node's file, as the saga that decides
+    // reads it again through the cluster.
+    let (spent, capped) = match source {
+        Some(source) => {
+            let day = Command(context::<LocalReads>(cx).0.clone())
+                .load_spend_day(&spend_day(now))
+                .await
+                .map_err(topcoat::Error::from_anyhow)?;
+            let capped = day.refusal(spending.caps, &user_id, source.most_usd_micros(), now);
+            (Some(day.charged_to(&user_id)), capped)
+        }
+        None => (None, None),
+    };
+    let capped_text = capped.map(|cap| {
+        let reused = match config.reuse_days {
+            0 => String::new(),
+            1 => " A seed fetched in the last day is still answered.".to_owned(),
+            days => format!(" A seed fetched in the last {days} days is still answered."),
+        };
+        format!("{}{reused}", cap_reached(cap, spend_day_ends(now)))
+    });
+    let capped_by = capped.map(|cap| match cap {
+        SpendCap::User => "user",
+        SpendCap::Platform => "platform",
+    });
+    let spent_text = spent.map(|spent| {
+        format!(
+            "Your fetches cost {} today (UTC), of the {} a day may cost.",
+            format_usd(spent),
+            format_usd(spending.caps.user_usd_micros)
+        )
+    });
+    let seeds_description = match config.reuse_days {
+        0 => "Each seed is fetched with the keywords that contain its words, up to 1,000 of them. A fetch is one paid call to the keyword source, and replaces what an earlier fetch of the seed gave.".to_owned(),
+        days => format!("Each seed is fetched with the keywords that contain its words, up to 1,000 of them. A fetch is one paid call to the keyword source, unless the seed was fetched in the last {days} day{} for the same country and language, by you or anyone: its keywords are then those, at no cost.", if days == 1 { "" } else { "s" }),
+    };
     let id = study.id.clone();
     let page_link = |after: Option<&str>, before: Option<&str>| {
         href!(index, study_id: id.clone())
@@ -178,7 +232,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let seeds: Vec<SeedLine> = study
         .seeds
         .iter()
-        .map(|seed| SeedLine::of(seed, now))
+        .map(|seed| SeedLine::of(seed, now, spending.reuse_secs))
         .collect();
     let fetching = seeds.iter().any(|seed| seed.state == "fetching");
     let owed = study.seeds.iter().filter(|seed| seed.is_owed(now)).count();
@@ -213,6 +267,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     alert_description("Keyword research is not set up on this platform: the operator has to give it a keyword source before keywords can be fetched.")
                 )
             }
+            if let (Some(text), Some(by)) = (&capped_text, capped_by) {
+                alert(
+                    variant: AlertVariant::Warning,
+                    attrs: attributes! { role="alert" class="mb-4" data-spend-capped=(by) },
+                    icon(data: icons::WARNING)
+                    alert_description((text))
+                )
+            }
             if fetching {
                 alert(
                     variant: AlertVariant::Info,
@@ -227,7 +289,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             section_card(
                 title: Some("Seed keywords"),
-                description: Some("Each seed is fetched with the keywords that contain its words, up to 1,000 of them. A fetch is one paid call to the keyword source, and replaces what an earlier fetch of the seed gave."),
+                description: Some(&seeds_description),
                 table(
                     table_header(
                         table_row(
@@ -272,6 +334,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         }
                     )
                 )
+                if let (Some(text), Some(spent)) = (&spent_text, spent) {
+                    <p class="mt-3 text-sm text-muted-foreground" data-spent-today=(spent)>(text)</p>
+                }
                 <div class="mt-4 flex flex-wrap items-start justify-between gap-3">
                     if can_add {
                         <form method="post" action=(href!(seeds::add_seed, study_id: id.clone())) class="flex flex-wrap gap-2">

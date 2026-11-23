@@ -42,6 +42,15 @@ const PLACES_RETRY_AFTER: Duration = Duration::from_secs(60);
 /// language lists.
 const SOURCE: &str = "google";
 
+/// What a call and a keyword returned cost, in millionths of a US dollar, as
+/// read on 2026-11-18. Only the bound on a call not made yet is reckoned
+/// from them; what a call did cost is read from its answer.
+const CALL_USD_MICROS: u64 = 12_000;
+const ROW_USD_MICROS: u64 = 120;
+
+/// The most one call may cost: 0.132 USD, for the thousand it may return.
+pub const MOST_USD_MICROS: u64 = CALL_USD_MICROS + ROW_USD_MICROS * MAX_ROWS as u64;
+
 const OK: u32 = 20000;
 /// "No search results": an answer, with no rows.
 const NO_RESULTS: u32 = 40102;
@@ -175,6 +184,10 @@ impl KeywordSource for DataforseoClient {
             rows: rows(answer.result),
             cost_usd_micros: answer.cost_usd_micros,
         })
+    }
+
+    fn most_usd_micros(&self) -> u64 {
+        MOST_USD_MICROS
     }
 
     async fn places(&self) -> Result<Vec<Place>, KeywordError> {

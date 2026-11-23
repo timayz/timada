@@ -48,8 +48,10 @@ most searched first.
 | a keyword returned | 0.00012 USD |
 | a call that returns 1,000 | about 0.13 USD |
 
-Prices read on 2026-11-18. The code does not reckon them: it reads the `cost` field of
-each answer and returns it with the rows, in millionths of a dollar, for a cap to count.
+Prices read on 2026-11-18. The code does not reckon what a call cost: it reads the
+`cost` field of each answer and returns it with the rows, in millionths of a dollar,
+which is what the caps count. The prices are only used for the most a call not made
+yet may cost (0.132 USD), the room a cap keeps for it; see *What a day may cost*.
 
 The cost per click is in US dollars whatever the country. A figure DataForSEO has
 nothing for stays empty; it is never shown as zero.
@@ -78,7 +80,47 @@ shows "No answer" after ten minutes and can be asked again too; the rows of that
 call, if it was made, are lost.
 
 What each study spent is kept on it (`cost_usd_micros`, summed from its fetches).
-Nothing bounds it yet: the caps per user and for the platform are #678.
+
+## What a day may cost
+
+Every call is paid by the platform's account, whoever asks. `[research]` bounds it:
+
+```toml
+[research]
+daily_usd_per_user = 1.0   # one user's calls, a day
+daily_usd = 10.0           # every user's calls together, a day
+reuse_days = 30            # a seed's keywords answer the next fetch of it
+```
+
+**A seed is paid for once.** A fetch first looks for a paid fetch of the same seed,
+country and language made within `reuse_days`, in any study, by the same user or
+another, deleted since or not. When there is one its rows are recorded on the study
+that asks, with the day they were fetched, and nothing is paid or counted. So a seed
+fetched within that time has no *Fetch again* button. `reuse_days = 0` pays for every
+fetch. Two users who ask for a new seed in the same second may both pay for it: the
+second does not know of the first yet.
+
+**The caps.** A day runs from midnight to midnight UTC. Before a call is made, room is
+held for it at the most it may cost (0.132 USD); a call that no longer fits under the
+user's cap or the platform's is not made, and the seed fails saying which cap was
+reached and when it frees. Once the source answered, what it says the call cost takes
+the place of what was held. Three things follow:
+
+- a cap is never passed, on one node or on several: the day's spending is one stream
+  (`SpendDay`, id `2026-11-23`), every node writes it against the version it read, and
+  two nodes cannot both take the last room;
+- the last calls before a cap are refused while a little of it is left (less than
+  0.132 USD), and a cap under 0.132 lets no call through;
+- a call the source failed costs nothing and gives its room back. A node that stopped
+  between holding room and charging keeps it held for ten minutes.
+
+The study's page shows what the user's fetches cost today beside their cap, and a
+warning once the next call would be refused. A day holds room for 20,000 calls at
+most, whatever the caps: past it the platform's cap reads as reached.
+
+**What was spent.** *Research spend*, under *Platform* for administrators
+(`/admin/research`), lists the day's and the month's spend by user, with the number of
+calls, beside the caps. It reads a table kept from the charges, a moment behind them.
 
 ## When a call fails
 

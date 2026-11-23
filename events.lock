@@ -373,12 +373,16 @@ event timada-pages/Translation::Dropped { dropped_by: String }
 event timada-pages/Translation::SeoSet { meta_title: String, meta_description: String, set_by: String }
 event timada-pages/Translation::Written { kind: String, subject_id: String, language: String, title: String, slug: String, summary: String, body: String, written_by: String }
 event timada-pages/TranslationSlug::Claimed { subject_id: String, version: u16 }
+event timada-research/SpendDay::Charged { hold: String, user_id: String, study_id: String, seed: String, cost_usd_micros: u64, charged_by: String }
+event timada-research/SpendDay::Held { hold: String, user_id: String, study_id: String, seed: String, most_usd_micros: u64, held_by: String }
+event timada-research/SpendDay::Released { hold: String, released_by: String }
 event timada-research/Study::Created { name: String, country: String, language: String, created_by: String }
 event timada-research/Study::Deleted { deleted_by: String }
 event timada-research/Study::FetchFailed { seed: String, reason: String, failed_by: String }
 event timada-research/Study::FetchRequested { seed: String, requested_by: String }
 event timada-research/Study::FetchStarted { seed: String, started_by: String }
 event timada-research/Study::KeywordsFetched { seed: String, rows: Vec<KeywordRow>, cost_usd_micros: u64, fetched_by: String }
+event timada-research/Study::KeywordsReused { seed: String, rows: Vec<KeywordRow>, from_study: String, fetched_at: u64, reused_by: String }
 event timada-research/Study::Renamed { name: String, renamed_by: String }
 event timada-research/Study::SeedAdded { seed: String, added_by: String }
 event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }

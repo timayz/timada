@@ -3,6 +3,7 @@
 pub mod cluster;
 pub mod companies;
 pub mod invitations;
+pub mod research;
 pub mod tenants;
 pub mod users;
 

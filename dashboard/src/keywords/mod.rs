@@ -136,6 +136,11 @@ pub trait KeywordSource: Send + Sync {
         language: &str,
     ) -> Result<Suggestions, KeywordError>;
 
+    /// The most one call of [`suggestions`](Self::suggestions) may cost, in
+    /// millionths of a US dollar: the room a cap keeps for a call before it
+    /// is made. What a call did cost is the answer's to say.
+    fn most_usd_micros(&self) -> u64;
+
     /// The countries the source has keywords for, by name, each with its
     /// languages: what a form may offer. Free, and kept between calls.
     async fn places(&self) -> Result<Vec<Place>, KeywordError>;
