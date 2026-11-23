@@ -62,6 +62,20 @@ pub const MAX_MARKS: usize = 2_000;
 /// holds 65,535 events.
 pub const MAX_MARK_EVENTS: u16 = 60_000;
 
+/// How many categories a study's tree holds at most, parents and children
+/// together.
+pub const MAX_TREE_CATEGORIES: usize = 200;
+
+/// How many keywords a study parks at most.
+pub const MAX_PARKED: usize = 500;
+
+/// How many parent categories a tree usually has at most: past it, the page
+/// says so.
+pub const USUAL_PARENTS: usize = 6;
+
+/// How many words a study names its niche by at most.
+pub const MAX_NICHE_WORDS: usize = 10;
+
 /// How long a fetch may run before the owner may ask again: a node that
 /// took it on and stopped leaves it there.
 pub const FETCH_STALE_SECS: u64 = 10 * 60;

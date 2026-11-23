@@ -16,6 +16,7 @@ pub mod mark;
 pub mod rename;
 pub mod restore;
 pub mod seeds;
+pub mod tree;
 
 use timada_core::page::{Cursor, PageFrom};
 use timada_research::{
@@ -847,6 +848,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         1 => "1 keyword".to_owned(),
         n => format!("{n} keywords"),
     };
+    let tree_size = study.tree.categories.len();
+    let tree_text = match tree_size {
+        0 => "No category yet: the kept keywords are what a shop's categories are named after."
+            .to_owned(),
+        1 => "1 category built from the kept keywords.".to_owned(),
+        n => format!("{n} categories built from the kept keywords."),
+    };
     let title = format!("{} · Research", study.name);
     let place = format!("Searched in {} · {}", study.country, study.language);
 
@@ -1228,6 +1236,17 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <a class=(LINK) href=(href!(export::export, study_id: id.clone())) data-study-export="">"Export the keywords with their score (CSV)"</a>
                     </p>
                 }
+            )
+
+            section_card(
+                title: Some("Categories"),
+                description: Some("The tree of a shop to come, built by hand from the kept keywords: parent categories, their children, and the keywords parked for later."),
+                attrs: attributes! { id="categories" data-study-categories=(tree_size) },
+                <p class="px-6 text-sm">
+                    <span class="text-muted-foreground">(&tree_text)</span>
+                    " "
+                    <a class=(LINK) href=(href!(tree::index, study_id: id.clone())) data-study-tree="">"Build the category tree"</a>
+                </p>
             )
 
             section_card(

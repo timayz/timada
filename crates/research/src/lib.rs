@@ -19,10 +19,12 @@ mod command;
 mod error;
 mod query;
 mod score;
+mod tree;
 mod value_object;
 
 pub use command::*;
 pub use error::*;
 pub use query::*;
 pub use score::*;
+pub use tree::*;
 pub use value_object::*;

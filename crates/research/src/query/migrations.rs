@@ -22,6 +22,8 @@ pub const MIGRATION_APP: &str = "research";
 /// worked out again from the two whenever one changes; a study's row keeps
 /// where the competition test stands, and `base_verdict` what its other
 /// tests say.
+/// `research_keywords_keyword` finds the rows of one keyword, for a study's
+/// category tree.
 /// `research_fetches`: the last paid fetch of a seed in a country and a
 /// language, over every study: where a new fetch of it looks first.
 /// `research_spend`: what a user's calls cost on a day (UTC); `version` is
@@ -129,6 +131,10 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         ALTER TABLE research_studies ADD COLUMN competition TEXT NOT NULL DEFAULT 'not_checked';
         ALTER TABLE research_studies ADD COLUMN searched_count INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE research_studies ADD COLUMN owed_count INTEGER NOT NULL DEFAULT 0;",
+        ),
+        Migration::up(
+            "0005_tree",
+            "CREATE INDEX research_keywords_keyword ON research_keywords (study_id, keyword);",
         ),
     ],
 );

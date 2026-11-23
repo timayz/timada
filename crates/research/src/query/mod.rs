@@ -8,6 +8,8 @@
 //! stream, never these. `research_checks` keeps the first results of each
 //! keyword searched, `research_domain_marks` what each user said of a site,
 //! and `research_domains` what the two come to for a study's main keywords.
+//! A study's category tree is its stream's; the figures of the keywords it
+//! is made of are looked up in `research_keywords`.
 
 mod competition;
 mod keywords;
@@ -15,6 +17,7 @@ mod migrations;
 mod read_model;
 mod spend;
 mod studies;
+mod tree;
 
 pub use competition::*;
 pub use keywords::*;
@@ -22,6 +25,7 @@ pub use migrations::*;
 pub use read_model::*;
 pub use spend::*;
 pub use studies::*;
+pub use tree::*;
 
 #[cfg(test)]
 mod tests {
@@ -118,6 +122,16 @@ mod tests {
                 "{plan:#?}"
             );
         }
+        let figures = plan(&db, &super::tree::figures_statement(2), ("study", "a", "b")).await;
+        assert!(
+            figures.iter().all(|step| !step.starts_with("SCAN")
+                && (!step.starts_with("SEARCH") || step.contains("research_keywords_keyword"))),
+            "{figures:#?}"
+        );
+        assert!(
+            figures.iter().any(|step| step.starts_with("SEARCH")),
+            "{figures:#?}"
+        );
         let plan = plan(
             &db,
             &super::studies::studies_of_user_statement(),

@@ -540,6 +540,17 @@ pub fn describe_error(code: &str) -> &'static str {
         }
         "invalid_domain" => "A site is named by its domain, like example.com.",
         "too_many_marks" => "At most 2,000 sites are marked: no more can be.",
+        "unknown_parent_category" => {
+            "A category goes under one of the tree's parent categories, and a child holds none."
+        }
+        "tree_category_has_children" => {
+            "This category has children: move them or take them out first."
+        }
+        "too_many_tree_categories" => "A tree holds at most 200 categories.",
+        "too_many_parked_keywords" => "At most 500 keywords are parked.",
+        "keyword_not_in_tree" => "This keyword is not in the tree.",
+        "keyword_not_kept" => "Only a keyword the study keeps makes a category.",
+        "too_many_niche_words" => "A niche is named by at most 10 words.",
         "keywords_disabled" => {
             "Keyword research is not set up on this platform: the operator has to give it a keyword source."
         }

@@ -1,8 +1,8 @@
 use evento::WriteError;
 
 use crate::value_object::{
-    MAX_CHECKED_KEYWORDS, MAX_HAND_SET, MAX_LISTED_WORDS, MAX_MARKS, MAX_NAME_LEN, MAX_SEED_LEN,
-    MAX_SEEDS, MAX_WORD_LEN,
+    MAX_CHECKED_KEYWORDS, MAX_HAND_SET, MAX_LISTED_WORDS, MAX_MARKS, MAX_NAME_LEN, MAX_NICHE_WORDS,
+    MAX_PARKED, MAX_SEED_LEN, MAX_SEEDS, MAX_TREE_CATEGORIES, MAX_WORD_LEN,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -55,6 +55,18 @@ pub enum ResearchError {
     InvalidDomain,
     #[error("at most {MAX_MARKS} sites are marked: no more can be")]
     TooManyMarks,
+    #[error("a category goes under one of the tree's parent categories")]
+    UnknownParent,
+    #[error("this category has children: move them or take them out first")]
+    CategoryHasChildren,
+    #[error("a tree holds at most {MAX_TREE_CATEGORIES} categories")]
+    TooManyCategories,
+    #[error("at most {MAX_PARKED} keywords are parked")]
+    TooManyParked,
+    #[error("this keyword is not in the tree")]
+    NotInTree,
+    #[error("a niche is named by at most {MAX_NICHE_WORDS} words")]
+    TooManyNicheWords,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -108,6 +120,12 @@ impl ResearchError {
             Self::NothingToCheck => "nothing_to_check",
             Self::InvalidDomain => "invalid_domain",
             Self::TooManyMarks => "too_many_marks",
+            Self::UnknownParent => "unknown_parent_category",
+            Self::CategoryHasChildren => "tree_category_has_children",
+            Self::TooManyCategories => "too_many_tree_categories",
+            Self::TooManyParked => "too_many_parked_keywords",
+            Self::NotInTree => "keyword_not_in_tree",
+            Self::TooManyNicheWords => "too_many_niche_words",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })
