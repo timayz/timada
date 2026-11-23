@@ -41,7 +41,7 @@ use crate::components::sidebar::{
 };
 
 /// What the rail highlights: the key of the page being shown (one of the
-/// [`SECTIONS`] keys on a tenant page, `"dashboard"`, `"companies"`,
+/// [`SECTIONS`] keys on a tenant page, `"dashboard"`, `"companies"`, `"research"`,
 /// `"account"`, `"admin_tenants"`, `"admin_users"`, `"admin_companies"`,
 /// `"admin_cluster"`, or
 /// `""` for a page under none of them), and the tenant whose sections to
@@ -451,6 +451,7 @@ async fn rail_groups(cx: &Cx, user: Option<&UserState>, shell: Shell<'_>) -> Res
                     sidebar_menu(
                         nav_item(href: href!(crate::app::home).resolve(cx), label: "Dashboard", symbol: icons::DASHBOARD, active: current == "dashboard")
                         nav_item(href: href!(crate::app::companies::index).resolve(cx), label: "Companies", symbol: icons::COMPANIES, active: current == "companies")
+                        nav_item(href: href!(crate::app::research::index).resolve(cx), label: "Research", symbol: icons::RESEARCH, active: current == "research")
                         nav_item(href: href!(crate::app::auth::account::account).resolve(cx), label: "Account", symbol: icons::ACCOUNT, active: current == "account")
                     )
                 )

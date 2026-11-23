@@ -57,6 +57,29 @@ nothing for stays empty; it is never shown as zero.
 The list of countries is read once a day and kept in memory. A country or a language
 that is not on it is refused without a call.
 
+## Studies
+
+A signed-in user keeps the keywords of a candidate niche in a **study**, under
+*Research* in the workspace: a name, up to 20 seed keywords, and the country and
+language they are searched in, picked from the list above. A study is its owner's
+only.
+
+Nothing is fetched when a study is started. On its page the owner asks for the
+keywords of one seed or of every seed that still wants its own; each seed is one
+call, made in the background within a few seconds, and the page shows the fetch on
+its way, then its rows. A seed can be fetched again later: its new rows replace its
+earlier ones. The keywords read back per study, the most searched first, each with its
+volume, cost per click, difficulty, intent, the seed it came from and the day it was
+fetched.
+
+A fetch that fails says why on the seed: a refusal in DataForSEO's words, or that the
+source did not answer. The owner asks again. A fetch whose node stopped in the middle
+shows "No answer" after ten minutes and can be asked again too; the rows of that one
+call, if it was made, are lost.
+
+What each study spent is kept on it (`cost_usd_micros`, summed from its fetches).
+Nothing bounds it yet: the caps per user and for the platform are #678.
+
 ## When a call fails
 
 A failure is one of two kinds, and what asks decides what to do with each:

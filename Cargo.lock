@@ -7956,6 +7956,7 @@ dependencies = [
  "timada-newsletter",
  "timada-orders",
  "timada-pages",
+ "timada-research",
  "timada-reviews",
  "timada-shoppers",
  "timada-storefront",
@@ -8096,6 +8097,19 @@ dependencies = [
  "bitcode",
  "evento",
  "pulldown-cmark",
+ "thiserror 2.0.21",
+ "timada-core",
+ "tokio",
+ "ulid",
+]
+
+[[package]]
+name = "timada-research"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
  "thiserror 2.0.21",
  "timada-core",
  "tokio",

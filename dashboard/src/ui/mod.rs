@@ -513,6 +513,21 @@ pub fn describe_error(code: &str) -> &'static str {
             "Fill in the legal name, form, address and e-mail, each within its length."
         }
         "invalid_share_capital" => "Enter the share capital in euros, like 1000 or 1000.50.",
+        "invalid_study_name" => "A study's name is 1 to 80 characters.",
+        "invalid_seed" => "A seed keyword is 1 to 80 characters.",
+        "study_without_seed" => "A study starts from one seed keyword at least, one a line.",
+        "too_many_seeds" => "A study holds at most 20 seed keywords.",
+        "invalid_study_place" => "Pick the country and the language from the list.",
+        "study_not_found" => "This study does not exist.",
+        "unknown_seed" => "The study has no such seed keyword.",
+        "keywords_fetching" => "These keywords are being fetched: look again in a moment.",
+        "nothing_to_fetch" => "Every seed keyword has its keywords, or is being fetched.",
+        "keywords_disabled" => {
+            "Keyword research is not set up on this platform: the operator has to give it a keyword source."
+        }
+        "keyword_places_unavailable" => {
+            "The keyword source could not say which countries it covers. Try again in a moment."
+        }
         "invalid_review_reason" => "A reason is at most 300 characters.",
         "invalid_review_reply" => "Write a reply of at most 1000 characters.",
         "review_not_found" => "This review does not exist.",

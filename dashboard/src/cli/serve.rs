@@ -57,7 +57,10 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
             "secrets.key is not set: no shopper can create an account and no contact message can be received"
         );
     }
-    if config.dataforseo.credentials().is_none() {
+    // Where the studies' keywords come from, for the pages and the saga
+    // that fetches them.
+    let keywords = crate::keywords::Keywords::new(&config.dataforseo);
+    if !keywords.enabled() {
         tracing::info!("dataforseo.login is not set: keyword research is off");
     }
     let keys = Arc::new(crate::key_vault::KeyVault::new(
@@ -213,6 +216,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         keys: keys.clone(),
         payments: payments.clone(),
         aliexpress: aliexpress.clone(),
+        keywords: keywords.clone(),
         place: place.clone(),
         vies: Arc::new(crate::vies::ViesClient::new(
             config.invoicing.vies_url.clone(),
@@ -516,6 +520,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         payments,
         shop_mail,
         aliexpress,
+        keywords,
         store: connections,
         workers: workers.clone(),
         checkouts,
@@ -586,6 +591,8 @@ pub struct Deps {
     pub keys: Arc<crate::key_vault::KeyVault>,
     pub payments: Arc<crate::payments::Payments>,
     pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
+    /// Where the studies' keywords are fetched from.
+    pub keywords: crate::keywords::Keywords,
     /// This node's place among the nodes up: which of the work a saga is
     /// told about falls to it.
     pub place: cluster::ShareOf,
@@ -771,6 +778,14 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
             d.store.clone(),
         )
     }),
+    ("research", Kind::ReadModel, |d| {
+        timada_research::read_model_subscription(d.db.clone())
+    }),
+    // The keywords a study's owner asked for are fetched from the keyword
+    // source and recorded on the study.
+    ("keyword fetches", Kind::Sharded, |d| {
+        crate::research::subscription(d.keywords.clone(), d.store.clone())
+    }),
     ("pictures", Kind::ReadModel, |d| {
         crate::media::subscription(d.fetcher.clone())
     }),
@@ -950,6 +965,7 @@ mod tests {
                 "pages",
                 "invoicing",
                 "AliExpress",
+                "research",
                 "mail logos",
                 "pictures",
             ]

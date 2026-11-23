@@ -373,6 +373,14 @@ event timada-pages/Translation::Dropped { dropped_by: String }
 event timada-pages/Translation::SeoSet { meta_title: String, meta_description: String, set_by: String }
 event timada-pages/Translation::Written { kind: String, subject_id: String, language: String, title: String, slug: String, summary: String, body: String, written_by: String }
 event timada-pages/TranslationSlug::Claimed { subject_id: String, version: u16 }
+event timada-research/Study::Created { name: String, country: String, language: String, created_by: String }
+event timada-research/Study::Deleted { deleted_by: String }
+event timada-research/Study::FetchFailed { seed: String, reason: String, failed_by: String }
+event timada-research/Study::FetchRequested { seed: String, requested_by: String }
+event timada-research/Study::FetchStarted { seed: String, started_by: String }
+event timada-research/Study::KeywordsFetched { seed: String, rows: Vec<KeywordRow>, cost_usd_micros: u64, fetched_by: String }
+event timada-research/Study::Renamed { name: String, renamed_by: String }
+event timada-research/Study::SeedAdded { seed: String, added_by: String }
 event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }
 event timada-reviews/Review::Published { published_by: String }
 event timada-reviews/Review::Rejected { reason: String, rejected_by: String }
@@ -504,6 +512,7 @@ type timada_orders::value_object::OrderLine { product_id: String, variant_id: Op
 type timada_orders::value_object::OrderSource { first: Click, last: Click }
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String, capture_before: Option<u64> }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, region: Option<String>, country: String, phone: Option<String> }
+type timada_research::aggregator::KeywordRow { keyword: String, volume: Option<u64>, cpc_usd_cents: Option<u64>, difficulty: Option<u8>, intent: Option<String> }
 type timada_reviews::value_object::ReviewPhoto { id: String, picture: timada_core::Picture }
 type timada_shoppers::value_object::NewsletterSubscription { subscriber_id: String, key_id: String }
 type timada_tenancy::command::MailLogo { id: String, picture: timada_core::Picture }
