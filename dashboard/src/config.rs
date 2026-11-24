@@ -1078,6 +1078,18 @@ pub struct GoogleConfig {
     /// The daily reads stop at four fifths of it, so the pages keep some.
     #[serde(default = "default_google_ads_calls_a_day")]
     pub ads_calls_a_day: u32,
+    /// Where Merchant Center is read.
+    #[serde(default)]
+    pub merchant_url: Option<String>,
+    /// How often, in seconds, a node looks for the shops whose daily read
+    /// of Merchant Center is due.
+    #[serde(default = "default_google_search_check_secs")]
+    pub merchant_check_secs: u64,
+    /// How long after a read of Merchant Center, in seconds, a member who
+    /// asks for another is turned down: each read takes its questions from
+    /// the account's daily allowance at Google.
+    #[serde(default = "default_google_search_check_secs")]
+    pub merchant_ask_again_secs: u64,
 }
 
 impl Default for GoogleConfig {
@@ -1093,6 +1105,9 @@ impl Default for GoogleConfig {
             ads_url: None,
             ads_check_secs: default_google_search_check_secs(),
             ads_calls_a_day: default_google_ads_calls_a_day(),
+            merchant_url: None,
+            merchant_check_secs: default_google_search_check_secs(),
+            merchant_ask_again_secs: default_google_search_check_secs(),
         }
     }
 }

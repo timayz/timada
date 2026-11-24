@@ -112,6 +112,10 @@ ads_url = "http://127.0.0.1:12117/ads/v26"
 # Ads account.
 search_check_secs = 1
 ads_check_secs = 1
+merchant_url = "http://127.0.0.1:12117/merchant"
+merchant_check_secs = 1
+# A member may ask for another read at once.
+merchant_ask_again_secs = 0
 
 # Texts are drafted by a stand-in for the model (tests/e2e/writer.ts), which
 # counts every call at 1,500 tokens read and 900 written: 0.024 USD at these

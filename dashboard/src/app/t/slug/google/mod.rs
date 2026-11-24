@@ -1,7 +1,7 @@
 //! `/t/{slug}/google`: the Google account the shop is connected to, for
 //! members with `pages:read`; those with `pages:manage` connect it, choose
-//! the shop's Search Console site and its Google Ads account, and take the
-//! connection off. One
+//! the shop's Search Console site, its Google Ads account and its Merchant
+//! Center account, and take the connection off. One
 //! connection serves everything the shop reads from Google, so there is one
 //! place to say yes and one "connect again". Read from the connection's own
 //! stream, so a change shows at once; the sites and the accounts to choose
@@ -11,11 +11,12 @@ pub mod ads_account;
 pub mod connect;
 pub mod disconnect;
 pub mod finish;
+pub mod merchant_account;
 pub mod site;
 
 use timada_google::{
     ACCESS_ADS, ACCESS_MERCHANT_CENTER, ACCESS_SEARCH_CONSOLE, AdsAccount, Command,
-    ConnectionState, GoogleError,
+    ConnectionState, GoogleError, MerchantAccount,
 };
 use timada_tenancy::{PERMISSION_PAGES_MANAGE, PERMISSION_PAGES_READ};
 use topcoat::{
@@ -51,6 +52,9 @@ struct GoogleLink<'a> {
     /// already.
     #[serde(skip_serializing_if = "Option::is_none")]
     ads: Option<&'a str>,
+    /// The same for the Merchant Center accounts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    merchant: Option<&'a str>,
 }
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -59,6 +63,7 @@ struct GoogleQuery {
     message: Option<String>,
     sites: Option<String>,
     ads: Option<String>,
+    merchant: Option<String>,
 }
 
 /// The page, with a flash error code or message.
@@ -107,8 +112,25 @@ fn access_hint(access: &str) -> &'static str {
         ACCESS_ADS => {
             "What your campaigns cost and brought, read once a day: cost, clicks and conversions by campaign, product and search. Nothing is changed in Google Ads."
         }
+        ACCESS_MERCHANT_CENTER => {
+            "Whether Google accepts your products for Shopping ads and the free listings, and why not, read once a day. Nothing is changed in Merchant Center."
+        }
         _ => "",
     }
+}
+
+/// The Merchant Center accounts the shop's grant reaches, asked of Google
+/// under the connection's grant.
+pub async fn merchant_accounts_of(
+    cx: &Cx,
+    service: &Google,
+    connection: &ConnectionState,
+) -> std::result::Result<Vec<MerchantAccount>, GoogleFault> {
+    service
+        .read(context::<Executor>(cx), connection, |access| async move {
+            service.merchant_accounts(&access).await
+        })
+        .await
 }
 
 /// A Google Ads account's number as the pages of Google Ads write it:
@@ -212,10 +234,25 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             Err(fault) => ads_fault = Some(fault),
         }
     }
+    // And for the Merchant Center accounts.
+    let choosing_merchant = connection.as_ref().is_some_and(|connection| {
+        can_manage
+            && connection.reads(ACCESS_MERCHANT_CENTER)
+            && (connection.merchant.is_none() || query.merchant.is_some())
+    });
+    let mut merchant_fault = None;
+    let mut merchant_found = Vec::new();
+    if let Some(connection) = connection.as_ref().filter(|_| choosing_merchant) {
+        match merchant_accounts_of(cx, service, connection).await {
+            Ok(found) => merchant_found = found,
+            Err(fault) => merchant_fault = Some(fault),
+        }
+    }
     // Met while listing the sites or the accounts: the page says so at once.
     let lapsed = connection.as_ref().is_some_and(|c| c.lapsed)
         || sites_fault == Some(GoogleFault::ConnectAgain)
-        || ads_fault == Some(GoogleFault::ConnectAgain);
+        || ads_fault == Some(GoogleFault::ConnectAgain)
+        || merchant_fault == Some(GoogleFault::ConnectAgain);
     let address = if choosing {
         timada_orders::Command::new(access.executor()?.clone(), access.tenant_id())
             .storefront_address()
@@ -276,6 +313,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             message: None,
             sites: Some("1"),
             ads: None,
+            merchant: None,
         })
         .resolve(cx);
     let covers_ads = connection.as_ref().is_some_and(|c| c.covers(ACCESS_ADS));
@@ -308,6 +346,41 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             message: None,
             sites: None,
             ads: Some("1"),
+            merchant: None,
+        })
+        .resolve(cx);
+    let covers_merchant = connection
+        .as_ref()
+        .is_some_and(|c| c.covers(ACCESS_MERCHANT_CENTER));
+    let merchant = connection.as_ref().and_then(|c| c.merchant.clone());
+    // `(number, name, chosen)`.
+    let merchant_choices: Vec<(String, String, bool)> = merchant_found
+        .iter()
+        .map(|found| {
+            (
+                found.account_id.clone(),
+                found.name.clone(),
+                merchant
+                    .as_ref()
+                    .is_some_and(|chosen| chosen.account_id == found.account_id),
+            )
+        })
+        .collect();
+    // A project Google does not know for Merchant Center says so in
+    // Google's words: it is the operator's to put right.
+    let merchant_fault = merchant_fault
+        .filter(|fault| *fault != GoogleFault::ConnectAgain)
+        .map(|fault| match fault {
+            GoogleFault::Refused(said) => format!("Google refused: {said}"),
+            fault => crate::ui::describe_error(fault_code(&fault)).to_owned(),
+        });
+    let change_merchant = href!(index, slug: slug.clone())
+        .query(GoogleLink {
+            error: None,
+            message: None,
+            sites: None,
+            ads: None,
+            merchant: Some("1"),
         })
         .resolve(cx);
 
@@ -464,12 +537,53 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                     </label>
                                 }
                             </fieldset>
-                            <div>button(attrs: attributes! { type="submit" }, "Save the account")</div>
+                            <div>button(attrs: attributes! { type="submit" }, "Save the Google Ads account")</div>
                         </form>
                     } else if choosing_ads && ads_fault.is_none() {
                         <p class="text-sm text-muted-foreground" data-google-no-ads="">"This Google account reaches no Google Ads account ads can run in. Open one in Google Ads, or connect the Google account that manages the shop's."</p>
                     } else if can_manage && ads.is_some() {
-                        <a href=(change_ads) class=(LINK)>"Change the account"</a>
+                        <a href=(change_ads) class=(LINK)>"Change the Google Ads account"</a>
+                    }
+                )
+            }
+
+            if covers_merchant && !lapsed {
+                section_card(
+                    title: Some("Merchant Center account"),
+                    if let Some(merchant) = &merchant {
+                        <div class="mb-4">
+                            facts(
+                                fact(term: "Account", attrs: attributes! { data-google-merchant=(&merchant.account_id) }, (&merchant.account_id) if !merchant.name.is_empty() { " · " (&merchant.name) })
+                            )
+                        </div>
+                    } else {
+                        <p class="mb-4 text-sm text-muted-foreground" data-google-merchant-missing="">"No account chosen yet: say which Merchant Center account takes this shop's feed, and where its products stand is read from the next pass on."</p>
+                    }
+                    if let Some(fault) = &merchant_fault {
+                        alert(
+                            variant: AlertVariant::Warning,
+                            attrs: attributes! { role="alert" class="mb-4" data-google-merchant-fault="" },
+                            alert_description((fault))
+                        )
+                    }
+                    if choosing_merchant && !merchant_choices.is_empty() {
+                        <form method="post" action=(href!(merchant_account::merchant_account, slug: slug.clone())) class="flex max-w-2xl flex-col gap-3">
+                            <fieldset class="flex flex-col gap-2">
+                                <legend class="mb-2 text-sm font-medium">"The Merchant Center accounts this Google account reaches"</legend>
+                                for (id, name, chosen) in &merchant_choices {
+                                    <label class="flex items-center gap-2 text-sm">
+                                        <input type="radio" name="account_id" value=(id) checked=(*chosen) required="" class="accent-primary">
+                                        <code>(id)</code>
+                                        (name)
+                                    </label>
+                                }
+                            </fieldset>
+                            <div>button(attrs: attributes! { type="submit" }, "Save the Merchant Center account")</div>
+                        </form>
+                    } else if choosing_merchant && merchant_fault.is_none() {
+                        <p class="text-sm text-muted-foreground" data-google-no-merchant="">"This Google account reaches no Merchant Center account. Open one in Merchant Center, or connect the Google account that manages the shop's."</p>
+                    } else if can_manage && merchant.is_some() {
+                        <a href=(change_merchant) class=(LINK)>"Change the Merchant Center account"</a>
                     }
                 )
             }

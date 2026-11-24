@@ -52,7 +52,7 @@ test("a shop chooses its Google Ads account and reads what its ads cost and brou
     await expect(accounts.getByRole("radio")).toHaveCount(2);
     await expect(accounts.getByText("through a manager account")).toHaveCount(1);
     await accounts.getByRole("radio", { name: /111-111-1111/ }).check();
-    await page.getByRole("button", { name: "Save the account" }).click();
+    await page.getByRole("button", { name: "Save the Google Ads account" }).click();
     await expect(page.getByRole("status")).toContainText("Google Ads account saved.");
     await expect(page.locator("[data-google-ads]")).toHaveAttribute("data-google-ads", "1111111111");
     await expect(page.locator("[data-google-ads]")).toContainText("111-111-1111 · Acme");
@@ -159,7 +159,7 @@ test("a read Google Ads does not answer says why and when it is tried again", as
     await page.getByRole("button", { name: "Connect a Google account" }).click();
     await expect(page.getByRole("status")).toContainText("Google account connected.");
     await page.getByRole("radio", { name: /111-111-1111/ }).check();
-    await page.getByRole("button", { name: "Save the account" }).click();
+    await page.getByRole("button", { name: "Save the Google Ads account" }).click();
     await expect(page.getByRole("status")).toContainText("Google Ads account saved.");
 
     await page.goto(`/t/${shop.slug}/ads`);

@@ -119,6 +119,7 @@ impl StandIn {
                 userinfo_url: Some(format!("{}/v1/userinfo", self.url)),
                 search_console_url: Some(format!("{}/webmasters/v3", self.url)),
                 ads_url: Some(format!("{}/ads/v26", self.url)),
+                merchant_url: Some(format!("{}/merchant", self.url)),
                 ..GoogleConfig::default()
             },
         )
@@ -150,10 +151,7 @@ pub(crate) async fn connected(
             Connect {
                 refresh_token_sealed: google.seal(tenant_id, refresh_token).unwrap(),
                 account: "alice@example.com".into(),
-                accesses: vec![
-                    ACCESS_SEARCH_CONSOLE.into(),
-                    timada_google::ACCESS_ADS.into(),
-                ],
+                accesses: timada_google::ACCESSES.map(str::to_owned).to_vec(),
             },
         )
         .await

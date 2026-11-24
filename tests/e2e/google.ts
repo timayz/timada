@@ -10,7 +10,11 @@ import { standInPort } from "./shard";
 // `searchFails` makes those answer the way Google's own failure
 // does. Google Ads answers too: the accounts the grant reaches
 // (`adsAccounts`) and, for one, its four reports over the days in
-// `adsDays` (`ADS_*` say what each day holds), until `adsFails`. `refuse` makes the
+// `adsDays` (`ADS_*` say what each day holds), until `adsFails`. Merchant
+// Center lists its accounts (`merchantAccounts`), an account's products
+// (`merchantProducts`) and what is held against it (`merchantIssues`);
+// `merchantUnregistered` answers the way a Cloud project Google does not
+// know for Merchant Center is answered. `refuse` makes the
 // account say no, `withdraw()` ends every grant given so far the way an
 // account does from its own settings, and `grants` leaves boxes unticked.
 // config/e2e.toml points the dashboard at it, and scripts/e2e.sh each next
@@ -24,6 +28,17 @@ export const GOOGLE_CLIENT_SECRET = "google-e2e-s3cret";
 
 export const SEARCH_CONSOLE_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly";
 export const ADS_SCOPE = "https://www.googleapis.com/auth/adwords";
+export const MERCHANT_SCOPE = "https://www.googleapis.com/auth/content";
+
+/// A product as Merchant Center has it: where it stands for Shopping ads
+/// and for the free listings (`approved`, `pending` or `disapproved`), and
+/// what Google holds against it.
+export type MerchantProduct = {
+  offerId: string;
+  ads?: "approved" | "pending" | "disapproved";
+  listings?: "approved" | "pending" | "disapproved";
+  issues?: { code: string; attribute?: string; description: string; detail?: string }[];
+};
 
 /// A Google Ads account the grant reaches; `manager` is the manager account
 /// it is reached through.
@@ -106,6 +121,16 @@ export class FakeGoogle {
   adsFails = false;
   /// The reports asked of Google Ads: which, of which account, over which days.
   readonly adsQuestions: { customer: string; report: string; first: string; last: string }[] = [];
+  /// The Merchant Center accounts the grant reaches; none unless a test says.
+  merchantAccounts: { accountId: string; accountName: string }[] = [];
+  /// The products of every account, as Merchant Center has them.
+  merchantProducts: MerchantProduct[] = [];
+  /// What Google holds against the account itself.
+  merchantIssues: { title: string; severity: string; detail: string; documentationUri: string }[] = [];
+  /// The Cloud project is not registered with a Merchant Center account.
+  merchantUnregistered = false;
+  /// How many times the products of an account were listed.
+  merchantReads = 0;
   /// How many times a grant was renewed.
   renewals = 0;
   private readonly codes = new Map<string, string[]>();
@@ -327,6 +352,53 @@ export class FakeGoogle {
         });
       send(200, [{ results }]);
       return;
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/merchant/")) {
+      if (this.merchantUnregistered) {
+        send(401, {
+          error: {
+            code: 401,
+            message: "GCP project with id timada-e2e and number 12345 is not registered with the merchant account.",
+            status: "UNAUTHENTICATED",
+          },
+        });
+        return;
+      }
+      if (url.pathname === "/merchant/accounts/v1/accounts") {
+        send(200, this.merchantAccounts.length > 0 ? { accounts: this.merchantAccounts } : {});
+        return;
+      }
+      if (/^\/merchant\/accounts\/v1\/accounts\/\d+\/issues$/.test(url.pathname)) {
+        send(200, this.merchantIssues.length > 0 ? { accountIssues: this.merchantIssues } : {});
+        return;
+      }
+      if (/^\/merchant\/products\/v1\/accounts\/\d+\/products$/.test(url.pathname)) {
+        this.merchantReads += 1;
+        const place = (context: string, standing?: string) =>
+          standing ? [{ reportingContext: context, [`${standing}Countries`]: ["FR"] }] : [];
+        const products = this.merchantProducts.map((product) => ({
+          name: `accounts/1/products/fr~FR~${product.offerId}`,
+          offerId: product.offerId,
+          productStatus: {
+            destinationStatuses: [
+              ...place("SHOPPING_ADS", product.ads),
+              ...place("FREE_LISTINGS", product.listings),
+            ],
+            itemLevelIssues: (product.issues ?? []).map((issue) => ({
+              code: issue.code,
+              severity: "DISAPPROVED",
+              resolution: "merchant_action",
+              attribute: issue.attribute ?? "",
+              reportingContext: "SHOPPING_ADS",
+              description: issue.description,
+              detail: issue.detail ?? "",
+              documentation: "https://support.google.com/merchants/answer/6324350",
+            })),
+          },
+        }));
+        send(200, products.length > 0 ? { products } : {});
+        return;
+      }
     }
     send(404, { error: { code: 404, message: "Not Found" } });
   }

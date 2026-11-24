@@ -10,20 +10,24 @@
 //! connection again and decides again ([`WRITE_ATTEMPTS`] times).
 
 mod ads;
+mod merchant;
 mod search;
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
 use crate::aggregator::{
-    AdsAccountChosen, Connected, Connection, Disconnected, Lapsed, SiteChosen,
+    AdsAccountChosen, Connected, Connection, Disconnected, Lapsed, MerchantAccountChosen,
+    SiteChosen,
 };
 use crate::error::GoogleError;
 use crate::value_object::{
-    ACCESS_ADS, ACCESS_SEARCH_CONSOLE, ACCESSES, MAX_ACCOUNT_LEN, MAX_ADS_NAME_LEN, connection_id,
-    normalize_customer_id, normalize_site,
+    ACCESS_ADS, ACCESS_MERCHANT_CENTER, ACCESS_SEARCH_CONSOLE, ACCESSES, MAX_ACCOUNT_LEN,
+    MAX_ADS_NAME_LEN, connection_id, normalize_customer_id, normalize_merchant_account,
+    normalize_site,
 };
 
 pub use ads::*;
+pub use merchant::*;
 pub use search::*;
 
 /// The command gateway over the platform's streams. Cheap to clone when `E`
@@ -49,6 +53,14 @@ pub struct AdsAccount {
     pub time_zone: String,
 }
 
+/// A Merchant Center account, as a shop's connection keeps the one chosen.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MerchantAccount {
+    /// The account's number, digits only.
+    pub account_id: String,
+    pub name: String,
+}
+
 /// The write model of a shop's connection.
 #[evento::projection(id = id, name = "timada-google/ConnectionState")]
 #[evento::snapshot(none)]
@@ -70,6 +82,8 @@ pub struct ConnectionState {
     pub site: Option<String>,
     /// The shop's Google Ads account, once chosen.
     pub ads: Option<AdsAccount>,
+    /// The shop's Merchant Center account, once chosen.
+    pub merchant: Option<MerchantAccount>,
     /// Google no longer honours the grant: the merchant has to connect
     /// again.
     pub lapsed: bool,
@@ -96,6 +110,7 @@ pub fn connection_projection<E: Executor>() -> Projection<E, ConnectionState> {
         .handler(on_site_chosen())
         .handler(on_lapsed())
         .handler(on_ads_account_chosen())
+        .handler(on_merchant_account_chosen())
         .handler(on_disconnected())
         .strict()
 }
@@ -129,6 +144,17 @@ async fn on_connected(
             .any(|access| access == ACCESS_ADS);
     if !keeps_ads {
         connection.ads = None;
+    }
+    // And for the Merchant Center account.
+    let keeps_merchant = connection.connected
+        && connection.account == event.data.account
+        && event
+            .data
+            .accesses
+            .iter()
+            .any(|access| access == ACCESS_MERCHANT_CENTER);
+    if !keeps_merchant {
+        connection.merchant = None;
     }
     connection.connected = true;
     connection.refresh_token_sealed = event.data.refresh_token_sealed.to_owned();
@@ -166,6 +192,18 @@ async fn on_ads_account_chosen(
         name: event.data.name.to_owned(),
         currency: event.data.currency.to_owned(),
         time_zone: event.data.time_zone.to_owned(),
+    });
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_merchant_account_chosen(
+    event: Event<MerchantAccountChosen>,
+    connection: &mut ConnectionState,
+) -> anyhow::Result<()> {
+    connection.merchant = Some(MerchantAccount {
+        account_id: event.data.account_id.to_owned(),
+        name: event.data.name.to_owned(),
     });
     Ok(())
 }
@@ -369,6 +407,44 @@ impl<E: Executor> Command<E> {
                 name: chosen.name.clone(),
                 currency: chosen.currency.clone(),
                 time_zone: chosen.time_zone.clone(),
+                chosen_by: actor_user_id.to_owned(),
+            });
+            Ok(true)
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Says which of the Merchant Center accounts the grant reaches is the
+    /// shop's; the same again is a no-op. The host checks beforehand that
+    /// the grant reaches it, and says what Merchant Center calls it.
+    pub async fn choose_merchant_account(
+        &self,
+        actor_user_id: &str,
+        tenant_id: &str,
+        account: MerchantAccount,
+        routing_key: Option<String>,
+    ) -> Result<(), GoogleError> {
+        let chosen = MerchantAccount {
+            account_id: normalize_merchant_account(&account.account_id)?,
+            name: account.name.trim().chars().take(MAX_ADS_NAME_LEN).collect(),
+        };
+        self.settle(tenant_id, routing_key, |connection, write| {
+            let connection = connection
+                .filter(|connection| connection.connected)
+                .ok_or(GoogleError::NotConnected)?;
+            if connection.lapsed {
+                return Err(GoogleError::Lapsed);
+            }
+            if !connection.covers(ACCESS_MERCHANT_CENTER) {
+                return Err(GoogleError::NoMerchantCenter);
+            }
+            if connection.merchant.as_ref() == Some(&chosen) {
+                return Ok(false);
+            }
+            write.event(&MerchantAccountChosen {
+                account_id: chosen.account_id.clone(),
+                name: chosen.name.clone(),
                 chosen_by: actor_user_id.to_owned(),
             });
             Ok(true)

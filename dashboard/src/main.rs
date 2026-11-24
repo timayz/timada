@@ -29,6 +29,8 @@ mod mailroom;
 mod margins;
 mod media;
 mod media_images;
+mod merchant_notices;
+mod merchant_passes;
 mod message_keys;
 mod message_notifications;
 mod meta_conversions;

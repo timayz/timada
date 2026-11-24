@@ -843,6 +843,26 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     );
     let can_draft =
         can_propose && !product.is_archived() && context::<crate::writer::Writers>(cx).enabled();
+    // Where Google has it, when the shop reads Merchant Center: the feed's
+    // items are the product, or each of its variants.
+    let feed_items: Vec<String> = if product.variants.is_empty() {
+        vec![product.id.clone()]
+    } else {
+        product.variants.iter().map(|v| v.id.clone()).collect()
+    };
+    let merchant = crate::app::t::slug::merchant_center::product_standing(
+        context::<Db>(cx),
+        &tenant.id,
+        &feed_items,
+    )
+    .await
+    .map_err(topcoat::Error::from_anyhow)?
+    .map(|(ads, _)| {
+        let (label, tone) = crate::app::t::slug::merchant_center::standing_label(&ads);
+        (ads, format!("Shopping ads: {label}"), tone)
+    });
+    let merchant_url =
+        href!(crate::app::t::slug::merchant_center::index, slug: tenant.slug.clone()).resolve(cx);
     Ok(view! {
         document(
             title: &title,
@@ -855,6 +875,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     attrs: attributes! { data-product-status=(product.status.as_str()) },
                     (status_label(product.status))
                 )
+                if let Some((ads, label, tone)) = &merchant {
+                    <a href=(&merchant_url) data-product-merchant=(ads)>
+                        status_badge(tone: *tone, (label))
+                    </a>
+                }
                 if can_propose {
                     <a class=(LINK) href=(&suggest_url) data-suggest-change="">"Suggest a change"</a>
                 }

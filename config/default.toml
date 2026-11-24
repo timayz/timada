@@ -424,7 +424,8 @@ dir = "data/shopper-keys"
 # The application the shops connect their Google accounts to: an OAuth client
 # of a Google Cloud project of the platform's (APIs & Services, Credentials,
 # "Web application"), with <server.url>/google/callback as its one authorized
-# redirect URI and the Search Console API and the Google Ads API enabled. A shop's member says yes
+# redirect URI and the Search Console API, the Google Ads API and the
+# Merchant API enabled. A shop's member says yes
 # once on Google's page; what the account grants is kept sealed under
 # `secrets.key`, so this needs that key too. Without the id and the secret no
 # shop connects a Google account. docs/google.md says what Google asks of the
@@ -451,6 +452,14 @@ dir = "data/shopper-keys"
 # # four, and the reads stop at four fifths of this, so about 570 shops a day
 # # at "Explorer".
 # ads_calls_a_day = 2880
+# # Merchant Center.
+# merchant_url = "https://merchantapi.googleapis.com"
+# # The same for the daily read of Merchant Center.
+# merchant_check_secs = 300
+# # How long after a read of Merchant Center, in seconds, a member who asks
+# # for another is turned down: each read takes its questions from the
+# # account's daily allowance at Google.
+# merchant_ask_again_secs = 300
 
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that

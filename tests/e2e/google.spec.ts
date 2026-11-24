@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
-import { ADS_SCOPE, FakeGoogle, SEARCH_CONSOLE_SCOPE } from "./google";
+import { ADS_SCOPE, FakeGoogle, MERCHANT_SCOPE, SEARCH_CONSOLE_SCOPE } from "./google";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // A shop's connection to a Google account, end to end against a stand-in
@@ -22,6 +22,7 @@ test("a shop connects a Google account and chooses its Search Console site", asy
     await expect(page.locator("[data-google]")).toHaveAttribute("data-google", "none");
     await expect(page.getByLabel("Search Console (read only)")).toBeChecked();
     await expect(page.getByLabel("Google Ads")).toBeChecked();
+    await expect(page.getByLabel("Merchant Center")).toBeChecked();
 
     // An account that says no: nothing is kept.
     google.refuse = true;
@@ -31,17 +32,17 @@ test("a shop connects a Google account and chooses its Search Console site", asy
     google.refuse = false;
 
     // One that unticks what was asked: nothing to read through.
-    google.grants = (asked) => asked.filter((scope) => scope !== SEARCH_CONSOLE_SCOPE && scope !== ADS_SCOPE);
+    google.grants = (asked) => asked.filter((scope) => ![SEARCH_CONSOLE_SCOPE, ADS_SCOPE, MERCHANT_SCOPE].includes(scope));
     await page.getByRole("button", { name: "Connect a Google account" }).click();
     await expect(page.getByRole("alert")).toContainText("The account granted none of the access asked for");
     google.grants = undefined;
 
-    // Yes: asked for the address, Search Console and Google Ads, to be renewed, every
+    // Yes: asked for the address and the three kinds of access, to be renewed, every
     // time, on top of what the account granted before.
     await page.getByRole("button", { name: "Connect a Google account" }).click();
     await expect(page.getByRole("status")).toContainText("Google account connected.");
     await expect(page).toHaveURL(new RegExp(`/t/${shop.slug}/google\\?`));
-    expect(google.asked.at(-1)).toEqual(["openid", "email", SEARCH_CONSOLE_SCOPE, ADS_SCOPE]);
+    expect(google.asked.at(-1)).toEqual(["openid", "email", SEARCH_CONSOLE_SCOPE, ADS_SCOPE, MERCHANT_SCOPE]);
     expect(google.visits.at(-1)).toMatchObject({
       response_type: "code",
       access_type: "offline",
@@ -51,9 +52,11 @@ test("a shop connects a Google account and chooses its Search Console site", asy
     expect(google.visits.at(-1)?.redirect_uri).toMatch(/\/google\/callback$/);
     await expect(page.locator("[data-google]")).toHaveAttribute("data-google", "connected");
     await expect(page.locator("[data-google-account]")).toHaveText("merchant@example.com");
-    await expect(page.locator("[data-google-accesses]")).toHaveText("Search Console (read only), Google Ads");
-    // The account reaches no Google Ads account: nothing to choose there.
+    await expect(page.locator("[data-google-accesses]")).toHaveText("Search Console (read only), Google Ads, Merchant Center");
+    // The account reaches no Google Ads account and no Merchant Center
+    // account: nothing to choose there.
     await expect(page.locator("[data-google-no-ads]")).toBeVisible();
+    await expect(page.locator("[data-google-no-merchant]")).toBeVisible();
 
     // The sites the account reads, without the one it never proved its own.
     await expect(page.locator("[data-google-site-missing]")).toBeVisible();
