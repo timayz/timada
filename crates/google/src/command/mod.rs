@@ -9,6 +9,8 @@
 //! write that lost to another is no verdict: every command loads the
 //! connection again and decides again ([`WRITE_ATTEMPTS`] times).
 
+mod search;
+
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
 use crate::aggregator::{Connected, Connection, Disconnected, Lapsed, SiteChosen};
@@ -16,6 +18,8 @@ use crate::error::GoogleError;
 use crate::value_object::{
     ACCESS_SEARCH_CONSOLE, ACCESSES, MAX_ACCOUNT_LEN, connection_id, normalize_site,
 };
+
+pub use search::*;
 
 /// The command gateway over the platform's streams. Cheap to clone when `E`
 /// is (the dashboard's executor is an `Arc` wrapper).

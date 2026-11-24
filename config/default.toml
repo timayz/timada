@@ -410,6 +410,9 @@ dir = "data/shopper-keys"
 # token_url = "https://oauth2.googleapis.com/token"
 # userinfo_url = "https://openidconnect.googleapis.com/v1/userinfo"
 # search_console_url = "https://www.googleapis.com/webmasters/v3"
+# # How often, in seconds, a node looks for the shops whose daily read of
+# # Search Console is due. A shop is read once a day whatever this is.
+# search_check_secs = 300
 
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that

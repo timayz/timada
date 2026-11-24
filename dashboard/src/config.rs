@@ -934,7 +934,7 @@ impl DataforseoConfig {
 /// Console, Google Ads and Merchant Center can be read. Without its id and
 /// secret, or without `secrets.key` to seal what the accounts grant, no shop
 /// connects one.
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct GoogleConfig {
     /// The OAuth client's id and secret, from the Cloud project's
     /// credentials; both or neither.
@@ -955,6 +955,28 @@ pub struct GoogleConfig {
     /// Where Search Console is read.
     #[serde(default)]
     pub search_console_url: Option<String>,
+    /// How often, in seconds, a node looks for the shops whose daily read
+    /// of Search Console is due.
+    #[serde(default = "default_google_search_check_secs")]
+    pub search_check_secs: u64,
+}
+
+impl Default for GoogleConfig {
+    fn default() -> Self {
+        Self {
+            client_id: None,
+            client_secret: None,
+            authorize_url: None,
+            token_url: None,
+            userinfo_url: None,
+            search_console_url: None,
+            search_check_secs: default_google_search_check_secs(),
+        }
+    }
+}
+
+fn default_google_search_check_secs() -> u64 {
+    300
 }
 
 impl GoogleConfig {

@@ -107,7 +107,7 @@ struct Section {
 
 /// A tenant's sections, in rail order. The labels are what the pages and
 /// the browser tests call them.
-static SECTIONS: [Section; 32] = [
+static SECTIONS: [Section; 33] = [
     Section {
         key: "products",
         label: "Products",
@@ -235,6 +235,12 @@ static SECTIONS: [Section; 32] = [
         group: Group::Storefront,
     },
     Section {
+        key: "search_console",
+        label: "Search Console",
+        icon: icons::SEARCH_CONSOLE,
+        group: Group::Storefront,
+    },
+    Section {
         key: "google_tag",
         label: "Google tag",
         icon: icons::GOOGLE_TAG,
@@ -318,7 +324,7 @@ fn allowed(nav: &TenantNav, key: &str) -> bool {
         "newsletter" => nav.newsletter,
         "automations" => nav.automations,
         "pages" | "articles" | "announcements" | "newsletter_popup" | "languages" | "redirects"
-        | "google_tag" | "meta_pixel" | "google" => nav.pages,
+        | "google_tag" | "meta_pixel" | "google" | "search_console" => nav.pages,
         "payments" => nav.payments,
         "aliexpress" => nav.aliexpress,
         "shipping" => nav.shipping,
@@ -356,6 +362,7 @@ pub fn section_url(cx: &Cx, slug: &str, key: &str) -> String {
         "newsletter_popup" => href!(t::newsletter_popup::index, t::slug: slug).resolve(cx),
         "languages" => href!(t::languages::index, t::slug: slug).resolve(cx),
         "redirects" => href!(t::redirects::index, t::slug: slug).resolve(cx),
+        "search_console" => href!(t::search_console::index, t::slug: slug).resolve(cx),
         "google_tag" => href!(t::google_tag::index, t::slug: slug).resolve(cx),
         "meta_pixel" => href!(t::meta_pixel::index, t::slug: slug).resolve(cx),
         "google" => href!(t::google::index, t::slug: slug).resolve(cx),

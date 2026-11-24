@@ -10,6 +10,12 @@
 //! every page that reads through it says "connect again" until the merchant
 //! does.
 //!
+//! What Search Console says of a shop's site is recorded here too, a day
+//! at a time, by the host's daily pass: the site's clicks, impressions and
+//! average position, and the same for its most clicked queries and pages.
+//! The rows of a day live in the event that records it, so a rebuilt read
+//! model and every node of a cluster hold the same.
+//!
 //! The connection's stream sits in the platform's own tenant (the default
 //! tenant of the store), under an id made of the shop's: a storefront's key, which
 //! reads the shop's streams, never sees the sealed grant. The crate is pure
@@ -18,8 +24,10 @@
 pub mod aggregator;
 mod command;
 mod error;
+mod query;
 mod value_object;
 
 pub use command::*;
 pub use error::*;
+pub use query::*;
 pub use value_object::*;

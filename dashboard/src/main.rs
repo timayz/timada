@@ -50,6 +50,7 @@ mod review_requests;
 mod saga_fault;
 mod scheduled_exports;
 mod seal;
+mod search_passes;
 mod shop_mail;
 mod shopper_erasure;
 mod shopper_keys;

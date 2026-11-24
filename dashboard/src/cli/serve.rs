@@ -430,6 +430,22 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     )
     .start(crate::scheduled_exports::SWEEP_EVERY);
 
+    // What Search Console says of the connected shops' sites is read once a
+    // day each, each node reading for its own part of the shops.
+    let live = cluster.clone();
+    let search_passes = crate::search_passes::SearchPasses::new(
+        db.clone(),
+        local.0.clone(),
+        Arc::new(move || {
+            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, cluster::Among::All);
+            timada_core::Share { index, of }
+        }),
+        google.clone(),
+    )
+    .start(std::time::Duration::from_secs(
+        config.google.search_check_secs.max(1),
+    ));
+
     // A cart nobody touched for `[carts] idle_days` is dropped, each node
     // dropping its own part of them.
     let live = cluster.clone();
@@ -573,6 +589,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     unanswered_checkouts.abort();
     hold_reminders.abort();
     scheduled_exports.abort();
+    search_passes.abort();
     idle_carts.abort();
     best_sellers.abort();
     newsletter_sends.abort();
@@ -792,6 +809,9 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     }),
     ("research", Kind::ReadModel, |d| {
         timada_research::read_model_subscription(d.db.clone())
+    }),
+    ("google", Kind::ReadModel, |d| {
+        timada_google::read_model_subscription(d.db.clone())
     }),
     // The keywords a study's owner asked for are fetched from the keyword
     // source and recorded on the study.

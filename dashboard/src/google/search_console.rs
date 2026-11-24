@@ -1,8 +1,65 @@
 //! What is read from Search Console under a shop's access.
 
 use serde::Deserialize;
+use serde_json::json;
+use timada_google::SearchNumbers;
+use timada_google::aggregator::SearchRow;
 
 use super::{Google, GoogleFault};
+
+/// What a day's rows are grouped by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dimension {
+    Query,
+    Page,
+}
+
+impl Dimension {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::Page => "page",
+        }
+    }
+}
+
+/// What a site did on one day.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DayNumbers {
+    /// `2026-11-20`, a day of Google's (Pacific time).
+    pub day: String,
+    pub numbers: SearchNumbers,
+}
+
+#[derive(Deserialize)]
+struct Analytics {
+    #[serde(default)]
+    rows: Vec<AnalyticsRow>,
+}
+
+/// Google writes the four figures as decimals, the counts included.
+#[derive(Deserialize)]
+struct AnalyticsRow {
+    #[serde(default)]
+    keys: Vec<String>,
+    #[serde(default)]
+    clicks: f64,
+    #[serde(default)]
+    impressions: f64,
+    #[serde(default)]
+    position: f64,
+}
+
+impl AnalyticsRow {
+    fn numbers(&self) -> SearchNumbers {
+        // `as` saturates, and takes what is no number for zero.
+        SearchNumbers {
+            clicks: self.clicks.round() as u64,
+            impressions: self.impressions.round() as u64,
+            position_milli: (self.position * 1000.0).round() as u32,
+        }
+    }
+}
 
 /// A site the account sees in Search Console.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,5 +106,96 @@ impl Google {
             .collect();
         sites.sort_by(|a, b| a.site.cmp(&b.site));
         Ok(sites)
+    }
+
+    /// Where a site's search numbers are asked for. The site is one part
+    /// of the path, its slashes written out.
+    fn analytics_url(&self, site: &str) -> Result<reqwest::Url, GoogleFault> {
+        let refused = |reason: String| GoogleFault::Refused(reason);
+        let mut url = reqwest::Url::parse(&self.inner()?.search_console_url)
+            .map_err(|err| refused(err.to_string()))?;
+        url.path_segments_mut()
+            .map_err(|()| refused("Search Console's address takes no path".into()))?
+            .extend(["sites", site, "searchAnalytics", "query"]);
+        Ok(url)
+    }
+
+    /// What `site` did in web search on each day from `first` to `last`
+    /// (`2026-11-20`, both included), the oldest first. Google answers with
+    /// the days it has finished counting only (two to three days behind),
+    /// and leaves out a day nothing was shown on. One question, grouped by
+    /// day alone: the cheap kind.
+    pub async fn search_days(
+        &self,
+        access_token: &str,
+        site: &str,
+        first: &str,
+        last: &str,
+    ) -> Result<Vec<DayNumbers>, GoogleFault> {
+        let body = json!({
+            "startDate": first,
+            "endDate": last,
+            "dimensions": ["date"],
+            "type": "web",
+            "dataState": "final",
+            "rowLimit": 1000,
+        });
+        let answer: Analytics = self
+            .post(self.analytics_url(site)?, access_token, &body)
+            .await?;
+        let mut days: Vec<DayNumbers> = answer
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let day = row.keys.first()?;
+                (day.len() == 10 && timada_core::civil::parse_date(day).is_some()).then(|| {
+                    DayNumbers {
+                        day: day.clone(),
+                        numbers: row.numbers(),
+                    }
+                })
+            })
+            .collect();
+        days.sort_by(|a, b| a.day.cmp(&b.day));
+        Ok(days)
+    }
+
+    /// The most clicked queries, or pages, of `site` in web search on
+    /// `day`, `limit` at most, as Google sorts them: by clicks. One
+    /// question over one day and one grouping: Google counts grouping by
+    /// query or by page as costly, both at once as the most, and a longer
+    /// range as more.
+    pub async fn search_rows(
+        &self,
+        access_token: &str,
+        site: &str,
+        day: &str,
+        dimension: Dimension,
+        limit: usize,
+    ) -> Result<Vec<SearchRow>, GoogleFault> {
+        let body = json!({
+            "startDate": day,
+            "endDate": day,
+            "dimensions": [dimension.key()],
+            "type": "web",
+            "dataState": "final",
+            "rowLimit": limit.clamp(1, 25_000),
+        });
+        let answer: Analytics = self
+            .post(self.analytics_url(site)?, access_token, &body)
+            .await?;
+        Ok(answer
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let numbers = row.numbers();
+                Some(SearchRow {
+                    key: row.keys.first()?.clone(),
+                    clicks: numbers.clicks,
+                    impressions: numbers.impressions,
+                    position_milli: numbers.position_milli,
+                })
+            })
+            .collect())
     }
 }

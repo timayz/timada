@@ -115,6 +115,7 @@ impl StandIn {
                 token_url: Some(format!("{}/token", self.url)),
                 userinfo_url: Some(format!("{}/v1/userinfo", self.url)),
                 search_console_url: Some(format!("{}/webmasters/v3", self.url)),
+                ..GoogleConfig::default()
             },
         )
     }
@@ -134,22 +135,23 @@ pub(crate) fn token_answer(access: &str) -> (u16, String) {
 pub(crate) async fn connected(
     store: &evento::Turso,
     google: &Google,
+    tenant_id: &str,
     refresh_token: &str,
 ) -> ConnectionState {
     let command = Command(store.clone());
     command
         .connect(
             "user-alice",
-            SHOP,
+            tenant_id,
             Connect {
-                refresh_token_sealed: google.seal(SHOP, refresh_token).unwrap(),
+                refresh_token_sealed: google.seal(tenant_id, refresh_token).unwrap(),
                 account: "alice@example.com".into(),
                 accesses: vec![ACCESS_SEARCH_CONSOLE.into()],
             },
         )
         .await
         .unwrap();
-    command.load_connection(SHOP).await.unwrap().unwrap()
+    command.load_connection(tenant_id).await.unwrap().unwrap()
 }
 
 #[test]
@@ -311,7 +313,7 @@ async fn an_access_is_renewed_from_the_grant_and_held_while_it_is_good() {
     .await;
     let google = stand_in.google();
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
-    let connection = connected(&store, &google, "refresh-1").await;
+    let connection = connected(&store, &google, SHOP, "refresh-1").await;
 
     assert_eq!(
         google.access(&store, &connection).await.unwrap(),
@@ -334,7 +336,7 @@ async fn an_access_is_renewed_from_the_grant_and_held_while_it_is_good() {
 
     // Another grant (the merchant connected again): the access held was
     // the earlier one's.
-    let connection = connected(&store, &google, "refresh-2").await;
+    let connection = connected(&store, &google, SHOP, "refresh-2").await;
     assert_eq!(
         google.access(&store, &connection).await.unwrap(),
         "access-2"
@@ -347,7 +349,7 @@ async fn the_access_a_grant_came_with_is_used_first() {
     let stand_in = StandIn::start(|_| token_answer("access-9")).await;
     let google = stand_in.google();
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
-    let connection = connected(&store, &google, "refresh-1").await;
+    let connection = connected(&store, &google, SHOP, "refresh-1").await;
     google.keep(
         SHOP,
         &connection.refresh_token_sealed,
@@ -394,7 +396,7 @@ async fn a_grant_google_no_longer_honours_is_recorded_as_lapsed() {
     .await;
     let google = stand_in.google();
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
-    let connection = connected(&store, &google, "refresh-1").await;
+    let connection = connected(&store, &google, SHOP, "refresh-1").await;
 
     assert_eq!(
         google.access(&store, &connection).await,
@@ -420,7 +422,7 @@ async fn google_not_answering_says_nothing_of_the_grant() {
     let stand_in = StandIn::start(|_| (500, "{}".into())).await;
     let google = stand_in.google();
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
-    let connection = connected(&store, &google, "refresh-1").await;
+    let connection = connected(&store, &google, SHOP, "refresh-1").await;
     assert!(matches!(
         google.access(&store, &connection).await,
         Err(GoogleFault::Unavailable(_))
@@ -487,7 +489,7 @@ async fn the_sites_an_account_reads_are_listed_without_the_unproved_ones() {
     .await;
     let google = stand_in.google();
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
-    let connection = connected(&store, &google, "refresh-1").await;
+    let connection = connected(&store, &google, SHOP, "refresh-1").await;
     let sites = google
         .read(&store, &connection, |access| {
             let google = google.clone();
@@ -535,7 +537,7 @@ async fn an_access_turned_down_is_asked_for_again_once() {
     .await;
     let google = stand_in.google();
     let store = evento::Turso::in_memory_concurrent().await.unwrap();
-    let connection = connected(&store, &google, "refresh-1").await;
+    let connection = connected(&store, &google, SHOP, "refresh-1").await;
     google.keep(
         SHOP,
         &connection.refresh_token_sealed,
@@ -573,7 +575,7 @@ async fn an_access_turned_down_is_asked_for_again_once() {
     })
     .await;
     let google = withdrawn.google();
-    let connection = connected(&store, &google, "refresh-3").await;
+    let connection = connected(&store, &google, SHOP, "refresh-3").await;
     google.keep(
         SHOP,
         &connection.refresh_token_sealed,
