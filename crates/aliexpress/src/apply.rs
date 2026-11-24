@@ -8,7 +8,7 @@
 
 use std::collections::HashMap;
 
-use evento::Executor;
+use evento::{Executor, WriteError};
 use timada_catalog::{
     AddImage, CatalogError, DefineVariant, MAX_OPTION_VALUES, MAX_VARIANTS, OptionSelection,
     ProductState, VariantCost, VariantPrice,
@@ -35,6 +35,10 @@ pub const PLENTY: u32 = 20;
 pub fn shelf_count(available: u32) -> u32 {
     available.min(PLENTY)
 }
+
+/// How many times a read is applied when one of its writes to the product
+/// lost to another write.
+const APPLY_ATTEMPTS: usize = 3;
 
 /// What [`apply_sync`] did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -205,6 +209,12 @@ fn link_of(sku: &MappedSku, variant_id: Option<String>) -> SkuLink {
 /// AliExpress no longer has it). `pricing` is what applies, the link's own
 /// or the shop's; without one prices are left alone, and so is a price the
 /// rule's stays within `tolerance_bps` of (hundredths of a percent).
+///
+/// The product is the merchant's to edit and other reads' to bring in step
+/// at the same moment, so a write here that loses to another is no verdict
+/// (#770): the product is read again and what is still to change decided
+/// again, [`APPLY_ATTEMPTS`] times at most, after which the conflict is the
+/// caller's.
 pub async fn apply_sync<E: Executor>(
     catalog: &timada_catalog::Command<E>,
     actor: &str,
@@ -213,24 +223,65 @@ pub async fn apply_sync<E: Executor>(
     pricing: Option<&Pricing>,
     tolerance_bps: u32,
 ) -> Result<SyncOutcome, CatalogError> {
-    let mut outcome = SyncOutcome {
+    // What the tries that lost had repriced before they lost.
+    let mut repriced = 0;
+    for attempt in 1..=APPLY_ATTEMPTS {
+        let mut outcome = SyncOutcome::default();
+        match apply_once(
+            catalog,
+            actor,
+            link,
+            product,
+            pricing,
+            tolerance_bps,
+            &mut outcome,
+        )
+        .await
+        {
+            Ok(()) => {
+                outcome.repriced += repriced;
+                return Ok(outcome);
+            }
+            Err(CatalogError::Write(WriteError::InvalidOriginalVersion))
+                if attempt < APPLY_ATTEMPTS =>
+            {
+                repriced += outcome.repriced;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Err(WriteError::InvalidOriginalVersion.into())
+}
+
+/// One try of [`apply_sync`], from the product as it stands now; `outcome`
+/// holds what it changed even when a later write of it failed.
+async fn apply_once<E: Executor>(
+    catalog: &timada_catalog::Command<E>,
+    actor: &str,
+    link: &LinkState,
+    product: Option<&AeProduct>,
+    pricing: Option<&Pricing>,
+    tolerance_bps: u32,
+    outcome: &mut SyncOutcome,
+) -> Result<(), CatalogError> {
+    *outcome = SyncOutcome {
         skus: link.skus.clone(),
         offline: product.is_none_or(|product| !product.on_sale()),
         found: link.found.clone(),
         ..Default::default()
     };
     let Some(product_id) = link.product_id.as_deref() else {
-        return Ok(outcome);
+        return Ok(());
     };
     let Some(state) = catalog.load_product(product_id).await? else {
         outcome
             .warnings
             .push("the product is gone from the catalog".into());
-        return Ok(outcome);
+        return Ok(());
     };
     if state.is_archived() {
         outcome.warnings.push("the product is archived".into());
-        return Ok(outcome);
+        return Ok(());
     }
     let currency = state.currency().map(str::to_owned);
     let mut skus = Vec::with_capacity(link.skus.len());
@@ -375,7 +426,7 @@ pub async fn apply_sync<E: Executor>(
         catalog.unpublish_product(actor, product_id).await?;
         outcome.unpublished = true;
     }
-    Ok(outcome)
+    Ok(())
 }
 
 /// Whether `price` is within `tolerance_bps` of `current`, in hundredths of a

@@ -11,6 +11,10 @@ use timada_catalog::{CreateProduct, DefineVariant, OptionSelection};
 use timada_catalog_import::{ImportOptions, NoImages, import_one};
 use timada_tenancy::{Pricing, PricingRule, Rounding};
 
+mod common;
+
+use common::Rigged;
+
 const ALICE: &str = "user-alice";
 /// The tenant the tests act in.
 const TENANT: &str = "acme";
@@ -576,6 +580,87 @@ async fn a_read_reprices_every_combination_in_one_event() {
     assert_eq!(prices, [1062, 1300]);
 }
 
+/// A read's write to the product that loses to another write is no verdict:
+/// the merchant publishes while the read reprices, and the read decides
+/// again from the product as it now is (#770).
+#[tokio::test]
+async fn a_read_that_loses_to_the_merchants_write_decides_again() {
+    let executor = executor().await;
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let (link_id, product_id) = imported(&executor).await;
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    let mut read = fixture();
+    for sku in &mut read.skus {
+        sku.cost_cents = sku.cost_cents.map(|cost| cost + 100);
+    }
+
+    let rigged = Rigged::new(executor.clone()).hold_first::<timada_catalog::aggregator::Product>();
+    let (held, merchant) = (
+        timada_catalog::Command::new(rigged.clone(), TENANT),
+        timada_catalog::Command::new(rigged.clone(), TENANT),
+    );
+    let pricing = PRICING;
+    let (outcome, published) = tokio::join!(
+        apply_sync(&held, "sync", &link, Some(&read), Some(&pricing), 0),
+        async {
+            rigged.parked().await;
+            merchant.publish_product(ALICE, &product_id).await
+        },
+    );
+    published.unwrap();
+    assert_eq!(outcome.unwrap().repriced, 2);
+    let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+    assert!(product.is_published());
+    let prices: Vec<u64> = product
+        .variants
+        .iter()
+        .map(|variant| variant.price.amount_cents)
+        .collect();
+    assert_eq!(prices, [1062, 1300]);
+}
+
+/// Two reads of one item at once, the sweep's and the merchant's: the one
+/// whose record of the costs loses finds them recorded, and both end well
+/// (#770).
+#[tokio::test]
+async fn two_reads_at_once_both_end_well() {
+    let executor = executor().await;
+    let catalog = timada_catalog::Command::new(executor.clone(), TENANT);
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let (link_id, product_id) = imported(&executor).await;
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    let mut read = fixture();
+    for sku in &mut read.skus {
+        sku.cost_cents = sku.cost_cents.map(|cost| cost + 100);
+    }
+
+    let rigged =
+        Rigged::new(executor.clone()).hold_first::<timada_catalog::aggregator::ProductCost>();
+    let (held, other) = (
+        timada_catalog::Command::new(rigged.clone(), TENANT),
+        timada_catalog::Command::new(rigged.clone(), TENANT),
+    );
+    let pricing = PRICING;
+    let (first, second) = tokio::join!(
+        apply_sync(&held, "sync", &link, Some(&read), Some(&pricing), 0),
+        async {
+            rigged.parked().await;
+            apply_sync(&other, ALICE, &link, Some(&read), Some(&pricing), 0).await
+        },
+    );
+    let (first, second) = (first.unwrap(), second.unwrap());
+    assert_eq!(first.repriced + second.repriced, 2, "each price moved once");
+    assert_eq!(first.skus, second.skus);
+    let costs = catalog.load_product_costs(&product_id).await.unwrap();
+    for sku in &first.skus {
+        assert_eq!(
+            costs.cost_of(sku.variant_id.as_deref()),
+            Some(sku.cost_cents)
+        );
+    }
+}
+
 /// A read is recorded against the version of the link it started from: one
 /// recorded in between wins, and nothing but reads and the merchant's own
 /// changes ever goes on the stream (#472).
@@ -607,6 +692,34 @@ async fn a_read_records_against_the_version_it_started_from() {
         .unwrap();
     let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
     assert_eq!(link.last_error.as_deref(), Some("no"));
+}
+
+/// The link ends while a read of it is recorded: the read's record does not
+/// keep it (#770).
+#[tokio::test]
+async fn a_link_ends_over_a_read_recorded_at_the_same_moment() {
+    let executor = executor().await;
+    let links = timada_aliexpress::Command::new(executor.clone(), TENANT);
+    let (link_id, _) = imported(&executor).await;
+    let (_, version) = links.load_link_versioned(&link_id).await.unwrap().unwrap();
+
+    let rigged = Rigged::new(executor.clone())
+        .hold_first::<timada_aliexpress::aggregator::AliexpressProduct>();
+    let (held, reader) = (
+        timada_aliexpress::Command::new(rigged.clone(), TENANT),
+        timada_aliexpress::Command::new(rigged.clone(), TENANT),
+    );
+    let (unlinked, recorded) = tokio::join!(held.unlink(ALICE, &link_id), async {
+        rigged.parked().await;
+        reader
+            .record_sync("sync", &link_id, version, SyncRead::default())
+            .await
+    });
+    recorded.unwrap();
+    unlinked.unwrap();
+    let link = links.load_link_by_id(&link_id).await.unwrap().unwrap();
+    assert_eq!(link.status, LinkStatus::Unlinked);
+    assert!(link.last_synced_at.is_some());
 }
 
 #[tokio::test]
