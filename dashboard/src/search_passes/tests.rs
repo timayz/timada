@@ -2,7 +2,8 @@ use std::sync::Mutex;
 
 use evento::Evento;
 use timada_google::{
-    CATCH_UP_SECS, CHECK_EVERY_SECS, last_search_day, search_totals, top_pages, top_queries,
+    CATCH_UP_SECS, CHECK_EVERY_SECS, last_search_day, page_queries, search_totals, top_pages,
+    top_queries,
 };
 use timada_tenancy::CreateTenant;
 
@@ -37,12 +38,16 @@ fn questions(stand_in: &StandIn) -> Vec<(String, String, String)> {
             let body: serde_json::Value = serde_json::from_str(&request.body).unwrap();
             assert_eq!(body["type"], "web");
             assert_eq!(body["dataState"], "final");
-            // Never by query and by page at once.
-            assert_eq!(body["dimensions"].as_array().unwrap().len(), 1);
+            let grouping: Vec<&str> = body["dimensions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|dimension| dimension.as_str().unwrap())
+                .collect();
             (
                 body["startDate"].as_str().unwrap().to_owned(),
                 body["endDate"].as_str().unwrap().to_owned(),
-                body["dimensions"][0].as_str().unwrap().to_owned(),
+                grouping.join("+"),
             )
         })
         .collect()
@@ -70,7 +75,13 @@ fn answer(held: &Mutex<Held>, request: &Request) -> (u16, String) {
         body["startDate"].as_str().unwrap(),
         body["endDate"].as_str().unwrap(),
     );
-    let rows: Vec<serde_json::Value> = match body["dimensions"][0].as_str().unwrap() {
+    let grouping: Vec<&str> = body["dimensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|dimension| dimension.as_str().unwrap())
+        .collect();
+    let rows: Vec<serde_json::Value> = match grouping.join("+").as_str() {
         "date" => held
             .days
             .iter()
@@ -91,8 +102,22 @@ fn answer(held: &Mutex<Held>, request: &Request) -> (u16, String) {
                 return (429, r#"{"error":{"message":"Quota exceeded"}}"#.into());
             }
             assert_eq!(first, last);
-            assert_eq!(body["rowLimit"], MAX_SEARCH_ROWS);
-            if grouping == "query" {
+            if grouping == "page+query" {
+                assert_eq!(body["rowLimit"], PAGE_QUERIES_ASKED);
+                // By clicks, as Google lists them: the one nobody clicked
+                // comes last.
+                vec![
+                    serde_json::json!({
+                        "keys": ["https://shop.example/arbres-a-chat", "arbre à chat"],
+                        "clicks": 6.0, "impressions": 100.0, "ctr": 0.06, "position": 4.0,
+                    }),
+                    serde_json::json!({
+                        "keys": ["https://shop.example/arbres-a-chat", "griffoir"],
+                        "clicks": 0.0, "impressions": 150.0, "ctr": 0.0, "position": 12.5,
+                    }),
+                ]
+            } else if grouping == "query" {
+                assert_eq!(body["rowLimit"], MAX_SEARCH_ROWS);
                 vec![
                     serde_json::json!({
                         "keys": ["arbre à chat"], "clicks": 6.0, "impressions": 100.0,
@@ -104,6 +129,7 @@ fn answer(held: &Mutex<Held>, request: &Request) -> (u16, String) {
                     }),
                 ]
             } else {
+                assert_eq!(body["rowLimit"], MAX_SEARCH_ROWS);
                 vec![serde_json::json!({
                     "keys": ["https://shop.example/arbres-a-chat"], "clicks": 9.0,
                     "impressions": 180.0, "ctr": 0.05, "position": 7.5,
@@ -226,7 +252,8 @@ impl Rig {
 }
 
 /// A shop just connected is read for the days Google has finished, each
-/// with its queries and its pages, and not again until the next day.
+/// with its queries, its pages and which page showed for which query, and
+/// not again until the next day.
 #[tokio::test]
 async fn a_connected_shop_is_read_once_a_day() {
     let rig = Rig::new(3).await;
@@ -234,7 +261,7 @@ async fn a_connected_shop_is_read_once_a_day() {
     rig.catch_up().await;
 
     // One question for the days, over the ninety a new shop is owed, then
-    // two a day, the newest day first.
+    // three a day, the newest day first.
     let asked = questions(&rig.stand_in);
     assert_eq!(
         asked[0],
@@ -253,7 +280,11 @@ async fn a_connected_shop_is_read_once_a_day() {
         asked[2],
         (newest.clone(), newest.clone(), "page".to_owned())
     );
-    assert_eq!(asked.len(), 7);
+    assert_eq!(
+        asked[3],
+        (newest.clone(), newest.clone(), "page+query".to_owned())
+    );
+    assert_eq!(asked.len(), 10);
     assert_eq!(rig.stand_in.renewals(), 1);
 
     assert_eq!(
@@ -290,6 +321,21 @@ async fn a_connected_shop_is_read_once_a_day() {
         .await
         .unwrap();
     assert_eq!(pages[0].key, "https://shop.example/arbres-a-chat");
+    // Which page showed for which query, the most shown first.
+    let pairs = page_queries(&rig.db, &rig.shop, SITE, &newest, &newest, 10)
+        .await
+        .unwrap();
+    let read: Vec<_> = pairs
+        .iter()
+        .map(|pair| (pair.page.as_str(), pair.query.as_str(), pair.impressions))
+        .collect();
+    assert_eq!(
+        read,
+        vec![
+            ("https://shop.example/arbres-a-chat", "griffoir", 150),
+            ("https://shop.example/arbres-a-chat", "arbre à chat", 100),
+        ]
+    );
 
     // The pass ended: the next is due a day later, and none before.
     let watch = rig.watch().await;
@@ -297,7 +343,7 @@ async fn a_connected_shop_is_read_once_a_day() {
     assert_eq!(watch.last_error, None);
     assert_eq!(watch.next_at, watch.checked_at + CHECK_EVERY_SECS);
     assert_eq!(rig.only().sweep(watch.next_at - 1).await.unwrap(), 0);
-    assert_eq!(questions(&rig.stand_in).len(), 7);
+    assert_eq!(questions(&rig.stand_in).len(), 10);
 
     // A day later Google has finished one more: only the last days are
     // asked about, and only the new one fetched.
@@ -311,14 +357,14 @@ async fn a_connected_shop_is_read_once_a_day() {
     assert_eq!(rig.only().sweep(next).await.unwrap(), 1);
     let asked = questions(&rig.stand_in);
     assert_eq!(
-        asked[7],
+        asked[10],
         (
             day_before(&tomorrow, RECENT_DAYS),
             tomorrow.clone(),
             "date".to_owned()
         )
     );
-    assert_eq!(asked.len(), 10);
+    assert_eq!(asked.len(), 14);
     rig.catch_up().await;
     assert_eq!(rig.held_days().await.len(), 4);
     // The access held served the second pass too.
@@ -429,8 +475,8 @@ async fn a_pass_that_fails_is_recorded_and_tried_again() {
 #[tokio::test]
 async fn the_days_read_before_a_failure_stand() {
     let rig = Rig::new(3).await;
-    // The first day's two questions are answered, the next is not.
-    rig.held.lock().unwrap().rows_fail_after = Some(2);
+    // The first day's three questions are answered, the next is not.
+    rig.held.lock().unwrap().rows_fail_after = Some(3);
     assert_eq!(rig.only().sweep(rig.now).await.unwrap(), 1);
     rig.catch_up().await;
     assert_eq!(rig.held_days().await, vec![day_before(&rig.today, 2)]);
@@ -445,10 +491,10 @@ async fn the_days_read_before_a_failure_stand() {
     rig.catch_up().await;
     assert_eq!(rig.held_days().await.len(), 3);
     // The day held was not fetched again: one question for the days, then
-    // two for each of the two missing.
+    // three for each of the two missing.
     let asked = questions(&rig.stand_in);
-    let again = &asked[4..];
-    assert_eq!(again.len(), 5);
+    let again = &asked[5..];
+    assert_eq!(again.len(), 7);
     assert!(
         again.iter().all(|(first, _, grouping)| {
             grouping == "date" || *first != day_before(&rig.today, 2)
@@ -516,7 +562,7 @@ async fn a_disconnected_shop_is_left_alone_and_keeps_what_was_read() {
             .unwrap(),
         0
     );
-    assert_eq!(questions(&rig.stand_in).len(), 5);
+    assert_eq!(questions(&rig.stand_in).len(), 7);
     assert_eq!(rig.held_days().await.len(), 2);
 }
 

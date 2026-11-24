@@ -9,7 +9,10 @@ import { createTenant, uniqueTenant } from "./tenants";
 // page gives the period's totals, the queries and the pages, each page told
 // for what it is in the shop. A read Google does not answer says why and
 // when it is tried again; a connection Google no longer honours says
-// "connect again" and keeps what was read.
+// "connect again" and keeps what was read. The page beside it tells where
+// the shop's categories stand: the ones whose best query sits on the second
+// page of results, the check a new shop is owed, the queries no category
+// answers.
 
 /// Connects the shop's Google account and chooses `site`.
 async function connect(page: Page, slug: string, site: string) {
@@ -74,6 +77,7 @@ test("a shop reads its Search Console queries and pages", async ({ page }) => {
     expect(google.questions[0]).toMatchObject({ dimension: "date", first: searchDay(90) });
     expect(google.questions.filter((question) => question.dimension === "query")).toHaveLength(3);
     expect(google.questions.filter((question) => question.dimension === "page")).toHaveLength(3);
+    expect(google.questions.filter((question) => question.dimension === "page+query")).toHaveLength(3);
     expect(google.questions.filter((question) => question.dimension !== "date").every((q) => q.first === q.last)).toBe(
       true,
     );
@@ -151,6 +155,87 @@ test("a read Google does not answer says why and when it is tried again", async 
     const asked = google.questions.length;
     await page.waitForTimeout(3000);
     expect(google.questions).toHaveLength(asked);
+  } finally {
+    await google.stop();
+  }
+});
+
+test("a shop sees which categories sit on the second page of results", async ({ page }) => {
+  const google = new FakeGoogle();
+  // One finished day the week before, two this week.
+  google.searchDays = [searchDay(10), searchDay(3), searchDay(2)];
+  const category = "https://shop.example/arbres-a-chat";
+  google.searchPageQueries = (day) => [
+    // Nobody clicks on the second page: Google lists the pair last.
+    { page: category, query: "arbre a chat pas cher", clicks: 1, impressions: 5, position: 3 },
+    { page: "https://shop.example/", query: "boutique chat", clicks: 0, impressions: 20, position: 8 },
+    { page: category, query: "arbre à chat", clicks: 0, impressions: 40, position: day === searchDay(10) ? 18 : 14 },
+  ];
+  await google.start();
+  try {
+    await registerWithEmail(page, uniqueEmail("ranking"));
+    const shop = uniqueTenant("Ranking");
+    await createTenant(page, shop.name);
+    await page.goto(`/t/${shop.slug}/categories`);
+    await page.getByLabel("Name").fill("Arbres a chat");
+    await page.getByRole("button", { name: "Create category" }).click();
+    await expect(page.getByRole("status")).toBeVisible();
+
+    // Nothing read yet: the page says where to look.
+    await page.goto(`/t/${shop.slug}/search-console`);
+    await page.locator("[data-page-tabs]").getByRole("link", { name: "Categories" }).click();
+    await expect(page).toHaveURL(new RegExp(`/t/${shop.slug}/search-console/categories$`));
+    await expect(page.locator("[data-ranking-empty]")).toBeVisible();
+    await expect(page.locator("[data-ranking]")).toHaveCount(0);
+
+    await connect(page, shop.slug, "sc-domain:shop.example");
+
+    // Read off the page, once the three days are in.
+    await page.goto(`/t/${shop.slug}/search-console/categories`);
+    const row = page.locator("[data-ranking-category]");
+    await expect(async () => {
+      await page.reload();
+      await expect(row.locator("[data-impressions]")).toHaveAttribute("data-impressions", "120", { timeout: 1000 });
+    }).toPass({ timeout: 30_000 });
+
+    // The category by its most shown query, not its best placed: 18, then
+    // 14 twice, over 40 impressions each.
+    await expect(row).toHaveCount(1);
+    await expect(row.getByRole("link", { name: "Arbres a chat" })).toBeVisible();
+    await expect(row.locator("[data-ranking-query]")).toHaveText("arbre à chat");
+    await expect(row.locator("[data-position]")).toHaveText("15.3");
+    // Week by week, the oldest first: nothing for four, then 18, then 14.
+    await expect(row.locator("[data-week-positions]")).toHaveText("Position: – · – · – · – · 18.0 · 14.0");
+    await expect(row.locator("[data-week-impressions]")).toHaveText("Impressions: – · – · – · – · 40 · 80");
+    await expect(row.locator("[data-moved]")).toHaveAttribute("data-moved", "up");
+    await expect(row.locator("[data-moved]")).toHaveText("Up 4.0");
+    // What the catalog says of it.
+    await expect(row.locator("[data-products]")).toHaveAttribute("data-products", "0");
+    await expect(row.locator("[data-text]")).toHaveAttribute("data-text", "no");
+    await expect(page.locator("[data-live]")).toHaveAttribute("data-live", "1");
+    await expect(page.locator("[data-band-first]")).toHaveAttribute("data-band-first", "0");
+    await expect(page.locator("[data-band-second]")).toHaveAttribute("data-band-second", "1");
+
+    // The check a new shop is owed: not due yet, one category placed of
+    // the two wanted, impressions rising from nothing.
+    const check = page.locator("[data-check]");
+    await expect(check).toHaveAttribute("data-check", "early");
+    await expect(check.locator("[data-check-first]")).toHaveAttribute("data-check-first", searchDay(10));
+    await expect(check.locator("[data-check-placed]")).toHaveAttribute("data-check-placed", "1");
+    await expect(check.locator("[data-check-trend]")).toHaveAttribute("data-check-trend", "rising");
+    await expect(check).toContainText(`the check is due on ${searchDay(-80)}`);
+
+    // The query the home page answers, and no category.
+    const loose = page.locator("[data-loose-query]");
+    await expect(loose).toHaveCount(1);
+    await expect(loose).toHaveAttribute("data-loose-query", "boutique chat");
+    await expect(loose.locator("[data-impressions]")).toHaveAttribute("data-impressions", "60");
+    await expect(loose.locator("[data-position]")).toHaveText("8.0");
+    await expect(loose.locator("[data-search-kind]")).toHaveText("Home page");
+
+    // The category's row leads to the category.
+    await row.getByRole("link", { name: "Arbres a chat" }).click();
+    await expect(page).toHaveURL(new RegExp(`/t/${shop.slug}/categories/[^/]+$`));
   } finally {
     await google.stop();
   }

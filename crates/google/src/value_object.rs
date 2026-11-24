@@ -39,6 +39,10 @@ pub fn search_watch_id(tenant_id: &str) -> String {
 /// clicked. A day's event carries both lists.
 pub const MAX_SEARCH_ROWS: usize = 500;
 
+/// How many pairs of a page and a query it showed for are kept of a day:
+/// its most shown. They ride in the day's event with the two lists.
+pub const MAX_PAGE_QUERY_ROWS: usize = 1_000;
+
 /// The longest query or address kept: Google's own filters take 4,096
 /// characters, and nothing a person types or a shop serves comes near.
 pub const MAX_SEARCH_KEY_LEN: usize = 1_000;

@@ -12,7 +12,8 @@
 //!
 //! What Search Console says of a shop's site is recorded here too, a day
 //! at a time, by the host's daily pass: the site's clicks, impressions and
-//! average position, and the same for its most clicked queries and pages.
+//! average position, the same for its most clicked queries and pages, and
+//! which page showed for which query.
 //! The rows of a day live in the event that records it, so a rebuilt read
 //! model and every node of a cluster hold the same.
 //!

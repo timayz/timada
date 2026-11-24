@@ -172,7 +172,7 @@ event timada-google/Connection::Connected { tenant_id: String, refresh_token_sea
 event timada-google/Connection::Disconnected { disconnected_by: String }
 event timada-google/Connection::Lapsed { noticed_by: String }
 event timada-google/Connection::SiteChosen { site: String, chosen_by: String }
-event timada-google/SearchDay::DayFetched { tenant_id: String, site: String, day: String, clicks: u64, impressions: u64, position_milli: u32, queries: Vec<SearchRow>, pages: Vec<SearchRow>, fetched_by: String }
+event timada-google/SearchDay::DayFetched { tenant_id: String, site: String, day: String, clicks: u64, impressions: u64, position_milli: u32, queries: Vec<SearchRow>, pages: Vec<SearchRow>, page_queries: Vec<PageQueryRow>, fetched_by: String }
 event timada-google/SearchWatch::SearchCheckFailed { tenant_id: String, site: String, reason: String, attempts: u32, failed_by: String }
 event timada-google/SearchWatch::SearchChecked { tenant_id: String, site: String, behind: bool, checked_by: String }
 event timada-identity/AccountInvitation::Accepted { user_id: String, accepted_at: u64 }
@@ -526,6 +526,7 @@ type timada_core::picture::Picture { width: u32, height: u32, listing: Rendition
 type timada_core::picture::RenditionFile { width: u32, height: u32, size: u64, sha256: [u8;32] }
 type timada_discounts::value_object::CarriedReservation { cart_id: String, expires_at: u64 }
 type timada_discounts::value_object::CarriedUse { cart_id: String, order_id: String, returned: bool }
+type timada_google::aggregator::PageQueryRow { page: String, query: String, clicks: u64, impressions: u64, position_milli: u32 }
 type timada_google::aggregator::SearchRow { key: String, clicks: u64, impressions: u64, position_milli: u32 }
 type timada_identity::value_object::ChallengePurpose enum { Register, SignIn, ResetPassword }
 type timada_identity::value_object::SignInMethod enum { OAuth2, Passkey }

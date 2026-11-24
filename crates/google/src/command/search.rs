@@ -14,11 +14,13 @@
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
-use crate::aggregator::{DayFetched, SearchCheckFailed, SearchChecked, SearchRow, SearchWatch};
+use crate::aggregator::{
+    DayFetched, PageQueryRow, SearchCheckFailed, SearchChecked, SearchRow, SearchWatch,
+};
 use crate::error::GoogleError;
 use crate::value_object::{
-    CATCH_UP_SECS, CHECK_EVERY_SECS, MAX_REASON_LEN, MAX_SEARCH_KEY_LEN, MAX_SEARCH_ROWS,
-    normalize_site, retry_delay_secs, search_day_id, search_watch_id,
+    CATCH_UP_SECS, CHECK_EVERY_SECS, MAX_PAGE_QUERY_ROWS, MAX_REASON_LEN, MAX_SEARCH_KEY_LEN,
+    MAX_SEARCH_ROWS, normalize_site, retry_delay_secs, search_day_id, search_watch_id,
 };
 
 use super::Command;
@@ -48,6 +50,8 @@ pub struct DayReport {
     pub queries: Vec<SearchRow>,
     /// The most clicked pages, by address.
     pub pages: Vec<SearchRow>,
+    /// The queries each page showed for, in any order.
+    pub page_queries: Vec<PageQueryRow>,
 }
 
 /// The write model of a shop's watch: where the look for new days stands.
@@ -136,6 +140,25 @@ fn kept(rows: Vec<SearchRow>) -> Vec<SearchRow> {
         .collect()
 }
 
+/// The pairs of a day as they are kept: without the ones with no page or
+/// no query, or one too long, the most shown first (then the most clicked,
+/// then by page and query, so two nodes keep the same),
+/// [`MAX_PAGE_QUERY_ROWS`] at most.
+fn kept_page_queries(rows: Vec<PageQueryRow>) -> Vec<PageQueryRow> {
+    let whole = |key: &str| !key.is_empty() && key.len() <= MAX_SEARCH_KEY_LEN;
+    let mut rows: Vec<PageQueryRow> = rows
+        .into_iter()
+        .filter(|row| whole(&row.page) && whole(&row.query))
+        .collect();
+    rows.sort_by(|a, b| {
+        (b.impressions, b.clicks)
+            .cmp(&(a.impressions, a.clicks))
+            .then_with(|| (&a.page, &a.query).cmp(&(&b.page, &b.query)))
+    });
+    rows.truncate(MAX_PAGE_QUERY_ROWS);
+    rows
+}
+
 /// A day as `YYYY-MM-DD`.
 fn is_day(day: &str) -> bool {
     day.len() == 10 && timada_core::civil::parse_date(day).is_some()
@@ -219,6 +242,7 @@ impl<E: Executor> Command<E> {
                 position_milli: report.numbers.position_milli,
                 queries: kept(report.queries),
                 pages: kept(report.pages),
+                page_queries: kept_page_queries(report.page_queries),
                 fetched_by: actor.to_owned(),
             });
         match write.commit(&self.0).await {

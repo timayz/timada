@@ -118,17 +118,22 @@ A pass asks Google, for web search and finished days only (`dataState: final`):
    grouped by query or page, which also tells which days are finished: Google answers
    with those only, two to three days behind, in Pacific time;
 2. for each missing day, its most clicked **queries**, then its most clicked
-   **pages**: two questions over one day each.
+   **pages**: two questions over one day each;
+3. for each missing day, **which page showed for which query**: one question over
+   that day, grouped by both, for 5,000 pairs of which the 1,000 most shown are kept.
 
 That shape follows Google's limits, read on 2026-11-23:
 
 - the counted quotas are far away: 1,200 questions a minute for a site and for an
-  account, 30,000,000 a day for the application. A daily pass is three questions on a
+  account, 30,000,000 a day for the application. A daily pass is four questions on a
   normal day;
 - the limit that matters is the **load** quota, which Google does not put a number on:
   grouping or filtering by query or by page is costly, both at once "the most
-  expensive", and a longer range costs more. So a pass never groups by both, and asks
-  for rows one day at a time;
+  expensive", and a longer range costs more. So a pass asks for rows one day at a
+  time, and groups by both once a day only, because nothing else tells which page
+  answers which query (#684). Google lists rows by clicks, and a page on the second
+  page of results has few or none: more pairs are asked for than kept, and the ones
+  kept are the most shown;
 - a site's totals are their own question because the rows do not add up to them: the
   queries too few people typed are withheld from the rows and counted in the totals,
   and a search that shows two pages of the site counts once for the site and once for
@@ -142,12 +147,12 @@ next pass ten minutes later while older days are left; after that, once a day.
 - **A day** is one event on a stream of its own (`SearchDay`, id made of the shop, the
   site and the day), written once: Google does not change a finished day, and two
   nodes that both fetched it record it once. Its rows live in the event (the 500 most
-  clicked queries and the 500 most clicked pages), so a rebuilt read model and every
-  node hold the same.
+  clicked queries, the 500 most clicked pages and the 1,000 most shown pairs of a
+  page and a query), so a rebuilt read model and every node hold the same.
 - **The read model** (`google_search_days`, `google_search_queries`,
-  `google_search_pages`) is keyed by shop, site and day. The site's numbers are kept
-  486 days (sixteen months, as far back as Search Console goes), the queries and the
-  pages 92 days: each new day drops what is older, so nothing sweeps them. A shop that
+  `google_search_pages`, `google_search_page_queries`) is keyed by shop, site and day. The site's numbers are kept
+  486 days (sixteen months, as far back as Search Console goes), the queries, the
+  pages and the pairs 92 days: each new day drops what is older, so nothing sweeps them. A shop that
   chooses another site keeps the earlier one's rows apart, to age out.
 - A day with no search that showed the site is absent from Google's answer: it holds
   no row, and counts for nothing.
@@ -172,6 +177,34 @@ the back office now: an address that moved since, or one the storefront serves o
 own (the cart, a search), reads "Other". A page's or an article's slug in another
 language is not among the back office's rows, so those are told by the main
 language's.
+
+## Categories in search (#684)
+
+`/t/{slug}/search-console/categories`, the tab beside the overview, for members with
+`pages:read`. Worked out on each visit from `google_search_page_queries`
+(`search_console/ranking.rs`, pure), nothing of it is stored:
+
+- **A category's best query** is the one its page was shown for the most over the
+  last 28 days (four weeks ending on the last day held): the most shown, not the
+  best placed, so a rare query at position 1 does not hide a category whose main
+  query sits at 14. A category served in several languages is one category.
+- **On the second page**: the categories whose best query averages a position that
+  rounds to 11 to 20 (10.5 up to 20.5), with the query, its impressions and its
+  position, both week by week over the last six weeks, and what the catalog says of
+  the category: the products its page lists, whether it has a description, when it
+  last changed. A line above the table counts the categories on the first page, the
+  second, further, and not shown.
+- **New shop check**: shown for 180 days from the first day Search Console holds for
+  the site, due on day 90. Two answers: how many categories have their best query in
+  positions 1 to 20 (two wanted), and whether the site's impressions over the last 28
+  days are rising, flat or falling against the 28 before (a tenth either way). The
+  first day is the first Google showed the site on, as far back as was read (90 days
+  before the shop connected): Search Console's own "first indexed" date is not read.
+- **Queries without a category**: what the shop showed for over the last 28 days
+  through no category page, the 50 most shown, each with the page Google answered
+  with the most. Candidates for a new category or for an article.
+
+A day read before the pairs were (none on a released version) holds no pair.
 
 The browser suite runs against a stand-in (`tests/e2e/google.ts`), which
 `config/e2e.toml` points the four addresses at.

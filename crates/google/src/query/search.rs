@@ -57,6 +57,19 @@ pub async fn last_search_day(db: &Db, tenant_id: &str, site: &str) -> Result<Opt
     Ok(day.map(|(day,)| day))
 }
 
+/// The first day of `site` the shop holds: the first Google showed it on,
+/// as far back as it was read; `None` before the first.
+pub async fn first_search_day(db: &Db, tenant_id: &str, site: &str) -> Result<Option<String>> {
+    let day: Option<(String,)> = db
+        .fetch_optional(
+            "SELECT day FROM google_search_days
+             WHERE tenant_id = ?1 AND site = ?2 ORDER BY day LIMIT 1",
+            (tenant_id, site),
+        )
+        .await?;
+    Ok(day.map(|(day,)| day))
+}
+
 /// What a site, a query or a page did over a period.
 #[derive(Debug, Clone, Copy, Default, FromRow, PartialEq, Eq)]
 pub struct SearchFigures {
@@ -188,4 +201,52 @@ pub async fn top_pages(
         (tenant_id, site, first, last, limit),
     )
     .await
+}
+
+/// A query a page showed for over a period.
+#[derive(Debug, Clone, FromRow, PartialEq, Eq)]
+pub struct PageQueryLine {
+    /// The page's address.
+    pub page: String,
+    /// The query as typed.
+    pub query: String,
+    pub clicks: i64,
+    pub impressions: i64,
+    pub weighted_position_milli: i64,
+}
+
+impl PageQueryLine {
+    pub fn figures(&self) -> SearchFigures {
+        SearchFigures {
+            clicks: self.clicks,
+            impressions: self.impressions,
+            weighted_position_milli: self.weighted_position_milli,
+        }
+    }
+}
+
+/// The statement of [`page_queries`]: the period's rows are one range of
+/// the key, added up by page and query. It reads every row of the period,
+/// [`MAX_PAGE_QUERY_ROWS`](crate::MAX_PAGE_QUERY_ROWS) a day at most.
+pub(super) const PAGE_QUERIES: &str = "SELECT page, query, SUM(clicks) AS clicks,
+        SUM(impressions) AS impressions,
+        SUM(position_milli * impressions) AS weighted_position_milli
+     FROM google_search_page_queries
+     WHERE tenant_id = ?1 AND site = ?2 AND day >= ?3 AND day <= ?4
+     GROUP BY page, query
+     ORDER BY impressions DESC, page, query
+     LIMIT ?5";
+
+/// The queries each page of `site` showed for from `first` to `last`, the
+/// most shown first, `limit` at most.
+pub async fn page_queries(
+    db: &Db,
+    tenant_id: &str,
+    site: &str,
+    first: &str,
+    last: &str,
+    limit: i64,
+) -> Result<Vec<PageQueryLine>> {
+    db.fetch_all(PAGE_QUERIES, (tenant_id, site, first, last, limit))
+        .await
 }
