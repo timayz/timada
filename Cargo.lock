@@ -7817,6 +7817,7 @@ name = "timada-aliexpress"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bitcode",
  "deunicode",
  "evento",
@@ -7834,6 +7835,7 @@ dependencies = [
  "timada-tenancy",
  "tokio",
  "tracing",
+ "ulid",
 ]
 
 [[package]]

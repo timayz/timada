@@ -26,3 +26,5 @@ sha2.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
+async-trait.workspace = true
+ulid.workspace = true

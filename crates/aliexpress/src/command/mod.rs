@@ -75,8 +75,8 @@ impl<E: Executor> Deref for Command<E> {
 
 pub(crate) use timada_core::unix_now;
 
-/// How many times a read's failure is recorded again when another write to
-/// the link came in between.
+/// How many times a read's failure, or the link's end, is written again when
+/// another write to the link came in between.
 const WRITE_ATTEMPTS: usize = 3;
 
 /// What a read of a linked item recorded.
@@ -648,26 +648,36 @@ impl<E: Executor> Command<E> {
         Ok(())
     }
 
-    /// Stops keeping the product in step; unlinked already is a no-op.
+    /// Stops keeping the product in step; unlinked already is a no-op. A
+    /// read recorded at the same moment does not keep the link: it is read
+    /// again and unlinked on top.
     pub async fn unlink(
         &self,
         actor: &str,
         link_id: &str,
         routing_key: Option<String>,
     ) -> Result<(), AliexpressError> {
-        let link = self.require_link(link_id).await?;
-        if link.status == LinkStatus::Unlinked {
-            return Ok(());
+        for attempt in 1..=WRITE_ATTEMPTS {
+            let link = self.require_link(link_id).await?;
+            if link.status == LinkStatus::Unlinked {
+                return Ok(());
+            }
+            let written = link
+                .write()?
+                .routing_key_opt(routing_key.clone())
+                .event(&Unlinked {
+                    unlinked_by: actor.to_owned(),
+                })
+                .tenant(&self.tenant)
+                .commit(&self.executor)
+                .await;
+            match written {
+                Ok(_) => return Ok(()),
+                Err(WriteError::InvalidOriginalVersion) if attempt < WRITE_ATTEMPTS => {}
+                Err(err) => return Err(err.into()),
+            }
         }
-        link.write()?
-            .routing_key_opt(routing_key)
-            .event(&Unlinked {
-                unlinked_by: actor.to_owned(),
-            })
-            .tenant(&self.tenant)
-            .commit(&self.executor)
-            .await?;
-        Ok(())
+        Err(WriteError::InvalidOriginalVersion.into())
     }
 }
 
