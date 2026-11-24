@@ -16,6 +16,7 @@ pub const CATEGORIES: IconData = iconify_icon!("lucide:folder-tree");
 pub const FEED: IconData = iconify_icon!("lucide:rss");
 pub const COSTS: IconData = iconify_icon!("lucide:calculator");
 pub const PROPOSALS: IconData = iconify_icon!("lucide:clipboard-check");
+pub const WRITER: IconData = iconify_icon!("lucide:pen-line");
 pub const ORDERS: IconData = iconify_icon!("lucide:shopping-bag");
 pub const CARTS: IconData = iconify_icon!("lucide:shopping-cart");
 pub const CUSTOMERS: IconData = iconify_icon!("lucide:contact");

@@ -369,6 +369,16 @@ pub fn describe_error(code: &str) -> &'static str {
             "What this proposal is about changed since it was prepared: it ended as out of date and nothing was applied."
         }
         "proposal_none_selected" => "Tick the proposals to answer first.",
+        "writer_off" => "Text drafts are not set up on this platform.",
+        "writer_on_its_way" => {
+            "A draft is on its way for it already: it will wait under Proposals."
+        }
+        "writer_unknown_kind" => "Texts are drafted for a product or a category.",
+        "writer_invalid_subject" => "Name the product or the category to draft the texts of.",
+        "writer_invalid_keyword" => "A search to write for is at most 120 characters.",
+        "writer_brief_too_long" => {
+            "The tone, and what never to claim, are at most 1,000 characters each."
+        }
         "meta_pixel_invalid_id" => "A Meta pixel ID is 5 to 20 digits.",
         "meta_pixel_missing" => {
             "A Conversions API token needs the ID of the pixel it was made for."

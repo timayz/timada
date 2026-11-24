@@ -224,6 +224,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         |kind: &str| crate::app::t::slug::proposals::new::new_url(cx, &slug, kind, &category.id);
     let suggest_url = suggest(timada_proposals::KIND_CATEGORY);
     let suggest_child_url = suggest(timada_proposals::KIND_NEW_CATEGORY);
+    let can_draft =
+        can_propose && !category.archived && context::<crate::writer::Writers>(cx).enabled();
 
     Ok(view! {
         document(
@@ -255,6 +257,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 if can_propose && !category.archived {
                     <a class=(LINK) href=(&suggest_url) data-suggest-change="">"Suggest a change"</a>
                     <a class=(LINK) href=(&suggest_child_url) data-suggest-category="">"Suggest a category under it"</a>
+                }
+                if can_draft {
+                    crate::app::t::slug::writer::draft_form(slug: &slug, kind: timada_proposals::KIND_CATEGORY, subject_id: &category.id)
                 }
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())

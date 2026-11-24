@@ -156,6 +156,26 @@ pub async fn apply(
                 .await?;
         }
     }
+    // A name or a description the writer drafted is declared as written by
+    // a machine, so the shopping feed says so, as Merchant Center asks.
+    if product && proposal.source == timada_writer::WRITER_SOURCE {
+        let names = changes.iter().any(|change| change.field == FIELD_NAME);
+        let describes = changes
+            .iter()
+            .any(|change| change.field == FIELD_DESCRIPTION);
+        if (names || describes)
+            && let Some(now) = catalog.load_product(id).await?
+        {
+            catalog
+                .declare_ai_writing(
+                    actor,
+                    id,
+                    now.ai_title || names,
+                    now.ai_description || describes,
+                )
+                .await?;
+        }
+    }
     Ok(())
 }
 
@@ -562,6 +582,51 @@ mod tests {
             proposal(&store, &shop, &id).await.status,
             ProposalStatus::Applied
         );
+    }
+
+    /// What the writer drafted is declared as machine-written once it is
+    /// applied; what a member wrote is not.
+    #[tokio::test]
+    async fn a_text_the_writer_drafted_is_declared_as_such() {
+        let store = store().await;
+        let shop = shop(&store).await;
+        let product_id = product(&store, &shop).await;
+        let catalog = Catalog::new(store.clone(), &shop);
+        approved(
+            &store,
+            &shop,
+            draft(
+                KIND_PRODUCT,
+                &product_id,
+                &[(FIELD_META_TITLE, "Gants moto")],
+            ),
+            &[],
+        )
+        .await;
+        pass(&store).await;
+        let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+        assert!(!product.ai_title && !product.ai_description);
+
+        let mut drafted = draft(KIND_PRODUCT, &product_id, &[(FIELD_NAME, "Gants moto été")]);
+        drafted.source = timada_writer::WRITER_SOURCE.to_owned();
+        approved(&store, &shop, drafted, &[]).await;
+        pass(&store).await;
+        let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+        assert_eq!(product.name, "Gants moto été");
+        assert!(product.ai_title);
+        assert!(!product.ai_description);
+
+        // A drafted description joins the name.
+        let mut drafted = draft(
+            KIND_PRODUCT,
+            &product_id,
+            &[(FIELD_DESCRIPTION, "Des gants légers.")],
+        );
+        drafted.source = timada_writer::WRITER_SOURCE.to_owned();
+        approved(&store, &shop, drafted, &[]).await;
+        pass(&store).await;
+        let product = catalog.load_product(&product_id).await.unwrap().unwrap();
+        assert!(product.ai_title && product.ai_description);
     }
 
     #[tokio::test]

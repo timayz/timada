@@ -108,6 +108,10 @@ pub struct Services {
     pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
     /// Where the studies' keywords come from, when the operator set a source.
     pub keywords: crate::keywords::Keywords,
+    /// The model that drafts texts, when the operator set one, and what
+    /// its drafts may spend in a day.
+    pub writers: crate::writer::Writers,
+    pub writer_spending: crate::writer::Spending,
     /// The application the shops connect their Google accounts to, when
     /// the operator set one.
     pub google: crate::google::Google,
@@ -146,6 +150,8 @@ pub fn router(services: Services) -> Router {
         shop_mail,
         aliexpress,
         keywords,
+        writers,
+        writer_spending,
         google,
         euro_rates,
         store,
@@ -213,6 +219,8 @@ pub fn router(services: Services) -> Router {
         .with(payments)
         .with(aliexpress)
         .with(keywords)
+        .with(writers)
+        .with(writer_spending)
         .with(google)
         .with(euro_rates)
         .with(store)

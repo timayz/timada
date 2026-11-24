@@ -7966,6 +7966,7 @@ dependencies = [
  "timada-storefront",
  "timada-support",
  "timada-tenancy",
+ "timada-writer",
  "tokio",
  "tokio-rustls",
  "topcoat",
@@ -8243,6 +8244,19 @@ dependencies = [
  "timada-core",
  "tokio",
  "tracing",
+ "ulid",
+]
+
+[[package]]
+name = "timada-writer"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "thiserror 2.0.21",
+ "timada-core",
+ "tokio",
  "ulid",
 ]
 

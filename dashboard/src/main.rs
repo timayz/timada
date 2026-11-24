@@ -62,6 +62,7 @@ mod study_shop;
 mod ui;
 mod vies;
 mod workers;
+mod writer;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
