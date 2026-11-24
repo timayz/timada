@@ -3,14 +3,17 @@
 //! carries who did it, so the stream is its own audit trail. No field is an
 //! enum, so the lock never freezes one.
 
-/// A shop's connection to a Google account. Its id is the shop's, and it
-/// lives in the platform's tenant, out of reach of the shop's storefront.
+/// A shop's connection to a Google account. Its id is made of the shop's
+/// ([`connection_id`](crate::connection_id)), and it lives in the platform's
+/// tenant, out of reach of the shop's storefront.
 #[evento::aggregate(name = "timada-google/Connection")]
 pub enum Connection {
     /// A Google account said yes to the platform's application. It replaces
     /// the grant held before, whole: a wider one asked for later covers
     /// what the earlier one did.
     Connected {
+        /// The shop: the stream's id does not give it back.
+        tenant_id: String,
         /// What renews the access, sealed by the host for this shop. The
         /// access itself lasts an hour and is never recorded.
         refresh_token_sealed: Vec<u8>,

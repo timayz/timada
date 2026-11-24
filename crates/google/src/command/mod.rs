@@ -13,7 +13,9 @@ use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Ev
 
 use crate::aggregator::{Connected, Connection, Disconnected, Lapsed, SiteChosen};
 use crate::error::GoogleError;
-use crate::value_object::{ACCESS_SEARCH_CONSOLE, ACCESSES, MAX_ACCOUNT_LEN, normalize_site};
+use crate::value_object::{
+    ACCESS_SEARCH_CONSOLE, ACCESSES, MAX_ACCOUNT_LEN, connection_id, normalize_site,
+};
 
 /// The command gateway over the platform's streams. Cheap to clone when `E`
 /// is (the dashboard's executor is an `Arc` wrapper).
@@ -28,8 +30,9 @@ const WRITE_ATTEMPTS: usize = 5;
 #[evento::snapshot(none)]
 #[derive(Debug, PartialEq, Eq)]
 pub struct ConnectionState {
-    /// The shop.
     pub id: String,
+    /// The shop.
+    pub tenant_id: String,
     /// Whether a grant is held: `false` once the merchant took it off.
     pub connected: bool,
     /// What renews the access, sealed by the host; empty when not
@@ -76,6 +79,7 @@ async fn on_connected(
     connection: &mut ConnectionState,
 ) -> anyhow::Result<()> {
     connection.id = event.aggregate_id.to_owned();
+    connection.tenant_id = event.data.tenant_id.to_owned();
     // Another account sees other sites, and a grant without Search Console
     // sees none: the site chosen goes with either.
     let keeps_site = connection.connected
@@ -120,6 +124,7 @@ async fn on_disconnected(
 ) -> anyhow::Result<()> {
     *connection = ConnectionState {
         id: event.aggregate_id.to_owned(),
+        tenant_id: connection.tenant_id.clone(),
         aggregate_version: connection.aggregate_version,
         ..ConnectionState::default()
     };
@@ -145,7 +150,7 @@ impl<E: Executor> Command<E> {
         tenant_id: &str,
     ) -> anyhow::Result<Option<ConnectionState>> {
         connection_projection()
-            .load(tenant_id)
+            .load(connection_id(tenant_id))
             .execute(&self.0)
             .await
     }
@@ -167,7 +172,7 @@ impl<E: Executor> Command<E> {
             let mut write = match &loaded {
                 Some(connection) => connection.write()?,
                 None => {
-                    let mut write = evento::append(tenant_id);
+                    let mut write = evento::append(connection_id(tenant_id));
                     write.original_version(0);
                     write
                 }
@@ -209,6 +214,7 @@ impl<E: Executor> Command<E> {
             return Err(GoogleError::UnknownAccess);
         }
         let connected = Connected {
+            tenant_id: tenant_id.to_owned(),
             refresh_token_sealed: cmd.refresh_token_sealed,
             account: cmd.account.trim().chars().take(MAX_ACCOUNT_LEN).collect(),
             accesses: ACCESSES

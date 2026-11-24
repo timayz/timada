@@ -11,7 +11,7 @@
 //! does.
 //!
 //! The connection's stream sits in the platform's own tenant (the default
-//! tenant of the store), under the shop's id: a storefront's key, which
+//! tenant of the store), under an id made of the shop's: a storefront's key, which
 //! reads the shop's streams, never sees the sealed grant. The crate is pure
 //! domain code: it never calls Google and never sees a grant in the clear.
 

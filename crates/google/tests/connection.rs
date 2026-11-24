@@ -20,6 +20,9 @@ async fn a_shop_connects_chooses_its_site_and_disconnects() {
     assert!(connection.reads(ACCESS_SEARCH_CONSOLE));
     assert!(!connection.covers(ACCESS_ADS));
     assert_eq!(connection.account, "alice@example.com");
+    // The shop's own id names another stream.
+    assert_eq!(connection.tenant_id, SHOP);
+    assert_ne!(connection.id, SHOP);
     assert_eq!(connection.refresh_token_sealed, b"sealed-1");
     assert_eq!(connection.site, None);
 
@@ -34,6 +37,7 @@ async fn a_shop_connects_chooses_its_site_and_disconnects() {
     google.disconnect(ALICE, SHOP).await.unwrap();
     let connection = google.load_connection(SHOP).await.unwrap().unwrap();
     assert!(!connection.connected);
+    assert_eq!(connection.tenant_id, SHOP);
     assert!(connection.refresh_token_sealed.is_empty());
     assert_eq!(connection.site, None);
     assert!(!connection.reads(ACCESS_SEARCH_CONSOLE));

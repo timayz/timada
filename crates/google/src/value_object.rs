@@ -19,6 +19,12 @@ pub const MAX_ACCOUNT_LEN: usize = 254;
 /// The longest Search Console site name kept.
 pub const MAX_SITE_LEN: usize = 300;
 
+/// The stream of a shop's connection. Stream ids are one space for every
+/// kind of aggregate, and the shop's own id names its tenant's stream.
+pub fn connection_id(tenant_id: &str) -> String {
+    evento::hash_ids(vec!["google-connection", tenant_id])
+}
+
 /// What Google calls a kind of access when asked for it; `None` for a kind
 /// that is not one of [`ACCESSES`].
 pub fn scope_of(access: &str) -> Option<&'static str> {

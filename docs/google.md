@@ -82,7 +82,7 @@ verification takes in practice.
 ## How it is kept
 
 - The connection is an aggregate of its own, `timada-google/Connection`, whose id is
-  the shop's, in the **platform's streams**: a storefront's key reads the shop's
+  made of the shop's (`connection_id`), in the **platform's streams**: a storefront's key reads the shop's
   streams and never sees the sealed grant.
 - The grant's refresh token is sealed for the shop (`seal::google_sealer`, bound to
   the shop's id) before it is recorded. It does not lapse while it is used; Google

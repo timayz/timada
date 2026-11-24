@@ -393,7 +393,7 @@ impl Google {
         if !connection.connected || connection.lapsed {
             return Err(GoogleFault::ConnectAgain);
         }
-        let tenant_id = connection.id.as_str();
+        let tenant_id = connection.tenant_id.as_str();
         if let Ok(all) = inner.held.lock()
             && let Some(held) = all.get(tenant_id)
             && held.refresh_token_sealed == connection.refresh_token_sealed
@@ -469,7 +469,7 @@ impl Google {
         let access = self.access(store, connection).await?;
         match call(access).await {
             Err(GoogleFault::ConnectAgain) => {
-                self.forget(&connection.id);
+                self.forget(&connection.tenant_id);
                 let access = self.access(store, connection).await?;
                 call(access).await.map_err(|fault| match fault {
                     GoogleFault::ConnectAgain => {
@@ -486,21 +486,21 @@ impl Google {
     /// and drops the access held for it. A store that does not take the
     /// write leaves it to the next one who meets the refusal.
     async fn lapsed<E: evento::Executor + Clone>(&self, store: &E, connection: &ConnectionState) {
-        self.forget(&connection.id);
+        self.forget(&connection.tenant_id);
         let noted = timada_google::Command(store.clone())
             .note_lapsed(
                 GOOGLE_ACTOR,
-                &connection.id,
+                &connection.tenant_id,
                 &connection.refresh_token_sealed,
             )
             .await;
         match noted {
             Ok(true) => {
-                tracing::warn!(tenant = %connection.id, "Google no longer honours a shop's grant: its merchant has to connect again");
+                tracing::warn!(tenant = %connection.tenant_id, "Google no longer honours a shop's grant: its merchant has to connect again");
             }
             Ok(false) => {}
             Err(err) => {
-                tracing::warn!(tenant = %connection.id, %err, "a lapsed Google grant could not be recorded");
+                tracing::warn!(tenant = %connection.tenant_id, %err, "a lapsed Google grant could not be recorded");
             }
         }
     }
