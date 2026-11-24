@@ -162,3 +162,29 @@ async fn a_slug_whose_tenant_was_never_written_is_held_while_the_claim_is_fresh(
         globex.id
     );
 }
+
+#[tokio::test]
+async fn a_tenant_made_under_a_chosen_id_is_made_once() {
+    let cmd = command().await;
+    let id = new_id();
+    let made = cmd
+        .create_tenant_under(&id, create("Biker Gloves", "user-alice"))
+        .await
+        .unwrap();
+    assert_eq!(made.id, id);
+    assert_eq!(made.slug, "biker-gloves");
+    assert!(made.is_owner("user-alice"));
+
+    // Asked for again, as a saga delivered twice does: the same tenant.
+    let again = cmd
+        .create_tenant_under(&id, create("Biker Gloves", "user-alice"))
+        .await
+        .unwrap();
+    assert_eq!(again.aggregate_version, made.aggregate_version);
+    assert_eq!(again.slug, "biker-gloves");
+    assert!(matches!(
+        cmd.create_tenant_under(&new_id(), create(" ", "user-alice"))
+            .await,
+        Err(TenancyError::InvalidName)
+    ));
+}

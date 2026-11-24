@@ -24,6 +24,8 @@ pub const MIGRATION_APP: &str = "research";
 /// tests say.
 /// `research_keywords_keyword` finds the rows of one keyword, for a study's
 /// category tree.
+/// A study's row names the shop its categories are created in (`tenant_id`,
+/// empty until it has one) and how many it created there.
 /// `research_fetches`: the last paid fetch of a seed in a country and a
 /// language, over every study: where a new fetch of it looks first.
 /// `research_spend`: what a user's calls cost on a day (UTC); `version` is
@@ -135,6 +137,12 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
         Migration::up(
             "0005_tree",
             "CREATE INDEX research_keywords_keyword ON research_keywords (study_id, keyword);",
+        ),
+        Migration::up(
+            "0006_shop",
+            "ALTER TABLE research_studies ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '';
+        ALTER TABLE research_studies ADD COLUMN created_count INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX research_studies_shop ON research_studies (tenant_id, created_at DESC);",
         ),
     ],
 );

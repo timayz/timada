@@ -558,6 +558,16 @@ pub fn describe_error(code: &str) -> &'static str {
         "keyword_not_in_tree" => "This keyword is not in the tree.",
         "keyword_not_kept" => "Only a keyword the study keeps makes a category.",
         "too_many_niche_words" => "A niche is named by at most 10 words.",
+        "tree_held_back" => {
+            "Nothing is created while a category of the tree has something in its way."
+        }
+        "shop_not_manageable" => "Pick a shop whose catalog you may manage.",
+        "invalid_study_shop" => "Name the shop to create, or pick one of yours.",
+        "study_has_another_shop" => {
+            "This study's categories are created in the shop it is linked to."
+        }
+        "categories_being_created" => "The categories are being created: look again in a moment.",
+        "nothing_to_create" => "Every category that can be created is.",
         "keywords_disabled" => {
             "Keyword research is not set up on this platform: the operator has to give it a keyword source."
         }

@@ -29,6 +29,27 @@ pub struct ResultRow {
     pub title: String,
 }
 
+/// One category of a study's tree as it is to be created in a shop.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct PlannedCategory {
+    /// The keyword of the tree it is made of.
+    pub keyword: String,
+    /// The id the category goes by in the shop, chosen with the request so
+    /// asking twice creates it once.
+    pub category_id: String,
+    /// The category above it in the shop, by id; `None` for a parent
+    /// category.
+    pub parent_id: Option<String>,
+    pub name: String,
+    pub slug: String,
+    /// The title search engines show: it starts with the keyword.
+    pub meta_title: String,
+    /// Campaigns are to leave its products out.
+    pub out_of_ads: bool,
+    /// Where it sorts among its siblings, lowest first.
+    pub position: u32,
+}
+
 /// A niche study. Its id is a fresh [`new_study_id`](crate::new_study_id),
 /// and it lives in the platform's tenant: it exists before any shop does.
 #[evento::aggregate(name = "timada-research/Study")]
@@ -199,6 +220,47 @@ pub enum Study {
     NicheWordsSet {
         words: Vec<String>,
         set_by: String,
+    },
+    /// The owner asked for the tree to be created as draft categories in
+    /// the shop `tenant_id`: one they may manage the catalog of, or with
+    /// `shop_name` a shop to create first under that id, theirs. The host
+    /// creates what `categories` lists, parents before their children.
+    CreationRequested {
+        /// A fresh id, which what follows names.
+        request: String,
+        tenant_id: String,
+        shop_name: Option<String>,
+        categories: Vec<PlannedCategory>,
+        requested_by: String,
+    },
+    /// The study's shop: the one its categories are created in, from then
+    /// on.
+    ShopLinked {
+        tenant_id: String,
+        linked_by: String,
+    },
+    /// The category of `keyword` exists in the study's shop, as a draft.
+    CategoryCreated {
+        request: String,
+        keyword: String,
+        category_id: String,
+        slug: String,
+        created_by: String,
+    },
+    /// The shop refused the category of `keyword`; `reason` says why, for
+    /// the owner. It is left to create.
+    CategoryNotCreated {
+        request: String,
+        keyword: String,
+        reason: String,
+        failed_by: String,
+    },
+    /// Nothing of the request could be created: no such shop, or one its
+    /// asker may not manage. `reason` says why, for the owner.
+    CreationFailed {
+        request: String,
+        reason: String,
+        failed_by: String,
     },
     /// Gone for its owner; the stream stays.
     Deleted {

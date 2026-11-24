@@ -382,11 +382,15 @@ event timada-research/DomainMarks::DomainMarked { domain: String, specialist: bo
 event timada-research/SpendDay::Charged { hold: String, user_id: String, study_id: String, query: String, cost_usd_micros: u64, charged_by: String }
 event timada-research/SpendDay::Held { hold: String, user_id: String, study_id: String, query: String, most_usd_micros: u64, held_by: String }
 event timada-research/SpendDay::Released { hold: String, released_by: String }
+event timada-research/Study::CategoryCreated { request: String, keyword: String, category_id: String, slug: String, created_by: String }
+event timada-research/Study::CategoryNotCreated { request: String, keyword: String, reason: String, failed_by: String }
 event timada-research/Study::CategoryParked { keyword: String, parked_by: String }
 event timada-research/Study::CategoryPlaced { keyword: String, parent: Option<String>, placed_by: String }
 event timada-research/Study::CategoryPriced { keyword: String, price_cents: Option<u64>, priced_by: String }
 event timada-research/Study::CategoryRemoved { keyword: String, removed_by: String }
 event timada-research/Study::Created { name: String, country: String, language: String, created_by: String }
+event timada-research/Study::CreationFailed { request: String, reason: String, failed_by: String }
+event timada-research/Study::CreationRequested { request: String, tenant_id: String, shop_name: Option<String>, categories: Vec<PlannedCategory>, requested_by: String }
 event timada-research/Study::Deleted { deleted_by: String }
 event timada-research/Study::FetchFailed { seed: String, reason: String, failed_by: String }
 event timada-research/Study::FetchRequested { seed: String, requested_by: String }
@@ -403,6 +407,7 @@ event timada-research/Study::ResultsFetched { keyword: String, results: Vec<Resu
 event timada-research/Study::ResultsRequested { keyword: String, requested_by: String }
 event timada-research/Study::ResultsStarted { keyword: String, started_by: String }
 event timada-research/Study::SeedAdded { seed: String, added_by: String }
+event timada-research/Study::ShopLinked { tenant_id: String, linked_by: String }
 event timada-reviews/Review::PhotoRemoved { image_id: String, removed_by: String }
 event timada-reviews/Review::Published { published_by: String }
 event timada-reviews/Review::Rejected { reason: String, rejected_by: String }
@@ -535,6 +540,7 @@ type timada_orders::value_object::OrderSource { first: Click, last: Click }
 type timada_orders::value_object::Payment { provider: String, payment_id: String, amount_cents: u64, currency: String, capture_before: Option<u64> }
 type timada_orders::value_object::ShippingAddress { name: String, line1: String, line2: Option<String>, postal_code: String, city: String, region: Option<String>, country: String, phone: Option<String> }
 type timada_research::aggregator::KeywordRow { keyword: String, volume: Option<u64>, cpc_usd_cents: Option<u64>, difficulty: Option<u8>, intent: Option<String> }
+type timada_research::aggregator::PlannedCategory { keyword: String, category_id: String, parent_id: Option<String>, name: String, slug: String, meta_title: String, out_of_ads: bool, position: u32 }
 type timada_research::aggregator::ResultRow { position: u8, domain: String, url: String, title: String }
 type timada_reviews::value_object::ReviewPhoto { id: String, picture: timada_core::Picture }
 type timada_shoppers::value_object::NewsletterSubscription { subscriber_id: String, key_id: String }

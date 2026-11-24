@@ -416,11 +416,12 @@ pub(super) async fn count_charge(
 async fn upsert_study(db: &Db, study: &StudyState) -> anyhow::Result<()> {
     db.execute(
         "INSERT INTO research_studies (id, owner_id, name, country, language, seed_count,
-            keyword_count, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            keyword_count, created_at, updated_at, tenant_id, created_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT (id) DO UPDATE SET
             name = excluded.name, seed_count = excluded.seed_count,
-            keyword_count = excluded.keyword_count, updated_at = excluded.updated_at",
+            keyword_count = excluded.keyword_count, updated_at = excluded.updated_at,
+            tenant_id = excluded.tenant_id, created_count = excluded.created_count",
         (
             study.id.as_str(),
             study.owner.as_str(),
@@ -431,6 +432,8 @@ async fn upsert_study(db: &Db, study: &StudyState) -> anyhow::Result<()> {
             study.keywords() as i64,
             study.created_at as i64,
             study.updated_at as i64,
+            study.shop.as_deref().unwrap_or_default(),
+            study.created.len() as i64,
         ),
     )
     .await?;

@@ -83,6 +83,60 @@ impl Tree {
     }
 }
 
+/// A category of the tree that exists in the study's shop.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CreatedCategory {
+    pub keyword: String,
+    /// Its id in the shop.
+    pub category_id: String,
+    pub slug: String,
+}
+
+/// The last time the owner asked for the tree to be created, and what
+/// came of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Creation {
+    pub request: String,
+    pub tenant_id: String,
+    /// The name of the shop to create first, when one was asked for.
+    pub shop_name: Option<String>,
+    /// Unix seconds of the request.
+    pub requested_at: u64,
+    pub planned: Vec<crate::aggregator::PlannedCategory>,
+    /// The keywords whose category was created for this request.
+    pub created: Vec<String>,
+    /// The keywords whose category the shop refused, each with why.
+    pub refused: Vec<(String, String)>,
+    /// Why nothing could be created, when nothing could.
+    pub failed: Option<String>,
+}
+
+impl Creation {
+    /// Whether every category it planned was created or refused, or
+    /// nothing could be.
+    pub fn is_settled(&self) -> bool {
+        self.failed.is_some() || self.left().next().is_none()
+    }
+
+    /// What it planned and has neither created nor been refused.
+    pub fn left(&self) -> impl Iterator<Item = &crate::aggregator::PlannedCategory> {
+        self.planned.iter().filter(|planned| {
+            !self.created.contains(&planned.keyword)
+                && !self
+                    .refused
+                    .iter()
+                    .any(|(keyword, _)| *keyword == planned.keyword)
+        })
+    }
+
+    /// Whether the host is still at it at `now` (unix seconds): not
+    /// settled, and asked for not so long ago that it must have stopped.
+    pub fn is_pending(&self, now: u64) -> bool {
+        !self.is_settled()
+            && now.saturating_sub(self.requested_at) < crate::value_object::FETCH_STALE_SECS
+    }
+}
+
 /// The figures of one keyword, as the read model holds them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct KeywordFigures {

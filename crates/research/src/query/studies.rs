@@ -45,6 +45,10 @@ pub struct StudyRow {
     pub searched_count: i64,
     /// How many are still without.
     pub owed_count: i64,
+    /// The shop its categories are created in; empty until it has one.
+    pub tenant_id: String,
+    /// How many categories it created there.
+    pub created_count: i64,
 }
 
 impl StudyRow {
@@ -64,7 +68,7 @@ const STUDY_COLUMNS: &str =
     "SELECT id, owner_id, name, country, language, seed_count, keyword_count, created_at,
         updated_at, verdict, scored_keywords, main_count, long_tail_count, kept_volume,
         avg_cpc_millis, currency, break_even_roas, price_per_click, needed_price_per_click,
-        competition, searched_count, owed_count
+        competition, searched_count, owed_count, tenant_id, created_count
      FROM research_studies";
 
 /// The statement of [`studies_of_user`].
@@ -86,6 +90,28 @@ pub async fn studies_of_user(db: &Db, user_id: &str, limit: i64) -> Result<Vec<S
 pub async fn study_row(db: &Db, study_id: &str) -> Result<Option<StudyRow>> {
     Ok(db
         .fetch_all(&format!("{STUDY_COLUMNS} WHERE id = ?1"), (study_id,))
+        .await?
+        .into_iter()
+        .next())
+}
+
+/// The statement of [`study_of_shop`].
+pub(super) fn study_of_shop_statement() -> String {
+    format!(
+        "{STUDY_COLUMNS} INDEXED BY research_studies_shop
+         WHERE tenant_id = ?1 ORDER BY created_at DESC LIMIT 1"
+    )
+}
+
+/// The study a shop's categories were created from: the niche it starts
+/// with. The most recent, should two name the shop; `None` for a shop made
+/// by hand.
+pub async fn study_of_shop(db: &Db, tenant_id: &str) -> Result<Option<StudyRow>> {
+    if tenant_id.is_empty() {
+        return Ok(None);
+    }
+    Ok(db
+        .fetch_all(&study_of_shop_statement(), (tenant_id,))
         .await?
         .into_iter()
         .next())

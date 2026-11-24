@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { FakeDataforseo, keywordsFor, sitesFor } from "./dataforseo";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { ADMIN_STATE } from "./fixtures";
+import { createTenant, uniqueTenant } from "./tenants";
 
 // A niche study, end to end against a stand-in for the keyword source
 // (dataforseo.ts): a user starts one from a few seed keywords, asks for the
@@ -28,6 +29,9 @@ import { ADMIN_STATE } from "./fixtures";
 // The kept keywords are what a shop's categories are named after: the owner
 // builds a tree from them by hand, parents, children and keywords parked
 // for later, and the page says what stands between it and its creation.
+// The tree is then created as draft categories, off the page: in a shop
+// made from the study, or in one of the owner's, where an address already
+// taken is said before anything is created.
 
 /// Reloads the study's page until the seed's fetch stands at `status`.
 async function seedStands(page: Page, seed: string, status: string) {
@@ -495,6 +499,175 @@ test("the kept keywords of a study become a category tree", async ({ page, brows
     const stranger = await (await browser.newContext()).newPage();
     await registerWithEmail(stranger, uniqueEmail("stranger"));
     expect((await stranger.goto(treeUrl))?.status()).toBe(404);
+  } finally {
+    await source.stop();
+  }
+});
+
+/// Starts a study from one seed, fetches it and brings its own keyword
+/// back, so it keeps three: the seed, its cheap one and its best one.
+async function studyOfThree(page: Page, seed: string) {
+  await page.goto("/research/new");
+  await page.getByLabel("Name").fill(`Study ${seed}`);
+  await page.getByLabel("Seed keywords, one a line").fill(seed);
+  await page.getByRole("button", { name: "Start the study" }).click();
+  await expect(page.getByRole("status")).toContainText("Study started.");
+  const studyUrl = page.url().split("?")[0];
+  await page.getByRole("button", { name: "Fetch the keywords of 1 seed" }).click();
+  await seedStands(page, seed, "fetched");
+  await keywordsListed(page, 5);
+  await listHolds(page, /^Too difficult/, [seed]);
+  await page.locator(`[data-keyword="${seed}"]`).getByRole("button", { name: "Bring back" }).click();
+  await listHolds(page, /^Main/, [seed, `${seed} pas cher`, `meilleur ${seed}`]);
+  return studyUrl;
+}
+
+/// Reloads the tree's page until what it created in a shop stands at
+/// `state`: the categories are created off the page.
+async function creationStands(page: Page, treeUrl: string, state: string) {
+  await expect(async () => {
+    await page.goto(treeUrl);
+    await expect(page.locator("[data-create]")).toHaveAttribute("data-create", state, { timeout: 1000 });
+  }).toPass({ timeout: 30_000 });
+}
+
+test("a study's tree is created as draft categories in a shop", async ({ page }) => {
+  const source = new FakeDataforseo();
+  await source.start();
+  const tag = Date.now().toString(36);
+  const seed = `gants moto ${tag}`;
+  const cheap = `${seed} pas cher`;
+  const best = `meilleur ${seed}`;
+  const slugOf = (keyword: string) => keyword.replace(/ /g, "-");
+  const named = (keyword: string) => keyword.charAt(0).toUpperCase() + keyword.slice(1);
+  try {
+    await registerWithEmail(page, uniqueEmail("founder"));
+    const studyUrl = await studyOfThree(page, seed);
+    const treeUrl = `${studyUrl}/tree`;
+
+    // The sale said, the seed's clicks cost too much against its price;
+    // its child is given a price of its own that pays for them.
+    await page.goto(studyUrl);
+    await page.getByLabel("Average price, VAT included").fill("60");
+    await page.getByLabel("Supplier's cost").fill("15");
+    await page.getByLabel("Sending a parcel").fill("4");
+    await page.getByLabel("At the border").fill("5");
+    await page.getByLabel("VAT in the price, in %").fill("20");
+    await page.getByLabel("Fixed costs, for each sale").fill("1");
+    await page.getByLabel("Payment fee, in % of the price").fill("1.5");
+    await page.getByLabel("Payment fee, for each payment").fill("0.25");
+    await page.getByRole("button", { name: "Save and score again" }).click();
+    await expect(page.getByRole("status")).toContainText("Saved: the study is scored again.");
+    await page.goto(treeUrl);
+    await move(page, `[data-kept="${seed}"]`, "A parent category", "Placed in the tree.");
+    await move(page, `[data-kept="${cheap}"]`, `Under ${named(seed)}`, "Placed in the tree.");
+    await page.getByLabel(`Average price of ${named(cheap)}, in EUR`).fill("70");
+    await page.locator(`[data-category="${cheap}"]`).getByRole("button", { name: /^Save/ }).click();
+    await expect(page.getByRole("status")).toContainText("Price saved.");
+
+    // A name held back holds everything back.
+    await page.getByLabel("The niche's own words").fill("casque");
+    await page.getByRole("button", { name: "Save the words" }).click();
+    await expect(page.locator("[data-create-held-back]")).toBeVisible();
+    await expect(page.locator("[data-create-new]")).toHaveCount(0);
+    await page.getByLabel("The niche's own words").fill("moto");
+    await page.getByRole("button", { name: "Save the words" }).click();
+    await expect(page.locator("[data-tree]")).toHaveAttribute("data-tree", "ready");
+
+    // One action: the shop, then its categories, as drafts.
+    await expect(page.locator("[data-create]")).toHaveAttribute("data-create", "none");
+    const shop = `Biker gloves ${tag}`;
+    await page.getByLabel("Create a shop from this study").fill(shop);
+    await page.getByRole("button", { name: "Create the shop and its categories" }).click();
+    await expect(page.getByRole("status")).toContainText("The categories are being created as drafts.");
+    await creationStands(page, treeUrl, "done");
+    await expect(page.locator("[data-create]")).toHaveAttribute("data-create-created", "2");
+    await expect(page.locator(`[data-created="${slugOf(seed)}"]`)).toBeVisible();
+    const shopSlug = await page.locator("[data-create-shop]").getAttribute("data-create-shop");
+    expect(shopSlug).toBe(`biker-gloves-${tag}`);
+
+    // The shop is the user's, and holds the tree: nothing published, the
+    // parent kept out of ads, its child under it.
+    await expect(async () => {
+      await page.goto(`/t/${shopSlug}/categories`);
+      await expect(page.locator("[data-category]")).toHaveCount(2, { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    const parent = page.locator(`[data-category="${slugOf(seed)}"]`);
+    const child = page.locator(`[data-category="${slugOf(cheap)}"]`);
+    await expect(parent).toHaveAttribute("data-category-depth", "0");
+    await expect(parent.locator("[data-category-draft]")).toBeVisible();
+    await expect(parent.locator("[data-category-out-of-ads]")).toBeVisible();
+    await expect(child).toHaveAttribute("data-category-depth", "1");
+    await expect(child.locator("[data-category-draft]")).toBeVisible();
+    await expect(child.locator("[data-category-out-of-ads]")).toHaveCount(0);
+    await page.goto(treeUrl);
+    await page.locator(`[data-created="${slugOf(cheap)}"]`).getByRole("link").click();
+    await expect(page.getByRole("heading", { level: 1 })).toContainText(named(cheap));
+    await expect(page.locator("[data-category-published]")).toHaveAttribute("data-category-published", "no");
+    await expect(page.getByLabel("Search engines' title")).toHaveValue(named(cheap));
+
+    // A keyword placed later is left to create, in the study's shop only.
+    await page.goto(treeUrl);
+    await move(page, `[data-kept="${best}"]`, "A parent category", "Placed in the tree.");
+    await expect(page.locator("[data-create]")).toHaveAttribute("data-create", "partial");
+    await expect(page.locator(`[data-left="${slugOf(best)}"]`)).toHaveAttribute("data-left-state", "ready");
+    await expect(page.locator("[data-create-new]")).toHaveCount(0);
+    await page.getByRole("button", { name: `Create 1 draft category in ${shop}` }).click();
+    await creationStands(page, treeUrl, "done");
+    await expect(page.locator("[data-create]")).toHaveAttribute("data-create-created", "3");
+
+  } finally {
+    await source.stop();
+  }
+});
+
+test("a tree is created in a shop of its owner, where a taken address is said first", async ({ page }) => {
+  const source = new FakeDataforseo();
+  await source.start();
+  const tag = Date.now().toString(36);
+  const slugOf = (keyword: string) => keyword.replace(/ /g, "-");
+  const named = (keyword: string) => keyword.charAt(0).toUpperCase() + keyword.slice(1);
+  try {
+    await registerWithEmail(page, uniqueEmail("merchant"));
+    // In a shop that exists, an address already taken is said before
+    // anything is created, and holds back what is under it.
+    const other = `casque moto ${tag}`;
+    const otherTreeUrl = `${await studyOfThree(page, other)}/tree`;
+    const { name: handMade, slug: handMadeSlug } = uniqueTenant("Hand Made");
+    await createTenant(page, handMade);
+    await page.goto(`/t/${handMadeSlug}/categories`);
+    await page.getByLabel("Name").fill(named(other));
+    await page.getByRole("button", { name: "Create category" }).click();
+    await expect(page.getByRole("status")).toContainText("Category created.");
+    const takenUrl = page.url().split("?")[0];
+    await page.goto(otherTreeUrl);
+    await move(page, `[data-kept="${other}"]`, "A parent category", "Placed in the tree.");
+    await move(page, `[data-kept="${other} pas cher"]`, `Under ${named(other)}`, "Placed in the tree.");
+    await move(page, `[data-kept="meilleur ${other}"]`, "A parent category", "Placed in the tree.");
+    await expect(page.getByLabel("Create in a shop")).toBeEnabled();
+    await page.getByLabel("Create in a shop").selectOption({ label: handMade });
+    await page.getByRole("button", { name: "See what would be created" }).click();
+    await expect(page).toHaveURL(new RegExp(`shop=${handMadeSlug}`));
+    await expect(page.locator(`[data-left="${slugOf(other)}"]`)).toHaveAttribute("data-left-state", "taken");
+    await expect(page.locator(`[data-left="${slugOf(other)}-pas-cher"]`)).toHaveAttribute("data-left-state", "under_taken");
+    await expect(page.locator(`[data-left="meilleur-${slugOf(other)}"]`)).toHaveAttribute("data-left-state", "ready");
+    await page.getByRole("button", { name: `Create 1 draft category in ${handMade}` }).click();
+    await creationStands(page, otherTreeUrl, "partial");
+    await expect(page.locator("[data-create]")).toHaveAttribute("data-create-created", "1");
+    await expect(page.locator("[data-create]")).toHaveAttribute("data-create-left", "2");
+    await expect(page.locator("[data-create-shop]")).toHaveAttribute("data-create-shop", handMadeSlug);
+
+    // The address freed in the shop, what is left is created.
+    await page.goto(takenUrl);
+    await page.getByRole("button", { name: "Archive" }).click();
+    await expect(page.getByRole("status")).toContainText("Category archived.");
+    await expect(async () => {
+      await page.goto(otherTreeUrl);
+      await expect(page.locator(`[data-left="${slugOf(other)}"]`)).toHaveAttribute("data-left-state", "ready", { timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
+    await page.getByRole("button", { name: `Create 2 draft categories in ${handMade}` }).click();
+    await creationStands(page, otherTreeUrl, "done");
+    await expect(page.locator("[data-create]")).toHaveAttribute("data-create-created", "3");
   } finally {
     await source.stop();
   }
