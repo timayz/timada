@@ -7951,6 +7951,7 @@ dependencies = [
  "timada-catalog-import",
  "timada-core",
  "timada-discounts",
+ "timada-google",
  "timada-identity",
  "timada-invoicing",
  "timada-newsletter",
@@ -7987,6 +7988,18 @@ dependencies = [
  "tokio",
  "tracing",
  "ulid",
+]
+
+[[package]]
+name = "timada-google"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "thiserror 2.0.21",
+ "timada-core",
+ "tokio",
 ]
 
 [[package]]

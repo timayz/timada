@@ -63,6 +63,13 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     if !keywords.enabled() {
         tracing::info!("dataforseo.login is not set: keyword research is off");
     }
+    // The application the shops connect their Google accounts to.
+    let google = crate::google::Google::new(crate::seal::google_sealer(&config), &config.google);
+    if !google.enabled() {
+        tracing::info!(
+            "google.client_id or secrets.key is not set: no shop connects a Google account"
+        );
+    }
     let keys = Arc::new(crate::key_vault::KeyVault::new(
         &config.data_keys,
         keys_sealer,
@@ -522,6 +529,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         shop_mail,
         aliexpress,
         keywords,
+        google,
         euro_rates,
         store: connections,
         workers: workers.clone(),

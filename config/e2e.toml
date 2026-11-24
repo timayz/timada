@@ -98,6 +98,16 @@ login = "keywords-e2e@example.com"
 password = "dataforseo-e2e-s3cret"
 api_url = "http://127.0.0.1:12116"
 
+# A shop connects its Google account to a stand-in for Google
+# (tests/e2e/google.ts), which says yes at once.
+[google]
+client_id = "timada-e2e.apps.googleusercontent.com"
+client_secret = "google-e2e-s3cret"
+authorize_url = "http://127.0.0.1:12117/o/oauth2/v2/auth"
+token_url = "http://127.0.0.1:12117/token"
+userinfo_url = "http://127.0.0.1:12117/v1/userinfo"
+search_console_url = "http://127.0.0.1:12117/webmasters/v3"
+
 # A user's day has room for three of the stand-in's calls (0.01248 USD each,
 # held at 0.132 before they are made); the fourth is refused
 # (research.spec.ts). The platform's cap is out of the suite's reach.

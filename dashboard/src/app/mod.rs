@@ -5,6 +5,7 @@ pub mod aliexpress;
 pub mod auth;
 pub mod companies;
 pub mod feeds;
+pub mod google;
 pub mod invitations;
 pub mod research;
 pub(crate) mod server_errors;
@@ -107,6 +108,9 @@ pub struct Services {
     pub aliexpress: Arc<crate::aliexpress::Aliexpress>,
     /// Where the studies' keywords come from, when the operator set a source.
     pub keywords: crate::keywords::Keywords,
+    /// The application the shops connect their Google accounts to, when
+    /// the operator set one.
+    pub google: crate::google::Google,
     /// The euro reference rates, for a study to read a cost per click in
     /// its sale's currency.
     pub euro_rates: Arc<dyn crate::ecb::EuroRates>,
@@ -142,6 +146,7 @@ pub fn router(services: Services) -> Router {
         shop_mail,
         aliexpress,
         keywords,
+        google,
         euro_rates,
         store,
         workers,
@@ -208,6 +213,7 @@ pub fn router(services: Services) -> Router {
         .with(payments)
         .with(aliexpress)
         .with(keywords)
+        .with(google)
         .with(euro_rates)
         .with(store)
         .with(workers)

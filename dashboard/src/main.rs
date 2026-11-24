@@ -15,6 +15,7 @@ mod disk;
 mod ecb;
 mod export;
 mod feed;
+mod google;
 mod hold_reminders;
 mod idle_carts;
 mod invitation_mails;

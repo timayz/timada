@@ -30,6 +30,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/automations` | `timada-automations` | The scenarios a shop's team draws: a trigger, then a tree of steps, kept as a definition the editor works on (see `docs/automations.md`) |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/research` | `timada-research` | The niche studies a user keeps before any shop exists: seed keywords, a country and a language, and the keywords fetched for each seed, in the platform's own streams (see `docs/keywords.md`) |
+| `crates/google` | `timada-google` | The one connection a shop keeps to a Google account: the grant, sealed by the host, the kinds of access it covers and the shop's Search Console site, in the platform's own streams (see `docs/google.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/loadtest` | `timada-loadtest` | Crowds of random shoppers on a storefront over plain HTTP, paying through a stand-in for Stripe: latency, capacity and anomalies (see `docs/loadtest.md`) |
 | `crates/core` | `timada-core` | What every context shares and none owns: the paused-store refusal, languages and time zones, the personal-data keys (`keys`), the mailed-code MAC (`codes`), and the one form of an e-mail address, a slug, a currency, the clock, a calendar date, an amount and a `LIKE` pattern (`email`, `slug`, `currency`, `time`, `civil`, `money`, `sql`). Depends on evento only, never on a database driver or the web framework; every context depends on it |
@@ -485,10 +486,11 @@ by construction.
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
    orders, open carts, customers, discounts, checkout offers, shipping, reviews,
    messages, newsletter, automations, pages, payments, invoicing and the invoices,
-   mail, AliExpress, the shop's name and time zone), `/companies` and
+   mail, AliExpress, the Google account, the shop's name and time zone), `/companies` and
    `/companies/{id}` (the legal entities the shops sell as, their AliExpress buyer
    account), `/research` and `/research/{id}` (a user's niche studies, see *Niche
-   studies*), `/aliexpress` (the platform app's callback), `/stripe/webhooks/{tenant_id}`,
+   studies*), `/aliexpress` (the platform app's callback), `/google/callback` (where Google
+   sends a member back, see `docs/google.md`), `/stripe/webhooks/{tenant_id}`,
    `/store/reviews` and `/store/reviews/revise` (a storefront handing in a review, see
    *Reviews*), `/store/shoppers/*` (a storefront signing its shoppers in, see *Shopper
    accounts*), `/store/contact` (a storefront handing in a message from its contact
@@ -1376,7 +1378,8 @@ rates), `advertising` (Meta's address, for the stand-in), `reviews`
 (the review-request timer), `newsletter` (the send sweep), `automations` (the run
 timer, the abandoned-checkout delay), `store` (the limits on what a storefront hands
 in and the carts it starts), `carts` (how long an idle cart is kept), `invitations`
-(their limits), `aliexpress` (the platform's app), `store_api`
+(their limits), `aliexpress` (the platform's app), `google` (the application the
+shops connect their Google accounts to; omit its id and secret and none does), `store_api`
 (omit to not expose it), `cluster` (omit for a single node), `monitoring`.
 `config/dev.local.toml` is the developer's own file and is ignored by git;
 `config/e2e.toml` is what the browser suite runs on. Configuration is written for

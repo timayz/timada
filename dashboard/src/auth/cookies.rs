@@ -160,6 +160,19 @@ pub struct AliexpressFlow {
     pub issued_at: u64,
 }
 
+/// A member on their way to Google to connect the shop's account.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoogleFlow {
+    /// The shop, by the slug of the page to come back to.
+    pub slug: String,
+    pub tenant_id: String,
+    /// The member who started it; the way back requires the same one.
+    pub user_id: String,
+    /// `state` sent to Google; must come back unchanged.
+    pub state: String,
+    pub issued_at: u64,
+}
+
 fn flow_jar(cx: &Cx) -> impl Cookies + '_ {
     // `Lax`, not `Strict`: the OIDC callback is a top-level cross-site
     // navigation and must still carry the cookie.
@@ -205,6 +218,10 @@ pub fn api_key_reveal(cx: &Cx) -> UnparsedCookieStore<ApiKeyReveal, impl Cookies
 
 pub fn aliexpress_flow(cx: &Cx) -> UnparsedCookieStore<AliexpressFlow, impl Cookies + '_> {
     cookie_store(flow_jar(cx), "aliexpress_flow")
+}
+
+pub fn google_flow(cx: &Cx) -> UnparsedCookieStore<GoogleFlow, impl Cookies + '_> {
+    cookie_store(flow_jar(cx), "google_flow")
 }
 
 /// Whether a flow started at `issued_at` may still finish at `now`.

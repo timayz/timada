@@ -104,6 +104,13 @@ pub fn meta_sealer(config: &Config) -> Option<Sealer> {
     Some(Sealer::new("meta", &secrets.key))
 }
 
+/// What seals what the shops' Google accounts granted: `None` without
+/// `secrets.key`.
+pub fn google_sealer(config: &Config) -> Option<Sealer> {
+    let secrets = config.secrets.as_ref()?;
+    Some(Sealer::new("google", &secrets.key))
+}
+
 /// What seals the personal-data keys on disk ([`crate::key_vault`]): `None`
 /// without `secrets.key`. The purpose stays `shoppers`, its first use: it
 /// labels the derived key, and the files already on disk were sealed under it.
