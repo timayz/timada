@@ -41,6 +41,7 @@ mod order_mails;
 mod payments;
 mod peer_port;
 mod peers;
+mod proposals;
 mod rate_limit;
 mod read_only_store;
 mod readiness;

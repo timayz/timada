@@ -460,6 +460,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .require_permission(cx, PERMISSION_PRODUCTS_READ)
         .await?;
     let can_manage = access.can(cx, PERMISSION_PRODUCTS_MANAGE).await?;
+    let can_propose = access
+        .can(cx, timada_tenancy::PERMISSION_PROPOSALS_PREPARE)
+        .await?;
     let query = query_params::<ProductQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let product = require_product(cx, &access).await?;
@@ -832,6 +835,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let gender = product.gender.clone().unwrap_or_default();
     let feed_labels = product.feed_labels.clone();
     let title = format!("{} · Products · {}", product.name, tenant.name);
+    let suggest_url = crate::app::t::slug::proposals::new::new_url(
+        cx,
+        &tenant.slug,
+        timada_proposals::KIND_PRODUCT,
+        &product.id,
+    );
     Ok(view! {
         document(
             title: &title,
@@ -844,6 +853,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     attrs: attributes! { data-product-status=(product.status.as_str()) },
                     (status_label(product.status))
                 )
+                if can_propose {
+                    <a class=(LINK) href=(&suggest_url) data-suggest-change="">"Suggest a change"</a>
+                }
                 if editable {
                     if product.is_published() {
                         <form method="post" action=(href!(unpublish::unpublish, slug: slug.clone(), product_id: product.id.clone()))>

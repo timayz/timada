@@ -151,6 +151,30 @@ pub async fn send_message_notification(
     Ok(())
 }
 
+/// Tells a member of `tenant_name` that changes prepared for the shop wait
+/// for an answer, with a link to the list. What they would change stays on
+/// the dashboard.
+pub async fn send_proposals_notice(cx: &Cx, to: &str, tenant_name: &str, link: &str) -> Result<()> {
+    let from = context::<MailSender>(cx).0.clone();
+    let subject = format!("Changes wait for your approval on {tenant_name}");
+    let mail = Mail::builder()
+        .from(from)
+        .to([Mailbox::new(to)?])
+        .subject(&subject)
+        .html(
+            cx,
+            view! {
+                <p>"Changes were prepared for " <strong>(tenant_name)</strong> ". Nothing is applied until someone approves it."</p>
+                <p><a href=(link)>"Read what waits"</a></p>
+                <p>"Or open this address: " (link)</p>
+            },
+        )
+        .await?
+        .build()?;
+    send(cx, mail).await?;
+    Ok(())
+}
+
 /// Reminds a member of `tenant_name` that the hold on the shopper's card
 /// for order `reference`, which AliExpress may have, lapses at `lapses_at`
 /// (unix seconds): the payment is to be taken before, with a link to the

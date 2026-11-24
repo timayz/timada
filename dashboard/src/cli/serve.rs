@@ -813,6 +813,13 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     ("google", Kind::ReadModel, |d| {
         timada_google::read_model_subscription(d.db.clone())
     }),
+    ("proposals", Kind::ReadModel, |d| {
+        timada_proposals::read_model_subscription(d.db.clone())
+    }),
+    // What a member approved is changed in the shop, under their name.
+    ("proposal changes", Kind::Sharded, |d| {
+        crate::proposals::apply::subscription(d.store.clone())
+    }),
     // The keywords a study's owner asked for are fetched from the keyword
     // source and recorded on the study.
     ("keyword fetches", Kind::Sharded, |d| {
@@ -911,6 +918,9 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     }),
     ("message notices", Kind::Sharded, |d| {
         crate::message_notifications::subscription(d.mailroom.clone())
+    }),
+    ("proposal notices", Kind::Sharded, |d| {
+        crate::proposals::notices::subscription(d.mailroom.clone())
     }),
     // The sales told to Meta from the server, for the shops that gave a
     // Conversions API token and the shoppers who allowed advertising.
@@ -1013,6 +1023,8 @@ mod tests {
                 "invoicing",
                 "AliExpress",
                 "research",
+                "google",
+                "proposals",
                 "mail logos",
                 "pictures",
             ]

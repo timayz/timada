@@ -345,6 +345,30 @@ pub fn describe_error(code: &str) -> &'static str {
         "google_invalid_site" | "google_unknown_site" => {
             "Choose one of the sites the account reads in Search Console."
         }
+        "proposal_unknown_kind" => "This is not a kind of change a proposal can carry.",
+        "proposal_invalid_subject" => "A proposal names the product or the category it is about.",
+        "proposal_invalid_source" => "A proposal says what prepared it.",
+        "proposal_invalid_changes" => {
+            "A proposal changes one to eight fields of what it is about, each once."
+        }
+        "proposal_value_too_long" => "A value is at most 20,000 characters.",
+        "proposal_nothing_to_change" => {
+            "Nothing would change: every field already holds that value."
+        }
+        "proposal_reason_too_long" => "A reason is at most 1,000 characters.",
+        "proposal_invalid_validity" => "A proposal is valid for ninety days at most.",
+        "proposal_not_found" => "This proposal does not exist.",
+        "proposal_not_waiting" => "This proposal was answered already.",
+        "proposal_expired" => {
+            "This proposal waited past its date: it can be refused, no longer approved."
+        }
+        "proposal_unknown_field" => "The proposal does not change this field.",
+        "proposal_no_applier" => "Nothing applies this kind of change yet.",
+        "proposal_subject_missing" => "What the proposal is about is no longer there.",
+        "proposal_out_of_date" => {
+            "What this proposal is about changed since it was prepared: it ended as out of date and nothing was applied."
+        }
+        "proposal_none_selected" => "Tick the proposals to answer first.",
         "meta_pixel_invalid_id" => "A Meta pixel ID is 5 to 20 digits.",
         "meta_pixel_missing" => {
             "A Conversions API token needs the ID of the pixel it was made for."
@@ -674,6 +698,12 @@ pub fn describe_permission(permission: &str) -> &'static str {
         "automations:manage" => "Draw, save and delete automation scenarios (includes seeing them)",
         "pages:read" => "See the shop's pages (legal notice, terms, about), drafts included",
         "pages:manage" => "Write, publish and delete the shop's pages (includes seeing them)",
+        "proposals:prepare" => {
+            "Prepare a change to the shop for someone else to approve, and see the ones that wait"
+        }
+        "proposals:approve" => {
+            "Approve, edit or refuse the changes that wait; a change to the catalog also needs the permission to manage products"
+        }
         _ => "Unknown permission",
     }
 }
