@@ -5,10 +5,13 @@ use timada_core::page::PageFrom;
 
 use common::*;
 use timada_catalog::{
-    Command, DefineVariant, OptionSelection, ProductFilter, ProductStatus, Sellable,
-    categories_of_product, categories_of_tenant, category_by_id, count_products, live_child_count,
-    product_by_id, product_count, products_of_tenant, read_model_subscription, sellable, tree_of,
-    upsert_product,
+    Command, DefineVariant, DraftCategory, categories_out_of_ads, category_paths,
+    published_child_count,
+};
+use timada_catalog::{
+    OptionSelection, ProductFilter, ProductStatus, Sellable, categories_of_product,
+    categories_of_tenant, category_by_id, count_products, live_child_count, product_by_id,
+    product_count, products_of_tenant, read_model_subscription, sellable, tree_of, upsert_product,
 };
 
 async fn catch_up(executor: &evento::Turso, pool: &Db) {
@@ -625,4 +628,69 @@ async fn the_list_pages_from_where_the_page_beside_it_stopped() {
         Some(older)
     );
     assert_eq!(timada_core::page::Cursor::parse("x-1"), None);
+}
+
+#[tokio::test]
+async fn a_draft_category_is_listed_in_the_back_office_and_has_no_address() {
+    let (executor, pool) = executor_with_pool().await;
+    let cmd = Command::new(executor.clone(), TENANT);
+    let bedding = create_category(&cmd, "Bedding").await;
+    for (id, slug, parent_id, out_of_ads) in [
+        ("01GLOVES", "gloves", None, true),
+        ("01SUMMER", "summer", Some("01GLOVES"), false),
+    ] {
+        cmd.create_draft_category(
+            ALICE,
+            DraftCategory {
+                id: id.to_owned(),
+                name: slug.to_owned(),
+                slug: slug.to_owned(),
+                parent_id: parent_id.map(str::to_owned),
+                meta_title: String::new(),
+                out_of_ads,
+                position: 0,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    catch_up(&executor, &pool).await;
+
+    let rows = categories_of_tenant(&pool, TENANT).await.unwrap();
+    assert_eq!(rows.len(), 3, "drafts are the back office's to show");
+    let gloves = rows.iter().find(|row| row.id == "01GLOVES").unwrap();
+    assert!(gloves.draft && gloves.out_of_ads);
+    assert!(!rows.iter().find(|row| row.id == bedding.id).unwrap().draft);
+    assert_eq!(
+        categories_out_of_ads(&pool, TENANT).await.unwrap(),
+        ["01GLOVES".to_owned()].into()
+    );
+    assert_eq!(
+        published_child_count(&pool, TENANT, "01GLOVES")
+            .await
+            .unwrap(),
+        0
+    );
+
+    // A feed or a mail links to no draft, nor to what is under one.
+    let paths = category_paths(&pool, TENANT).await.unwrap();
+    assert_eq!(paths.category(&bedding.id), Some("/bedding"));
+    assert_eq!(paths.category("01GLOVES"), None);
+    assert_eq!(paths.category("01SUMMER"), None);
+
+    cmd.set_category_published(ALICE, "01GLOVES", true)
+        .await
+        .unwrap();
+    cmd.set_category_published(ALICE, "01SUMMER", true)
+        .await
+        .unwrap();
+    catch_up(&executor, &pool).await;
+    let paths = category_paths(&pool, TENANT).await.unwrap();
+    assert_eq!(paths.category("01SUMMER"), Some("/gloves/summer"));
+    assert_eq!(
+        published_child_count(&pool, TENANT, "01GLOVES")
+            .await
+            .unwrap(),
+        1
+    );
 }

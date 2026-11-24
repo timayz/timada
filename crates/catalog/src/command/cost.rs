@@ -381,6 +381,10 @@ impl<E: Executor> super::Command<E> {
         if state.tiers() == tiers {
             return Ok(());
         }
+        // One label says one thing: not the tier and "out of ads" at once.
+        if tiers.feed_label.is_some() && tiers.feed_label == self.load_feed_ads_label().await? {
+            return Err(CatalogError::FeedLabelTaken);
+        }
         self.write_sale_costs(&state)?
             .routing_key_opt(routing_key)
             .event(&MarginTiersSet {

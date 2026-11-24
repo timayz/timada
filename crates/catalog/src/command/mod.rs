@@ -51,6 +51,10 @@ pub use word::*;
 use evento::{Executor, Projection, metadata::Event};
 
 use crate::aggregator::category::{
+    AllowedInAds as CategoryAllowedInAds, KeptOutOfAds as CategoryKeptOutOfAds,
+    Published as CategoryPublished, Unpublished as CategoryUnpublished,
+};
+use crate::aggregator::category::{
     Archived as CategoryArchived, BodyWritten as CategoryBodyWritten,
     Claimed as CategorySlugClaimed, Created as CategoryCreated, Described as CategoryDescribed,
     HiddenFromMenu as CategoryHiddenFromMenu, Moved as CategoryMoved,
@@ -1391,6 +1395,10 @@ pub struct CategoryState {
     pub archived: bool,
     /// Left out of the shop's menu, with its subtree.
     pub hidden_from_menu: bool,
+    /// Kept back from shoppers until it is published.
+    pub draft: bool,
+    /// Campaigns leave its products out.
+    pub out_of_ads: bool,
     /// The questions its page answers below the products, in order.
     pub questions: Vec<crate::value_object::CategoryQuestion>,
     /// The products its page shows first, in order, by id.
@@ -1416,6 +1424,10 @@ pub fn category_projection<E: Executor>() -> Projection<E, CategoryState> {
         .handler(on_category_seo_set())
         .handler(on_category_questions_set())
         .handler(on_category_products_pinned())
+        .handler(on_category_unpublished())
+        .handler(on_category_published())
+        .handler(on_category_kept_out_of_ads())
+        .handler(on_category_allowed_in_ads())
         .strict()
 }
 
@@ -1521,6 +1533,46 @@ async fn on_category_shown_in_menu(
     category: &mut CategoryState,
 ) -> anyhow::Result<()> {
     category.hidden_from_menu = false;
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_unpublished(
+    event: Event<CategoryUnpublished>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.draft = true;
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_published(
+    event: Event<CategoryPublished>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.draft = false;
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_kept_out_of_ads(
+    event: Event<CategoryKeptOutOfAds>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.out_of_ads = true;
+    category.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_allowed_in_ads(
+    event: Event<CategoryAllowedInAds>,
+    category: &mut CategoryState,
+) -> anyhow::Result<()> {
+    category.out_of_ads = false;
     category.updated_at = event.timestamp;
     Ok(())
 }

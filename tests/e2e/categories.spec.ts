@@ -19,6 +19,10 @@ async function openCategories(page: Page, tenant: string, slug?: string) {
 // product under a category from the product page, and the tree (a read model,
 // a moment behind) follows with its counts. A member whose role lacks
 // `products:read` cannot open the pages.
+//
+// A category is kept back from shoppers as a draft, from the top down, and
+// kept out of ads: the shopping feed's page says which label marks its
+// products.
 
 test("an owner builds a category tree and files a product under it", async ({ page }) => {
   await registerWithEmail(page, uniqueEmail("owner"));
@@ -180,6 +184,74 @@ test("an owner builds a category tree and files a product under it", async ({ pa
   await expect(page.getByRole("status")).toContainText("Category archived.");
   await expect(page.locator("[data-category-archived]")).toBeVisible();
   await expect(page.getByRole("button", { name: "Rename" })).toHaveCount(0);
+});
+
+test("a category is kept back as a draft and kept out of ads", async ({ page }) => {
+  await registerWithEmail(page, uniqueEmail("owner"));
+  const { name, slug } = uniqueTenant("Draft Shop");
+  await createTenant(page, name);
+  await page.goto(`/t/${slug}/categories`);
+  await page.getByLabel("Name").fill("Gloves");
+  await page.getByRole("button", { name: "Create category" }).click();
+  await expect(page.getByRole("status")).toContainText("Category created.");
+  const glovesUrl = page.url().split("?")[0];
+  await openCategories(page, slug, "gloves");
+  await page.getByLabel("Name").fill("Summer gloves");
+  await selectByText(page, "Parent", "Gloves");
+  await page.getByRole("button", { name: "Create category" }).click();
+  await expect(page.getByRole("status")).toContainText("Category created.");
+  const summerUrl = page.url().split("?")[0];
+
+  // Made by hand, a category is shown to shoppers. One above another that
+  // is shown stays so: the tree is kept back from the bottom up.
+  await expect(page.locator("[data-category-published]")).toHaveAttribute("data-category-published", "yes");
+  await openCategories(page, slug, "summer-gloves");
+  await page.goto(glovesUrl);
+  await page.getByRole("button", { name: "Keep back as a draft" }).click();
+  await expect(page.getByRole("alert")).toContainText("Keep back its sub-categories first");
+  await page.goto(summerUrl);
+  await page.getByRole("button", { name: "Keep back as a draft" }).click();
+  await expect(page.getByRole("status")).toContainText("Category kept back as a draft.");
+  await expect(page.locator("[data-category-published]")).toHaveAttribute("data-category-published", "no");
+  await expect(page.locator("[data-category-draft]")).toBeVisible();
+  await expect(async () => {
+    await page.goto(glovesUrl);
+    await page.getByRole("button", { name: "Keep back as a draft" }).click();
+    await expect(page.getByRole("status")).toContainText("Category kept back as a draft.", { timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+  await expect(async () => {
+    await page.goto(`/t/${slug}/categories`);
+    await expect(page.locator("[data-category=gloves] [data-category-draft]")).toBeVisible({ timeout: 1000 });
+    await expect(page.locator("[data-category=summer-gloves] [data-category-draft]")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+
+  // And published from the top down.
+  await page.goto(summerUrl);
+  await page.getByRole("button", { name: "Publish" }).click();
+  await expect(page.getByRole("alert")).toContainText("The category above it is a draft");
+  await page.goto(glovesUrl);
+  await page.getByRole("button", { name: "Publish" }).click();
+  await expect(page.getByRole("status")).toContainText("Category published.");
+  await expect(page.locator("[data-category-published]")).toHaveAttribute("data-category-published", "yes");
+
+  // Kept out of ads, which the list and the feed's page follow.
+  await expect(page.locator("[data-category-ads]")).toHaveAttribute("data-category-ads", "in");
+  await page.getByLabel("Keep its products out of ads").check();
+  await page.getByRole("button", { name: "Save ads" }).click();
+  await expect(page.getByRole("status")).toContainText("Kept out of ads.");
+  await expect(page.locator("[data-category-ads]")).toHaveAttribute("data-category-ads", "out");
+  await expect(async () => {
+    await page.goto(`/t/${slug}/categories`);
+    await expect(page.locator("[data-category=gloves] [data-category-out-of-ads]")).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 15_000 });
+
+  await page.goto(`/t/${slug}/feed`);
+  await expect(page.locator("[data-feed-ads-label]")).toHaveAttribute("data-feed-ads-label", "");
+  await page.getByLabel("Label that marks them").selectOption({ label: "Custom label 3" });
+  await page.getByRole("button", { name: "Save the label" }).click();
+  await expect(page.getByRole("status")).toContainText("Label saved.");
+  await expect(page.locator("[data-feed-ads-label]")).toHaveAttribute("data-feed-ads-label", "3");
+  await expect(page.getByLabel("Label that marks them")).toHaveValue("3");
 });
 
 test("a category cannot be moved under its own sub-category", async ({ page }) => {

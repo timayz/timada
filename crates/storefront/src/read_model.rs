@@ -1000,8 +1000,13 @@ fn attributes_json(product: &ProductState) -> anyhow::Result<String> {
 
 /// The category row, and every count worked out again when it is new, moved
 /// or archived: each of those changes what the pages below and above list.
+/// A draft is kept as an archived category is: no page, no menu entry, no
+/// line of the sitemap, until it is published.
 async fn upsert_category(db: &Db, category: &CategoryState) -> anyhow::Result<()> {
-    db.write(category, |tx, category| {
+    let withheld = category.archived || category.draft;
+    let env = (category, withheld);
+    db.write(&env, |tx, (category, withheld)| {
+        let withheld = *withheld;
         Box::pin(async move {
             let was: Option<(Option<String>, bool)> = fetch_optional(
                 tx,
@@ -1032,7 +1037,7 @@ async fn upsert_category(db: &Db, category: &CategoryState) -> anyhow::Result<()
                     category.description.as_str(),
                     category.parent_id.as_deref(),
                     category.position as i64,
-                    category.archived,
+                    withheld,
                     !category.hidden_from_menu,
                     category.updated_at as i64,
                     category.body.as_str(),
@@ -1052,7 +1057,7 @@ async fn upsert_category(db: &Db, category: &CategoryState) -> anyhow::Result<()
                 ),
             )
             .await?;
-            if was != Some((category.parent_id.clone(), category.archived)) {
+            if was != Some((category.parent_id.clone(), withheld)) {
                 refresh_category_counts(tx).await?;
             }
             Ok(())

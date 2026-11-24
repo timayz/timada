@@ -48,21 +48,26 @@ event timada-automations/Scenario::Renamed { name: String, renamed_by: String }
 event timada-automations/Scenario::Resumed { resumed_by: String }
 event timada-automations/Scenario::Saved { definition: String, saved_by: String }
 event timada-catalog/BestSellers::Ranked { product_ids: Vec<String>, ranked_by: String }
+event timada-catalog/Category::AllowedInAds { allowed_by: String }
 event timada-catalog/Category::Archived { archived_by: String }
 event timada-catalog/Category::BodyWritten { body: String, written_by: String }
 event timada-catalog/Category::Created { slug: String, name: String, parent_id: Option<String>, created_by: String }
 event timada-catalog/Category::Described { description: String, described_by: String }
 event timada-catalog/Category::HiddenFromMenu { hidden_by: String }
+event timada-catalog/Category::KeptOutOfAds { kept_by: String }
 event timada-catalog/Category::Moved { parent_id: Option<String>, moved_by: String }
 event timada-catalog/Category::Positioned { position: u32, positioned_by: String }
 event timada-catalog/Category::ProductsPinned { product_ids: Vec<String>, pinned_by: String }
+event timada-catalog/Category::Published { published_by: String }
 event timada-catalog/Category::QuestionsSet { questions: Vec<CategoryQuestion>, set_by: String }
 event timada-catalog/Category::Renamed { name: String, renamed_by: String }
 event timada-catalog/Category::SeoSet { meta_title: String, meta_description: String, set_by: String }
 event timada-catalog/Category::ShownInMenu { shown_by: String }
+event timada-catalog/Category::Unpublished { unpublished_by: String }
 event timada-catalog/CategorySlug::Claimed { category_id: String }
 event timada-catalog/CategorySlug::Released unit
 event timada-catalog/DeliveryDefault::DefaultDeliveryDaysSet { days: Option<DeliveryDays>, set_by: String }
+event timada-catalog/Feed::AdsLabelSet { label: Option<u8>, set_by: String }
 event timada-catalog/Feed::Closed { closed_by: String }
 event timada-catalog/Feed::Opened { token: String, opened_by: String }
 event timada-catalog/ListingFilters::FiltersSet { names: Vec<String>, set_by: String }

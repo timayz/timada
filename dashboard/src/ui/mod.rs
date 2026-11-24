@@ -165,6 +165,13 @@ pub fn describe_error(code: &str) -> &'static str {
         "category_archived" => "This category is archived and cannot change any more.",
         "category_cycle" => "A category cannot be moved under one of its own sub-categories.",
         "category_too_deep" => "Categories nest at most three levels deep.",
+        "category_parent_draft" => "The category above it is a draft: publish that one first.",
+        "category_has_published_children" => {
+            "Keep back its sub-categories first: they are shown to shoppers."
+        }
+        "feed_label_taken" => {
+            "This label already says something else: the margin's tier and what is kept out of ads each need their own."
+        }
         "category_invalid_questions" => {
             "A category answers at most 20 questions: each on one line of at most 200 characters, followed by its answer of at most 1,500."
         }

@@ -4,10 +4,11 @@
 //! stream, so a change shows at once; the address itself answers a moment
 //! later, once the read model has followed.
 
+pub mod ads_label;
 pub mod close;
 pub mod open;
 
-use timada_catalog::count_feed_products;
+use timada_catalog::{FEED_LABELS, OUT_OF_ADS_LABEL, count_feed_products};
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
 use topcoat::{
     Result,
@@ -23,6 +24,7 @@ use crate::app::feeds::token as feeds;
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
+use crate::components::select::select;
 use crate::config::Config;
 use crate::db::Db;
 use crate::ui::{LINK, Shell, document, fact, facts, notice, page_header, section_card};
@@ -63,6 +65,14 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .load_feed_token()
         .await
         .map_err(topcoat::Error::from_anyhow)?;
+    let ads_label = catalog(&access)?
+        .load_feed_ads_label()
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+        .map(usize::from);
+    let ads_hint = format!(
+        "The products whose main category is kept out of ads carry « {OUT_OF_ADS_LABEL} » in this label, in place of their own: exclude that value in your campaigns. A category is kept out on its own page."
+    );
     let has_storefront = super::orders::orders(&access)?
         .storefront_address()
         .await
@@ -185,6 +195,28 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         <a class=(LINK) href=(href!(super::api_keys::index, slug: slug.clone()))>"API keys"</a> "."
                     </p>
                 }
+            )
+
+            section_card(
+                title: Some("Out of ads"),
+                description: Some("Some categories are worth a page and not a campaign: a click on what they are searched by costs more than a sale can pay."),
+                attrs: attributes! { data-feed-ads-label=(ads_label.map(|label| label.to_string()).unwrap_or_default()) },
+                <form method="post" action=(href!(ads_label::ads_label, slug: slug.clone())) class="flex max-w-3xl flex-col gap-4">
+                    field(
+                        field_label(attrs: attributes! { for="feed-ads-label" }, "Label that marks them")
+                        field_description(attrs: attributes! { id="feed-ads-label-hint" }, (&ads_hint))
+                        select(
+                            attrs: attributes! { id="feed-ads-label" name="label" aria-describedby="feed-ads-label-hint" disabled=(!can_manage) class="w-48" },
+                            <option value="" selected=(ads_label.is_none())>"None"</option>
+                            for n in 0..FEED_LABELS {
+                                <option value=(n) selected=(ads_label == Some(n))>"Custom label " (n)</option>
+                            }
+                        )
+                    )
+                    if can_manage {
+                        <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save the label")</div>
+                    }
+                </form>
             )
 
             section_card(

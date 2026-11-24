@@ -1,4 +1,4 @@
-//! Schema of the read models: one migration, applied by the composition root
+//! Schema of the read models, applied by the composition root
 //! in the store's database next to evento's own.
 
 use evento::turso::migrate::{Migration, Migrations};
@@ -13,35 +13,36 @@ pub const MIGRATION_APP: &str = "catalog";
 /// tenant has (`catalog_tallies`, one row per count, see `PRODUCTS`).
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
-    &[Migration::up(
-        "0001_products",
-        // One row per product of a tenant. `thumbnail` is the first picture's
-        // file name, for a listing's thumbnail. When a product varies,
-        // `min_amount_cents` and `max_amount_cents` are the cheapest and the
-        // dearest a shopper may pay. `stock_state` is worked out from the
-        // stock rows after the row is written, hence its default.
-        // `slug_search` and `name_search` are what a search finds a product
-        // by: the slug and the name lowercased and stripped of accents, under
-        // an index cut in runs of three characters so a search matches
-        // anywhere in a word. `slug_search` starts with the tenant's token
-        // (`timada_core::db::tenant_search_key`), which every search must
-        // match too: the index then answers with the tenant's own products
-        // only, not with every shop's. There is no description: no page
-        // reads it from here, and a list sorting rows carried it along.
-        // `tax_category` and the two `delivery_*_days` (`NULL`: the shop's
-        // default) are what a cart is priced with, with `catalog_variants`:
-        // one row per combination, `on_sale` for those a shopper can buy,
-        // `label` the values as the shop shows them (`Sable / Large`).
-        // `catalog_delivery_default` is the shop's delivery time, one row per
-        // tenant that set one. `catalog_feed_products` is what a shopping
-        // feed says of each product it carries (published, priced, not
-        // taken out of the feed), as JSON a feed is written from a page of
-        // rows at a time; `catalog_feeds` is which tenant's feed answers at
-        // an address, one row per open feed. `catalog_product_costs` is
-        // what the shop pays for the things a product sells, one row per
-        // product it said something of, as JSON: a feed grades its margins
-        // from it, and no page shown to a shopper reads it.
-        "CREATE TABLE catalog_products (
+    &[
+        Migration::up(
+            "0001_products",
+            // One row per product of a tenant. `thumbnail` is the first picture's
+            // file name, for a listing's thumbnail. When a product varies,
+            // `min_amount_cents` and `max_amount_cents` are the cheapest and the
+            // dearest a shopper may pay. `stock_state` is worked out from the
+            // stock rows after the row is written, hence its default.
+            // `slug_search` and `name_search` are what a search finds a product
+            // by: the slug and the name lowercased and stripped of accents, under
+            // an index cut in runs of three characters so a search matches
+            // anywhere in a word. `slug_search` starts with the tenant's token
+            // (`timada_core::db::tenant_search_key`), which every search must
+            // match too: the index then answers with the tenant's own products
+            // only, not with every shop's. There is no description: no page
+            // reads it from here, and a list sorting rows carried it along.
+            // `tax_category` and the two `delivery_*_days` (`NULL`: the shop's
+            // default) are what a cart is priced with, with `catalog_variants`:
+            // one row per combination, `on_sale` for those a shopper can buy,
+            // `label` the values as the shop shows them (`Sable / Large`).
+            // `catalog_delivery_default` is the shop's delivery time, one row per
+            // tenant that set one. `catalog_feed_products` is what a shopping
+            // feed says of each product it carries (published, priced, not
+            // taken out of the feed), as JSON a feed is written from a page of
+            // rows at a time; `catalog_feeds` is which tenant's feed answers at
+            // an address, one row per open feed. `catalog_product_costs` is
+            // what the shop pays for the things a product sells, one row per
+            // product it said something of, as JSON: a feed grades its margins
+            // from it, and no page shown to a shopper reads it.
+            "CREATE TABLE catalog_products (
             tenant_id TEXT NOT NULL,
             id TEXT NOT NULL,
             slug TEXT NOT NULL,
@@ -181,7 +182,14 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             n INTEGER NOT NULL,
             PRIMARY KEY (tenant_id, name)
         );",
-    )],
+        ),
+        // A category kept back from shoppers, and one campaigns leave out.
+        Migration::up(
+            "0002_category_drafts",
+            "ALTER TABLE catalog_categories ADD COLUMN draft INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE catalog_categories ADD COLUMN out_of_ads INTEGER NOT NULL DEFAULT 0;",
+        ),
+    ],
 );
 
 /// The tables the migration creates: what a node empties before copying its

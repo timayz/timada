@@ -1276,6 +1276,68 @@ async fn a_store_follows_the_category_tree_its_products_are_filed_under() {
         "its products are still for sale"
     );
 
+    // A draft is the back office's: the shop learns of it once published,
+    // and forgets it when it is kept back again. A category made by hand
+    // after it tells when the copy has read past the draft.
+    assert!(
+        catalog
+            .create_draft_category(
+                "alice",
+                timada_catalog::DraftCategory {
+                    id: "01GLOVES".into(),
+                    name: "Gloves".into(),
+                    slug: "gloves".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+    );
+    catalog
+        .create_category(
+            "alice",
+            CreateCategory {
+                name: "Bowls".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    eventually("the category made after the draft arrives", async || {
+        published_category_by_slug(&db, "bowls")
+            .await
+            .unwrap()
+            .is_some()
+    })
+    .await;
+    assert!(
+        published_category_by_slug(&db, "gloves")
+            .await
+            .unwrap()
+            .is_none(),
+        "a draft has no page"
+    );
+    assert_eq!(published_categories(&db).await.unwrap().len(), 2);
+    catalog
+        .set_category_published("alice", "01GLOVES", true)
+        .await
+        .unwrap();
+    eventually("a published category joins the tree", async || {
+        published_categories(&db).await.unwrap().len() == 3
+    })
+    .await;
+    catalog
+        .set_category_published("alice", "01GLOVES", false)
+        .await
+        .unwrap();
+    eventually("and leaves it when it is kept back", async || {
+        published_category_by_slug(&db, "gloves")
+            .await
+            .unwrap()
+            .is_none()
+    })
+    .await;
+
     store.shutdown().await;
 }
 

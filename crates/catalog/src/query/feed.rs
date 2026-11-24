@@ -24,7 +24,7 @@ use timada_core::xml::xml_text as xml;
 use super::paths::{CategoryPaths, ProductWording};
 use crate::command::ProductState;
 use crate::margin::{Margin, MarginTiers, ProductCosts, ShopCosts};
-use crate::value_object::DeliveryDays;
+use crate::value_object::{DeliveryDays, OUT_OF_ADS_LABEL};
 
 /// A product as a feed carries it: one row of `catalog_feed_products`.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -448,6 +448,31 @@ pub struct FeedShop {
     /// How one of the labels grades what each item leaves, in a shop that
     /// asked for it.
     pub margin: Option<FeedMargin>,
+    /// Which label says a product is kept out of ads, and of which
+    /// categories, in a shop that gave it one.
+    pub ads: Option<FeedAds>,
+}
+
+/// What a feed's writer marks the products kept out of ads with: the label
+/// that says [`OUT_OF_ADS_LABEL`] in place of the merchant's own on a
+/// product whose main category is one of `categories`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FeedAds {
+    /// Which label carries the mark, from 0.
+    pub label: usize,
+    /// The categories campaigns leave out, by id.
+    pub categories: BTreeSet<String>,
+}
+
+impl FeedAds {
+    /// Whether campaigns leave `product` out: its main category is kept
+    /// out of ads.
+    fn leaves_out(&self, product: &FeedProduct) -> bool {
+        product
+            .categories
+            .first()
+            .is_some_and(|main| self.categories.contains(main))
+    }
 }
 
 /// What a feed's writer grades an item's margin with: the label that says
@@ -723,8 +748,11 @@ fn write_item(
         // The label a shop gave to its margins says the item's tier, and
         // nothing where its cost is not known: never the merchant's own
         // label, which a campaign would take for a tier.
-        let label = match &shop.margin {
-            Some(margin) if margin.label == n => margin
+        // The label a shop gave to what campaigns leave out says so, and
+        // is the merchant's own on every other product.
+        let label = match (&shop.ads, &shop.margin) {
+            (Some(ads), _) if ads.label == n && ads.leaves_out(product) => OUT_OF_ADS_LABEL,
+            (_, Some(margin)) if margin.label == n => margin
                 .tier(product, item.grouped.then_some(item.id), item.amount_cents)
                 .unwrap_or(""),
             _ => label,
@@ -881,6 +909,7 @@ mod tests {
             }],
             delivery_days: Some(DeliveryDays { min: 2, max: 4 }),
             margin: None,
+            ads: None,
         }
     }
 
@@ -1159,6 +1188,46 @@ mod tests {
         assert!(
             xml.contains("<g:shipping>FR::Colissimo  48h  suivi:0.00 EUR</g:shipping>"),
             "{xml}"
+        );
+    }
+
+    /// A shop that gave a label to what campaigns leave out has it say so
+    /// on the products whose main category is kept out, in place of the
+    /// merchant's own, and leaves every other product's label alone.
+    #[test]
+    fn a_product_of_a_category_kept_out_of_ads_says_so_on_its_label() {
+        let mut shop = shop();
+        shop.ads = Some(FeedAds {
+            label: 0,
+            categories: BTreeSet::from(["01GLOVES".to_owned()]),
+        });
+        let mut product = mug();
+        product.categories = vec!["01GLOVES".into(), "01OTHER".into()];
+        let out = items(&product, &shop);
+        assert!(
+            out.contains("<g:custom_label_0>no_ads</g:custom_label_0>"),
+            "{out}"
+        );
+        assert!(
+            out.contains("<g:custom_label_2>eu</g:custom_label_2>"),
+            "{out}"
+        );
+
+        // Only its main category counts.
+        product.categories = vec!["01OTHER".into(), "01GLOVES".into()];
+        let out = items(&product, &shop);
+        assert!(
+            out.contains("<g:custom_label_0>high margin</g:custom_label_0>"),
+            "{out}"
+        );
+
+        // A label with nothing of the merchant's on it says it too.
+        shop.ads.as_mut().unwrap().label = 1;
+        product.categories = vec!["01GLOVES".into()];
+        let out = items(&product, &shop);
+        assert!(
+            out.contains("<g:custom_label_1>no_ads</g:custom_label_1>"),
+            "{out}"
         );
     }
 
