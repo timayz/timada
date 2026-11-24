@@ -319,6 +319,32 @@ pub fn describe_error(code: &str) -> &'static str {
         "google_ads_id_missing" => {
             "Conversion labels and enhanced conversions need the Google Ads conversion ID."
         }
+        "google_disabled" => {
+            "Connecting a Google account is not available on this installation: its operator has to set it up first."
+        }
+        "google_no_access_chosen" => "Tick what the shop may read from Google.",
+        "google_connect_expired" => {
+            "Connecting took too long, or was started in another browser. Start again."
+        }
+        "google_connect_refused" => {
+            "Google did not connect the account: it was refused there, or Google gave nothing to keep. Start again."
+        }
+        "google_nothing_granted" => {
+            "The account granted none of the access asked for: tick the boxes on Google's page when it asks."
+        }
+        "google_unknown_access" => "This kind of access is not one a shop can turn on.",
+        "google_unavailable" => "Google did not answer. Try again in a moment.",
+        "google_refused" => "Google refused the request. Try again, or connect again.",
+        "google_not_connected" => "The shop is not connected to a Google account.",
+        "google_connect_again" => {
+            "Google no longer honours this connection: connect the account again."
+        }
+        "google_no_search_console" => {
+            "The connection does not cover Search Console: connect again and tick it."
+        }
+        "google_invalid_site" | "google_unknown_site" => {
+            "Choose one of the sites the account reads in Search Console."
+        }
         "meta_pixel_invalid_id" => "A Meta pixel ID is 5 to 20 digits.",
         "meta_pixel_missing" => {
             "A Conversions API token needs the ID of the pixel it was made for."

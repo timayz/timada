@@ -125,6 +125,9 @@ clusterCa:
 #                              for that password, read on its standard input
 #   TIMADA__SECRETS__KEY       at least 32 characters; never change it
 #   TIMADA__MAIL__SMTP_URL     smtps://user:pass@host:465
+# and, for the shops to connect their Google accounts (docs/google.md),
+#   TIMADA__GOOGLE__CLIENT_ID
+#   TIMADA__GOOGLE__CLIENT_SECRET
 extraSecretEnv: {}
 
 database:

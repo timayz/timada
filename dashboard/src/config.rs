@@ -69,6 +69,10 @@ pub struct Config {
     /// What keyword research may spend; every setting has a default.
     #[serde(default)]
     pub research: ResearchConfig,
+    /// The application the shops connect their Google accounts to; without
+    /// its id and secret, no shop connects one.
+    #[serde(default)]
+    pub google: GoogleConfig,
     pub auth: AuthConfig,
     pub mail: MailConfig,
     pub monitoring: MonitoringConfig,
@@ -925,6 +929,53 @@ impl DataforseoConfig {
     }
 }
 
+/// The platform's application at Google (an OAuth client of a Google Cloud
+/// project), which a shop's Google account says yes to so the shop's Search
+/// Console, Google Ads and Merchant Center can be read. Without its id and
+/// secret, or without `secrets.key` to seal what the accounts grant, no shop
+/// connects one.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct GoogleConfig {
+    /// The OAuth client's id and secret, from the Cloud project's
+    /// credentials; both or neither.
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    /// Where a merchant is sent to say yes; Google's own when unset. Tests
+    /// point the four addresses at a stand-in.
+    #[serde(default)]
+    pub authorize_url: Option<String>,
+    /// Where a code is exchanged for a grant, and a grant renewed.
+    #[serde(default)]
+    pub token_url: Option<String>,
+    /// Where the account behind a grant is named.
+    #[serde(default)]
+    pub userinfo_url: Option<String>,
+    /// Where Search Console is read.
+    #[serde(default)]
+    pub search_console_url: Option<String>,
+}
+
+impl GoogleConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        let set = |value: &Option<String>| value.as_deref().is_some_and(|v| !v.is_empty());
+        if set(&self.client_id) != set(&self.client_secret) {
+            return Err(ConfigError::Message(
+                "google.client_id and google.client_secret go together: set both or neither".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The client's id and secret, when both are set.
+    pub fn credentials(&self) -> Option<(&str, &str)> {
+        let id = self.client_id.as_deref().filter(|v| !v.is_empty())?;
+        let secret = self.client_secret.as_deref().filter(|v| !v.is_empty())?;
+        Some((id, secret))
+    }
+}
+
 /// What keyword research may spend: every call to the keyword source is
 /// paid by the platform's account, whoever asks.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -1270,6 +1321,7 @@ impl Config {
         }
         config.dataforseo.validate()?;
         config.research.validate()?;
+        config.google.validate()?;
         config.auth.validate()?;
         config.mail.validate()?;
 
@@ -2043,5 +2095,6 @@ mod tests {
         let config = Config::load(Some(&path)).unwrap();
         assert_eq!(config.auth.root.email(), "root-e2e@example.com");
         assert!(config.dataforseo.credentials().is_some());
+        assert!(config.google.credentials().is_some());
     }
 }

@@ -393,6 +393,24 @@ dir = "data/shopper-keys"
 # # seed, country and language again, at no cost. 0 pays for every fetch.
 # reuse_days = 30
 
+# The application the shops connect their Google accounts to: an OAuth client
+# of a Google Cloud project of the platform's (APIs & Services, Credentials,
+# "Web application"), with <server.url>/google/callback as its one authorized
+# redirect URI and the Search Console API enabled. A shop's member says yes
+# once on Google's page; what the account grants is kept sealed under
+# `secrets.key`, so this needs that key too. Without the id and the secret no
+# shop connects a Google account. docs/google.md says what Google asks of the
+# application before other people's accounts may say yes to it.
+# [google]
+# # Both or neither. In production: TIMADA__GOOGLE__CLIENT_SECRET.
+# client_id = ""
+# client_secret = ""
+# # Google's own addresses, changed only for tests.
+# authorize_url = "https://accounts.google.com/o/oauth2/v2/auth"
+# token_url = "https://oauth2.googleapis.com/token"
+# userinfo_url = "https://openidconnect.googleapis.com/v1/userinfo"
+# search_console_url = "https://www.googleapis.com/webmasters/v3"
+
 # The store API: where a merchant's storefront connects with one of the
 # tenant's API keys (created on /t/<slug>/api-keys) to read and write that
 # tenant's events; a connection sees that tenant's streams and nothing else.

@@ -14,6 +14,7 @@ pub mod customers;
 pub mod discounts;
 pub mod export_schedule;
 pub mod feed;
+pub mod google;
 pub mod google_tag;
 pub mod invoices;
 pub mod invoicing;
