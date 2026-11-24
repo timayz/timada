@@ -69,6 +69,10 @@ pub struct Config {
     /// What keyword research may spend; every setting has a default.
     #[serde(default)]
     pub research: ResearchConfig,
+    /// The model that drafts the shops' texts, and what it may spend;
+    /// without a key, nothing is drafted.
+    #[serde(default)]
+    pub writer: WriterConfig,
     /// The application the shops connect their Google accounts to; without
     /// its id and secret, no shop connects one.
     #[serde(default)]
@@ -929,6 +933,109 @@ impl DataforseoConfig {
     }
 }
 
+/// The model that writes first drafts of the shops' texts (a product's or a
+/// category's name, description, and what search engines show), under the
+/// platform's own key and paid by the call. A draft is never published: it
+/// waits as a proposal for a member. Without the key text drafts are off.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct WriterConfig {
+    /// The API key of the platform's account with the model's maker.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// Where the model's API is reached; its maker's own address when
+    /// unset. Tests point it at a stand-in.
+    #[serde(default)]
+    pub api_url: Option<String>,
+    /// Which model writes.
+    #[serde(default = "default_writer_model")]
+    pub model: String,
+    /// What the model's maker charges for a million tokens read and a
+    /// million written, in US dollars: what a call cost is reckoned from
+    /// them. Set them with `model`.
+    #[serde(default = "default_writer_input_usd_per_mtok")]
+    pub input_usd_per_mtok: f64,
+    #[serde(default = "default_writer_output_usd_per_mtok")]
+    pub output_usd_per_mtok: f64,
+    /// The most one shop's drafts may cost in a day (UTC), in US dollars.
+    #[serde(default = "default_writer_daily_usd_per_shop")]
+    pub daily_usd_per_shop: f64,
+    /// The most every shop's drafts may cost together in a day (UTC), in
+    /// US dollars.
+    #[serde(default = "default_writer_daily_usd")]
+    pub daily_usd: f64,
+}
+
+impl Default for WriterConfig {
+    fn default() -> Self {
+        Self {
+            key: None,
+            api_url: None,
+            model: default_writer_model(),
+            input_usd_per_mtok: default_writer_input_usd_per_mtok(),
+            output_usd_per_mtok: default_writer_output_usd_per_mtok(),
+            daily_usd_per_shop: default_writer_daily_usd_per_shop(),
+            daily_usd: default_writer_daily_usd(),
+        }
+    }
+}
+
+fn default_writer_model() -> String {
+    "claude-opus-5-5".to_owned()
+}
+
+fn default_writer_input_usd_per_mtok() -> f64 {
+    4.0
+}
+
+fn default_writer_output_usd_per_mtok() -> f64 {
+    20.0
+}
+
+fn default_writer_daily_usd_per_shop() -> f64 {
+    5.0
+}
+
+fn default_writer_daily_usd() -> f64 {
+    50.0
+}
+
+impl WriterConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.model.trim().is_empty() {
+            return Err(ConfigError::Message(
+                "writer.model: name the model that writes".into(),
+            ));
+        }
+        for (key, usd) in [
+            ("input_usd_per_mtok", self.input_usd_per_mtok),
+            ("output_usd_per_mtok", self.output_usd_per_mtok),
+            ("daily_usd_per_shop", self.daily_usd_per_shop),
+            ("daily_usd", self.daily_usd),
+        ] {
+            if !(0.0..=MAX_RESEARCH_DAILY_USD).contains(&usd) {
+                return Err(ConfigError::Message(format!(
+                    "writer.{key}: {usd} is not an amount in US dollars from 0 to {MAX_RESEARCH_DAILY_USD}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The key, when one is set.
+    pub fn key(&self) -> Option<&str> {
+        self.key.as_deref().filter(|key| !key.is_empty())
+    }
+
+    /// The day's caps, in millionths of a US dollar.
+    pub fn caps(&self) -> timada_writer::SpendCaps {
+        let micros = |usd: f64| (usd * 1_000_000.0).round() as u64;
+        timada_writer::SpendCaps {
+            shop_usd_micros: micros(self.daily_usd_per_shop),
+            platform_usd_micros: micros(self.daily_usd),
+        }
+    }
+}
+
 /// The platform's application at Google (an OAuth client of a Google Cloud
 /// project), which a shop's Google account says yes to so the shop's Search
 /// Console, Google Ads and Merchant Center can be read. Without its id and
@@ -1343,6 +1450,7 @@ impl Config {
         }
         config.dataforseo.validate()?;
         config.research.validate()?;
+        config.writer.validate()?;
         config.google.validate()?;
         config.auth.validate()?;
         config.mail.validate()?;

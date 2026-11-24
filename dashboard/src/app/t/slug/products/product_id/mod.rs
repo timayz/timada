@@ -841,6 +841,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         timada_proposals::KIND_PRODUCT,
         &product.id,
     );
+    let can_draft =
+        can_propose && !product.is_archived() && context::<crate::writer::Writers>(cx).enabled();
     Ok(view! {
         document(
             title: &title,
@@ -855,6 +857,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 )
                 if can_propose {
                     <a class=(LINK) href=(&suggest_url) data-suggest-change="">"Suggest a change"</a>
+                }
+                if can_draft {
+                    crate::app::t::slug::writer::draft_form(slug: &slug, kind: timada_proposals::KIND_PRODUCT, subject_id: &product.id)
                 }
                 if editable {
                     if product.is_published() {

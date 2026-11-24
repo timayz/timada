@@ -110,6 +110,15 @@ search_console_url = "http://127.0.0.1:12117/webmasters/v3"
 # A site just chosen is read within a couple of seconds.
 search_check_secs = 1
 
+# Texts are drafted by a stand-in for the model (tests/e2e/writer.ts), which
+# counts every call at 1,500 tokens read and 900 written: 0.024 USD at these
+# prices. The caps are out of the suite's reach.
+[writer]
+key = "writer-e2e-s3cret"
+api_url = "http://127.0.0.1:12118"
+daily_usd_per_shop = 100.0
+daily_usd = 10000.0
+
 # A user's day has room for three of the stand-in's calls (0.01248 USD each,
 # held at 0.132 before they are made); the fourth is refused
 # (research.spec.ts). The platform's cap is out of the suite's reach.

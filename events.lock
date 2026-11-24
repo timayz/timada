@@ -520,6 +520,14 @@ event timada-tenancy/Tenant::Suspended { reason: String }
 event timada-tenancy/Tenant::TimeZoneSet { time_zone: String, set_by: String }
 event timada-tenancy/TenantSlug::Claimed { tenant_id: String }
 event timada-tenancy/TenantSlug::Released unit
+event timada-writer/Brief::BriefSet { tone: String, never: String, set_by: String }
+event timada-writer/Draft::Drafted { proposal_id: String, cost_usd_micros: u64, to_check: Vec<String>, drafted_by: String }
+event timada-writer/Draft::Failed { reason: String, failed_by: String }
+event timada-writer/Draft::Requested { kind: String, subject_id: String, subject_name: String, keyword: String, requested_by: String }
+event timada-writer/Draft::Started { started_by: String }
+event timada-writer/SpendDay::Charged { hold: String, tenant_id: String, draft_id: String, cost_usd_micros: u64, charged_by: String }
+event timada-writer/SpendDay::Held { hold: String, tenant_id: String, draft_id: String, most_usd_micros: u64, held_by: String }
+event timada-writer/SpendDay::Released { hold: String, released_by: String }
 
 type timada_aliexpress::aggregator::NewSku { sku_id: String, selections: Vec<(String, String)>, cost_cents: u64, available: u32, image: Option<String> }
 type timada_aliexpress::aggregator::SkuLink { sku_id: String, variant_id: Option<String>, cost_cents: u64 }

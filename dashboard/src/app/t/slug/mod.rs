@@ -39,6 +39,7 @@ pub mod sales;
 pub mod search_console;
 pub mod shipping;
 pub mod time_zone;
+pub mod writer;
 
 use std::sync::Arc;
 
@@ -207,6 +208,7 @@ pub struct TenantNav {
     pub products: bool,
     pub categories: bool,
     pub proposals: bool,
+    pub writer: bool,
     pub orders: bool,
     pub carts: bool,
     pub customers: bool,
@@ -241,6 +243,11 @@ impl TenantNav {
             // Whoever prepares changes or answers them sees what waits.
             proposals: access.can(cx, PERMISSION_PROPOSALS_APPROVE).await?
                 || access.can(cx, PERMISSION_PROPOSALS_PREPARE).await?,
+            // Text drafts, while the platform has a writer: for whoever
+            // prepares proposals about a catalog they see.
+            writer: products
+                && context::<crate::writer::Writers>(cx).enabled()
+                && access.can(cx, PERMISSION_PROPOSALS_PREPARE).await?,
             // Sales are one section too: the open carts are the orders not
             // placed yet.
             orders,

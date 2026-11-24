@@ -17,7 +17,7 @@ proposal means, and how it is applied, in `dashboard/src/proposals/`.
 | subject | The product's or the category's id; for a category to create, the category above it (empty for the top level) |
 | changes | One to eight fields, each with the value it held when the proposal was prepared (`before`) and the value it would take (`after`) |
 | reason | Why: the rule and the numbers it read, or the note of whoever prepared it |
-| source | What prepared it (`person`, later `writer`, a rule's or an agent's name). The waiting list is grouped by it |
+| source | What prepared it (`person`, `writer` for a [text draft](writer.md), a rule's or an agent's name). The waiting list is grouped by it |
 | prepared by | The member, or the name the rule or the agent acts under |
 | valid until | After it the proposal can be refused, no longer approved. Thirty days by default, ninety at most |
 

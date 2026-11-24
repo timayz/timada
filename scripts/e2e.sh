@@ -52,14 +52,14 @@ if ! curl -sf -o /dev/null "$maildev/email"; then
 fi
 
 # The server under test binds 3000 and the store API 4321; the specs start the
-# storefronts and the fake Stripe, VIES, AliExpress, Meta, DataForSEO and
-# Google servers on the others.
+# storefronts and the fake Stripe, VIES, AliExpress, Meta, DataForSEO, Google
+# and writer servers on the others.
 # With the dev server up, `serve` dies on its first bind and the proxy forwards
 # the suite to the dev server instead, which writes the test data into its
 # database (#400). The proxy balances over 3000 to 3002, so a server left on
 # 3001 or 3002 would get its share of the suite too. Checked before the build
 # so a wasted build is not the first sign.
-ports=(3000 3001 3002 3457 3458 3459 3460 3461 4321 12112 12113 12114 12115 12116 12117)
+ports=(3000 3001 3002 3457 3458 3459 3460 3461 4321 12112 12113 12114 12115 12116 12117 12118)
 if [ "$nodes" = 3 ]; then
   # The other nodes' store API, and what the nodes talk to one another on.
   ports+=(4322 4323 7000 7001 7002 7100 7101 7102)
@@ -67,7 +67,7 @@ fi
 # The other servers' store API, and the fakes their workers start, 100 ports
 # further on for each next server.
 for ((i = 1; i < shards; i++)); do
-  ports+=($((4321 + i)) $((12112 + 100 * i)) $((12113 + 100 * i)) $((12114 + 100 * i)) $((12115 + 100 * i)) $((12116 + 100 * i)) $((12117 + 100 * i)))
+  ports+=($((4321 + i)) $((12112 + 100 * i)) $((12113 + 100 * i)) $((12114 + 100 * i)) $((12115 + 100 * i)) $((12116 + 100 * i)) $((12117 + 100 * i)) $((12118 + 100 * i)))
 done
 for port in "${ports[@]}"; do
   if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
@@ -169,6 +169,7 @@ else
       "TIMADA__GOOGLE__TOKEN_URL=http://127.0.0.1:$((12117 + off))/token"
       "TIMADA__GOOGLE__USERINFO_URL=http://127.0.0.1:$((12117 + off))/v1/userinfo"
       "TIMADA__GOOGLE__SEARCH_CONSOLE_URL=http://127.0.0.1:$((12117 + off))/webmasters/v3"
+      "TIMADA__WRITER__API_URL=http://127.0.0.1:$((12118 + off))"
       ./target/debug/timada-dashboard
     )
     "${server[@]}" reset
