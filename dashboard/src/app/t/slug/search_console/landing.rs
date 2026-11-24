@@ -22,7 +22,10 @@ use crate::db::Db;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Landing {
     Home,
-    Category(String),
+    Category {
+        id: String,
+        name: String,
+    },
     Product(String),
     /// The list of the articles.
     Blog,
@@ -38,7 +41,7 @@ impl Landing {
     pub fn label(&self) -> (&'static str, &str) {
         match self {
             Self::Home => ("Home page", ""),
-            Self::Category(name) => ("Category", name),
+            Self::Category { name, .. } => ("Category", name),
             Self::Product(name) => ("Product", name),
             Self::Blog => ("Blog", ""),
             Self::Article(title) => ("Article", title),
@@ -51,7 +54,7 @@ impl Landing {
     pub fn key(&self) -> &'static str {
         match self {
             Self::Home => "home",
-            Self::Category(_) => "category",
+            Self::Category { .. } => "category",
             Self::Product(_) => "product",
             Self::Blog => "blog",
             Self::Article(_) => "article",
@@ -130,8 +133,8 @@ impl<'a> Landings<'a> {
             return Ok(Landing::Home);
         };
         let path = format!("/{}", parts.join("/"));
-        if let Some(name) = self.category(&language, &path).await? {
-            return Ok(Landing::Category(name));
+        if let Some((id, name)) = self.category(&language, &path).await? {
+            return Ok(Landing::Category { id, name });
         }
         if parts[0] == "blog" {
             return Ok(match parts.len() {
@@ -162,8 +165,12 @@ impl<'a> Landings<'a> {
         Ok(Landing::Other)
     }
 
-    /// The name of the live category at `path` in `language`.
-    async fn category(&mut self, language: &str, path: &str) -> anyhow::Result<Option<String>> {
+    /// The id and the name of the live category at `path` in `language`.
+    async fn category(
+        &mut self,
+        language: &str,
+        path: &str,
+    ) -> anyhow::Result<Option<(String, String)>> {
         if !self.categories.contains_key(language) {
             let paths = if language.is_empty() {
                 category_paths(self.db, self.tenant_id).await?
@@ -193,7 +200,8 @@ impl<'a> Landings<'a> {
         Ok(self
             .category_names
             .as_ref()
-            .and_then(|names| names.get(&id).cloned()))
+            .and_then(|names| names.get(&id).cloned())
+            .map(|name| (id, name)))
     }
 
     /// The name of the product that goes by `slug` in `language`.
@@ -359,15 +367,18 @@ mod tests {
         let db = shop().await;
         let others = vec!["en".to_owned()];
         let mut landings = Landings::new(&db, "shop", &others);
-        let category = |name: &str| Landing::Category(name.to_owned());
+        let category = |id: &str, name: &str| Landing::Category {
+            id: id.to_owned(),
+            name: name.to_owned(),
+        };
         let product = |name: &str| Landing::Product(name.to_owned());
         for (path, expected) in [
             ("", Landing::Home),
             ("/", Landing::Home),
             ("/?utm_source=x", Landing::Home),
-            ("/jeux", category("Jeux pour chat")),
-            ("/jeux/souris", category("Souris")),
-            ("/jeux/souris/", category("Souris")),
+            ("/jeux", category("c1", "Jeux pour chat")),
+            ("/jeux/souris", category("c2", "Souris")),
+            ("/jeux/souris/", category("c2", "Souris")),
             (
                 "/jeux/souris/souris-en-peluche",
                 product("Souris en peluche"),
@@ -384,8 +395,8 @@ mod tests {
             ),
             // In the other language, by the slugs it goes by there.
             ("/en", Landing::Home),
-            ("/en/toys", category("Jeux pour chat")),
-            ("/en/toys/mice", category("Souris")),
+            ("/en/toys", category("c1", "Jeux pour chat")),
+            ("/en/toys/mice", category("c2", "Souris")),
             ("/en/toys/mice/plush-mouse", product("Plush mouse")),
             // No translation: the main slug stands.
             ("/en/p/plumeau", product("Plumeau")),

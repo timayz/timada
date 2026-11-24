@@ -4,12 +4,14 @@ use common::*;
 use timada_core::db::Db;
 use timada_google::{
     ACCESS_ADS, CATCH_UP_SECS, CHECK_EVERY_SECS, Connect, DueSearch, GOOGLE_ACTOR, GoogleError,
-    KEPT_DAYS, KEPT_ROW_DAYS, MAX_SEARCH_ROWS, day_before, last_search_day,
-    read_model_subscription, search_days_held, search_totals, searches_due, top_pages, top_queries,
+    KEPT_DAYS, KEPT_ROW_DAYS, MAX_PAGE_QUERY_ROWS, MAX_SEARCH_ROWS, day_before, first_search_day,
+    last_search_day, page_queries, read_model_subscription, search_days_held, search_totals,
+    searches_due, top_pages, top_queries,
 };
 
 const SITE: &str = "sc-domain:shop.example";
 const OTHER_SITE: &str = "https://blog.shop.example/";
+const CATEGORY: &str = "https://shop.example/arbres-a-chat";
 const FAR: i64 = i64::MAX;
 
 async fn catch_up(executor: &evento::Turso, db: &Db) {
@@ -287,6 +289,16 @@ async fn a_period_adds_up_its_days_queries_and_pages() {
             .unwrap(),
         None
     );
+    assert_eq!(
+        first_search_day(&db, SHOP, SITE).await.unwrap().as_deref(),
+        Some("2026-11-19")
+    );
+    assert_eq!(
+        first_search_day(&db, SHOP, "sc-domain:none.example")
+            .await
+            .unwrap(),
+        None
+    );
 
     let totals = search_totals(&db, SHOP, SITE, "2026-11-01", "2026-11-30")
         .await
@@ -350,6 +362,70 @@ async fn a_period_adds_up_its_days_queries_and_pages() {
     );
 }
 
+/// Which page showed for which query: a period adds a pair up over its
+/// days, the most shown first.
+#[tokio::test]
+async fn a_period_adds_up_the_queries_each_page_showed_for() {
+    let (executor, db) = executor_with_pool().await;
+    let google = timada_google::Command(executor.clone());
+    google
+        .record_search_day(GOOGLE_ACTOR, SHOP, SITE, day("2026-11-19"))
+        .await
+        .unwrap();
+    let mut second = day("2026-11-20");
+    second.page_queries = vec![
+        pair(CATEGORY, "arbre à chat", 20, 300, 2_000),
+        pair(CATEGORY, "arbre à chat xxl", 5, 120, 14_000),
+        pair("https://shop.example/", "arbre à chat", 0, 40, 18_000),
+    ];
+    google
+        .record_search_day(GOOGLE_ACTOR, SHOP, SITE, second)
+        .await
+        .unwrap();
+    google
+        .record_search_day(GOOGLE_ACTOR, SHOP, OTHER_SITE, day("2026-11-20"))
+        .await
+        .unwrap();
+    catch_up(&executor, &db).await;
+    catch_up(&executor, &db).await;
+
+    let lines = page_queries(&db, SHOP, SITE, "2026-11-01", "2026-11-30", 100)
+        .await
+        .unwrap();
+    let read: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            (
+                line.page.as_str(),
+                line.query.as_str(),
+                line.clicks,
+                line.impressions,
+            )
+        })
+        .collect();
+    assert_eq!(
+        read,
+        vec![
+            (CATEGORY, "arbre à chat", 26, 400),
+            (CATEGORY, "arbre à chat xxl", 5, 120),
+            (CATEGORY, "griffoir", 2, 50),
+            ("https://shop.example/", "arbre à chat", 0, 40),
+        ]
+    );
+    // Position 4 over 100 impressions and 2 over 300: 2.5.
+    assert_eq!(lines[0].figures().position_tenths(), Some(25));
+    assert_eq!(lines[1].figures().position_tenths(), Some(140));
+    // One day of it, and no more rows than asked for.
+    let one = page_queries(&db, SHOP, SITE, "2026-11-19", "2026-11-19", 1)
+        .await
+        .unwrap();
+    assert_eq!(one.len(), 1);
+    assert_eq!(
+        (one[0].query.as_str(), one[0].impressions),
+        ("arbre à chat", 100)
+    );
+}
+
 #[tokio::test]
 async fn the_history_kept_is_bounded() {
     let (executor, db) = executor_with_pool().await;
@@ -380,6 +456,15 @@ async fn the_history_kept_is_bounded() {
         .map(|n| row(&format!("query {n:04}"), 1, 10, 5_000))
         .chain([row("", 1, 1, 1_000), row(&"x".repeat(2_000), 1, 1, 1_000)])
         .collect();
+    // The pairs come in no order: the most shown are the ones kept.
+    long.page_queries = (0..MAX_PAGE_QUERY_ROWS + 20)
+        .map(|n| pair(CATEGORY, &format!("query {n:04}"), 0, n as u64 + 1, 15_000))
+        .chain([
+            pair("", "query", 1, 9_999, 1_000),
+            pair(CATEGORY, "", 1, 9_999, 1_000),
+            pair(CATEGORY, &"x".repeat(2_000), 1, 9_999, 1_000),
+        ])
+        .collect();
     google
         .record_search_day(GOOGLE_ACTOR, SHOP, SITE, long)
         .await
@@ -400,8 +485,24 @@ async fn the_history_kept_is_bounded() {
                 .len()
         }
     };
-    assert_eq!(rows_on(old_rows).await, 0);
-    assert_eq!(rows_on(kept_rows).await, 2);
+    assert_eq!(rows_on(old_rows.clone()).await, 0);
+    assert_eq!(rows_on(kept_rows.clone()).await, 2);
     // A day keeps its most clicked rows only.
     assert_eq!(rows_on(latest.to_owned()).await, MAX_SEARCH_ROWS);
+
+    let pairs_on = |day: String| {
+        let db = db.clone();
+        async move {
+            page_queries(&db, SHOP, SITE, &day, &day, 10_000)
+                .await
+                .unwrap()
+        }
+    };
+    assert!(pairs_on(old_rows.clone()).await.is_empty());
+    assert_eq!(pairs_on(kept_rows.clone()).await.len(), 2);
+    // A day keeps its most shown pairs only: the twenty least shown went.
+    let kept = pairs_on(latest.to_owned()).await;
+    assert_eq!(kept.len(), MAX_PAGE_QUERY_ROWS);
+    assert_eq!(kept[0].impressions, MAX_PAGE_QUERY_ROWS as i64 + 20);
+    assert_eq!(kept.last().unwrap().impressions, 21);
 }

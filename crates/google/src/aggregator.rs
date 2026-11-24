@@ -48,6 +48,20 @@ pub struct SearchRow {
     pub position_milli: u32,
 }
 
+/// One query a page of a site showed for on a day, as Search Console gave
+/// it: which page answers which query, which neither list alone tells.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct PageQueryRow {
+    /// The page's address.
+    pub page: String,
+    /// The query as typed.
+    pub query: String,
+    pub clicks: u64,
+    pub impressions: u64,
+    /// The average position, in thousandths: 3,400 is position 3.4.
+    pub position_milli: u32,
+}
+
 /// One finished day of a shop's site in Search Console. Its id is made of
 /// the shop, the site and the day ([`search_day_id`](crate::search_day_id)):
 /// Google does not change a day it has finished counting, so the stream
@@ -71,6 +85,11 @@ pub enum SearchDay {
         /// than the site's numbers: a search that shows two pages counts
         /// once for the site and once for each.
         pages: Vec<SearchRow>,
+        /// The queries each page showed for, the most shown first,
+        /// [`MAX_PAGE_QUERY_ROWS`](crate::MAX_PAGE_QUERY_ROWS) at most. A
+        /// page shown on the second page of results has few clicks or
+        /// none, so these are kept by impressions.
+        page_queries: Vec<PageQueryRow>,
         fetched_by: String,
     },
 }

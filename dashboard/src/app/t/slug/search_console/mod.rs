@@ -6,8 +6,12 @@
 //! (`crate::search_passes`), for the days Google has finished counting, so
 //! a period ends on the last of those, two to three days back. Summed from
 //! the read model; where the daily read stands is the watch's own stream.
+//! Where the categories stand, by their best query, is the page beside it
+//! ([`categories`]).
 
+pub mod categories;
 mod landing;
+mod ranking;
 
 use timada_google::{
     ACCESS_SEARCH_CONSOLE, MAX_SEARCH_ROWS, SearchFigures, day_before, last_search_day,
@@ -34,8 +38,8 @@ use crate::components::table::{
 };
 use crate::db::Db;
 use crate::ui::{
-    LINK, Shell, document, empty_row, fact, facts, filter_bar, format_time, icons, page_header,
-    section_card,
+    LINK, PageTab, Shell, document, empty_row, fact, facts, filter_bar, format_time, icons,
+    page_header, page_tabs, section_card,
 };
 
 /// How many queries, and how many pages, a period lists.
@@ -87,6 +91,24 @@ fn position(figures: &SearchFigures) -> String {
         Some(tenths) => format!("{}.{}", tenths / 10, tenths % 10),
         None => "None".to_owned(),
     }
+}
+
+/// The tabs over the two pages; `current` is `overview` or `categories`.
+fn tabs(cx: &Cx, slug: &str, current: &str) -> Vec<PageTab> {
+    vec![
+        PageTab {
+            label: "Overview",
+            href: href!(index, slug: slug.to_owned()).resolve(cx),
+            count: None,
+            current: current == "overview",
+        },
+        PageTab {
+            label: "Categories",
+            href: href!(categories::index, slug: slug.to_owned()).resolve(cx),
+            count: None,
+            current: current == "categories",
+        },
+    ]
 }
 
 /// One query or one page of the period, as its row shows it.
@@ -225,6 +247,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let slug = tenant.slug.clone();
     let title = format!("Search Console · {}", tenant.name);
     let google_page = href!(super::google::index, slug: slug.clone()).resolve(cx);
+    let tabs = tabs(cx, &slug, "overview");
     let failure = watch
         .as_ref()
         .filter(|_| standing == Standing::Read)
@@ -248,6 +271,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 title: "Search Console",
                 subtitle: Some("Where your shop shows on Google: the queries it shows for and the pages found, as Search Console counts them. Read once a day through the shop's Google account."),
             )
+            page_tabs(label: "Search Console", tabs: &tabs)
 
             <div data-search-console=(standing.key())>
                 if standing == Standing::NotConnected {

@@ -1,4 +1,4 @@
-//! The subscription that keeps the five tables current.
+//! The subscription that keeps the six tables current.
 //!
 //! A connection's and a watch's handler reload the strict write model and
 //! rewrite the shop's row, so delivery may repeat (the subscription is
@@ -14,7 +14,7 @@ use evento::{
 };
 use timada_core::db::{Db, Value, execute, params_from_iter};
 
-use crate::aggregator::{Connection, DayFetched, SearchRow, SearchWatch};
+use crate::aggregator::{Connection, DayFetched, PageQueryRow, SearchRow, SearchWatch};
 use crate::command::{connection_projection, search_watch_projection};
 use crate::value_object::{ACCESS_SEARCH_CONSOLE, KEPT_DAYS, KEPT_ROW_DAYS, day_before};
 
@@ -154,6 +154,21 @@ async fn on_day_fetched<E: Executor>(
             }
             execute(
                 tx,
+                "DELETE FROM google_search_page_queries
+                 WHERE tenant_id = ?1 AND site = ?2 AND day = ?3",
+                key,
+            )
+            .await?;
+            insert_page_queries(tx, key, &day.page_queries).await?;
+            execute(
+                tx,
+                "DELETE FROM google_search_page_queries
+                 WHERE tenant_id = ?1 AND site = ?2 AND day < ?3",
+                (key.0, key.1, day_before(&day.day, KEPT_ROW_DAYS)),
+            )
+            .await?;
+            execute(
+                tx,
                 "DELETE FROM google_search_days WHERE tenant_id = ?1 AND site = ?2 AND day < ?3",
                 (key.0, key.1, day_before(&day.day, KEPT_DAYS)),
             )
@@ -203,6 +218,45 @@ async fn insert_rows(
                 (tenant_id, site, day, {column}, clicks, impressions, position_milli)
              VALUES {}
              ON CONFLICT (tenant_id, site, day, {column}) DO UPDATE SET
+                clicks = excluded.clicks, impressions = excluded.impressions,
+                position_milli = excluded.position_milli",
+            tuples.join(", ")
+        );
+        execute(tx, &statement, params_from_iter(values)).await?;
+    }
+    Ok(())
+}
+
+/// Writes the queries a day's pages showed for, a few statements for the
+/// lot; a pair listed twice keeps the later figures.
+async fn insert_page_queries(
+    tx: &timada_core::db::Connection,
+    key: (&str, &str, &str),
+    rows: &[PageQueryRow],
+) -> anyhow::Result<()> {
+    for chunk in rows.chunks(ROWS_PER_INSERT) {
+        let mut values = Vec::with_capacity(chunk.len() * 8);
+        let mut tuples = Vec::with_capacity(chunk.len());
+        for (at, row) in chunk.iter().enumerate() {
+            let n = at * 8;
+            let places: Vec<String> = (1..=8).map(|place| format!("?{}", n + place)).collect();
+            tuples.push(format!("({})", places.join(", ")));
+            values.extend([
+                Value::from(key.0),
+                Value::from(key.1),
+                Value::from(key.2),
+                Value::from(row.page.as_str()),
+                Value::from(row.query.as_str()),
+                Value::from(row.clicks as i64),
+                Value::from(row.impressions as i64),
+                Value::from(i64::from(row.position_milli)),
+            ]);
+        }
+        let statement = format!(
+            "INSERT INTO google_search_page_queries
+                (tenant_id, site, day, page, query, clicks, impressions, position_milli)
+             VALUES {}
+             ON CONFLICT (tenant_id, site, day, page, query) DO UPDATE SET
                 clicks = excluded.clicks, impressions = excluded.impressions,
                 position_milli = excluded.position_milli",
             tuples.join(", ")

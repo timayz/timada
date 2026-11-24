@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use timada_google::aggregator::SearchRow;
+use timada_google::aggregator::{PageQueryRow, SearchRow};
 use timada_google::{ACCESS_SEARCH_CONSOLE, Command, Connect, DayReport, SearchNumbers};
 
 pub type Google = Command<evento::Turso>;
@@ -35,8 +35,25 @@ pub fn row(key: &str, clicks: u64, impressions: u64, position_milli: u32) -> Sea
     }
 }
 
+/// A query a page showed for, with its numbers.
+pub fn pair(
+    page: &str,
+    query: &str,
+    clicks: u64,
+    impressions: u64,
+    position_milli: u32,
+) -> PageQueryRow {
+    PageQueryRow {
+        page: page.to_owned(),
+        query: query.to_owned(),
+        clicks,
+        impressions,
+        position_milli,
+    }
+}
+
 /// A day of 10 clicks over 200 impressions at position 8, with two queries
-/// and one page.
+/// and one page, which showed for both.
 pub fn day(day: &str) -> DayReport {
     DayReport {
         day: day.to_owned(),
@@ -50,6 +67,22 @@ pub fn day(day: &str) -> DayReport {
             row("griffoir", 2, 50, 12_000),
         ],
         pages: vec![row("https://shop.example/arbres-a-chat", 9, 180, 7_500)],
+        page_queries: vec![
+            pair(
+                "https://shop.example/arbres-a-chat",
+                "arbre à chat",
+                6,
+                100,
+                4_000,
+            ),
+            pair(
+                "https://shop.example/arbres-a-chat",
+                "griffoir",
+                2,
+                50,
+                12_000,
+            ),
+        ],
     }
 }
 

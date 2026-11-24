@@ -1,7 +1,7 @@
 //! Read side. `google_connections` and `google_search_watch` say which
-//! shops' daily pass is due; `google_search_days`, `google_search_queries`
-//! and `google_search_pages` hold what Search Console said of each site, a
-//! day at a time, which [`read_model_subscription`] keeps current from the
+//! shops' daily pass is due; `google_search_days`, `google_search_queries`,
+//! `google_search_pages` and `google_search_page_queries` hold what Search
+//! Console said of each site, a day at a time, which [`read_model_subscription`] keeps current from the
 //! platform's streams. Whether a shop is connected, and where its pass
 //! stands, is read from the streams themselves by the page that shows it:
 //! the tables only say where to look and what a period comes to.
@@ -75,6 +75,25 @@ mod tests {
                 "{plan:#?}"
             );
         }
+        let pairs = plan(
+            &db,
+            super::search::PAGE_QUERIES,
+            (
+                "shop",
+                "sc-domain:shop.example",
+                "2026-08-01",
+                "2026-11-01",
+                100,
+            ),
+        )
+        .await;
+        assert!(
+            pairs
+                .iter()
+                .filter(|step| !step.starts_with("USE SORTER"))
+                .all(|step| step.starts_with("SEARCH")),
+            "{pairs:#?}"
+        );
         let held = plan(
             &db,
             super::search::DAYS_HELD,

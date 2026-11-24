@@ -13,14 +13,16 @@ pub const MIGRATION_APP: &str = "google";
 /// whose site changed is due at once.
 /// `google_search_days`: what a site did on a day. `google_search_queries`
 /// and `google_search_pages`: the most clicked queries and pages of a day.
-/// A position is in thousandths. The three are keyed by shop, site and day,
-/// so a period is one range of the key, and a site's rows are left behind,
-/// to age out, when the shop chooses another.
+/// `google_search_page_queries`: the queries each page showed for on a day,
+/// its most shown. A position is in thousandths. The four are keyed by shop,
+/// site and day, so a period is one range of the key, and a site's rows are
+/// left behind, to age out, when the shop chooses another.
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
-    &[Migration::up(
-        "0001_search",
-        "CREATE TABLE google_connections (
+    &[
+        Migration::up(
+            "0001_search",
+            "CREATE TABLE google_connections (
             tenant_id TEXT NOT NULL PRIMARY KEY,
             site TEXT NOT NULL,
             lapsed INTEGER NOT NULL
@@ -59,7 +61,22 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
             position_milli INTEGER NOT NULL,
             PRIMARY KEY (tenant_id, site, day, page)
         );",
-    )],
+        ),
+        Migration::up(
+            "0002_page_queries",
+            "CREATE TABLE google_search_page_queries (
+                tenant_id TEXT NOT NULL,
+                site TEXT NOT NULL,
+                day TEXT NOT NULL,
+                page TEXT NOT NULL,
+                query TEXT NOT NULL,
+                clicks INTEGER NOT NULL,
+                impressions INTEGER NOT NULL,
+                position_milli INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, site, day, page, query)
+            );",
+        ),
+    ],
 );
 
 /// The tables the migration creates: what a node empties before copying its
@@ -70,4 +87,5 @@ pub const TABLES: &[&str] = &[
     "google_search_days",
     "google_search_queries",
     "google_search_pages",
+    "google_search_page_queries",
 ];

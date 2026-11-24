@@ -18,8 +18,11 @@
 //!   question, no grouping by query or page, which also tells which days
 //!   are finished (Google answers with those only);
 //! - for each missing day, its most clicked queries, then its most clicked
-//!   pages: two questions over one day each, never the two groupings at
-//!   once.
+//!   pages: two questions over one day each;
+//! - for each missing day, which page showed for which query
+//!   ([`PAGE_QUERIES_ASKED`] pairs, of which the most shown are kept): the
+//!   costly grouping, which nothing else tells (a category's best query,
+//!   the queries no category answers), so it is asked once, over one day.
 //!
 //! A shop just connected is owed [`BACKFILL_DAYS`] days, fetched the newest
 //! first, [`DAYS_A_PASS`] a pass, with the next pass a few minutes later
@@ -51,8 +54,13 @@ pub const READER: &str = "timada-dashboard";
 /// How many due shops one read takes.
 const PAGE: i64 = 200;
 
-/// How many days one pass fetches: two questions a day.
+/// How many days one pass fetches: three questions a day.
 pub const DAYS_A_PASS: usize = 10;
+
+/// How many pairs of a page and a query a day is asked for. Google lists
+/// them by clicks; the ones kept are the most shown, so more are asked for
+/// than kept, in the one question.
+pub const PAGE_QUERIES_ASKED: usize = 5_000;
 
 /// How far back a caught-up shop is asked about: Google finishes a day two
 /// to three days later, and suggests looking at the last ten.
@@ -264,6 +272,16 @@ impl SearchPasses {
             };
             let queries = rows(Dimension::Query).await?;
             let pages = rows(Dimension::Page).await?;
+            let page_queries = google
+                .read(&self.store, connection, |access| {
+                    let day = day.day.clone();
+                    async move {
+                        google
+                            .search_page_queries(&access, site, &day, PAGE_QUERIES_ASKED)
+                            .await
+                    }
+                })
+                .await?;
             let written = command
                 .record_search_day(
                     READER,
@@ -274,6 +292,7 @@ impl SearchPasses {
                         numbers: day.numbers,
                         queries,
                         pages,
+                        page_queries,
                     },
                 )
                 .await

@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use serde_json::json;
 use timada_google::SearchNumbers;
-use timada_google::aggregator::SearchRow;
+use timada_google::aggregator::{PageQueryRow, SearchRow};
 
 use super::{Google, GoogleFault};
 
@@ -191,6 +191,45 @@ impl Google {
                 let numbers = row.numbers();
                 Some(SearchRow {
                     key: row.keys.first()?.clone(),
+                    clicks: numbers.clicks,
+                    impressions: numbers.impressions,
+                    position_milli: numbers.position_milli,
+                })
+            })
+            .collect())
+    }
+
+    /// The queries each page of `site` showed for in web search on `day`,
+    /// `limit` at most, in Google's order (by clicks, which says little of
+    /// a page nobody reaches yet: the caller keeps the most shown). The
+    /// kind of question Google counts as the most costly, so it is asked
+    /// over one day, once a day.
+    pub async fn search_page_queries(
+        &self,
+        access_token: &str,
+        site: &str,
+        day: &str,
+        limit: usize,
+    ) -> Result<Vec<PageQueryRow>, GoogleFault> {
+        let body = json!({
+            "startDate": day,
+            "endDate": day,
+            "dimensions": ["page", "query"],
+            "type": "web",
+            "dataState": "final",
+            "rowLimit": limit.clamp(1, 25_000),
+        });
+        let answer: Analytics = self
+            .post(self.analytics_url(site)?, access_token, &body)
+            .await?;
+        Ok(answer
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let numbers = row.numbers();
+                Some(PageQueryRow {
+                    page: row.keys.first()?.clone(),
+                    query: row.keys.get(1)?.clone(),
                     clicks: numbers.clicks,
                     impressions: numbers.impressions,
                     position_milli: numbers.position_milli,

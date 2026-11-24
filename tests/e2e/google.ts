@@ -6,7 +6,8 @@ import { standInPort } from "./shard";
 // address a code is exchanged and a grant renewed at, the one that names
 // the account, Search Console's list of sites and, for a site, what it did
 // in search: by day for the days in `searchDays`, then each day's queries
-// and pages. `searchFails` makes those answer the way Google's own failure
+// and pages, and which page showed for which query (`searchPageQueries`).
+// `searchFails` makes those answer the way Google's own failure
 // does. `refuse` makes the
 // account say no, `withdraw()` ends every grant given so far the way an
 // account does from its own settings, and `grants` leaves boxes unticked.
@@ -34,7 +35,11 @@ export const SEARCH_QUERIES = [
   { key: "griffoir carton", clicks: 2, impressions: 50, position: 12.5 },
 ];
 
-/// A question about a site's numbers, as the dashboard sent it.
+/// A query a page showed for on a day.
+export type PageQuery = { page: string; query: string; clicks: number; impressions: number; position: number };
+
+/// A question about a site's numbers, as the dashboard sent it; `dimension`
+/// is what it groups by, `page+query` for both.
 export type SearchQuestion = { site: string; first: string; last: string; dimension: string };
 
 /// A site as Search Console lists it.
@@ -61,6 +66,8 @@ export class FakeGoogle {
   searchDays: string[] = [searchDay(4), searchDay(3), searchDay(2)];
   /// The addresses found, the most clicked first; the origin is the site's.
   searchPages: string[] = ["https://shop.example/", "https://shop.example/panier"];
+  /// Which page showed for which query on a day; none unless a test says.
+  searchPageQueries: (day: string) => PageQuery[] = () => [];
   /// Search Console's numbers fail the way Google's own servers do.
   searchFails = false;
   /// The questions about a site's numbers.
@@ -167,7 +174,7 @@ export class FakeGoogle {
     const analytics = /^\/webmasters\/v3\/sites\/(.+)\/searchAnalytics\/query$/.exec(url.pathname);
     if (req.method === "POST" && analytics) {
       const asked = JSON.parse(body || "{}") as { startDate: string; endDate: string; dimensions: string[] };
-      const dimension = asked.dimensions?.[0] ?? "";
+      const dimension = (asked.dimensions ?? []).join("+");
       this.questions.push({
         site: decodeURIComponent(analytics[1]),
         first: asked.startDate,
@@ -178,8 +185,8 @@ export class FakeGoogle {
         send(500, { error: { code: 500, message: "Backend Error", status: "INTERNAL" } });
         return;
       }
-      const row = (key: string, of: { clicks: number; impressions: number; position: number }) => ({
-        keys: [key],
+      const row = (key: string | string[], of: { clicks: number; impressions: number; position: number }) => ({
+        keys: [key].flat(),
         clicks: of.clicks,
         impressions: of.impressions,
         ctr: of.clicks / of.impressions,
@@ -193,6 +200,8 @@ export class FakeGoogle {
           .map((day) => row(day, SEARCH_DAY));
       } else if (dimension === "query") {
         rows = SEARCH_QUERIES.map((query) => row(query.key, query));
+      } else if (dimension === "page+query") {
+        rows = this.searchPageQueries(asked.startDate).map((pair) => row([pair.page, pair.query], pair));
       } else {
         rows = this.searchPages.map((address, at) =>
           row(address, { clicks: 5 - at, impressions: 100 - 10 * at, position: 3 + at }),
