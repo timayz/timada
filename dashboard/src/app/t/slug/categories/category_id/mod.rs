@@ -131,6 +131,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .require_permission(cx, PERMISSION_PRODUCTS_READ)
         .await?;
     let can_manage = access.can(cx, PERMISSION_PRODUCTS_MANAGE).await?;
+    let can_propose = access
+        .can(cx, timada_tenancy::PERMISSION_PROPOSALS_PREPARE)
+        .await?;
     let query = query_params::<CategoryQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
     let category = require_category(cx, &access).await?;
@@ -217,6 +220,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let slug = tenant.slug.clone();
     let editable = can_manage && !category.archived;
     let title = format!("{} · Categories · {}", category.name, tenant.name);
+    let suggest =
+        |kind: &str| crate::app::t::slug::proposals::new::new_url(cx, &slug, kind, &category.id);
+    let suggest_url = suggest(timada_proposals::KIND_CATEGORY);
+    let suggest_child_url = suggest(timada_proposals::KIND_NEW_CATEGORY);
+    let can_draft =
+        can_propose && !category.archived && context::<crate::writer::Writers>(cx).enabled();
 
     Ok(view! {
         document(
@@ -244,6 +253,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 }
                 if translated {
                     <a class=(LINK) href=(href!(translations::index, slug: slug.clone(), category_id: category.id.clone())) data-category-translations="">"Translations"</a>
+                }
+                if can_propose && !category.archived {
+                    <a class=(LINK) href=(&suggest_url) data-suggest-change="">"Suggest a change"</a>
+                    <a class=(LINK) href=(&suggest_child_url) data-suggest-category="">"Suggest a category under it"</a>
+                }
+                if can_draft {
+                    crate::app::t::slug::writer::draft_form(slug: &slug, kind: timada_proposals::KIND_CATEGORY, subject_id: &category.id)
                 }
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())

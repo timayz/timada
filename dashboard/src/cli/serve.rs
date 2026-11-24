@@ -63,6 +63,13 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     if !keywords.enabled() {
         tracing::info!("dataforseo.login is not set: keyword research is off");
     }
+    // The model that drafts the shops' texts, for the pages and the saga
+    // that asks it.
+    let writers = crate::writer::Writers::new(&config.writer);
+    if !writers.enabled() {
+        tracing::info!("writer.key is not set: text drafts are off");
+    }
+    let writer_spending = crate::writer::Spending::new(&config.writer);
     // The application the shops connect their Google accounts to.
     let google = crate::google::Google::new(crate::seal::google_sealer(&config), &config.google);
     if !google.enabled() {
@@ -225,6 +232,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         aliexpress: aliexpress.clone(),
         keywords: keywords.clone(),
         spending: crate::research::Spending::new(&config.research),
+        writers: writers.clone(),
+        writer_spending,
         place: place.clone(),
         vies: Arc::new(crate::vies::ViesClient::new(
             config.invoicing.vies_url.clone(),
@@ -545,6 +554,8 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         shop_mail,
         aliexpress,
         keywords,
+        writers,
+        writer_spending,
         google,
         euro_rates,
         store: connections,
@@ -622,6 +633,10 @@ pub struct Deps {
     pub keywords: crate::keywords::Keywords,
     /// What the fetches may spend in a day.
     pub spending: crate::research::Spending,
+    /// The model that drafts the shops' texts.
+    pub writers: crate::writer::Writers,
+    /// What the drafts may spend in a day.
+    pub writer_spending: crate::writer::Spending,
     /// This node's place among the nodes up: which of the work a saga is
     /// told about falls to it.
     pub place: cluster::ShareOf,
@@ -813,6 +828,26 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     ("google", Kind::ReadModel, |d| {
         timada_google::read_model_subscription(d.db.clone())
     }),
+    ("proposals", Kind::ReadModel, |d| {
+        timada_proposals::read_model_subscription(d.db.clone())
+    }),
+    ("writer", Kind::ReadModel, |d| {
+        timada_writer::read_model_subscription(d.db.clone())
+    }),
+    // The texts a member asked for are drafted by the writer and prepared
+    // as proposals.
+    ("text drafts", Kind::Sharded, |d| {
+        crate::writer::drafts::subscription(
+            d.writers.clone(),
+            d.store.clone(),
+            d.db.clone(),
+            d.writer_spending,
+        )
+    }),
+    // What a member approved is changed in the shop, under their name.
+    ("proposal changes", Kind::Sharded, |d| {
+        crate::proposals::apply::subscription(d.store.clone())
+    }),
     // The keywords a study's owner asked for are fetched from the keyword
     // source and recorded on the study.
     ("keyword fetches", Kind::Sharded, |d| {
@@ -911,6 +946,9 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     }),
     ("message notices", Kind::Sharded, |d| {
         crate::message_notifications::subscription(d.mailroom.clone())
+    }),
+    ("proposal notices", Kind::Sharded, |d| {
+        crate::proposals::notices::subscription(d.mailroom.clone())
     }),
     // The sales told to Meta from the server, for the shops that gave a
     // Conversions API token and the shoppers who allowed advertising.
@@ -1013,6 +1051,9 @@ mod tests {
                 "invoicing",
                 "AliExpress",
                 "research",
+                "google",
+                "proposals",
+                "writer",
                 "mail logos",
                 "pictures",
             ]

@@ -389,6 +389,20 @@ const STORE_READ_MODELS: &[ReadModel] = &[
         migrations: &timada_google::MIGRATIONS,
         tables: timada_google::TABLES,
     },
+    ReadModel {
+        name: Some("proposals"),
+        subscriptions: &[timada_proposals::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
+        migrations: &timada_proposals::MIGRATIONS,
+        tables: timada_proposals::TABLES,
+    },
+    ReadModel {
+        name: Some("writer"),
+        subscriptions: &[timada_writer::READ_MODEL_SUBSCRIPTION],
+        sagas: &[],
+        migrations: &timada_writer::MIGRATIONS,
+        tables: timada_writer::TABLES,
+    },
 ];
 
 /// The tables that are this node's own in the store's database, no peer's

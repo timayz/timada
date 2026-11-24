@@ -41,6 +41,7 @@ mod order_mails;
 mod payments;
 mod peer_port;
 mod peers;
+mod proposals;
 mod rate_limit;
 mod read_only_store;
 mod readiness;
@@ -61,6 +62,7 @@ mod study_shop;
 mod ui;
 mod vies;
 mod workers;
+mod writer;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

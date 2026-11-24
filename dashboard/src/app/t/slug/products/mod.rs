@@ -5,6 +5,7 @@
 
 pub mod cost;
 pub mod create;
+pub mod draft;
 pub mod label;
 pub mod product_id;
 
@@ -168,6 +169,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await?;
     let can_manage = access.can(cx, PERMISSION_PRODUCTS_MANAGE).await?;
     let query = query_params::<ProductsQuery>(cx)?;
+    // Whether the ticked products' texts may be drafted from here.
+    let can_draft = context::<crate::writer::Writers>(cx).enabled()
+        && access
+            .can(cx, timada_tenancy::PERMISSION_PROPOSALS_PREPARE)
+            .await?;
     let q = query.q.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let category = query
         .category
@@ -343,6 +349,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             })
                         )
                         button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-9" formaction=(href!(cost::cost, slug: slug.clone())) }, "Cost the ticked products")
+                        if can_draft {
+                            button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" class="h-9 sm:ml-6" formaction=(href!(draft::draft, slug: slug.clone())) }, "Draft the ticked products' texts")
+                        }
                     </form>
                     <script>(Unescaped::new_unchecked(SELECT_ALL_SCRIPT))</script>
                 }

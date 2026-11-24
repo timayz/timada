@@ -42,6 +42,11 @@ pub const ROLE_OWNER: &str = "owner";
 /// - `pages:read` — see the shop's pages (legal notice, terms, about) as
 ///   written, drafts included.
 /// - `pages:manage` — write, publish and delete them.
+/// - `proposals:prepare` — prepare a change to the shop for someone else to
+///   approve, and see the ones that wait.
+/// - `proposals:approve` — approve, edit or refuse the changes that wait.
+///   What an approval changes still needs its own permission
+///   (`products:manage` for a product or a category).
 pub const PERMISSIONS: &[&str] = &[
     PERMISSION_TENANT_MANAGE,
     PERMISSION_MEMBERS_READ,
@@ -70,6 +75,8 @@ pub const PERMISSIONS: &[&str] = &[
     PERMISSION_AUTOMATIONS_MANAGE,
     PERMISSION_PAGES_READ,
     PERMISSION_PAGES_MANAGE,
+    PERMISSION_PROPOSALS_PREPARE,
+    PERMISSION_PROPOSALS_APPROVE,
 ];
 pub const PERMISSION_TENANT_MANAGE: &str = "tenant:manage";
 pub const PERMISSION_MEMBERS_READ: &str = "members:read";
@@ -103,6 +110,8 @@ pub const PERMISSION_AUTOMATIONS_READ: &str = "automations:read";
 pub const PERMISSION_AUTOMATIONS_MANAGE: &str = "automations:manage";
 pub const PERMISSION_PAGES_READ: &str = "pages:read";
 pub const PERMISSION_PAGES_MANAGE: &str = "pages:manage";
+pub const PERMISSION_PROPOSALS_PREPARE: &str = "proposals:prepare";
+pub const PERMISSION_PROPOSALS_APPROVE: &str = "proposals:approve";
 
 /// Every scope a store API key can hold, as `resource:action`. None appends
 /// to the store: only the dashboard writes a tenant's events. A stored key may

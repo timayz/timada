@@ -393,6 +393,34 @@ dir = "data/shopper-keys"
 # # seed, country and language again, at no cost. 0 pays for every fetch.
 # reuse_days = 30
 
+# First drafts of the shops' texts: a product's or a category's name, its
+# description, and the title and description search engines show, written by
+# a model from what the shop knows of the product, for the keyword it is to
+# be found by. A draft is never published: it waits under the shop's
+# Proposals for a member to edit, approve or refuse.
+# The model is reached under the platform's own key, which pays for every
+# call. A day (UTC, midnight to midnight) has two caps, in US dollars. They
+# count what each call cost, reckoned from the tokens the model says it read
+# and wrote at the two prices below. A call is refused before it is made
+# when the most it may cost (16,000 tokens each way: 0.384 USD at the
+# default prices) no longer fits under a cap, so a cap is never passed. A
+# draft costs a few cents. On a cluster the caps hold over every node.
+# Without a key text drafts are off, and no page offers them.
+# [writer]
+# # The API key of the platform's account. In production: TIMADA__WRITER__KEY.
+# key = ""
+# # Which model writes, and what a million tokens cost it, read and written,
+# # in US dollars. Change the three together.
+# model = "claude-opus-5-5"
+# input_usd_per_mtok = 4.0
+# output_usd_per_mtok = 20.0
+# # For one shop's drafts.
+# daily_usd_per_shop = 5.0
+# # For every shop's drafts together.
+# daily_usd = 50.0
+# # The model's maker's own address, changed only for tests.
+# api_url = "https://api.anthropic.com"
+
 # The application the shops connect their Google accounts to: an OAuth client
 # of a Google Cloud project of the platform's (APIs & Services, Credentials,
 # "Web application"), with <server.url>/google/callback as its one authorized

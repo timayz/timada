@@ -7959,12 +7959,14 @@ dependencies = [
  "timada-newsletter",
  "timada-orders",
  "timada-pages",
+ "timada-proposals",
  "timada-research",
  "timada-reviews",
  "timada-shoppers",
  "timada-storefront",
  "timada-support",
  "timada-tenancy",
+ "timada-writer",
  "tokio",
  "tokio-rustls",
  "topcoat",
@@ -8119,6 +8121,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "timada-proposals"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "serde",
+ "thiserror 2.0.21",
+ "timada-core",
+ "tokio",
+ "ulid",
+]
+
+[[package]]
 name = "timada-research"
 version = "0.1.1"
 dependencies = [
@@ -8228,6 +8244,19 @@ dependencies = [
  "timada-core",
  "tokio",
  "tracing",
+ "ulid",
+]
+
+[[package]]
+name = "timada-writer"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "thiserror 2.0.21",
+ "timada-core",
+ "tokio",
  "ulid",
 ]
 

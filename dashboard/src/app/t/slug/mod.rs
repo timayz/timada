@@ -30,6 +30,7 @@ pub mod orders;
 pub mod pages;
 pub mod payments;
 pub mod products;
+pub mod proposals;
 pub mod redirects;
 pub mod rename;
 pub mod reviews;
@@ -38,6 +39,7 @@ pub mod sales;
 pub mod search_console;
 pub mod shipping;
 pub mod time_zone;
+pub mod writer;
 
 use std::sync::Arc;
 
@@ -53,8 +55,9 @@ use timada_tenancy::{
     PERMISSION_CUSTOMERS_READ, PERMISSION_DISCOUNTS_READ, PERMISSION_MAIL_MANAGE,
     PERMISSION_MEMBERS_READ, PERMISSION_NEWSLETTER_READ, PERMISSION_ORDERS_READ,
     PERMISSION_PAGES_READ, PERMISSION_PAYMENTS_MANAGE, PERMISSION_PRODUCTS_READ,
-    PERMISSION_REVIEWS_READ, PERMISSION_ROLES_MANAGE, PERMISSION_SHIPPING_MANAGE,
-    PERMISSION_SUPPORT_READ, PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
+    PERMISSION_PROPOSALS_APPROVE, PERMISSION_PROPOSALS_PREPARE, PERMISSION_REVIEWS_READ,
+    PERMISSION_ROLES_MANAGE, PERMISSION_SHIPPING_MANAGE, PERMISSION_SUPPORT_READ,
+    PERMISSION_TENANT_MANAGE, ROLE_OWNER, TenantState,
 };
 use topcoat::{
     Result,
@@ -204,6 +207,8 @@ pub fn tenant_url(cx: &Cx, slug: &str, error: Option<&str>, message: Option<&str
 pub struct TenantNav {
     pub products: bool,
     pub categories: bool,
+    pub proposals: bool,
+    pub writer: bool,
     pub orders: bool,
     pub carts: bool,
     pub customers: bool,
@@ -235,6 +240,14 @@ impl TenantNav {
             // The catalog is one section of the back office: whoever sees the
             // products sees the categories they are filed under.
             categories: products,
+            // Whoever prepares changes or answers them sees what waits.
+            proposals: access.can(cx, PERMISSION_PROPOSALS_APPROVE).await?
+                || access.can(cx, PERMISSION_PROPOSALS_PREPARE).await?,
+            // Text drafts, while the platform has a writer: for whoever
+            // prepares proposals about a catalog they see.
+            writer: products
+                && context::<crate::writer::Writers>(cx).enabled()
+                && access.can(cx, PERMISSION_PROPOSALS_PREPARE).await?,
             // Sales are one section too: the open carts are the orders not
             // placed yet.
             orders,
@@ -294,6 +307,22 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
             tone: Tone::Primary,
             hint: None,
         });
+    }
+    if nav.proposals {
+        let n = timada_proposals::count_waiting(pool, id)
+            .await
+            .map_err(topcoat::Error::from_anyhow)?;
+        // Nothing waiting is the usual state: no tile for it.
+        if n > 0 {
+            tiles.push(Tile {
+                label: "Waiting proposals",
+                value: n.to_string(),
+                symbol: icons::PROPOSALS,
+                href: link("proposals"),
+                tone: attention(n),
+                hint: None,
+            });
+        }
     }
     if nav.orders {
         let n = order_count(pool, id)
