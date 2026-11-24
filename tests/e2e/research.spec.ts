@@ -24,6 +24,10 @@ import { ADMIN_STATE } from "./fixtures";
 // too, one paid search a keyword: the page lists the sites found, the owner
 // marks each as a specialist shop or a generalist, and the competition test
 // follows. A mark is the user's: the next study knows it.
+//
+// The kept keywords are what a shop's categories are named after: the owner
+// builds a tree from them by hand, parents, children and keywords parked
+// for later, and the page says what stands between it and its creation.
 
 /// Reloads the study's page until the seed's fetch stands at `status`.
 async function seedStands(page: Page, seed: string, status: string) {
@@ -360,6 +364,141 @@ async function sitesListed(page: Page, count: number) {
     await expect(page.locator("[data-site]")).toHaveCount(count, { timeout: 1000 });
   }).toPass({ timeout: 20_000 });
 }
+
+/// Sends the keyword of a row of the tree's page where `to` says.
+async function move(page: Page, row: string, to: string, said: string) {
+  const form = page.locator(row).locator("[data-place]");
+  await form.getByRole("combobox").selectOption({ label: to });
+  await form.getByRole("button", { name: /^Move/ }).click();
+  await expect(page.getByRole("status")).toContainText(said);
+}
+
+test("the kept keywords of a study become a category tree", async ({ page, browser }) => {
+  const source = new FakeDataforseo();
+  await source.start();
+  const tag = Date.now().toString(36);
+  const seed = `gants moto ${tag}`;
+  const cheap = `${seed} pas cher`;
+  const best = `meilleur ${seed}`;
+  const named = (keyword: string) => keyword.charAt(0).toUpperCase() + keyword.slice(1);
+  try {
+    await registerWithEmail(page, uniqueEmail("planter"));
+    await page.goto("/research/new");
+    await page.getByLabel("Name").fill(`Biker gloves ${Date.now()}`);
+    await page.getByLabel("Seed keywords, one a line").fill(seed);
+    await page.getByRole("button", { name: "Start the study" }).click();
+    await expect(page.getByRole("status")).toContainText("Study started.");
+    const studyUrl = page.url().split("?")[0];
+    await page.getByRole("button", { name: "Fetch the keywords of 1 seed" }).click();
+    await seedStands(page, seed, "fetched");
+    await keywordsListed(page, 5);
+    await listHolds(page, /^Too difficult/, [seed]);
+    await page.locator(`[data-keyword="${seed}"]`).getByRole("button", { name: "Bring back" }).click();
+    await listHolds(page, /^Main/, [seed, cheap, best]);
+    const calls = source.calls.length;
+
+    // The tree starts empty, from the three keywords the study keeps.
+    await expect(page.locator("[data-study-categories]")).toHaveAttribute("data-study-categories", "0");
+    await page.locator("[data-study-tree]").click();
+    const treeUrl = page.url().split("?")[0];
+    expect(treeUrl).toBe(`${studyUrl}/tree`);
+    await expect(page.locator("[data-tree]")).toHaveAttribute("data-tree", "empty");
+    await expect(page.locator("[data-kept]")).toHaveCount(3);
+    await expect(page.locator("[data-tree-unpriced]")).toBeVisible();
+
+    // A parent, a child of it, and one parked for later.
+    await move(page, `[data-kept="${seed}"]`, "A parent category", "Placed in the tree.");
+    await move(page, `[data-kept="${cheap}"]`, `Under ${named(seed)}`, "Placed in the tree.");
+    await move(page, `[data-kept="${best}"]`, "Parked for later", "Parked for later.");
+    await expect(page.locator("[data-category]")).toHaveCount(2);
+    const parent = page.locator(`[data-category="${seed}"]`);
+    const child = page.locator(`[data-category="${cheap}"]`);
+    await expect(parent).toHaveAttribute("data-category-level", "parent");
+    await expect(parent.locator("[data-category-name]")).toHaveText(named(seed));
+    await expect(parent).toHaveAttribute("data-category-slug", `gants-moto-${tag}`);
+    await expect(parent.locator("[data-volume]")).toHaveText("12100");
+    await expect(parent.locator("[data-cpc]")).toHaveText("$0.42");
+    await expect(child).toHaveAttribute("data-category-level", "child");
+    await expect(child).toHaveAttribute("data-category-slug", `gants-moto-${tag}-pas-cher`);
+    await expect(page.locator(`[data-parked="${best}"]`)).toBeVisible();
+    await expect(page.locator(`[data-kept="${seed}"]`)).toHaveAttribute("data-kept-stands", "tree");
+    await expect(page.locator(`[data-kept="${best}"]`)).toHaveAttribute("data-kept-stands", "parked");
+    // A parent stays where it is while it has a child.
+    await expect(parent.locator("[data-place]")).toHaveCount(0);
+    await expect(parent).toContainText("Move its children first");
+
+    // The niche is named by the words of its seeds until its owner says:
+    // a name without one of them is held back.
+    await expect(page.locator("[data-tree]")).toHaveAttribute("data-tree", "ready");
+    await expect(page.locator("[data-niche-words]")).toHaveAttribute("data-niche-words", "seeds");
+    await expect(page.getByLabel("The niche's own words")).toHaveValue(`gants\nmoto\n${tag}`);
+    await page.getByLabel("The niche's own words").fill("casque");
+    await page.getByRole("button", { name: "Save the words" }).click();
+    await expect(page.getByRole("status")).toContainText("Saved: the names are checked again.");
+    await expect(page.locator("[data-tree]")).toHaveAttribute("data-tree", "held_back");
+    await expect(page.locator("[data-tree-held-back]")).toHaveAttribute("data-tree-held-back", "2");
+    await expect(child.locator('[data-category-problem="no_niche_word"]')).toBeVisible();
+    await page.getByLabel("The niche's own words").fill("Motos");
+    await page.getByRole("button", { name: "Save the words" }).click();
+    await expect(page.locator("[data-tree]")).toHaveAttribute("data-tree", "ready");
+    await expect(page.locator("[data-niche-words]")).toHaveAttribute("data-niche-words", "said");
+
+    // Once the sale is said, a category whose clicks cost too much against
+    // its price is kept out of ads; a price of its own changes that.
+    await expect(parent.locator("[data-category-ads]")).toHaveAttribute("data-category-ads", "");
+    await page.goto(studyUrl);
+    await expect(page.locator("[data-study-categories]")).toHaveAttribute("data-study-categories", "2");
+    await page.getByLabel("Average price, VAT included").fill("60");
+    await page.getByLabel("Supplier's cost").fill("15");
+    await page.getByLabel("Sending a parcel").fill("4");
+    await page.getByLabel("At the border").fill("5");
+    await page.getByLabel("VAT in the price, in %").fill("20");
+    await page.getByLabel("Fixed costs, for each sale").fill("1");
+    await page.getByLabel("Payment fee, in % of the price").fill("1.5");
+    await page.getByLabel("Payment fee, for each payment").fill("0.25");
+    await page.getByRole("button", { name: "Save and score again" }).click();
+    await expect(page.locator('[data-sale-line="needed"]')).toContainText("194.67");
+    await page.goto(treeUrl);
+    await expect(parent.locator("[data-ratio]")).toHaveText("142.85");
+    await expect(parent.locator("[data-category-ads]")).toHaveAttribute("data-category-ads", "keep_out");
+    await expect(child.locator("[data-ratio]")).toHaveText("193.54");
+    await expect(child.locator("[data-category-ads]")).toHaveAttribute("data-category-ads", "keep_out");
+    await page.getByLabel(`Average price of ${named(cheap)}, in EUR`).fill("70");
+    await child.getByRole("button", { name: /^Save/ }).click();
+    await expect(page.getByRole("status")).toContainText("Price saved.");
+    await expect(child.locator("[data-category-price]")).toContainText("70.00");
+    await expect(child.locator("[data-ratio]")).toHaveText("225.80");
+    await expect(child.locator("[data-category-ads]")).toHaveAttribute("data-category-ads", "ads");
+
+    // A parked keyword comes into the tree; a child goes out of it.
+    await move(page, `[data-parked="${best}"]`, "A parent category", "Placed in the tree.");
+    await expect(page.locator('[data-category-level="parent"]')).toHaveCount(2);
+    await expect(page.locator("[data-parked]")).toHaveCount(0);
+    await move(page, `[data-category="${cheap}"]`, "Out of the tree", "Taken out.");
+    await expect(page.locator("[data-category]")).toHaveCount(2);
+    await expect(page.locator(`[data-kept="${cheap}"]`)).toHaveAttribute("data-kept-stands", "");
+
+    // A keyword the study stops keeping is held back where it stands.
+    await page.goto(studyUrl);
+    await listHolds(page, /^Main/, [seed, cheap, best]);
+    await page.locator(`[data-keyword="${best}"]`).getByRole("button", { name: "Drop" }).click();
+    await expect(page.getByRole("status")).toContainText("Keyword dropped.");
+    await expect(async () => {
+      await page.goto(treeUrl);
+      await expect(page.locator(`[data-category="${best}"] [data-category-problem="not_kept"]`)).toBeVisible({ timeout: 1000 });
+    }).toPass({ timeout: 20_000 });
+    await expect(page.locator("[data-tree]")).toHaveAttribute("data-tree", "held_back");
+    await expect(page.locator("[data-kept]")).toHaveCount(2);
+
+    // Nothing was fetched for any of it, and the tree is its owner's only.
+    expect(source.calls).toHaveLength(calls);
+    const stranger = await (await browser.newContext()).newPage();
+    await registerWithEmail(stranger, uniqueEmail("stranger"));
+    expect((await stranger.goto(treeUrl))?.status()).toBe(404);
+  } finally {
+    await source.stop();
+  }
+});
 
 test("the first results say whether a specialist holds the niche", async ({ page }) => {
   const source = new FakeDataforseo();

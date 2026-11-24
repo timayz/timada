@@ -18,6 +18,7 @@ mod marks;
 mod results;
 mod spend;
 mod study;
+mod tree;
 
 use evento::{
     Executor, Projection, ProjectionAggregate, WriteBuilder, WriteError, metadata::Event,
@@ -30,12 +31,14 @@ pub use spend::*;
 pub use study::*;
 
 use crate::aggregator::{
-    Created, Deleted, FetchFailed, FetchRequested, FetchStarted, InputsSet, KeywordDropped,
-    KeywordRestored, KeywordsFetched, KeywordsReused, Renamed, ResultsFailed, ResultsFetched,
-    ResultsRequested, ResultsStarted, SeedAdded, Study,
+    CategoryParked, CategoryPlaced, CategoryPriced, CategoryRemoved, Created, Deleted, FetchFailed,
+    FetchRequested, FetchStarted, InputsSet, KeywordDropped, KeywordRestored, KeywordsFetched,
+    KeywordsReused, NicheWordsSet, Renamed, ResultsFailed, ResultsFetched, ResultsRequested,
+    ResultsStarted, SeedAdded, Study,
 };
 use crate::error::ResearchError;
 use crate::score::{Sale, StudyInputs};
+use crate::tree::{Tree, TreeCategory};
 use crate::value_object::{FETCH_STALE_SECS, FetchStatus};
 
 /// The command gateway over the platform's streams. Cheap to clone when `E`
@@ -135,6 +138,8 @@ pub struct StudyState {
     /// Unix seconds of the last `InputsSet`: the day of the rate it
     /// carries. `None` until the owner said anything.
     pub inputs_set_at: Option<u64>,
+    /// The category tree the owner built from the kept keywords.
+    pub tree: Tree,
     /// Unix seconds of `Created`.
     pub created_at: u64,
     /// Unix seconds of the last event.
@@ -190,6 +195,11 @@ pub fn study_projection<E: Executor>() -> Projection<E, StudyState> {
         .handler(on_results_started())
         .handler(on_results_fetched())
         .handler(on_results_failed())
+        .handler(on_category_placed())
+        .handler(on_category_parked())
+        .handler(on_category_removed())
+        .handler(on_category_priced())
+        .handler(on_niche_words_set())
         .handler(on_deleted())
         .strict()
 }
@@ -398,6 +408,82 @@ async fn on_results_failed(
         check.status = FetchStatus::Failed;
         check.last_error = Some(event.data.reason.to_owned());
     }
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_placed(
+    event: Event<CategoryPlaced>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    let keyword = &event.data.keyword;
+    // It keeps its place among the others, and its price, when it only
+    // changes parent.
+    match study
+        .tree
+        .categories
+        .iter_mut()
+        .find(|category| category.keyword == *keyword)
+    {
+        Some(category) => category.parent = event.data.parent.to_owned(),
+        None => {
+            study.tree.take_out(keyword);
+            study.tree.categories.push(TreeCategory {
+                keyword: keyword.to_owned(),
+                parent: event.data.parent.to_owned(),
+                price_cents: None,
+            });
+        }
+    }
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_parked(
+    event: Event<CategoryParked>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    study.tree.take_out(&event.data.keyword);
+    study.tree.parked.push(event.data.keyword.to_owned());
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_removed(
+    event: Event<CategoryRemoved>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    study.tree.take_out(&event.data.keyword);
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_priced(
+    event: Event<CategoryPriced>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    if let Some(category) = study
+        .tree
+        .categories
+        .iter_mut()
+        .find(|category| category.keyword == event.data.keyword)
+    {
+        category.price_cents = event.data.price_cents;
+    }
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_niche_words_set(
+    event: Event<NicheWordsSet>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    study.tree.niche_words = Some(event.data.words.to_owned());
     study.updated_at = event.timestamp;
     Ok(())
 }

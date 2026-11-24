@@ -166,6 +166,40 @@ pub enum Study {
         reason: String,
         failed_by: String,
     },
+    /// The owner put `keyword`, one the study keeps, in its category tree:
+    /// as a parent category with no `parent`, or under the parent category
+    /// `parent` names by its keyword. It replaces where the keyword stood,
+    /// in the tree or parked.
+    CategoryPlaced {
+        keyword: String,
+        parent: Option<String>,
+        placed_by: String,
+    },
+    /// The owner parked `keyword` for later: out of the tree, and kept in
+    /// sight.
+    CategoryParked {
+        keyword: String,
+        parked_by: String,
+    },
+    /// `keyword` is out of the tree and no longer parked.
+    CategoryRemoved {
+        keyword: String,
+        removed_by: String,
+    },
+    /// The average price of the category of `keyword`, VAT included, in
+    /// the currency of the study's sale, when it is not the study's;
+    /// `None` goes back to the study's.
+    CategoryPriced {
+        keyword: String,
+        price_cents: Option<u64>,
+        priced_by: String,
+    },
+    /// The niche's own words, the list whole: a category's name holds one
+    /// of them at least. Empty when the owner wants no name checked.
+    NicheWordsSet {
+        words: Vec<String>,
+        set_by: String,
+    },
     /// Gone for its owner; the stream stays.
     Deleted {
         deleted_by: String,

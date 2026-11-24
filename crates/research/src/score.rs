@@ -693,7 +693,7 @@ impl Score {
 
 /// The words of `text`, folded: lowercase, without accents, cut wherever a
 /// character is neither a letter nor a digit.
-fn words(text: &str) -> Vec<String> {
+pub(crate) fn words(text: &str) -> Vec<String> {
     search_key(text)
         .split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty())
@@ -770,7 +770,7 @@ fn cpc_millis(cpc_usd_cents: u64, usd_micros: Option<u64>) -> u64 {
 
 /// A price over a cost per click, in hundredths, rounded down; `None` when
 /// a click is free.
-fn ratio(price_cents: u64, cpc_millis: u64) -> Option<u64> {
+pub(crate) fn ratio(price_cents: u64, cpc_millis: u64) -> Option<u64> {
     (cpc_millis > 0).then(|| {
         let ratio = u128::from(price_cents) * 100_000 / u128::from(cpc_millis);
         u64::try_from(ratio).unwrap_or(u64::MAX)
