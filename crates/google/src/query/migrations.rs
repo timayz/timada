@@ -17,6 +17,16 @@ pub const MIGRATION_APP: &str = "google";
 /// its most shown. A position is in thousandths. The four are keyed by shop,
 /// site and day, so a period is one range of the key, and a site's rows are
 /// left behind, to age out, when the shop chooses another.
+/// `google_ads_accounts`: one row per shop whose connection reads Google Ads
+/// and has an account chosen: where the daily pass looks for shops.
+/// `google_ads_watch`: where each shop's pass stands. `google_ads_calls`:
+/// how many questions each shop's passes asked Google Ads on a day (UTC),
+/// which the platform's daily allowance is counted in.
+/// `google_ads_days`: what an account cost and brought on a day, added up
+/// from `google_ads_campaigns` (a campaign on a kind of device).
+/// `google_ads_ad_groups`, `google_ads_products` and `google_ads_terms`:
+/// the day's ad groups, products and searches. Money is in millionths of
+/// the account's currency, conversions in thousandths.
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
     &[
@@ -76,6 +86,93 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 PRIMARY KEY (tenant_id, site, day, page, query)
             );",
         ),
+        Migration::up(
+            "0003_ads",
+            "CREATE TABLE google_ads_accounts (
+                tenant_id TEXT NOT NULL PRIMARY KEY,
+                customer_id TEXT NOT NULL,
+                lapsed INTEGER NOT NULL
+            );
+            CREATE TABLE google_ads_watch (
+                tenant_id TEXT NOT NULL PRIMARY KEY,
+                customer_id TEXT NOT NULL,
+                next_at INTEGER NOT NULL
+            );
+            CREATE TABLE google_ads_calls (
+                day TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                calls INTEGER NOT NULL,
+                PRIMARY KEY (day, tenant_id)
+            );
+            CREATE TABLE google_ads_days (
+                tenant_id TEXT NOT NULL,
+                customer_id TEXT NOT NULL,
+                day TEXT NOT NULL,
+                currency TEXT NOT NULL,
+                cost_micros INTEGER NOT NULL,
+                impressions INTEGER NOT NULL,
+                clicks INTEGER NOT NULL,
+                conversions_milli INTEGER NOT NULL,
+                value_micros INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, customer_id, day)
+            );
+            CREATE TABLE google_ads_campaigns (
+                tenant_id TEXT NOT NULL,
+                customer_id TEXT NOT NULL,
+                day TEXT NOT NULL,
+                campaign_id TEXT NOT NULL,
+                device TEXT NOT NULL,
+                name TEXT NOT NULL,
+                cost_micros INTEGER NOT NULL,
+                impressions INTEGER NOT NULL,
+                clicks INTEGER NOT NULL,
+                conversions_milli INTEGER NOT NULL,
+                value_micros INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, customer_id, day, campaign_id, device)
+            );
+            CREATE TABLE google_ads_ad_groups (
+                tenant_id TEXT NOT NULL,
+                customer_id TEXT NOT NULL,
+                day TEXT NOT NULL,
+                ad_group_id TEXT NOT NULL,
+                campaign_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                cost_micros INTEGER NOT NULL,
+                impressions INTEGER NOT NULL,
+                clicks INTEGER NOT NULL,
+                conversions_milli INTEGER NOT NULL,
+                value_micros INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, customer_id, day, ad_group_id)
+            );
+            CREATE TABLE google_ads_products (
+                tenant_id TEXT NOT NULL,
+                customer_id TEXT NOT NULL,
+                day TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                ad_group_id TEXT NOT NULL,
+                campaign_id TEXT NOT NULL,
+                cost_micros INTEGER NOT NULL,
+                impressions INTEGER NOT NULL,
+                clicks INTEGER NOT NULL,
+                conversions_milli INTEGER NOT NULL,
+                value_micros INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, customer_id, day, item_id, ad_group_id)
+            );
+            CREATE TABLE google_ads_terms (
+                tenant_id TEXT NOT NULL,
+                customer_id TEXT NOT NULL,
+                day TEXT NOT NULL,
+                term TEXT NOT NULL,
+                ad_group_id TEXT NOT NULL,
+                campaign_id TEXT NOT NULL,
+                cost_micros INTEGER NOT NULL,
+                impressions INTEGER NOT NULL,
+                clicks INTEGER NOT NULL,
+                conversions_milli INTEGER NOT NULL,
+                value_micros INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, customer_id, day, term, ad_group_id)
+            );",
+        ),
     ],
 );
 
@@ -88,4 +185,12 @@ pub const TABLES: &[&str] = &[
     "google_search_queries",
     "google_search_pages",
     "google_search_page_queries",
+    "google_ads_accounts",
+    "google_ads_watch",
+    "google_ads_calls",
+    "google_ads_days",
+    "google_ads_campaigns",
+    "google_ads_ad_groups",
+    "google_ads_products",
+    "google_ads_terms",
 ];

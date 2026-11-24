@@ -5,19 +5,22 @@ cost (Google Ads) and whether its products are accepted (Merchant Center). Each 
 the consent of the Google account that owns them. A shop keeps **one connection** for
 all three (#686): one place to say yes, one grant kept sealed, one "connect again".
 
-Search Console is the first kind of access a shop can turn on. Google Ads and Merchant
-Center are modelled (`timada_google::ACCESSES`) and join the page with what reads them
-(#688, #687).
+Search Console and Google Ads are the kinds of access a shop can turn on. Merchant
+Center is modelled (`timada_google::ACCESSES`) and joins the page with what reads it
+(#687).
 
 ## Setting it up (operator, once)
 
 1. In a Google Cloud project of the platform's, enable the **Google Search Console
-   API**.
+   API** and the **Google Ads API**. The project's access level at Google Ads sets how
+   many questions a day it may ask (see "Google Ads" below): put it in
+   `google.ads_calls_a_day`.
 2. Under *APIs & Services › OAuth consent screen* (Google Auth Platform), set the
    application's name, support address, home page and privacy policy, choose
    **External** users, and add the scope
-   `https://www.googleapis.com/auth/webmasters.readonly` under *Data Access*. That
-   page is where Google says whether it counts the scope as sensitive.
+   `https://www.googleapis.com/auth/webmasters.readonly` under *Data Access*, and
+   `https://www.googleapis.com/auth/adwords` for Google Ads. That page is where Google
+   says whether it counts a scope as sensitive.
 3. Under *Credentials*, create an OAuth client of type **Web application** with one
    authorized redirect URI: `<server.url>/google/callback`.
 4. Put its id and secret in `[google]`, next to `[secrets] key`, which seals what the
@@ -208,3 +211,95 @@ A day read before the pairs were (none on a released version) holds no pair.
 
 The browser suite runs against a stand-in (`tests/e2e/google.ts`), which
 `config/e2e.toml` points the four addresses at.
+
+## Google Ads (#688)
+
+`/t/{slug}/ads`, for members with `orders:read`: what the shop's Google Ads account
+cost and brought over the last 7, 28 or 90 days (cost, impressions, clicks,
+conversions, conversion value and return on ad spend), then the same by campaign, by
+kind of device, by ad group, by category, by product and by search. Read only:
+nothing is changed in Google Ads.
+
+### The account
+
+Once the connection covers Google Ads, `/t/{slug}/google` lists the Google Ads
+accounts the grant reaches and the member chooses the shop's: the accounts the Google
+account reaches by itself, and the clients of the manager accounts it reaches (then
+read through the manager, named in `login-customer-id`). The choice keeps the
+account's number, name, currency and time zone on the connection
+(`Connection::AdsAccountChosen`). The same Google account connecting again keeps it;
+another account, or a grant without Google Ads, drops it.
+
+### What Google asks (read on 2026-11-24)
+
+- **No developer token.** Google stopped reading the `developer-token` header on
+  2026-09-09: the access level belongs to the **Cloud project** of the OAuth client.
+  Nothing is sent, and there is nothing to configure but the level's limit.
+- **Access levels**, in operations a day (a sliding 24 hours), on real accounts:
+
+  | Level | A day | How it is obtained |
+  |---|---|---|
+  | Test | none (test accounts only) | on enabling the API |
+  | Explorer | 2,880 | applied for, mostly automated |
+  | Basic | 15,000 | brand verification first |
+  | Standard | no limit | manual audit, about ten working days |
+
+- **One question is one operation.** A report asked as a stream
+  (`googleAds:searchStream`) counts once however many rows it carries, so every
+  report is asked that way, over a range of days.
+- **The API's version is in the address** (`google.ads_url`, `v26` today). Google
+  retires a version about a year after it ships: moving to the next one is a change
+  of that default, checked against the release notes.
+- **The `adwords` scope is restricted** (see "What Google asks of the application").
+
+Not confirmed against a real account: that `search_term_view` answers for Shopping
+campaigns as it does for Search ones (Google's page says only that it leaves out
+Performance Max), and that an item's id comes back in lower case (it is matched that
+way whatever Google does).
+
+### The daily read
+
+`dashboard/src/ads_passes.rs`, shaped like the read of Search Console: every node
+sweeps, every `google.ads_check_secs`, the shops the read model says are due, each
+node its part; the connection and the watch (`timada-google/AdsWatch`) decide.
+
+A pass asks **four questions**, each over the same range of days:
+
+1. `campaign` by day and device: the totals, and the account's currency;
+2. `ad_group` by day;
+3. `shopping_performance_view` by day and item: the feed's products;
+4. `search_term_view` by day, for the searches that brought a click.
+
+The days are the **account's own** (its time zone), up to its yesterday. Google goes
+on counting a day after it ends: a conversion is counted on the day of the click that
+led to it. So every pass reads the last **14 days** again, and a day is recorded again
+only when its numbers moved (`AdsDay::AdsDayFetched`, the last one standing). A shop
+that just chose its account is owed **90 days**, read a month a pass, the newest
+first, ten minutes apart.
+
+**The allowance.** Each pass records how many questions it asked
+(`AdsChecked.calls`), and the read model adds them up by day (UTC) for all shops and
+all nodes. A sweep stops once the day's passes have used **four fifths** of
+`google.ads_calls_a_day`: the shops left stay due and are read when there is room,
+and the pages that list the accounts to choose from keep the rest. At "Explorer" that
+is about 570 shops a day. Google's own refusal (`RESOURCE_EXHAUSTED`) is recorded
+like any failure and tried again later. The tally is by calendar day where Google's
+window slides, and a node counts what its read model has seen: both can let a few
+questions through near the limit, which Google then refuses.
+
+### What is kept
+
+In the read model, keyed by shop, account and day, money in millionths of the
+account's currency: the day's totals, campaigns by device and ad groups for 486 days;
+products (2,000 a day at most, the ones that cost the most) and searches (1,000 a day)
+for 92 days. An account changed leaves the other one's days to age out.
+
+### What the page tells
+
+The return on ad spend is **Google's**: the value of the conversions Google Ads
+counted over what the clicks cost. It depends on what the Google tag reports (#537),
+and is not the shop's own count of its orders: that is the sales report's (#689).
+
+"By category" adds the products up by the categories the catalog files them under
+**today**; a product in two categories counts in both. An item the catalog no longer
+has reads "No longer in the catalog".

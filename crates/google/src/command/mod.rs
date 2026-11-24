@@ -9,16 +9,21 @@
 //! write that lost to another is no verdict: every command loads the
 //! connection again and decides again ([`WRITE_ATTEMPTS`] times).
 
+mod ads;
 mod search;
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
-use crate::aggregator::{Connected, Connection, Disconnected, Lapsed, SiteChosen};
+use crate::aggregator::{
+    AdsAccountChosen, Connected, Connection, Disconnected, Lapsed, SiteChosen,
+};
 use crate::error::GoogleError;
 use crate::value_object::{
-    ACCESS_SEARCH_CONSOLE, ACCESSES, MAX_ACCOUNT_LEN, connection_id, normalize_site,
+    ACCESS_ADS, ACCESS_SEARCH_CONSOLE, ACCESSES, MAX_ACCOUNT_LEN, MAX_ADS_NAME_LEN, connection_id,
+    normalize_customer_id, normalize_site,
 };
 
+pub use ads::*;
 pub use search::*;
 
 /// The command gateway over the platform's streams. Cheap to clone when `E`
@@ -28,6 +33,21 @@ pub struct Command<E: Executor>(pub E);
 /// How many times a command decides again when another write to the
 /// connection came in between its load and its write.
 const WRITE_ATTEMPTS: usize = 5;
+
+/// A Google Ads account, as a shop's connection keeps the one chosen.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AdsAccount {
+    /// The account's number, digits only.
+    pub customer_id: String,
+    /// The manager account it is reached through; `None` for one the grant
+    /// reaches by itself.
+    pub login_customer_id: Option<String>,
+    pub name: String,
+    /// The currency it is billed and reports in (`EUR`).
+    pub currency: String,
+    /// The time zone its days are counted in (`Europe/Paris`).
+    pub time_zone: String,
+}
 
 /// The write model of a shop's connection.
 #[evento::projection(id = id, name = "timada-google/ConnectionState")]
@@ -48,6 +68,8 @@ pub struct ConnectionState {
     pub accesses: Vec<String>,
     /// The shop's Search Console site, once chosen.
     pub site: Option<String>,
+    /// The shop's Google Ads account, once chosen.
+    pub ads: Option<AdsAccount>,
     /// Google no longer honours the grant: the merchant has to connect
     /// again.
     pub lapsed: bool,
@@ -73,6 +95,7 @@ pub fn connection_projection<E: Executor>() -> Projection<E, ConnectionState> {
         .handler(on_connected())
         .handler(on_site_chosen())
         .handler(on_lapsed())
+        .handler(on_ads_account_chosen())
         .handler(on_disconnected())
         .strict()
 }
@@ -96,6 +119,17 @@ async fn on_connected(
     if !keeps_site {
         connection.site = None;
     }
+    // The same goes for the Google Ads account chosen.
+    let keeps_ads = connection.connected
+        && connection.account == event.data.account
+        && event
+            .data
+            .accesses
+            .iter()
+            .any(|access| access == ACCESS_ADS);
+    if !keeps_ads {
+        connection.ads = None;
+    }
     connection.connected = true;
     connection.refresh_token_sealed = event.data.refresh_token_sealed.to_owned();
     connection.account = event.data.account.to_owned();
@@ -118,6 +152,21 @@ async fn on_site_chosen(
 async fn on_lapsed(event: Event<Lapsed>, connection: &mut ConnectionState) -> anyhow::Result<()> {
     let _ = event;
     connection.lapsed = true;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_ads_account_chosen(
+    event: Event<AdsAccountChosen>,
+    connection: &mut ConnectionState,
+) -> anyhow::Result<()> {
+    connection.ads = Some(AdsAccount {
+        customer_id: event.data.customer_id.to_owned(),
+        login_customer_id: event.data.login_customer_id.to_owned(),
+        name: event.data.name.to_owned(),
+        currency: event.data.currency.to_owned(),
+        time_zone: event.data.time_zone.to_owned(),
+    });
     Ok(())
 }
 
@@ -262,6 +311,64 @@ impl<E: Executor> Command<E> {
             }
             write.event(&SiteChosen {
                 site: site.clone(),
+                chosen_by: actor_user_id.to_owned(),
+            });
+            Ok(true)
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Says which of the Google Ads accounts the grant reaches is the
+    /// shop's; the same again is a no-op. The host checks beforehand that
+    /// the grant reaches it, and says what Google Ads calls it, the
+    /// currency it reports in and the time zone its days are counted in.
+    pub async fn choose_ads_account(
+        &self,
+        actor_user_id: &str,
+        tenant_id: &str,
+        account: AdsAccount,
+        routing_key: Option<String>,
+    ) -> Result<(), GoogleError> {
+        let customer_id = normalize_customer_id(&account.customer_id)?;
+        let login_customer_id = account
+            .login_customer_id
+            .as_deref()
+            .map(normalize_customer_id)
+            .transpose()?
+            .filter(|login| *login != customer_id);
+        let currency = account.currency.trim().to_ascii_uppercase();
+        // Any currency Google Ads bills in, not only the ones shops price in.
+        if currency.len() != 3 || !currency.chars().all(|c| c.is_ascii_uppercase()) {
+            return Err(GoogleError::InvalidAdsAccount);
+        }
+        let chosen = AdsAccount {
+            customer_id,
+            login_customer_id,
+            name: account.name.trim().chars().take(MAX_ADS_NAME_LEN).collect(),
+            currency,
+            // A zone the database does not name counts its days in UTC.
+            time_zone: timada_core::time_zone(&account.time_zone).unwrap_or_default(),
+        };
+        self.settle(tenant_id, routing_key, |connection, write| {
+            let connection = connection
+                .filter(|connection| connection.connected)
+                .ok_or(GoogleError::NotConnected)?;
+            if connection.lapsed {
+                return Err(GoogleError::Lapsed);
+            }
+            if !connection.covers(ACCESS_ADS) {
+                return Err(GoogleError::NoAds);
+            }
+            if connection.ads.as_ref() == Some(&chosen) {
+                return Ok(false);
+            }
+            write.event(&AdsAccountChosen {
+                customer_id: chosen.customer_id.clone(),
+                login_customer_id: chosen.login_customer_id.clone(),
+                name: chosen.name.clone(),
+                currency: chosen.currency.clone(),
+                time_zone: chosen.time_zone.clone(),
                 chosen_by: actor_user_id.to_owned(),
             });
             Ok(true)

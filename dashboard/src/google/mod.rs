@@ -20,6 +20,7 @@
 //! so withdrawing one shop's would end every other shop's connected to the
 //! same account. The page says where the account withdraws it.
 
+mod ads;
 mod search_console;
 
 use std::collections::HashMap;
@@ -33,6 +34,7 @@ use timada_google::{ConnectionState, GOOGLE_ACTOR, accesses_of, scope_of};
 use crate::config::GoogleConfig;
 use crate::seal::Sealer;
 
+pub use ads::{AdsRead, AdsRows, assemble_ads_days};
 pub use search_console::{Dimension, Site};
 
 /// Where a merchant says yes.
@@ -43,6 +45,8 @@ pub const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const GOOGLE_USERINFO_URL: &str = "https://openidconnect.googleapis.com/v1/userinfo";
 /// Where Search Console is read.
 pub const SEARCH_CONSOLE_URL: &str = "https://www.googleapis.com/webmasters/v3";
+/// Where Google Ads is read: the version of its API is part of the address.
+pub const ADS_URL: &str = "https://googleads.googleapis.com/v26";
 
 /// How long Google is given to answer.
 pub const GOOGLE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -51,9 +55,11 @@ pub const GOOGLE_TIMEOUT: Duration = Duration::from_secs(20);
 const RENEW_BEFORE: Duration = Duration::from_secs(5 * 60);
 
 /// The kinds of access a shop is offered to turn on: the ones something
-/// reads through. Google Ads and Merchant Center join the list with what
-/// reads them.
-pub const OFFERED: &[&str] = &[timada_google::ACCESS_SEARCH_CONSOLE];
+/// reads through. Merchant Center joins the list with what reads it.
+pub const OFFERED: &[&str] = &[
+    timada_google::ACCESS_SEARCH_CONSOLE,
+    timada_google::ACCESS_ADS,
+];
 
 /// Why Google gave nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +116,7 @@ struct Inner {
     token_url: String,
     userinfo_url: String,
     search_console_url: String,
+    ads_url: String,
     sealer: Sealer,
     client: reqwest::Client,
     held: Mutex<HashMap<String, Held>>,
@@ -244,6 +251,7 @@ impl Google {
             token_url: address(&config.token_url, GOOGLE_TOKEN_URL),
             userinfo_url: address(&config.userinfo_url, GOOGLE_USERINFO_URL),
             search_console_url: address(&config.search_console_url, SEARCH_CONSOLE_URL),
+            ads_url: address(&config.ads_url, ADS_URL),
             sealer,
             client: reqwest::Client::builder()
                 .timeout(GOOGLE_TIMEOUT)

@@ -107,8 +107,11 @@ authorize_url = "http://127.0.0.1:12117/o/oauth2/v2/auth"
 token_url = "http://127.0.0.1:12117/token"
 userinfo_url = "http://127.0.0.1:12117/v1/userinfo"
 search_console_url = "http://127.0.0.1:12117/webmasters/v3"
-# A site just chosen is read within a couple of seconds.
+ads_url = "http://127.0.0.1:12117/ads/v26"
+# A site just chosen is read within a couple of seconds, and so is a Google
+# Ads account.
 search_check_secs = 1
+ads_check_secs = 1
 
 # Texts are drafted by a stand-in for the model (tests/e2e/writer.ts), which
 # counts every call at 1,500 tokens read and 900 written: 0.024 USD at these

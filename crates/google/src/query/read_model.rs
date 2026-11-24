@@ -1,4 +1,4 @@
-//! The subscription that keeps the six tables current.
+//! The subscription that keeps the tables current.
 //!
 //! A connection's and a watch's handler reload the strict write model and
 //! rewrite the shop's row, so delivery may repeat (the subscription is
@@ -14,9 +14,14 @@ use evento::{
 };
 use timada_core::db::{Db, Value, execute, params_from_iter};
 
-use crate::aggregator::{Connection, DayFetched, PageQueryRow, SearchRow, SearchWatch};
-use crate::command::{connection_projection, search_watch_projection};
-use crate::value_object::{ACCESS_SEARCH_CONSOLE, KEPT_DAYS, KEPT_ROW_DAYS, day_before};
+use crate::aggregator::{
+    AdsDayFetched, AdsNumbers, AdsWatch, Connection, DayFetched, PageQueryRow, SearchRow,
+    SearchWatch,
+};
+use crate::command::{ads_watch_projection, connection_projection, search_watch_projection};
+use crate::value_object::{
+    ACCESS_ADS, ACCESS_SEARCH_CONSOLE, KEPT_DAYS, KEPT_ROW_DAYS, day_before,
+};
 
 /// The cursor identity of the read-model subscription, in the store.
 pub const READ_MODEL_SUBSCRIPTION: &str = "timada-google/read-models";
@@ -34,6 +39,8 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(on_connection_event())
         .handler(on_watch_event())
         .handler(on_day_fetched())
+        .handler(on_ads_watch_event())
+        .handler(on_ads_day_fetched())
         .any_routing_key()
         .tenant("")
 }
@@ -72,6 +79,33 @@ async fn on_connection_event<E: Executor>(
         None => {
             db.execute(
                 "DELETE FROM google_connections WHERE tenant_id = ?1",
+                (connection.tenant_id.as_str(),),
+            )
+            .await?;
+        }
+    }
+    let ads = connection
+        .ads
+        .as_ref()
+        .filter(|_| connection.covers(ACCESS_ADS));
+    match ads {
+        Some(ads) => {
+            db.execute(
+                "INSERT INTO google_ads_accounts (tenant_id, customer_id, lapsed)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT (tenant_id) DO UPDATE SET
+                    customer_id = excluded.customer_id, lapsed = excluded.lapsed",
+                (
+                    connection.tenant_id.as_str(),
+                    ads.customer_id.as_str(),
+                    i64::from(connection.lapsed),
+                ),
+            )
+            .await?;
+        }
+        None => {
+            db.execute(
+                "DELETE FROM google_ads_accounts WHERE tenant_id = ?1",
                 (connection.tenant_id.as_str(),),
             )
             .await?;
@@ -264,4 +298,264 @@ async fn insert_page_queries(
         execute(tx, &statement, params_from_iter(values)).await?;
     }
     Ok(())
+}
+
+/// How many days of the questions asked are kept: the allowance is a
+/// day's.
+const KEPT_CALL_DAYS: u32 = 7;
+
+#[evento::subscription_all]
+async fn on_ads_watch_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<AdsWatch>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(watch) = ads_watch_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    db.write(&watch, |tx, watch| {
+        Box::pin(async move {
+            execute(
+                tx,
+                "INSERT INTO google_ads_watch (tenant_id, customer_id, next_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT (tenant_id) DO UPDATE SET
+                    customer_id = excluded.customer_id, next_at = excluded.next_at",
+                (
+                    watch.tenant_id.as_str(),
+                    watch.customer_id.as_str(),
+                    watch.next_at as i64,
+                ),
+            )
+            .await?;
+            // The watch holds its own tally of the day: written whole, so a
+            // repeated delivery counts nothing twice.
+            execute(
+                tx,
+                "INSERT INTO google_ads_calls (day, tenant_id, calls) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (day, tenant_id) DO UPDATE SET calls = excluded.calls",
+                (
+                    watch.calls_day.as_str(),
+                    watch.tenant_id.as_str(),
+                    i64::from(watch.calls),
+                ),
+            )
+            .await?;
+            execute(
+                tx,
+                "DELETE FROM google_ads_calls WHERE day < ?1",
+                (day_before(&watch.calls_day, KEPT_CALL_DAYS),),
+            )
+            .await?;
+            Ok(())
+        })
+    })
+    .await
+}
+
+/// The five figures of a row, in the tables' order.
+fn figures(numbers: &AdsNumbers) -> [Value; 5] {
+    [
+        Value::from(numbers.cost_micros as i64),
+        Value::from(numbers.impressions as i64),
+        Value::from(numbers.clicks as i64),
+        Value::from(numbers.conversions_milli as i64),
+        Value::from(numbers.value_micros as i64),
+    ]
+}
+
+/// Writes a day's rows of one kind, a few statements for the lot. `keys`
+/// names the columns that tell a row from another on its day, and each row
+/// gives their values, then its figures.
+async fn insert_ads_rows(
+    tx: &timada_core::db::Connection,
+    table: &str,
+    keys: &[&str],
+    day: (&str, &str, &str),
+    rows: Vec<(Vec<Value>, AdsNumbers)>,
+) -> anyhow::Result<()> {
+    let width = 3 + keys.len() + 5;
+    for chunk in rows.chunks(ROWS_PER_INSERT) {
+        let mut values = Vec::with_capacity(chunk.len() * width);
+        let mut tuples = Vec::with_capacity(chunk.len());
+        for (at, (named, numbers)) in chunk.iter().enumerate() {
+            let places: Vec<String> = (1..=width)
+                .map(|place| format!("?{}", at * width + place))
+                .collect();
+            tuples.push(format!("({})", places.join(", ")));
+            values.extend([Value::from(day.0), Value::from(day.1), Value::from(day.2)]);
+            values.extend(named.iter().cloned());
+            values.extend(figures(numbers));
+        }
+        let statement = format!(
+            "INSERT OR REPLACE INTO {table}
+                (tenant_id, customer_id, day, {}, cost_micros, impressions, clicks,
+                 conversions_milli, value_micros)
+             VALUES {}",
+            keys.join(", "),
+            tuples.join(", ")
+        );
+        execute(tx, &statement, params_from_iter(values)).await?;
+    }
+    Ok(())
+}
+
+#[evento::subscription]
+async fn on_ads_day_fetched<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<AdsDayFetched>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    db.write(&event.data, |tx, day| {
+        Box::pin(async move {
+            let key = (
+                day.tenant_id.as_str(),
+                day.customer_id.as_str(),
+                day.day.as_str(),
+            );
+            // The day's totals: every campaign on every device.
+            let mut total = AdsNumbers::default();
+            for row in &day.campaigns {
+                total.cost_micros += row.numbers.cost_micros;
+                total.impressions += row.numbers.impressions;
+                total.clicks += row.numbers.clicks;
+                total.conversions_milli += row.numbers.conversions_milli;
+                total.value_micros += row.numbers.value_micros;
+            }
+            let mut values = vec![
+                Value::from(key.0),
+                Value::from(key.1),
+                Value::from(key.2),
+                Value::from(day.currency.as_str()),
+            ];
+            values.extend(figures(&total));
+            execute(
+                tx,
+                "INSERT OR REPLACE INTO google_ads_days
+                    (tenant_id, customer_id, day, currency, cost_micros, impressions, clicks,
+                     conversions_milli, value_micros)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params_from_iter(values),
+            )
+            .await?;
+            // A day read again replaces what it read before, whole.
+            for table in [
+                "google_ads_campaigns",
+                "google_ads_ad_groups",
+                "google_ads_products",
+                "google_ads_terms",
+            ] {
+                execute(
+                    tx,
+                    &format!(
+                        "DELETE FROM {table}
+                         WHERE tenant_id = ?1 AND customer_id = ?2 AND day = ?3"
+                    ),
+                    key,
+                )
+                .await?;
+            }
+            let text = |value: &String| Value::from(value.as_str());
+            insert_ads_rows(
+                tx,
+                "google_ads_campaigns",
+                &["campaign_id", "device", "name"],
+                key,
+                day.campaigns
+                    .iter()
+                    .map(|row| {
+                        (
+                            vec![text(&row.campaign_id), text(&row.device), text(&row.name)],
+                            row.numbers,
+                        )
+                    })
+                    .collect(),
+            )
+            .await?;
+            insert_ads_rows(
+                tx,
+                "google_ads_ad_groups",
+                &["ad_group_id", "campaign_id", "name"],
+                key,
+                day.ad_groups
+                    .iter()
+                    .map(|row| {
+                        (
+                            vec![
+                                text(&row.ad_group_id),
+                                text(&row.campaign_id),
+                                text(&row.name),
+                            ],
+                            row.numbers,
+                        )
+                    })
+                    .collect(),
+            )
+            .await?;
+            insert_ads_rows(
+                tx,
+                "google_ads_products",
+                &["item_id", "ad_group_id", "campaign_id"],
+                key,
+                day.products
+                    .iter()
+                    .map(|row| {
+                        (
+                            vec![
+                                text(&row.item_id),
+                                text(&row.ad_group_id),
+                                text(&row.campaign_id),
+                            ],
+                            row.numbers,
+                        )
+                    })
+                    .collect(),
+            )
+            .await?;
+            insert_ads_rows(
+                tx,
+                "google_ads_terms",
+                &["term", "ad_group_id", "campaign_id"],
+                key,
+                day.terms
+                    .iter()
+                    .map(|row| {
+                        (
+                            vec![
+                                text(&row.term),
+                                text(&row.ad_group_id),
+                                text(&row.campaign_id),
+                            ],
+                            row.numbers,
+                        )
+                    })
+                    .collect(),
+            )
+            .await?;
+            // The history kept, counted back from the day just read.
+            for (table, kept) in [
+                ("google_ads_days", KEPT_DAYS),
+                ("google_ads_campaigns", KEPT_DAYS),
+                ("google_ads_ad_groups", KEPT_DAYS),
+                ("google_ads_products", KEPT_ROW_DAYS),
+                ("google_ads_terms", KEPT_ROW_DAYS),
+            ] {
+                execute(
+                    tx,
+                    &format!(
+                        "DELETE FROM {table}
+                         WHERE tenant_id = ?1 AND customer_id = ?2 AND day < ?3"
+                    ),
+                    (key.0, key.1, day_before(&day.day, kept)),
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    })
+    .await
 }

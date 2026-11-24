@@ -8,7 +8,9 @@ import { standInPort } from "./shard";
 // in search: by day for the days in `searchDays`, then each day's queries
 // and pages, and which page showed for which query (`searchPageQueries`).
 // `searchFails` makes those answer the way Google's own failure
-// does. `refuse` makes the
+// does. Google Ads answers too: the accounts the grant reaches
+// (`adsAccounts`) and, for one, its four reports over the days in
+// `adsDays` (`ADS_*` say what each day holds), until `adsFails`. `refuse` makes the
 // account say no, `withdraw()` ends every grant given so far the way an
 // account does from its own settings, and `grants` leaves boxes unticked.
 // config/e2e.toml points the dashboard at it, and scripts/e2e.sh each next
@@ -21,6 +23,28 @@ export const GOOGLE_CLIENT_ID = "timada-e2e.apps.googleusercontent.com";
 export const GOOGLE_CLIENT_SECRET = "google-e2e-s3cret";
 
 export const SEARCH_CONSOLE_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly";
+export const ADS_SCOPE = "https://www.googleapis.com/auth/adwords";
+
+/// A Google Ads account the grant reaches; `manager` is the manager account
+/// it is reached through.
+export type AdsAccount = { id: string; name: string; currency: string; timeZone: string; manager?: string };
+
+/// What the stand-in says an account's ads did on each day they were shown:
+/// one campaign on two kinds of device, its two ad groups, and two searches.
+/// Money is in the account's currency.
+export const ADS_CAMPAIGN = { id: "11", name: "Shopping" };
+export const ADS_DEVICES = [
+  { device: "MOBILE", cost: 9, impressions: 1500, clicks: 30, conversions: 1, value: 20 },
+  { device: "DESKTOP", cost: 3, impressions: 500, clicks: 10, conversions: 1, value: 20 },
+];
+export const ADS_GROUPS = [
+  { id: "21", name: "Arbres à chat", cost: 8, impressions: 1200, clicks: 25, conversions: 2, value: 40 },
+  { id: "22", name: "Griffoirs", cost: 4, impressions: 800, clicks: 15, conversions: 0, value: 0 },
+];
+export const ADS_TERMS = [
+  { term: "arbre à chat", group: "21", cost: 6, impressions: 900, clicks: 20, conversions: 2, value: 40 },
+  { term: "griffoir carton", group: "22", cost: 4, impressions: 800, clicks: 15, conversions: 0, value: 0 },
+];
 
 /// A day `back` days before today (UTC), as Search Console writes it.
 export function searchDay(back: number): string {
@@ -72,6 +96,16 @@ export class FakeGoogle {
   searchFails = false;
   /// The questions about a site's numbers.
   readonly questions: SearchQuestion[] = [];
+  /// The Google Ads accounts the grant reaches; none unless a test says.
+  adsAccounts: AdsAccount[] = [];
+  /// The days the accounts' ads were shown on (days of the account).
+  adsDays: string[] = [];
+  /// The feed's items shown, one in each ad group of `ADS_GROUPS`.
+  adsItems: string[] = [];
+  /// Google Ads fails the way Google's own servers do.
+  adsFails = false;
+  /// The reports asked of Google Ads: which, of which account, over which days.
+  readonly adsQuestions: { customer: string; report: string; first: string; last: string }[] = [];
   /// How many times a grant was renewed.
   renewals = 0;
   private readonly codes = new Map<string, string[]>();
@@ -209,6 +243,89 @@ export class FakeGoogle {
       }
       // Google leaves `rows` out when there is none.
       send(200, rows.length > 0 ? { rows, responseAggregationType: "byProperty" } : {});
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/ads/v26/customers:listAccessibleCustomers") {
+      // The accounts reached by themselves, and the managers of the others.
+      const reached = new Set(this.adsAccounts.map((account) => account.manager ?? account.id));
+      send(200, reached.size > 0 ? { resourceNames: [...reached].map((id) => `customers/${id}`) } : {});
+      return;
+    }
+    const ads = /^\/ads\/v26\/customers\/(\d+)\/googleAds:searchStream$/.exec(url.pathname);
+    if (req.method === "POST" && ads) {
+      const query = (JSON.parse(body || "{}") as { query: string }).query;
+      const report = / FROM (\w+)/.exec(query)?.[1] ?? "";
+      if (report === "customer_client") {
+        const clients = this.adsAccounts.filter((account) => account.manager === ads[1]);
+        const own = this.adsAccounts.find((account) => account.id === ads[1]);
+        const row = (account: AdsAccount, level: number) => ({
+          customerClient: {
+            id: account.id,
+            level: `${level}`,
+            manager: false,
+            descriptiveName: account.name,
+            currencyCode: account.currency,
+            timeZone: account.timeZone,
+          },
+        });
+        const results = own
+          ? [row(own, 0)]
+          : [{ customerClient: { id: ads[1], level: "0", manager: true } }, ...clients.map((c) => row(c, 1))];
+        send(200, [{ results }]);
+        return;
+      }
+      const [, first, last] = /BETWEEN '([\d-]+)' AND '([\d-]+)'/.exec(query) ?? [];
+      this.adsQuestions.push({ customer: ads[1], report, first, last });
+      if (this.adsFails) {
+        send(500, [{ error: { code: 500, message: "Internal error encountered.", status: "INTERNAL" } }]);
+        return;
+      }
+      // Counts as text and decimals as numbers, the way Google writes them.
+      const metrics = (of: { cost: number; impressions: number; clicks: number; conversions: number; value: number }) => ({
+        costMicros: `${of.cost * 1_000_000}`,
+        impressions: `${of.impressions}`,
+        clicks: `${of.clicks}`,
+        conversions: of.conversions,
+        conversionsValue: of.value,
+      });
+      const currency = this.adsAccounts.find((account) => account.id === ads[1])?.currency ?? "EUR";
+      const campaign = { id: ADS_CAMPAIGN.id, name: ADS_CAMPAIGN.name };
+      const results = this.adsDays
+        .filter((day) => day >= first && day <= last)
+        .flatMap((day) => {
+          if (report === "campaign") {
+            return ADS_DEVICES.map((of) => ({
+              campaign,
+              customer: { currencyCode: currency },
+              segments: { date: day, device: of.device },
+              metrics: metrics(of),
+            }));
+          }
+          if (report === "ad_group") {
+            return ADS_GROUPS.map((of) => ({
+              campaign,
+              adGroup: { id: of.id, name: of.name },
+              segments: { date: day },
+              metrics: metrics(of),
+            }));
+          }
+          if (report === "shopping_performance_view") {
+            return this.adsItems.slice(0, ADS_GROUPS.length).map((item, at) => ({
+              campaign,
+              adGroup: { id: ADS_GROUPS[at].id },
+              segments: { date: day, productItemId: item },
+              metrics: metrics(ADS_GROUPS[at]),
+            }));
+          }
+          return ADS_TERMS.map((of) => ({
+            searchTermView: { searchTerm: of.term },
+            campaign,
+            adGroup: { id: of.group },
+            segments: { date: day },
+            metrics: metrics(of),
+          }));
+        });
+      send(200, [{ results }]);
       return;
     }
     send(404, { error: { code: 404, message: "Not Found" } });

@@ -35,6 +35,62 @@ pub fn search_watch_id(tenant_id: &str) -> String {
     evento::hash_ids(vec!["google-search-watch", tenant_id])
 }
 
+/// The stream of one day of a shop's Google Ads account.
+pub fn ads_day_id(tenant_id: &str, customer_id: &str, day: &str) -> String {
+    evento::hash_ids(vec!["google-ads-day", tenant_id, customer_id, day])
+}
+
+/// The stream that says where the daily read of a shop's Google Ads
+/// account stands.
+pub fn ads_watch_id(tenant_id: &str) -> String {
+    evento::hash_ids(vec!["google-ads-watch", tenant_id])
+}
+
+/// The kinds of device Google Ads tells apart, as they are kept.
+pub const ADS_DEVICES: [&str; 5] = ["mobile", "desktop", "tablet", "tv", "other"];
+
+/// How many rows of a campaign on a device are kept of a day: every
+/// campaign of an account many times over.
+pub const MAX_ADS_CAMPAIGN_ROWS: usize = 500;
+
+/// How many ad groups are kept of a day.
+pub const MAX_ADS_AD_GROUP_ROWS: usize = 1_000;
+
+/// How many products are kept of a day: the ones that cost the most.
+pub const MAX_ADS_PRODUCT_ROWS: usize = 2_000;
+
+/// How many searches are kept of a day: the ones that cost the most.
+pub const MAX_ADS_TERM_ROWS: usize = 1_000;
+
+/// The longest name of a campaign, an ad group or an account kept.
+pub const MAX_ADS_NAME_LEN: usize = 200;
+
+/// How many days back a shop that just chose its account is read for.
+pub const ADS_BACKFILL_DAYS: u32 = 90;
+
+/// How many of the last days every pass reads again: Google counts a
+/// conversion on the day of the click that led to it, and most come within
+/// two weeks of it.
+pub const ADS_RECENT_DAYS: u32 = 14;
+
+/// How many days one pass reads at most: the days owed to a new shop come
+/// a month a pass.
+pub const ADS_DAYS_A_PASS: u32 = 31;
+
+/// A Google Ads account's number as the API takes it: its ten digits,
+/// without the dashes the pages of Google Ads write it with.
+pub fn normalize_customer_id(customer_id: &str) -> Result<String, GoogleError> {
+    let digits: String = customer_id
+        .trim()
+        .chars()
+        .filter(|c| *c != '-' && !c.is_whitespace())
+        .collect();
+    if digits.len() != 10 || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return Err(GoogleError::InvalidAdsAccount);
+    }
+    Ok(digits)
+}
+
 /// How many queries, and how many pages, are kept of a day: its most
 /// clicked. A day's event carries both lists.
 pub const MAX_SEARCH_ROWS: usize = 500;
@@ -179,10 +235,36 @@ mod tests {
         assert_eq!(day_before("soon", 3), "soon");
         // Every stream has an id of its own.
         assert_ne!(search_watch_id("shop"), connection_id("shop"));
+        assert_ne!(ads_watch_id("shop"), search_watch_id("shop"));
+        assert_ne!(
+            ads_day_id("shop", "1234567890", "2026-11-20"),
+            ads_day_id("shop", "1234567891", "2026-11-20")
+        );
         assert_ne!(
             search_day_id("shop", "sc-domain:a.example", "2026-11-20"),
             search_day_id("shop", "sc-domain:b.example", "2026-11-20")
         );
+    }
+
+    #[test]
+    fn an_ads_account_is_its_ten_digits() {
+        assert_eq!(normalize_customer_id("123-456-7890").unwrap(), "1234567890");
+        assert_eq!(normalize_customer_id(" 1234567890 ").unwrap(), "1234567890");
+        for bad in [
+            "",
+            "123456789",
+            "12345678901",
+            "123-456-789O",
+            "customers/1",
+        ] {
+            assert!(
+                matches!(
+                    normalize_customer_id(bad),
+                    Err(GoogleError::InvalidAdsAccount)
+                ),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

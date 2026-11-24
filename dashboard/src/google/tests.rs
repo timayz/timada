@@ -14,6 +14,8 @@ pub(crate) struct Request {
     /// `POST /token HTTP/1.1`.
     pub line: String,
     pub authorization: String,
+    /// The request line and the headers, as sent.
+    pub head: String,
     pub body: String,
 }
 
@@ -68,6 +70,7 @@ impl StandIn {
                                     .then(|| line[14..].trim().to_owned())
                             })
                             .unwrap_or_default(),
+                        head: head.clone(),
                         body,
                     };
                     let (status, body) = answer(&request);
@@ -115,6 +118,7 @@ impl StandIn {
                 token_url: Some(format!("{}/token", self.url)),
                 userinfo_url: Some(format!("{}/v1/userinfo", self.url)),
                 search_console_url: Some(format!("{}/webmasters/v3", self.url)),
+                ads_url: Some(format!("{}/ads/v26", self.url)),
                 ..GoogleConfig::default()
             },
         )
@@ -146,7 +150,10 @@ pub(crate) async fn connected(
             Connect {
                 refresh_token_sealed: google.seal(tenant_id, refresh_token).unwrap(),
                 account: "alice@example.com".into(),
-                accesses: vec![ACCESS_SEARCH_CONSOLE.into()],
+                accesses: vec![
+                    ACCESS_SEARCH_CONSOLE.into(),
+                    timada_google::ACCESS_ADS.into(),
+                ],
             },
         )
         .await

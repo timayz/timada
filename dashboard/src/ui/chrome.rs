@@ -107,7 +107,7 @@ struct Section {
 
 /// A tenant's sections, in rail order. The labels are what the pages and
 /// the browser tests call them.
-static SECTIONS: [Section; 35] = [
+static SECTIONS: [Section; 36] = [
     Section {
         key: "products",
         label: "Products",
@@ -172,6 +172,12 @@ static SECTIONS: [Section; 35] = [
         key: "sales",
         label: "Sales report",
         icon: icons::SALES,
+        group: Group::Sales,
+    },
+    Section {
+        key: "ads",
+        label: "Google Ads",
+        icon: icons::ADS,
         group: Group::Sales,
     },
     Section {
@@ -327,7 +333,7 @@ fn allowed(nav: &TenantNav, key: &str) -> bool {
         "categories" => nav.categories,
         "proposals" => nav.proposals,
         "writer" => nav.writer,
-        "orders" | "sales" => nav.orders,
+        "orders" | "sales" | "ads" => nav.orders,
         "carts" => nav.carts,
         "customers" => nav.customers,
         "invoices" => nav.invoices,
@@ -363,6 +369,7 @@ pub fn section_url(cx: &Cx, slug: &str, key: &str) -> String {
         "writer" => href!(t::writer::index, t::slug: slug).resolve(cx),
         "orders" => href!(t::orders::index, t::slug: slug).resolve(cx),
         "sales" => href!(t::sales::index, t::slug: slug).resolve(cx),
+        "ads" => href!(t::ads::index, t::slug: slug).resolve(cx),
         "carts" => href!(t::carts::index, t::slug: slug).resolve(cx),
         "customers" => href!(t::customers::index, t::slug: slug).resolve(cx),
         "invoices" => href!(t::invoices::index, t::slug: slug).resolve(cx),
