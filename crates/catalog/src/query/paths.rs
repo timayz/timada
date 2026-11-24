@@ -53,6 +53,13 @@ impl CategoryPaths {
         self.by_id.get(category_id).map(String::as_str)
     }
 
+    /// Every live category's id with where its page is, in no order.
+    pub fn paths(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.by_id
+            .iter()
+            .map(|(id, path)| (id.as_str(), path.as_str()))
+    }
+
     /// The default address of a product that goes by `slug`, filed under
     /// `filed` (its main category first, as
     /// [`ProductState::filed_under`](crate::ProductState::filed_under)

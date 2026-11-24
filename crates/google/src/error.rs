@@ -14,6 +14,8 @@ pub enum GoogleError {
     NoSearchConsole,
     #[error("a Search Console site reads https://shop.example/ or sc-domain:shop.example")]
     InvalidSite,
+    #[error("a day reads 2026-11-20")]
+    InvalidDay,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -52,6 +54,7 @@ impl GoogleError {
             Self::Lapsed => "google_connect_again",
             Self::NoSearchConsole => "google_no_search_console",
             Self::InvalidSite => "google_invalid_site",
+            Self::InvalidDay => "google_invalid_day",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })

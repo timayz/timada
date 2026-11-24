@@ -98,5 +98,80 @@ verification takes in practice.
   `ConnectionState::reads` and says "connect again" until the member does. Google not
   answering says nothing of the grant.
 
+## Search Console (#683)
+
+`/t/{slug}/search-console`, for members with `pages:read`: the site's clicks,
+impressions, click rate and average position over the last 7, 28 or 90 days, then the
+queries it showed for and the pages found, the most clicked first.
+
+### The daily read
+
+`dashboard/src/search_passes.rs`. Every node sweeps, every `google.search_check_secs`
+(five minutes), the shops the read model says are due, each node those of its part of
+the shops. The shop's own streams decide: its connection says whether Google can be
+read and for which site, its watch (`timada-google/SearchWatch`) from when a pass is
+due.
+
+A pass asks Google, for web search and finished days only (`dataState: final`):
+
+1. the site's numbers **by day** over the days it may be missing. One question, not
+   grouped by query or page, which also tells which days are finished: Google answers
+   with those only, two to three days behind, in Pacific time;
+2. for each missing day, its most clicked **queries**, then its most clicked
+   **pages**: two questions over one day each.
+
+That shape follows Google's limits, read on 2026-11-23:
+
+- the counted quotas are far away: 1,200 questions a minute for a site and for an
+  account, 30,000,000 a day for the application. A daily pass is three questions on a
+  normal day;
+- the limit that matters is the **load** quota, which Google does not put a number on:
+  grouping or filtering by query or by page is costly, both at once "the most
+  expensive", and a longer range costs more. So a pass never groups by both, and asks
+  for rows one day at a time;
+- a site's totals are their own question because the rows do not add up to them: the
+  queries too few people typed are withheld from the rows and counted in the totals,
+  and a search that shows two pages of the site counts once for the site and once for
+  each page.
+
+A shop just connected is owed 90 days, fetched the newest first, ten a pass, with the
+next pass ten minutes later while older days are left; after that, once a day.
+
+### What is kept
+
+- **A day** is one event on a stream of its own (`SearchDay`, id made of the shop, the
+  site and the day), written once: Google does not change a finished day, and two
+  nodes that both fetched it record it once. Its rows live in the event (the 500 most
+  clicked queries and the 500 most clicked pages), so a rebuilt read model and every
+  node hold the same.
+- **The read model** (`google_search_days`, `google_search_queries`,
+  `google_search_pages`) is keyed by shop, site and day. The site's numbers are kept
+  486 days (sixteen months, as far back as Search Console goes), the queries and the
+  pages 92 days: each new day drops what is older, so nothing sweeps them. A shop that
+  chooses another site keeps the earlier one's rows apart, to age out.
+- A day with no search that showed the site is absent from Google's answer: it holds
+  no row, and counts for nothing.
+
+### When it fails
+
+- **Google does not answer, or refuses**: the pass leaves `SearchCheckFailed` on the
+  watch with the reason, which the page shows, and the next pass waits an hour, then
+  two, up to a day. The days recorded before the failure stand.
+- **The grant is no longer honoured**: recorded on the connection (`Lapsed`), not as a
+  failed pass. The shop is not due again until its member connects again, and the
+  page says "connect again" above what was read before.
+- **The store fails**: nothing is recorded; the next sweep tries again.
+
+### What a page is
+
+`search_console/landing.rs` reads a page's address the way the storefront serves it:
+a category at its path in the tree, a product under its category or at `/p/{slug}`,
+an article at `/blog/{slug}`, one of the shop's own pages at `/{slug}`, each under
+`/{language}` in a language other than the main one. It is told from what is live in
+the back office now: an address that moved since, or one the storefront serves on its
+own (the cart, a search), reads "Other". A page's or an article's slug in another
+language is not among the back office's rows, so those are told by the main
+language's.
+
 The browser suite runs against a stand-in (`tests/e2e/google.ts`), which
 `config/e2e.toml` points the four addresses at.

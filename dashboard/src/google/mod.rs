@@ -33,7 +33,7 @@ use timada_google::{ConnectionState, GOOGLE_ACTOR, accesses_of, scope_of};
 use crate::config::GoogleConfig;
 use crate::seal::Sealer;
 
-pub use search_console::Site;
+pub use search_console::{Dimension, Site};
 
 /// Where a merchant says yes.
 pub const GOOGLE_AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -342,6 +342,26 @@ impl Google {
             .client
             .get(url)
             .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(unavailable)?;
+        let status = response.status().as_u16();
+        let body = response.bytes().await.map_err(unavailable)?;
+        open_api(status, &body)
+    }
+
+    async fn post<T: DeserializeOwned>(
+        &self,
+        url: reqwest::Url,
+        access_token: &str,
+        body: &serde_json::Value,
+    ) -> Result<T, GoogleFault> {
+        let response = self
+            .inner()?
+            .client
+            .post(url)
+            .bearer_auth(access_token)
+            .json(body)
             .send()
             .await
             .map_err(unavailable)?;

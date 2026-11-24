@@ -34,6 +34,7 @@ pub const LANGUAGES: IconData = iconify_icon!("lucide:languages");
 pub const REDIRECTS: IconData = iconify_icon!("lucide:corner-up-right");
 pub const GOOGLE_TAG: IconData = iconify_icon!("lucide:chart-no-axes-column");
 pub const META_PIXEL: IconData = iconify_icon!("lucide:scan-eye");
+pub const SEARCH_CONSOLE: IconData = iconify_icon!("lucide:text-search");
 pub const GOOGLE: IconData = iconify_icon!("lucide:link");
 pub const PAYMENTS: IconData = iconify_icon!("lucide:credit-card");
 pub const ALIEXPRESS: IconData = iconify_icon!("lucide:package-plus");

@@ -107,6 +107,8 @@ authorize_url = "http://127.0.0.1:12117/o/oauth2/v2/auth"
 token_url = "http://127.0.0.1:12117/token"
 userinfo_url = "http://127.0.0.1:12117/v1/userinfo"
 search_console_url = "http://127.0.0.1:12117/webmasters/v3"
+# A site just chosen is read within a couple of seconds.
+search_check_secs = 1
 
 # A user's day has room for three of the stand-in's calls (0.01248 USD each,
 # held at 0.132 before they are made); the fourth is refused

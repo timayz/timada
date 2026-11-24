@@ -30,7 +30,7 @@ consensus executor; read models are SQL tables fed by subscriptions. One binary,
 | `crates/automations` | `timada-automations` | The scenarios a shop's team draws: a trigger, then a tree of steps, kept as a definition the editor works on (see `docs/automations.md`) |
 | `crates/invoicing` | `timada-invoicing` | The invoices and credit notes of the orders, numbered under French rules, drawn as PDF (see `docs/invoicing.md`) |
 | `crates/research` | `timada-research` | The niche studies a user keeps before any shop exists: seed keywords, a country and a language, and the keywords fetched for each seed, in the platform's own streams (see `docs/keywords.md`) |
-| `crates/google` | `timada-google` | The one connection a shop keeps to a Google account: the grant, sealed by the host, the kinds of access it covers and the shop's Search Console site, in the platform's own streams (see `docs/google.md`) |
+| `crates/google` | `timada-google` | The one connection a shop keeps to a Google account: the grant, sealed by the host, the kinds of access it covers and the shop's Search Console site; and what Search Console says of that site, a day at a time, in the platform's own streams (see `docs/google.md`) |
 | `crates/storefront` | `timada-storefront` | The library a merchant app depends on (see `docs/storefront.md`) |
 | `crates/loadtest` | `timada-loadtest` | Crowds of random shoppers on a storefront over plain HTTP, paying through a stand-in for Stripe: latency, capacity and anomalies (see `docs/loadtest.md`) |
 | `crates/core` | `timada-core` | What every context shares and none owns: the paused-store refusal, languages and time zones, the personal-data keys (`keys`), the mailed-code MAC (`codes`), and the one form of an e-mail address, a slug, a currency, the clock, a calendar date, an amount and a `LIKE` pattern (`email`, `slug`, `currency`, `time`, `civil`, `money`, `sql`). Depends on evento only, never on a database driver or the web framework; every context depends on it |
@@ -193,7 +193,7 @@ by construction.
    is refused for its version, and the write it missed is applied here before the
    refusal, so the retry sees it); every timer (the payments sweeps, the hold
    reminders, the idle carts, the best sellers, the review requests, the newsletter
-   sends, the automation runs, the AliExpress sync), which acts off read-model rows the node
+   sends, the automation runs, the AliExpress sync, the Search Console reads), which acts off read-model rows the node
    derived from that file and writes only at the version it loaded, or a claim of its
    own, so the same refusal holds (the payments and AliExpress services hold no store
    of their own: a shop and its company are read from the store their caller reads,
@@ -486,7 +486,8 @@ by construction.
    `/tenants/new` and `/t/{slug}` (members, roles, API keys, products, categories,
    orders, open carts, customers, discounts, checkout offers, shipping, reviews,
    messages, newsletter, automations, pages, payments, invoicing and the invoices,
-   mail, AliExpress, the Google account, the shop's name and time zone), `/companies` and
+   mail, AliExpress, the Google account and what Search Console says of the shop's
+   site, the shop's name and time zone), `/companies` and
    `/companies/{id}` (the legal entities the shops sell as, their AliExpress buyer
    account), `/research` and `/research/{id}` (a user's niche studies, see *Niche
    studies*), `/aliexpress` (the platform app's callback), `/google/callback` (where Google
