@@ -95,6 +95,7 @@ pub fn label(kind: ExportKind) -> &'static str {
         ExportKind::Orders => "orders",
         ExportKind::Customers => "customers",
         ExportKind::Newsletter => "newsletter subscribers",
+        ExportKind::Sales => "sales report",
     }
 }
 
@@ -378,6 +379,7 @@ impl<D: Deliver + 'static> ScheduledExports<D> {
                     shop.id.clone(),
                     run.kind,
                     period,
+                    (run.first_day, run.last_day),
                     MAX_POSTED_BYTES,
                 )
                 .await

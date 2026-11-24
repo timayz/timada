@@ -225,6 +225,57 @@ pub const BEST_SELLERS: &str = "SELECT currency, product_id, max(name) AS name,
      GROUP BY currency, product_id
      ORDER BY sales_cents DESC, product_id LIMIT ?4";
 
+/// What one product sold over a period in the orders one channel brought,
+/// in one currency.
+#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
+pub struct ProductSourceSales {
+    pub currency: String,
+    pub product_id: String,
+    /// Its name on the last line sold.
+    pub name: String,
+    /// `source / medium`; `None` gathers the orders whose storefront did
+    /// not say.
+    pub source: Option<String>,
+    pub quantity: i64,
+    /// What its lines were sold for, VAT included, before any discount on
+    /// the order and without shipping.
+    pub sales_cents: i64,
+    /// How many of them know what they left, and what those were sold for.
+    pub costed_quantity: i64,
+    pub costed_sales_cents: i64,
+    /// What those left; refunds are an order's and are not taken off here.
+    pub profit_cents: i64,
+}
+
+/// What each product of a tenant sold over `period`, by the channel that
+/// brought the shopper: what a channel's spend on a product is set against.
+/// Every product sold in the period, a row a channel.
+pub async fn sales_by_product_source(
+    db: &Db,
+    tenant_id: &str,
+    period: Period,
+) -> anyhow::Result<Vec<ProductSourceSales>> {
+    db.fetch_all(SALES_BY_PRODUCT_SOURCE, (tenant_id, period.from, period.to))
+        .await
+}
+
+/// See [`sales_by_product_source`]. Each line finds its order by the
+/// order's whole key.
+pub const SALES_BY_PRODUCT_SOURCE: &str = "SELECT l.currency AS currency,
+        l.product_id AS product_id, max(l.name) AS name, s.source AS source,
+        sum(l.quantity) AS quantity,
+        sum(l.amount_cents) AS sales_cents,
+        sum(CASE WHEN l.profit_cents IS NOT NULL THEN l.quantity ELSE 0 END) AS costed_quantity,
+        sum(CASE WHEN l.profit_cents IS NOT NULL THEN l.amount_cents ELSE 0 END)
+            AS costed_sales_cents,
+        sum(coalesce(l.profit_cents, 0)) AS profit_cents
+     FROM orders_sale_lines l INDEXED BY orders_sale_lines_placed
+     JOIN orders_sales s INDEXED BY sqlite_autoindex_orders_sales_1
+        ON s.tenant_id = l.tenant_id AND s.order_id = l.order_id
+     WHERE l.tenant_id = ?1 AND l.placed_at >= ?2 AND l.placed_at < ?3 AND l.counted = 1
+     GROUP BY l.currency, l.product_id, s.source
+     ORDER BY sales_cents DESC, l.product_id, s.source";
+
 /// The next shop, after `after` in the order of their ids, that ever sold
 /// something (`""` starts from the first): one step of a walk over the
 /// shops with sales, a seek each, however many lines each one has.

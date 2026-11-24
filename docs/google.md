@@ -303,3 +303,40 @@ and is not the shop's own count of its orders: that is the sales report's (#689)
 "By category" adds the products up by the categories the catalog files them under
 **today**; a product in two categories counts in both. An item the catalog no longer
 has reads "No longer in the catalog".
+
+## Profit after ads (#689)
+
+The sales report (`/t/{slug}/sales`) sets what Google Ads cost against what the shop's
+own orders say, on the same days (`dashboard/src/sales_report.rs`):
+
+- **For the shop**: ad spend and profit after ads, beside the period's totals.
+- **Paid and free**: the orders by the kind of click that brought the shopper last.
+  An order is matched by the source it kept (#538): `google / cpc` (a `gclid`, or a
+  campaign tagged with a paid medium) is Google Ads; a paid medium from anywhere else
+  is "other paid clicks", whose spend is not read; everything else came without a paid
+  click, and its share of the revenue is told. A second channel that tells its spend
+  is one more row.
+- **By product and by category**: what Google Ads cost for each (from the products
+  the daily read keeps), what the orders Google Ads brought bought of it, the return
+  (sales for 1 spent), the **break-even** and the gap between the two. A return above
+  the break-even earns, one below costs.
+
+The break-even is what has to be sold for 1 left before ads, from the period's own
+sales of the product or the category: the lines that kept their costs (#546). A
+product with ads paid for and nothing sold costs, whatever its break-even.
+
+What to keep in mind when reading it:
+
+- The spend is in the **account's currency**; sales in another currency are left out
+  of the comparison.
+- The days are the same calendar days on both sides: the shop's clock for the orders,
+  the account's for the spend. Two different time zones shift a day's edges by their
+  difference.
+- The total spend covers every campaign; the products' rows only what Google Ads
+  tells by product (a Search campaign on the shop's name has none).
+- This is the shop's count. Google's own return, from the conversions its tag
+  reports, is on `/t/{slug}/ads`.
+
+The same numbers leave as a CSV file from the page, and on a schedule like the other
+exports (#625): a row a currency for the totals, then each source, each kind of
+click, each product and each category, told apart by their first cell.

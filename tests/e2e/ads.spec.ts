@@ -112,6 +112,35 @@ test("a shop chooses its Google Ads account and reads what its ads cost and brou
     await page.getByRole("button", { name: "Show" }).click();
     await expect(page).toHaveURL(/days=7/);
     await expect(page.locator("[data-ads-days]")).toHaveAttribute("data-ads-days", "2");
+
+    // The sales report sets the spend against what the shop sold: nothing
+    // yet, so the ads only cost.
+    await page.getByRole("link", { name: "Sales report", exact: true }).click();
+    await expect(page.locator("[data-sales-ads]")).toHaveAttribute("data-sales-ads", "connected");
+    const channel = page.locator('[data-sales-channel="google-ads"]');
+    await expect(channel).toContainText("Google Ads");
+    await expect(channel.locator("[data-orders]")).toHaveAttribute("data-orders", "0");
+    await expect(channel.locator("[data-spend]")).toHaveAttribute("data-spend", "2400");
+    await expect(channel.locator("[data-after-ads]")).toHaveAttribute("data-after-ads", "-2400");
+    const spent = page.locator(`[data-sales-ad-table="products"] [data-sales-ad-row="${productId}"]`);
+    await expect(spent.getByRole("link", { name: "Arbre a chat" })).toBeVisible();
+    await expect(spent.locator("[data-spend]")).toHaveAttribute("data-spend", "1600");
+    await expect(spent.locator("[data-return]")).toHaveText("0.00");
+    await expect(spent.locator("[data-verdict]")).toHaveAttribute("data-verdict", "Costs");
+    await expect(page.locator('[data-sales-ad-table="categories"] [data-sales-ad-row="none"]')).toContainText(
+      "In no category",
+    );
+
+    // The same in the file.
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("link", { name: "Export these days as CSV" }).click();
+    const download = await downloading;
+    expect(download.suggestedFilename()).toMatch(new RegExp(`^sales-${shop.slug}-\\d{4}-\\d\\d-\\d\\d-`));
+    const href = await page.getByRole("link", { name: "Export these days as CSV" }).getAttribute("href");
+    const file = await (await page.request.get(href!)).text();
+    expect(file).toContain("section,key,name,currency,orders,quantity,revenue,refunds,profit,ad_spend,");
+    expect(file).toContain("channel,google-ads,Google Ads,EUR,0,,0.00,0.00,,24.00,0.00,,-24.00");
+    expect(file).toContain(`product,${productId},Arbre a chat,EUR,,0,0.00,,,16.00,0.00,,-16.00`);
   } finally {
     await google.stop();
   }

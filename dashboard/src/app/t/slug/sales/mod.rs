@@ -4,6 +4,13 @@
 //! best sellers) and by category. Summed from the orders read model, a
 //! moment behind the orders themselves; the days are the shop's own
 //! (its time zone).
+//!
+//! With a Google Ads account connected, the report also sets what the ads
+//! cost against what the orders they brought were paid
+//! (`crate::sales_report`): for the shop, by kind of click (paid or not),
+//! by product and by category, each beside its break-even.
+
+pub mod export;
 
 use jiff::{Timestamp, ToSpan, civil::Date, tz::TimeZone};
 use timada_catalog::format_money;
@@ -17,6 +24,8 @@ use topcoat::{
 };
 
 use super::{TenantAccess, TenantNav, require_tenant, slug};
+use crate::app::t::slug::ads::ratio;
+use crate::components::button::button_variants;
 use crate::components::button::{ButtonSize, ButtonVariant, button};
 use crate::components::input::input;
 use crate::components::select::select;
@@ -24,13 +33,17 @@ use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
 };
 use crate::db::Db;
+use crate::export::{schedule_card, schedule_view};
+use crate::sales_report::{ItemRow, Paid, Verdict, ad_report};
 use crate::ui::{
-    LINK, Shell, document, empty_row, fact, facts, filter_bar, page_header, section_card,
-    signed_money,
+    LINK, Shell, Tone, document, empty_row, fact, facts, filter_bar, notice, page_header,
+    section_card, signed_money, status_badge,
 };
 
 /// How many products the best sellers list.
 const BEST_SELLERS: i64 = 20;
+/// How many products are listed against what their ads cost.
+const AD_PRODUCTS: usize = 50;
 /// The periods offered, in days up to today, with what the menu calls them.
 const SPANS: [(u32, &str); 4] = [
     (7, "Last 7 days"),
@@ -42,20 +55,23 @@ const SPANS: [(u32, &str); 4] = [
 const DEFAULT_SPAN: u32 = 30;
 
 #[topcoat::router::query_params(error = bad_request)]
-struct SalesQuery {
+pub struct SalesQuery {
     /// One of [`SPANS`], in days; anything else is the default, unless the
     /// two dates below are given.
     days: Option<String>,
     /// The first and the last day, `YYYY-MM-DD`, both included.
     from: Option<String>,
     to: Option<String>,
+    /// A flash from the schedule's form.
+    error: Option<String>,
+    message: Option<String>,
 }
 
 /// The days a report covers, in the shop's zone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Days {
-    first: Date,
-    last: Date,
+pub struct Days {
+    pub first: Date,
+    pub last: Date,
     /// The span picked from the menu; `None` for dates typed in.
     span: Option<u32>,
 }
@@ -63,7 +79,7 @@ struct Days {
 impl Days {
     /// What the query asks for, `today` being the shop's: two dates in
     /// order when both are given, else a span ending today.
-    fn of(query: &SalesQuery, today: Date) -> Self {
+    pub fn of(query: &SalesQuery, today: Date) -> Self {
         let date = |value: &Option<String>| value.as_deref()?.trim().parse::<Date>().ok();
         if let (Some(first), Some(last)) = (date(&query.from), date(&query.to))
             && first <= last
@@ -89,7 +105,7 @@ impl Days {
         }
     }
 
-    fn period(&self, zone: &TimeZone) -> Period {
+    pub fn period(&self, zone: &TimeZone) -> Period {
         period_of_days(zone, self.first, self.last)
     }
 }
@@ -104,6 +120,34 @@ pub(crate) fn period_of_days(zone: &TimeZone, first: Date, last: Date) -> Period
     Period {
         from: midnight(first),
         to: midnight(last.tomorrow().unwrap_or(last)),
+    }
+}
+
+/// The days an export's address names.
+#[derive(serde::Serialize)]
+struct ExportDays<'a> {
+    from: &'a str,
+    to: &'a str,
+}
+
+/// How far a return is from its break-even, signed: `+0.83`, `-1.20`.
+fn gap(hundredths: Option<i64>) -> String {
+    match hundredths {
+        Some(gap) => format!(
+            "{}{}.{:02}",
+            if gap < 0 { "-" } else { "+" },
+            gap.abs() / 100,
+            gap.abs() % 100
+        ),
+        None => "None".to_owned(),
+    }
+}
+
+fn verdict_tone(verdict: Verdict) -> Tone {
+    match verdict {
+        Verdict::Earns => Tone::Success,
+        Verdict::Costs => Tone::Danger,
+        Verdict::NotKnown => Tone::Neutral,
     }
 }
 
@@ -128,6 +172,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .await?;
     let query = query_params::<SalesQuery>(cx)?;
     let nav = TenantNav::of(cx, &access).await?;
+    let schedule = schedule_view(cx, &access, timada_orders::ExportKind::Sales).await?;
     let TenantAccess { tenant, .. } = access;
     let zone = TimeZone::get(tenant.shop_time_zone()).unwrap_or(TimeZone::UTC);
     let today = Timestamp::now().to_zoned(zone.clone()).date();
@@ -151,6 +196,21 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let first = days.first.to_string();
     let last = days.last.to_string();
     let title = format!("Sales report · {}", tenant.name);
+    let ads = ad_report(db, &tenant.id, period, &first, &last)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let ads_page = href!(super::ads::index, slug: slug.clone()).resolve(cx);
+    let free_share = ads
+        .free_share_bps()
+        .map(|bps| format!("{}.{} %", bps / 100, (bps % 100) / 10));
+    let ad_products: Vec<ItemRow> = ads.products.iter().take(AD_PRODUCTS).cloned().collect();
+    let ad_categories: Vec<ItemRow> = ads.categories.clone();
+    let export_url = href!(export::export, slug: slug.clone())
+        .query(ExportDays {
+            from: &first,
+            to: &last,
+        })
+        .resolve(cx);
 
     Ok(view! {
         document(
@@ -160,6 +220,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 title: "Sales report",
                 subtitle: Some("What the orders placed over a period add up to. An order counts from the day it is placed, on the shop's clock, and for nothing once cancelled; its refunds count with it, whenever they were made."),
             )
+
+            notice(error: query.error.as_deref(), message: query.message.as_deref())
 
             section_card(
                 filter_bar(
@@ -216,8 +278,140 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 if total.costed_orders < total.orders { " orders" }
                             }
                         )
+                        if ads.connected && ads.currency == total.currency {
+                            fact(term: "Ad spend", attrs: attributes! { data-sales-ad-spend=(ads.spend_cents) }, (money(ads.spend_cents, &total.currency)) " on Google Ads")
+                            fact(
+                                term: "Profit after ads",
+                                attrs: attributes! { data-sales-after-ads=(if total.costed_orders > 0 { (total.profit_cents - ads.spend_cents).to_string() } else { String::new() }) },
+                                if total.costed_orders == 0 {
+                                    "Not told"
+                                } else {
+                                    (profit_label(total.profit_cents - ads.spend_cents, total.costed_orders, total.orders, &total.currency))
+                                    if total.costed_orders < total.orders { " orders" }
+                                }
+                            )
+                        }
                     )
                 )
+            }
+
+            section_card(
+                title: Some("Paid and free"),
+                description: Some("The orders by the kind of click that brought the shopper last: an ad of Google Ads, another paid click (its campaign's medium says cpc, ppc, paid…), or none. The return is what the orders were paid for 1 spent; what is left after ads is told when every order of the row kept what its goods cost."),
+                attrs: attributes! { data-sales-ads=(if ads.connected { "connected" } else { "none" }) },
+                if !ads.connected {
+                    <p class="mb-4 text-sm text-muted-foreground">
+                        "No ad spend is read for this shop: connect its Google Ads account on the "
+                        <a href=(&ads_page) class=(LINK)>"Google Ads"</a>
+                        " page and what its clicks cost is set against these sales."
+                    </p>
+                }
+                if let Some(share) = &free_share {
+                    <p class="mb-4 text-sm" data-sales-free-share="">(share) " of the revenue came without a paid click."</p>
+                }
+                table(
+                    attrs: attributes! { data-sales-channels=(&ads.currency) },
+                    table_header(
+                        table_row(
+                            table_head("Click")
+                            table_head(attrs: attributes! { class="text-right" }, "Orders")
+                            table_head(attrs: attributes! { class="text-right" }, "Revenue")
+                            table_head(attrs: attributes! { class="text-right" }, "Ad spend")
+                            table_head(attrs: attributes! { class="text-right" }, "Return")
+                            table_head(attrs: attributes! { class="text-right" }, "Profit")
+                            table_head(attrs: attributes! { class="text-right" }, "After ads")
+                        )
+                    )
+                    table_body(
+                        if ads.channels.is_empty() {
+                            empty_row(colspan: 7, text: "Nothing sold or spent over these days.")
+                        }
+                        for row in &ads.channels {
+                            table_row(
+                                attrs: attributes! { data-sales-channel=(row.key()) },
+                                table_cell((row.label()))
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" data-orders=(row.orders) }, (row.orders))
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" }, (money(row.revenue_cents, &ads.currency)))
+                                table_cell(
+                                    attrs: attributes! { class="text-right tabular-nums" data-spend=(row.spend_cents.map(|cents| cents.to_string()).unwrap_or_default()) },
+                                    if let Some(spend) = row.spend_cents {
+                                        (money(spend, &ads.currency))
+                                    } else if row.paid == Paid::Other {
+                                        "Not read"
+                                    }
+                                )
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" data-return="" }, if row.spend_cents.is_some() { (ratio(row.return_hundredths())) })
+                                table_cell(attrs: attributes! { class="text-right tabular-nums" }, (profit_label(row.profit_cents, row.costed_orders, row.orders, &ads.currency)))
+                                table_cell(
+                                    attrs: attributes! { class="text-right tabular-nums" data-after-ads=(row.after_ads_cents().map(|cents| cents.to_string()).unwrap_or_default()) },
+                                    if let Some(left) = row.after_ads_cents() {
+                                        (signed_money(left, &ads.currency))
+                                    }
+                                )
+                            )
+                        }
+                    )
+                )
+            )
+
+            if ads.connected {
+                for (name, title, head, rows) in [
+                    ("products", "Ads by product", "Product", &ad_products),
+                    ("categories", "Ads by category", "Category", &ad_categories),
+                ] {
+                    section_card(
+                        title: Some(title),
+                        description: Some(if name == "products" {
+                            "What Google Ads cost for each product, beside what the orders its ads brought bought of it. The break-even is what has to be sold for 1 left before ads, from this period's own sales of it: a return above it earns, one below costs."
+                        } else {
+                            "The same, added up by the categories the catalog files the products under today. A product in two categories counts in both."
+                        }),
+                        table(
+                            attrs: attributes! { data-sales-ad-table=(name) },
+                            table_header(
+                                table_row(
+                                    table_head((head))
+                                    table_head(attrs: attributes! { class="text-right" }, "Ad spend")
+                                    table_head(attrs: attributes! { class="text-right" }, "Sold")
+                                    table_head(attrs: attributes! { class="text-right" }, "Sales")
+                                    table_head(attrs: attributes! { class="text-right" }, "Return")
+                                    table_head(attrs: attributes! { class="text-right" }, "Break-even")
+                                    table_head(attrs: attributes! { class="text-right" }, "Gap")
+                                    table_head("Verdict")
+                                )
+                            )
+                            table_body(
+                                if rows.is_empty() {
+                                    empty_row(colspan: 8, text: "No ad paid for and nothing sold through one over these days.")
+                                }
+                                for row in rows.iter() {
+                                    table_row(
+                                        attrs: attributes! { data-sales-ad-row=(&row.key) },
+                                        table_cell(
+                                            if let Some(product_id) = row.product_id.as_ref().filter(|_| name == "products") {
+                                                <a class=(LINK) href=(href!(super::products::product_id::index, slug: slug.clone(), super::products::product_id::product_id: product_id.clone()))>(&row.name)</a>
+                                            } else {
+                                                (&row.name)
+                                            }
+                                        )
+                                        table_cell(attrs: attributes! { class="text-right tabular-nums" data-spend=(row.spend_cents) }, (money(row.spend_cents, &ads.currency)))
+                                        table_cell(attrs: attributes! { class="text-right tabular-nums" }, (row.quantity))
+                                        table_cell(attrs: attributes! { class="text-right tabular-nums" }, (money(row.sales_cents, &ads.currency)))
+                                        table_cell(attrs: attributes! { class="text-right tabular-nums" data-return="" }, (ratio(row.return_hundredths())))
+                                        table_cell(attrs: attributes! { class="text-right tabular-nums" data-break-even="" }, (ratio(row.break_even_hundredths())))
+                                        table_cell(attrs: attributes! { class="text-right tabular-nums" data-gap="" }, (gap(row.gap_hundredths())))
+                                        table_cell(
+                                            attrs: attributes! { data-verdict=(row.verdict().map_or("", Verdict::label)) },
+                                            if let Some(verdict) = row.verdict() {
+                                                status_badge(tone: verdict_tone(verdict), (verdict.label()))
+                                            }
+                                        )
+                                    )
+                                }
+                            )
+                        )
+                    )
+                }
             }
 
             section_card(
@@ -313,6 +507,16 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                 )
             )
+
+            section_card(
+                title: Some("Export"),
+                description: Some("These days' report as a CSV file: the totals, each source, each kind of click, each product and each category, with what the ads cost."),
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(&export_url) data-sales-export="">"Export these days as CSV"</a>
+            )
+            schedule_card(
+                action: href!(super::export_schedule::export_schedule, slug: slug.clone()).resolve(cx),
+                schedule: &schedule,
+            )
         )
     })
 }
@@ -326,6 +530,8 @@ mod tests {
             days: days.map(str::to_owned),
             from: from.map(str::to_owned),
             to: to.map(str::to_owned),
+            error: None,
+            message: None,
         }
     }
 

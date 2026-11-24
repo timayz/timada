@@ -54,6 +54,9 @@ fn page_url(
         ExportKind::Newsletter => href!(super::newsletter::index, slug: slug.to_owned())
             .query(flash)
             .resolve(cx),
+        ExportKind::Sales => href!(super::sales::index, slug: slug.to_owned())
+            .query(flash)
+            .resolve(cx),
     }
 }
 
