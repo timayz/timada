@@ -644,7 +644,12 @@ test("a tree is created in a shop of its owner, where a taken address is said fi
     await move(page, `[data-kept="${other}"]`, "A parent category", "Placed in the tree.");
     await move(page, `[data-kept="${other} pas cher"]`, `Under ${named(other)}`, "Placed in the tree.");
     await move(page, `[data-kept="meilleur ${other}"]`, "A parent category", "Placed in the tree.");
-    await expect(page.getByLabel("Create in a shop")).toBeEnabled();
+    // The shops offered come from a read model, which trails the shop's
+    // creation: the page is read again until it lists the shop (#776).
+    await expect(async () => {
+      await page.goto(otherTreeUrl);
+      await expect(page.getByLabel("Create in a shop").getByRole("option", { name: handMade })).toBeAttached({ timeout: 1000 });
+    }).toPass({ timeout: 15_000 });
     await page.getByLabel("Create in a shop").selectOption({ label: handMade });
     await page.getByRole("button", { name: "See what would be created" }).click();
     await expect(page).toHaveURL(new RegExp(`shop=${handMadeSlug}`));
