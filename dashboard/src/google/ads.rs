@@ -19,7 +19,10 @@ use serde_json::{Value, json};
 use timada_google::aggregator::{
     AdsAdGroupRow, AdsCampaignRow, AdsNumbers, AdsProductRow, AdsTermRow,
 };
-use timada_google::{AdsAccount, AdsDayReport, CAMPAIGN_SHOPPING, CampaignPlan, geo_target_of};
+use timada_google::{
+    AdsAccount, AdsDayReport, CAMPAIGN_BRAND, CAMPAIGN_SHOPPING, CAMPAIGN_WINNERS, CampaignPlan,
+    geo_target_of,
+};
 
 use super::{Google, GoogleFault, reason, unavailable};
 
@@ -475,7 +478,7 @@ pub fn campaign_operations(
     };
     let budget = of("campaignBudgets", &temp());
     let campaign = of("campaigns", &temp());
-    let shopping = plan.kind == CAMPAIGN_SHOPPING;
+    let shopping = plan.kind != CAMPAIGN_BRAND;
     let mut operations = vec![json!({ "campaignBudgetOperation": { "create": {
         "resourceName": budget,
         "amountMicros": plan.daily_budget_micros.to_string(),
@@ -495,7 +498,9 @@ pub fn campaign_operations(
     if shopping {
         created["shoppingSetting"] = json!({
             "merchantId": context.merchant_id,
-            "campaignPriority": 0,
+            // The winners' campaign outranks the first one for the
+            // products both could show.
+            "campaignPriority": if plan.kind == CAMPAIGN_WINNERS { 2 } else { 0 },
             "enableLocal": false,
         });
     } else {
@@ -529,7 +534,55 @@ pub fn campaign_operations(
         }
     }
     let bid = plan.bid_micros.to_string();
-    if shopping {
+    if plan.kind == CAMPAIGN_WINNERS {
+        let group_id = temp();
+        let ad_group = of("adGroups", &group_id);
+        operations.push(json!({ "adGroupOperation": { "create": {
+            "resourceName": ad_group,
+            "name": plan.name,
+            "campaign": campaign,
+            "status": "ENABLED",
+            "type": "SHOPPING_PRODUCT_ADS",
+            "cpcBidMicros": bid,
+        } } }));
+        operations.push(json!({ "adGroupAdOperation": { "create": {
+            "adGroup": ad_group,
+            "status": "ENABLED",
+            "ad": { "shoppingProductAd": {} },
+        } } }));
+        // The products named, each by its item of the feed, and no other.
+        let root = of("adGroupCriteria", &format!("{group_id}~{}", temp()));
+        operations.push(json!({ "adGroupCriterionOperation": { "create": {
+            "resourceName": root,
+            "adGroup": ad_group,
+            "status": "ENABLED",
+            "listingGroup": { "type": "SUBDIVISION" },
+        } } }));
+        for product in &plan.products {
+            operations.push(json!({ "adGroupCriterionOperation": { "create": {
+                "adGroup": ad_group,
+                "status": "ENABLED",
+                "cpcBidMicros": bid,
+                "listingGroup": {
+                    "type": "UNIT",
+                    "parentAdGroupCriterion": root,
+                    "caseValue": { "productItemId": {
+                        "value": product.category_id.to_lowercase(),
+                    } },
+                },
+            } } }));
+        }
+        operations.push(json!({ "adGroupCriterionOperation": { "create": {
+            "adGroup": ad_group,
+            "status": "ENABLED",
+            "negative": true,
+            "listingGroup": {
+                "type": "UNIT",
+                "parentAdGroupCriterion": root,
+                "caseValue": { "productItemId": {} },
+            },
+        } } }));
+    } else if shopping {
         let index = format!("INDEX{}", context.label);
         for group in &plan.ad_groups {
             let group_id = temp();
@@ -730,6 +783,162 @@ impl Google {
                 .collect(),
             campaign_id,
         }))
+    }
+
+    /// What a click is paid at most in the ad group `ad_group_id`: each of
+    /// its product groups that bids, by name, with its bid in millionths.
+    /// One question.
+    pub async fn ads_group_bids(
+        &self,
+        access_token: &str,
+        account: &AdsAccount,
+        ad_group_id: &str,
+    ) -> Result<Vec<(String, u64)>, GoogleFault> {
+        let rows = self
+            .ads_search(
+                access_token,
+                &account.customer_id,
+                account.login_customer_id.as_deref(),
+                &format!(
+                    "SELECT ad_group_criterion.resource_name, ad_group_criterion.cpc_bid_micros \
+                     FROM ad_group_criterion WHERE ad_group.id = {ad_group_id} \
+                     AND ad_group_criterion.type = 'LISTING_GROUP' \
+                     AND ad_group_criterion.listing_group.type = 'UNIT' \
+                     AND ad_group_criterion.negative = FALSE \
+                     AND ad_group_criterion.status != 'REMOVED'"
+                ),
+            )
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                (
+                    text(row, &["adGroupCriterion", "resourceName"]),
+                    count(row, &["adGroupCriterion", "cpcBidMicros"]),
+                )
+            })
+            .filter(|(name, _)| !name.is_empty())
+            .collect())
+    }
+
+    /// Pays a click of the ad group `ad_group_id` `bid_micros` at most: on
+    /// the ad group, and on each of its product groups in `units`. All or
+    /// none.
+    pub async fn ads_set_group_bid(
+        &self,
+        access_token: &str,
+        account: &AdsAccount,
+        ad_group_id: &str,
+        units: &[String],
+        bid_micros: u64,
+    ) -> Result<(), GoogleFault> {
+        let bid = bid_micros.to_string();
+        let mut operations = vec![json!({ "adGroupOperation": {
+            "updateMask": "cpc_bid_micros",
+            "update": {
+                "resourceName": format!(
+                    "customers/{}/adGroups/{ad_group_id}",
+                    account.customer_id
+                ),
+                "cpcBidMicros": bid,
+            },
+        } })];
+        for unit in units {
+            operations.push(json!({ "adGroupCriterionOperation": {
+                "updateMask": "cpc_bid_micros",
+                "update": { "resourceName": unit, "cpcBidMicros": bid },
+            } }));
+        }
+        self.ads_mutate(access_token, account, operations).await?;
+        Ok(())
+    }
+
+    /// How much more or less the campaign `campaign_id` pays a click on
+    /// each kind of device it says something of: the device as it is kept,
+    /// the criterion's name, and the adjustment in hundredths. One
+    /// question.
+    pub async fn ads_device_adjustments(
+        &self,
+        access_token: &str,
+        account: &AdsAccount,
+        campaign_id: &str,
+    ) -> Result<Vec<(String, String, i32)>, GoogleFault> {
+        let rows = self
+            .ads_search(
+                access_token,
+                &account.customer_id,
+                account.login_customer_id.as_deref(),
+                &format!(
+                    "SELECT campaign_criterion.resource_name, campaign_criterion.device.type, \
+                     campaign_criterion.bid_modifier FROM campaign_criterion \
+                     WHERE campaign.id = {campaign_id} AND campaign_criterion.type = 'DEVICE'"
+                ),
+            )
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                let criterion = &row["campaignCriterion"];
+                // No modifier is none: paid as the others.
+                let modifier = match &criterion["bidModifier"] {
+                    Value::Number(number) => number.as_f64().unwrap_or(1.0),
+                    Value::String(text) => text.parse().unwrap_or(1.0),
+                    _ => 1.0,
+                };
+                (
+                    device(&text(criterion, &["device", "type"])).to_owned(),
+                    text(criterion, &["resourceName"]),
+                    ((modifier - 1.0) * 100.0).round() as i32,
+                )
+            })
+            .collect())
+    }
+
+    /// Pays a click on `device` (`MOBILE`, `TABLET` or `DESKTOP`) `percent`
+    /// hundredths more or less in the campaign `campaign_id`: on the
+    /// criterion `held` when the campaign says something of the device
+    /// already, on a new one otherwise.
+    pub async fn ads_set_device_adjustment(
+        &self,
+        access_token: &str,
+        account: &AdsAccount,
+        campaign_id: &str,
+        (device, held): (&str, Option<&str>),
+        percent: i32,
+    ) -> Result<(), GoogleFault> {
+        let operation = match held {
+            Some(held) => json!({ "campaignCriterionOperation": {
+                "updateMask": "bid_modifier",
+                "update": { "resourceName": held, "bidModifier": modifier(percent) },
+            } }),
+            None => json!({ "campaignCriterionOperation": { "create": {
+                "campaign": format!("customers/{}/campaigns/{campaign_id}", account.customer_id),
+                "device": { "type": device },
+                "bidModifier": modifier(percent),
+            } } }),
+        };
+        self.ads_mutate(access_token, account, vec![operation])
+            .await?;
+        Ok(())
+    }
+
+    /// Stops the campaign `campaign_id` showing for the search `term`,
+    /// typed exactly so.
+    pub async fn ads_exclude_term(
+        &self,
+        access_token: &str,
+        account: &AdsAccount,
+        campaign_id: &str,
+        term: &str,
+    ) -> Result<(), GoogleFault> {
+        let operation = json!({ "campaignCriterionOperation": { "create": {
+            "campaign": format!("customers/{}/campaigns/{campaign_id}", account.customer_id),
+            "negative": true,
+            "keyword": { "text": term, "matchType": "EXACT" },
+        } } });
+        self.ads_mutate(access_token, account, vec![operation])
+            .await?;
+        Ok(())
     }
 
     /// Sets the campaign `campaign_id` of `account` running. Asked of one

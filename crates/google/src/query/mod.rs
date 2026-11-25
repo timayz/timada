@@ -169,6 +169,26 @@ mod tests {
                 "{plan:#?}"
             );
         }
+        use super::ads::{Within, within_statement};
+        for within in [
+            Within::Devices,
+            Within::AdGroups,
+            Within::Products,
+            Within::Terms,
+        ] {
+            let plan = plan(
+                &db,
+                &within_statement(within),
+                ("shop", "1234567890", "2026-08-01", "2026-11-01", "11", 100),
+            )
+            .await;
+            assert!(
+                plan.iter()
+                    .filter(|step| !step.starts_with("USE SORTER"))
+                    .all(|step| step.starts_with("SEARCH")),
+                "{plan:#?}"
+            );
+        }
         for by in [By::Product, By::Term] {
             let plan = plan(
                 &db,

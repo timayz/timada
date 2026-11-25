@@ -24,9 +24,9 @@ use crate::aggregator::{
 };
 use crate::error::ProposalError;
 use crate::value_object::{
-    DEFAULT_VALID_SECS, KINDS, MAX_CHANGES, MAX_REASON_LEN, MAX_SOURCE_LEN, MAX_SUBJECT_ID_LEN,
-    MAX_SUBJECT_NAME_LEN, MAX_VALID_SECS, MAX_VALUE_LEN, ProposalStatus, checked, is_field_of,
-    new_proposal_id, note,
+    DEFAULT_VALID_SECS, KIND_ADS_NEGATIVE_TERM, KINDS, MAX_CHANGES, MAX_REASON_LEN, MAX_SOURCE_LEN,
+    MAX_SUBJECT_ID_LEN, MAX_SUBJECT_NAME_LEN, MAX_VALID_SECS, MAX_VALUE_LEN, ProposalStatus,
+    checked, is_field_of, new_proposal_id, note,
 };
 
 /// The command gateway. Cheap to clone when `E` is.
@@ -379,7 +379,13 @@ impl<E: Executor> Command<E> {
             MAX_SUBJECT_ID_LEN,
             ProposalError::InvalidSubject,
         )?;
-        if subject_id.chars().any(char::is_whitespace) {
+        // An id has no space in it; a search is what a person typed, its
+        // words a space apart.
+        let spaced = cmd.kind == KIND_ADS_NEGATIVE_TERM;
+        if subject_id
+            .chars()
+            .any(|c| c.is_control() || (c.is_whitespace() && !(spaced && c == ' ')))
+        {
             return Err(ProposalError::InvalidSubject);
         }
         let source = checked(&cmd.source, MAX_SOURCE_LEN, ProposalError::InvalidSource)?;

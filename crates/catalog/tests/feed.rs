@@ -508,3 +508,28 @@ async fn a_feed_opens_at_an_address_of_its_own_and_moves_or_closes() {
     let third = cmd.open_feed(ALICE).await.unwrap();
     assert_eq!(cmd.load_feed_token().await.unwrap(), Some(third));
 }
+
+#[tokio::test]
+async fn a_product_is_kept_out_of_ads_and_let_back_in() {
+    let cmd = command().await;
+    let product = create_product(&cmd, "Cat Tree").await;
+    assert!(!product.out_of_ads);
+    cmd.set_product_in_ads(ALICE, &product.id, false)
+        .await
+        .unwrap();
+    let kept = cmd.load_product(&product.id).await.unwrap().unwrap();
+    assert!(kept.out_of_ads);
+    // It stays in the shop as it was.
+    assert_eq!(kept.status, product.status);
+    // The same again writes nothing.
+    cmd.set_product_in_ads(ALICE, &product.id, false)
+        .await
+        .unwrap();
+    let again = cmd.load_product(&product.id).await.unwrap().unwrap();
+    assert_eq!(again.aggregate_version, kept.aggregate_version);
+    cmd.set_product_in_ads(ALICE, &product.id, true)
+        .await
+        .unwrap();
+    let back = cmd.load_product(&product.id).await.unwrap().unwrap();
+    assert!(!back.out_of_ads);
+}

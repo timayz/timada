@@ -16,13 +16,14 @@
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
 use crate::aggregator::{
-    Campaign, CampaignAdGroup, CampaignCreated, CampaignSetting, LiveFailed, LiveRequested,
-    WentLive,
+    AdjustmentSet, BidSet, Campaign, CampaignAdGroup, CampaignCreated, CampaignSetting, LiveFailed,
+    LiveRequested, TermExcluded, WentLive,
 };
 use crate::error::GoogleError;
 use crate::value_object::{
-    CAMPAIGN_KINDS, CampaignPlan, MAX_ADS_NAME_LEN, MAX_REASON_LEN, SETTLE_DAYS, campaign_fields,
-    campaign_stream_id, normalize_campaign_field, normalize_customer_id, plan_of,
+    CAMPAIGN_BID, CAMPAIGN_KINDS, CAMPAIGN_PHONE, CAMPAIGN_TABLET, CampaignPlan, MAX_ADS_NAME_LEN,
+    MAX_KEYWORD_LEN, MAX_REASON_LEN, SETTLE_DAYS, TUNED_DEVICES, adjustment_percent, bid_cents,
+    campaign_fields, campaign_stream_id, normalize_campaign_field, normalize_customer_id, plan_of,
 };
 
 use super::Command;
@@ -61,6 +62,15 @@ pub struct CampaignState {
     /// Why Google Ads refused to set it running, the last time it was
     /// asked.
     pub live_error: Option<String>,
+    /// The bids changed since it was created: the ad group, what a click
+    /// is paid there at most (`0.32`), and when it was last changed (unix
+    /// seconds).
+    pub bids: Vec<(String, String, u64)>,
+    /// The devices' adjustments changed since it was created: the device,
+    /// the adjustment in hundredths (empty for none), and when.
+    pub adjustments: Vec<(String, String, u64)>,
+    /// The searches it no longer shows for.
+    pub excluded_terms: Vec<String>,
 }
 
 impl CampaignState {
@@ -82,6 +92,47 @@ impl CampaignState {
         )
     }
 
+    /// What a click of the ad group `ad_group_id` is paid at most, as
+    /// timada last set it (`0.32`): the campaign's starting bid until it
+    /// was changed.
+    pub fn bid_of(&self, ad_group_id: &str) -> &str {
+        self.bids
+            .iter()
+            .find(|(id, ..)| id == ad_group_id)
+            .map_or_else(|| self.setting(CAMPAIGN_BID), |(_, bid, _)| bid.as_str())
+    }
+
+    /// How much more or less a click on `device` is paid, in hundredths
+    /// as timada last set it; empty for none.
+    pub fn adjustment_of(&self, device: &str) -> &str {
+        self.adjustments
+            .iter()
+            .find(|(named, ..)| named == device)
+            .map_or_else(
+                || match device {
+                    "mobile" => self.setting(CAMPAIGN_PHONE),
+                    "tablet" => self.setting(CAMPAIGN_TABLET),
+                    _ => "",
+                },
+                |(_, percent, _)| percent.as_str(),
+            )
+    }
+
+    /// Unix seconds of the last change to the bid of `subject` (an ad
+    /// group's number, or a device); `None` for one left as created.
+    pub fn changed_at(&self, subject: &str) -> Option<u64> {
+        self.bids
+            .iter()
+            .chain(&self.adjustments)
+            .find(|(named, ..)| named == subject)
+            .map(|(.., at)| *at)
+    }
+
+    /// Whether the campaign no longer shows for the search `term`.
+    pub fn excludes(&self, term: &str) -> bool {
+        self.excluded_terms.iter().any(|held| held == term)
+    }
+
     /// Unix seconds until when a campaign that runs is left alone; `None`
     /// while it is paused.
     pub fn settles_at(&self) -> Option<u64> {
@@ -95,6 +146,9 @@ pub fn campaign_projection<E: Executor>() -> Projection<E, CampaignState> {
         .handler(on_live_requested())
         .handler(on_went_live())
         .handler(on_live_failed())
+        .handler(on_bid_set())
+        .handler(on_adjustment_set())
+        .handler(on_term_excluded())
         .strict()
 }
 
@@ -153,6 +207,51 @@ async fn on_live_failed(
 ) -> anyhow::Result<()> {
     campaign.live_requested = false;
     campaign.live_error = Some(event.data.reason.to_owned());
+    Ok(())
+}
+
+/// Puts `value` in place of the one `list` holds for `key`, changed at
+/// `at`.
+fn put(list: &mut Vec<(String, String, u64)>, key: &str, value: &str, at: u64) {
+    match list.iter_mut().find(|(named, ..)| named == key) {
+        Some(held) => *held = (key.to_owned(), value.to_owned(), at),
+        None => list.push((key.to_owned(), value.to_owned(), at)),
+    }
+}
+
+#[evento::handler]
+async fn on_bid_set(event: Event<BidSet>, campaign: &mut CampaignState) -> anyhow::Result<()> {
+    put(
+        &mut campaign.bids,
+        &event.data.ad_group_id,
+        &event.data.bid,
+        event.timestamp,
+    );
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_adjustment_set(
+    event: Event<AdjustmentSet>,
+    campaign: &mut CampaignState,
+) -> anyhow::Result<()> {
+    put(
+        &mut campaign.adjustments,
+        &event.data.device,
+        &event.data.percent,
+        event.timestamp,
+    );
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_term_excluded(
+    event: Event<TermExcluded>,
+    campaign: &mut CampaignState,
+) -> anyhow::Result<()> {
+    if !campaign.excludes(&event.data.term) {
+        campaign.excluded_terms.push(event.data.term.to_owned());
+    }
     Ok(())
 }
 
@@ -394,5 +493,112 @@ impl<E: Executor> Command<E> {
         })
         .await?;
         Ok(())
+    }
+
+    /// Records that a click of the ad group `ad_group_id` of the shop's
+    /// campaign of `kind` is now paid `bid` at most (`0.32`), as Google
+    /// Ads was told. Whether it was written: the same bid again is left
+    /// alone.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_bid(
+        &self,
+        actor: &str,
+        tenant_id: &str,
+        kind: &str,
+        ad_group_id: &str,
+        bid: &str,
+        proposal_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<bool, GoogleError> {
+        let cents = bid_cents(bid).ok_or(GoogleError::InvalidCampaignAmount)?;
+        let bid = timada_core::money::format_amount(cents);
+        self.settle_campaign(tenant_id, kind, routing_key, |campaign, write| {
+            let campaign = campaign.ok_or(GoogleError::NoCampaign)?;
+            if !campaign
+                .ad_groups
+                .iter()
+                .any(|group| group.ad_group_id == ad_group_id)
+            {
+                return Err(GoogleError::InvalidTuned);
+            }
+            if campaign.bid_of(ad_group_id) == bid {
+                return Ok(false);
+            }
+            write.event(&BidSet {
+                ad_group_id: ad_group_id.to_owned(),
+                bid: bid.clone(),
+                proposal_id: proposal_id.to_owned(),
+                set_by: actor.to_owned(),
+            });
+            Ok(true)
+        })
+        .await
+    }
+
+    /// Records that a click on `device` is now paid `percent` hundredths
+    /// more or less by the shop's campaign of `kind` (empty for the
+    /// same), as Google Ads was told. Whether it was written.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_adjustment(
+        &self,
+        actor: &str,
+        tenant_id: &str,
+        kind: &str,
+        device: &str,
+        percent: &str,
+        proposal_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<bool, GoogleError> {
+        if !TUNED_DEVICES.contains(&device) {
+            return Err(GoogleError::InvalidTuned);
+        }
+        let percent = match adjustment_percent(percent).ok_or(GoogleError::InvalidAdjustment)? {
+            0 => String::new(),
+            percent => percent.to_string(),
+        };
+        self.settle_campaign(tenant_id, kind, routing_key, |campaign, write| {
+            let campaign = campaign.ok_or(GoogleError::NoCampaign)?;
+            if campaign.adjustment_of(device) == percent {
+                return Ok(false);
+            }
+            write.event(&AdjustmentSet {
+                device: device.to_owned(),
+                percent: percent.clone(),
+                proposal_id: proposal_id.to_owned(),
+                set_by: actor.to_owned(),
+            });
+            Ok(true)
+        })
+        .await
+    }
+
+    /// Records that the shop's campaign of `kind` no longer shows for the
+    /// search `term`, as Google Ads was told. Whether it was written.
+    pub async fn record_excluded_term(
+        &self,
+        actor: &str,
+        tenant_id: &str,
+        kind: &str,
+        term: &str,
+        proposal_id: &str,
+        routing_key: Option<String>,
+    ) -> Result<bool, GoogleError> {
+        let term = term.trim();
+        if term.is_empty() || term.chars().count() > MAX_KEYWORD_LEN {
+            return Err(GoogleError::InvalidTuned);
+        }
+        self.settle_campaign(tenant_id, kind, routing_key, |campaign, write| {
+            let campaign = campaign.ok_or(GoogleError::NoCampaign)?;
+            if campaign.excludes(term) {
+                return Ok(false);
+            }
+            write.event(&TermExcluded {
+                term: term.to_owned(),
+                proposal_id: proposal_id.to_owned(),
+                excluded_by: actor.to_owned(),
+            });
+            Ok(true)
+        })
+        .await
     }
 }

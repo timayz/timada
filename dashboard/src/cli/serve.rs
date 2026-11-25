@@ -890,6 +890,11 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     ("ads campaigns", Kind::Sharded, |d| {
         crate::campaigns::subscription(d.store.clone(), d.google.clone())
     }),
+    // A tuning round asked for, or due once Google Ads was read, reads the
+    // campaign's last weeks and prepares its proposals.
+    ("ads tuning", Kind::Sharded, |d| {
+        crate::tuning::subscription(d.store.clone(), d.db.clone())
+    }),
     // The keywords a study's owner asked for are fetched from the keyword
     // source and recorded on the study.
     ("keyword fetches", Kind::Sharded, |d| {

@@ -66,6 +66,7 @@ pub fn kind_label(kind: &str) -> &'static str {
     match kind {
         CAMPAIGN_SHOPPING => "First Shopping campaign",
         CAMPAIGN_BRAND => "Search campaign on the shop's name",
+        timada_google::CAMPAIGN_WINNERS => "Campaign for the products that sell",
         _ => "Campaign",
     }
 }
@@ -82,6 +83,7 @@ pub fn field_label(field: &str) -> &'static str {
         CAMPAIGN_START => "Starts",
         CAMPAIGN_AD_GROUPS => "Ad groups",
         CAMPAIGN_KEYWORDS => "Searches",
+        timada_google::CAMPAIGN_PRODUCTS => "Products",
         CAMPAIGN_HEADLINES => "Headlines",
         CAMPAIGN_DESCRIPTIONS => "Descriptions",
         _ => "Setting",
@@ -92,7 +94,11 @@ pub fn field_label(field: &str) -> &'static str {
 pub fn is_long(field: &str) -> bool {
     matches!(
         field,
-        CAMPAIGN_AD_GROUPS | CAMPAIGN_KEYWORDS | CAMPAIGN_HEADLINES | CAMPAIGN_DESCRIPTIONS
+        CAMPAIGN_AD_GROUPS
+            | CAMPAIGN_KEYWORDS
+            | CAMPAIGN_HEADLINES
+            | CAMPAIGN_DESCRIPTIONS
+            | timada_google::CAMPAIGN_PRODUCTS
     )
 }
 
@@ -403,13 +409,13 @@ pub enum Made {
     Refused(String),
 }
 
-fn refused(reason: impl Into<String>) -> anyhow::Result<Made> {
+pub(crate) fn refused(reason: impl Into<String>) -> anyhow::Result<Made> {
     Ok(Made::Refused(reason.into()))
 }
 
 /// Asks Google `call` under the shop's grant, again after a moment when
 /// Google could not answer.
-async fn asked<T, F, Fut>(
+pub(crate) async fn asked<T, F, Fut>(
     google: &Google,
     store: &Executor,
     connection: &ConnectionState,
@@ -435,17 +441,35 @@ where
 }
 
 /// What a member reads of a call Google did not take.
-fn said(fault: &GoogleFault) -> String {
+pub(crate) fn said(fault: &GoogleFault) -> String {
     match fault {
         GoogleFault::Off => "No Google application is set on this platform.".to_owned(),
         GoogleFault::ConnectAgain => {
             "Google no longer honours the shop's connection: connect again.".to_owned()
         }
         GoogleFault::Unavailable(why) => {
-            format!("Google Ads could not answer ({why}). Nothing was created: prepare it again.")
+            format!("Google Ads could not answer ({why}). Nothing was changed: prepare it again.")
         }
         GoogleFault::Refused(why) => format!("Google Ads refused it: {why}"),
     }
+}
+
+/// The shop's connection and the Google Ads account `customer_id` in it,
+/// when the shop still reads Google Ads through that account.
+pub(crate) async fn reach(
+    store: &Executor,
+    tenant_id: &str,
+    customer_id: &str,
+) -> anyhow::Result<Option<(ConnectionState, AdsAccount)>> {
+    let connection = connections(store.clone())
+        .load_connection(tenant_id)
+        .await?;
+    Ok(connection
+        .filter(|connection| connection.reads(ACCESS_ADS))
+        .and_then(|connection| {
+            let account = connection.ads.clone()?;
+            (account.customer_id == customer_id).then_some((connection, account))
+        }))
 }
 
 /// The ad groups of `plan` as `found` holds them, when it holds them all:
@@ -511,7 +535,7 @@ pub async fn create(
         return refused("The shop has no Google Ads account to create it in.");
     };
     let mut context = CampaignContext::default();
-    if kind == CAMPAIGN_SHOPPING {
+    if kind != CAMPAIGN_BRAND {
         let Some(merchant) = connection
             .merchant
             .as_ref()
@@ -520,6 +544,8 @@ pub async fn create(
             return refused("The shop has no Merchant Center account whose products to show.");
         };
         context.merchant_id = merchant.account_id.clone();
+    }
+    if kind == CAMPAIGN_SHOPPING {
         let label = timada_catalog::Command::new(store.clone(), tenant_id)
             .load_feed_ads_label()
             .await?;
@@ -527,7 +553,7 @@ pub async fn create(
             return refused("The feed has no label for campaigns any more.");
         };
         context.label = label;
-    } else {
+    } else if kind == CAMPAIGN_BRAND {
         let address = timada_orders::Command::new(store.clone(), tenant_id)
             .storefront_address()
             .await?;
@@ -664,14 +690,7 @@ pub(crate) async fn set_live(store: &Executor, google: &Google, id: &str) -> any
             .await?;
         Ok(())
     };
-    let connection = connections.load_connection(tenant_id).await?;
-    let Some((connection, account)) = connection
-        .filter(|connection| connection.reads(ACCESS_ADS))
-        .and_then(|connection| {
-            let account: AdsAccount = connection.ads.clone()?;
-            (account.customer_id == campaign.customer_id).then_some((connection, account))
-        })
-    else {
+    let Some((connection, account)) = reach(store, tenant_id, &campaign.customer_id).await? else {
         return fail(
             "The shop is no longer connected to the campaign's Google Ads account.".into(),
         )

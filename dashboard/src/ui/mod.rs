@@ -385,6 +385,13 @@ pub fn describe_error(code: &str) -> &'static str {
         "google_campaign_exists" => "The campaign was created already: change it at Google Ads.",
         "google_no_campaign" => "The campaign was not created yet.",
         "google_campaign_live" => "The campaign runs already.",
+        "google_invalid_tuning" => {
+            "A threshold is a whole number within its range; a step or a return reads 0.02."
+        }
+        "google_campaign_settling" => {
+            "The campaign does not run yet, or is in its first three weeks: a round comes after."
+        }
+        "google_invalid_tuned" => "No such ad group, device or search in the campaign.",
         "google_merchant_just_read" => {
             "Merchant Center was read a moment ago. Wait a few minutes before asking again."
         }

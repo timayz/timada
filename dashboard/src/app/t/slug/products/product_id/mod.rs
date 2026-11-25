@@ -1,6 +1,7 @@
 //! `/t/{slug}/products/{product_id}`: one product, read from its own stream
 //! (so an edit shows at once), with the forms that change it.
 
+pub mod ads;
 pub mod ai_writing;
 pub mod archive;
 pub mod attributes;
@@ -1750,6 +1751,23 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             }
                             if editable {
                                 <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save labels")</div>
+                            }
+                        </fieldset>
+                    </form>
+                )
+
+                section_card(
+                    title: Some("Ads"),
+                    description: Some("A product whose clicks cost more than it sells for is worth keeping in the shop and out of the campaigns. The feed then says so on the label for campaigns, and no ad group shows it."),
+                    attrs: attributes! { data-product-ads=(if product.out_of_ads { "out" } else { "in" }) },
+                    <form method="post" action=(href!(ads::ads, slug: slug.clone(), product_id: product.id.clone()))>
+                        <fieldset disabled=(!editable) class="flex max-w-xl flex-col gap-4">
+                            label(
+                                checkbox(attrs: attributes! { name="out_of_ads" value="on" checked=(product.out_of_ads) })
+                                "Keep it out of ads"
+                            )
+                            if editable {
+                                <div>button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" }, "Save ads")</div>
                             }
                         </fieldset>
                     </form>

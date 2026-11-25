@@ -307,3 +307,59 @@ pub async fn ads_by_term(
     )
     .await
 }
+
+/// What one campaign's rows are added up by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Within {
+    /// By kind of device: the key is the device.
+    Devices,
+    /// By ad group: the key is its number, the name its name.
+    AdGroups,
+    /// By item of the feed: the key is the item, the name the number of
+    /// an ad group it showed in.
+    Products,
+    /// By search: the key is the search, the name the number of an ad
+    /// group it showed in.
+    Terms,
+}
+
+/// The statement that adds up, by one thing, the rows of the campaign
+/// `?5` over a period: one range of the table's key, the other campaigns
+/// passed over. Cut to `?6` rows.
+pub(super) fn within_statement(within: Within) -> String {
+    let (table, key, name) = match within {
+        Within::Devices => ("google_ads_campaigns", "device", "''"),
+        Within::AdGroups => ("google_ads_ad_groups", "ad_group_id", "MAX(name)"),
+        Within::Products => ("google_ads_products", "item_id", "MAX(ad_group_id)"),
+        Within::Terms => ("google_ads_terms", "term", "MAX(ad_group_id)"),
+    };
+    format!(
+        "SELECT {key} AS key, {name} AS name,
+            SUM(cost_micros) AS cost_micros, SUM(impressions) AS impressions,
+            SUM(clicks) AS clicks, SUM(conversions_milli) AS conversions_milli,
+            SUM(value_micros) AS value_micros
+         FROM {table}
+         WHERE tenant_id = ?1 AND customer_id = ?2 AND day >= ?3 AND day <= ?4
+            AND campaign_id = ?5
+         GROUP BY {key}
+         ORDER BY cost_micros DESC, clicks DESC, {key} LIMIT ?6"
+    )
+}
+
+/// What the campaign `campaign_id` of the account did from `first` to
+/// `last`, added up by `within`: the rows that cost the most first,
+/// `limit` at most. What a tuning round reads.
+pub async fn ads_within_campaign(
+    db: &Db,
+    within: Within,
+    tenant_id: &str,
+    (customer_id, campaign_id): (&str, &str),
+    (first, last): (&str, &str),
+    limit: i64,
+) -> Result<Vec<AdsLine>> {
+    db.fetch_all(
+        &within_statement(within),
+        (tenant_id, customer_id, first, last, campaign_id, limit),
+    )
+    .await
+}

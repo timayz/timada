@@ -444,4 +444,71 @@ pub enum Campaign {
     /// Google Ads refused to set it running; `reason` says why, for the
     /// member.
     LiveFailed { reason: String, failed_by: String },
+    /// The most a click of one ad group is paid was changed at Google Ads,
+    /// through a proposal a member approved.
+    BidSet {
+        ad_group_id: String,
+        /// In the account's currency, as a person writes it (`0.32`).
+        bid: String,
+        proposal_id: String,
+        set_by: String,
+    },
+    /// How much more or less a click on a kind of device is paid was
+    /// changed at Google Ads, through a proposal a member approved.
+    AdjustmentSet {
+        /// One of [`TUNED_DEVICES`](crate::TUNED_DEVICES).
+        device: String,
+        /// In hundredths (`-55`); empty for none.
+        percent: String,
+        proposal_id: String,
+        set_by: String,
+    },
+    /// The campaign no longer shows for a search, through a proposal a
+    /// member approved.
+    TermExcluded {
+        term: String,
+        proposal_id: String,
+        excluded_by: String,
+    },
+}
+
+/// How a shop's campaign is tuned: the thresholds its rounds decide on,
+/// and where the rounds stand. Its id is made of the shop's
+/// ([`tuning_id`](crate::tuning_id)), and it lives in the platform's
+/// tenant. A round reads the last weeks of the campaign and prepares
+/// proposals; nothing is changed at Google Ads until a member approves.
+#[evento::aggregate(name = "timada-google/Tuning")]
+pub enum Tuning {
+    /// The thresholds, each named as
+    /// [`TUNING_FIELDS`](crate::TUNING_FIELDS) names it.
+    TuningSet {
+        tenant_id: String,
+        settings: Vec<CampaignSetting>,
+        set_by: String,
+    },
+    /// A round was asked for, by a member or because one was due: the host
+    /// reads the numbers and prepares the proposals.
+    RoundRequested {
+        tenant_id: String,
+        requested_by: String,
+    },
+    /// A round read the days from `first` to `last` and prepared
+    /// `proposals` (their ids). `notes` say what it looked at and left
+    /// alone, and why; `flags` what a person should look at and no
+    /// proposal changes (a product that sells below its break-even).
+    RoundPrepared {
+        tenant_id: String,
+        first: String,
+        last: String,
+        proposals: Vec<String>,
+        notes: Vec<String>,
+        flags: Vec<String>,
+        prepared_by: String,
+    },
+    /// A round could not be prepared; `reason` says why, for the member.
+    RoundFailed {
+        tenant_id: String,
+        reason: String,
+        failed_by: String,
+    },
 }

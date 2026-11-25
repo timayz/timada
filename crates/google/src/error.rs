@@ -56,6 +56,14 @@ pub enum GoogleError {
     NoCampaign,
     #[error("the campaign runs already")]
     CampaignLive,
+    #[error(
+        "a threshold is a whole number within its range, a step or a return an amount like 0.02"
+    )]
+    InvalidTuning,
+    #[error("the campaign does not run yet, or has not had its first three weeks")]
+    CampaignSettling,
+    #[error("no such ad group, device or search in the campaign")]
+    InvalidTuned,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -113,6 +121,9 @@ impl GoogleError {
             Self::CampaignExists => "google_campaign_exists",
             Self::NoCampaign => "google_no_campaign",
             Self::CampaignLive => "google_campaign_live",
+            Self::InvalidTuning => "google_invalid_tuning",
+            Self::CampaignSettling => "google_campaign_settling",
+            Self::InvalidTuned => "google_invalid_tuned",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })

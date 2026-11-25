@@ -274,6 +274,16 @@ pub enum Product {
         description: bool,
         declared_by: String,
     },
+    /// Campaigns are to leave the product out, whatever its category: its
+    /// clicks cost more than it sells for. It stays in the shop; the feeds
+    /// say so on the label for campaigns.
+    AdsExcluded {
+        excluded_by: String,
+    },
+    /// The product may be advertised again.
+    AdsAllowed {
+        allowed_by: String,
+    },
     /// The price a reduction is announced against, struck through beside
     /// the price of a product sold as is; `None` announces none. In the
     /// product's currency. The command holds it to the lowest price the

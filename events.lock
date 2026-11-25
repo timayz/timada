@@ -71,6 +71,8 @@ event timada-catalog/Feed::AdsLabelSet { label: Option<u8>, set_by: String }
 event timada-catalog/Feed::Closed { closed_by: String }
 event timada-catalog/Feed::Opened { token: String, opened_by: String }
 event timada-catalog/ListingFilters::FiltersSet { names: Vec<String>, set_by: String }
+event timada-catalog/Product::AdsAllowed { allowed_by: String }
+event timada-catalog/Product::AdsExcluded { excluded_by: String }
 event timada-catalog/Product::AiWritingDeclared { title: bool, description: bool, declared_by: String }
 event timada-catalog/Product::Archived { archived_by: String }
 event timada-catalog/Product::AttributeRemoved { name: String, removed_by: String }
@@ -171,9 +173,12 @@ event timada-discounts/Offers::OfferReactivated { offer_id: String, reactivated_
 event timada-google/AdsDay::AdsDayFetched { tenant_id: String, customer_id: String, day: String, currency: String, campaigns: Vec<AdsCampaignRow>, ad_groups: Vec<AdsAdGroupRow>, products: Vec<AdsProductRow>, terms: Vec<AdsTermRow>, fetched_by: String }
 event timada-google/AdsWatch::AdsCheckFailed { tenant_id: String, customer_id: String, reason: String, attempts: u32, calls: u32, failed_by: String }
 event timada-google/AdsWatch::AdsChecked { tenant_id: String, customer_id: String, first: String, last: String, behind: bool, calls: u32, checked_by: String }
+event timada-google/Campaign::AdjustmentSet { device: String, percent: String, proposal_id: String, set_by: String }
+event timada-google/Campaign::BidSet { ad_group_id: String, bid: String, proposal_id: String, set_by: String }
 event timada-google/Campaign::CampaignCreated { tenant_id: String, customer_id: String, kind: String, campaign_id: String, name: String, settings: Vec<CampaignSetting>, ad_groups: Vec<CampaignAdGroup>, live: bool, proposal_id: String, created_by: String }
 event timada-google/Campaign::LiveFailed { reason: String, failed_by: String }
 event timada-google/Campaign::LiveRequested { requested_by: String }
+event timada-google/Campaign::TermExcluded { term: String, proposal_id: String, excluded_by: String }
 event timada-google/Campaign::WentLive { at: u64, noticed_by: String }
 event timada-google/Connection::AdsAccountChosen { customer_id: String, login_customer_id: Option<String>, name: String, currency: String, time_zone: String, chosen_by: String }
 event timada-google/Connection::Connected { tenant_id: String, refresh_token_sealed: Vec<u8>, account: String, accesses: Vec<String>, connected_by: String }
@@ -193,6 +198,10 @@ event timada-google/MerchantWatch::MerchantChecked { tenant_id: String, account_
 event timada-google/SearchDay::DayFetched { tenant_id: String, site: String, day: String, clicks: u64, impressions: u64, position_milli: u32, queries: Vec<SearchRow>, pages: Vec<SearchRow>, page_queries: Vec<PageQueryRow>, fetched_by: String }
 event timada-google/SearchWatch::SearchCheckFailed { tenant_id: String, site: String, reason: String, attempts: u32, failed_by: String }
 event timada-google/SearchWatch::SearchChecked { tenant_id: String, site: String, behind: bool, checked_by: String }
+event timada-google/Tuning::RoundFailed { tenant_id: String, reason: String, failed_by: String }
+event timada-google/Tuning::RoundPrepared { tenant_id: String, first: String, last: String, proposals: Vec<String>, notes: Vec<String>, flags: Vec<String>, prepared_by: String }
+event timada-google/Tuning::RoundRequested { tenant_id: String, requested_by: String }
+event timada-google/Tuning::TuningSet { tenant_id: String, settings: Vec<CampaignSetting>, set_by: String }
 event timada-identity/AccountInvitation::Accepted { user_id: String, accepted_at: u64 }
 event timada-identity/AccountInvitation::MailClaimed { by: String, until: u64 }
 event timada-identity/AccountInvitation::MailDeferred { retry_at: u64, attempts: u32, reason: String }

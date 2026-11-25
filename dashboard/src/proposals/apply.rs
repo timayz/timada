@@ -30,8 +30,9 @@ use timada_catalog::{
 use timada_proposals::aggregator::{Approved, Change};
 use timada_proposals::{
     FIELD_BODY, FIELD_DESCRIPTION, FIELD_META_DESCRIPTION, FIELD_META_TITLE, FIELD_NAME,
-    FIELD_PRICE, KIND_ADS_CAMPAIGN, KIND_NEW_CATEGORY, KIND_PRODUCT, PROPOSALS_ACTOR,
-    ProposalState, ProposalStatus, priced_variant, proposed_category_id,
+    FIELD_PRICE, KIND_ADS_BID, KIND_ADS_CAMPAIGN, KIND_ADS_EXCLUSION, KIND_ADS_NEGATIVE_TERM,
+    KIND_NEW_CATEGORY, KIND_PRODUCT, PROPOSALS_ACTOR, ProposalState, ProposalStatus,
+    priced_variant, proposed_category_id,
 };
 
 use super::{Catalog, Proposals, REMOVED, Standing, Subject, permissions_of, standing, subject};
@@ -269,6 +270,22 @@ pub(crate) async fn settle(
             }
             crate::campaigns::Made::Refused(reason) => fail(&reason).await,
         };
+    }
+    if matches!(
+        proposal.kind.as_str(),
+        KIND_ADS_BID | KIND_ADS_EXCLUSION | KIND_ADS_NEGATIVE_TERM
+    ) {
+        // One field a proposal: made, or made already.
+        for change in left(&held, &proposal.changes) {
+            match crate::tuning::apply(store, google, tenant_id, &proposal, change).await? {
+                crate::campaigns::Made::Done => {}
+                crate::campaigns::Made::Refused(reason) => return fail(&reason).await,
+            }
+        }
+        proposals
+            .record_applied(PROPOSALS_ACTOR, proposal_id)
+            .await?;
+        return Ok(());
     }
     match apply(&catalog, &proposal.answered_by, &proposal, &held).await {
         Ok(()) => {
@@ -513,7 +530,8 @@ mod tests {
             now(),
         )
         .await;
-        assert!(matches!(ads, Err(Refusal::NoApplier)));
+        // A bid of a campaign the shop does not have.
+        assert!(matches!(ads, Err(Refusal::SubjectMissing)));
     }
 
     #[tokio::test]
@@ -730,7 +748,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_suspended_shop_or_a_kind_nothing_applies_fails_the_change() {
+    async fn a_suspended_shop_fails_the_change_and_a_bid_with_no_campaign_ends() {
         let store = store().await;
         let shop = shop(&store).await;
         let product_id = product(&store, &shop).await;
@@ -756,7 +774,8 @@ mod tests {
             .unwrap();
         assert_eq!(product.name, "Gants");
 
-        // An ads change, approved on the stream itself: nothing makes it.
+        // A bid of a campaign the shop does not have: the member who
+        // approves is told, and it ends.
         let proposals = Proposals::new(store.clone(), &shop);
         let bid = proposals
             .prepare(
@@ -779,14 +798,16 @@ mod tests {
             .await
             .unwrap();
         let waiting = proposal(&store, &shop, &bid).await;
-        let refused = approve(&store, &shop, ALICE, &waiting, vec![], now()).await;
-        assert!(matches!(refused, Err(Refusal::NoApplier)));
-        proposals.approve(ALICE, &bid, vec![], now()).await.unwrap();
+        let ended = approve(&store, &shop, ALICE, &waiting, vec![], now()).await;
+        assert!(matches!(ended, Err(Refusal::OutOfDate)));
+        assert_eq!(
+            proposal(&store, &shop, &bid).await.status,
+            ProposalStatus::OutOfDate
+        );
+        // Approved on the stream by a node that read it before: the saga
+        // finds it answered and asks Google nothing.
         settle(&store, &Google::new(None, &Default::default()), &shop, &bid)
             .await
             .unwrap();
-        let failed = proposal(&store, &shop, &bid).await;
-        assert_eq!(failed.status, ProposalStatus::Failed);
-        assert_eq!(failed.note, NO_APPLIER);
     }
 }

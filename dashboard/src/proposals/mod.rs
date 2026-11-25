@@ -9,8 +9,9 @@
 //! meets the checks a typed one does. A campaign to create is a kind too:
 //! its subject is the shop's campaign of a kind, its fields the settings,
 //! and applying it creates the campaign at Google Ads
-//! ([`crate::campaigns`]). The other kinds about ads are carried, and
-//! nothing applies them yet.
+//! ([`crate::campaigns`]). The kinds a tuning round prepares (a bid, a
+//! product kept out of ads, a search excluded) are read and applied by
+//! [`crate::tuning`].
 //!
 //! A value is kept as a person reads and types it: a text as it is, a
 //! price as `19.90` in the product's currency. It is normalized before it
@@ -33,9 +34,10 @@ use timada_google::{GoogleError, campaign_fields, normalize_campaign_field, plan
 use timada_proposals::aggregator::Change;
 use timada_proposals::{
     CATEGORY_FIELDS, FIELD_BODY, FIELD_DESCRIPTION, FIELD_META_DESCRIPTION, FIELD_META_TITLE,
-    FIELD_NAME, FIELD_PRICE, KIND_ADS_CAMPAIGN, KIND_CATEGORY, KIND_NEW_CATEGORY, KIND_PRODUCT,
-    NEW_CATEGORY_FIELDS, PRODUCT_FIELDS, Prepare, ProposalError, ProposalState, ProposalStatus,
-    priced_variant, proposed_category_id, variant_price_field,
+    FIELD_NAME, FIELD_PRICE, KIND_ADS_BID, KIND_ADS_CAMPAIGN, KIND_ADS_EXCLUSION,
+    KIND_ADS_NEGATIVE_TERM, KIND_CATEGORY, KIND_NEW_CATEGORY, KIND_PRODUCT, NEW_CATEGORY_FIELDS,
+    PRODUCT_FIELDS, Prepare, ProposalError, ProposalState, ProposalStatus, priced_variant,
+    proposed_category_id, variant_price_field,
 };
 use timada_tenancy::{
     PERMISSION_ADS_MANAGE, PERMISSION_ORDERS_READ, PERMISSION_PRODUCTS_MANAGE,
@@ -64,7 +66,9 @@ pub fn permissions_of(kind: &str) -> Option<(&'static str, &'static str)> {
             Some((PERMISSION_PRODUCTS_READ, PERMISSION_PRODUCTS_MANAGE))
         }
         // What the ads cost is read with the orders.
-        KIND_ADS_CAMPAIGN => Some((PERMISSION_ORDERS_READ, PERMISSION_ADS_MANAGE)),
+        KIND_ADS_CAMPAIGN | KIND_ADS_BID | KIND_ADS_EXCLUSION | KIND_ADS_NEGATIVE_TERM => {
+            Some((PERMISSION_ORDERS_READ, PERMISSION_ADS_MANAGE))
+        }
         _ => None,
     }
 }
@@ -89,8 +93,12 @@ pub fn field_label(field: &str) -> String {
         FIELD_META_TITLE => "Search engines' title".to_owned(),
         FIELD_META_DESCRIPTION => "Search engines' description".to_owned(),
         FIELD_PRICE => "Price".to_owned(),
+        _ if crate::tuning::field_label(field).is_some() => crate::tuning::field_label(field)
+            .unwrap_or_default()
+            .to_owned(),
         _ if timada_google::SHOPPING_FIELDS.contains(&field)
-            || timada_google::BRAND_FIELDS.contains(&field) =>
+            || timada_google::BRAND_FIELDS.contains(&field)
+            || timada_google::WINNERS_FIELDS.contains(&field) =>
         {
             crate::campaigns::field_label(field).to_owned()
         }
@@ -107,9 +115,9 @@ pub fn kind_label(kind: &str) -> &'static str {
         KIND_PRODUCT => "Product",
         KIND_CATEGORY => "Category",
         KIND_NEW_CATEGORY => "New category",
-        timada_proposals::KIND_ADS_BID => "Bid",
-        timada_proposals::KIND_ADS_EXCLUSION => "Ads exclusion",
-        timada_proposals::KIND_ADS_NEGATIVE_TERM => "Negative search term",
+        KIND_ADS_BID => "Bid",
+        KIND_ADS_EXCLUSION => "Ads exclusion",
+        KIND_ADS_NEGATIVE_TERM => "Negative search term",
         KIND_ADS_CAMPAIGN => "Campaign",
         _ => "Change",
     }
@@ -141,6 +149,12 @@ pub fn normalized(
 ) -> Result<String, Refusal> {
     if kind == KIND_ADS_CAMPAIGN {
         return Ok(normalize_campaign_field(subject_id, field, value)?);
+    }
+    if matches!(
+        kind,
+        KIND_ADS_BID | KIND_ADS_EXCLUSION | KIND_ADS_NEGATIVE_TERM
+    ) {
+        return Ok(crate::tuning::normalized(field, value)?);
     }
     Ok(normalized_text(kind, field, value)?)
 }
@@ -241,6 +255,9 @@ pub async fn subject(
 ) -> anyhow::Result<Option<Subject>> {
     let catalog = &Catalog::new(store.clone(), tenant_id);
     match kind {
+        KIND_ADS_BID | KIND_ADS_EXCLUSION | KIND_ADS_NEGATIVE_TERM => {
+            crate::tuning::subject(store, tenant_id, kind, subject_id).await
+        }
         KIND_ADS_CAMPAIGN => {
             let fields = campaign_fields(subject_id);
             if fields.is_empty() {

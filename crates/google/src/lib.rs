@@ -26,9 +26,11 @@ pub mod aggregator;
 mod command;
 mod error;
 mod query;
+mod tuning;
 mod value_object;
 
 pub use command::*;
 pub use error::*;
 pub use query::*;
+pub use tuning::*;
 pub use value_object::*;
