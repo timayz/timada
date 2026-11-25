@@ -503,6 +503,45 @@ pub struct FeedMargin {
     pub vat_bps: BTreeMap<String, u32>,
 }
 
+/// What each thing a feed product sells leaves: itself when it is sold as
+/// is, each of its variants otherwise. `None` for one whose cost is not
+/// known. `vat_bps` gives the VAT in a price, by kind of goods.
+pub fn item_margins(
+    product: &FeedProduct,
+    vat_bps: &BTreeMap<String, u32>,
+    costs: Option<&ShopCosts>,
+) -> Vec<Option<Margin>> {
+    // A row written before it said its kind of goods is standard ones.
+    let category = if product.tax_category.is_empty() {
+        crate::TAX_CATEGORY_STANDARD
+    } else {
+        &product.tax_category
+    };
+    let vat_bps = vat_bps.get(category).copied().unwrap_or(0);
+    let of = |variant_id: Option<&str>, amount_cents: u64| {
+        Margin::of(
+            amount_cents,
+            &product.currency,
+            vat_bps,
+            product.costs.unit_costs(variant_id),
+            costs,
+        )
+    };
+    if product.variants.is_empty() {
+        product
+            .amount_cents
+            .map(|amount| of(None, amount))
+            .into_iter()
+            .collect()
+    } else {
+        product
+            .variants
+            .iter()
+            .map(|variant| of(Some(&variant.id), variant.amount_cents))
+            .collect()
+    }
+}
+
 impl FeedMargin {
     /// The tier of one of `product` (`variant_id` `None`) or of one of its
     /// variants, sold at `amount_cents`; `None` when its cost is not

@@ -25,6 +25,7 @@ mod invitation_mails;
 mod invoicing;
 mod key_vault;
 mod keywords;
+mod launch_path;
 mod mail;
 mod mail_fault;
 mod mailroom;

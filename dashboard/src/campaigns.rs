@@ -340,6 +340,19 @@ pub async fn ready(
             let (mut groups, left_out) = ad_groups_of(&categories);
             ready.over = groups.len().saturating_sub(MAX_CAMPAIGN_AD_GROUPS);
             groups.truncate(MAX_CAMPAIGN_AD_GROUPS);
+            // What the launch path asks before ads start.
+            let path = crate::launch_path::path(store, db, tenant).await?;
+            let waits = crate::launch_path::blocking(&path);
+            checks.push(Check::of(
+                "launch",
+                "The launch path's steps before ads hold",
+                (!waits.is_empty()).then(|| {
+                    format!(
+                        "On the launch path, these do not hold yet: {}.",
+                        waits.join("; ")
+                    )
+                }),
+            ));
             checks.push(Check::of(
                 "categories",
                 "A category holds products to advertise",

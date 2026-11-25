@@ -16,6 +16,10 @@ pub enum LaunchError {
     InvalidDecision,
     #[error("a note is at most 1,000 characters")]
     NoteTooLong,
+    #[error("no such step to confirm")]
+    UnknownStep,
+    #[error("a number of products is between 1 and 100,000")]
+    InvalidPathTarget,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -54,6 +58,8 @@ impl LaunchError {
             Self::NotReached => "launch_not_reached",
             Self::InvalidDecision => "launch_invalid_decision",
             Self::NoteTooLong => "launch_note_too_long",
+            Self::UnknownStep => "launch_unknown_step",
+            Self::InvalidPathTarget => "launch_invalid_path_target",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })
