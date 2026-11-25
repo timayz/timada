@@ -172,7 +172,7 @@ export class FakeDataforseo {
           }));
           send(
             200,
-            envelope(20000, "Ok.", 0.002, [
+            envelope(20000, "Ok.", 0.004, [
               {
                 keyword,
                 type: "organic",

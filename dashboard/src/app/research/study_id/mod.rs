@@ -743,7 +743,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         search_cost(mains.len())
     );
     let competition_description = format!(
-        "The sites in the first page of a search for each main keyword (the {MAX_CHECKED_KEYWORDS} most searched at the most), in the study's country and language. A niche whose first results are marketplaces and department stores can be taken by a specialist shop; one a specialist already holds is hard. Say of each site found for {SEVERAL_KEYWORDS} keywords or more which it is: a mark is kept for your other studies."
+        "The sites in the first two pages of a search for each main keyword (the {MAX_CHECKED_KEYWORDS} most searched at the most), in the study's country and language. A niche whose first results are marketplaces and department stores can be taken by a specialist shop; one a specialist already holds is hard. Say of each site found for {SEVERAL_KEYWORDS} keywords or more which it is: a mark is kept for your other studies."
     );
     let config = &context::<Config>(cx).research;
     let spending = Spending::new(config);

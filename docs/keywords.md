@@ -53,11 +53,29 @@ Prices read on 2026-11-18. The code does not reckon what a call cost: it reads t
 which is what the caps count. The prices are only used for the most a call not made
 yet may cost (0.132 USD), the room a cap keeps for it; see *What a day may cost*.
 
-A second call asks who holds the first results of a search: the first page Google
-gives for one keyword from one country in one language, on a desktop (DataForSEO SERP,
-`serp/google/organic/live/regular`). Only the organic results are kept, ten at the
-most, each with its place, its site, its address and its title; ads and Google's own
-boxes are passed over.
+A second call asks who holds the first results of a search: the first two pages
+Google gives for one keyword from one country in one language, on a desktop
+(DataForSEO SERP, `serp/google/organic/live/regular`, twenty results asked for). Only
+the organic results are kept, twenty at the most, each with its place, its site, its
+address and its title; ads and Google's own boxes are passed over.
+
+Two pages because one says too little. Google's first page is mostly its own boxes (an
+AI overview, shops nearby, products, images): for `arbre à chat` on 2026-11-25 it held
+three to nine organic results, not the same from one search to the next. Twenty asked
+for gave 13 organic results and thirty gave 22.
+
+| | |
+|---|---|
+| a search of two pages, answered at once (the one made) | 0.004 USD |
+| the same in DataForSEO's queue, answered in about five minutes | 0.0012 USD |
+| in the queue's priority lane, about a minute | 0.0024 USD |
+
+Prices read on 2026-11-23 for a page of ten results, and a search is charged by the
+page: 0.004 USD for twenty results and 0.006 for thirty, both seen charged on
+2026-11-25. The queue costs a third but
+answers later through a second call; the search is made live so the pass that asks
+records the answer, as a seed's fetch does. Moving to the queue is a change to
+`DataforseoClient::first_results` and to the saga that waits for it.
 
 Since November 2026 DataForSEO answers every organic result under Google's own
 address: `domain` is `google.com` and `url` an opaque `google.com/goto` link, on the
@@ -127,7 +145,7 @@ fetch. Two users who ask for a new seed in the same second may both pay for it: 
 second does not know of the first yet.
 
 **The caps.** A day runs from midnight to midnight UTC. Before a call is made, room is
-held for it at the most it may cost (0.132 USD for a seed's keywords, 0.002 for a
+held for it at the most it may cost (0.132 USD for a seed's keywords, 0.004 for a
 search); a call that no longer fits under the
 user's cap or the platform's is not made, and the seed fails saying which cap was
 reached and when it frees. Once the source answered, what it says the call cost takes
@@ -231,13 +249,13 @@ A niche whose first results are marketplaces and department stores can be taken 
 specialist shop; one a specialist already holds is hard. The study's page answers it
 under *Who holds the first results*.
 
-**The searches.** *Search the first results* asks for the first page of each main
+**The searches.** *Search the first results* asks for the first two pages of each main
 keyword, the 50 most searched at the most, in the study's country and language. The
 button says how many searches that is and the most they cost before it is pressed.
 Each is one paid call made in the background, a few seconds each, one after the other,
 by a saga of its own (`first results`) so that a study's searches do not keep another
 study's keywords waiting. They go through the day's caps as a fetch does, held at
-0.002 USD each; a search past a cap or one the source failed says why on the page and
+0.004 USD each; a search past a cap or one the source failed says why on the page and
 is asked again with the same button, which only asks for the keywords still without
 their results. Once every main keyword has its own, *Search them all again* pays for
 all of them anew. A keyword that stops being a main one keeps its results: brought
@@ -362,7 +380,8 @@ Read on 2026-11-25 with the platform's login, for `arbre à chat` in France in F
   searched 18,100 times a month, has a difficulty of 5, and most of the fifty keywords
   searched the most have 0;
 - that one search says who holds a keyword: three searches of `arbre à chat` within
-  two minutes gave three different first pages, of five to nine organic results.
+  two minutes gave three different first pages, of three to nine organic results. Two pages
+  are read since, which says more; whether it says enough is not measured.
 
 Both need a live call, which the `keywords` command makes:
 

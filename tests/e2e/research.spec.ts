@@ -704,7 +704,7 @@ test("the first results say whether a specialist holds the niche", async ({ page
     await testStands(page, "main_keywords", "failed");
     await expect(competition).toHaveAttribute("data-competition", "not_checked");
     await expect(competition.locator("[data-site]")).toHaveCount(0);
-    await expect(competition.locator("[data-search-cost]")).toContainText("One paid search each: $0.0040 at the most.");
+    await expect(competition.locator("[data-search-cost]")).toContainText("One paid search each: $0.0080 at the most.");
     expect(source.searches).toHaveLength(0);
     await competition.getByRole("button", { name: "Search the first results of 2 main keywords" }).click();
     await expect(page.getByRole("status")).toContainText("The first results are being searched.");
@@ -726,7 +726,7 @@ test("the first results say whether a specialist holds the niche", async ({ page
     await expect(own.locator("[data-site-places]")).toHaveText("3");
     await expect(page.locator('[data-site="ads.example"]')).toHaveCount(0);
     // Both searches were paid, beside the fetch.
-    await spentToday(page, 12480 + 4000);
+    await spentToday(page, 12480 + 8000);
 
     // Until the sites found for both keywords are marked, nothing is said.
     const test = page.locator('[data-test="no_specialist"]');
@@ -750,7 +750,7 @@ test("the first results say whether a specialist holds the niche", async ({ page
 
     // Every keyword searched: asking again is offered, with its cost.
     await expect(competition.getByRole("button", { name: "Search them all again" })).toBeVisible();
-    await expect(competition.locator("[data-search-cost]")).toContainText("costs $0.0040 at the most");
+    await expect(competition.locator("[data-search-cost]")).toContainText("costs $0.0080 at the most");
 
     // The marks are the user's: the next study knows both sites.
     const other = `gamelle ${tag}`;

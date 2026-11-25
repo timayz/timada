@@ -42,8 +42,10 @@ pub const MAX_STUDY_EVENTS: u16 = 60_000;
 /// results looked at: each is a paid search.
 pub const MAX_CHECKED_KEYWORDS: usize = 50;
 
-/// How many of a search's first organic results are kept: its first page.
-pub const MAX_RESULTS: usize = 10;
+/// How many of a search's first organic results are kept: its first two
+/// pages. The first page alone holds three to nine of them among the search
+/// engine's own boxes, and not the same from one search to the next (#791).
+pub const MAX_RESULTS: usize = 20;
 
 /// The longest site name, in characters.
 pub const MAX_DOMAIN_LEN: usize = 253;
