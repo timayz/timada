@@ -13,6 +13,7 @@ mod ads;
 mod campaign;
 mod merchant;
 mod search;
+mod tuning;
 
 use evento::{Executor, Projection, ProjectionAggregate, WriteError, metadata::Event};
 
@@ -31,6 +32,7 @@ pub use ads::*;
 pub use campaign::*;
 pub use merchant::*;
 pub use search::*;
+pub use tuning::*;
 
 /// The command gateway over the platform's streams. Cheap to clone when `E`
 /// is (the dashboard's executor is an `Arc` wrapper).

@@ -561,6 +561,58 @@ async fn a_campaign_on_the_shops_name_is_a_search_campaign_with_one_ad() {
     );
 }
 
+/// What a tuning round proposes for the products that sell well.
+#[tokio::test]
+async fn a_winners_campaign_outranks_the_first_and_shows_the_products_named() {
+    let rig = Rig::new().await;
+    let draft = Draft {
+        kind: KIND_ADS_CAMPAIGN.to_owned(),
+        subject_id: timada_google::CAMPAIGN_WINNERS.to_owned(),
+        values: [
+            (CAMPAIGN_NAME, "Winners · Acme"),
+            (CAMPAIGN_DAILY_BUDGET, "10"),
+            (CAMPAIGN_BID, "0.34"),
+            (CAMPAIGN_COUNTRIES, "FR"),
+            (CAMPAIGN_START, START_PAUSED),
+            (
+                timada_google::CAMPAIGN_PRODUCTS,
+                "01TREE Arbre à chat XXL\n01TREEBIG Arbre à chat XXL",
+            ),
+        ]
+        .into_iter()
+        .map(|(field, value)| (field.to_owned(), value.to_owned()))
+        .collect(),
+        reason: "Two products that sell well.".to_owned(),
+        source: "tuning round".to_owned(),
+        valid_until: None,
+    };
+    let id = rig.approved(draft, &[]).await;
+    rig.settle(&id).await;
+    assert_eq!(rig.proposal(&id).await.status, ProposalStatus::Applied);
+    let campaign = rig.campaign(timada_google::CAMPAIGN_WINNERS).await.unwrap();
+    assert_eq!(campaign.ad_groups.len(), 1);
+    let batch = &rig.mutations()[0];
+    let created = creates(batch, "campaignOperation")[0];
+    assert_eq!(created["advertisingChannelType"], "SHOPPING");
+    assert_eq!(created["shoppingSetting"]["campaignPriority"], 2);
+    assert_eq!(created["shoppingSetting"]["merchantId"], "5550001");
+    // One ad group: each item named, and no other.
+    assert_eq!(creates(batch, "adGroupOperation").len(), 1);
+    let listed = creates(batch, "adGroupCriterionOperation");
+    assert_eq!(listed.len(), 4);
+    assert_eq!(listed[0]["listingGroup"]["type"], "SUBDIVISION");
+    assert_eq!(
+        listed[1]["listingGroup"]["caseValue"]["productItemId"],
+        json!({"value": "01tree"})
+    );
+    assert_eq!(listed[1]["cpcBidMicros"], "340000");
+    assert_eq!(listed[3]["negative"], true);
+    assert_eq!(
+        listed[3]["listingGroup"]["caseValue"]["productItemId"],
+        json!({})
+    );
+}
+
 #[tokio::test]
 async fn a_paused_campaign_is_set_running_when_a_member_asks() {
     let rig = Rig::new().await;

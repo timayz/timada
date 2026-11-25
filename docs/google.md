@@ -404,8 +404,8 @@ Either way `WentLive` is written once, with the moment. The checkpoints
 (#697) count their days from it, and the page says to leave the campaign
 alone for its first 21 days.
 
-A campaign is created, never changed, from timada: its bids and its
-structure are tuned by the rounds of #692, or by hand at Google Ads. A
+A campaign's structure is created, never changed, from timada: its bids
+are tuned by [rounds](#tuning-rounds-692), the rest by hand at Google Ads. A
 shop that moves to another Google Ads account may create its campaigns
 again there.
 
@@ -423,6 +423,68 @@ again there.
   both write the category's id in small letters, so nothing depends on it.
 - Device adjustments on a Standard Shopping campaign with manual bids, sent
   when the campaign is created.
+
+## Tuning rounds (#692)
+
+After its first three weeks a manual campaign is tuned by the same few
+rules every round. `/t/{slug}/ads/tuning` (from the campaigns page) asks
+for a round, says what the last one did and holds the thresholds. The rules
+are pure code in `crates/google/src/tuning.rs` (`tune`); the saga, and what
+applies an approved change, in `dashboard/src/tuning.rs`.
+
+A round reads the first campaign's last days from the read model, and what
+the shop sold over the same days from its orders. It asks Google nothing: a
+bid is the one timada last set. Each change it finds becomes one
+[proposal](proposals.md), with the numbers it was decided on as its reason.
+Nothing is sent to Google Ads until a member approves.
+
+| What | Rule (defaults) | Proposal |
+|---|---|---|
+| A category's bid | With 100 clicks: one step (0.02) up when the return is at or above its target, two when half again above; one step down under half the target, two under a quarter. Barely serving (under 200 impressions): one step up. | `ads_bid` about `group:{ad group}`, field `max_cpc` |
+| A draining product | 150 clicks, no conversion at Google Ads and none sold by the shop's orders | `ads_exclusion` about the product, field `ads`: `shown` to `kept out` |
+| A product below break-even | It sells, under its break-even | none: flagged on the page, for its price |
+| A winner | 50 clicks and a return half again above its break-even | `ads_campaign` about `winners`: a Shopping campaign of its own, priority 2, two steps above the starting bid. Proposed once; later winners are flagged |
+| A search | 3 clicks, no conversion, no word in common with the ad group's category or the products it showed | `ads_negative_term` about the search, field `search`: `shown` to `excluded` |
+| A device | With 100 clicks: 5 points more or less when its return is a quarter off the campaign's, 10 when half off | `ads_bid` about `device:{device}`, field `adjustment` |
+
+The target of an ad group is its category's break-even when the shop's
+sales say it (#689), and the shop's target return (3.00) otherwise. With
+too few clicks nothing is proposed, and the round says so under "Left
+alone". A bid or an adjustment just changed is left to show for 14 days
+before another round looks at it. A subject that already has a proposal
+waiting gets no second one.
+
+Every threshold is the shop's to set on the page (`Tuning::TuningSet`).
+"A round every so many days" makes rounds come by themselves: when the
+daily read of Google Ads ends and one is due, the saga asks for it, under
+the name `timada-tuning`, and the members who may approve are mailed that
+proposals wait. A round is refused while the campaign does not run or is in
+its first 21 days.
+
+### What an approval does
+
+- **A bid** is read back from Google Ads first. One that is neither what
+  the proposal was prepared against nor what it would set was changed by
+  hand since: it is left alone and the proposal says what Google Ads holds.
+  Otherwise the ad group and its product group are set together, and the
+  campaign records it (`BidSet`).
+- **A device's adjustment** goes the same way, on the campaign's criterion
+  for the device (`AdjustmentSet`).
+- **A search** becomes a negative keyword of the campaign, typed exactly
+  so (`TermExcluded`).
+- **A product** is marked "kept out of ads" in the catalog
+  (`Product::AdsExcluded`, also a checkbox on its Shopping feed tab). The
+  feed then says `no_ads` on its label for campaigns, so no ad group shows
+  it once Merchant Center read the feed again. It is never removed from
+  the shop, and nothing is sent to Google Ads.
+
+Not built here, as the issue leaves them for later rounds: the move to a
+target return per margin tier, then to profit as the conversion value.
+
+Not confirmed against a real account: that a campaign's device criteria
+are there to update before an adjustment was ever set (a missing one is
+created), and that excluding the same search twice is refused rather than
+doubled (timada records an exclusion and does not send it again).
 
 ## Profit after ads (#689)
 

@@ -6,8 +6,8 @@
 use evento::{Executor, ProjectionAggregate};
 
 use crate::aggregator::{
-    AiWritingDeclared, Classified, FeedLabelsSet, FeedListingSet, Identified, OptionKindSet,
-    VariantIdentified,
+    AdsAllowed, AdsExcluded, AiWritingDeclared, Classified, FeedLabelsSet, FeedListingSet,
+    Identified, OptionKindSet, VariantIdentified,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
@@ -284,6 +284,35 @@ impl<E: Executor> super::Command<E> {
             .tenant(&self.tenant)
             .commit(&self.executor)
             .await?;
+        Ok(())
+    }
+
+    /// Lets campaigns advertise the product, or keeps it out of them
+    /// whatever its category; asking for what it already is is a no-op.
+    /// It stays in the shop either way.
+    pub async fn set_product_in_ads(
+        &self,
+        actor: &str,
+        product_id: &str,
+        in_ads: bool,
+        routing_key: Option<String>,
+    ) -> Result<(), CatalogError> {
+        let product = self.require_editable(product_id).await?;
+        if product.out_of_ads != in_ads {
+            return Ok(());
+        }
+        let mut write = product.write()?;
+        let write = write.routing_key_opt(routing_key);
+        if in_ads {
+            write.event(&AdsAllowed {
+                allowed_by: actor.to_owned(),
+            });
+        } else {
+            write.event(&AdsExcluded {
+                excluded_by: actor.to_owned(),
+            });
+        }
+        write.tenant(&self.tenant).commit(&self.executor).await?;
         Ok(())
     }
 

@@ -49,6 +49,9 @@ pub struct FeedProduct {
     pub labels: Vec<String>,
     pub ai_title: bool,
     pub ai_description: bool,
+    /// Campaigns leave it out, whatever its category.
+    #[serde(default)]
+    pub out_of_ads: bool,
     /// Its pictures by id, in the order the merchant put them.
     pub images: Vec<String>,
     pub currency: String,
@@ -160,6 +163,7 @@ impl FeedProduct {
             labels: product.feed_labels.to_vec(),
             ai_title: product.ai_title,
             ai_description: product.ai_description,
+            out_of_ads: product.out_of_ads,
             images: product.images.iter().map(|i| i.id.clone()).collect(),
             currency: product.currency()?.to_owned(),
             amount_cents: product.price.as_ref().map(|price| price.amount_cents),
@@ -454,8 +458,8 @@ pub struct FeedShop {
 }
 
 /// What a feed's writer tells campaigns on one label, in place of the
-/// merchant's own: [`OUT_OF_ADS_LABEL`] on a product whose main category is
-/// one of `categories`, and on every other product its main category
+/// merchant's own: [`OUT_OF_ADS_LABEL`] on a product kept out of ads or
+/// whose main category is one of `categories`, and on every other product its main category
 /// ([`ads_category_label`]), which a campaign makes its ad groups from.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FeedAds {
@@ -474,13 +478,14 @@ pub fn ads_category_label(category_id: &str) -> String {
 }
 
 impl FeedAds {
-    /// Whether campaigns leave `product` out: its main category is kept
-    /// out of ads.
+    /// Whether campaigns leave `product` out: it is kept out of ads
+    /// itself, or its main category is.
     fn leaves_out(&self, product: &FeedProduct) -> bool {
-        product
-            .categories
-            .first()
-            .is_some_and(|main| self.categories.contains(main))
+        product.out_of_ads
+            || product
+                .categories
+                .first()
+                .is_some_and(|main| self.categories.contains(main))
     }
 }
 
@@ -888,6 +893,7 @@ mod tests {
             labels: vec!["high margin".into(), String::new(), "eu".into()],
             ai_title: false,
             ai_description: false,
+            out_of_ads: false,
             images: vec!["a".into(), "b".into()],
             currency: "EUR".into(),
             amount_cents: Some(1250),
@@ -1242,6 +1248,15 @@ mod tests {
             "{out}"
         );
         assert!(!out.contains("high margin"), "{out}");
+
+        // A product kept out itself says so whatever its category.
+        product.out_of_ads = true;
+        let out = items(&product, &shop);
+        assert!(
+            out.contains("<g:custom_label_0>no_ads</g:custom_label_0>"),
+            "{out}"
+        );
+        product.out_of_ads = false;
 
         // A product filed nowhere says nothing there.
         product.categories = vec![];

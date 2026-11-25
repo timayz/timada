@@ -96,8 +96,12 @@ pub const CAMPAIGN_SHOPPING: &str = "shopping";
 /// The small Search campaign on the shop's own name.
 pub const CAMPAIGN_BRAND: &str = "brand";
 
+/// The products that sell well, in a Shopping campaign of their own that
+/// outranks the first and bids higher. A tuning round proposes it.
+pub const CAMPAIGN_WINNERS: &str = "winners";
+
 /// Every kind of campaign timada creates.
-pub const CAMPAIGN_KINDS: [&str; 2] = [CAMPAIGN_SHOPPING, CAMPAIGN_BRAND];
+pub const CAMPAIGN_KINDS: [&str; 3] = [CAMPAIGN_SHOPPING, CAMPAIGN_BRAND, CAMPAIGN_WINNERS];
 
 /// The stream of a shop's campaign of one kind.
 pub fn campaign_stream_id(tenant_id: &str, kind: &str) -> String {
@@ -130,6 +134,10 @@ pub const CAMPAIGN_HEADLINES: &str = "headlines";
 /// The descriptions of its ad, a line each.
 pub const CAMPAIGN_DESCRIPTIONS: &str = "descriptions";
 
+/// The products of a winners campaign, a line each: the feed's item id, a
+/// space, the product's name.
+pub const CAMPAIGN_PRODUCTS: &str = "products";
+
 pub const START_PAUSED: &str = "paused";
 pub const START_LIVE: &str = "live";
 
@@ -157,11 +165,22 @@ pub const BRAND_FIELDS: [&str; 8] = [
     CAMPAIGN_DESCRIPTIONS,
 ];
 
+/// The settings of a winners campaign.
+pub const WINNERS_FIELDS: [&str; 6] = [
+    CAMPAIGN_NAME,
+    CAMPAIGN_DAILY_BUDGET,
+    CAMPAIGN_BID,
+    CAMPAIGN_COUNTRIES,
+    CAMPAIGN_START,
+    CAMPAIGN_PRODUCTS,
+];
+
 /// The settings a campaign of `kind` takes; none for no kind.
 pub fn campaign_fields(kind: &str) -> &'static [&'static str] {
     match kind {
         CAMPAIGN_SHOPPING => &SHOPPING_FIELDS,
         CAMPAIGN_BRAND => &BRAND_FIELDS,
+        CAMPAIGN_WINNERS => &WINNERS_FIELDS,
         _ => &[],
     }
 }
@@ -456,7 +475,7 @@ pub fn normalize_campaign_field(
             START_LIVE => Ok(START_LIVE.to_owned()),
             _ => Err(GoogleError::InvalidStart),
         },
-        CAMPAIGN_AD_GROUPS => Ok(ad_groups_of(value)?
+        CAMPAIGN_AD_GROUPS | CAMPAIGN_PRODUCTS => Ok(ad_groups_of(value)?
             .iter()
             .map(|group| ad_group_line(&group.category_id, &group.name))
             .collect::<Vec<_>>()
@@ -500,6 +519,9 @@ pub struct CampaignPlan {
     pub live: bool,
     /// Of a Shopping campaign.
     pub ad_groups: Vec<AdGroupPlan>,
+    /// Of a winners campaign: the feed's item id (in `category_id`) and
+    /// the product's name.
+    pub products: Vec<AdGroupPlan>,
     /// Of a campaign on the shop's name.
     pub keywords: Vec<String>,
     pub headlines: Vec<String>,
@@ -543,6 +565,7 @@ pub fn plan_of<'a>(
             CAMPAIGN_TABLET => plan.tablet_percent = percent(),
             CAMPAIGN_START => plan.live = value == START_LIVE,
             CAMPAIGN_AD_GROUPS => plan.ad_groups = ad_groups_of(&value)?,
+            CAMPAIGN_PRODUCTS => plan.products = ad_groups_of(&value)?,
             CAMPAIGN_KEYWORDS => plan.keywords = listed(),
             CAMPAIGN_HEADLINES => plan.headlines = listed(),
             CAMPAIGN_DESCRIPTIONS => plan.descriptions = listed(),
@@ -554,6 +577,184 @@ pub fn plan_of<'a>(
         return Err(GoogleError::BidOverBudget);
     }
     Ok(plan)
+}
+
+/// The stream that says how a shop's campaign is tuned.
+pub fn tuning_id(tenant_id: &str) -> String {
+    evento::hash_ids(vec!["google-tuning", tenant_id])
+}
+
+/// Who a round asked for by the schedule says asked.
+pub const TUNING_ACTOR: &str = "timada-tuning";
+
+/// The kinds of device a round adjusts the bids of.
+pub const TUNED_DEVICES: [&str; 3] = ["mobile", "tablet", "desktop"];
+
+/// How many days back a round reads.
+pub const TUNING_DAYS: &str = "days";
+/// How many clicks an ad group or a kind of device needs before its bid is
+/// moved.
+pub const TUNING_MIN_CLICKS: &str = "min_clicks";
+/// How many clicks without a sale make a product one to keep out of ads.
+pub const TUNING_DRAIN_CLICKS: &str = "drain_clicks";
+/// How many clicks a product needs before it is called a winner.
+pub const TUNING_WINNER_CLICKS: &str = "winner_clicks";
+/// How many clicks without a sale make a search one to stop showing for.
+pub const TUNING_TERM_CLICKS: &str = "term_clicks";
+/// What a bid moves by, in the account's currency (`0.02`): one step, or
+/// two.
+pub const TUNING_STEP: &str = "step";
+/// The return an ad group is held to while the shop's own sales do not
+/// say its break-even (`3.00`).
+pub const TUNING_TARGET_RETURN: &str = "target_return";
+/// How many days a bid just changed is left to show before another round
+/// looks at it.
+pub const TUNING_REST_DAYS: &str = "rest_days";
+/// Every how many days a round is prepared without being asked; `0` for
+/// only when asked.
+pub const TUNING_EVERY_DAYS: &str = "every_days";
+
+/// The thresholds of a round, in the order a page shows them, each with
+/// its default.
+pub const TUNING_FIELDS: [(&str, &str); 9] = [
+    (TUNING_DAYS, "21"),
+    (TUNING_MIN_CLICKS, "100"),
+    (TUNING_DRAIN_CLICKS, "150"),
+    (TUNING_WINNER_CLICKS, "50"),
+    (TUNING_TERM_CLICKS, "3"),
+    (TUNING_STEP, "0.02"),
+    (TUNING_TARGET_RETURN, "3.00"),
+    (TUNING_REST_DAYS, "14"),
+    (TUNING_EVERY_DAYS, "0"),
+];
+
+/// `value` as a round keeps the threshold `field`.
+pub fn normalize_tuning_field(field: &str, value: &str) -> Result<String, GoogleError> {
+    let value = value.trim();
+    let whole = |range: std::ops::RangeInclusive<u64>| {
+        value
+            .parse::<u64>()
+            .ok()
+            .filter(|n| range.contains(n))
+            .map(|n| n.to_string())
+            .ok_or(GoogleError::InvalidTuning)
+    };
+    match field {
+        TUNING_DAYS => whole(7..=90),
+        TUNING_MIN_CLICKS | TUNING_DRAIN_CLICKS | TUNING_WINNER_CLICKS => whole(1..=100_000),
+        TUNING_TERM_CLICKS => whole(1..=1_000),
+        TUNING_REST_DAYS => whole(0..=90),
+        // Not asked for, or at least a week apart.
+        TUNING_EVERY_DAYS => whole(0..=90).and_then(|days| match days.as_str() {
+            "1" | "2" | "3" | "4" | "5" | "6" => Err(GoogleError::InvalidTuning),
+            _ => Ok(days),
+        }),
+        TUNING_STEP => parse_cents(value)
+            .filter(|cents| (1..=100).contains(cents))
+            .map(timada_core::money::format_amount)
+            .ok_or(GoogleError::InvalidTuning),
+        TUNING_TARGET_RETURN => parse_cents(value)
+            .filter(|hundredths| (10..=10_000).contains(hundredths))
+            .map(timada_core::money::format_amount)
+            .ok_or(GoogleError::InvalidTuning),
+        _ => Err(GoogleError::InvalidTuning),
+    }
+}
+
+/// The thresholds a round decides on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TuningSettings {
+    pub days: u32,
+    pub min_clicks: u64,
+    pub drain_clicks: u64,
+    pub winner_clicks: u64,
+    pub term_clicks: u64,
+    /// In hundredths of the account's currency.
+    pub step_cents: u64,
+    /// In hundredths: 300 is 3.00 sold for 1 spent.
+    pub target_return: i64,
+    pub rest_days: u64,
+    /// 0 for only when asked.
+    pub every_days: u64,
+}
+
+impl Default for TuningSettings {
+    fn default() -> Self {
+        tuning_settings_of(std::iter::empty()).expect("the defaults are thresholds")
+    }
+}
+
+impl TuningSettings {
+    /// What `field` is set at, as a person reads it.
+    pub fn value(&self, field: &str) -> String {
+        match field {
+            TUNING_DAYS => self.days.to_string(),
+            TUNING_MIN_CLICKS => self.min_clicks.to_string(),
+            TUNING_DRAIN_CLICKS => self.drain_clicks.to_string(),
+            TUNING_WINNER_CLICKS => self.winner_clicks.to_string(),
+            TUNING_TERM_CLICKS => self.term_clicks.to_string(),
+            TUNING_STEP => timada_core::money::format_amount(self.step_cents),
+            TUNING_TARGET_RETURN => {
+                timada_core::money::format_amount(self.target_return.max(0) as u64)
+            }
+            TUNING_REST_DAYS => self.rest_days.to_string(),
+            TUNING_EVERY_DAYS => self.every_days.to_string(),
+            _ => String::new(),
+        }
+    }
+}
+
+/// The thresholds that `settings` (field, value) say, the default for each
+/// one left out.
+pub fn tuning_settings_of<'a>(
+    settings: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Result<TuningSettings, GoogleError> {
+    let given: Vec<(&str, &str)> = settings.into_iter().collect();
+    let kept = |field: &str| -> Result<String, GoogleError> {
+        let default = TUNING_FIELDS
+            .iter()
+            .find(|(named, _)| *named == field)
+            .map_or("", |(_, default)| *default);
+        let value = given
+            .iter()
+            .find(|(named, _)| *named == field)
+            .map_or(default, |(_, value)| *value);
+        normalize_tuning_field(field, value)
+    };
+    let whole = |field: &str| -> Result<u64, GoogleError> {
+        kept(field)?.parse().map_err(|_| GoogleError::InvalidTuning)
+    };
+    let cents = |field: &str| -> Result<u64, GoogleError> {
+        parse_cents(&kept(field)?).ok_or(GoogleError::InvalidTuning)
+    };
+    Ok(TuningSettings {
+        days: whole(TUNING_DAYS)? as u32,
+        min_clicks: whole(TUNING_MIN_CLICKS)?,
+        drain_clicks: whole(TUNING_DRAIN_CLICKS)?,
+        winner_clicks: whole(TUNING_WINNER_CLICKS)?,
+        term_clicks: whole(TUNING_TERM_CLICKS)?,
+        step_cents: cents(TUNING_STEP)?,
+        target_return: cents(TUNING_TARGET_RETURN)? as i64,
+        rest_days: whole(TUNING_REST_DAYS)?,
+        every_days: whole(TUNING_EVERY_DAYS)?,
+    })
+}
+
+/// A bid as a campaign keeps it (`0.32`), in hundredths.
+pub fn bid_cents(bid: &str) -> Option<u64> {
+    parse_cents(bid).filter(|cents| *cents > 0)
+}
+
+/// A device's adjustment as a campaign keeps it (`-55`, or empty for
+/// none), in hundredths.
+pub fn adjustment_percent(value: &str) -> Option<i32> {
+    match value.trim() {
+        "" => Some(0),
+        typed => typed
+            .parse()
+            .ok()
+            .filter(|percent| (MIN_ADJUSTMENT..=MAX_ADJUSTMENT).contains(percent)),
+    }
 }
 
 /// The stream of what Merchant Center says of a shop's products.

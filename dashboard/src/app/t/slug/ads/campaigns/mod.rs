@@ -13,8 +13,8 @@ pub mod prepare;
 use timada_google::{
     CAMPAIGN_AD_GROUPS, CAMPAIGN_BID, CAMPAIGN_COUNTRIES, CAMPAIGN_DAILY_BUDGET,
     CAMPAIGN_DESCRIPTIONS, CAMPAIGN_HEADLINES, CAMPAIGN_KEYWORDS, CAMPAIGN_KINDS, CAMPAIGN_NAME,
-    CAMPAIGN_PHONE, CAMPAIGN_SHOPPING, CAMPAIGN_START, CAMPAIGN_TABLET, MAX_CAMPAIGN_AD_GROUPS,
-    SETTLE_DAYS, START_LIVE, START_PAUSED,
+    CAMPAIGN_PHONE, CAMPAIGN_SHOPPING, CAMPAIGN_START, CAMPAIGN_TABLET, CAMPAIGN_WINNERS,
+    MAX_CAMPAIGN_AD_GROUPS, SETTLE_DAYS, START_LIVE, START_PAUSED,
 };
 use timada_proposals::{KIND_ADS_CAMPAIGN, waiting_about};
 use timada_tenancy::{PERMISSION_ADS_MANAGE, PERMISSION_ORDERS_READ};
@@ -156,6 +156,18 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         let campaign = held(&store, access.tenant_id(), kind)
             .await
             .map_err(failed)?;
+        // A tuning round proposes the winners' campaign: it has no form
+        // here, and nothing to show before one did.
+        let proposed = kind == CAMPAIGN_WINNERS;
+        let waiting = match campaign {
+            Some(_) => None,
+            None => waiting_about(db, access.tenant_id(), KIND_ADS_CAMPAIGN, kind)
+                .await
+                .map_err(failed)?,
+        };
+        if proposed && campaign.is_none() && waiting.is_none() {
+            continue;
+        }
         let created = campaign.map(|campaign| Created {
             settling_until: campaign
                 .settles_at()
@@ -177,21 +189,21 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 CAMPAIGN_SHOPPING => {
                     "Standard Shopping with manual bids: one ad group a category, told by the feed's label, the categories kept out of ads left out."
                 }
+                CAMPAIGN_WINNERS => {
+                    "A Shopping campaign for the products that sell well: it outranks the first one for them and bids higher. A tuning round proposes it."
+                }
                 _ => {
                     "A small Search campaign on the shop's own name, so that whoever looks for the shop finds it first."
                 }
             },
             created,
-            waiting: None,
+            waiting,
             checks: Vec::new(),
             ready: false,
             settings: Vec::new(),
             notes: Vec::new(),
         };
-        if card.created.is_none() {
-            card.waiting = waiting_about(db, access.tenant_id(), KIND_ADS_CAMPAIGN, kind)
-                .await
-                .map_err(failed)?;
+        if card.created.is_none() && !proposed {
             let ready = ready(&store, db, &access.tenant, kind)
                 .await
                 .map_err(failed)?;
@@ -227,6 +239,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let slug = tenant.slug.clone();
     let title = format!("Campaigns · Google Ads · {}", tenant.name);
     let ads_page = href!(super::index, slug: slug.clone()).resolve(cx);
+    let tuning_page = href!(super::tuning::index, slug: slug.clone()).resolve(cx);
     let prepare_url = href!(prepare::prepare, slug: slug.clone()).resolve(cx);
     let live_url = href!(live::live, slug: slug.clone()).resolve(cx);
     let settle_note = format!(
@@ -240,6 +253,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             page_header(
                 title: "Campaigns",
                 subtitle: Some("What timada creates for you in Google Ads. You fill the settings, read the whole campaign as a proposal and approve it: nothing is sent to Google Ads before."),
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(&tuning_page)>"Tuning"</a>
                 <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(&ads_page)>"Back to Google Ads"</a>
             )
             notice(error: query.error.as_deref(), message: query.message.as_deref())

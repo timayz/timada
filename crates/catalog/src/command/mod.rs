@@ -64,14 +64,14 @@ use crate::aggregator::category::{
 };
 use crate::aggregator::sku::{Claimed as SkuClaimed, Released as SkuReleased};
 use crate::aggregator::{
-    AiWritingDeclared, Archived, AttributeRemoved, AttributeSet, Categorized, Claimed, Classified,
-    CompareAtSet, Created, Deleted, DeliveryDaysSet, Described, FeedLabelsSet, FeedListingSet,
-    Identified, ImageAdded, ImageAltChanged, ImageRemoved, ImagesReordered, MainCategorySet,
-    OptionDefined, OptionHidden, OptionKindSet, OptionLabelled, OptionRemoved, OptionRenamed,
-    OptionShown, OptionValueLabelled, OptionValuesChanged, Priced, Published, Released, Renamed,
-    SeoSet, TaxCategorySet, Uncategorized, Unpublished, VariantCompareAtSet, VariantDefined,
-    VariantIdentified, VariantImaged, VariantPriced, VariantRemoved, VariantSkuChanged,
-    VariantsRepriced,
+    AdsAllowed, AdsExcluded, AiWritingDeclared, Archived, AttributeRemoved, AttributeSet,
+    Categorized, Claimed, Classified, CompareAtSet, Created, Deleted, DeliveryDaysSet, Described,
+    FeedLabelsSet, FeedListingSet, Identified, ImageAdded, ImageAltChanged, ImageRemoved,
+    ImagesReordered, MainCategorySet, OptionDefined, OptionHidden, OptionKindSet, OptionLabelled,
+    OptionRemoved, OptionRenamed, OptionShown, OptionValueLabelled, OptionValuesChanged, Priced,
+    Published, Released, Renamed, SeoSet, TaxCategorySet, Uncategorized, Unpublished,
+    VariantCompareAtSet, VariantDefined, VariantIdentified, VariantImaged, VariantPriced,
+    VariantRemoved, VariantSkuChanged, VariantsRepriced,
 };
 use crate::error::CatalogError;
 use crate::value_object::{
@@ -350,6 +350,8 @@ pub struct ProductState {
     pub ai_title: bool,
     /// A machine wrote its description.
     pub ai_description: bool,
+    /// Campaigns leave it out, whatever its category.
+    pub out_of_ads: bool,
     /// The merchant took it out of the shopping feed.
     pub off_feed: bool,
     pub created_by: String,
@@ -662,6 +664,8 @@ pub fn product_projection<E: Executor>() -> Projection<E, ProductState> {
         .handler(on_option_kind_set())
         .handler(on_feed_labels_set())
         .handler(on_ai_writing_declared())
+        .handler(on_ads_excluded())
+        .handler(on_ads_allowed())
         .handler(on_feed_listing_set())
         .handler(on_compare_at_set())
         .handler(on_variant_compare_at_set())
@@ -1271,6 +1275,26 @@ async fn on_feed_labels_set(
             .map(|label| label.to_owned())
             .unwrap_or_default();
     }
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_ads_excluded(
+    event: Event<AdsExcluded>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.out_of_ads = true;
+    product.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_ads_allowed(
+    event: Event<AdsAllowed>,
+    product: &mut ProductState,
+) -> anyhow::Result<()> {
+    product.out_of_ads = false;
     product.updated_at = event.timestamp;
     Ok(())
 }

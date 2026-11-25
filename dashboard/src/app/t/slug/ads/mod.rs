@@ -12,6 +12,7 @@
 //! is the sales report's.
 
 pub mod campaigns;
+pub mod tuning;
 
 use std::collections::BTreeMap;
 

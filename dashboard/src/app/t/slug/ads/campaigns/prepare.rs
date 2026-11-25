@@ -78,7 +78,10 @@ impl CampaignForm {
 pub async fn prepare(cx: &Cx, Form(form): Form<CampaignForm>) -> Result<SeeOther> {
     let access = require_tenant(cx).await?;
     access.require_permission(cx, PERMISSION_ADS_MANAGE).await?;
-    let kind = known(&form.kind).ok_or_else(not_found)?;
+    // The winners' campaign is a tuning round's to prepare.
+    let kind = known(&form.kind)
+        .filter(|kind| *kind != timada_google::CAMPAIGN_WINNERS)
+        .ok_or_else(not_found)?;
     let slug = access.tenant.slug.as_str();
     let store = access.executor()?;
     let db = context::<Db>(cx);

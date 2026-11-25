@@ -29,7 +29,9 @@ The fields a kind may change:
 | `category` | `name`, `description`, `body`, `meta_title`, `meta_description` |
 | `new_category` | `name`, `meta_title` |
 | `ads_campaign` | the campaign's settings (`name`, `daily_budget`, `bid`, `countries`, …); the subject is the kind of campaign, `shopping` or `brand`. See [the first campaign](google.md#the-first-campaign-691) |
-| the other ads kinds | whatever the host names them; nothing applies them yet |
+| `ads_bid` | `max_cpc` of an ad group (`group:{id}`), or `adjustment` of a kind of device (`device:{device}`) |
+| `ads_exclusion` | `ads` of a product: `shown` or `kept out` |
+| `ads_negative_term` | `search` of a search: `shown` or `excluded`. The subject is the search as typed, the one subject with spaces in it |
 
 A value is kept as a person reads and types it: a text as it is, a price
 as `19.90` in the product's currency. It is normalized the way the command
@@ -83,7 +85,8 @@ half-way, end on the same values.
 
 Approving also asks for the permission the change itself needs
 (`products:manage` for the three catalog kinds, `ads:manage` for a
-campaign): a proposal is not a way around it. A member who holds `proposals:approve` alone can read and
+campaign and for what a [tuning round](google.md#tuning-rounds-692)
+prepares): a proposal is not a way around it. A member who holds `proposals:approve` alone can read and
 refuse. Owners hold everything.
 
 ## Pages
