@@ -270,12 +270,14 @@ pub async fn file(
     tenant_id: String,
     kind: ExportKind,
     period: Period,
+    days: (Date, Date),
     limit: usize,
 ) -> anyhow::Result<Option<Vec<u8>>> {
     let mut parts = match kind {
         ExportKind::Orders => orders_parts(db, tenant_id, period),
         ExportKind::Customers => customers_parts(db, tenant_id, period),
         ExportKind::Newsletter => subscribers_parts(db, tenant_id, period),
+        ExportKind::Sales => sales_parts(db, tenant_id, period, days),
     };
     let mut file = Vec::new();
     while let Some(part) = parts.recv().await {
@@ -317,6 +319,37 @@ fn orders_parts(db: Db, tenant_id: String, period: Period) -> Parts {
                     order_lines(&mut text, order, invoice.as_ref());
                 }
                 Ok(Some((last, text)))
+            }
+        },
+    )
+}
+
+/// The sales report of a tenant over `period`, with what its ads cost on
+/// `days` (the period's first and last, as the shop's clock has them):
+/// totals, sources, kinds of click, products and categories, told apart by
+/// their first cell.
+pub fn sales_csv(db: Db, tenant_id: String, period: Period, days: (Date, Date)) -> Body {
+    download(sales_parts(db, tenant_id, period, days))
+}
+
+fn sales_parts(db: Db, tenant_id: String, period: Period, days: (Date, Date)) -> Parts {
+    let tenant = tenant_id.clone();
+    let (first, last) = (days.0.to_string(), days.1.to_string());
+    written(
+        "sales",
+        tenant_id,
+        &crate::sales_report::SALES_COLUMNS,
+        // A report is a few sums: one part, then the end.
+        move |after: Option<()>| {
+            let (db, tenant) = (db.clone(), tenant.clone());
+            let (first, last) = (first.clone(), last.clone());
+            async move {
+                if after.is_some() {
+                    return Ok(None);
+                }
+                let text =
+                    crate::sales_report::sales_lines(&db, &tenant, period, &first, &last).await?;
+                Ok(Some(((), text)))
             }
         },
     )

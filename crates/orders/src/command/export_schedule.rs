@@ -20,16 +20,20 @@ pub enum ExportKind {
     Customers,
     /// The newsletter's subscribers who asked over it.
     Newsletter,
+    /// The sales report of the period: what was sold, by what brought the
+    /// shopper, by product and by category, with what the ads cost.
+    Sales,
 }
 
 impl ExportKind {
-    pub const ALL: [Self; 3] = [Self::Orders, Self::Customers, Self::Newsletter];
+    pub const ALL: [Self; 4] = [Self::Orders, Self::Customers, Self::Newsletter, Self::Sales];
 
     pub fn key(self) -> &'static str {
         match self {
             Self::Orders => "orders",
             Self::Customers => "customers",
             Self::Newsletter => "newsletter",
+            Self::Sales => "sales",
         }
     }
 

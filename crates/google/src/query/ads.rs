@@ -29,6 +29,19 @@ pub async fn ads_due(db: &Db, now: i64, after: &str, limit: i64) -> Result<Vec<D
     db.fetch_all(ADS_DUE, (after, now, limit)).await
 }
 
+/// The Google Ads account the shop's connection reads, as the read model
+/// has it; `None` for a shop with none chosen, or disconnected. For a
+/// report written outside a request: a page reads the connection itself.
+pub async fn ads_account_of(db: &Db, tenant_id: &str) -> Result<Option<String>> {
+    let row: Option<(String,)> = db
+        .fetch_optional(
+            "SELECT customer_id FROM google_ads_accounts WHERE tenant_id = ?1",
+            (tenant_id,),
+        )
+        .await?;
+    Ok(row.map(|(customer_id,)| customer_id))
+}
+
 /// The statement of [`ads_calls_on`].
 pub(super) const CALLS_ON: &str =
     "SELECT COALESCE(SUM(calls), 0) FROM google_ads_calls WHERE day = ?1";

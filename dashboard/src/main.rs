@@ -50,6 +50,7 @@ mod reads;
 mod research;
 mod review_requests;
 mod saga_fault;
+mod sales_report;
 mod scheduled_exports;
 mod seal;
 mod search_passes;

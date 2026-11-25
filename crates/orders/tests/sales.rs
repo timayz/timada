@@ -4,9 +4,9 @@ use common::*;
 use timada_catalog::CreateCategory;
 use timada_core::db::Db;
 use timada_orders::{
-    BEST_SELLERS, Command, OrderCosts, OrderLine, Period, SALES_BY_CATEGORY, SALES_BY_SOURCE,
-    SALES_TOTALS, best_sellers, read_model_subscription, sales_by_category, sales_by_source,
-    sales_totals,
+    BEST_SELLERS, Command, OrderCosts, OrderLine, Period, SALES_BY_CATEGORY,
+    SALES_BY_PRODUCT_SOURCE, SALES_BY_SOURCE, SALES_TOTALS, best_sellers, read_model_subscription,
+    sales_by_category, sales_by_product_source, sales_by_source, sales_totals,
 };
 
 const EVER: Period = Period {
@@ -133,6 +133,25 @@ async fn a_period_s_sales_are_summed_by_currency_product_category_and_source() {
     assert_eq!(sources[0].revenue_cents, 4650);
     assert_eq!(sources[0].profit_cents, 1200);
 
+    // By product and source: the mug's three, of which two know their cost.
+    let by_product = sales_by_product_source(&pool, TENANT, EVER).await.unwrap();
+    assert_eq!(by_product.len(), 2);
+    assert_eq!(by_product[0].product_id, mug);
+    assert_eq!(by_product[0].source, None);
+    assert_eq!(
+        (by_product[0].quantity, by_product[0].sales_cents),
+        (3, 3750)
+    );
+    assert_eq!(
+        (
+            by_product[0].costed_quantity,
+            by_product[0].costed_sales_cents,
+            by_product[0].profit_cents
+        ),
+        (2, 2500, 1700)
+    );
+    assert_eq!(by_product[1].costed_sales_cents, 0);
+
     // Another shop's orders, and another period, are not this one's.
     assert!(sales_totals(&pool, "other", EVER).await.unwrap().is_empty());
     let before = Period { from: 0, to: 1 };
@@ -155,6 +174,7 @@ async fn a_period_s_sales_are_summed_by_currency_product_category_and_source() {
         (SALES_BY_SOURCE, "orders_sales_placed", false),
         (BEST_SELLERS, "orders_sale_lines_placed", true),
         (SALES_BY_CATEGORY, "orders_sale_lines_placed", false),
+        (SALES_BY_PRODUCT_SOURCE, "orders_sale_lines_placed", false),
     ] {
         let mut params = vec![
             timada_core::db::Value::from(TENANT),
