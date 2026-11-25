@@ -106,6 +106,14 @@ pub enum TenancyError {
     InvalidApiKeyScopes,
     #[error("this API key is not valid")]
     ApiKeyInvalid,
+    #[error(
+        "a key covers one to twenty shops you are a member of, each with permissions you hold there"
+    )]
+    InvalidAgentKeyScope,
+    #[error("twenty keys at most: withdraw one first")]
+    TooManyAgentKeys,
+    #[error("no such key")]
+    AgentKeyNotFound,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -152,6 +160,9 @@ impl TenancyError {
             Self::InvalidApiKeyLabel => "invalid_api_key_label",
             Self::InvalidApiKeyScopes => "invalid_api_key_scopes",
             Self::ApiKeyInvalid => "api_key_invalid",
+            Self::InvalidAgentKeyScope => "invalid_agent_key_scope",
+            Self::TooManyAgentKeys => "too_many_agent_keys",
+            Self::AgentKeyNotFound => "agent_key_not_found",
             Self::InvalidPublishableKey => "invalid_publishable_key",
             Self::PaymentsNotStopped => "payments_not_stopped",
             Self::PaymentsStoppedRecently => "payments_stopped_recently",

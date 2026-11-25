@@ -30,6 +30,7 @@ mod mail;
 mod mail_fault;
 mod mailroom;
 mod margins;
+mod mcp;
 mod media;
 mod media_images;
 mod merchant_notices;

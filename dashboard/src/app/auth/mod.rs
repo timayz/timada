@@ -2,6 +2,7 @@
 //! endpoints, all under `/auth`.
 
 pub mod account;
+pub mod agent_keys;
 pub mod email;
 pub mod forgot_password;
 pub mod invitation;

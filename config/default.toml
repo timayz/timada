@@ -568,3 +568,11 @@ log_line_number = true
 # by tenant, the consensus engine's counters) and `/ready`. An internal
 # address: the figures name tenants. Absent: no metrics.
 # metrics_listen = "127.0.0.1:9100"
+
+# The MCP server: an assistant reads a user's shops and prepares changes for
+# a person to approve, at POST /mcp on the dashboard's own address, under a
+# key the user makes on their account page (docs/mcp.md). Off unless turned
+# on: the address then answers 404 and no page offers a key.
+# In production: TIMADA__MCP__ENABLED.
+# [mcp]
+# enabled = false

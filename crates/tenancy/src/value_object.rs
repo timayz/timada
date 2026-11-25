@@ -295,6 +295,64 @@ pub fn api_key_id(token: &str) -> String {
     evento::hash_ids(vec!["api-key", token])
 }
 
+/// What an agent key's token starts with.
+pub const AGENT_KEY_PREFIX: &str = "mk_";
+/// How many keys a user holds at once.
+pub const MAX_AGENT_KEYS: usize = 20;
+/// How many shops one key covers.
+pub const MAX_AGENT_KEY_SHOPS: usize = 20;
+/// How many calls a key's log keeps of a day: under what a stream holds.
+pub const MAX_AGENT_CALLS_A_DAY: u32 = 60_000;
+
+/// The stream of the keys a user gave to agents.
+pub fn agent_keys_id(user_id: &str) -> String {
+    evento::hash_ids(vec!["agent-keys", user_id])
+}
+
+/// What a key is known by: the hash of its token.
+pub fn agent_key_id(token: &str) -> String {
+    evento::hash_ids(vec!["agent-key", token])
+}
+
+/// The stream of the days a key was used on.
+pub fn agent_key_use_id(key_id: &str) -> String {
+    evento::hash_ids(vec!["agent-key-use", key_id])
+}
+
+/// The stream of what a key asked for on a day.
+pub fn agent_calls_id(key_id: &str, day: &str) -> String {
+    evento::hash_ids(vec!["agent-calls", key_id, day])
+}
+
+/// A fresh agent token for `user_id`: the prefix, the user, and 32 random
+/// bytes as URL-safe base64. It names its user so the key is found on the
+/// user's own stream.
+pub fn generate_agent_key_token(user_id: &str) -> String {
+    format!("{AGENT_KEY_PREFIX}{user_id}.{}", random_base64url())
+}
+
+/// The user a token says it is of; `None` for what is no agent token.
+pub fn agent_key_user(token: &str) -> Option<&str> {
+    let (user_id, secret) = token.strip_prefix(AGENT_KEY_PREFIX)?.split_once('.')?;
+    (!user_id.is_empty()
+        && user_id.len() <= 64
+        && user_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && secret.len() >= 32)
+        .then_some(user_id)
+}
+
+/// What the page shows of an agent token: its first characters, the user
+/// left out.
+pub fn agent_key_hint(token: &str) -> String {
+    let secret = token.split_once('.').map_or("", |(_, secret)| secret);
+    format!(
+        "{AGENT_KEY_PREFIX}…{}",
+        secret.chars().take(API_KEY_HINT_LEN).collect::<String>()
+    )
+}
+
 /// A fresh store API token: the prefix and 32 random bytes as URL-safe
 /// base64 without padding (46 characters in all).
 pub fn generate_api_key_token() -> String {

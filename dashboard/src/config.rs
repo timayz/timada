@@ -73,6 +73,10 @@ pub struct Config {
     /// without a key, nothing is drafted.
     #[serde(default)]
     pub writer: WriterConfig,
+    /// The MCP server assistants reach the dashboard through; off unless
+    /// turned on.
+    #[serde(default)]
+    pub mcp: McpConfig,
     /// The application the shops connect their Google accounts to; without
     /// its id and secret, no shop connects one.
     #[serde(default)]
@@ -931,6 +935,15 @@ impl DataforseoConfig {
         let password = self.password.as_deref().filter(|v| !v.is_empty())?;
         Some((login, password))
     }
+}
+
+/// The MCP server: what lets an assistant read a user's shops and prepare
+/// changes for a person to approve, under a key the user made.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+pub struct McpConfig {
+    /// Whether `POST /mcp` answers and users may make agent keys.
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 /// The model that writes first drafts of the shops' texts (a product's or a

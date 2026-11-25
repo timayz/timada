@@ -7,6 +7,7 @@ pub mod companies;
 pub mod feeds;
 pub mod google;
 pub mod invitations;
+pub mod mcp;
 pub mod research;
 pub(crate) mod server_errors;
 pub mod store;

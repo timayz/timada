@@ -438,3 +438,64 @@ pub mod company_series {
         Claimed { tenant_id: String },
     }
 }
+
+/// The agent keys' events, in their own module: the macro names an event
+/// struct after its variant, and `Revoked` already belongs to others above.
+pub mod agent {
+    /// A shop a key covers, with what the key may do there: permissions of
+    /// [`PERMISSIONS`](crate::PERMISSIONS), never wider than what the user
+    /// who made the key holds in the shop.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+    pub struct AgentShop {
+        pub tenant_id: String,
+        pub permissions: Vec<String>,
+    }
+
+    /// The keys a user gave to agents: credentials to the dashboard's MCP
+    /// server, each limited to the shops and permissions the user chose.
+    /// One stream a user ([`agent_keys_id`](crate::agent_keys_id)). The
+    /// token is shown once; the stream knows its hash and a short hint.
+    #[evento::aggregate(name = "timada-tenancy/AgentKeys")]
+    pub enum AgentKeys {
+        Minted {
+            user_id: String,
+            /// The hash of the token ([`agent_key_id`](crate::agent_key_id)).
+            key_id: String,
+            label: String,
+            /// The token's first characters, for the page.
+            hint: String,
+            shops: Vec<AgentShop>,
+            minted_by: String,
+        },
+        Withdrawn {
+            key_id: String,
+            withdrawn_by: String,
+        },
+    }
+
+    /// The days a key was used on: one stream a key
+    /// ([`agent_key_use_id`](crate::agent_key_use_id)), an event the first
+    /// time it is used on a day (UTC).
+    #[evento::aggregate(name = "timada-tenancy/AgentKeyUse")]
+    pub enum AgentKeyUse {
+        UsedOn {
+            /// `2026-11-25`.
+            day: String,
+        },
+    }
+
+    /// What a key asked for on a day: one stream a key and a day
+    /// ([`agent_calls_id`](crate::agent_calls_id)), an event a call. The
+    /// log its user reads.
+    #[evento::aggregate(name = "timada-tenancy/AgentCalls")]
+    pub enum AgentCalls {
+        Called {
+            /// The tool asked for.
+            tool: String,
+            /// The shop it was asked about; empty for none.
+            tenant_id: String,
+            /// Whether it was answered rather than refused.
+            ok: bool,
+        },
+    }
+}

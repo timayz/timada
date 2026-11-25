@@ -57,6 +57,7 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
     // Root signs in with the configured password and nothing else.
     let sections = if is_root { ROOT_SECTIONS } else { SECTIONS };
     let current_session = session::token_hash(cx).await?.map(|hash| session_id(&hash));
+    let agents = context::<crate::config::Config>(cx).mcp.enabled;
     let sessions = active_sessions(context::<Db>(cx), user_id, now() as i64)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
@@ -257,6 +258,15 @@ pub async fn account(cx: &Cx) -> Result<impl View> {
                         button(variant: ButtonVariant::Outline, attrs: attributes! { type="submit" class="text-destructive-text" }, icon(data: icons::LOG_OUT) "Sign out everywhere else")
                     </form>
                 )
+
+                if agents {
+                    section_card(
+                        title: Some("Agent keys"),
+                        description: Some("Let an assistant read your shops and prepare changes for you to approve, through timada's MCP server."),
+                        attrs: attributes! { id="agent-keys" class="scroll-mt-20" },
+                        <a class=(crate::ui::LINK) href=(href!(super::agent_keys::index))>"Manage your agent keys"</a>
+                    )
+                }
 
                 section_card(
                     title: Some("Recent sign-ins"),
