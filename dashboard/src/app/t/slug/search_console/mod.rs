@@ -10,7 +10,7 @@
 //! ([`categories`]).
 
 pub mod categories;
-mod landing;
+pub(crate) mod landing;
 mod ranking;
 
 use timada_google::{

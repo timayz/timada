@@ -400,8 +400,8 @@ counted in what the daily passes may use.
 A campaign created paused is set running from the page (`LiveRequested`,
 then the saga `timada-dashboard/ads-campaigns` tells Google Ads), or at
 Google Ads itself: the daily read records the first day it showed an ad.
-Either way `WentLive` is written once, with the moment. The checkpoints
-(#697) count their days from it, and the page says to leave the campaign
+Either way `WentLive` is written once, with the moment. The
+[checkpoints](launch.md) count their days from it, and the page says to leave the campaign
 alone for its first 21 days.
 
 A campaign's structure is created, never changed, from timada: its bids

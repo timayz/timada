@@ -219,6 +219,44 @@ pub async fn send_merchant_notice(
     Ok(())
 }
 
+/// Tells an owner of `tenant_name` that a checkpoint's day came: which one
+/// (`label`), what its numbers say (`advice`, `why`), the numbers
+/// themselves, and a link to the page where the decision is recorded.
+pub async fn send_checkpoint_notice(
+    cx: &Cx,
+    to: &str,
+    tenant_name: &str,
+    (label, advice, why): (&str, &str, &str),
+    figures: &[(String, String)],
+    link: &str,
+) -> Result<()> {
+    let from = context::<MailSender>(cx).0.clone();
+    let subject = format!("{label} of {tenant_name}: {advice}");
+    let mail = Mail::builder()
+        .from(from)
+        .to([Mailbox::new(to)?])
+        .subject(&subject)
+        .html(
+            cx,
+            view! {
+                <p>(label) " of " <strong>(tenant_name)</strong> " has come. Its numbers say: " <strong>(advice)</strong> "."</p>
+                <p>(why)</p>
+                <ul>
+                    for (name, value) in figures {
+                        <li>(name) ": " (value)</li>
+                    }
+                </ul>
+                <p>"This is advice: nothing is switched off by itself. Record what you decide, and why."</p>
+                <p><a href=(link)>"Open the checkpoints"</a></p>
+                <p>"Or open this address: " (link)</p>
+            },
+        )
+        .await?
+        .build()?;
+    send(cx, mail).await?;
+    Ok(())
+}
+
 /// Reminds a member of `tenant_name` that the hold on the shopper's card
 /// for order `reference`, which AliExpress may have, lapses at `lapses_at`
 /// (unix seconds): the payment is to be taken before, with a link to the

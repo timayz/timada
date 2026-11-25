@@ -7,6 +7,7 @@ mod authz;
 mod automations;
 mod best_sellers;
 mod campaigns;
+mod checkpoints;
 mod cli;
 mod cluster;
 mod code_mails;

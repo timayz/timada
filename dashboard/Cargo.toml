@@ -33,6 +33,7 @@ timada-reviews = { path = "../crates/reviews", version = "0.1.1" }
 timada-support = { path = "../crates/support", version = "0.1.1" }
 timada-research = { path = "../crates/research", version = "0.1.1" }
 timada-google = { path = "../crates/google", version = "0.1.1" }
+timada-launch = { path = "../crates/launch", version = "0.1.1" }
 timada-proposals = { path = "../crates/proposals", version = "0.1.1" }
 timada-writer = { path = "../crates/writer", version = "0.1.1" }
 timada-newsletter = { path = "../crates/newsletter", version = "0.1.1" }

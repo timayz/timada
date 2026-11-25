@@ -1000,6 +1000,14 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     ("merchant notices", Kind::Sharded, |d| {
         crate::merchant_notices::subscription(d.mailroom.clone())
     }),
+    // A shop's checkpoint is read when Google Ads was read and its day
+    // came, and its owners are told.
+    ("checkpoints", Kind::Sharded, |d| {
+        crate::checkpoints::subscription(d.store.clone(), d.db.clone())
+    }),
+    ("checkpoint notices", Kind::Sharded, |d| {
+        crate::checkpoints::notices_subscription(d.mailroom.clone())
+    }),
     // The sales told to Meta from the server, for the shops that gave a
     // Conversions API token and the shoppers who allowed advertising.
     ("meta conversions", Kind::Sharded, |d| {
