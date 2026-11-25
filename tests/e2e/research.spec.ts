@@ -18,8 +18,7 @@ import { createTenant, uniqueTenant } from "./tenants";
 // the page gives the verdict with the tests behind it, what one sale leaves,
 // the keywords by what the score made of each, and the owner corrects it
 // (a word excluded, a keyword dropped or brought back) without a fetch. The
-// list sets the studies side by side, and the keywords export with their
-// score.
+// list sets the studies side by side.
 //
 // Who holds the first results of the main keywords is searched off the page
 // too, one paid search a keyword: the page lists the sites found, the owner
@@ -329,19 +328,9 @@ test("a study is scored, corrected by its owner and compared", async ({ page, br
     await listHolds(page, /^Main/, [seed, best]);
     expect(source.calls).toHaveLength(calls);
 
-    // The keywords export with their score, for the owner only.
-    const exportUrl = await page.locator("[data-study-export]").getAttribute("href");
-    const file = await page.request.get(exportUrl!);
-    expect(file.status()).toBe(200);
-    expect(file.headers()["content-type"]).toContain("text/csv");
-    const lines = (await file.text()).split("\r\n");
-    expect(lines[0]).toContain("keyword,outcome,counts_under,searches_a_month,difficulty,cost_per_click_usd");
-    expect(lines).toContainEqual(expect.stringContaining(`${seed},main,,12100,38,0.42,`));
-    expect(lines).toContainEqual(expect.stringContaining(`${cheap},excluded,,5400,14,0.31,`));
-    expect(lines.filter((line) => line !== "")).toHaveLength(6);
+    // A study is its owner's only.
     const stranger = await (await browser.newContext()).newPage();
     await registerWithEmail(stranger, uniqueEmail("stranger"));
-    expect((await stranger.request.get(exportUrl!)).status()).toBe(404);
     expect((await stranger.goto(studyUrl))?.status()).toBe(404);
 
     // The list sets the studies side by side.

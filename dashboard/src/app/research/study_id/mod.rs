@@ -9,7 +9,6 @@
 pub mod competition;
 pub mod delete;
 pub mod drop;
-pub mod export;
 pub mod fetch;
 pub mod inputs;
 pub mod mark;
@@ -1230,11 +1229,6 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             }
                         )
                     )
-                }
-                if total > 0 {
-                    <p class="px-6 text-sm">
-                        <a class=(LINK) href=(href!(export::export, study_id: id.clone())) data-study-export="">"Export the keywords with their score (CSV)"</a>
-                    </p>
                 }
             )
 
