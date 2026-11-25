@@ -105,6 +105,9 @@ pub enum Kind {
     /// turned against a product or the account (`MerchantFeed`, then
     /// `MerchantNotice`), keyed by the day.
     MerchantNotice,
+    /// The platform's notice to a shop's owners that a checkpoint's day
+    /// came (`Launch`, then its `Notice`), keyed by the checkpoint.
+    CheckpointNotice,
 }
 
 impl Kind {
@@ -128,6 +131,7 @@ impl Kind {
             Self::MessageNotice => "message_notice",
             Self::ProposalNotice => "proposal_notice",
             Self::MerchantNotice => "merchant_notice",
+            Self::CheckpointNotice => "checkpoint_notice",
         }
     }
 
@@ -141,6 +145,7 @@ impl Kind {
             "message_notice" => Self::MessageNotice,
             "proposal_notice" => Self::ProposalNotice,
             "merchant_notice" => Self::MerchantNotice,
+            "checkpoint_notice" => Self::CheckpointNotice,
             _ => Self::OrderMail(*Self::ORDER_MAILS.iter().find(|mail| mail.key() == value)?),
         })
     }
@@ -160,6 +165,7 @@ impl Kind {
             Self::MessageNotice => "message notice",
             Self::ProposalNotice => "proposals notice",
             Self::MerchantNotice => "Merchant Center notice",
+            Self::CheckpointNotice => "checkpoint notice",
         }
     }
 }
@@ -574,6 +580,7 @@ impl Mailroom {
             Some(Kind::MessageNotice) => crate::message_notifications::send(self, owed, now).await,
             Some(Kind::ProposalNotice) => crate::proposals::notices::send(self, owed, now).await,
             Some(Kind::MerchantNotice) => crate::merchant_notices::send(self, owed, now).await,
+            Some(Kind::CheckpointNotice) => crate::checkpoints::send(self, owed, now).await,
             None => {
                 tracing::error!(kind = %owed.kind, "not a kind of owed mail; left alone");
                 Ok(Outcome::Left)

@@ -10,6 +10,7 @@ pub mod articles;
 pub mod automations;
 pub mod carts;
 pub mod categories;
+pub mod checkpoints;
 pub mod costs;
 pub mod customers;
 pub mod discounts;
@@ -327,6 +328,61 @@ async fn tiles(cx: &Cx, tenant: &TenantState, nav: &TenantNav) -> Result<Vec<Til
         }
     }
     if nav.orders {
+        // Where the launch stands, once the first campaign runs.
+        let launch = crate::checkpoints::standing(
+            context::<crate::cluster::Executor>(cx),
+            pool,
+            id,
+            crate::auth::now(),
+        )
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+        if let Some(started) = launch.started_at {
+            let last =
+                timada_launch::Command::new(context::<crate::cluster::Executor>(cx).clone(), id)
+                    .load_launch()
+                    .await
+                    .map_err(topcoat::Error::from_anyhow)?;
+            let target = last.as_ref().and_then(|launch| launch.target());
+            let read = last.as_ref().and_then(|launch| {
+                launch
+                    .reached
+                    .iter()
+                    .rev()
+                    .find(|reached| reached.started_at == started)
+            });
+            let mut hint = Vec::new();
+            if let Some(read) = read {
+                hint.push(format!(
+                    "{}: {}",
+                    crate::checkpoints::checkpoint_label(read.checkpoint),
+                    crate::checkpoints::advice_label(&read.advice).to_lowercase()
+                ));
+            }
+            if let Some(percent) =
+                target.and_then(|target| launch.progress_percent(target.monthly_profit_cents))
+            {
+                hint.push(format!("{percent} % of the target"));
+            }
+            tiles.push(Tile {
+                label: "Next checkpoint",
+                value: match launch.ahead {
+                    Some((checkpoint, at)) => format!(
+                        "{} · {}",
+                        crate::checkpoints::checkpoint_label(checkpoint),
+                        timada_core::civil::format_date(at)
+                    ),
+                    None => "All read".to_owned(),
+                },
+                symbol: icons::CHECKPOINTS,
+                href: link("checkpoints"),
+                tone: match read.map(|read| read.advice.as_str()) {
+                    Some(timada_launch::STOP | timada_launch::FIX) => Tone::Warning,
+                    _ => Tone::Neutral,
+                },
+                hint: (!hint.is_empty()).then(|| hint.join(" · ")),
+            });
+        }
         let n = order_count(pool, id)
             .await
             .map_err(topcoat::Error::from_anyhow)?;

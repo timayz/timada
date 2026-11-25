@@ -7956,6 +7956,7 @@ dependencies = [
  "timada-google",
  "timada-identity",
  "timada-invoicing",
+ "timada-launch",
  "timada-newsletter",
  "timada-orders",
  "timada-pages",
@@ -8040,6 +8041,18 @@ dependencies = [
  "typst-assets",
  "typst-pdf",
  "world-tax",
+]
+
+[[package]]
+name = "timada-launch"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "bitcode",
+ "evento",
+ "thiserror 2.0.21",
+ "timada-core",
+ "tokio",
 ]
 
 [[package]]

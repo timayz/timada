@@ -392,6 +392,17 @@ pub fn describe_error(code: &str) -> &'static str {
             "The campaign does not run yet, or is in its first three weeks: a round comes after."
         }
         "google_invalid_tuned" => "No such ad group, device or search in the campaign.",
+        "launch_invalid_target" => {
+            "A target is an amount above zero, in a currency of three letters."
+        }
+        "launch_invalid_target_day" => "A target's day is a day yet to come.",
+        "launch_invalid_threshold" => {
+            "A threshold is a whole number, or an amount like 0.70, within its range; the bar to go on is never under the bar to stop."
+        }
+        "launch_unknown_checkpoint" => "No such checkpoint.",
+        "launch_not_reached" => "The checkpoint's day has not come.",
+        "launch_invalid_decision" => "A decision is to go on, to fix or to stop.",
+        "launch_note_too_long" => "A note is at most 1,000 characters.",
         "google_merchant_just_read" => {
             "Merchant Center was read a moment ago. Wait a few minutes before asking again."
         }
