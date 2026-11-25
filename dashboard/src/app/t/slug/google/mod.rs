@@ -1,19 +1,21 @@
 //! `/t/{slug}/google`: the Google account the shop is connected to, for
 //! members with `pages:read`; those with `pages:manage` connect it, choose
-//! the shop's Search Console site and take the connection off. One
+//! the shop's Search Console site and its Google Ads account, and take the
+//! connection off. One
 //! connection serves everything the shop reads from Google, so there is one
 //! place to say yes and one "connect again". Read from the connection's own
-//! stream, so a change shows at once; the sites to choose from are asked of
-//! Google when the page lists them.
+//! stream, so a change shows at once; the sites and the accounts to choose
+//! from are asked of Google when the page lists them.
 
+pub mod ads_account;
 pub mod connect;
 pub mod disconnect;
 pub mod finish;
 pub mod site;
 
 use timada_google::{
-    ACCESS_ADS, ACCESS_MERCHANT_CENTER, ACCESS_SEARCH_CONSOLE, Command, ConnectionState,
-    GoogleError,
+    ACCESS_ADS, ACCESS_MERCHANT_CENTER, ACCESS_SEARCH_CONSOLE, AdsAccount, Command,
+    ConnectionState, GoogleError,
 };
 use timada_tenancy::{PERMISSION_PAGES_MANAGE, PERMISSION_PAGES_READ};
 use topcoat::{
@@ -45,6 +47,10 @@ struct GoogleLink<'a> {
     /// Lists the sites to choose from, with one chosen already.
     #[serde(skip_serializing_if = "Option::is_none")]
     sites: Option<&'a str>,
+    /// Lists the Google Ads accounts to choose from, with one chosen
+    /// already.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ads: Option<&'a str>,
 }
 
 #[topcoat::router::query_params(error = bad_request)]
@@ -52,6 +58,7 @@ struct GoogleQuery {
     error: Option<String>,
     message: Option<String>,
     sites: Option<String>,
+    ads: Option<String>,
 }
 
 /// The page, with a flash error code or message.
@@ -97,8 +104,38 @@ fn access_hint(access: &str) -> &'static str {
         ACCESS_SEARCH_CONSOLE => {
             "The queries your shop shows for on Google and the pages found, read once a day. Nothing is changed in Search Console."
         }
+        ACCESS_ADS => {
+            "What your campaigns cost and brought, read once a day: cost, clicks and conversions by campaign, product and search. Nothing is changed in Google Ads."
+        }
         _ => "",
     }
+}
+
+/// A Google Ads account's number as the pages of Google Ads write it:
+/// `123-456-7890`.
+pub fn customer_number(customer_id: &str) -> String {
+    match (
+        customer_id.get(..3),
+        customer_id.get(3..6),
+        customer_id.get(6..),
+    ) {
+        (Some(a), Some(b), Some(c)) if customer_id.len() == 10 => format!("{a}-{b}-{c}"),
+        _ => customer_id.to_owned(),
+    }
+}
+
+/// The Google Ads accounts the shop's grant reaches, asked of Google under
+/// the connection's grant.
+pub async fn ads_accounts_of(
+    cx: &Cx,
+    service: &Google,
+    connection: &ConnectionState,
+) -> std::result::Result<Vec<AdsAccount>, GoogleFault> {
+    service
+        .read(context::<Executor>(cx), connection, |access| async move {
+            service.ads_accounts(&access).await
+        })
+        .await
 }
 
 /// The Search Console sites the shop's account reads, asked of Google under
@@ -161,9 +198,24 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             Err(fault) => sites_fault = Some(fault),
         }
     }
-    // Met while listing the sites: the page says so at once.
+    // The same for the Google Ads accounts.
+    let choosing_ads = connection.as_ref().is_some_and(|connection| {
+        can_manage
+            && connection.reads(ACCESS_ADS)
+            && (connection.ads.is_none() || query.ads.is_some())
+    });
+    let mut ads_fault = None;
+    let mut ads_found = Vec::new();
+    if let Some(connection) = connection.as_ref().filter(|_| choosing_ads) {
+        match ads_accounts_of(cx, service, connection).await {
+            Ok(found) => ads_found = found,
+            Err(fault) => ads_fault = Some(fault),
+        }
+    }
+    // Met while listing the sites or the accounts: the page says so at once.
     let lapsed = connection.as_ref().is_some_and(|c| c.lapsed)
-        || sites_fault == Some(GoogleFault::ConnectAgain);
+        || sites_fault == Some(GoogleFault::ConnectAgain)
+        || ads_fault == Some(GoogleFault::ConnectAgain);
     let address = if choosing {
         timada_orders::Command::new(access.executor()?.clone(), access.tenant_id())
             .storefront_address()
@@ -223,6 +275,39 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             error: None,
             message: None,
             sites: Some("1"),
+            ads: None,
+        })
+        .resolve(cx);
+    let covers_ads = connection.as_ref().is_some_and(|c| c.covers(ACCESS_ADS));
+    let ads = connection.as_ref().and_then(|c| c.ads.clone());
+    // `(number, as written, name, currency, through a manager, chosen)`.
+    let ads_choices: Vec<(String, String, String, String, bool, bool)> = ads_found
+        .iter()
+        .map(|found| {
+            (
+                found.customer_id.clone(),
+                customer_number(&found.customer_id),
+                found.name.clone(),
+                found.currency.clone(),
+                found.login_customer_id.is_some(),
+                ads.as_ref()
+                    .is_some_and(|ads| ads.customer_id == found.customer_id),
+            )
+        })
+        .collect();
+    let ads_fault = ads_fault
+        .filter(|fault| *fault != GoogleFault::ConnectAgain)
+        .map(|fault| crate::ui::describe_error(fault_code(&fault)));
+    let ads_number = ads
+        .as_ref()
+        .map(|ads| customer_number(&ads.customer_id))
+        .unwrap_or_default();
+    let change_ads = href!(index, slug: slug.clone())
+        .query(GoogleLink {
+            error: None,
+            message: None,
+            sites: None,
+            ads: Some("1"),
         })
         .resolve(cx);
 
@@ -341,6 +426,54 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 )
             }
 
+            if covers_ads && !lapsed {
+                section_card(
+                    title: Some("Google Ads account"),
+                    if let Some(ads) = &ads {
+                        <div class="mb-4">
+                            facts(
+                                fact(term: "Account", attrs: attributes! { data-google-ads=(&ads.customer_id) }, (&ads_number) if !ads.name.is_empty() { " · " (&ads.name) })
+                                fact(term: "Currency", (&ads.currency))
+                                if !ads.time_zone.is_empty() {
+                                    fact(term: "Time zone", (&ads.time_zone))
+                                }
+                            )
+                        </div>
+                    } else {
+                        <p class="mb-4 text-sm text-muted-foreground" data-google-ads-missing="">"No account chosen yet: say which of the Google Ads accounts this Google account reaches is this shop's, and what its campaigns cost and brought is read from the next pass on."</p>
+                    }
+                    if let Some(fault) = ads_fault {
+                        alert(
+                            variant: AlertVariant::Warning,
+                            attrs: attributes! { role="alert" class="mb-4" },
+                            alert_description((fault))
+                        )
+                    }
+                    if choosing_ads && !ads_choices.is_empty() {
+                        <form method="post" action=(href!(ads_account::ads_account, slug: slug.clone())) class="flex max-w-2xl flex-col gap-3">
+                            <fieldset class="flex flex-col gap-2">
+                                <legend class="mb-2 text-sm font-medium">"The Google Ads accounts this Google account reaches"</legend>
+                                for (id, number, name, currency, managed, chosen) in &ads_choices {
+                                    <label class="flex items-center gap-2 text-sm">
+                                        <input type="radio" name="customer_id" value=(id) checked=(*chosen) required="" class="accent-primary">
+                                        <code>(number)</code>
+                                        (name)
+                                        <span class="text-muted-foreground">
+                                            "(" (currency) if *managed { ", through a manager account" } ")"
+                                        </span>
+                                    </label>
+                                }
+                            </fieldset>
+                            <div>button(attrs: attributes! { type="submit" }, "Save the account")</div>
+                        </form>
+                    } else if choosing_ads && ads_fault.is_none() {
+                        <p class="text-sm text-muted-foreground" data-google-no-ads="">"This Google account reaches no Google Ads account ads can run in. Open one in Google Ads, or connect the Google account that manages the shop's."</p>
+                    } else if can_manage && ads.is_some() {
+                        <a href=(change_ads) class=(LINK)>"Change the account"</a>
+                    }
+                )
+            }
+
             if connection.is_some() && can_manage {
                 section_card(
                     title: Some("Disconnect"),
@@ -370,5 +503,11 @@ mod tests {
         assert!(!is_shop_site("https://other.example/", address));
         assert!(!is_shop_site("sc-domain:other.example", address));
         assert!(!is_shop_site("https://www.shop.example/", None));
+    }
+
+    #[test]
+    fn an_ads_account_reads_as_google_ads_writes_it() {
+        assert_eq!(customer_number("1234567890"), "123-456-7890");
+        assert_eq!(customer_number("12345"), "12345");
     }
 }

@@ -5,11 +5,16 @@
 //! platform's streams. Whether a shop is connected, and where its pass
 //! stands, is read from the streams themselves by the page that shows it:
 //! the tables only say where to look and what a period comes to.
+//! The `google_ads_*` tables do the same for Google Ads: which shops' pass
+//! is due, what the passes asked of the day's allowance, and what each
+//! account cost and brought, a day at a time.
 
+mod ads;
 mod migrations;
 mod read_model;
 mod search;
 
+pub use ads::*;
 pub use migrations::*;
 pub use read_model::*;
 pub use search::*;
@@ -109,5 +114,45 @@ mod tests {
             due.iter().all(|step| step.starts_with("SEARCH")),
             "{due:#?}"
         );
+        let due = plan(&db, super::ads::ADS_DUE, ("", 0, 200)).await;
+        assert!(
+            due.iter().all(|step| step.starts_with("SEARCH")),
+            "{due:#?}"
+        );
+        let calls = plan(&db, super::ads::CALLS_ON, ("2026-11-20",)).await;
+        assert!(
+            calls.iter().all(|step| step.starts_with("SEARCH")),
+            "{calls:#?}"
+        );
+        let account = ("shop", "1234567890", "2026-08-01", "2026-11-01");
+        let totals = plan(&db, super::ads::TOTALS, account).await;
+        assert!(
+            totals.iter().all(|step| step.starts_with("SEARCH")),
+            "{totals:#?}"
+        );
+        use super::ads::{By, by_statement};
+        for by in [By::Campaign, By::Device, By::AdGroup] {
+            let plan = plan(&db, &by_statement(by), account).await;
+            assert!(
+                plan.iter()
+                    .filter(|step| !step.starts_with("USE SORTER"))
+                    .all(|step| step.starts_with("SEARCH")),
+                "{plan:#?}"
+            );
+        }
+        for by in [By::Product, By::Term] {
+            let plan = plan(
+                &db,
+                &by_statement(by),
+                ("shop", "1234567890", "2026-08-01", "2026-11-01", 100),
+            )
+            .await;
+            assert!(
+                plan.iter()
+                    .filter(|step| !step.starts_with("USE SORTER"))
+                    .all(|step| step.starts_with("SEARCH")),
+                "{plan:#?}"
+            );
+        }
     }
 }

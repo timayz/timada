@@ -2,6 +2,7 @@
 //! members and roles pages; every one of them starts with [`require_tenant`]
 //! and then asks the [`TenantAccess`] for the permission it needs.
 
+pub mod ads;
 pub mod aliexpress;
 pub mod announcements;
 pub mod api_keys;

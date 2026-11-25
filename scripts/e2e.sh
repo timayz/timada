@@ -169,6 +169,7 @@ else
       "TIMADA__GOOGLE__TOKEN_URL=http://127.0.0.1:$((12117 + off))/token"
       "TIMADA__GOOGLE__USERINFO_URL=http://127.0.0.1:$((12117 + off))/v1/userinfo"
       "TIMADA__GOOGLE__SEARCH_CONSOLE_URL=http://127.0.0.1:$((12117 + off))/webmasters/v3"
+      "TIMADA__GOOGLE__ADS_URL=http://127.0.0.1:$((12117 + off))/ads/v26"
       "TIMADA__WRITER__API_URL=http://127.0.0.1:$((12118 + off))"
       ./target/debug/timada-dashboard
     )

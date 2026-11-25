@@ -33,6 +33,22 @@ pub enum Connection {
     /// left unused too long): nothing is read through it until the merchant
     /// connects again.
     Lapsed { noticed_by: String },
+    /// Which of the Google Ads accounts the grant reaches is this shop's.
+    AdsAccountChosen {
+        /// The account's number, digits only (`1234567890`).
+        customer_id: String,
+        /// The manager account it is reached through, digits only; `None`
+        /// for an account the grant reaches by itself.
+        login_customer_id: Option<String>,
+        /// What Google Ads calls the account, for the merchant to tell
+        /// which one it is.
+        name: String,
+        /// The currency the account is billed and reports in (`EUR`).
+        currency: String,
+        /// The time zone its days are counted in (`Europe/Paris`).
+        time_zone: String,
+        chosen_by: String,
+    },
     /// The merchant took the connection off: the grant is forgotten.
     Disconnected { disconnected_by: String },
 }
@@ -116,6 +132,120 @@ pub enum SearchWatch {
         site: String,
         reason: String,
         attempts: u32,
+        failed_by: String,
+    },
+}
+
+/// What ads cost and brought, as Google Ads counts it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct AdsNumbers {
+    /// What the clicks cost, in millionths of the account's currency.
+    pub cost_micros: u64,
+    pub impressions: u64,
+    pub clicks: u64,
+    /// The conversions, in thousandths: Google shares one between the
+    /// clicks that led to it, so 1,500 is a conversion and a half.
+    pub conversions_milli: u64,
+    /// What the conversions were worth, in millionths of the account's
+    /// currency.
+    pub value_micros: u64,
+}
+
+/// One campaign on one kind of device on a day.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct AdsCampaignRow {
+    pub campaign_id: String,
+    pub name: String,
+    /// One of [`ADS_DEVICES`](crate::ADS_DEVICES).
+    pub device: String,
+    pub numbers: AdsNumbers,
+}
+
+/// One ad group on a day.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct AdsAdGroupRow {
+    pub campaign_id: String,
+    pub ad_group_id: String,
+    pub name: String,
+    pub numbers: AdsNumbers,
+}
+
+/// One product of the feed in one ad group on a day.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct AdsProductRow {
+    /// The feed's item id as Google Ads reports it: in lower case.
+    pub item_id: String,
+    pub campaign_id: String,
+    pub ad_group_id: String,
+    pub numbers: AdsNumbers,
+}
+
+/// One search an ad was clicked for, in one ad group on a day.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct AdsTermRow {
+    /// What the person typed.
+    pub term: String,
+    pub campaign_id: String,
+    pub ad_group_id: String,
+    pub numbers: AdsNumbers,
+}
+
+/// One day of a shop's Google Ads account. Its id is made of the shop, the
+/// account and the day ([`ads_day_id`](crate::ads_day_id)). Google goes on
+/// counting a day after it ends (a conversion is counted on the day of the
+/// click that led to it, and may come weeks later), so a day is read again
+/// for a while and the stream gets an event each time its numbers moved:
+/// the last one stands. It lives in the platform's tenant.
+#[evento::aggregate(name = "timada-google/AdsDay")]
+pub enum AdsDay {
+    AdsDayFetched {
+        tenant_id: String,
+        customer_id: String,
+        /// `2026-11-20`, a day of the account's time zone.
+        day: String,
+        /// The account's currency (`EUR`).
+        currency: String,
+        /// Every campaign that was shown, by device: what the day's totals
+        /// are added up from.
+        campaigns: Vec<AdsCampaignRow>,
+        ad_groups: Vec<AdsAdGroupRow>,
+        /// The products shown, the ones that cost the most first,
+        /// [`MAX_ADS_PRODUCT_ROWS`](crate::MAX_ADS_PRODUCT_ROWS) at most.
+        products: Vec<AdsProductRow>,
+        /// The searches that brought a click, the ones that cost the most
+        /// first, [`MAX_ADS_TERM_ROWS`](crate::MAX_ADS_TERM_ROWS) at most.
+        terms: Vec<AdsTermRow>,
+        fetched_by: String,
+    },
+}
+
+/// Where the daily read of a shop's Google Ads account stands. Its id is
+/// made of the shop's ([`ads_watch_id`](crate::ads_watch_id)), and it lives
+/// in the platform's tenant. A pass leaves one event.
+#[evento::aggregate(name = "timada-google/AdsWatch")]
+pub enum AdsWatch {
+    /// A pass over the account read the days from `first` to `last`.
+    /// `behind`: older days are left to read, so the next pass is due
+    /// sooner. `calls`: how many questions it asked Google Ads, which the
+    /// platform's daily allowance is counted in.
+    AdsChecked {
+        tenant_id: String,
+        customer_id: String,
+        first: String,
+        last: String,
+        behind: bool,
+        calls: u32,
+        checked_by: String,
+    },
+    /// A pass over the account failed; `reason` says why, for the merchant.
+    /// `attempts` counts the failures in a row, this one included: the
+    /// next pass waits longer after each.
+    AdsCheckFailed {
+        tenant_id: String,
+        customer_id: String,
+        reason: String,
+        attempts: u32,
+        calls: u32,
         failed_by: String,
     },
 }

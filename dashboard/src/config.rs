@@ -1066,6 +1066,18 @@ pub struct GoogleConfig {
     /// of Search Console is due.
     #[serde(default = "default_google_search_check_secs")]
     pub search_check_secs: u64,
+    /// Where Google Ads is read, with the version of its API.
+    #[serde(default)]
+    pub ads_url: Option<String>,
+    /// How often, in seconds, a node looks for the shops whose daily read
+    /// of Google Ads is due.
+    #[serde(default = "default_google_search_check_secs")]
+    pub ads_check_secs: u64,
+    /// How many questions a day Google Ads takes from the platform's Cloud
+    /// project: 2,880 at the "Explorer" access level, 15,000 at "Basic".
+    /// The daily reads stop at four fifths of it, so the pages keep some.
+    #[serde(default = "default_google_ads_calls_a_day")]
+    pub ads_calls_a_day: u32,
 }
 
 impl Default for GoogleConfig {
@@ -1078,8 +1090,15 @@ impl Default for GoogleConfig {
             userinfo_url: None,
             search_console_url: None,
             search_check_secs: default_google_search_check_secs(),
+            ads_url: None,
+            ads_check_secs: default_google_search_check_secs(),
+            ads_calls_a_day: default_google_ads_calls_a_day(),
         }
     }
+}
+
+fn default_google_ads_calls_a_day() -> u32 {
+    2_880
 }
 
 fn default_google_search_check_secs() -> u64 {

@@ -455,6 +455,23 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.google.search_check_secs.max(1),
     ));
 
+    // What Google Ads says the connected shops' accounts cost and brought
+    // is read once a day each, the same way.
+    let live = cluster.clone();
+    let ads_passes = crate::ads_passes::AdsPasses::new(
+        db.clone(),
+        local.0.clone(),
+        Arc::new(move || {
+            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, cluster::Among::All);
+            timada_core::Share { index, of }
+        }),
+        google.clone(),
+        config.google.ads_calls_a_day,
+    )
+    .start(std::time::Duration::from_secs(
+        config.google.ads_check_secs.max(1),
+    ));
+
     // A cart nobody touched for `[carts] idle_days` is dropped, each node
     // dropping its own part of them.
     let live = cluster.clone();
@@ -601,6 +618,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     hold_reminders.abort();
     scheduled_exports.abort();
     search_passes.abort();
+    ads_passes.abort();
     idle_carts.abort();
     best_sellers.abort();
     newsletter_sends.abort();

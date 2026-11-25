@@ -345,6 +345,10 @@ pub fn describe_error(code: &str) -> &'static str {
         "google_invalid_site" | "google_unknown_site" => {
             "Choose one of the sites the account reads in Search Console."
         }
+        "google_no_ads" => "The connection does not cover Google Ads: connect again and tick it.",
+        "google_invalid_ads_account" | "google_unknown_ads_account" => {
+            "Choose one of the Google Ads accounts the Google account reaches."
+        }
         "proposal_unknown_kind" => "This is not a kind of change a proposal can carry.",
         "proposal_invalid_subject" => "A proposal names the product or the category it is about.",
         "proposal_invalid_source" => "A proposal says what prepared it.",

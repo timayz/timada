@@ -1,4 +1,5 @@
 mod account_invitation_mails;
+mod ads_passes;
 mod aliexpress;
 mod app;
 mod auth;

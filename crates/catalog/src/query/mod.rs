@@ -6,6 +6,7 @@
 
 mod categories;
 mod feed;
+mod items;
 mod migrations;
 mod paths;
 mod products;
@@ -14,6 +15,7 @@ mod sellable;
 
 pub use categories::*;
 pub use feed::*;
+pub use items::*;
 pub use migrations::*;
 pub use paths::*;
 pub use products::*;
