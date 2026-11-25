@@ -59,6 +59,14 @@ gives for one keyword from one country in one language, on a desktop (DataForSEO
 most, each with its place, its site, its address and its title; ads and Google's own
 boxes are passed over.
 
+Since November 2026 DataForSEO answers every organic result under Google's own
+address: `domain` is `google.com` and `url` an opaque `google.com/goto` link, on the
+advanced endpoint as on the regular one (#791). The site is then read from the start
+of the result's `breadcrumb` (`https://www.jardiland.com › Conseil & idées`), and so
+is its address, down to the site only. A result whose breadcrumb names no site, a
+video's for one, is passed over. An answer that names the site in `domain` is read
+as before.
+
 | | |
 |---|---|
 | a search, answered at once (the one made) | 0.002 USD |
@@ -336,23 +344,29 @@ A failure is one of two kinds, and what asks decides what to do with each:
   reached, the country or the language is not held. It would be said again, so the
   reason is kept in DataForSEO's words for whoever reads it.
 
+## Confirmed against the real service
+
+Read on 2026-11-25 with the platform's login, for `arbre à chat` in France in French:
+
+- a search takes the country code the keywords do: sent `location_code` 2250, it was
+  made with `gl=FR` and `hl=fr` and answered with French shops;
+- France in French returns a difficulty, for 616 of the 1,000 keywords of the call.
+  The 384 others have none and are not held to be difficult.
+
 ## Not confirmed yet
 
-They need a live call, which the `keywords` command makes:
-
-- that a search takes the country code the keywords do. The countries are read from
-  DataForSEO Labs (`locations_and_languages`) and a search is sent the same
-  `location_code` (2250 for France); DataForSEO's pages do not say the two lists share
-  their codes, though every code seen does. One search settles it and prints who
-  holds the first results, for 0.002 USD:
-
-  ```sh
-  timada-dashboard keywords "arbre à chat" --country FR --language fr --results
-  ```
-
-- that France in French returns a difficulty. The last line of the command's output
-  counts the rows that have one;
 - how DataForSEO's difficulty compares with the Ahrefs and Semrush scores the usual
   thresholds are written for. Fetch a few keywords whose scores in those tools are
   known and record the comparison here. The score's default of 35 for the highest
-  difficulty kept waits on it.
+  difficulty kept waits on it. A first sign that its scale runs lower: `arbre à chat`,
+  searched 18,100 times a month, has a difficulty of 5, and most of the fifty keywords
+  searched the most have 0;
+- that one search says who holds a keyword: three searches of `arbre à chat` within
+  two minutes gave three different first pages, of five to nine organic results.
+
+Both need a live call, which the `keywords` command makes:
+
+```sh
+timada-dashboard keywords "arbre à chat" --country FR --language fr
+timada-dashboard keywords "arbre à chat" --country FR --language fr --results
+```
