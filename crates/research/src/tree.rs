@@ -34,6 +34,9 @@ pub struct Tree {
     pub categories: Vec<TreeCategory>,
     /// The keywords parked for later, in the order they were.
     pub parked: Vec<String>,
+    /// The keywords refused as categories, in the order they were: out of
+    /// what is left to choose.
+    pub refused: Vec<String>,
     /// The niche's own words as the owner said them; `None` until they
     /// did, when the words every seed shares stand in.
     pub niche_words: Option<Vec<String>>,
@@ -48,6 +51,10 @@ impl Tree {
 
     pub fn is_parked(&self, keyword: &str) -> bool {
         self.parked.iter().any(|parked| parked == keyword)
+    }
+
+    pub fn is_refused(&self, keyword: &str) -> bool {
+        self.refused.iter().any(|refused| refused == keyword)
     }
 
     /// The parent categories, in the order they were placed.
@@ -75,11 +82,13 @@ impl Tree {
         ordered
     }
 
-    /// Takes `keyword` out of the tree and out of the parked ones.
+    /// Takes `keyword` out of the tree, out of the parked ones and out of
+    /// the refused ones.
     pub(crate) fn take_out(&mut self, keyword: &str) {
         self.categories
             .retain(|category| category.keyword != keyword);
         self.parked.retain(|parked| parked != keyword);
+        self.refused.retain(|refused| refused != keyword);
     }
 }
 

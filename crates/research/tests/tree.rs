@@ -404,3 +404,80 @@ async fn the_keywords_left_to_choose_are_the_kept_ones_the_tree_has_not() {
         .unwrap();
     assert_eq!(none.rows.len(), 14);
 }
+
+/// A refused keyword is out of the tree and of the parked ones until its
+/// owner brings it back or places it after all.
+#[tokio::test]
+async fn a_refused_keyword_is_set_aside_until_it_is_brought_back() {
+    let research = command().await;
+    let study = study(&research, &["gants moto"]).await;
+    let id = study.id.as_str();
+    research
+        .place_category(ALICE, id, "gants moto", None)
+        .await
+        .unwrap();
+    research
+        .place_category(ALICE, id, "gants moto été", Some("gants moto"))
+        .await
+        .unwrap();
+    research
+        .park_category(ALICE, id, "bottes moto")
+        .await
+        .unwrap();
+    for keyword in ["gants moto été", "bottes moto", "gants de ski"] {
+        research.refuse_category(ALICE, id, keyword).await.unwrap();
+    }
+    let study = research.load_study(id).await.unwrap().unwrap();
+    assert_eq!(shape(&study), [("gants moto", None)]);
+    assert!(study.tree.parked.is_empty());
+    assert_eq!(
+        study.tree.refused,
+        ["gants moto été", "bottes moto", "gants de ski"]
+    );
+
+    // The same again writes nothing, and a stranger refuses nothing.
+    let version = study.aggregate_version;
+    research
+        .refuse_category(ALICE, id, "gants de ski")
+        .await
+        .unwrap();
+    assert!(
+        research
+            .refuse_category(MALLORY, id, "gants moto")
+            .await
+            .is_err()
+    );
+    let study = research.load_study(id).await.unwrap().unwrap();
+    assert_eq!(study.aggregate_version, version);
+
+    // Brought back, placed after all, or parked: no longer refused.
+    research
+        .remove_category(ALICE, id, "gants de ski")
+        .await
+        .unwrap();
+    research
+        .place_category(ALICE, id, "gants moto été", None)
+        .await
+        .unwrap();
+    research
+        .park_category(ALICE, id, "bottes moto")
+        .await
+        .unwrap();
+    let study = research.load_study(id).await.unwrap().unwrap();
+    assert!(study.tree.refused.is_empty());
+    assert_eq!(study.tree.parked, ["bottes moto"]);
+    assert_eq!(
+        shape(&study),
+        [("gants moto", None), ("gants moto été", None)]
+    );
+
+    // A parent category keeps its children: it is not refused over them.
+    research
+        .place_category(ALICE, id, "gants moto hiver", Some("gants moto"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        research.refuse_category(ALICE, id, "gants moto").await,
+        Err(ResearchError::CategoryHasChildren)
+    ));
+}

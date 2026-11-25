@@ -1,6 +1,7 @@
 //! The category tree a study's owner builds by hand from its kept
-//! keywords: a keyword becomes a parent category, a child of one, or is
-//! parked for later. Nothing here fetches, and nothing is created in a
+//! keywords: a keyword becomes a parent category, a child of one, is
+//! parked for later, or is refused so it is not offered again. Nothing
+//! here fetches, and nothing is created in a
 //! shop: the tree is the study's until its owner asks for it.
 //!
 //! Which keywords the score keeps is the read model's to say: the caller
@@ -10,11 +11,12 @@
 use evento::Executor;
 
 use crate::aggregator::{
-    CategoryParked, CategoryPlaced, CategoryPriced, CategoryRemoved, NicheWordsSet,
+    CategoryParked, CategoryPlaced, CategoryPriced, CategoryRefused, CategoryRemoved, NicheWordsSet,
 };
 use crate::error::ResearchError;
 use crate::value_object::{
-    MAX_NICHE_WORDS, MAX_PARKED, MAX_TREE_CATEGORIES, normalize_keyword, normalize_words,
+    MAX_NICHE_WORDS, MAX_PARKED, MAX_REFUSED, MAX_TREE_CATEGORIES, normalize_keyword,
+    normalize_words,
 };
 
 use super::inputs::room_for_a_change;
@@ -106,8 +108,37 @@ impl<E: Executor> Command<E> {
         .await
     }
 
-    /// Takes a keyword out of the tree, or out of the parked ones; one
-    /// that is in neither is a no-op.
+    /// Refuses a keyword as a category: out of the tree and of the parked
+    /// ones, and no longer among what is left to choose. The score keeps
+    /// it as it did. One already refused is a no-op.
+    pub async fn refuse_category(
+        &self,
+        actor_user_id: &str,
+        study_id: &str,
+        keyword: &str,
+        routing_key: Option<String>,
+    ) -> Result<(), ResearchError> {
+        let keyword = normalize_keyword(keyword)?;
+        self.settle_owned(actor_user_id, study_id, routing_key, |study, write| {
+            if study.tree.is_refused(&keyword) {
+                return Ok(Step::Leave(()));
+            }
+            without_children(study, &keyword)?;
+            if study.tree.refused.len() >= MAX_REFUSED {
+                return Err(ResearchError::TooManyRefused);
+            }
+            room_for_a_change(study)?;
+            write.event(&CategoryRefused {
+                keyword: keyword.clone(),
+                refused_by: actor_user_id.to_owned(),
+            });
+            Ok(Step::Write(()))
+        })
+        .await
+    }
+
+    /// Takes a keyword out of the tree, out of the parked ones or out of
+    /// the refused ones; one that is in none is a no-op.
     pub async fn remove_category(
         &self,
         actor_user_id: &str,
@@ -117,7 +148,10 @@ impl<E: Executor> Command<E> {
     ) -> Result<(), ResearchError> {
         let keyword = normalize_keyword(keyword)?;
         self.settle_owned(actor_user_id, study_id, routing_key, |study, write| {
-            if study.tree.category(&keyword).is_none() && !study.tree.is_parked(&keyword) {
+            if study.tree.category(&keyword).is_none()
+                && !study.tree.is_parked(&keyword)
+                && !study.tree.is_refused(&keyword)
+            {
                 return Ok(Step::Leave(()));
             }
             without_children(study, &keyword)?;

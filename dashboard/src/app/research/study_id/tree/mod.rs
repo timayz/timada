@@ -8,7 +8,8 @@
 //!
 //! Nothing is chosen until its owner chooses it: the kept keywords are
 //! listed « to choose », and one that is placed or parked leaves that list
-//! for the « chosen » one. Each move is a plain form; `picker.js` sends it
+//! for the « chosen » one. One the owner refuses leaves it for the
+//! « refused » one, so it is read once. Each move is a plain form; `picker.js` sends it
 //! in the background and shows what this page then renders, so nothing
 //! loads again.
 
@@ -68,7 +69,9 @@ pub(crate) const PARENT: &str = "parent";
 pub(crate) const UNDER: &str = "under:";
 /// Among the keywords parked for later.
 pub(crate) const PARK: &str = "park";
-/// Out of the tree and of the parked ones.
+/// Among the keywords refused as categories.
+pub(crate) const REFUSE: &str = "refuse";
+/// Out of the tree, of the parked ones and of the refused ones.
 pub(crate) const REMOVE: &str = "remove";
 
 /// The page shows this many keywords left to choose at once.
@@ -79,9 +82,16 @@ const TO_CHOOSE: &str = "to_choose";
 /// The list of the keywords in the tree and of the parked ones.
 const CHOSEN: &str = "chosen";
 
+/// The list of the keywords refused as categories.
+const REFUSED: &str = "refused";
+
 /// The lists the keywords are read by: one is in the first until its owner
-/// chooses it, and in the second from then on.
-const LISTS: [(&str, &str); 2] = [(TO_CHOOSE, "To choose"), (CHOSEN, "Chosen")];
+/// chooses it or refuses it, and in the second or the third from then on.
+const LISTS: [(&str, &str); 3] = [
+    (TO_CHOOSE, "To choose"),
+    (CHOSEN, "Chosen"),
+    (REFUSED, "Refused"),
+];
 
 #[topcoat::router::query_params(error = bad_request)]
 struct TreeQuery {
@@ -304,8 +314,8 @@ pub(crate) async fn left_to_create(
 
 /// One place a row's buttons offer to send its keyword to.
 struct Place {
-    /// What the button posts: [`PARENT`], [`UNDER`] and a keyword, [`PARK`]
-    /// or [`REMOVE`].
+    /// What the button posts: [`PARENT`], [`UNDER`] and a keyword, [`PARK`],
+    /// [`REFUSE`] or [`REMOVE`].
     to: String,
     /// The name of the parent category, for one it would go under.
     under: String,
@@ -321,10 +331,12 @@ impl Place {
 }
 
 /// The places a keyword can go from where it stands: among the parents,
-/// under each parent category but itself, parked, and out when it is in.
+/// under each parent category but itself, parked, refused while it is not
+/// in the tree, and out when it is in, parked or refused.
 fn places(study: &StudyState, keyword: &str) -> Vec<Place> {
     let placed = study.tree.category(keyword);
     let parked = study.tree.is_parked(keyword);
+    let refused = study.tree.is_refused(keyword);
     // A parent category with children stays where it is until they move.
     if study.tree.children_of(keyword).next().is_some() {
         return Vec::new();
@@ -346,7 +358,10 @@ fn places(study: &StudyState, keyword: &str) -> Vec<Place> {
     if !parked {
         places.push(Place::to(PARK));
     }
-    if placed.is_some() || parked {
+    if placed.is_none() && !refused {
+        places.push(Place::to(REFUSE));
+    }
+    if placed.is_some() || parked || refused {
         places.push(Place::to(REMOVE));
     }
     places
@@ -355,7 +370,8 @@ fn places(study: &StudyState, keyword: &str) -> Vec<Place> {
 /// The buttons of a row: one for each place its keyword can go, and a menu
 /// of the parent categories it can go under. A plain form, which
 /// `picker.js` sends without leaving the page. `menu` is the id its menu
-/// goes by, the page's own for each row.
+/// goes by, the page's own for each row. Taking a refused keyword out
+/// (`refused`) brings it back among the ones left to choose.
 #[component]
 async fn place_buttons(
     cx: &Cx,
@@ -364,9 +380,10 @@ async fn place_buttons(
     menu: &str,
     shown: &Shown,
     places: &[Place],
+    #[default] refused: bool,
 ) -> Result<impl View> {
     let can = |to: &str| places.iter().any(|place| place.to == to);
-    let (parent, park, remove) = (can(PARENT), can(PARK), can(REMOVE));
+    let (parent, park, refuse, remove) = (can(PARENT), can(PARK), can(REFUSE), can(REMOVE));
     let unders: Vec<&Place> = places
         .iter()
         .filter(|place| place.to.starts_with(UNDER))
@@ -417,9 +434,15 @@ async fn place_buttons(
                         <span class="sr-only">" for later: " (keyword)</span>
                     )
                 }
+                if refuse {
+                    button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" name="to" value=(REFUSE) },
+                        "Refuse"
+                        <span class="sr-only">" as a category: " (keyword)</span>
+                    )
+                }
                 if remove {
                     button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" name="to" value=(REMOVE) },
-                        "Take out"
+                        if refused { "Bring back" } else { "Take out" }
                         <span class="sr-only">": " (keyword)</span>
                     )
                 }
@@ -538,7 +561,7 @@ struct PickLine {
     difficulty: String,
     cpc: String,
     /// Left to choose: `main` or `long_tail`. Chosen: `parent`, `child` or
-    /// `parked`.
+    /// `parked`. Refused: `refused`.
     stands: &'static str,
     /// What the row says of it: its kind while it is left to choose, where
     /// it stands once chosen.
@@ -563,7 +586,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map(|category| category.keyword.clone())
         .chain(study.tree.parked.iter().cloned())
         .collect();
-    let figures = keyword_figures(db, &study.id, &chosen)
+    let refused = &study.tree.refused;
+    // The figures of the refused ones too: how many of them the study
+    // still keeps is what the count of the ones left to choose needs.
+    let looked_up: Vec<String> = chosen.iter().chain(refused).cloned().collect();
+    let figures = keyword_figures(db, &study.id, &looked_up)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
     let review = reviewed_with(&study, &figures);
@@ -581,15 +608,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .filter(|(outcome, _)| outcome == Tier::Main.as_str() || outcome == Tier::LongTail.as_str())
         .map(|(_, count)| *count as usize)
         .sum();
-    let chosen_kept = chosen
+    let set_aside = looked_up
         .iter()
         .filter(|keyword| figures.get(*keyword).is_some_and(|figures| figures.kept))
         .count();
-    let left_to_choose = kept.saturating_sub(chosen_kept);
+    let left_to_choose = kept.saturating_sub(set_aside);
     let after = query.after.as_deref().and_then(Cursor::parse);
     let before = query.before.as_deref().and_then(Cursor::parse);
     let listed = if list == TO_CHOOSE {
-        let taken: HashSet<String> = chosen.iter().cloned().collect();
+        let taken: HashSet<String> = looked_up.iter().cloned().collect();
         kept_keywords_without(
             db,
             &study.id,
@@ -623,7 +650,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             })
             .collect()
     } else {
-        chosen
+        let listed = if list == CHOSEN { &chosen } else { refused };
+        listed
             .iter()
             .enumerate()
             .map(|(at, keyword)| {
@@ -636,6 +664,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                         ),
                         None => ("parent", "A parent category".to_owned()),
                     },
+                    None if list == REFUSED => ("refused", "Refused".to_owned()),
                     None => ("parked", "Parked for later".to_owned()),
                 };
                 PickLine {
@@ -677,10 +706,10 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     None
                 )
             ),
-            count: Some(if *key == TO_CHOOSE {
-                left_to_choose
-            } else {
-                chosen.len()
+            count: Some(match *key {
+                TO_CHOOSE => left_to_choose,
+                CHOSEN => chosen.len(),
+                _ => refused.len(),
             }),
             current: *key == list,
         })
@@ -750,12 +779,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         "One a line. Until you say, these are the words every seed keyword shares. A category's name must hold one of them. Leave empty to check no name."
     };
-    let empty_text = match (choosing, kept, chosen.is_empty()) {
-        (true, 0, _) => "The study keeps no keyword yet.",
-        (true, _, _) => "Every keyword the study keeps is chosen.",
-        (false, _, true) => "Nothing is chosen yet: pick a keyword in « To choose ».",
-        (false, _, false) => "",
+    let empty_text = match (list, kept) {
+        (TO_CHOOSE, 0) => "The study keeps no keyword yet.",
+        (TO_CHOOSE, _) => "Every keyword the study keeps is chosen or refused.",
+        (CHOSEN, _) => "Nothing is chosen yet: pick a keyword in « To choose ».",
+        _ => "Nothing is refused: refuse a keyword in « To choose » and it is not offered again.",
     };
+    let listing_refused = list == REFUSED;
     let price_action = href!(price::price, study_id: id.clone()).resolve(cx);
     let place_action = href!(place::place, study_id: id.clone()).resolve(cx);
     let tree_description = "Each category is a keyword: its name and its address are read off it, and its figures are the keyword's. A parent category holds children; a child holds none. The price / CPC is the category's average price over its keyword's cost per click, and a category whose ratio is below what the study's sale needs is kept out of ads.";
@@ -1111,7 +1141,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
 
             section_card(
                 title: Some("Keywords"),
-                description: Some("The keywords the score keeps, the most searched first: only these make categories. None is chosen until you choose it: make it a parent category, put it under one, or park it for later, and it moves from « To choose » to « Chosen »."),
+                description: Some("The keywords the score keeps, the most searched first: only these make categories. None is chosen until you choose it: make it a parent category, put it under one, or park it for later, and it moves from « To choose » to « Chosen ». Refuse one and it moves to « Refused », where it stays out of your way; the score keeps it all the same."),
                 attrs: attributes! { id="kept" tabindex="-1" data-picker-list=(list) },
                 <div class="px-6">
                     page_tabs(label: "Keywords", tabs: &tabs)
@@ -1135,7 +1165,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             table_row(
                                 attrs: attributes! {
                                     data-kept=(choosing.then_some(row.keyword.as_str()))
-                                    data-chosen=((!choosing).then_some(row.keyword.as_str()))
+                                    data-chosen=((list == CHOSEN).then_some(row.keyword.as_str()))
+                                    data-refused=(listing_refused.then_some(row.keyword.as_str()))
                                     data-stands=(row.stands)
                                 },
                                 table_cell(
@@ -1150,7 +1181,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_cell(attrs: attributes! { class="tabular-nums" }, (&row.cpc))
                                 table_cell((&row.stands_label))
                                 table_cell(
-                                    place_buttons(action: &place_action, keyword: &row.keyword, menu: &row.menu, shown: &shown, places: &row.places)
+                                    place_buttons(action: &place_action, keyword: &row.keyword, menu: &row.menu, shown: &shown, places: &row.places, refused: listing_refused)
                                     if row.places.is_empty() {
                                         <p class="text-right text-xs text-muted-foreground">"Move its children first"</p>
                                     }

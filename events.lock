@@ -446,6 +446,7 @@ event timada-research/Study::CategoryNotCreated { request: String, keyword: Stri
 event timada-research/Study::CategoryParked { keyword: String, parked_by: String }
 event timada-research/Study::CategoryPlaced { keyword: String, parent: Option<String>, placed_by: String }
 event timada-research/Study::CategoryPriced { keyword: String, price_cents: Option<u64>, priced_by: String }
+event timada-research/Study::CategoryRefused { keyword: String, refused_by: String }
 event timada-research/Study::CategoryRemoved { keyword: String, removed_by: String }
 event timada-research/Study::Created { name: String, country: String, language: String, created_by: String }
 event timada-research/Study::CreationFailed { request: String, reason: String, failed_by: String }

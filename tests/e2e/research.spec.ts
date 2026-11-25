@@ -374,8 +374,8 @@ async function move(page: Page, row: string, to: string, said: string) {
 }
 
 /// Shows one of the two lists of the tree's page, by its tab.
-async function showList(page: Page, list: "to_choose" | "chosen") {
-  const name = list === "chosen" ? /^Chosen/ : /^To choose/;
+async function showList(page: Page, list: "to_choose" | "chosen" | "refused") {
+  const name = { to_choose: /^To choose/, chosen: /^Chosen/, refused: /^Refused/ }[list];
   await page.locator("#kept").getByRole("link", { name }).click();
   await expect(page.locator("#kept")).toHaveAttribute("data-picker-list", list);
 }
@@ -424,7 +424,7 @@ test("the kept keywords of a study become a category tree", async ({ page, brows
     await move(page, `[data-kept="${cheap}"]`, `Under ${named(seed)}`, "Placed in the tree.");
     await move(page, `[data-kept="${best}"]`, "Park", "Parked for later.");
     await expect(page.locator("[data-kept]")).toHaveCount(0);
-    await expect(page.locator("#kept")).toContainText("Every keyword the study keeps is chosen.");
+    await expect(page.locator("#kept")).toContainText("Every keyword the study keeps is chosen or refused.");
     await expect(page.locator("[data-category]")).toHaveCount(2);
     const parent = page.locator(`[data-category="${seed}"]`);
     const child = page.locator(`[data-category="${cheap}"]`);
@@ -501,6 +501,21 @@ test("the kept keywords of a study become a category tree", async ({ page, brows
     await expect(page.locator("[data-chosen]")).toHaveCount(2);
     await showList(page, "to_choose");
     await expect(page.locator("[data-kept]")).toHaveCount(1);
+    await expect(page.locator(`[data-kept="${cheap}"]`)).toBeVisible();
+
+    // A refused keyword leaves what is left to choose for a list of its
+    // own, and comes back from it; the score keeps it all the same.
+    await move(page, `[data-kept="${cheap}"]`, "Refuse", "Refused.");
+    await expect(page.locator("[data-kept]")).toHaveCount(0);
+    await expect(page.locator("#kept")).toContainText("Every keyword the study keeps is chosen or refused.");
+    await showList(page, "refused");
+    await expect(page.locator("[data-refused]")).toHaveCount(1);
+    await expect(page.locator(`[data-refused="${cheap}"]`)).toHaveAttribute("data-stands", "refused");
+    await page.reload();
+    await expect(page.locator(`[data-refused="${cheap}"]`)).toBeVisible();
+    await move(page, `[data-refused="${cheap}"]`, "Bring back", "Brought back.");
+    await expect(page.locator("[data-refused]")).toHaveCount(0);
+    await showList(page, "to_choose");
     await expect(page.locator(`[data-kept="${cheap}"]`)).toBeVisible();
 
     // A keyword the study stops keeping is held back where it stands.

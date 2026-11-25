@@ -71,6 +71,9 @@ pub const MAX_TREE_CATEGORIES: usize = 200;
 /// How many keywords a study parks at most.
 pub const MAX_PARKED: usize = 500;
 
+/// How many keywords a study refuses as categories at most.
+pub const MAX_REFUSED: usize = 1_000;
+
 /// How many parent categories a tree usually has at most: past it, the page
 /// says so.
 pub const USUAL_PARENTS: usize = 6;
