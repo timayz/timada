@@ -5,8 +5,8 @@
 //!
 //! - `dataforseo_labs/google/keyword_suggestions/live`, paid: the keywords
 //!   that contain a seed's words, with what its database holds for each;
-//! - `serp/google/organic/live/regular`, paid: the first page of a search,
-//!   made as it is asked. DataForSEO also takes searches in a queue at a
+//! - `serp/google/organic/live/regular`, paid: the first two pages of a
+//!   search, made as it is asked. DataForSEO also takes searches in a queue at a
 //!   third of the price and answers them minutes later; the live call is
 //!   the one made, since its answer is recorded by the pass that asked;
 //! - `dataforseo_labs/locations_and_languages`, free: the countries it has
@@ -58,10 +58,15 @@ const ROW_USD_MICROS: u64 = 120;
 /// The most one call may cost: 0.132 USD, for the thousand it may return.
 pub const MOST_USD_MICROS: u64 = CALL_USD_MICROS + ROW_USD_MICROS * MAX_ROWS as u64;
 
-/// What a live search of one page of ten results costs, in millionths of a
-/// US dollar, as read on 2026-11-23 (0.0006 in the queue, 0.0012 in its
-/// priority lane). A page is the unit: the ten asked for are one.
-pub const SEARCH_USD_MICROS: u64 = 2_000;
+/// What a live search costs for each page of ten results asked for, in
+/// millionths of a US dollar, as read on 2026-11-23 (0.0006 in the queue,
+/// 0.0012 in its priority lane). A page is the unit: a search of twenty
+/// results was charged two on 2026-11-25, and one of thirty three.
+const PAGE_USD_MICROS: u64 = 2_000;
+const PAGE_RESULTS: usize = 10;
+
+/// The most a search may cost: 0.004 USD, for the [`MAX_RESULTS`] asked for.
+pub const SEARCH_USD_MICROS: u64 = PAGE_USD_MICROS * MAX_RESULTS.div_ceil(PAGE_RESULTS) as u64;
 
 const OK: u32 = 20000;
 /// "No search results": an answer, with no rows.
@@ -430,6 +435,41 @@ struct SearchItem {
     domain: Option<String>,
     url: Option<String>,
     title: Option<String>,
+    /// The page's address as the search engine shows it under the title:
+    /// `https://www.zooplus.fr › chats`.
+    breadcrumb: Option<String>,
+}
+
+/// The search engine's own host, which DataForSEO has answered as the
+/// `domain` of every result since 2026-11 (#791): the `url` is then an
+/// opaque `google.com/goto` address and the site is only in the breadcrumb.
+const SEARCH_ENGINE_HOST: &str = "google.com";
+
+fn is_search_engine(host: &str) -> bool {
+    let host = host.trim().to_lowercase();
+    host.strip_prefix("www.").unwrap_or(&host) == SEARCH_ENGINE_HOST
+}
+
+/// The address a breadcrumb starts with, when it starts with one: a video's
+/// reads "Plus de 14,9 k vues · il y a 5 ans".
+fn breadcrumb_address(breadcrumb: &str) -> Option<reqwest::Url> {
+    let first = breadcrumb.split('›').next()?.trim();
+    let address = reqwest::Url::parse(first).ok()?;
+    matches!(address.scheme(), "http" | "https").then_some(address)
+}
+
+/// A result's site and address. The `domain` and `url` of the answer when
+/// they name a site; when they are the search engine's own, the site at the
+/// start of the breadcrumb, with its address as far as the breadcrumb gives
+/// it. `None` when neither names a site.
+fn site(item: &SearchItem) -> Option<(String, String)> {
+    let domain = item.domain.as_deref().map(str::trim).unwrap_or_default();
+    if !domain.is_empty() && !is_search_engine(domain) {
+        return Some((domain.to_owned(), item.url.clone().unwrap_or_default()));
+    }
+    let address = breadcrumb_address(item.breadcrumb.as_deref()?)?;
+    let host = address.host_str()?.to_owned();
+    Some((host, address.as_str().trim_end_matches('/').to_owned()))
 }
 
 /// The organic results of a page in their order, [`MAX_RESULTS`] at most;
@@ -454,10 +494,11 @@ fn results(result: Vec<SearchPage>) -> Vec<SearchResult> {
     organic
         .into_iter()
         .filter_map(|(rank, item)| {
+            let (domain, url) = site(&item)?;
             Some(SearchResult {
                 position: u8::try_from(rank).ok()?,
-                domain: item.domain.filter(|domain| !domain.trim().is_empty())?,
-                url: item.url.unwrap_or_default(),
+                domain,
+                url,
                 title: item.title.unwrap_or_default(),
             })
         })
@@ -656,7 +697,7 @@ mod tests {
         assert_eq!(answer.cost_usd_micros, 2_000);
         assert!(results(answer.result).is_empty());
         // No more than the first page, whatever comes back.
-        let items: Vec<_> = (1..=15)
+        let items: Vec<_> = (1..=25)
             .map(|rank| json!({"type": "organic", "rank_group": rank, "domain": format!("site{rank}.fr")}))
             .collect();
         let long = json!({"status_code": 20000, "cost": 0.004, "tasks": [{"status_code": 20000,
@@ -664,7 +705,52 @@ mod tests {
         .to_string();
         let kept = results(open::<SearchPage>(200, long.as_bytes()).unwrap().result);
         assert_eq!(kept.len(), MAX_RESULTS);
-        assert_eq!(kept[9].domain, "site10.fr");
+        assert_eq!(kept[19].domain, "site20.fr");
+    }
+
+    /// Organic results as DataForSEO answered them on 2026-11-25 (#791).
+    #[test]
+    fn a_result_under_the_search_engines_own_address_is_its_breadcrumbs_site() {
+        let goto = "https://google.com/goto?url=CAESewHEIkXX&gsessionid=q_XsxJmv";
+        let items = json!([
+            {"type": "organic", "rank_group": 1, "rank_absolute": 2, "page": 1,
+             "domain": "google.com", "title": "5 arbres à chat design", "url": goto,
+             "breadcrumb": "https://www.jardiland.com › Conseil & idées › Animaux"},
+            // A video names no site.
+            {"type": "organic", "rank_group": 2, "rank_absolute": 3, "page": 1,
+             "domain": "google.com", "title": "Nos arbres à chat", "url": goto,
+             "breadcrumb": "Plus de 14,9 k vues  ·  il y a 5 ans"},
+            // The title is sometimes the address, cut short.
+            {"type": "organic", "rank_group": 3, "rank_absolute": 4, "page": 1,
+             "domain": "google.com", "title": "https://ma-deco-feline.fr/products/arbre-a-chat-or...",
+             "url": goto, "breadcrumb": "https://ma-deco-feline.fr › products › arbre-a-chat-original"},
+            {"type": "organic", "rank_group": 4, "rank_absolute": 5, "page": 1,
+             "domain": "google.com", "title": "Arbre à chat", "url": goto,
+             "breadcrumb": "https://arbreachat.net"},
+            {"type": "organic", "rank_group": 5, "rank_absolute": 6, "page": 1,
+             "domain": "www.google.com", "title": "No breadcrumb", "url": goto},
+            // A page of the search engine's own sites is a site like another.
+            {"type": "organic", "rank_group": 6, "rank_absolute": 7, "page": 1,
+             "domain": "google.com", "title": "Aide", "url": goto,
+             "breadcrumb": "https://support.google.com › websearch"},
+        ]);
+        let answer = json!({"status_code": 20000, "cost": 0.002, "tasks": [{"status_code": 20000,
+            "cost": 0.002, "result": [{"items": items}]}]})
+        .to_string();
+        let kept = results(open::<SearchPage>(200, answer.as_bytes()).unwrap().result);
+        let sites: Vec<_> = kept
+            .iter()
+            .map(|result| (result.position, result.domain.as_str(), result.url.as_str()))
+            .collect();
+        assert_eq!(
+            sites,
+            vec![
+                (1, "www.jardiland.com", "https://www.jardiland.com"),
+                (3, "ma-deco-feline.fr", "https://ma-deco-feline.fr"),
+                (4, "arbreachat.net", "https://arbreachat.net"),
+                (6, "support.google.com", "https://support.google.com"),
+            ]
+        );
     }
 
     #[tokio::test]
@@ -677,7 +763,7 @@ mod tests {
             .unwrap();
         assert_eq!(found.results.len(), 2);
         assert_eq!(found.cost_usd_micros, 2_000);
-        assert_eq!(client.most_results_usd_micros(), 2_000);
+        assert_eq!(client.most_results_usd_micros(), 4_000);
 
         {
             let requests = requests.lock().unwrap();
@@ -693,7 +779,7 @@ mod tests {
                     "location_code": 2250,
                     "language_code": "fr",
                     "device": "desktop",
-                    "depth": 10,
+                    "depth": 20,
                 }])
             );
         }

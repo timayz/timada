@@ -88,8 +88,9 @@ pub struct Suggestions {
 }
 
 /// How many of a search's first organic results one call returns at most:
-/// its first page.
-pub const MAX_RESULTS: usize = 10;
+/// its first two pages. The first alone holds three to nine organic results
+/// among the search engine's own boxes (#791).
+pub const MAX_RESULTS: usize = 20;
 
 /// One organic result of a search.
 #[derive(Debug, Clone, PartialEq, Eq)]

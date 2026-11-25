@@ -162,15 +162,17 @@ export class FakeDataforseo {
             rank_group: at + 1,
             rank_absolute: at + 2,
             page: 1,
-            domain,
+            // As the real one answers since 2026-11 (#791): the search engine's
+            // own address, and the site at the start of the breadcrumb.
+            domain: "google.com",
             title: `${keyword} - ${domain}`,
             description: null,
-            url: `https://${domain}/`,
-            breadcrumb: null,
+            url: `https://google.com/goto?url=CAES${at}&gsessionid=e2e`,
+            breadcrumb: `https://${domain} › ${keyword}`,
           }));
           send(
             200,
-            envelope(20000, "Ok.", 0.002, [
+            envelope(20000, "Ok.", 0.004, [
               {
                 keyword,
                 type: "organic",

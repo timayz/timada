@@ -164,6 +164,20 @@ async fn the_first_results_are_asked_for_once_and_taken_on_by_one_node() {
         "g.fr",
         "h.fr",
         "i.fr",
+        "j.fr",
+        "k.fr",
+        "l.fr",
+        "m.fr",
+        "n.fr",
+        "o.fr",
+        "p.fr",
+        "q.fr",
+        "r.fr",
+        "s.fr",
+        "t.fr",
+        "u.fr",
+        "v.fr",
+        "w.fr",
     ]);
     many[1].title = format!("  Griffoirs \n {}", "x".repeat(500));
     assert!(
