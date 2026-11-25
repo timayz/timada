@@ -91,6 +91,79 @@ pub fn normalize_customer_id(customer_id: &str) -> Result<String, GoogleError> {
     Ok(digits)
 }
 
+/// The stream of what Merchant Center says of a shop's products.
+pub fn merchant_feed_id(tenant_id: &str, account_id: &str) -> String {
+    evento::hash_ids(vec!["google-merchant-feed", tenant_id, account_id])
+}
+
+/// The stream that says where the daily read of a shop's Merchant Center
+/// account stands.
+pub fn merchant_watch_id(tenant_id: &str) -> String {
+    evento::hash_ids(vec!["google-merchant-watch", tenant_id])
+}
+
+/// The stream of the notice owed to a shop's owners on a day.
+pub fn merchant_notice_id(tenant_id: &str, day: &str) -> String {
+    evento::hash_ids(vec!["google-merchant-notice", tenant_id, day])
+}
+
+/// The day (UTC) a shop's notice is keyed by, so its owners are told once
+/// a day at most.
+pub fn merchant_notice_day(now: u64) -> String {
+    timada_core::civil::format_date(now)
+}
+
+/// How long a notice is worth sending: a day.
+pub const MERCHANT_NOTICE_WINDOW_SECS: u64 = 24 * 60 * 60;
+
+/// Google shows the product.
+pub const MERCHANT_ACCEPTED: &str = "accepted";
+/// Google is still looking at it.
+pub const MERCHANT_PENDING: &str = "pending";
+/// Google does not show it.
+pub const MERCHANT_REFUSED: &str = "refused";
+/// The product is not sent there at all.
+pub const MERCHANT_ABSENT: &str = "none";
+
+/// Where a product may stand in Merchant Center, for Shopping ads or for
+/// the free listings.
+pub const MERCHANT_STATUSES: [&str; 4] = [
+    MERCHANT_ACCEPTED,
+    MERCHANT_PENDING,
+    MERCHANT_REFUSED,
+    MERCHANT_ABSENT,
+];
+
+/// What an issue does to a product: it is not shown, shown less, or shown
+/// all the same.
+pub const MERCHANT_SEVERITIES: [&str; 3] = ["refused", "limited", "none"];
+
+/// Where an issue applies.
+pub const MERCHANT_CONTEXTS: [&str; 2] = ["ads", "listings"];
+
+/// What an issue of the account does: nothing is shown, something is
+/// wrong, or something could be better.
+pub const MERCHANT_ACCOUNT_SEVERITIES: [&str; 3] = ["critical", "error", "suggestion"];
+
+/// How many products a read keeps: every one Google does not accept
+/// first, then the accepted ones up to this.
+pub const MAX_MERCHANT_PRODUCT_ROWS: usize = 5_000;
+
+/// How many issues are kept of a product, and of an account.
+pub const MAX_MERCHANT_ISSUES: usize = 10;
+
+/// The longest text kept of an issue.
+pub const MAX_MERCHANT_TEXT_LEN: usize = 500;
+
+/// A Merchant Center account's number: digits.
+pub fn normalize_merchant_account(account_id: &str) -> Result<String, GoogleError> {
+    let digits = account_id.trim();
+    if digits.is_empty() || digits.len() > 20 || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return Err(GoogleError::InvalidMerchantAccount);
+    }
+    Ok(digits.to_owned())
+}
+
 /// How many queries, and how many pages, are kept of a day: its most
 /// clicked. A day's event carries both lists.
 pub const MAX_SEARCH_ROWS: usize = 500;

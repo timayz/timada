@@ -20,6 +20,10 @@ pub enum GoogleError {
     NoAds,
     #[error("a Google Ads account is a number of ten digits")]
     InvalidAdsAccount,
+    #[error("the connection does not cover Merchant Center")]
+    NoMerchantCenter,
+    #[error("a Merchant Center account is a number")]
+    InvalidMerchantAccount,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -61,6 +65,8 @@ impl GoogleError {
             Self::InvalidDay => "google_invalid_day",
             Self::NoAds => "google_no_ads",
             Self::InvalidAdsAccount => "google_invalid_ads_account",
+            Self::NoMerchantCenter => "google_no_merchant_center",
+            Self::InvalidMerchantAccount => "google_invalid_merchant_account",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })

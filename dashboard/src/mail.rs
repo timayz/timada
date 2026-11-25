@@ -175,6 +175,50 @@ pub async fn send_proposals_notice(cx: &Cx, to: &str, tenant_name: &str, link: &
     Ok(())
 }
 
+/// Tells an owner of `tenant_name` that Merchant Center turned against
+/// something of the shop's: `refused` products refused that were not,
+/// `issues` new issues on the account, with a link to the page that names
+/// them.
+pub async fn send_merchant_notice(
+    cx: &Cx,
+    to: &str,
+    tenant_name: &str,
+    refused: usize,
+    issues: usize,
+    link: &str,
+) -> Result<()> {
+    let from = context::<MailSender>(cx).0.clone();
+    let subject = format!("Merchant Center needs a look on {tenant_name}");
+    let products = match refused {
+        0 => String::new(),
+        1 => "1 product that Google showed is now refused.".to_owned(),
+        n => format!("{n} products that Google showed are now refused."),
+    };
+    let account = match issues {
+        0 => String::new(),
+        1 => "Google holds a new issue against the Merchant Center account.".to_owned(),
+        n => format!("Google holds {n} new issues against the Merchant Center account."),
+    };
+    let mail = Mail::builder()
+        .from(from)
+        .to([Mailbox::new(to)?])
+        .subject(&subject)
+        .html(
+            cx,
+            view! {
+                <p>"Something changed for the worse in Merchant Center for " <strong>(tenant_name)</strong> "."</p>
+                if !products.is_empty() { <p>(&products)</p> }
+                if !account.is_empty() { <p>(&account)</p> }
+                <p><a href=(link)>"See what Google says"</a></p>
+                <p>"Or open this address: " (link)</p>
+            },
+        )
+        .await?
+        .build()?;
+    send(cx, mail).await?;
+    Ok(())
+}
+
 /// Reminds a member of `tenant_name` that the hold on the shopper's card
 /// for order `reference`, which AliExpress may have, lapses at `lapses_at`
 /// (unix seconds): the payment is to be taken before, with a link to the

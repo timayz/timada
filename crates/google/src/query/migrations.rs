@@ -27,6 +27,13 @@ pub const MIGRATION_APP: &str = "google";
 /// `google_ads_ad_groups`, `google_ads_products` and `google_ads_terms`:
 /// the day's ad groups, products and searches. Money is in millionths of
 /// the account's currency, conversions in thousandths.
+/// `google_merchant_accounts` and `google_merchant_watch`: the same for
+/// Merchant Center. `google_merchant_feeds`: when a shop's products were
+/// last read there with something moved. `google_merchant_products`: where
+/// each stands for Shopping ads and for the free listings, with `rank`
+/// sorting the ones to look at first (0 refused, 1 pending, 2 shown with an
+/// issue, 3 fine); `google_merchant_issues`: what Google holds against
+/// each; `google_merchant_account_issues`: against the account.
 pub const MIGRATIONS: Migrations<'static> = Migrations::new(
     MIGRATION_APP,
     &[
@@ -173,6 +180,61 @@ pub const MIGRATIONS: Migrations<'static> = Migrations::new(
                 PRIMARY KEY (tenant_id, customer_id, day, term, ad_group_id)
             );",
         ),
+        Migration::up(
+            "0004_merchant",
+            "CREATE TABLE google_merchant_accounts (
+                tenant_id TEXT NOT NULL PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                lapsed INTEGER NOT NULL
+            );
+            CREATE TABLE google_merchant_watch (
+                tenant_id TEXT NOT NULL PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                next_at INTEGER NOT NULL
+            );
+            CREATE TABLE google_merchant_feeds (
+                tenant_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                read_at INTEGER NOT NULL,
+                more INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, account_id)
+            );
+            CREATE TABLE google_merchant_products (
+                tenant_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                rank INTEGER NOT NULL,
+                ads TEXT NOT NULL,
+                listings TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, account_id, item_id)
+            );
+            CREATE INDEX google_merchant_products_rank
+                ON google_merchant_products (tenant_id, account_id, rank, item_id);
+            CREATE TABLE google_merchant_issues (
+                tenant_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                n INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                attribute TEXT NOT NULL,
+                context TEXT NOT NULL,
+                description TEXT NOT NULL,
+                detail TEXT NOT NULL,
+                documentation TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, account_id, item_id, n)
+            );
+            CREATE TABLE google_merchant_account_issues (
+                tenant_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                n INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                detail TEXT NOT NULL,
+                documentation TEXT NOT NULL,
+                PRIMARY KEY (tenant_id, account_id, n)
+            );",
+        ),
     ],
 );
 
@@ -193,4 +255,10 @@ pub const TABLES: &[&str] = &[
     "google_ads_ad_groups",
     "google_ads_products",
     "google_ads_terms",
+    "google_merchant_accounts",
+    "google_merchant_watch",
+    "google_merchant_feeds",
+    "google_merchant_products",
+    "google_merchant_issues",
+    "google_merchant_account_issues",
 ];

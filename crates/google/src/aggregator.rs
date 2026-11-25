@@ -49,6 +49,15 @@ pub enum Connection {
         time_zone: String,
         chosen_by: String,
     },
+    /// Which of the Merchant Center accounts the grant reaches is this
+    /// shop's.
+    MerchantAccountChosen {
+        /// The account's number, digits only.
+        account_id: String,
+        /// What Merchant Center calls the account.
+        name: String,
+        chosen_by: String,
+    },
     /// The merchant took the connection off: the grant is forgotten.
     Disconnected { disconnected_by: String },
 }
@@ -248,4 +257,134 @@ pub enum AdsWatch {
         calls: u32,
         failed_by: String,
     },
+}
+
+/// What Merchant Center holds against one product of the feed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct MerchantIssue {
+    /// Google's own name for the issue (`image_too_small`).
+    pub code: String,
+    /// What it does to the product, one of
+    /// [`MERCHANT_SEVERITIES`](crate::MERCHANT_SEVERITIES).
+    pub severity: String,
+    /// The field of the feed it names (`image_link`); empty when it names
+    /// none.
+    pub attribute: String,
+    /// Where it applies, one of
+    /// [`MERCHANT_CONTEXTS`](crate::MERCHANT_CONTEXTS); empty for both.
+    pub context: String,
+    /// What is wrong, then what to do about it, in Google's words.
+    pub description: String,
+    pub detail: String,
+    /// The page of Google's help that explains it.
+    pub documentation: String,
+}
+
+/// One product of the feed as Merchant Center has it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct MerchantProductRow {
+    /// The feed's item id, as Merchant Center keeps it.
+    pub item_id: String,
+    /// Where it stands for Shopping ads, one of
+    /// [`MERCHANT_STATUSES`](crate::MERCHANT_STATUSES).
+    pub ads: String,
+    /// The same for the free listings.
+    pub listings: String,
+    pub issues: Vec<MerchantIssue>,
+}
+
+/// Something Merchant Center holds against the account itself.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct MerchantAccountIssue {
+    pub title: String,
+    /// One of
+    /// [`MERCHANT_ACCOUNT_SEVERITIES`](crate::MERCHANT_ACCOUNT_SEVERITIES).
+    pub severity: String,
+    pub detail: String,
+    pub documentation: String,
+}
+
+/// What Merchant Center says of a shop's products. Its id is made of the
+/// shop and the account ([`merchant_feed_id`](crate::merchant_feed_id)),
+/// and it lives in the platform's tenant. It is read every day and gets an
+/// event when something moved: the last one stands.
+#[evento::aggregate(name = "timada-google/MerchantFeed")]
+pub enum MerchantFeed {
+    MerchantRead {
+        tenant_id: String,
+        account_id: String,
+        /// The products, the ones Google does not accept first,
+        /// [`MAX_MERCHANT_PRODUCT_ROWS`](crate::MAX_MERCHANT_PRODUCT_ROWS)
+        /// at most.
+        products: Vec<MerchantProductRow>,
+        /// How many accepted products were left out past that.
+        more: u32,
+        account_issues: Vec<MerchantAccountIssue>,
+        /// The items refused now that were not at the read before: what
+        /// the shop's owners are told. Empty for the first read.
+        newly_refused: Vec<String>,
+        /// The titles of the account's issues that the read before did not
+        /// have.
+        new_account_issues: Vec<String>,
+        read_by: String,
+    },
+}
+
+/// Where the daily read of a shop's Merchant Center account stands. Its id
+/// is made of the shop's ([`merchant_watch_id`](crate::merchant_watch_id)),
+/// and it lives in the platform's tenant. A pass leaves one event.
+#[evento::aggregate(name = "timada-google/MerchantWatch")]
+pub enum MerchantWatch {
+    /// A pass over the account read its `products` products.
+    MerchantChecked {
+        tenant_id: String,
+        account_id: String,
+        products: u32,
+        checked_by: String,
+    },
+    /// A pass over the account failed; `reason` says why, for the merchant.
+    /// `attempts` counts the failures in a row, this one included.
+    MerchantCheckFailed {
+        tenant_id: String,
+        account_id: String,
+        reason: String,
+        attempts: u32,
+        failed_by: String,
+    },
+}
+
+/// The notice, to a shop's owners, that Merchant Center turned against
+/// something on a day: a product refused that was not, a new issue on the
+/// account. Its id is made of the shop and the day
+/// ([`merchant_notice_id`](crate::merchant_notice_id)), so the owners are
+/// told once a day at most, and it lives in the platform's tenant. It is
+/// mailed by a subscription on every node of the work group: the node that
+/// writes the claim first is the one that mails, then records how it went
+/// ([`timada_core::Sending`]).
+#[evento::aggregate(name = "timada-google/MerchantNotice")]
+pub enum MerchantNotice {
+    /// What the stream is about, written with the first claim: the notice
+    /// of `day` (`2026-11-24`) for the shop, worth sending until
+    /// `expires_at` (unix seconds).
+    Owed {
+        tenant_id: String,
+        day: String,
+        expires_at: u64,
+    },
+    /// Node `by` took the sending, until `until` should it never say how it
+    /// went.
+    MailClaimed { by: String, until: u64 },
+    /// The notice was handed to the mail server, to every owner.
+    MailSent,
+    /// The mail server refused every owner's address for good.
+    MailUndeliverable { reason: String },
+    /// A send failed for a reason worth a retry, after `attempts` tries in
+    /// all; the next may be made at `retry_at` (unix seconds).
+    MailDeferred {
+        retry_at: u64,
+        attempts: u32,
+        reason: String,
+    },
+    /// Given up on after `attempts` tries.
+    MailFailed { reason: String, attempts: u32 },
 }

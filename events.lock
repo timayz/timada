@@ -175,7 +175,17 @@ event timada-google/Connection::AdsAccountChosen { customer_id: String, login_cu
 event timada-google/Connection::Connected { tenant_id: String, refresh_token_sealed: Vec<u8>, account: String, accesses: Vec<String>, connected_by: String }
 event timada-google/Connection::Disconnected { disconnected_by: String }
 event timada-google/Connection::Lapsed { noticed_by: String }
+event timada-google/Connection::MerchantAccountChosen { account_id: String, name: String, chosen_by: String }
 event timada-google/Connection::SiteChosen { site: String, chosen_by: String }
+event timada-google/MerchantFeed::MerchantRead { tenant_id: String, account_id: String, products: Vec<MerchantProductRow>, more: u32, account_issues: Vec<MerchantAccountIssue>, newly_refused: Vec<String>, new_account_issues: Vec<String>, read_by: String }
+event timada-google/MerchantNotice::MailClaimed { by: String, until: u64 }
+event timada-google/MerchantNotice::MailDeferred { retry_at: u64, attempts: u32, reason: String }
+event timada-google/MerchantNotice::MailFailed { reason: String, attempts: u32 }
+event timada-google/MerchantNotice::MailSent unit
+event timada-google/MerchantNotice::MailUndeliverable { reason: String }
+event timada-google/MerchantNotice::Owed { tenant_id: String, day: String, expires_at: u64 }
+event timada-google/MerchantWatch::MerchantCheckFailed { tenant_id: String, account_id: String, reason: String, attempts: u32, failed_by: String }
+event timada-google/MerchantWatch::MerchantChecked { tenant_id: String, account_id: String, products: u32, checked_by: String }
 event timada-google/SearchDay::DayFetched { tenant_id: String, site: String, day: String, clicks: u64, impressions: u64, position_milli: u32, queries: Vec<SearchRow>, pages: Vec<SearchRow>, page_queries: Vec<PageQueryRow>, fetched_by: String }
 event timada-google/SearchWatch::SearchCheckFailed { tenant_id: String, site: String, reason: String, attempts: u32, failed_by: String }
 event timada-google/SearchWatch::SearchChecked { tenant_id: String, site: String, behind: bool, checked_by: String }
@@ -555,6 +565,9 @@ type timada_google::aggregator::AdsCampaignRow { campaign_id: String, name: Stri
 type timada_google::aggregator::AdsNumbers { cost_micros: u64, impressions: u64, clicks: u64, conversions_milli: u64, value_micros: u64 }
 type timada_google::aggregator::AdsProductRow { item_id: String, campaign_id: String, ad_group_id: String, numbers: AdsNumbers }
 type timada_google::aggregator::AdsTermRow { term: String, campaign_id: String, ad_group_id: String, numbers: AdsNumbers }
+type timada_google::aggregator::MerchantAccountIssue { title: String, severity: String, detail: String, documentation: String }
+type timada_google::aggregator::MerchantIssue { code: String, severity: String, attribute: String, context: String, description: String, detail: String, documentation: String }
+type timada_google::aggregator::MerchantProductRow { item_id: String, ads: String, listings: String, issues: Vec<MerchantIssue> }
 type timada_google::aggregator::PageQueryRow { page: String, query: String, clicks: u64, impressions: u64, position_milli: u32 }
 type timada_google::aggregator::SearchRow { key: String, clicks: u64, impressions: u64, position_milli: u32 }
 type timada_identity::value_object::ChallengePurpose enum { Register, SignIn, ResetPassword }

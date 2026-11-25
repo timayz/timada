@@ -10,11 +10,13 @@
 //! account cost and brought, a day at a time.
 
 mod ads;
+mod merchant;
 mod migrations;
 mod read_model;
 mod search;
 
 pub use ads::*;
+pub use merchant::*;
 pub use migrations::*;
 pub use read_model::*;
 pub use search::*;
@@ -123,6 +125,33 @@ mod tests {
         assert!(
             calls.iter().all(|step| step.starts_with("SEARCH")),
             "{calls:#?}"
+        );
+        let due = plan(&db, super::merchant::MERCHANT_DUE, ("", 0, 200)).await;
+        assert!(
+            due.iter().all(|step| step.starts_with("SEARCH")),
+            "{due:#?}"
+        );
+        for statement in [
+            super::merchant::TALLY,
+            super::merchant::ISSUES_OF,
+            super::merchant::ACCOUNT_ISSUES,
+        ] {
+            let plan = plan(&db, statement, ("shop", "123")).await;
+            assert!(
+                plan.iter()
+                    // Counting by standing sorts what the key gave.
+                    .filter(|step| !step.starts_with("USE SORTER FOR GROUP BY"))
+                    .all(|step| step.starts_with("SEARCH")),
+                "{statement}: {plan:#?}"
+            );
+        }
+        let problems = plan(&db, super::merchant::PROBLEMS, ("shop", "123", 100)).await;
+        assert!(
+            problems
+                .iter()
+                .all(|step| step.starts_with("SEARCH")
+                    && step.contains("google_merchant_products_rank")),
+            "{problems:#?}"
         );
         let account = ("shop", "1234567890", "2026-08-01", "2026-11-01");
         let totals = plan(&db, super::ads::TOTALS, account).await;

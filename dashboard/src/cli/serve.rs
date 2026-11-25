@@ -472,6 +472,21 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
         config.google.ads_check_secs.max(1),
     ));
 
+    // And what Merchant Center says of their products.
+    let live = cluster.clone();
+    let merchant_passes = crate::merchant_passes::MerchantPasses::new(
+        db.clone(),
+        local.0.clone(),
+        Arc::new(move || {
+            let (index, of) = cluster::live_place(&live, cluster::LIVE_WITHIN, cluster::Among::All);
+            timada_core::Share { index, of }
+        }),
+        google.clone(),
+    )
+    .start(std::time::Duration::from_secs(
+        config.google.merchant_check_secs.max(1),
+    ));
+
     // A cart nobody touched for `[carts] idle_days` is dropped, each node
     // dropping its own part of them.
     let live = cluster.clone();
@@ -619,6 +634,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
     scheduled_exports.abort();
     search_passes.abort();
     ads_passes.abort();
+    merchant_passes.abort();
     idle_carts.abort();
     best_sellers.abort();
     newsletter_sends.abort();
@@ -967,6 +983,9 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     }),
     ("proposal notices", Kind::Sharded, |d| {
         crate::proposals::notices::subscription(d.mailroom.clone())
+    }),
+    ("merchant notices", Kind::Sharded, |d| {
+        crate::merchant_notices::subscription(d.mailroom.clone())
     }),
     // The sales told to Meta from the server, for the shops that gave a
     // Conversions API token and the shoppers who allowed advertising.

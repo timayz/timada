@@ -101,6 +101,10 @@ pub enum Kind {
     /// The platform's notice to a shop's members that proposals wait on
     /// it (`Proposal`, then `Notice`), keyed by the day.
     ProposalNotice,
+    /// The platform's notice to a shop's owners that Merchant Center
+    /// turned against a product or the account (`MerchantFeed`, then
+    /// `MerchantNotice`), keyed by the day.
+    MerchantNotice,
 }
 
 impl Kind {
@@ -123,6 +127,7 @@ impl Kind {
             Self::OrderMail(mail) => mail.key(),
             Self::MessageNotice => "message_notice",
             Self::ProposalNotice => "proposal_notice",
+            Self::MerchantNotice => "merchant_notice",
         }
     }
 
@@ -135,6 +140,7 @@ impl Kind {
             "newsletter_confirmation" => Self::NewsletterConfirmation,
             "message_notice" => Self::MessageNotice,
             "proposal_notice" => Self::ProposalNotice,
+            "merchant_notice" => Self::MerchantNotice,
             _ => Self::OrderMail(*Self::ORDER_MAILS.iter().find(|mail| mail.key() == value)?),
         })
     }
@@ -153,6 +159,7 @@ impl Kind {
             Self::OrderMail(_) => "order confirmation",
             Self::MessageNotice => "message notice",
             Self::ProposalNotice => "proposals notice",
+            Self::MerchantNotice => "Merchant Center notice",
         }
     }
 }
@@ -566,6 +573,7 @@ impl Mailroom {
             Some(Kind::OrderMail(mail)) => crate::order_mails::send(self, owed, mail, now).await,
             Some(Kind::MessageNotice) => crate::message_notifications::send(self, owed, now).await,
             Some(Kind::ProposalNotice) => crate::proposals::notices::send(self, owed, now).await,
+            Some(Kind::MerchantNotice) => crate::merchant_notices::send(self, owed, now).await,
             None => {
                 tracing::error!(kind = %owed.kind, "not a kind of owed mail; left alone");
                 Ok(Outcome::Left)

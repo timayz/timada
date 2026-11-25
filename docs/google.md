@@ -5,9 +5,8 @@ cost (Google Ads) and whether its products are accepted (Merchant Center). Each 
 the consent of the Google account that owns them. A shop keeps **one connection** for
 all three (#686): one place to say yes, one grant kept sealed, one "connect again".
 
-Search Console and Google Ads are the kinds of access a shop can turn on. Merchant
-Center is modelled (`timada_google::ACCESSES`) and joins the page with what reads it
-(#687).
+A shop turns on the kinds of access it wants read: Search Console, Google Ads,
+Merchant Center.
 
 ## Setting it up (operator, once)
 
@@ -340,3 +339,82 @@ What to keep in mind when reading it:
 The same numbers leave as a CSV file from the page, and on a schedule like the other
 exports (#625): a row a currency for the totals, then each source, each kind of
 click, each product and each category, told apart by their first cell.
+
+## Merchant Center (#687)
+
+`/t/{slug}/merchant-center`, for members with `pages:read`: how many of the shop's
+products Google accepts, still looks at or refuses, for Shopping ads and for the free
+listings; what Google holds against the account; and the products it does not simply
+accept, each with Google's reason, the field of the feed it names and a link to the
+product. A product's own page says where it stands. Read only: nothing is changed in
+Merchant Center.
+
+### Setting it up (operator, once more)
+
+Read on 2026-11-24. Besides enabling the **Merchant API** in the Cloud project and
+adding the scope `https://www.googleapis.com/auth/content` to the consent screen:
+
+- **The Cloud project has to be registered with a Merchant Center account**, once,
+  before any call works. It is registered with **one** account, the operator's own (a
+  standalone account with a verified site), not with each merchant's:
+
+  ```sh
+  curl -X POST -H "Authorization: Bearer $ACCESS" -H "Content-Type: application/json" \
+    "https://merchantapi.googleapis.com/accounts/v1/accounts/$ACCOUNT/developerRegistration:registerGcp" \
+    -d '{"developerEmail": "you@example.com"}'
+  ```
+
+  The caller has to be an administrator of that account, and `developerEmail` a
+  Google account, not a service account. Until it is done Google answers `401`,
+  "GCP project … is not registered with the merchant account": the Google account
+  page shows that sentence where it would list the accounts, and nothing is recorded
+  as a grant to renew.
+- **The Content API for Shopping is gone** (sunset on 2026-08-18): everything here
+  goes through the Merchant API, `v1`.
+- **Quotas are set by Google per account**, from how many products it holds: listing
+  the products is allowed about twice a full listing a day. A daily read and a few
+  asked for fit; `google.merchant_ask_again_secs` (five minutes) is how long a member
+  waits before asking again.
+
+### The account
+
+Once the connection covers Merchant Center, `/t/{slug}/google` lists the Merchant
+Center accounts the grant reaches and the member chooses the one that takes the shop's
+feed (`Connection::MerchantAccountChosen`). Sub-accounts of an advanced account are
+not listed: connect a Google account that reaches the shop's own account.
+
+### The read
+
+`dashboard/src/merchant_passes.rs`, once a day per shop like the other two, and when a
+member with `pages:manage` presses "Read now". A read lists every product of the
+account, a thousand a question, then asks what is held against the account.
+
+A product's standing in a place (Shopping ads, the free listings) is **refused** as
+soon as one country refuses it, **pending** while one has not answered, **accepted**
+otherwise, and "not sent" when Google does not name the place for it. Issues of other
+places (display ads, local listings) are left out.
+
+What moved since the read before is recorded on the shop's feed
+(`MerchantFeed::MerchantRead`): every product Google does not simply accept, then the
+accepted ones up to 5,000 in all (the rest are counted). A read that says the same is
+not recorded again.
+
+### What turns for the worse
+
+The read's event says what turned since the one before: the products refused that
+were not, and the issues the account did not have. A first read turns nothing, and a
+product refused from its first appearance is not news. The shop's **owners** are
+mailed once a day at most (`dashboard/src/merchant_notices.rs`, through the mailroom
+like the other notices), with a link to the page; what was put right before the mail
+left is not told.
+
+### For the launch path
+
+`merchant_standing(…).all_accepted_for_ads()` is what "all products accepted" reads:
+every product Merchant Center holds accepted for Shopping ads, none pending, refused
+or not sent there.
+
+Not confirmed against a real account: the exact wording and status of the
+"not registered" answer, and that `offerId` comes back in the case the feed gave it
+(the page matches it to the catalog whatever its case; the product's own page looks
+it up as the feed writes it).

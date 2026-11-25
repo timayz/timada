@@ -345,6 +345,18 @@ pub fn describe_error(code: &str) -> &'static str {
         "google_invalid_site" | "google_unknown_site" => {
             "Choose one of the sites the account reads in Search Console."
         }
+        "google_no_merchant_center" => {
+            "The connection does not cover Merchant Center: connect again and tick it."
+        }
+        "google_invalid_merchant_account" | "google_unknown_merchant_account" => {
+            "Choose one of the Merchant Center accounts the Google account reaches."
+        }
+        "google_merchant_just_read" => {
+            "Merchant Center was read a moment ago. Wait a few minutes before asking again."
+        }
+        "google_merchant_nothing_to_read" => {
+            "There is nothing to read Merchant Center with: connect the Google account and choose the Merchant Center account."
+        }
         "google_no_ads" => "The connection does not cover Google Ads: connect again and tick it.",
         "google_invalid_ads_account" | "google_unknown_ads_account" => {
             "Choose one of the Google Ads accounts the Google account reaches."

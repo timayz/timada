@@ -22,6 +22,7 @@ pub mod invoicing;
 pub mod languages;
 pub mod mail;
 pub mod members;
+pub mod merchant_center;
 pub mod messages;
 pub mod meta_pixel;
 pub mod newsletter;

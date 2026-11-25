@@ -15,12 +15,14 @@ use evento::{
 use timada_core::db::{Db, Value, execute, params_from_iter};
 
 use crate::aggregator::{
-    AdsDayFetched, AdsNumbers, AdsWatch, Connection, DayFetched, PageQueryRow, SearchRow,
-    SearchWatch,
+    AdsDayFetched, AdsNumbers, AdsWatch, Connection, DayFetched, MerchantRead, MerchantWatch,
+    PageQueryRow, SearchRow, SearchWatch,
 };
-use crate::command::{ads_watch_projection, connection_projection, search_watch_projection};
+use crate::command::{
+    ads_watch_projection, connection_projection, merchant_watch_projection, search_watch_projection,
+};
 use crate::value_object::{
-    ACCESS_ADS, ACCESS_SEARCH_CONSOLE, KEPT_DAYS, KEPT_ROW_DAYS, day_before,
+    ACCESS_ADS, ACCESS_MERCHANT_CENTER, ACCESS_SEARCH_CONSOLE, KEPT_DAYS, KEPT_ROW_DAYS, day_before,
 };
 
 /// The cursor identity of the read-model subscription, in the store.
@@ -41,6 +43,8 @@ pub fn read_model_subscription<E: Executor>(db: Db) -> SubscriptionBuilder<E> {
         .handler(on_day_fetched())
         .handler(on_ads_watch_event())
         .handler(on_ads_day_fetched())
+        .handler(on_merchant_watch_event())
+        .handler(on_merchant_read())
         .any_routing_key()
         .tenant("")
 }
@@ -106,6 +110,33 @@ async fn on_connection_event<E: Executor>(
         None => {
             db.execute(
                 "DELETE FROM google_ads_accounts WHERE tenant_id = ?1",
+                (connection.tenant_id.as_str(),),
+            )
+            .await?;
+        }
+    }
+    let merchant = connection
+        .merchant
+        .as_ref()
+        .filter(|_| connection.covers(ACCESS_MERCHANT_CENTER));
+    match merchant {
+        Some(merchant) => {
+            db.execute(
+                "INSERT INTO google_merchant_accounts (tenant_id, account_id, lapsed)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT (tenant_id) DO UPDATE SET
+                    account_id = excluded.account_id, lapsed = excluded.lapsed",
+                (
+                    connection.tenant_id.as_str(),
+                    merchant.account_id.as_str(),
+                    i64::from(connection.lapsed),
+                ),
+            )
+            .await?;
+        }
+        None => {
+            db.execute(
+                "DELETE FROM google_merchant_accounts WHERE tenant_id = ?1",
                 (connection.tenant_id.as_str(),),
             )
             .await?;
@@ -554,6 +585,170 @@ async fn on_ads_day_fetched<E: Executor>(
                 )
                 .await?;
             }
+            Ok(())
+        })
+    })
+    .await
+}
+
+#[evento::subscription_all]
+async fn on_merchant_watch_event<E: Executor>(
+    context: &Context<'_, E>,
+    event: RawEvent<MerchantWatch>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let Some(watch) = merchant_watch_projection()
+        .load(&event.aggregate_id)
+        .execute(context.executor)
+        .await?
+    else {
+        return Ok(());
+    };
+    db.execute(
+        "INSERT INTO google_merchant_watch (tenant_id, account_id, next_at) VALUES (?1, ?2, ?3)
+         ON CONFLICT (tenant_id) DO UPDATE SET
+            account_id = excluded.account_id, next_at = excluded.next_at",
+        (
+            watch.tenant_id.as_str(),
+            watch.account_id.as_str(),
+            watch.next_at as i64,
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Writes rows of `width` values each into `table`, a few statements for
+/// the lot.
+async fn insert_wide(
+    tx: &timada_core::db::Connection,
+    table: &str,
+    columns: &str,
+    width: usize,
+    rows: Vec<Vec<Value>>,
+) -> anyhow::Result<()> {
+    for chunk in rows.chunks(ROWS_PER_INSERT) {
+        let mut values = Vec::with_capacity(chunk.len() * width);
+        let mut tuples = Vec::with_capacity(chunk.len());
+        for (at, row) in chunk.iter().enumerate() {
+            let places: Vec<String> = (1..=width)
+                .map(|place| format!("?{}", at * width + place))
+                .collect();
+            tuples.push(format!("({})", places.join(", ")));
+            values.extend(row.iter().cloned());
+        }
+        let statement = format!(
+            "INSERT OR REPLACE INTO {table} ({columns}) VALUES {}",
+            tuples.join(", ")
+        );
+        execute(tx, &statement, params_from_iter(values)).await?;
+    }
+    Ok(())
+}
+
+/// A read replaces what the one before said of the account, whole: every
+/// product, every issue.
+#[evento::subscription]
+async fn on_merchant_read<E: Executor>(
+    context: &Context<'_, E>,
+    event: Event<MerchantRead>,
+) -> anyhow::Result<()> {
+    let db: Db = context.extract();
+    let read_at = event.timestamp as i64;
+    db.write(&event.data, |tx, read| {
+        Box::pin(async move {
+            let key = (read.tenant_id.as_str(), read.account_id.as_str());
+            for table in [
+                "google_merchant_products",
+                "google_merchant_issues",
+                "google_merchant_account_issues",
+            ] {
+                execute(
+                    tx,
+                    &format!("DELETE FROM {table} WHERE tenant_id = ?1 AND account_id = ?2"),
+                    key,
+                )
+                .await?;
+            }
+            execute(
+                tx,
+                "INSERT OR REPLACE INTO google_merchant_feeds
+                    (tenant_id, account_id, read_at, more)
+                 VALUES (?1, ?2, ?3, ?4)",
+                (key.0, key.1, read_at, i64::from(read.more)),
+            )
+            .await?;
+            let text = |value: &String| Value::from(value.as_str());
+            insert_wide(
+                tx,
+                "google_merchant_products",
+                "tenant_id, account_id, item_id, rank, ads, listings",
+                6,
+                read.products
+                    .iter()
+                    .map(|row| {
+                        vec![
+                            Value::from(key.0),
+                            Value::from(key.1),
+                            text(&row.item_id),
+                            Value::from(i64::from(row.rank())),
+                            text(&row.ads),
+                            text(&row.listings),
+                        ]
+                    })
+                    .collect(),
+            )
+            .await?;
+            insert_wide(
+                tx,
+                "google_merchant_issues",
+                "tenant_id, account_id, item_id, n, code, severity, attribute, context,
+                 description, detail, documentation",
+                11,
+                read.products
+                    .iter()
+                    .flat_map(|row| {
+                        row.issues.iter().enumerate().map(move |(n, issue)| {
+                            vec![
+                                Value::from(key.0),
+                                Value::from(key.1),
+                                text(&row.item_id),
+                                Value::from(n as i64),
+                                text(&issue.code),
+                                text(&issue.severity),
+                                text(&issue.attribute),
+                                text(&issue.context),
+                                text(&issue.description),
+                                text(&issue.detail),
+                                text(&issue.documentation),
+                            ]
+                        })
+                    })
+                    .collect(),
+            )
+            .await?;
+            insert_wide(
+                tx,
+                "google_merchant_account_issues",
+                "tenant_id, account_id, n, title, severity, detail, documentation",
+                7,
+                read.account_issues
+                    .iter()
+                    .enumerate()
+                    .map(|(n, issue)| {
+                        vec![
+                            Value::from(key.0),
+                            Value::from(key.1),
+                            Value::from(n as i64),
+                            text(&issue.title),
+                            text(&issue.severity),
+                            text(&issue.detail),
+                            text(&issue.documentation),
+                        ]
+                    })
+                    .collect(),
+            )
+            .await?;
             Ok(())
         })
     })

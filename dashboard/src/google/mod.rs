@@ -21,6 +21,7 @@
 //! same account. The page says where the account withdraws it.
 
 mod ads;
+mod merchant;
 mod search_console;
 
 use std::collections::HashMap;
@@ -45,6 +46,8 @@ pub const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const GOOGLE_USERINFO_URL: &str = "https://openidconnect.googleapis.com/v1/userinfo";
 /// Where Search Console is read.
 pub const SEARCH_CONSOLE_URL: &str = "https://www.googleapis.com/webmasters/v3";
+/// Where Merchant Center is read.
+pub const MERCHANT_URL: &str = "https://merchantapi.googleapis.com";
 /// Where Google Ads is read: the version of its API is part of the address.
 pub const ADS_URL: &str = "https://googleads.googleapis.com/v26";
 
@@ -54,11 +57,12 @@ pub const GOOGLE_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long before an access lapses another is asked for.
 const RENEW_BEFORE: Duration = Duration::from_secs(5 * 60);
 
-/// The kinds of access a shop is offered to turn on: the ones something
-/// reads through. Merchant Center joins the list with what reads it.
+/// The kinds of access a shop is offered to turn on: every one something
+/// reads through.
 pub const OFFERED: &[&str] = &[
     timada_google::ACCESS_SEARCH_CONSOLE,
     timada_google::ACCESS_ADS,
+    timada_google::ACCESS_MERCHANT_CENTER,
 ];
 
 /// Why Google gave nothing.
@@ -117,6 +121,7 @@ struct Inner {
     userinfo_url: String,
     search_console_url: String,
     ads_url: String,
+    merchant_url: String,
     sealer: Sealer,
     client: reqwest::Client,
     held: Mutex<HashMap<String, Held>>,
@@ -252,6 +257,7 @@ impl Google {
             userinfo_url: address(&config.userinfo_url, GOOGLE_USERINFO_URL),
             search_console_url: address(&config.search_console_url, SEARCH_CONSOLE_URL),
             ads_url: address(&config.ads_url, ADS_URL),
+            merchant_url: address(&config.merchant_url, MERCHANT_URL),
             sealer,
             client: reqwest::Client::builder()
                 .timeout(GOOGLE_TIMEOUT)
