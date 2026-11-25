@@ -2238,8 +2238,9 @@ dependencies = [
 
 [[package]]
 name = "evento"
-version = "2.0.0-alpha.42"
-source = "git+https://github.com/timayz/evento?branch=alpha#ba1b9ab2b362f1741019b7c4fbcd556805d5b5b2"
+version = "2.0.0-alpha.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80cc46376a8cca99371cea2482e7246262dce84925d3650a529492ee09997d0e"
 dependencies = [
  "evento-cluster",
  "evento-core",
@@ -2253,8 +2254,9 @@ dependencies = [
 
 [[package]]
 name = "evento-cluster"
-version = "2.0.0-alpha.42"
-source = "git+https://github.com/timayz/evento?branch=alpha#ba1b9ab2b362f1741019b7c4fbcd556805d5b5b2"
+version = "2.0.0-alpha.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2093f234cc9606b54f12c1d480f7c28c4b27c92417c2da011f153f25b328882a"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2272,8 +2274,9 @@ dependencies = [
 
 [[package]]
 name = "evento-core"
-version = "2.0.0-alpha.42"
-source = "git+https://github.com/timayz/evento?branch=alpha#ba1b9ab2b362f1741019b7c4fbcd556805d5b5b2"
+version = "2.0.0-alpha.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f48e1c14c2036a2fa6fca29f1c1c631a228992f997ac2e7ba7e79e2452fa1dc"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2292,8 +2295,9 @@ dependencies = [
 
 [[package]]
 name = "evento-fjall"
-version = "2.0.0-alpha.42"
-source = "git+https://github.com/timayz/evento?branch=alpha#ba1b9ab2b362f1741019b7c4fbcd556805d5b5b2"
+version = "2.0.0-alpha.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bbb3b26d9ee301769bc3ad8c49353d9f8479540e79977724bc79f7b8f336f83"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2309,8 +2313,9 @@ dependencies = [
 
 [[package]]
 name = "evento-lock"
-version = "2.0.0-alpha.42"
-source = "git+https://github.com/timayz/evento?branch=alpha#ba1b9ab2b362f1741019b7c4fbcd556805d5b5b2"
+version = "2.0.0-alpha.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5229827b71880f576f9408ffb7a7dd41bac406f380208c3d99e85230507f9eb"
 dependencies = [
  "anyhow",
  "quote",
@@ -2320,8 +2325,9 @@ dependencies = [
 
 [[package]]
 name = "evento-macro"
-version = "2.0.0-alpha.42"
-source = "git+https://github.com/timayz/evento?branch=alpha#ba1b9ab2b362f1741019b7c4fbcd556805d5b5b2"
+version = "2.0.0-alpha.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b59679142b8cfa3f501f6130e0c67df6a50095d3056db2fa623ac00285725c5"
 dependencies = [
  "convert_case 0.12.0",
  "quote",
@@ -2330,8 +2336,9 @@ dependencies = [
 
 [[package]]
 name = "evento-remote"
-version = "2.0.0-alpha.42"
-source = "git+https://github.com/timayz/evento?branch=alpha#ba1b9ab2b362f1741019b7c4fbcd556805d5b5b2"
+version = "2.0.0-alpha.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13995232eece51a435dbec8eb47a0ff0288414956d7a5279c4635cf0d822f4d8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2350,8 +2357,9 @@ dependencies = [
 
 [[package]]
 name = "evento-sql"
-version = "2.0.0-alpha.42"
-source = "git+https://github.com/timayz/evento?branch=alpha#ba1b9ab2b362f1741019b7c4fbcd556805d5b5b2"
+version = "2.0.0-alpha.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f7fd5fcc956e69f803c8370cb780a665bf445128359015282b680ef1390fb00"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2367,8 +2375,9 @@ dependencies = [
 
 [[package]]
 name = "evento-sql-migrator"
-version = "2.0.0-alpha.42"
-source = "git+https://github.com/timayz/evento?branch=alpha#ba1b9ab2b362f1741019b7c4fbcd556805d5b5b2"
+version = "2.0.0-alpha.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c289d8595d5b6e45fdcc779d32b2c18ba7d4ea108c62823ba40302c0a921a63"
 dependencies = [
  "async-trait",
  "evento-sql",
@@ -2379,8 +2388,9 @@ dependencies = [
 
 [[package]]
 name = "evento-turso"
-version = "2.0.0-alpha.42"
-source = "git+https://github.com/timayz/evento?branch=alpha#ba1b9ab2b362f1741019b7c4fbcd556805d5b5b2"
+version = "2.0.0-alpha.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "470663cfe4a5577d2dbf92f568d9d23b55ed0368b6f4b7751b3c21bd886b05dc"
 dependencies = [
  "anyhow",
  "async-trait",
