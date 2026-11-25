@@ -35,7 +35,7 @@ use timada_google::{ConnectionState, GOOGLE_ACTOR, accesses_of, scope_of};
 use crate::config::GoogleConfig;
 use crate::seal::Sealer;
 
-pub use ads::{AdsRead, AdsRows, assemble_ads_days};
+pub use ads::{AdsRead, AdsRows, CampaignContext, FoundCampaign, assemble_ads_days};
 pub use search_console::{Dimension, Site};
 
 /// Where a merchant says yes.

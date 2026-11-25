@@ -60,6 +60,16 @@ mod tests {
             count.iter().all(|step| step.starts_with("SEARCH")),
             "{count:#?}"
         );
+        let about = plan(
+            &db,
+            super::proposals::WAITING_ABOUT,
+            ("shop", "ads_campaign", "shopping"),
+        )
+        .await;
+        assert!(
+            about.iter().all(|step| step.starts_with("SEARCH")),
+            "{about:#?}"
+        );
         let sources = plan(&db, super::proposals::WAITING_SOURCES, ("shop",)).await;
         assert!(
             sources

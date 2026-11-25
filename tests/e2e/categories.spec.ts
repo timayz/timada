@@ -247,11 +247,11 @@ test("a category is kept back as a draft and kept out of ads", async ({ page }) 
 
   await page.goto(`/t/${slug}/feed`);
   await expect(page.locator("[data-feed-ads-label]")).toHaveAttribute("data-feed-ads-label", "");
-  await page.getByLabel("Label that marks them").selectOption({ label: "Custom label 3" });
+  await page.getByLabel("Label for campaigns").selectOption({ label: "Custom label 3" });
   await page.getByRole("button", { name: "Save the label" }).click();
   await expect(page.getByRole("status")).toContainText("Label saved.");
   await expect(page.locator("[data-feed-ads-label]")).toHaveAttribute("data-feed-ads-label", "3");
-  await expect(page.getByLabel("Label that marks them")).toHaveValue("3");
+  await expect(page.getByLabel("Label for campaigns")).toHaveValue("3");
 });
 
 test("a category cannot be moved under its own sub-category", async ({ page }) => {

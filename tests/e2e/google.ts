@@ -10,7 +10,9 @@ import { standInPort } from "./shard";
 // `searchFails` makes those answer the way Google's own failure
 // does. Google Ads answers too: the accounts the grant reaches
 // (`adsAccounts`) and, for one, its four reports over the days in
-// `adsDays` (`ADS_*` say what each day holds), until `adsFails`. Merchant
+// `adsDays` (`ADS_*` say what each day holds), until `adsFails`; it takes
+// the campaigns created through it (`adsCampaigns`, `adsMutations`), finds
+// one by its name and sets one running, unless `adsRefusesCampaigns`. Merchant
 // Center lists its accounts (`merchantAccounts`), an account's products
 // (`merchantProducts`) and what is held against it (`merchantIssues`);
 // `merchantUnregistered` answers the way a Cloud project Google does not
@@ -38,6 +40,15 @@ export type MerchantProduct = {
   ads?: "approved" | "pending" | "disapproved";
   listings?: "approved" | "pending" | "disapproved";
   issues?: { code: string; attribute?: string; description: string; detail?: string }[];
+};
+
+/// A campaign created through the API.
+export type AdsCampaignHeld = {
+  customer: string;
+  id: string;
+  name: string;
+  status: string;
+  adGroups: { id: string; name: string }[];
 };
 
 /// A Google Ads account the grant reaches; `manager` is the manager account
@@ -121,6 +132,12 @@ export class FakeGoogle {
   adsFails = false;
   /// The reports asked of Google Ads: which, of which account, over which days.
   readonly adsQuestions: { customer: string; report: string; first: string; last: string }[] = [];
+  /// The campaigns created through the API, as Google Ads holds them.
+  readonly adsCampaigns: AdsCampaignHeld[] = [];
+  /// The batches of operations Google Ads took, each whole.
+  readonly adsMutations: Record<string, any>[][] = [];
+  /// Google Ads refuses to create a campaign: Merchant Center is not linked.
+  adsRefusesCampaigns = false;
   /// The Merchant Center accounts the grant reaches; none unless a test says.
   merchantAccounts: { accountId: string; accountName: string }[] = [];
   /// The products of every account, as Merchant Center has them.
@@ -299,6 +316,21 @@ export class FakeGoogle {
         send(200, [{ results }]);
         return;
       }
+      // A campaign looked for by its name, with its ad groups.
+      const named = /campaign\.name = '((?:[^'\\]|\\.)*)'/.exec(query);
+      if (named) {
+        const name = named[1].replace(/\\(.)/g, "$1");
+        const results = this.adsCampaigns
+          .filter((campaign) => campaign.customer === ads[1] && campaign.name === name)
+          .flatMap((campaign) =>
+            campaign.adGroups.map((group) => ({
+              campaign: { id: campaign.id, status: campaign.status },
+              adGroup: { id: group.id, name: group.name },
+            })),
+          );
+        send(200, [{ results }]);
+        return;
+      }
       const [, first, last] = /BETWEEN '([\d-]+)' AND '([\d-]+)'/.exec(query) ?? [];
       this.adsQuestions.push({ customer: ads[1], report, first, last });
       if (this.adsFails) {
@@ -351,6 +383,63 @@ export class FakeGoogle {
           }));
         });
       send(200, [{ results }]);
+      return;
+    }
+    const mutate = /^\/ads\/v26\/customers\/(\d+)\/googleAds:mutate$/.exec(url.pathname);
+    if (req.method === "POST" && mutate) {
+      const operations = (JSON.parse(body || "{}") as { mutateOperations: Record<string, any>[] }).mutateOperations;
+      if (this.adsRefusesCampaigns) {
+        send(400, {
+          error: {
+            code: 400,
+            message: "Request contains an invalid argument.",
+            status: "INVALID_ARGUMENT",
+            details: [
+              {
+                errors: [
+                  {
+                    errorCode: { merchantCenterError: "MERCHANT_ID_CANNOT_BE_ACCESSED" },
+                    message: "Merchant ID is either not found or not linked to the Google Ads customer.",
+                  },
+                ],
+              },
+            ],
+          },
+        });
+        return;
+      }
+      this.adsMutations.push(operations);
+      // All or none, each answered in its place; what is created gets a
+      // number of Google's own.
+      const of = (kind: string, id: string) => ({ resourceName: `customers/${mutate[1]}/${kind}/${id}` });
+      let created: AdsCampaignHeld | undefined;
+      const answers = operations.map((operation) => {
+        const campaign = operation.campaignOperation;
+        if (campaign?.update) {
+          const held = this.adsCampaigns.find((c) => campaign.update.resourceName.endsWith(`/campaigns/${c.id}`));
+          if (held) held.status = campaign.update.status;
+          return { campaignResult: { resourceName: campaign.update.resourceName } };
+        }
+        if (campaign?.create) {
+          created = {
+            customer: mutate[1],
+            id: `${9001 + this.adsCampaigns.length}`,
+            name: campaign.create.name,
+            status: campaign.create.status,
+            adGroups: [],
+          };
+          return { campaignResult: of("campaigns", created.id) };
+        }
+        if (operation.adGroupOperation?.create && created) {
+          const id = `${created.id}${created.adGroups.length + 1}`;
+          created.adGroups.push({ id, name: operation.adGroupOperation.create.name });
+          return { adGroupResult: of("adGroups", id) };
+        }
+        if (operation.campaignBudgetOperation) return { campaignBudgetResult: of("campaignBudgets", "8001") };
+        return {};
+      });
+      if (created) this.adsCampaigns.push(created);
+      send(200, { mutateOperationResponses: answers });
       return;
     }
     if (req.method === "GET" && url.pathname.startsWith("/merchant/")) {

@@ -12,6 +12,10 @@
 //! value was changed in between: nothing is written over it and the
 //! proposal ends as out of date.
 //!
+//! A campaign to create is made at Google Ads, which knows it by its name:
+//! one found there under the approved name is recorded in place of making
+//! a second ([`crate::campaigns::create`]).
+//!
 //! A refusal of the shop's (a product archived meanwhile, a slug taken) is
 //! the proposal's outcome, recorded with its reason. Only the store
 //! failing fails the pass.
@@ -26,12 +30,13 @@ use timada_catalog::{
 use timada_proposals::aggregator::{Approved, Change};
 use timada_proposals::{
     FIELD_BODY, FIELD_DESCRIPTION, FIELD_META_DESCRIPTION, FIELD_META_TITLE, FIELD_NAME,
-    FIELD_PRICE, KIND_NEW_CATEGORY, KIND_PRODUCT, PROPOSALS_ACTOR, ProposalState, ProposalStatus,
-    priced_variant, proposed_category_id,
+    FIELD_PRICE, KIND_ADS_CAMPAIGN, KIND_NEW_CATEGORY, KIND_PRODUCT, PROPOSALS_ACTOR,
+    ProposalState, ProposalStatus, priced_variant, proposed_category_id,
 };
 
 use super::{Catalog, Proposals, REMOVED, Standing, Subject, permissions_of, standing, subject};
 use crate::cluster::Executor;
+use crate::google::Google;
 
 /// The cursor identity of the subscription, in the store.
 pub const SUBSCRIPTION: &str = "timada-dashboard/proposal-changes";
@@ -43,13 +48,16 @@ const SUSPENDED: &str = "The shop is suspended.";
 /// What the member reads of a kind nothing applies yet.
 const NO_APPLIER: &str = "Nothing applies this kind of change yet.";
 
-/// The store, to write with.
+/// The store, to write with, and Google, where a campaign is created.
 #[derive(Clone)]
-struct Store(Executor);
+struct Store(Executor, Google);
 
-pub fn subscription<E: evento::Executor>(store: Executor) -> SubscriptionBuilder<E> {
+pub fn subscription<E: evento::Executor>(
+    store: Executor,
+    google: Google,
+) -> SubscriptionBuilder<E> {
     SubscriptionBuilder::new(SUBSCRIPTION)
-        .data(Store(store))
+        .data(Store(store, google))
         .handler(on_approved())
         // A saga: it follows the node's own work group (the executor's
         // default routing key).
@@ -185,13 +193,14 @@ async fn on_approved<E: evento::Executor>(
     event: Event<Approved>,
 ) -> anyhow::Result<()> {
     let store: Store = context.extract();
-    settle(&store.0, &event.tenant, &event.aggregate_id).await
+    settle(&store.0, &store.1, &event.tenant, &event.aggregate_id).await
 }
 
 /// Applies the proposal `proposal_id` of the shop `tenant_id` if it is
 /// approved and not settled yet, and records how it went.
 pub(crate) async fn settle(
     store: &Executor,
+    google: &Google,
     tenant_id: &str,
     proposal_id: &str,
 ) -> anyhow::Result<()> {
@@ -221,7 +230,8 @@ pub(crate) async fn settle(
     }
     let catalog = Catalog::new(store.clone(), tenant_id);
     let held = subject(
-        &catalog,
+        store,
+        tenant_id,
         &proposal.kind,
         &proposal.subject_id,
         Some(proposal_id),
@@ -242,6 +252,24 @@ pub(crate) async fn settle(
         return Ok(());
     }
     let held = held.expect("a subject that is there");
+    if proposal.kind == KIND_ADS_CAMPAIGN {
+        // Created already, by this approval seen twice: nothing is left.
+        if left(&held, &proposal.changes).is_empty() {
+            proposals
+                .record_applied(PROPOSALS_ACTOR, proposal_id)
+                .await?;
+            return Ok(());
+        }
+        return match crate::campaigns::create(store, google, tenant_id, &proposal).await? {
+            crate::campaigns::Made::Done => {
+                proposals
+                    .record_applied(PROPOSALS_ACTOR, proposal_id)
+                    .await?;
+                Ok(())
+            }
+            crate::campaigns::Made::Refused(reason) => fail(&reason).await,
+        };
+    }
     match apply(&catalog, &proposal.answered_by, &proposal, &held).await {
         Ok(()) => {
             proposals
@@ -320,7 +348,7 @@ mod tests {
     }
 
     async fn pass(store: &Evento) {
-        subscription::<Evento>(store.clone())
+        subscription::<Evento>(store.clone(), Google::new(None, &Default::default()))
             .retry(0)
             .run_once(store)
             .await
@@ -413,7 +441,9 @@ mod tests {
 
         // Delivered again: nothing moves.
         let version = changed.aggregate_version;
-        settle(&store, &shop, &id).await.unwrap();
+        settle(&store, &Google::new(None, &Default::default()), &shop, &id)
+            .await
+            .unwrap();
         let again = catalog.load_product(&product_id).await.unwrap().unwrap();
         assert_eq!(again.aggregate_version, version);
     }
@@ -647,7 +677,9 @@ mod tests {
         let id = approved(&store, &shop, new(), &[]).await;
         assert_eq!(proposal(&store, &shop, &id).await.subject_name, "Top level");
         pass(&store).await;
-        settle(&store, &shop, &id).await.unwrap();
+        settle(&store, &Google::new(None, &Default::default()), &shop, &id)
+            .await
+            .unwrap();
         let category = catalog
             .load_category(&proposed_category_id(&id))
             .await
@@ -750,7 +782,9 @@ mod tests {
         let refused = approve(&store, &shop, ALICE, &waiting, vec![], now()).await;
         assert!(matches!(refused, Err(Refusal::NoApplier)));
         proposals.approve(ALICE, &bid, vec![], now()).await.unwrap();
-        settle(&store, &shop, &bid).await.unwrap();
+        settle(&store, &Google::new(None, &Default::default()), &shop, &bid)
+            .await
+            .unwrap();
         let failed = proposal(&store, &shop, &bid).await;
         assert_eq!(failed.status, ProposalStatus::Failed);
         assert_eq!(failed.note, NO_APPLIER);

@@ -168,6 +168,9 @@ pub fn subject_url(cx: &Cx, slug: &str, kind: &str, subject_id: &str) -> Option<
         return None;
     }
     match kind {
+        timada_proposals::KIND_ADS_CAMPAIGN => {
+            Some(href!(super::ads::campaigns::index, slug: slug.to_owned()).resolve(cx))
+        }
         KIND_PRODUCT => Some(
             href!(product_id::index, slug: slug.to_owned(), product_id::product_id: subject_id.to_owned())
                 .resolve(cx),

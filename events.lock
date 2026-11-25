@@ -171,6 +171,10 @@ event timada-discounts/Offers::OfferReactivated { offer_id: String, reactivated_
 event timada-google/AdsDay::AdsDayFetched { tenant_id: String, customer_id: String, day: String, currency: String, campaigns: Vec<AdsCampaignRow>, ad_groups: Vec<AdsAdGroupRow>, products: Vec<AdsProductRow>, terms: Vec<AdsTermRow>, fetched_by: String }
 event timada-google/AdsWatch::AdsCheckFailed { tenant_id: String, customer_id: String, reason: String, attempts: u32, calls: u32, failed_by: String }
 event timada-google/AdsWatch::AdsChecked { tenant_id: String, customer_id: String, first: String, last: String, behind: bool, calls: u32, checked_by: String }
+event timada-google/Campaign::CampaignCreated { tenant_id: String, customer_id: String, kind: String, campaign_id: String, name: String, settings: Vec<CampaignSetting>, ad_groups: Vec<CampaignAdGroup>, live: bool, proposal_id: String, created_by: String }
+event timada-google/Campaign::LiveFailed { reason: String, failed_by: String }
+event timada-google/Campaign::LiveRequested { requested_by: String }
+event timada-google/Campaign::WentLive { at: u64, noticed_by: String }
 event timada-google/Connection::AdsAccountChosen { customer_id: String, login_customer_id: Option<String>, name: String, currency: String, time_zone: String, chosen_by: String }
 event timada-google/Connection::Connected { tenant_id: String, refresh_token_sealed: Vec<u8>, account: String, accesses: Vec<String>, connected_by: String }
 event timada-google/Connection::Disconnected { disconnected_by: String }
@@ -565,6 +569,8 @@ type timada_google::aggregator::AdsCampaignRow { campaign_id: String, name: Stri
 type timada_google::aggregator::AdsNumbers { cost_micros: u64, impressions: u64, clicks: u64, conversions_milli: u64, value_micros: u64 }
 type timada_google::aggregator::AdsProductRow { item_id: String, campaign_id: String, ad_group_id: String, numbers: AdsNumbers }
 type timada_google::aggregator::AdsTermRow { term: String, campaign_id: String, ad_group_id: String, numbers: AdsNumbers }
+type timada_google::aggregator::CampaignAdGroup { ad_group_id: String, category_id: String, name: String }
+type timada_google::aggregator::CampaignSetting { field: String, value: String }
 type timada_google::aggregator::MerchantAccountIssue { title: String, severity: String, detail: String, documentation: String }
 type timada_google::aggregator::MerchantIssue { code: String, severity: String, attribute: String, context: String, description: String, detail: String, documentation: String }
 type timada_google::aggregator::MerchantProductRow { item_id: String, ads: String, listings: String, issues: Vec<MerchantIssue> }

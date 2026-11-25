@@ -44,7 +44,7 @@ use crate::components::table::{
 };
 use crate::components::textarea::textarea;
 use crate::db::Db;
-use crate::proposals::{Catalog, kind_label, subject};
+use crate::proposals::{kind_label, subject};
 use crate::ui::{
     LINK, Shell, Tone, cursor_pager, document, empty_row, fact, facts, format_time, notice,
     page_header, section_card, status_badge,
@@ -121,8 +121,7 @@ pub async fn ask(
     if kind != KIND_PRODUCT && kind != KIND_CATEGORY {
         return Err(WriterError::UnknownKind);
     }
-    let catalog = Catalog::new(store.clone(), access.tenant_id());
-    let Some(held) = subject(&catalog, kind, subject_id, None).await? else {
+    let Some(held) = subject(store, access.tenant_id(), kind, subject_id, None).await? else {
         return Ok(Asked::Missing);
     };
     if open_draft_of(context::<Db>(cx), access.tenant_id(), subject_id, now())

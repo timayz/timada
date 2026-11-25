@@ -29,8 +29,7 @@ use crate::components::field::{field, field_label};
 use crate::components::input::input;
 use crate::components::textarea::textarea;
 use crate::proposals::{
-    Catalog, Standing, field_label as label_of, kind_label, permissions_of, source_label, standing,
-    subject,
+    Standing, field_label as label_of, kind_label, permissions_of, source_label, standing, subject,
 };
 use crate::ui::{
     LINK, Shell, document, fact, facts, format_time, icons, notice, page_header, section_card,
@@ -101,9 +100,9 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let can_approve = can_answer && !expired && may_change;
     // What the subject holds now, for a member about to say yes.
     let stale = if can_approve {
-        let catalog = Catalog::new(access.executor()?.clone(), access.tenant_id());
         let held = subject(
-            &catalog,
+            access.executor()?,
+            access.tenant_id(),
             &proposal.kind,
             &proposal.subject_id,
             Some(&proposal.id),
@@ -148,7 +147,11 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         proposal.subject_name.clone()
     };
-    let heading = format!("Change to {about}");
+    let heading = if proposal.kind == timada_proposals::KIND_ADS_CAMPAIGN {
+        about.clone()
+    } else {
+        format!("Change to {about}")
+    };
     let title = format!("{heading} · Proposals · {}", tenant.name);
     let back = proposals_url(cx, &slug, None, None);
     let subject_link = subject_url(cx, &slug, &proposal.kind, &proposal.subject_id);
@@ -163,7 +166,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .iter()
         .map(|change| Edit {
             label: label_of(&change.field),
-            long: matches!(change.field.as_str(), FIELD_DESCRIPTION | FIELD_BODY),
+            long: matches!(change.field.as_str(), FIELD_DESCRIPTION | FIELD_BODY)
+                || crate::campaigns::is_long(&change.field),
             field: change.field.clone(),
             before: change.before.clone(),
             after: change.after.clone(),

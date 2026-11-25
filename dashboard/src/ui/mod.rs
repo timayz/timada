@@ -351,6 +351,40 @@ pub fn describe_error(code: &str) -> &'static str {
         "google_invalid_merchant_account" | "google_unknown_merchant_account" => {
             "Choose one of the Merchant Center accounts the Google account reaches."
         }
+        "campaign_not_ready" => {
+            "The shop is not ready for this campaign: the page says what is missing."
+        }
+        "campaign_waits" => {
+            "This campaign is prepared already and waits for an answer, under Proposals."
+        }
+        "google_invalid_campaign" => "No such campaign.",
+        "google_invalid_campaign_name" => "A campaign's name is one to 200 characters.",
+        "google_invalid_campaign_amount" => {
+            "An amount reads 0.30, in the account's currency, above zero."
+        }
+        "google_bid_over_budget" => "The bid is more than the campaign may spend in a day.",
+        "google_invalid_countries" => {
+            "Countries read FR, BE: the two letters of each, among the ones Google Ads is told by here."
+        }
+        "google_invalid_adjustment" => {
+            "An adjustment is a whole percentage between -90 and 900, or nothing."
+        }
+        "google_invalid_start" => "A campaign starts paused or live.",
+        "google_invalid_ad_groups" => {
+            "An ad group is a line made of the id of a category the shop advertises and a name, no two the same, a hundred at most."
+        }
+        "google_invalid_keywords" => {
+            "A campaign on the shop's name takes one to ten searches, a line each, of 80 characters at most."
+        }
+        "google_invalid_headlines" => {
+            "An ad takes three to fifteen headlines, a line each, of 30 characters at most."
+        }
+        "google_invalid_descriptions" => {
+            "An ad takes two to four descriptions, a line each, of 90 characters at most."
+        }
+        "google_campaign_exists" => "The campaign was created already: change it at Google Ads.",
+        "google_no_campaign" => "The campaign was not created yet.",
+        "google_campaign_live" => "The campaign runs already.",
         "google_merchant_just_read" => {
             "Merchant Center was read a moment ago. Wait a few minutes before asking again."
         }
@@ -729,6 +763,9 @@ pub fn describe_permission(permission: &str) -> &'static str {
         }
         "proposals:approve" => {
             "Approve, edit or refuse the changes that wait; a change to the catalog also needs the permission to manage products"
+        }
+        "ads:manage" => {
+            "Prepare the shop's campaigns, approve them and set them running at Google Ads"
         }
         _ => "Unknown permission",
     }

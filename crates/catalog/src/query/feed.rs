@@ -453,15 +453,24 @@ pub struct FeedShop {
     pub ads: Option<FeedAds>,
 }
 
-/// What a feed's writer marks the products kept out of ads with: the label
-/// that says [`OUT_OF_ADS_LABEL`] in place of the merchant's own on a
-/// product whose main category is one of `categories`.
+/// What a feed's writer tells campaigns on one label, in place of the
+/// merchant's own: [`OUT_OF_ADS_LABEL`] on a product whose main category is
+/// one of `categories`, and on every other product its main category
+/// ([`ads_category_label`]), which a campaign makes its ad groups from.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FeedAds {
     /// Which label carries the mark, from 0.
     pub label: usize,
     /// The categories campaigns leave out, by id.
     pub categories: BTreeSet<String>,
+}
+
+/// What the feed's label for campaigns says of a product filed first
+/// under the category `category_id`: its id in small letters, which is how
+/// Google Ads compares labels. An id rather than a name or an address, so
+/// that renaming a category leaves its ad group showing its products.
+pub fn ads_category_label(category_id: &str) -> String {
+    category_id.to_lowercase()
 }
 
 impl FeedAds {
@@ -748,10 +757,21 @@ fn write_item(
         // The label a shop gave to its margins says the item's tier, and
         // nothing where its cost is not known: never the merchant's own
         // label, which a campaign would take for a tier.
-        // The label a shop gave to what campaigns leave out says so, and
-        // is the merchant's own on every other product.
+        // The label a shop gave to its campaigns says which category the
+        // product is filed under first, which a campaign makes its ad
+        // groups from, or that campaigns leave it out: never the
+        // merchant's own, which a campaign would take for a category.
+        let category;
         let label = match (&shop.ads, &shop.margin) {
             (Some(ads), _) if ads.label == n && ads.leaves_out(product) => OUT_OF_ADS_LABEL,
+            (Some(ads), _) if ads.label == n => {
+                category = product
+                    .categories
+                    .first()
+                    .map(|main| ads_category_label(main))
+                    .unwrap_or_default();
+                category.as_str()
+            }
             (_, Some(margin)) if margin.label == n => margin
                 .tier(product, item.grouped.then_some(item.id), item.amount_cents)
                 .unwrap_or(""),
@@ -1191,9 +1211,9 @@ mod tests {
         );
     }
 
-    /// A shop that gave a label to what campaigns leave out has it say so
-    /// on the products whose main category is kept out, in place of the
-    /// merchant's own, and leaves every other product's label alone.
+    /// A shop that gave a label to its campaigns has it say, in place of
+    /// the merchant's own, that a product is left out when its main
+    /// category is kept out of ads, and which category it is otherwise.
     #[test]
     fn a_product_of_a_category_kept_out_of_ads_says_so_on_its_label() {
         let mut shop = shop();
@@ -1213,13 +1233,20 @@ mod tests {
             "{out}"
         );
 
-        // Only its main category counts.
+        // Only its main category counts: a product filed first under
+        // another says that one, for a campaign to make an ad group of.
         product.categories = vec!["01OTHER".into(), "01GLOVES".into()];
         let out = items(&product, &shop);
         assert!(
-            out.contains("<g:custom_label_0>high margin</g:custom_label_0>"),
+            out.contains("<g:custom_label_0>01other</g:custom_label_0>"),
             "{out}"
         );
+        assert!(!out.contains("high margin"), "{out}");
+
+        // A product filed nowhere says nothing there.
+        product.categories = vec![];
+        let out = items(&product, &shop);
+        assert!(!out.contains("custom_label_0"), "{out}");
 
         // A label with nothing of the merchant's on it says it too.
         shop.ads.as_mut().unwrap().label = 1;

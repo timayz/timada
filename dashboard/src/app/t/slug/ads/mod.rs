@@ -11,6 +11,8 @@
 //! Ads counted over what the clicks cost. What the shop's own orders say
 //! is the sales report's.
 
+pub mod campaigns;
+
 use std::collections::BTreeMap;
 
 use timada_catalog::{FeedItems, feed_items};
@@ -31,7 +33,7 @@ use topcoat::{
 use super::google::{customer_number, google};
 use super::{TenantAccess, TenantNav, require_tenant, slug};
 use crate::components::alert::{AlertVariant, alert, alert_description};
-use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
 use crate::components::select::select;
 use crate::components::table::{
     table, table_body, table_cell, table_head, table_header, table_row,
@@ -410,7 +412,8 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             shell: Shell::tenant(&tenant, &nav, "ads"),
             page_header(
                 title: "Google Ads",
-                subtitle: Some("What your campaigns cost and brought, as Google Ads counts it. Read once a day through the shop's Google account; nothing is changed in Google Ads."),
+                subtitle: Some("What your campaigns cost and brought, as Google Ads counts it. Read once a day through the shop's Google account."),
+                <a class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) href=(href!(campaigns::index, slug: slug.clone()))>"Campaigns"</a>
             )
 
             <div data-ads=(standing.key())>

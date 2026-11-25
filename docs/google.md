@@ -216,8 +216,8 @@ The browser suite runs against a stand-in (`tests/e2e/google.ts`), which
 `/t/{slug}/ads`, for members with `orders:read`: what the shop's Google Ads account
 cost and brought over the last 7, 28 or 90 days (cost, impressions, clicks,
 conversions, conversion value and return on ad spend), then the same by campaign, by
-kind of device, by ad group, by category, by product and by search. Read only:
-nothing is changed in Google Ads.
+kind of device, by ad group, by category, by product and by search. The page only
+reads; what timada creates in Google Ads is [the first campaign](#the-first-campaign-691).
 
 ### The account
 
@@ -302,6 +302,127 @@ and is not the shop's own count of its orders: that is the sales report's (#689)
 "By category" adds the products up by the categories the catalog files them under
 **today**; a product in two categories counts in both. An item the catalog no longer
 has reads "No longer in the catalog".
+
+## The first campaign (#691)
+
+A new shop's first campaign is always the same shape. timada builds it from
+the shop's categories, and creates it in the shop's Google Ads account once
+a member approved it. The page is `/t/{slug}/ads/campaigns`, reached from
+the Google Ads page; the code is `dashboard/src/campaigns.rs`, the
+aggregate `Campaign` in `crates/google`.
+
+Two campaigns are offered:
+
+| Kind | What Google Ads gets |
+|---|---|
+| `shopping` | A Standard Shopping campaign with manual bids, priority 0, one ad group a category, the same starting bid on each |
+| `brand` | A Search campaign with manual bids on Google's own results, one ad group, the shop's name as phrase keywords, one responsive search ad that leads to the shop's address |
+
+### What it waits for
+
+The page lists what is missing and offers no form until nothing is. Each
+check reads what timada already holds; none asks Google.
+
+| Check | Read from |
+|---|---|
+| A Google Ads account is chosen | the shop's connection |
+| The Google tag counts the sales | the tag has a Google Ads id and the label of its purchase conversion |
+| Merchant Center accepts every product (`shopping`) | the last read of Merchant Center (`merchant_standing().all_accepted_for_ads()`) |
+| The feed tells campaigns each product's category (`shopping`) | the feed's label for campaigns is chosen |
+| A category holds products to advertise (`shopping`) | a published category with products, not kept out of ads |
+| The shop's address is known (`brand`) | where shoppers find the shop, on the API keys page |
+
+"Counts the sales" is what timada can know. Whether Google Ads recorded a
+purchase cannot be read before a first ad was clicked: Google Ads counts a
+conversion only after an ad click.
+
+### One ad group a category, through the feed's label
+
+The feed's label for campaigns (one of `custom_label_0` to `4`, chosen on
+the Shopping feed's page) says, on every product, the category it is filed
+under first, as the category's id in small letters. On a product whose
+main category is kept out of ads it says `no_ads` instead. It takes the
+place of the merchant's own value on that label.
+
+Each ad group shows the products whose label says its category, and
+excludes every other product. So a product of a category kept out of ads,
+or filed nowhere, is shown by no ad group. The id is used, not the name or
+the address: renaming a category leaves its ad group showing its products.
+
+An ad group is named after its category, with the categories above it
+(`Chats > Arbres`), so no two share a name. A campaign is created with a
+hundred ad groups at most.
+
+### Settings and their defaults
+
+| Setting | Default | Limits |
+|---|---|---|
+| Campaign name | `Shopping · {shop}` / `{shop} · name` | no other campaign of the account bears it |
+| Daily budget | 10.00 / 2.00, in the account's currency | up to 10,000.00 |
+| Starting bid | 0.30 | not above the daily budget |
+| Countries | the ones the shipping methods name | 1 to 30, among those `geo_target_of` knows |
+| Phones, tablets (`shopping`) | -55 %, -40 % | -90 to 900, or nothing |
+| Starts | paused | paused or live |
+| Ad groups (`shopping`) | every category worth advertising | a line each: the category's id, then the ad group's name |
+| Searches, headlines, descriptions (`brand`) | the shop's name; three headlines; two descriptions, in English | 1 to 10 searches; 3 to 15 headlines of 30 characters; 2 to 4 descriptions of 90 |
+
+A country is told to Google Ads by its number there, which is 2,000 plus
+its ISO 3166-1 number (France is 2250). Google's list of geo targets
+confirms it for every country checked; its documentation does not state
+the rule.
+
+### From the form to Google Ads
+
+1. **Prepared.** The form's values become a [proposal](proposals.md) of
+   kind `ads_campaign`, whose subject is the kind of campaign and whose
+   fields are the settings. Nothing is sent to Google Ads. While it waits,
+   the page links to it in place of the form.
+2. **Approved.** A member with `proposals:approve` and `ads:manage` reads
+   the whole of it, changes what they want and approves.
+3. **Created.** The saga that applies proposals looks in the account for a
+   campaign of the approved name. One that holds the ad groups asked for is
+   this one, made by an attempt that did not get to record it, and is
+   recorded. Otherwise the campaign is sent as one request, which Google
+   Ads takes whole or not at all, and recorded on the shop
+   (`CampaignCreated`). So an approval seen by two nodes ends with one
+   campaign.
+4. **Refused.** What Google Ads refuses (Merchant Center not linked to the
+   account, a name taken by another campaign, billing) ends the proposal as
+   not applied, with Google's words. Nothing was created; it is prepared
+   again.
+
+Creating a campaign costs as many operations of the platform's daily
+allowance as it has parts: a dozen, plus five an ad group. It is not
+counted in what the daily passes may use.
+
+### Running, and the three weeks after
+
+A campaign created paused is set running from the page (`LiveRequested`,
+then the saga `timada-dashboard/ads-campaigns` tells Google Ads), or at
+Google Ads itself: the daily read records the first day it showed an ad.
+Either way `WentLive` is written once, with the moment. The checkpoints
+(#697) count their days from it, and the page says to leave the campaign
+alone for its first 21 days.
+
+A campaign is created, never changed, from timada: its bids and its
+structure are tuned by the rounds of #692, or by hand at Google Ads. A
+shop that moves to another Google Ads account may create its campaigns
+again there.
+
+### Not confirmed against a real account
+
+- That Explorer access may create campaigns: the documentation restricts
+  account creation, users, planning and billing, and does not list
+  campaigns.
+- The shape of the listing groups when the ad group is created in the same
+  request (a temporary number for both), and the "everything else" node of
+  a custom label keeping its index.
+- That a duplicate campaign name is refused on creation as it is on a
+  rename (`DUPLICATE_CAMPAIGN_NAME`).
+- That labels compare whatever their capitals: the feed and the campaign
+  both write the category's id in small letters, so nothing depends on it.
+- Device adjustments on a Standard Shopping campaign with manual bids, sent
+  when the campaign is created.
 
 ## Profit after ads (#689)
 
