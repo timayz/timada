@@ -216,6 +216,14 @@ pub fn api_key_reveal(cx: &Cx) -> UnparsedCookieStore<ApiKeyReveal, impl Cookies
     )
 }
 
+/// The agent key just made, on its way to the page that shows it once.
+pub fn agent_key_reveal(cx: &Cx) -> UnparsedCookieStore<ApiKeyReveal, impl Cookies + '_> {
+    cookie_store(
+        flow_jar(cx).default_max_age(time::Duration::seconds(API_KEY_REVEAL_MAX_AGE_SECS as i64)),
+        "agent_key_reveal",
+    )
+}
+
 pub fn aliexpress_flow(cx: &Cx) -> UnparsedCookieStore<AliexpressFlow, impl Cookies + '_> {
     cookie_store(flow_jar(cx), "aliexpress_flow")
 }

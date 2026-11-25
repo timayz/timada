@@ -503,6 +503,10 @@ event timada-support/MessageNotification::MailFailed { reason: String, attempts:
 event timada-support/MessageNotification::MailSent unit
 event timada-support/MessageNotification::MailUndeliverable { reason: String }
 event timada-support/MessageNotification::Owed { message_id: String, expires_at: u64 }
+event timada-tenancy/AgentCalls::Called { tool: String, tenant_id: String, ok: bool }
+event timada-tenancy/AgentKeyUse::UsedOn { day: String }
+event timada-tenancy/AgentKeys::Minted { user_id: String, key_id: String, label: String, hint: String, shops: Vec<AgentShop>, minted_by: String }
+event timada-tenancy/AgentKeys::Withdrawn { key_id: String, withdrawn_by: String }
 event timada-tenancy/ApiKey::Created { tenant_id: String, label: String, hint: String, scopes: Vec<String>, created_by: String, created_at: u64 }
 event timada-tenancy/ApiKey::Revoked { revoked_by: String, revoked_at: u64 }
 event timada-tenancy/ApiKey::Scoped { scopes: Vec<String>, scoped_by: String, scoped_at: u64 }
@@ -625,6 +629,7 @@ type timada_research::aggregator::PlannedCategory { keyword: String, category_id
 type timada_research::aggregator::ResultRow { position: u8, domain: String, url: String, title: String }
 type timada_reviews::value_object::ReviewPhoto { id: String, picture: timada_core::Picture }
 type timada_shoppers::value_object::NewsletterSubscription { subscriber_id: String, key_id: String }
+type timada_tenancy::aggregator::agent::AgentShop { tenant_id: String, permissions: Vec<String> }
 type timada_tenancy::command::MailLogo { id: String, picture: timada_core::Picture }
 type timada_tenancy::value_object::PriceBand { up_to_cents: u64, rule: PricingRule }
 type timada_tenancy::value_object::Pricing { bands: Vec<PriceBand>, above: PricingRule }

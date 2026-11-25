@@ -392,6 +392,11 @@ pub fn describe_error(code: &str) -> &'static str {
             "The campaign does not run yet, or is in its first three weeks: a round comes after."
         }
         "google_invalid_tuned" => "No such ad group, device or search in the campaign.",
+        "invalid_agent_key_scope" => {
+            "A key covers one to twenty shops you are a member of, each with at least one permission you hold there."
+        }
+        "too_many_agent_keys" => "Twenty keys at most: withdraw one first.",
+        "agent_key_not_found" => "No such key.",
         "launch_unknown_step" => "No such step to confirm.",
         "launch_invalid_path_target" => "A number of products is between 1 and 100,000.",
         "launch_invalid_target" => {

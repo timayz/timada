@@ -9,6 +9,7 @@
 //! members, roles, API keys, mail servers, templates and payment settings
 //! have each left theirs. The others are not: their streams stay short.
 
+mod agent_key;
 mod aliexpress;
 mod api_key;
 mod company;
@@ -26,6 +27,7 @@ mod suspend;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 
+pub use agent_key::*;
 pub use aliexpress::*;
 pub use api_key::*;
 pub use company::*;
