@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use timada_google::aggregator::{
     AdsAdGroupRow, AdsCampaignRow, AdsNumbers, AdsProductRow, AdsTermRow,
 };
-use timada_google::{AdsAccount, AdsDayReport};
+use timada_google::{AdsAccount, AdsDayReport, CAMPAIGN_SHOPPING, CampaignPlan, geo_target_of};
 
 use super::{Google, GoogleFault, reason, unavailable};
 
@@ -403,6 +403,355 @@ impl Google {
                 )),
             }
         }
+        Ok(())
+    }
+}
+
+/// What Google Ads called a campaign it just took, and its ad groups in
+/// the order they were asked for.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CreatedIds {
+    pub campaign_id: String,
+    pub ad_group_ids: Vec<String>,
+}
+
+/// A campaign found in an account by its name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FoundCampaign {
+    pub campaign_id: String,
+    /// Whether Google Ads has it running (`ENABLED`) rather than paused.
+    pub enabled: bool,
+    /// Its ad groups: Google Ads' number, then the name.
+    pub ad_groups: Vec<(String, String)>,
+}
+
+/// What a campaign needs beside its plan.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CampaignContext {
+    /// The Merchant Center account whose products a Shopping campaign
+    /// shows.
+    pub merchant_id: String,
+    /// Which of the feed's custom labels says a product's category (0 to
+    /// 4).
+    pub label: u8,
+    /// Where the ad of a campaign on the shop's name leads.
+    pub final_url: String,
+}
+
+/// The last part of a resource's name: Google Ads' number for it.
+fn number_of(resource_name: &str) -> String {
+    resource_name
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// A text inside the quotes of a question.
+fn quoted(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// What a device's clicks are paid against the bid, from hundredths more
+/// or less: -55 is 0.45.
+fn modifier(percent: i32) -> f64 {
+    f64::from(100 + percent) / 100.0
+}
+
+/// The operations that create the campaign `plan` describes in the account
+/// `customer_id`, to send together: Google Ads takes them all or none.
+/// What one creates is named by a number below zero until Google Ads gives
+/// it its own, so the ones after can refer to it.
+pub fn campaign_operations(
+    customer_id: &str,
+    plan: &CampaignPlan,
+    context: &CampaignContext,
+) -> Vec<Value> {
+    let of = |kind: &str, id: &str| format!("customers/{customer_id}/{kind}/{id}");
+    let mut next = 0i64;
+    let mut temp = || {
+        next -= 1;
+        next.to_string()
+    };
+    let budget = of("campaignBudgets", &temp());
+    let campaign = of("campaigns", &temp());
+    let shopping = plan.kind == CAMPAIGN_SHOPPING;
+    let mut operations = vec![json!({ "campaignBudgetOperation": { "create": {
+        "resourceName": budget,
+        "amountMicros": plan.daily_budget_micros.to_string(),
+        "deliveryMethod": "STANDARD",
+        // Its own: a budget is shared between campaigns unless told not to.
+        "explicitlyShared": false,
+    } } })];
+    let mut created = json!({
+        "resourceName": campaign,
+        "name": plan.name,
+        "advertisingChannelType": if shopping { "SHOPPING" } else { "SEARCH" },
+        "status": if plan.live { "ENABLED" } else { "PAUSED" },
+        "manualCpc": {},
+        "campaignBudget": budget,
+        "containsEuPoliticalAdvertising": "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING",
+    });
+    if shopping {
+        created["shoppingSetting"] = json!({
+            "merchantId": context.merchant_id,
+            "campaignPriority": 0,
+            "enableLocal": false,
+        });
+    } else {
+        // Google's own results only: the name of a shop is searched there.
+        created["networkSettings"] = json!({
+            "targetGoogleSearch": true,
+            "targetSearchNetwork": false,
+            "targetContentNetwork": false,
+            "targetPartnerSearchNetwork": false,
+        });
+    }
+    operations.push(json!({ "campaignOperation": { "create": created } }));
+    for country in &plan.countries {
+        if let Some(number) = geo_target_of(country) {
+            operations.push(json!({ "campaignCriterionOperation": { "create": {
+                "campaign": campaign,
+                "location": { "geoTargetConstant": format!("geoTargetConstants/{number}") },
+            } } }));
+        }
+    }
+    for (device, percent) in [
+        ("MOBILE", plan.phone_percent),
+        ("TABLET", plan.tablet_percent),
+    ] {
+        if let Some(percent) = percent {
+            operations.push(json!({ "campaignCriterionOperation": { "create": {
+                "campaign": campaign,
+                "device": { "type": device },
+                "bidModifier": modifier(percent),
+            } } }));
+        }
+    }
+    let bid = plan.bid_micros.to_string();
+    if shopping {
+        let index = format!("INDEX{}", context.label);
+        for group in &plan.ad_groups {
+            let group_id = temp();
+            let ad_group = of("adGroups", &group_id);
+            operations.push(json!({ "adGroupOperation": { "create": {
+                "resourceName": ad_group,
+                "name": group.name,
+                "campaign": campaign,
+                "status": "ENABLED",
+                "type": "SHOPPING_PRODUCT_ADS",
+                "cpcBidMicros": bid,
+            } } }));
+            operations.push(json!({ "adGroupAdOperation": { "create": {
+                "adGroup": ad_group,
+                "status": "ENABLED",
+                "ad": { "shoppingProductAd": {} },
+            } } }));
+            // The products shown: the ones whose label says this category,
+            // and none of the others. A tree goes up whole, its root first.
+            let root = of("adGroupCriteria", &format!("{group_id}~{}", temp()));
+            operations.push(json!({ "adGroupCriterionOperation": { "create": {
+                "resourceName": root,
+                "adGroup": ad_group,
+                "status": "ENABLED",
+                "listingGroup": { "type": "SUBDIVISION" },
+            } } }));
+            operations.push(json!({ "adGroupCriterionOperation": { "create": {
+                "adGroup": ad_group,
+                "status": "ENABLED",
+                "cpcBidMicros": bid,
+                "listingGroup": {
+                    "type": "UNIT",
+                    "parentAdGroupCriterion": root,
+                    "caseValue": { "productCustomAttribute": {
+                        "index": index,
+                        "value": timada_catalog::ads_category_label(&group.category_id),
+                    } },
+                },
+            } } }));
+            operations.push(json!({ "adGroupCriterionOperation": { "create": {
+                "adGroup": ad_group,
+                "status": "ENABLED",
+                "negative": true,
+                "listingGroup": {
+                    "type": "UNIT",
+                    "parentAdGroupCriterion": root,
+                    "caseValue": { "productCustomAttribute": { "index": index } },
+                },
+            } } }));
+        }
+    } else {
+        let ad_group = of("adGroups", &temp());
+        operations.push(json!({ "adGroupOperation": { "create": {
+            "resourceName": ad_group,
+            "name": plan.name,
+            "campaign": campaign,
+            "status": "ENABLED",
+            "type": "SEARCH_STANDARD",
+            "cpcBidMicros": bid,
+        } } }));
+        for keyword in &plan.keywords {
+            operations.push(json!({ "adGroupCriterionOperation": { "create": {
+                "adGroup": ad_group,
+                "status": "ENABLED",
+                // The words in this order, whatever comes around them.
+                "keyword": { "text": keyword, "matchType": "PHRASE" },
+            } } }));
+        }
+        let texts = |lines: &[String]| -> Vec<Value> {
+            lines.iter().map(|text| json!({ "text": text })).collect()
+        };
+        operations.push(json!({ "adGroupAdOperation": { "create": {
+            "adGroup": ad_group,
+            "status": "ENABLED",
+            "ad": {
+                "finalUrls": [context.final_url],
+                "responsiveSearchAd": {
+                    "headlines": texts(&plan.headlines),
+                    "descriptions": texts(&plan.descriptions),
+                },
+            },
+        } } }));
+    }
+    operations
+}
+
+#[derive(Deserialize)]
+struct Mutated {
+    #[serde(default, rename = "mutateOperationResponses")]
+    responses: Vec<Value>,
+}
+
+impl Google {
+    /// Sends `operations` to the account together: all are made, or none.
+    /// What Google Ads answers each with, in their order.
+    async fn ads_mutate(
+        &self,
+        access_token: &str,
+        account: &AdsAccount,
+        operations: Vec<Value>,
+    ) -> Result<Vec<Value>, GoogleFault> {
+        let inner = self.inner()?;
+        let url = format!(
+            "{}/customers/{}/googleAds:mutate",
+            inner.ads_url, account.customer_id
+        );
+        let mut request = inner
+            .client
+            .post(url)
+            .bearer_auth(access_token)
+            .json(&json!({ "mutateOperations": operations }));
+        if let Some(login) = account.login_customer_id.as_deref() {
+            request = request.header("login-customer-id", login);
+        }
+        let response = request.send().await.map_err(unavailable)?;
+        let status = response.status().as_u16();
+        let body = response.bytes().await.map_err(unavailable)?;
+        if status != 200 {
+            return Err(ads_refusal(status, &body));
+        }
+        let mutated: Mutated = serde_json::from_slice(&body)
+            .map_err(|err| GoogleFault::Unavailable(format!("unreadable answer: {err}")))?;
+        Ok(mutated.responses)
+    }
+
+    /// Creates the campaign `plan` describes in `account`, whole or not at
+    /// all. As many operations of the platform's allowance as the campaign
+    /// has parts.
+    pub async fn ads_create_campaign(
+        &self,
+        access_token: &str,
+        account: &AdsAccount,
+        plan: &CampaignPlan,
+        context: &CampaignContext,
+    ) -> Result<CreatedIds, GoogleFault> {
+        let operations = campaign_operations(&account.customer_id, plan, context);
+        let answers = self.ads_mutate(access_token, account, operations).await?;
+        let mut created = CreatedIds::default();
+        for answer in &answers {
+            let campaign = text(answer, &["campaignResult", "resourceName"]);
+            if !campaign.is_empty() {
+                created.campaign_id = number_of(&campaign);
+            }
+            let ad_group = text(answer, &["adGroupResult", "resourceName"]);
+            if !ad_group.is_empty() {
+                created.ad_group_ids.push(number_of(&ad_group));
+            }
+        }
+        let groups = if plan.kind == CAMPAIGN_SHOPPING {
+            plan.ad_groups.len()
+        } else {
+            1
+        };
+        if created.campaign_id.is_empty() || created.ad_group_ids.len() != groups {
+            return Err(GoogleFault::Unavailable(
+                "an answer that does not name what was created".into(),
+            ));
+        }
+        Ok(created)
+    }
+
+    /// The campaign called `name` in `account`, with its ad groups, when
+    /// there is one that was not removed. One question.
+    pub async fn ads_find_campaign(
+        &self,
+        access_token: &str,
+        account: &AdsAccount,
+        name: &str,
+    ) -> Result<Option<FoundCampaign>, GoogleFault> {
+        let rows = self
+            .ads_search(
+                access_token,
+                &account.customer_id,
+                account.login_customer_id.as_deref(),
+                &format!(
+                    "SELECT campaign.id, campaign.status, ad_group.id, ad_group.name \
+                     FROM ad_group WHERE campaign.name = '{}' \
+                     AND campaign.status != 'REMOVED' AND ad_group.status != 'REMOVED'",
+                    quoted(name)
+                ),
+            )
+            .await?;
+        let Some(first) = rows.first() else {
+            return Ok(None);
+        };
+        let campaign_id = text(first, &["campaign", "id"]);
+        Ok(Some(FoundCampaign {
+            enabled: text(first, &["campaign", "status"]) == "ENABLED",
+            ad_groups: rows
+                .iter()
+                .filter(|row| text(row, &["campaign", "id"]) == campaign_id)
+                .map(|row| {
+                    (
+                        text(row, &["adGroup", "id"]),
+                        text(row, &["adGroup", "name"]),
+                    )
+                })
+                .collect(),
+            campaign_id,
+        }))
+    }
+
+    /// Sets the campaign `campaign_id` of `account` running. Asked of one
+    /// that runs already, Google Ads changes nothing.
+    pub async fn ads_enable_campaign(
+        &self,
+        access_token: &str,
+        account: &AdsAccount,
+        campaign_id: &str,
+    ) -> Result<(), GoogleFault> {
+        let operation = json!({ "campaignOperation": {
+            "updateMask": "status",
+            "update": {
+                "resourceName": format!(
+                    "customers/{}/campaigns/{campaign_id}",
+                    account.customer_id
+                ),
+                "status": "ENABLED",
+            },
+        } });
+        self.ads_mutate(access_token, account, vec![operation])
+            .await?;
         Ok(())
     }
 }

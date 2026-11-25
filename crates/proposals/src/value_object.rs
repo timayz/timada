@@ -17,14 +17,19 @@ pub const KIND_ADS_EXCLUSION: &str = "ads_exclusion";
 /// A search term a campaign is no longer to show for.
 pub const KIND_ADS_NEGATIVE_TERM: &str = "ads_negative_term";
 
+/// A campaign to create in the shop's Google Ads account: its subject is
+/// the kind of campaign, its fields the campaign's settings.
+pub const KIND_ADS_CAMPAIGN: &str = "ads_campaign";
+
 /// Every kind a proposal can be of.
-pub const KINDS: [&str; 6] = [
+pub const KINDS: [&str; 7] = [
     KIND_PRODUCT,
     KIND_CATEGORY,
     KIND_NEW_CATEGORY,
     KIND_ADS_BID,
     KIND_ADS_EXCLUSION,
     KIND_ADS_NEGATIVE_TERM,
+    KIND_ADS_CAMPAIGN,
 ];
 
 pub const FIELD_NAME: &str = "name";
@@ -80,7 +85,7 @@ pub fn is_field_of(kind: &str, field: &str) -> bool {
         KIND_PRODUCT => PRODUCT_FIELDS.contains(&field) || priced_variant(field).is_some(),
         KIND_CATEGORY => CATEGORY_FIELDS.contains(&field),
         KIND_NEW_CATEGORY => NEW_CATEGORY_FIELDS.contains(&field),
-        KIND_ADS_BID | KIND_ADS_EXCLUSION | KIND_ADS_NEGATIVE_TERM => {
+        KIND_ADS_BID | KIND_ADS_EXCLUSION | KIND_ADS_NEGATIVE_TERM | KIND_ADS_CAMPAIGN => {
             !field.is_empty()
                 && field.len() <= MAX_FIELD_LEN
                 && field

@@ -71,7 +71,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         .map_err(topcoat::Error::from_anyhow)?
         .map(usize::from);
     let ads_hint = format!(
-        "The products whose main category is kept out of ads carry « {OUT_OF_ADS_LABEL} » in this label, in place of their own: exclude that value in your campaigns. A category is kept out on its own page."
+        "This label tells campaigns each product's main category, in place of the product's own label: the first campaign makes an ad group a category from it. The products whose main category is kept out of ads carry « {OUT_OF_ADS_LABEL} » there instead, and no campaign shows them. A category is kept out on its own page."
     );
     let has_storefront = super::orders::orders(&access)?
         .storefront_address()
@@ -198,12 +198,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             )
 
             section_card(
-                title: Some("Out of ads"),
-                description: Some("Some categories are worth a page and not a campaign: a click on what they are searched by costs more than a sale can pay."),
+                title: Some("Campaigns"),
+                description: Some("A campaign tells the products apart by one of the feed's labels: which category each belongs to, and which to leave out. Some categories are worth a page and not a campaign: a click on what they are searched by costs more than a sale can pay."),
                 attrs: attributes! { data-feed-ads-label=(ads_label.map(|label| label.to_string()).unwrap_or_default()) },
                 <form method="post" action=(href!(ads_label::ads_label, slug: slug.clone())) class="flex max-w-3xl flex-col gap-4">
                     field(
-                        field_label(attrs: attributes! { for="feed-ads-label" }, "Label that marks them")
+                        field_label(attrs: attributes! { for="feed-ads-label" }, "Label for campaigns")
                         field_description(attrs: attributes! { id="feed-ads-label-hint" }, (&ads_hint))
                         select(
                             attrs: attributes! { id="feed-ads-label" name="label" aria-describedby="feed-ads-label-hint" disabled=(!can_manage) class="w-48" },

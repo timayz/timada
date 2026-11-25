@@ -30,8 +30,7 @@ use crate::components::field::{field, field_description, field_label};
 use crate::components::input::input;
 use crate::components::textarea::textarea;
 use crate::proposals::{
-    Catalog, Draft, Subject, field_label as label_of, fields_of, kind_label, permissions_of,
-    subject,
+    Draft, Subject, field_label as label_of, fields_of, kind_label, permissions_of, subject,
 };
 use crate::ui::{Shell, document, notice, page_header, section_card};
 
@@ -95,14 +94,23 @@ async fn open(cx: &Cx, kind: &str, subject_id: &str) -> Result<(TenantAccess, Su
     let Some((read, _)) = permissions_of(kind) else {
         return Err(not_found().into());
     };
+    // A kind with no field to type is prepared from a page of its own.
+    if fields_of(kind).is_empty() {
+        return Err(not_found().into());
+    }
     if !access.can(cx, read).await? {
         return Err(forbidden().into());
     }
-    let catalog = Catalog::new(access.executor()?.clone(), access.tenant_id());
-    let held = subject(&catalog, kind, subject_id, None)
-        .await
-        .map_err(topcoat::Error::from_anyhow)?
-        .ok_or_else(not_found)?;
+    let held = subject(
+        access.executor()?,
+        access.tenant_id(),
+        kind,
+        subject_id,
+        None,
+    )
+    .await
+    .map_err(topcoat::Error::from_anyhow)?
+    .ok_or_else(not_found)?;
     Ok((access, held))
 }
 

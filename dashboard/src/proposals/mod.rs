@@ -6,7 +6,10 @@
 //! a category holds, [`standing`] says whether a proposal can still apply
 //! to it, and [`apply`](apply::apply) makes the change through the
 //! commands the product and category pages use, so an approved change
-//! meets the checks a typed one does. The kinds about ads are carried, and
+//! meets the checks a typed one does. A campaign to create is a kind too:
+//! its subject is the shop's campaign of a kind, its fields the settings,
+//! and applying it creates the campaign at Google Ads
+//! ([`crate::campaigns`]). The other kinds about ads are carried, and
 //! nothing applies them yet.
 //!
 //! A value is kept as a person reads and types it: a text as it is, a
@@ -26,14 +29,18 @@ use timada_catalog::{
     normalize_seo, parse_amount,
 };
 use timada_core::money::format_amount;
+use timada_google::{GoogleError, campaign_fields, normalize_campaign_field, plan_of};
 use timada_proposals::aggregator::Change;
 use timada_proposals::{
     CATEGORY_FIELDS, FIELD_BODY, FIELD_DESCRIPTION, FIELD_META_DESCRIPTION, FIELD_META_TITLE,
-    FIELD_NAME, FIELD_PRICE, KIND_CATEGORY, KIND_NEW_CATEGORY, KIND_PRODUCT, NEW_CATEGORY_FIELDS,
-    PRODUCT_FIELDS, Prepare, ProposalError, ProposalState, ProposalStatus, priced_variant,
-    proposed_category_id, variant_price_field,
+    FIELD_NAME, FIELD_PRICE, KIND_ADS_CAMPAIGN, KIND_CATEGORY, KIND_NEW_CATEGORY, KIND_PRODUCT,
+    NEW_CATEGORY_FIELDS, PRODUCT_FIELDS, Prepare, ProposalError, ProposalState, ProposalStatus,
+    priced_variant, proposed_category_id, variant_price_field,
 };
-use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, PERMISSION_PRODUCTS_READ};
+use timada_tenancy::{
+    PERMISSION_ADS_MANAGE, PERMISSION_ORDERS_READ, PERMISSION_PRODUCTS_MANAGE,
+    PERMISSION_PRODUCTS_READ,
+};
 
 use crate::cluster::Executor;
 
@@ -56,6 +63,8 @@ pub fn permissions_of(kind: &str) -> Option<(&'static str, &'static str)> {
         KIND_PRODUCT | KIND_CATEGORY | KIND_NEW_CATEGORY => {
             Some((PERMISSION_PRODUCTS_READ, PERMISSION_PRODUCTS_MANAGE))
         }
+        // What the ads cost is read with the orders.
+        KIND_ADS_CAMPAIGN => Some((PERMISSION_ORDERS_READ, PERMISSION_ADS_MANAGE)),
         _ => None,
     }
 }
@@ -80,6 +89,11 @@ pub fn field_label(field: &str) -> String {
         FIELD_META_TITLE => "Search engines' title".to_owned(),
         FIELD_META_DESCRIPTION => "Search engines' description".to_owned(),
         FIELD_PRICE => "Price".to_owned(),
+        _ if timada_google::SHOPPING_FIELDS.contains(&field)
+            || timada_google::BRAND_FIELDS.contains(&field) =>
+        {
+            crate::campaigns::field_label(field).to_owned()
+        }
         _ => match priced_variant(field) {
             Some(_) => "Variant price".to_owned(),
             None => field.replace('_', " "),
@@ -96,6 +110,7 @@ pub fn kind_label(kind: &str) -> &'static str {
         timada_proposals::KIND_ADS_BID => "Bid",
         timada_proposals::KIND_ADS_EXCLUSION => "Ads exclusion",
         timada_proposals::KIND_ADS_NEGATIVE_TERM => "Negative search term",
+        KIND_ADS_CAMPAIGN => "Campaign",
         _ => "Change",
     }
 }
@@ -117,7 +132,20 @@ pub fn source_label(source: &str) -> String {
 /// `value` as the shop would keep it in `field` of a subject of `kind`:
 /// what a proposal records, so it compares equal to what the subject holds
 /// once applied. Refused as the command that writes it would refuse it.
-pub fn normalized(kind: &str, field: &str, value: &str) -> Result<String, CatalogError> {
+/// `subject_id` tells a campaign's kind, whose settings differ.
+pub fn normalized(
+    kind: &str,
+    subject_id: &str,
+    field: &str,
+    value: &str,
+) -> Result<String, Refusal> {
+    if kind == KIND_ADS_CAMPAIGN {
+        return Ok(normalize_campaign_field(subject_id, field, value)?);
+    }
+    Ok(normalized_text(kind, field, value)?)
+}
+
+fn normalized_text(kind: &str, field: &str, value: &str) -> Result<String, CatalogError> {
     let product = kind == KIND_PRODUCT;
     match field {
         FIELD_NAME if product => normalize_name(value),
@@ -202,13 +230,38 @@ impl Subject {
 /// when nothing applies the kind. For a category to create, the subject is
 /// the category above it (none for an empty id), and the fields are those
 /// of the category itself once `proposal_id`'s was created: empty before.
+/// For a campaign, the subject is the shop's campaign of that kind, and
+/// the fields its settings once it was created: empty before.
 pub async fn subject(
-    catalog: &Catalog,
+    store: &Executor,
+    tenant_id: &str,
     kind: &str,
     subject_id: &str,
     proposal_id: Option<&str>,
 ) -> anyhow::Result<Option<Subject>> {
+    let catalog = &Catalog::new(store.clone(), tenant_id);
     match kind {
+        KIND_ADS_CAMPAIGN => {
+            let fields = campaign_fields(subject_id);
+            if fields.is_empty() {
+                return Ok(None);
+            }
+            let held = crate::campaigns::held(store, tenant_id, subject_id).await?;
+            Ok(Some(Subject {
+                name: crate::campaigns::kind_label(subject_id).to_owned(),
+                values: fields
+                    .iter()
+                    .map(|field| {
+                        let value = held
+                            .as_ref()
+                            .map_or("", |campaign| campaign.setting(field))
+                            .to_owned();
+                        ((*field).to_owned(), value)
+                    })
+                    .collect(),
+                currency: None,
+            }))
+        }
         KIND_PRODUCT => Ok(catalog
             .load_product(subject_id)
             .await?
@@ -294,6 +347,7 @@ pub enum Refusal {
     /// What the proposal is about changed since it was prepared.
     OutOfDate,
     Catalog(CatalogError),
+    Google(GoogleError),
     Proposal(ProposalError),
     Other(anyhow::Error),
 }
@@ -307,6 +361,7 @@ impl std::fmt::Display for Refusal {
                 f.write_str("what the proposal is about changed since it was prepared")
             }
             Self::Catalog(err) => err.fmt(f),
+            Self::Google(err) => err.fmt(f),
             Self::Proposal(err) => err.fmt(f),
             Self::Other(err) => err.fmt(f),
         }
@@ -318,6 +373,12 @@ impl std::error::Error for Refusal {}
 impl From<CatalogError> for Refusal {
     fn from(err: CatalogError) -> Self {
         Self::Catalog(err)
+    }
+}
+
+impl From<GoogleError> for Refusal {
+    fn from(err: GoogleError) -> Self {
+        Self::Google(err)
     }
 }
 
@@ -342,6 +403,7 @@ impl Refusal {
             Self::SubjectMissing => Some("proposal_subject_missing"),
             Self::OutOfDate => Some("proposal_out_of_date"),
             Self::Catalog(err) => err.code(),
+            Self::Google(err) => err.code(),
             Self::Proposal(err) => err.code(),
             Self::Other(_) => None,
         }
@@ -362,6 +424,25 @@ pub struct Draft {
     pub valid_until: Option<u64>,
 }
 
+/// What the values of a proposal must say together, over what each says
+/// alone: a campaign's settings make a campaign (a bid within its budget,
+/// nothing a campaign needs left empty), and one is created, never changed.
+fn whole(kind: &str, subject_id: &str, changes: &[Change]) -> Result<(), Refusal> {
+    if kind != KIND_ADS_CAMPAIGN {
+        return Ok(());
+    }
+    if changes.iter().any(|change| !change.before.is_empty()) {
+        return Err(GoogleError::CampaignExists.into());
+    }
+    plan_of(
+        subject_id,
+        changes
+            .iter()
+            .map(|change| (change.field.as_str(), change.after.as_str())),
+    )?;
+    Ok(())
+}
+
 /// Prepares `draft` in the shop `tenant_id` at `now` (unix seconds): reads
 /// what the subject holds, which the proposal is recorded against, and
 /// leaves out the fields that would not change. The new proposal's id.
@@ -375,8 +456,7 @@ pub async fn prepare(
     if permissions_of(&draft.kind).is_none() {
         return Err(Refusal::NoApplier);
     }
-    let catalog = Catalog::new(store.clone(), tenant_id);
-    let held = subject(&catalog, &draft.kind, &draft.subject_id, None)
+    let held = subject(store, tenant_id, &draft.kind, &draft.subject_id, None)
         .await?
         .ok_or(Refusal::SubjectMissing)?;
     let mut changes = Vec::with_capacity(draft.values.len());
@@ -385,13 +465,14 @@ pub async fn prepare(
             .value(&field)
             .ok_or(ProposalError::InvalidChanges)?
             .to_owned();
-        let after = normalized(&draft.kind, &field, &after)?;
+        let after = normalized(&draft.kind, &draft.subject_id, &field, &after)?;
         changes.push(Change {
             field,
             before,
             after,
         });
     }
+    whole(&draft.kind, &draft.subject_id, &changes)?;
     let id = Proposals::new(store.clone(), tenant_id)
         .prepare(
             actor,
@@ -434,15 +515,16 @@ pub async fn approve(
     for change in &proposal.changes {
         let mut change = change.clone();
         if let Some((_, after)) = edits.iter().find(|(field, _)| field == &change.field) {
-            change.after = normalized(&proposal.kind, &change.field, after)?;
+            change.after = normalized(&proposal.kind, &proposal.subject_id, &change.field, after)?;
             normalized_edits.push((change.field.clone(), change.after.clone()));
         }
         changes.push(change);
     }
+    whole(&proposal.kind, &proposal.subject_id, &changes)?;
     let proposals = Proposals::new(store.clone(), tenant_id);
-    let catalog = Catalog::new(store.clone(), tenant_id);
     let held = subject(
-        &catalog,
+        store,
+        tenant_id,
         &proposal.kind,
         &proposal.subject_id,
         Some(&proposal.id),

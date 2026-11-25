@@ -245,6 +245,7 @@ pub async fn serve(config: Config, host: Option<String>, port: Option<u16>) -> R
                 config.advertising.meta_api_url.clone(),
             )),
         )),
+        google: google.clone(),
     });
     let planned = planned(&config.server);
     let copied = cluster.health().joined_at_start;
@@ -678,6 +679,8 @@ pub struct Deps {
     pub euro_rates: Arc<dyn crate::ecb::EuroRates>,
     /// What tells Meta of the sales of the shops that gave a token.
     pub conversions: Arc<crate::meta_conversions::Conversions>,
+    /// Google, where the campaigns a member approved are created.
+    pub google: crate::google::Google,
 }
 
 /// Builds one subscription from the parts.
@@ -880,7 +883,12 @@ const SUBSCRIPTIONS: &[(&str, Kind, Make)] = &[
     }),
     // What a member approved is changed in the shop, under their name.
     ("proposal changes", Kind::Sharded, |d| {
-        crate::proposals::apply::subscription(d.store.clone())
+        crate::proposals::apply::subscription(d.store.clone(), d.google.clone())
+    }),
+    // A paused campaign a member asked to run is set running at Google
+    // Ads.
+    ("ads campaigns", Kind::Sharded, |d| {
+        crate::campaigns::subscription(d.store.clone(), d.google.clone())
     }),
     // The keywords a study's owner asked for are fetched from the keyword
     // source and recorded on the study.

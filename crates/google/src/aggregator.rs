@@ -388,3 +388,60 @@ pub enum MerchantNotice {
     /// Given up on after `attempts` tries.
     MailFailed { reason: String, attempts: u32 },
 }
+
+/// One setting of a campaign, as the proposal that asked for it named and
+/// wrote it (`bid`, `0.30`): the fields are
+/// [`CAMPAIGN_FIELDS`](crate::CAMPAIGN_FIELDS).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct CampaignSetting {
+    pub field: String,
+    pub value: String,
+}
+
+/// One ad group of a Shopping campaign: the products of one category.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, bitcode::Encode, bitcode::Decode)]
+pub struct CampaignAdGroup {
+    /// Google Ads' own number for the ad group.
+    pub ad_group_id: String,
+    /// The shop's category whose products it shows; empty for the ad
+    /// group of a campaign on the shop's name.
+    pub category_id: String,
+    pub name: String,
+}
+
+/// A campaign timada created in a shop's Google Ads account once a member
+/// approved it. Its id is made of the shop and the kind of campaign
+/// ([`campaign_stream_id`](crate::campaign_stream_id)), so a shop has one of
+/// each kind, and it lives in the platform's tenant.
+#[evento::aggregate(name = "timada-google/Campaign")]
+pub enum Campaign {
+    /// Google Ads took the campaign.
+    CampaignCreated {
+        tenant_id: String,
+        /// The Google Ads account it was created in.
+        customer_id: String,
+        /// One of [`CAMPAIGN_KINDS`](crate::CAMPAIGN_KINDS).
+        kind: String,
+        /// Google Ads' own number for the campaign.
+        campaign_id: String,
+        name: String,
+        /// What was approved, field by field.
+        settings: Vec<CampaignSetting>,
+        ad_groups: Vec<CampaignAdGroup>,
+        /// Whether it was created running; paused otherwise.
+        live: bool,
+        /// The proposal a member approved it through.
+        proposal_id: String,
+        created_by: String,
+    },
+    /// A member asked for a paused campaign to run: the host tells Google
+    /// Ads.
+    LiveRequested { requested_by: String },
+    /// The campaign runs since `at` (unix seconds): set running by the
+    /// host, or seen showing ads in the daily read after a member set it
+    /// running at Google Ads.
+    WentLive { at: u64, noticed_by: String },
+    /// Google Ads refused to set it running; `reason` says why, for the
+    /// member.
+    LiveFailed { reason: String, failed_by: String },
+}

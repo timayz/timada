@@ -13,7 +13,7 @@ proposal means, and how it is applied, in `dashboard/src/proposals/`.
 
 | Field | What it says |
 |---|---|
-| kind | What it is about: `product`, `category`, `new_category`, and for the ads issues `ads_bid`, `ads_exclusion`, `ads_negative_term` |
+| kind | What it is about: `product`, `category`, `new_category`, `ads_campaign`, and for the ads issues `ads_bid`, `ads_exclusion`, `ads_negative_term` |
 | subject | The product's or the category's id; for a category to create, the category above it (empty for the top level) |
 | changes | One to eight fields, each with the value it held when the proposal was prepared (`before`) and the value it would take (`after`) |
 | reason | Why: the rule and the numbers it read, or the note of whoever prepared it |
@@ -28,7 +28,8 @@ The fields a kind may change:
 | `product` | `name`, `description`, `meta_title`, `meta_description`, `price`, and `price:{variant id}` for one variant |
 | `category` | `name`, `description`, `body`, `meta_title`, `meta_description` |
 | `new_category` | `name`, `meta_title` |
-| the ads kinds | whatever the host names them; nothing applies them yet |
+| `ads_campaign` | the campaign's settings (`name`, `daily_budget`, `bid`, `countries`, …); the subject is the kind of campaign, `shopping` or `brand`. See [the first campaign](google.md#the-first-campaign-691) |
+| the other ads kinds | whatever the host names them; nothing applies them yet |
 
 A value is kept as a person reads and types it: a text as it is, a price
 as `19.90` in the product's currency. It is normalized the way the command
@@ -81,8 +82,8 @@ half-way, end on the same values.
 | `proposals:approve` | Approve, edit or refuse what waits |
 
 Approving also asks for the permission the change itself needs
-(`products:manage` for the three catalog kinds): a proposal is not a way
-around it. A member who holds `proposals:approve` alone can read and
+(`products:manage` for the three catalog kinds, `ads:manage` for a
+campaign): a proposal is not a way around it. A member who holds `proposals:approve` alone can read and
 refuse. Owners hold everything.
 
 ## Pages

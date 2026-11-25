@@ -47,6 +47,8 @@ pub const ROLE_OWNER: &str = "owner";
 /// - `proposals:approve` — approve, edit or refuse the changes that wait.
 ///   What an approval changes still needs its own permission
 ///   (`products:manage` for a product or a category).
+/// - `ads:manage` — prepare the shop's campaigns, approve them and set
+///   them running at Google Ads.
 pub const PERMISSIONS: &[&str] = &[
     PERMISSION_TENANT_MANAGE,
     PERMISSION_MEMBERS_READ,
@@ -77,6 +79,7 @@ pub const PERMISSIONS: &[&str] = &[
     PERMISSION_PAGES_MANAGE,
     PERMISSION_PROPOSALS_PREPARE,
     PERMISSION_PROPOSALS_APPROVE,
+    PERMISSION_ADS_MANAGE,
 ];
 pub const PERMISSION_TENANT_MANAGE: &str = "tenant:manage";
 pub const PERMISSION_MEMBERS_READ: &str = "members:read";
@@ -112,6 +115,7 @@ pub const PERMISSION_PAGES_READ: &str = "pages:read";
 pub const PERMISSION_PAGES_MANAGE: &str = "pages:manage";
 pub const PERMISSION_PROPOSALS_PREPARE: &str = "proposals:prepare";
 pub const PERMISSION_PROPOSALS_APPROVE: &str = "proposals:approve";
+pub const PERMISSION_ADS_MANAGE: &str = "ads:manage";
 
 /// Every scope a store API key can hold, as `resource:action`. None appends
 /// to the store: only the dashboard writes a tenant's events. A stored key may

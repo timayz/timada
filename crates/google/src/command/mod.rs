@@ -10,6 +10,7 @@
 //! connection again and decides again ([`WRITE_ATTEMPTS`] times).
 
 mod ads;
+mod campaign;
 mod merchant;
 mod search;
 
@@ -27,6 +28,7 @@ use crate::value_object::{
 };
 
 pub use ads::*;
+pub use campaign::*;
 pub use merchant::*;
 pub use search::*;
 

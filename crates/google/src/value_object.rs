@@ -91,6 +91,471 @@ pub fn normalize_customer_id(customer_id: &str) -> Result<String, GoogleError> {
     Ok(digits)
 }
 
+/// The first campaign of a shop: Shopping ads, an ad group a category.
+pub const CAMPAIGN_SHOPPING: &str = "shopping";
+/// The small Search campaign on the shop's own name.
+pub const CAMPAIGN_BRAND: &str = "brand";
+
+/// Every kind of campaign timada creates.
+pub const CAMPAIGN_KINDS: [&str; 2] = [CAMPAIGN_SHOPPING, CAMPAIGN_BRAND];
+
+/// The stream of a shop's campaign of one kind.
+pub fn campaign_stream_id(tenant_id: &str, kind: &str) -> String {
+    evento::hash_ids(vec!["google-campaign", tenant_id, kind])
+}
+
+/// What Google Ads calls the campaign.
+pub const CAMPAIGN_NAME: &str = "name";
+/// What it may spend in a day, in the account's currency (`10.00`).
+pub const CAMPAIGN_DAILY_BUDGET: &str = "daily_budget";
+/// The most a click is paid, to start with (`0.30`).
+pub const CAMPAIGN_BID: &str = "bid";
+/// Where the ads show: two-letter countries (`FR, BE`).
+pub const CAMPAIGN_COUNTRIES: &str = "countries";
+/// How much more or less a click on a phone is paid, in hundredths
+/// (`-55`); empty for the same.
+pub const CAMPAIGN_PHONE: &str = "phone_adjustment";
+/// The same on a tablet.
+pub const CAMPAIGN_TABLET: &str = "tablet_adjustment";
+/// Whether it is created running ([`START_LIVE`]) or paused
+/// ([`START_PAUSED`]).
+pub const CAMPAIGN_START: &str = "start";
+/// The ad groups of a Shopping campaign, a line each: the category's id,
+/// a space, its name.
+pub const CAMPAIGN_AD_GROUPS: &str = "ad_groups";
+/// The searches a campaign on the shop's name shows for, a line each.
+pub const CAMPAIGN_KEYWORDS: &str = "keywords";
+/// The headlines of its ad, a line each.
+pub const CAMPAIGN_HEADLINES: &str = "headlines";
+/// The descriptions of its ad, a line each.
+pub const CAMPAIGN_DESCRIPTIONS: &str = "descriptions";
+
+pub const START_PAUSED: &str = "paused";
+pub const START_LIVE: &str = "live";
+
+/// The settings of a Shopping campaign, in the order a page shows them.
+pub const SHOPPING_FIELDS: [&str; 8] = [
+    CAMPAIGN_NAME,
+    CAMPAIGN_DAILY_BUDGET,
+    CAMPAIGN_BID,
+    CAMPAIGN_COUNTRIES,
+    CAMPAIGN_PHONE,
+    CAMPAIGN_TABLET,
+    CAMPAIGN_START,
+    CAMPAIGN_AD_GROUPS,
+];
+
+/// The settings of a campaign on the shop's name.
+pub const BRAND_FIELDS: [&str; 8] = [
+    CAMPAIGN_NAME,
+    CAMPAIGN_DAILY_BUDGET,
+    CAMPAIGN_BID,
+    CAMPAIGN_COUNTRIES,
+    CAMPAIGN_START,
+    CAMPAIGN_KEYWORDS,
+    CAMPAIGN_HEADLINES,
+    CAMPAIGN_DESCRIPTIONS,
+];
+
+/// The settings a campaign of `kind` takes; none for no kind.
+pub fn campaign_fields(kind: &str) -> &'static [&'static str] {
+    match kind {
+        CAMPAIGN_SHOPPING => &SHOPPING_FIELDS,
+        CAMPAIGN_BRAND => &BRAND_FIELDS,
+        _ => &[],
+    }
+}
+
+/// What a first campaign bids to start with, in the account's currency.
+pub const DEFAULT_BID: &str = "0.30";
+/// What a first campaign pays less for a click on a phone, and on a tablet.
+pub const DEFAULT_PHONE: &str = "-55";
+pub const DEFAULT_TABLET: &str = "-40";
+
+/// How many days a campaign that went live is left alone before anything
+/// is read into its numbers: three weeks.
+pub const SETTLE_DAYS: u64 = 21;
+
+/// How many ad groups a campaign is created with at most.
+pub const MAX_CAMPAIGN_AD_GROUPS: usize = 100;
+/// How many countries a campaign shows in at most.
+pub const MAX_CAMPAIGN_COUNTRIES: usize = 30;
+/// How many searches a campaign on the shop's name shows for at most.
+pub const MAX_CAMPAIGN_KEYWORDS: usize = 10;
+/// The longest search Google Ads takes as a keyword.
+pub const MAX_KEYWORD_LEN: usize = 80;
+/// What Google Ads asks of a responsive search ad: three to fifteen
+/// headlines of thirty characters, two to four descriptions of ninety.
+pub const MIN_HEADLINES: usize = 3;
+pub const MAX_HEADLINES: usize = 15;
+pub const MAX_HEADLINE_LEN: usize = 30;
+pub const MIN_DESCRIPTIONS: usize = 2;
+pub const MAX_DESCRIPTIONS: usize = 4;
+pub const MAX_AD_DESCRIPTION_LEN: usize = 90;
+/// The least and the most a device's clicks are paid against the others,
+/// in hundredths: Google Ads takes from a tenth to ten times the bid.
+pub const MIN_ADJUSTMENT: i32 = -90;
+pub const MAX_ADJUSTMENT: i32 = 900;
+/// The most a campaign may be given to spend in a day, in hundredths of
+/// the account's currency: a typing mistake is not a budget.
+pub const MAX_DAILY_BUDGET_CENTS: u64 = 1_000_000;
+
+/// The countries Google Ads is told by their two letters, each with its
+/// number in ISO 3166-1: Google's own number for a country is that, plus
+/// 2,000 (France is 2250).
+const COUNTRY_NUMBERS: [(&str, u32); 72] = [
+    ("AE", 784),
+    ("AR", 32),
+    ("AT", 40),
+    ("AU", 36),
+    ("BE", 56),
+    ("BG", 100),
+    ("BR", 76),
+    ("CA", 124),
+    ("CH", 756),
+    ("CL", 152),
+    ("CO", 170),
+    ("CY", 196),
+    ("CZ", 203),
+    ("DE", 276),
+    ("DK", 208),
+    ("DZ", 12),
+    ("EE", 233),
+    ("EG", 818),
+    ("ES", 724),
+    ("FI", 246),
+    ("FR", 250),
+    ("GB", 826),
+    ("GP", 312),
+    ("GR", 300),
+    ("HK", 344),
+    ("HR", 191),
+    ("HU", 348),
+    ("ID", 360),
+    ("IE", 372),
+    ("IL", 376),
+    ("IN", 356),
+    ("IS", 352),
+    ("IT", 380),
+    ("JP", 392),
+    ("KR", 410),
+    ("LI", 438),
+    ("LT", 440),
+    ("LU", 442),
+    ("LV", 428),
+    ("MA", 504),
+    ("MC", 492),
+    ("MQ", 474),
+    ("MT", 470),
+    ("MX", 484),
+    ("MY", 458),
+    ("NL", 528),
+    ("NO", 578),
+    ("NZ", 554),
+    ("PE", 604),
+    ("PH", 608),
+    ("PL", 616),
+    ("PT", 620),
+    ("RE", 638),
+    ("RO", 642),
+    ("RS", 688),
+    ("SA", 682),
+    ("SE", 752),
+    ("SG", 702),
+    ("SI", 705),
+    ("SK", 703),
+    ("SN", 686),
+    ("TH", 764),
+    ("TN", 788),
+    ("TR", 792),
+    ("TW", 158),
+    ("UA", 804),
+    ("US", 840),
+    ("VN", 704),
+    ("ZA", 710),
+    ("CI", 384),
+    ("CM", 120),
+    ("QA", 634),
+];
+
+/// Google Ads' number for a country, by its two letters in capitals;
+/// `None` for one it is not told by here.
+pub fn geo_target_of(country: &str) -> Option<u32> {
+    COUNTRY_NUMBERS
+        .iter()
+        .find(|(code, _)| *code == country)
+        .map(|(_, number)| 2_000 + number)
+}
+
+/// An amount as a person types it (`0.3`, `12,50`), in hundredths.
+fn parse_cents(value: &str) -> Option<u64> {
+    let value = value.trim().replace(',', ".");
+    let (whole, fraction) = value.split_once('.').unwrap_or((value.as_str(), ""));
+    let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    if (whole.is_empty() && fraction.is_empty())
+        || fraction.len() > 2
+        || whole.len() > 9
+        || !digits(whole)
+        || !digits(fraction)
+    {
+        return None;
+    }
+    let whole: u64 = if whole.is_empty() {
+        0
+    } else {
+        whole.parse().ok()?
+    };
+    let cents: u64 = match fraction.len() {
+        0 => 0,
+        1 => fraction.parse::<u64>().ok()? * 10,
+        _ => fraction.parse().ok()?,
+    };
+    Some(whole * 100 + cents)
+}
+
+/// The lines of a text that say something, trimmed.
+fn lines(value: &str) -> Vec<&str> {
+    value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// `lines`, no two the same whatever their capitals, `min` to `max` of
+/// them and none longer than `longest`.
+fn checked_lines(
+    value: &str,
+    (min, max): (usize, usize),
+    longest: usize,
+    err: fn() -> GoogleError,
+) -> Result<String, GoogleError> {
+    let mut kept: Vec<&str> = Vec::new();
+    for line in lines(value) {
+        if line.chars().count() > longest || line.chars().any(char::is_control) {
+            return Err(err());
+        }
+        if !kept.iter().any(|held| held.eq_ignore_ascii_case(line)) {
+            kept.push(line);
+        }
+    }
+    if kept.len() < min || kept.len() > max {
+        return Err(err());
+    }
+    Ok(kept.join("\n"))
+}
+
+/// One ad group of a Shopping campaign to create.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdGroupPlan {
+    pub category_id: String,
+    pub name: String,
+}
+
+/// The line of [`CAMPAIGN_AD_GROUPS`] that names a category.
+pub fn ad_group_line(category_id: &str, name: &str) -> String {
+    format!("{category_id} {}", name.trim())
+}
+
+/// The ad groups a value of [`CAMPAIGN_AD_GROUPS`] names.
+fn ad_groups_of(value: &str) -> Result<Vec<AdGroupPlan>, GoogleError> {
+    let mut groups: Vec<AdGroupPlan> = Vec::new();
+    for line in lines(value) {
+        let (id, name) = line.split_once(' ').ok_or(GoogleError::InvalidAdGroups)?;
+        let name = name.trim();
+        let is_id = !id.is_empty()
+            && id.len() <= 128
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if !is_id
+            || name.is_empty()
+            || name.chars().count() > MAX_ADS_NAME_LEN
+            || name.chars().any(char::is_control)
+            || groups.iter().any(|group| group.category_id == id)
+        {
+            return Err(GoogleError::InvalidAdGroups);
+        }
+        groups.push(AdGroupPlan {
+            category_id: id.to_owned(),
+            name: name.to_owned(),
+        });
+    }
+    if groups.is_empty() || groups.len() > MAX_CAMPAIGN_AD_GROUPS {
+        return Err(GoogleError::InvalidAdGroups);
+    }
+    Ok(groups)
+}
+
+/// `value` as a campaign of `kind` keeps it in `field`: what a proposal
+/// records, and what [`plan_of`] reads back.
+pub fn normalize_campaign_field(
+    kind: &str,
+    field: &str,
+    value: &str,
+) -> Result<String, GoogleError> {
+    if !campaign_fields(kind).contains(&field) {
+        return Err(GoogleError::InvalidCampaign);
+    }
+    match field {
+        CAMPAIGN_NAME => {
+            let name = value.trim();
+            if name.is_empty()
+                || name.chars().count() > MAX_ADS_NAME_LEN
+                || name.chars().any(char::is_control)
+            {
+                return Err(GoogleError::InvalidCampaignName);
+            }
+            Ok(name.to_owned())
+        }
+        CAMPAIGN_DAILY_BUDGET | CAMPAIGN_BID => {
+            let cents = parse_cents(value)
+                .filter(|cents| (1..=MAX_DAILY_BUDGET_CENTS).contains(cents))
+                .ok_or(GoogleError::InvalidCampaignAmount)?;
+            Ok(timada_core::money::format_amount(cents))
+        }
+        CAMPAIGN_COUNTRIES => {
+            let mut countries: Vec<String> = Vec::new();
+            for country in value.split([',', ' ', '\n', ';']) {
+                let country = country.trim().to_ascii_uppercase();
+                if country.is_empty() {
+                    continue;
+                }
+                if geo_target_of(&country).is_none() {
+                    return Err(GoogleError::InvalidCountries);
+                }
+                if !countries.contains(&country) {
+                    countries.push(country);
+                }
+            }
+            if countries.is_empty() || countries.len() > MAX_CAMPAIGN_COUNTRIES {
+                return Err(GoogleError::InvalidCountries);
+            }
+            Ok(countries.join(", "))
+        }
+        CAMPAIGN_PHONE | CAMPAIGN_TABLET => {
+            let typed = value.trim().trim_end_matches('%').trim();
+            if typed.is_empty() {
+                return Ok(String::new());
+            }
+            let percent: i32 = typed
+                .trim_start_matches('+')
+                .parse()
+                .ok()
+                .filter(|percent| (MIN_ADJUSTMENT..=MAX_ADJUSTMENT).contains(percent))
+                .ok_or(GoogleError::InvalidAdjustment)?;
+            // No adjustment is no setting at all.
+            Ok(if percent == 0 {
+                String::new()
+            } else {
+                percent.to_string()
+            })
+        }
+        CAMPAIGN_START => match value.trim() {
+            START_PAUSED => Ok(START_PAUSED.to_owned()),
+            START_LIVE => Ok(START_LIVE.to_owned()),
+            _ => Err(GoogleError::InvalidStart),
+        },
+        CAMPAIGN_AD_GROUPS => Ok(ad_groups_of(value)?
+            .iter()
+            .map(|group| ad_group_line(&group.category_id, &group.name))
+            .collect::<Vec<_>>()
+            .join("\n")),
+        CAMPAIGN_KEYWORDS => {
+            checked_lines(value, (1, MAX_CAMPAIGN_KEYWORDS), MAX_KEYWORD_LEN, || {
+                GoogleError::InvalidKeywords
+            })
+        }
+        CAMPAIGN_HEADLINES => checked_lines(
+            value,
+            (MIN_HEADLINES, MAX_HEADLINES),
+            MAX_HEADLINE_LEN,
+            || GoogleError::InvalidHeadlines,
+        ),
+        CAMPAIGN_DESCRIPTIONS => checked_lines(
+            value,
+            (MIN_DESCRIPTIONS, MAX_DESCRIPTIONS),
+            MAX_AD_DESCRIPTION_LEN,
+            || GoogleError::InvalidDescriptions,
+        ),
+        _ => Err(GoogleError::InvalidCampaign),
+    }
+}
+
+/// A campaign to create, as Google Ads is told it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CampaignPlan {
+    /// One of [`CAMPAIGN_KINDS`].
+    pub kind: String,
+    pub name: String,
+    /// In millionths of the account's currency, as Google Ads counts.
+    pub daily_budget_micros: u64,
+    pub bid_micros: u64,
+    /// Two-letter countries, each one [`geo_target_of`] knows.
+    pub countries: Vec<String>,
+    /// In hundredths; `None` for no adjustment.
+    pub phone_percent: Option<i32>,
+    pub tablet_percent: Option<i32>,
+    /// Created running; paused otherwise.
+    pub live: bool,
+    /// Of a Shopping campaign.
+    pub ad_groups: Vec<AdGroupPlan>,
+    /// Of a campaign on the shop's name.
+    pub keywords: Vec<String>,
+    pub headlines: Vec<String>,
+    pub descriptions: Vec<String>,
+}
+
+/// The campaign of `kind` that `settings` (field, value) describe, each
+/// value as [`normalize_campaign_field`] keeps it. A setting left out is
+/// empty: only the two adjustments may be.
+pub fn plan_of<'a>(
+    kind: &str,
+    settings: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Result<CampaignPlan, GoogleError> {
+    let fields = campaign_fields(kind);
+    if fields.is_empty() {
+        return Err(GoogleError::InvalidCampaign);
+    }
+    let given: Vec<(&str, &str)> = settings.into_iter().collect();
+    let mut plan = CampaignPlan {
+        kind: kind.to_owned(),
+        ..CampaignPlan::default()
+    };
+    for field in fields {
+        let value = given
+            .iter()
+            .find(|(named, _)| named == field)
+            .map_or("", |(_, value)| *value);
+        let value = normalize_campaign_field(kind, field, value)?;
+        let listed = || value.lines().map(str::to_owned).collect::<Vec<_>>();
+        let percent = || value.parse::<i32>().ok();
+        match *field {
+            CAMPAIGN_NAME => plan.name = value,
+            CAMPAIGN_DAILY_BUDGET => {
+                plan.daily_budget_micros = parse_cents(&value).unwrap_or(0) * 10_000;
+            }
+            CAMPAIGN_BID => plan.bid_micros = parse_cents(&value).unwrap_or(0) * 10_000,
+            CAMPAIGN_COUNTRIES => {
+                plan.countries = value.split(", ").map(str::to_owned).collect();
+            }
+            CAMPAIGN_PHONE => plan.phone_percent = percent(),
+            CAMPAIGN_TABLET => plan.tablet_percent = percent(),
+            CAMPAIGN_START => plan.live = value == START_LIVE,
+            CAMPAIGN_AD_GROUPS => plan.ad_groups = ad_groups_of(&value)?,
+            CAMPAIGN_KEYWORDS => plan.keywords = listed(),
+            CAMPAIGN_HEADLINES => plan.headlines = listed(),
+            CAMPAIGN_DESCRIPTIONS => plan.descriptions = listed(),
+            _ => {}
+        }
+    }
+    // A bid the day's budget does not pay once never shows an ad.
+    if plan.bid_micros > plan.daily_budget_micros {
+        return Err(GoogleError::BidOverBudget);
+    }
+    Ok(plan)
+}
+
 /// The stream of what Merchant Center says of a shop's products.
 pub fn merchant_feed_id(tenant_id: &str, account_id: &str) -> String {
     evento::hash_ids(vec!["google-merchant-feed", tenant_id, account_id])
@@ -338,6 +803,227 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn a_country_is_told_by_googles_number_for_it() {
+        assert_eq!(geo_target_of("FR"), Some(2250));
+        assert_eq!(geo_target_of("DE"), Some(2276));
+        assert_eq!(geo_target_of("US"), Some(2840));
+        assert_eq!(geo_target_of("BE"), Some(2056));
+        assert_eq!(geo_target_of("fr"), None);
+        assert_eq!(geo_target_of("XX"), None);
+        // No country twice.
+        for (at, (code, _)) in COUNTRY_NUMBERS.iter().enumerate() {
+            assert!(
+                COUNTRY_NUMBERS[..at].iter().all(|(other, _)| other != code),
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_campaigns_settings_are_kept_as_a_person_reads_them() {
+        let kept = |field: &str, value: &str| {
+            normalize_campaign_field(CAMPAIGN_SHOPPING, field, value).unwrap()
+        };
+        assert_eq!(kept(CAMPAIGN_NAME, "  Shopping · Acme "), "Shopping · Acme");
+        assert_eq!(kept(CAMPAIGN_BID, "0,3"), "0.30");
+        assert_eq!(kept(CAMPAIGN_DAILY_BUDGET, "12"), "12.00");
+        assert_eq!(kept(CAMPAIGN_COUNTRIES, "fr,be ; FR\nlu"), "FR, BE, LU");
+        assert_eq!(kept(CAMPAIGN_PHONE, " -55 % "), "-55");
+        assert_eq!(kept(CAMPAIGN_TABLET, "+20"), "20");
+        assert_eq!(kept(CAMPAIGN_TABLET, "0"), "");
+        assert_eq!(kept(CAMPAIGN_TABLET, ""), "");
+        assert_eq!(kept(CAMPAIGN_START, " live "), START_LIVE);
+        assert_eq!(
+            kept(
+                CAMPAIGN_AD_GROUPS,
+                "\n 01CAT   Arbres à chat \n\n01TOY Jouets\n"
+            ),
+            "01CAT Arbres à chat\n01TOY Jouets"
+        );
+        let refused = |kind: &str, field: &str, value: &str| {
+            normalize_campaign_field(kind, field, value)
+                .unwrap_err()
+                .code()
+                .unwrap()
+        };
+        let shopping = CAMPAIGN_SHOPPING;
+        assert_eq!(
+            refused(shopping, CAMPAIGN_NAME, " "),
+            "google_invalid_campaign_name"
+        );
+        assert_eq!(
+            refused(shopping, CAMPAIGN_BID, "0"),
+            "google_invalid_campaign_amount"
+        );
+        assert_eq!(
+            refused(shopping, CAMPAIGN_BID, "0.305"),
+            "google_invalid_campaign_amount"
+        );
+        assert_eq!(
+            refused(shopping, CAMPAIGN_BID, "cheap"),
+            "google_invalid_campaign_amount"
+        );
+        assert_eq!(
+            refused(shopping, CAMPAIGN_DAILY_BUDGET, "10001"),
+            "google_invalid_campaign_amount"
+        );
+        assert_eq!(
+            refused(shopping, CAMPAIGN_COUNTRIES, ""),
+            "google_invalid_countries"
+        );
+        assert_eq!(
+            refused(shopping, CAMPAIGN_COUNTRIES, "FR, Mars"),
+            "google_invalid_countries"
+        );
+        assert_eq!(
+            refused(shopping, CAMPAIGN_PHONE, "-95"),
+            "google_invalid_adjustment"
+        );
+        assert_eq!(
+            refused(shopping, CAMPAIGN_PHONE, "less"),
+            "google_invalid_adjustment"
+        );
+        assert_eq!(
+            refused(shopping, CAMPAIGN_START, "soon"),
+            "google_invalid_start"
+        );
+        assert_eq!(
+            refused(shopping, CAMPAIGN_AD_GROUPS, ""),
+            "google_invalid_ad_groups"
+        );
+        assert_eq!(
+            refused(shopping, CAMPAIGN_AD_GROUPS, "01CAT"),
+            "google_invalid_ad_groups"
+        );
+        assert_eq!(
+            refused(
+                shopping,
+                CAMPAIGN_AD_GROUPS,
+                "01CAT Chats\n01CAT Chats encore"
+            ),
+            "google_invalid_ad_groups"
+        );
+        // A setting of the other kind of campaign.
+        assert_eq!(
+            refused(shopping, CAMPAIGN_KEYWORDS, "acme"),
+            "google_invalid_campaign"
+        );
+        assert_eq!(
+            refused(CAMPAIGN_BRAND, CAMPAIGN_PHONE, "-55"),
+            "google_invalid_campaign"
+        );
+        assert_eq!(
+            refused("display", CAMPAIGN_NAME, "Acme"),
+            "google_invalid_campaign"
+        );
+
+        let brand = |field: &str, value: &str| {
+            normalize_campaign_field(CAMPAIGN_BRAND, field, value).unwrap()
+        };
+        assert_eq!(
+            brand(CAMPAIGN_KEYWORDS, "acme\n Acme \nacme moto"),
+            "acme\nacme moto"
+        );
+        assert_eq!(
+            refused(CAMPAIGN_BRAND, CAMPAIGN_HEADLINES, "Acme\nOfficial shop"),
+            "google_invalid_headlines"
+        );
+        assert_eq!(
+            refused(
+                CAMPAIGN_BRAND,
+                CAMPAIGN_HEADLINES,
+                "Acme\nOfficial shop\nA headline of more than thirty characters"
+            ),
+            "google_invalid_headlines"
+        );
+        assert_eq!(
+            refused(CAMPAIGN_BRAND, CAMPAIGN_DESCRIPTIONS, "One only."),
+            "google_invalid_descriptions"
+        );
+    }
+
+    #[test]
+    fn settings_make_a_campaign_or_say_what_is_wrong() {
+        let shopping = [
+            (CAMPAIGN_NAME, "Shopping · Acme"),
+            (CAMPAIGN_DAILY_BUDGET, "10.00"),
+            (CAMPAIGN_BID, "0.30"),
+            (CAMPAIGN_COUNTRIES, "FR, BE"),
+            (CAMPAIGN_PHONE, "-55"),
+            (CAMPAIGN_START, START_LIVE),
+            (CAMPAIGN_AD_GROUPS, "01CAT Arbres à chat"),
+        ];
+        let plan = plan_of(CAMPAIGN_SHOPPING, shopping).unwrap();
+        assert_eq!(
+            plan,
+            CampaignPlan {
+                kind: CAMPAIGN_SHOPPING.into(),
+                name: "Shopping · Acme".into(),
+                daily_budget_micros: 10_000_000,
+                bid_micros: 300_000,
+                countries: vec!["FR".into(), "BE".into()],
+                phone_percent: Some(-55),
+                // Left out: no adjustment.
+                tablet_percent: None,
+                live: true,
+                ad_groups: vec![AdGroupPlan {
+                    category_id: "01CAT".into(),
+                    name: "Arbres à chat".into(),
+                }],
+                ..CampaignPlan::default()
+            }
+        );
+        // What a campaign needs is not left out.
+        let without = |field: &str| {
+            plan_of(
+                CAMPAIGN_SHOPPING,
+                shopping.into_iter().filter(|(named, _)| *named != field),
+            )
+            .unwrap_err()
+            .code()
+            .unwrap()
+        };
+        assert_eq!(without(CAMPAIGN_NAME), "google_invalid_campaign_name");
+        assert_eq!(without(CAMPAIGN_BID), "google_invalid_campaign_amount");
+        assert_eq!(without(CAMPAIGN_COUNTRIES), "google_invalid_countries");
+        assert_eq!(without(CAMPAIGN_START), "google_invalid_start");
+        assert_eq!(without(CAMPAIGN_AD_GROUPS), "google_invalid_ad_groups");
+        let mut dear = shopping;
+        dear[2].1 = "10.01";
+        assert!(matches!(
+            plan_of(CAMPAIGN_SHOPPING, dear),
+            Err(GoogleError::BidOverBudget)
+        ));
+
+        let brand = plan_of(
+            CAMPAIGN_BRAND,
+            [
+                (CAMPAIGN_NAME, "Acme · name"),
+                (CAMPAIGN_DAILY_BUDGET, "2.00"),
+                (CAMPAIGN_BID, "0.30"),
+                (CAMPAIGN_COUNTRIES, "FR"),
+                (CAMPAIGN_START, START_PAUSED),
+                (CAMPAIGN_KEYWORDS, "acme"),
+                (CAMPAIGN_HEADLINES, "Acme\nOfficial shop\nOrder online"),
+                (
+                    CAMPAIGN_DESCRIPTIONS,
+                    "The official shop.\nDelivered to your door.",
+                ),
+            ],
+        )
+        .unwrap();
+        assert!(!brand.live);
+        assert_eq!(brand.keywords, vec!["acme"]);
+        assert_eq!(brand.headlines.len(), 3);
+        assert_eq!(brand.descriptions.len(), 2);
+        assert!(brand.ad_groups.is_empty());
+        assert_ne!(
+            campaign_stream_id("shop", CAMPAIGN_SHOPPING),
+            campaign_stream_id("shop", CAMPAIGN_BRAND)
+        );
     }
 
     #[test]

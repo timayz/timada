@@ -122,6 +122,26 @@ pub async fn answered_proposals(
     page(db, tenant_id, false, from, limit).await
 }
 
+pub(super) const WAITING_ABOUT: &str = "SELECT id FROM proposals
+    INDEXED BY proposals_listed WHERE tenant_id = ?1 AND waiting = 1
+    AND kind = ?2 AND subject_id = ?3
+    ORDER BY listed_at DESC, id DESC LIMIT 1";
+
+/// The latest of the tenant's waiting proposals of `kind` about
+/// `subject_id`, by id: what a page that prepares one shows in place of
+/// its form.
+pub async fn waiting_about(
+    db: &Db,
+    tenant_id: &str,
+    kind: &str,
+    subject_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let row: Option<(String,)> = db
+        .fetch_optional(WAITING_ABOUT, (tenant_id, kind, subject_id))
+        .await?;
+    Ok(row.map(|(id,)| id))
+}
+
 pub(super) const COUNT_WAITING: &str = "SELECT COUNT(*) FROM proposals
     INDEXED BY proposals_listed WHERE tenant_id = ?1 AND waiting = 1";
 

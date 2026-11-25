@@ -27,7 +27,12 @@
 //! read the newest first, [`ADS_DAYS_A_PASS`] a pass, with the next pass a
 //! few minutes later while older days are left. A pass that fails is
 //! recorded with its reason and tried again later, further apart each time.
+//!
+//! A pass also notices a campaign timada created paused that a member set
+//! running at Google Ads itself: the first day it showed an ad is recorded
+//! as the day it went live ([`crate::campaigns::note_shown`]).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -246,6 +251,7 @@ impl AdsPasses {
             days_to_read(&last_finished_day(now, &account.time_zone), watch.as_ref());
         let calls = AtomicU32::new(0);
         let mut recorded = 0;
+        let mut shown = BTreeMap::new();
         let passed = self
             .fetch(
                 &command,
@@ -253,7 +259,7 @@ impl AdsPasses {
                 &account,
                 (&first, &last),
                 &calls,
-                &mut recorded,
+                (&mut recorded, &mut shown),
             )
             .await;
         let calls = calls.load(Ordering::Relaxed);
@@ -263,6 +269,7 @@ impl AdsPasses {
                 command
                     .record_ads_check(READER, tenant_id, customer_id, &first, &last, behind, calls)
                     .await?;
+                crate::campaigns::note_shown(&self.store, tenant_id, customer_id, &shown).await?;
                 tracing::debug!(tenant = %tenant_id, days = recorded, behind, "Google Ads read");
             }
             // Recorded on the connection, or nothing to read with.
@@ -279,7 +286,8 @@ impl AdsPasses {
     }
 
     /// Asks Google Ads its four reports over the days, and records each
-    /// day whose numbers are new or moved.
+    /// day whose numbers are new or moved. `shown` gets, by campaign, the
+    /// first of the days on which it showed an ad.
     async fn fetch(
         &self,
         command: &Command<Executor>,
@@ -287,7 +295,7 @@ impl AdsPasses {
         account: &AdsAccount,
         (first, last): (&str, &str),
         calls: &AtomicU32,
-        recorded: &mut usize,
+        (recorded, shown): (&mut usize, &mut BTreeMap<String, String>),
     ) -> Result<(), Stopped> {
         let google = &self.google;
         let mut rows = AdsRows::default();
@@ -313,6 +321,16 @@ impl AdsPasses {
             // this pass's to record.
             if day.day.as_str() < first || day.day.as_str() > last {
                 continue;
+            }
+            // The days come the oldest first.
+            for row in day
+                .campaigns
+                .iter()
+                .filter(|row| row.numbers.impressions > 0)
+            {
+                shown
+                    .entry(row.campaign_id.clone())
+                    .or_insert_with(|| day.day.clone());
             }
             let written = command
                 .record_ads_day(READER, &connection.tenant_id, &account.customer_id, day)

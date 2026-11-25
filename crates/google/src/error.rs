@@ -24,6 +24,38 @@ pub enum GoogleError {
     NoMerchantCenter,
     #[error("a Merchant Center account is a number")]
     InvalidMerchantAccount,
+    #[error("no such campaign")]
+    InvalidCampaign,
+    #[error("a campaign's name is one to 200 characters")]
+    InvalidCampaignName,
+    #[error("an amount reads 0.30, in the account's currency")]
+    InvalidCampaignAmount,
+    #[error("the bid is more than the campaign may spend in a day")]
+    BidOverBudget,
+    #[error(
+        "countries read FR, BE: the two letters of each, among the ones Google Ads is told by here"
+    )]
+    InvalidCountries,
+    #[error("an adjustment is a whole percentage between -90 and 900, or nothing")]
+    InvalidAdjustment,
+    #[error("a campaign starts paused or live")]
+    InvalidStart,
+    #[error("an ad group is a line made of a category's id and its name, one to a hundred of them")]
+    InvalidAdGroups,
+    #[error(
+        "a campaign on the shop's name takes one to ten searches, a line each, of 80 characters at most"
+    )]
+    InvalidKeywords,
+    #[error("an ad takes three to fifteen headlines, a line each, of 30 characters at most")]
+    InvalidHeadlines,
+    #[error("an ad takes two to four descriptions, a line each, of 90 characters at most")]
+    InvalidDescriptions,
+    #[error("the campaign was created already")]
+    CampaignExists,
+    #[error("the campaign was not created yet")]
+    NoCampaign,
+    #[error("the campaign runs already")]
+    CampaignLive,
     #[error(transparent)]
     Write(#[from] WriteError),
     #[error(transparent)]
@@ -67,6 +99,20 @@ impl GoogleError {
             Self::InvalidAdsAccount => "google_invalid_ads_account",
             Self::NoMerchantCenter => "google_no_merchant_center",
             Self::InvalidMerchantAccount => "google_invalid_merchant_account",
+            Self::InvalidCampaign => "google_invalid_campaign",
+            Self::InvalidCampaignName => "google_invalid_campaign_name",
+            Self::InvalidCampaignAmount => "google_invalid_campaign_amount",
+            Self::BidOverBudget => "google_bid_over_budget",
+            Self::InvalidCountries => "google_invalid_countries",
+            Self::InvalidAdjustment => "google_invalid_adjustment",
+            Self::InvalidStart => "google_invalid_start",
+            Self::InvalidAdGroups => "google_invalid_ad_groups",
+            Self::InvalidKeywords => "google_invalid_keywords",
+            Self::InvalidHeadlines => "google_invalid_headlines",
+            Self::InvalidDescriptions => "google_invalid_descriptions",
+            Self::CampaignExists => "google_campaign_exists",
+            Self::NoCampaign => "google_no_campaign",
+            Self::CampaignLive => "google_campaign_live",
             Self::Write(err) => return timada_core::write_refusal(err),
             Self::Other(_) => return None,
         })
