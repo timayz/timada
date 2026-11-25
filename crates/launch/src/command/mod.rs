@@ -19,12 +19,14 @@ use timada_core::Sending;
 
 use crate::aggregator::{
     CheckpointReached, DecisionRecorded, Figure, Launch, MailClaimed, MailDeferred, MailFailed,
-    MailSent, MailUndeliverable, Notice, Owed, TargetSet, ThresholdsSet,
+    MailSent, MailUndeliverable, Notice, Owed, PathTargetsSet, StepConfirmed, StepUnconfirmed,
+    TargetSet, ThresholdsSet,
 };
 use crate::error::LaunchError;
 use crate::value_object::{
-    ADVICES, CHECKPOINTS, MAX_NOTE_LEN, Reading, THRESHOLDS, Thresholds, checkpoint_at, judge,
-    launch_id, normalize_threshold, thresholds_of,
+    ADVICES, CHECKPOINTS, CONFIRMED_STEPS, DEFAULT_PRODUCTS, DEFAULT_PRODUCTS_PER_CATEGORY,
+    MAX_NOTE_LEN, Reading, THRESHOLDS, Thresholds, checkpoint_at, judge, launch_id,
+    normalize_threshold, thresholds_of,
 };
 
 /// The command gateway. Cheap to clone when `E` is.
@@ -114,6 +116,12 @@ pub struct LaunchState {
     pub thresholds: Vec<(String, String)>,
     /// The checkpoints read so far, in the order of their days.
     pub reached: Vec<Reached>,
+    /// The steps of the launch path a member said hold: the step, who
+    /// said so, and when (unix seconds).
+    pub confirmed: Vec<(String, String, u64)>,
+    /// What the launch path holds the catalog to, once the shop said:
+    /// products a category at the bottom of the tree, and products in all.
+    pub path_targets: Option<(u32, u32)>,
 }
 
 impl LaunchState {
@@ -130,6 +138,21 @@ impl LaunchState {
                 .map(|(name, value)| (name.as_str(), value.as_str())),
         )
         .unwrap_or_default()
+    }
+
+    /// Who said the step `step` holds, and when; `None` while nobody did.
+    pub fn confirmed(&self, step: &str) -> Option<(&str, u64)> {
+        self.confirmed
+            .iter()
+            .find(|(held, ..)| held == step)
+            .map(|(_, by, at)| (by.as_str(), *at))
+    }
+
+    /// How many products a category at the bottom of the tree is to hold,
+    /// and how many the shop.
+    pub fn path_targets(&self) -> (u32, u32) {
+        self.path_targets
+            .unwrap_or((DEFAULT_PRODUCTS_PER_CATEGORY, DEFAULT_PRODUCTS))
     }
 
     /// The checkpoint of day `checkpoint`, once read.
@@ -169,6 +192,9 @@ pub fn launch_projection<E: Executor>() -> Projection<E, LaunchState> {
         .handler(on_thresholds_set())
         .handler(on_checkpoint_reached())
         .handler(on_decision_recorded())
+        .handler(on_step_confirmed())
+        .handler(on_step_unconfirmed())
+        .handler(on_path_targets_set())
         .strict()
 }
 
@@ -334,6 +360,44 @@ async fn on_notice_failed(event: Event<MailFailed>, state: &mut NoticeState) -> 
         attempts: event.data.attempts,
     };
     state.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_step_confirmed(
+    event: Event<StepConfirmed>,
+    launch: &mut LaunchState,
+) -> anyhow::Result<()> {
+    launch.id = event.aggregate_id.to_owned();
+    launch
+        .confirmed
+        .retain(|(step, ..)| *step != event.data.step);
+    launch.confirmed.push((
+        event.data.step.to_owned(),
+        event.data.confirmed_by.to_owned(),
+        event.timestamp,
+    ));
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_step_unconfirmed(
+    event: Event<StepUnconfirmed>,
+    launch: &mut LaunchState,
+) -> anyhow::Result<()> {
+    launch
+        .confirmed
+        .retain(|(step, ..)| *step != event.data.step);
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_path_targets_set(
+    event: Event<PathTargetsSet>,
+    launch: &mut LaunchState,
+) -> anyhow::Result<()> {
+    launch.id = event.aggregate_id.to_owned();
+    launch.path_targets = Some((event.data.products_per_category, event.data.products));
     Ok(())
 }
 
@@ -544,6 +608,70 @@ impl<E: Executor> Command<E> {
                 decision: decision.to_owned(),
                 note: note.to_owned(),
                 decided_by: actor_user_id.to_owned(),
+            });
+            Ok(true)
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Says, for a member, that the step `step` of the launch path holds
+    /// (`holds`), or takes that word back. One of [`CONFIRMED_STEPS`]; the
+    /// same again is a no-op.
+    pub async fn confirm_step(
+        &self,
+        actor_user_id: &str,
+        step: &str,
+        holds: bool,
+        routing_key: Option<String>,
+    ) -> Result<(), LaunchError> {
+        if !CONFIRMED_STEPS.contains(&step) {
+            return Err(LaunchError::UnknownStep);
+        }
+        self.settle(routing_key, |launch, write| {
+            let held = launch.is_some_and(|launch| launch.confirmed(step).is_some());
+            if held == holds {
+                return Ok(false);
+            }
+            if holds {
+                write.event(&StepConfirmed {
+                    step: step.to_owned(),
+                    confirmed_by: actor_user_id.to_owned(),
+                });
+            } else {
+                write.event(&StepUnconfirmed {
+                    step: step.to_owned(),
+                    unconfirmed_by: actor_user_id.to_owned(),
+                });
+            }
+            Ok(true)
+        })
+        .await?;
+        Ok(())
+    }
+
+    /// Sets what the launch path holds the catalog to: `per_category`
+    /// products in every category at the bottom of the tree, `products` in
+    /// the shop. The same again is a no-op.
+    pub async fn set_path_targets(
+        &self,
+        actor_user_id: &str,
+        per_category: u32,
+        products: u32,
+        routing_key: Option<String>,
+    ) -> Result<(), LaunchError> {
+        let sane = |n: u32| (1..=100_000).contains(&n);
+        if !sane(per_category) || !sane(products) {
+            return Err(LaunchError::InvalidPathTarget);
+        }
+        self.settle(routing_key, |launch, write| {
+            if launch.is_some_and(|launch| launch.path_targets() == (per_category, products)) {
+                return Ok(false);
+            }
+            write.event(&PathTargetsSet {
+                products_per_category: per_category,
+                products,
+                set_by: actor_user_id.to_owned(),
             });
             Ok(true)
         })

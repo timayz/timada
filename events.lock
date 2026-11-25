@@ -261,6 +261,9 @@ event timada-invoicing/Document::Reserved { series: String, year: u16, chunk: u3
 event timada-invoicing/LedgerPointer::Rolled { chunk: u32 }
 event timada-launch/Launch::CheckpointReached { checkpoint: u32, started_at: u64, figures: Vec<Figure>, advice: String, why: String, reached_by: String }
 event timada-launch/Launch::DecisionRecorded { checkpoint: u32, decision: String, note: String, decided_by: String }
+event timada-launch/Launch::PathTargetsSet { products_per_category: u32, products: u32, set_by: String }
+event timada-launch/Launch::StepConfirmed { step: String, confirmed_by: String }
+event timada-launch/Launch::StepUnconfirmed { step: String, unconfirmed_by: String }
 event timada-launch/Launch::TargetSet { monthly_profit_cents: u64, currency: String, by_day: String, set_by: String }
 event timada-launch/Launch::ThresholdsSet { thresholds: Vec<Figure>, set_by: String }
 event timada-launch/Notice::MailClaimed { by: String, until: u64 }

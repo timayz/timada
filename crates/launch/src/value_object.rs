@@ -26,6 +26,40 @@ pub const MAX_NOTE_LEN: usize = 1_000;
 /// How long the notice of a checkpoint is worth sending: a week.
 pub const NOTICE_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
 
+/// No product is left with the text its supplier gave it.
+pub const STEP_SUPPLIER_TEXT: &str = "supplier_text";
+/// The legal pages say what is true of this company.
+pub const STEP_LEGAL: &str = "legal";
+/// The storefront asks before it measures.
+pub const STEP_CONSENT: &str = "consent";
+/// Shoppers have a way to reach the shop that answers.
+pub const STEP_CONTACT: &str = "contact";
+/// The storefront's sitemap and robots file answer.
+pub const STEP_SITEMAP: &str = "sitemap";
+/// The sitemap was given to Search Console.
+pub const STEP_SITEMAP_SUBMITTED: &str = "sitemap_submitted";
+/// A real order went through, its purchase counted by Google Ads.
+pub const STEP_TEST_ORDER: &str = "test_order";
+/// The home, a category and a product pass Core Web Vitals on a phone.
+pub const STEP_SPEED: &str = "speed";
+
+/// The steps of the launch path a member confirms: timada cannot know.
+pub const CONFIRMED_STEPS: [&str; 8] = [
+    STEP_SUPPLIER_TEXT,
+    STEP_LEGAL,
+    STEP_CONSENT,
+    STEP_CONTACT,
+    STEP_SITEMAP,
+    STEP_SITEMAP_SUBMITTED,
+    STEP_TEST_ORDER,
+    STEP_SPEED,
+];
+
+/// How many products a category at the bottom of the tree is to hold, and
+/// how many the shop, until the shop says otherwise.
+pub const DEFAULT_PRODUCTS_PER_CATEGORY: u32 = 10;
+pub const DEFAULT_PRODUCTS: u32 = 200;
+
 /// The stream of a shop's launch. A tenant's stream ids are one space
 /// whatever the aggregate.
 pub fn launch_id() -> String {

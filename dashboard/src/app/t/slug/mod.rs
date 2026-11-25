@@ -21,6 +21,7 @@ pub mod google_tag;
 pub mod invoices;
 pub mod invoicing;
 pub mod languages;
+pub mod launch;
 pub mod mail;
 pub mod members;
 pub mod merchant_center;

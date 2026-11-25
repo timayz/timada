@@ -1,7 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { registerWithEmail, uniqueEmail } from "./email";
 import { FakeGoogle } from "./google";
-import { fileUnder } from "./storefront";
+import { productTab } from "./forms";
+import { addShippingMethod } from "./shop";
+import { publishProduct } from "./storefront";
+import { setLegalIdentity } from "./tenants";
 import { createTenant, uniqueTenant } from "./tenants";
 
 // A shop's first Shopping campaign, end to end against a stand-in for
@@ -25,13 +28,8 @@ test("a shop prepares its first campaign, approves it and sets it running", asyn
     await page.getByRole("button", { name: "Create category" }).click();
     await expect(page.getByRole("status")).toContainText("Category created.");
     const categoryId = new URL(page.url()).pathname.split("/").at(-1)!;
-    await page.goto(`/t/${shop.slug}/products`);
-    await page.getByLabel("Name").fill("Arbre a chat");
-    await page.getByRole("button", { name: "Create product" }).click();
-    await expect(page.getByRole("status")).toContainText("Product created.");
-    const productUrl = page.url().split("?")[0];
+    const productUrl = (await publishProduct(page, shop.slug, "Arbre a chat", "49.90", "Arbres a chat")).split("?")[0];
     const productId = new URL(productUrl).pathname.split("/").at(-1)!;
-    await fileUnder(page, productUrl, "Arbres a chat");
 
     google.adsAccounts = [{ id: "1111111111", name: "Acme", currency: "EUR", timeZone: "UTC" }];
     google.merchantAccounts = [{ accountId: "5550001", accountName: "Acme" }];
@@ -43,9 +41,10 @@ test("a shop prepares its first campaign, approves it and sets it running", asyn
     await expect(page).toHaveURL(new RegExp(`/t/${shop.slug}/ads/campaigns$`));
     const shopping = page.locator("[data-campaign=shopping]");
     const check = (key: string) => shopping.locator(`[data-campaign-check=${key}]`);
-    for (const key of ["account", "conversion", "products", "label"]) {
+    for (const key of ["account", "conversion", "products", "label", "launch"]) {
       await expect(check(key)).toHaveAttribute("data-met", "false");
     }
+    await expect(check("launch")).toContainText("The company's details are filled");
     await expect(shopping.locator("[data-campaign-not-ready]")).toBeVisible();
     await expect(shopping.locator("[data-campaign-form]")).toHaveCount(0);
 
@@ -78,11 +77,44 @@ test("a shop prepares its first campaign, approves it and sets it running", asyn
     await page.getByRole("button", { name: "Save the label" }).click();
     await expect(page.getByRole("status")).toContainText("Label saved.");
 
+    // What the launch path asks before ads: what the product costs, the
+    // company, a legal page, delivery and returns, and a member's word on
+    // what timada cannot check.
+    await page.goto(productUrl);
+    await productTab(page, "Cost & margin");
+    await page.getByLabel("Cost of one (EUR)").fill("10");
+    await page.getByRole("button", { name: "Record what it costs" }).click();
+    await expect(page.getByRole("status")).toContainText("Costs saved.");
+    await setLegalIdentity(page, shop.slug);
+    await addShippingMethod(page, shop.slug, "Colis suivi", "4,90", "France FR");
+    await page.getByLabel("Return window, in days").fill("30");
+    await page.getByRole("button", { name: "Set return terms" }).click();
+    await expect(page.getByRole("status")).toContainText("Return terms set.");
+    await page.goto(`/t/${shop.slug}/pages`);
+    await page.getByRole("link", { name: "New page" }).click();
+    await page.locator("#page-title").fill("Mentions légales");
+    await page.locator("#page-body").fill("Le site est édité par Acme.");
+    await page.getByRole("button", { name: "Save draft" }).click();
+    await expect(page.getByRole("status")).toContainText("Draft saved.");
+    await page.getByRole("button", { name: "Publish" }).click();
+    await expect(page.getByRole("status")).toContainText("Published");
+    for (const step of ["legal", "consent", "test_order"]) {
+      await expect(async () => {
+        await page.goto(`/t/${shop.slug}/launch`);
+        await page
+          .locator(`[data-launch-step=${step}]`)
+          .getByRole("button", { name: "I checked: it holds" })
+          .click({ timeout: 1000 });
+      }).toPass({ timeout: 15_000 });
+      await expect(page.getByRole("status")).toContainText("Noted: it holds.");
+    }
+
     // Ready once Merchant Center was read: the form, with its defaults.
     await expect(async () => {
       await page.goto(`/t/${shop.slug}/ads/campaigns`);
       await expect(check("products")).toHaveAttribute("data-met", "true", { timeout: 1000 });
       await expect(check("categories")).toHaveAttribute("data-met", "true", { timeout: 1000 });
+      await expect(check("launch")).toHaveAttribute("data-met", "true", { timeout: 1000 });
     }).toPass({ timeout: 30_000 });
     for (const key of ["account", "conversion", "label"]) {
       await expect(check(key)).toHaveAttribute("data-met", "true");

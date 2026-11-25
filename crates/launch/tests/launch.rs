@@ -196,3 +196,48 @@ async fn a_checkpoint_is_read_once_judged_on_the_shops_thresholds_and_decided() 
     let launch = launches.load_launch().await.unwrap().unwrap();
     assert_eq!(launch.reached(120).unwrap().advice, STOP);
 }
+
+#[tokio::test]
+async fn a_member_says_a_step_holds_and_takes_it_back() {
+    let launches = command().await;
+    assert!(matches!(
+        launches.confirm_step(ALICE, "feed", true).await,
+        Err(LaunchError::UnknownStep)
+    ));
+    // Nothing to take back.
+    launches
+        .confirm_step(ALICE, timada_launch::STEP_SPEED, false)
+        .await
+        .unwrap();
+    assert!(launches.load_launch().await.unwrap().is_none());
+    launches
+        .confirm_step(ALICE, timada_launch::STEP_SPEED, true)
+        .await
+        .unwrap();
+    launches
+        .confirm_step("user-bob", timada_launch::STEP_SPEED, true)
+        .await
+        .unwrap();
+    let launch = launches.load_launch().await.unwrap().unwrap();
+    // The first word stands until it is taken back.
+    assert_eq!(
+        launch.confirmed(timada_launch::STEP_SPEED).unwrap().0,
+        ALICE
+    );
+    assert_eq!(launch.confirmed(timada_launch::STEP_LEGAL), None);
+    launches
+        .confirm_step("user-bob", timada_launch::STEP_SPEED, false)
+        .await
+        .unwrap();
+    let launch = launches.load_launch().await.unwrap().unwrap();
+    assert_eq!(launch.confirmed(timada_launch::STEP_SPEED), None);
+
+    assert_eq!(launch.path_targets(), (10, 200));
+    launches.set_path_targets(ALICE, 5, 60).await.unwrap();
+    let launch = launches.load_launch().await.unwrap().unwrap();
+    assert_eq!(launch.path_targets(), (5, 60));
+    assert!(matches!(
+        launches.set_path_targets(ALICE, 0, 60).await,
+        Err(LaunchError::InvalidPathTarget)
+    ));
+}

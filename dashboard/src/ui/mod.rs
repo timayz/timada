@@ -392,6 +392,8 @@ pub fn describe_error(code: &str) -> &'static str {
             "The campaign does not run yet, or is in its first three weeks: a round comes after."
         }
         "google_invalid_tuned" => "No such ad group, device or search in the campaign.",
+        "launch_unknown_step" => "No such step to confirm.",
+        "launch_invalid_path_target" => "A number of products is between 1 and 100,000.",
         "launch_invalid_target" => {
             "A target is an amount above zero, in a currency of three letters."
         }

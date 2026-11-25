@@ -330,6 +330,7 @@ check reads what timada already holds; none asks Google.
 | Merchant Center accepts every product (`shopping`) | the last read of Merchant Center (`merchant_standing().all_accepted_for_ads()`) |
 | The feed tells campaigns each product's category (`shopping`) | the feed's label for campaigns is chosen |
 | A category holds products to advertise (`shopping`) | a published category with products, not kept out of ads |
+| The launch path's steps before ads hold (`shopping`) | every step of [the launch path](launch.md#the-launch-path-696) marked "before ads" |
 | The shop's address is known (`brand`) | where shoppers find the shop, on the API keys page |
 
 "Counts the sales" is what timada can know. Whether Google Ads recorded a

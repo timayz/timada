@@ -56,6 +56,23 @@ pub enum Launch {
         note: String,
         decided_by: String,
     },
+    /// A member says a step of the launch path holds, one timada cannot
+    /// check by itself (a legal page's content, a phone that answers): one
+    /// of [`CONFIRMED_STEPS`](crate::CONFIRMED_STEPS).
+    StepConfirmed { step: String, confirmed_by: String },
+    /// A member takes that word back.
+    StepUnconfirmed {
+        step: String,
+        unconfirmed_by: String,
+    },
+    /// What the launch path holds the catalog to: how many products every
+    /// category at the bottom of the tree is to hold, and how many the
+    /// shop.
+    PathTargetsSet {
+        products_per_category: u32,
+        products: u32,
+        set_by: String,
+    },
 }
 
 /// The notice, to a shop's owners, that a checkpoint's day came. Its id is
