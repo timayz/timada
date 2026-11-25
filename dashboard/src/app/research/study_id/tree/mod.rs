@@ -5,21 +5,32 @@
 //! are to leave it out, and what stands between it and its creation in a
 //! shop. The tree is read from the study's stream, the figures from the
 //! shared read model.
+//!
+//! Nothing is chosen until its owner chooses it: the kept keywords are
+//! listed « to choose », and one that is placed or parked leaves that list
+//! for the « chosen » one. One the owner refuses leaves it for the
+//! « refused » one, so it is read once. Each move is a plain form; `picker.js` sends it
+//! in the background and shows what this page then renders, so nothing
+//! loads again.
 
 pub mod create;
 pub mod place;
 pub mod price;
 pub mod words;
 
+use std::collections::HashSet;
+
 use timada_catalog::MAX_CATEGORY_NAME_LEN;
 use timada_core::page::{Cursor, PageFrom};
 use timada_research::{
-    Channel, KeywordFigures, PlanCategory, ReviewedCategory, StudyState, Thresholds, TreeProblem,
-    TreeReview, USUAL_PARENTS, keyword_figures, keywords_of_outcome, outcome_counts, review_tree,
+    Channel, KeywordFigures, PlanCategory, ReviewedCategory, StudyState, Thresholds, Tier,
+    TreeProblem, TreeReview, USUAL_PARENTS, kept_keywords_without, keyword_figures, outcome_counts,
+    review_tree,
 };
 use timada_tenancy::{PERMISSION_PRODUCTS_MANAGE, TenantState, tenants_of_user};
 use topcoat::{
     Result,
+    asset::asset,
     context::{Cx, context},
     icon::icon,
     router::{href, page, query_params},
@@ -30,8 +41,12 @@ use super::{require_owned, study_id, study_url};
 use crate::app::tenants::tenancy;
 use crate::cluster::LocalReads;
 use crate::components::alert::{AlertVariant, alert, alert_description};
-use crate::components::button::{ButtonSize, ButtonVariant, button};
+use crate::components::button::{ButtonSize, ButtonVariant, button, button_variants};
+use crate::components::dropdown_menu::{
+    dropdown_menu, dropdown_menu_content, dropdown_menu_item, dropdown_menu_trigger,
+};
 use crate::components::field::{field, field_description, field_label};
+use crate::components::floating::FloatingAlign;
 use crate::components::input::input;
 use crate::components::pagination::{
     pagination, pagination_content, pagination_item, pagination_next, pagination_previous,
@@ -54,19 +69,34 @@ pub(crate) const PARENT: &str = "parent";
 pub(crate) const UNDER: &str = "under:";
 /// Among the keywords parked for later.
 pub(crate) const PARK: &str = "park";
-/// Out of the tree and of the parked ones.
+/// Among the keywords refused as categories.
+pub(crate) const REFUSE: &str = "refuse";
+/// Out of the tree, of the parked ones and of the refused ones.
 pub(crate) const REMOVE: &str = "remove";
 
-/// The page shows this many kept keywords at once.
+/// The page shows this many keywords left to choose at once.
 const PAGE_SIZE: i64 = 50;
 
-/// The lists the kept keywords are read by.
-const LISTS: [(&str, &str); 2] = [("main", "Main"), ("long_tail", "Long tail")];
+/// The list of the kept keywords that are neither in the tree nor parked.
+const TO_CHOOSE: &str = "to_choose";
+/// The list of the keywords in the tree and of the parked ones.
+const CHOSEN: &str = "chosen";
+
+/// The list of the keywords refused as categories.
+const REFUSED: &str = "refused";
+
+/// The lists the keywords are read by: one is in the first until its owner
+/// chooses it or refuses it, and in the second or the third from then on.
+const LISTS: [(&str, &str); 3] = [
+    (TO_CHOOSE, "To choose"),
+    (CHOSEN, "Chosen"),
+    (REFUSED, "Refused"),
+];
 
 #[topcoat::router::query_params(error = bad_request)]
 struct TreeQuery {
-    /// Which of the kept keywords are listed ([`LISTS`]); the main ones
-    /// without one.
+    /// Which of the keywords are listed ([`LISTS`]); the ones left to
+    /// choose without one.
     list: Option<String>,
     after: Option<String>,
     before: Option<String>,
@@ -100,20 +130,46 @@ fn list_of(list: Option<&str>) -> Option<&'static str> {
         .find(|key| Some(*key) == list)
 }
 
-/// The tree's page of a study, on one of the lists of kept keywords.
+/// The tree's page of a study.
 pub(crate) fn tree_url(
     cx: &Cx,
     study_id: &str,
-    list: Option<&str>,
     error: Option<&str>,
     message: Option<&str>,
 ) -> String {
+    picker_url(cx, study_id, &Shown::default(), error, message)
+}
+
+/// What a move's form says of the list it was sent from, to come back to
+/// it: which list, and which page of it.
+#[derive(Default)]
+pub(crate) struct Shown {
+    pub list: Option<String>,
+    pub after: Option<String>,
+    pub before: Option<String>,
+}
+
+/// The tree's page of a study, where one of its lists was shown.
+pub(crate) fn picker_url(
+    cx: &Cx,
+    study_id: &str,
+    shown: &Shown,
+    error: Option<&str>,
+    message: Option<&str>,
+) -> String {
+    let cursor = |cursor: &'_ Option<String>| -> Option<String> {
+        cursor
+            .as_deref()
+            .filter(|cursor| Cursor::parse(cursor).is_some())
+            .map(str::to_owned)
+    };
+    let (after, before) = (cursor(&shown.after), cursor(&shown.before));
     href!(index, study_id: study_id.to_owned())
         .query(TreeLink {
-            list: list_of(list).filter(|list| *list != LISTS[0].0),
+            list: list_of(shown.list.as_deref()).filter(|list| *list != LISTS[0].0),
             shop: None,
-            after: None,
-            before: None,
+            after: after.as_deref(),
+            before: before.as_deref(),
             error,
             message,
         })
@@ -153,14 +209,22 @@ pub(crate) async fn reviewed(cx: &Cx, study: &StudyState) -> Result<TreeReview> 
     let figures = keyword_figures(context::<Db>(cx), &study.id, &in_tree)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
+    Ok(reviewed_with(study, &figures))
+}
+
+/// The study's tree, checked against `figures`.
+fn reviewed_with(
+    study: &StudyState,
+    figures: &std::collections::HashMap<String, KeywordFigures>,
+) -> TreeReview {
     let seeds: Vec<String> = study.seeds.iter().map(|seed| seed.seed.clone()).collect();
-    Ok(review_tree(
+    review_tree(
         &study.tree,
         &seeds,
         &study.inputs,
         &Thresholds::default(),
-        &figures,
-    ))
+        figures,
+    )
 }
 
 /// The shop that goes by `slug`, when `user_id` may manage its catalog and
@@ -248,30 +312,38 @@ pub(crate) async fn left_to_create(
     Ok(lines)
 }
 
-/// One place a row's form offers to send its keyword to.
+/// One place a row's buttons offer to send its keyword to.
 struct Place {
-    /// What the form posts: [`PARENT`], [`UNDER`] and a keyword, [`PARK`]
-    /// or [`REMOVE`].
+    /// What the button posts: [`PARENT`], [`UNDER`] and a keyword, [`PARK`],
+    /// [`REFUSE`] or [`REMOVE`].
     to: String,
-    label: String,
+    /// The name of the parent category, for one it would go under.
+    under: String,
+}
+
+impl Place {
+    fn to(to: &str) -> Self {
+        Self {
+            to: to.to_owned(),
+            under: String::new(),
+        }
+    }
 }
 
 /// The places a keyword can go from where it stands: among the parents,
-/// under each parent category but itself, parked, and out when it is in.
+/// under each parent category but itself, parked, refused while it is not
+/// in the tree, and out when it is in, parked or refused.
 fn places(study: &StudyState, keyword: &str) -> Vec<Place> {
     let placed = study.tree.category(keyword);
     let parked = study.tree.is_parked(keyword);
-    let has_children = study.tree.children_of(keyword).next().is_some();
+    let refused = study.tree.is_refused(keyword);
+    // A parent category with children stays where it is until they move.
+    if study.tree.children_of(keyword).next().is_some() {
+        return Vec::new();
+    }
     let mut places = Vec::new();
     if placed.is_none_or(|category| category.parent.is_some()) {
-        places.push(Place {
-            to: PARENT.to_owned(),
-            label: "A parent category".to_owned(),
-        });
-    }
-    // A parent category with children stays where it is until they move.
-    if has_children {
-        return Vec::new();
+        places.push(Place::to(PARENT));
     }
     for parent in study.tree.parents() {
         let stands_there =
@@ -279,49 +351,101 @@ fn places(study: &StudyState, keyword: &str) -> Vec<Place> {
         if parent.keyword != keyword && !stands_there {
             places.push(Place {
                 to: format!("{UNDER}{}", parent.keyword),
-                label: format!("Under {}", timada_research::category_name(&parent.keyword)),
+                under: timada_research::category_name(&parent.keyword),
             });
         }
     }
     if !parked {
-        places.push(Place {
-            to: PARK.to_owned(),
-            label: "Parked for later".to_owned(),
-        });
+        places.push(Place::to(PARK));
     }
-    if placed.is_some() || parked {
-        places.push(Place {
-            to: REMOVE.to_owned(),
-            label: "Out of the tree".to_owned(),
-        });
+    if placed.is_none() && !refused {
+        places.push(Place::to(REFUSE));
+    }
+    if placed.is_some() || parked || refused {
+        places.push(Place::to(REMOVE));
     }
     places
 }
 
-/// The form of a row: where its keyword goes.
+/// The buttons of a row: one for each place its keyword can go, and a menu
+/// of the parent categories it can go under. A plain form, which
+/// `picker.js` sends without leaving the page. `menu` is the id its menu
+/// goes by, the page's own for each row. Taking a refused keyword out
+/// (`refused`) brings it back among the ones left to choose.
 #[component]
-async fn place_form(
+async fn place_buttons(
     cx: &Cx,
     action: &str,
     keyword: &str,
-    list: &str,
+    menu: &str,
+    shown: &Shown,
     places: &[Place],
+    #[default] refused: bool,
 ) -> Result<impl View> {
+    let can = |to: &str| places.iter().any(|place| place.to == to);
+    let (parent, park, refuse, remove) = (can(PARENT), can(PARK), can(REFUSE), can(REMOVE));
+    let unders: Vec<&Place> = places
+        .iter()
+        .filter(|place| place.to.starts_with(UNDER))
+        .collect();
     Ok(view! {
         if !places.is_empty() {
-            <form method="post" action=(action) class="flex justify-end gap-2" data-place="">
+            <form method="post" action=(action) class="flex flex-wrap justify-end gap-2" data-place="">
                 <input type="hidden" name="keyword" value=(keyword)>
-                <input type="hidden" name="list" value=(list)>
-                select(
-                    attrs: attributes! { name="to" aria-label=(format!("Where {keyword} goes")) class="w-48" },
-                    for place in places {
-                        <option value=(&place.to)>(&place.label)</option>
-                    }
-                )
-                button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" },
-                    "Move"
-                    <span class="sr-only">" " (keyword)</span>
-                )
+                if let Some(list) = &shown.list {
+                    <input type="hidden" name="list" value=(list)>
+                }
+                if let Some(after) = &shown.after {
+                    <input type="hidden" name="after" value=(after)>
+                }
+                if let Some(before) = &shown.before {
+                    <input type="hidden" name="before" value=(before)>
+                }
+                if parent {
+                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" name="to" value=(PARENT) },
+                        "Parent"
+                        <span class="sr-only">" category: " (keyword)</span>
+                    )
+                }
+                if !unders.is_empty() {
+                    dropdown_menu(
+                        dropdown_menu_trigger(
+                            target: menu,
+                            attrs: attributes! { class=(button_variants(ButtonVariant::Outline, ButtonSize::Sm)) },
+                            "Under…"
+                            <span class="sr-only">" a parent category: " (keyword)</span>
+                        )
+                        dropdown_menu_content(
+                            id: menu,
+                            align: FloatingAlign::End,
+                            for place in &unders {
+                                dropdown_menu_item(
+                                    attrs: attributes! { type="submit" name="to" value=(&place.to) },
+                                    <span class="sr-only">"Under "</span>
+                                    (&place.under)
+                                )
+                            }
+                        )
+                    )
+                }
+                if park {
+                    button(variant: ButtonVariant::Outline, size: ButtonSize::Sm, attrs: attributes! { type="submit" name="to" value=(PARK) },
+                        "Park"
+                        <span class="sr-only">" for later: " (keyword)</span>
+                    )
+                }
+                if refuse {
+                    button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" name="to" value=(REFUSE) },
+                        "Refuse"
+                        <span class="sr-only">" as a category: " (keyword)</span>
+                    )
+                }
+                if remove {
+                    button(variant: ButtonVariant::Ghost, size: ButtonSize::Sm, attrs: attributes! { type="submit" name="to" value=(REMOVE) },
+                        if refused { "Bring back" } else { "Take out" }
+                        <span class="sr-only">": " (keyword)</span>
+                    )
+                }
             </form>
         }
     })
@@ -358,6 +482,8 @@ fn problem_text(problem: &TreeProblem) -> String {
 /// One category of the tree, as the page words it.
 struct CategoryLine {
     keyword: String,
+    /// The id of its menu of parent categories.
+    menu: String,
     name: String,
     slug: String,
     child: bool,
@@ -378,7 +504,7 @@ struct CategoryLine {
 }
 
 impl CategoryLine {
-    fn of(category: &ReviewedCategory, study: &StudyState) -> Self {
+    fn of(at: usize, category: &ReviewedCategory, study: &StudyState) -> Self {
         let currency = study.inputs.sale.currency.as_str();
         let (ads, ads_label, ads_tone) = match category.channel {
             Some(Channel::Ads) => ("ads", "Ads", Tone::Success),
@@ -387,6 +513,7 @@ impl CategoryLine {
         };
         Self {
             keyword: category.keyword.clone(),
+            menu: format!("under-tree-{at}"),
             name: category.name.clone(),
             slug: category.slug.clone(),
             child: category.parent.is_some(),
@@ -417,14 +544,30 @@ impl CategoryLine {
     }
 }
 
-/// One kept keyword, as the list words it.
-struct KeptLine {
+/// A cost per click of a row of the read model, in US dollars.
+fn row_click(cents: Option<i64>) -> String {
+    cents.map_or_else(
+        || "–".to_owned(),
+        |cents| format!("${}", timada_core::format_amount(cents as u64)),
+    )
+}
+
+/// One keyword of the list shown, as it words it.
+struct PickLine {
     keyword: String,
+    /// The id of its menu of parent categories.
+    menu: String,
     volume: String,
     difficulty: String,
     cpc: String,
-    /// `tree`, `parked`, or empty.
+    /// Left to choose: `main` or `long_tail`. Chosen: `parent`, `child` or
+    /// `parked`. Refused: `refused`.
     stands: &'static str,
+    /// What the row says of it: its kind while it is left to choose, where
+    /// it stands once chosen.
+    stands_label: String,
+    /// Whether the study no longer keeps it, for a chosen one.
+    not_kept: bool,
     places: Vec<Place>,
 }
 
@@ -433,66 +576,141 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     let (study, user_id) = require_owned(cx).await?;
     let query = query_params::<TreeQuery>(cx)?;
     let db = context::<Db>(cx);
-    let list = list_of(query.list.as_deref()).unwrap_or(LISTS[0].0);
-    let after = query.after.as_deref().and_then(Cursor::parse);
-    let before = query.before.as_deref().and_then(Cursor::parse);
-    let listed = keywords_of_outcome(
-        db,
-        &study.id,
-        list,
-        PageFrom::of(after.as_ref(), before.as_ref()),
-        PAGE_SIZE,
-    )
-    .await
-    .map_err(topcoat::Error::from_anyhow)?;
-    let counts = outcome_counts(db, &study.id)
+    let list = list_of(query.list.as_deref()).unwrap_or(TO_CHOOSE);
+    // What is chosen is the study's to say, so a move shows at once; the
+    // figures are the read model's.
+    let chosen: Vec<String> = study
+        .tree
+        .ordered()
+        .into_iter()
+        .map(|category| category.keyword.clone())
+        .chain(study.tree.parked.iter().cloned())
+        .collect();
+    let refused = &study.tree.refused;
+    // The figures of the refused ones too: how many of them the study
+    // still keeps is what the count of the ones left to choose needs.
+    let looked_up: Vec<String> = chosen.iter().chain(refused).cloned().collect();
+    let figures = keyword_figures(db, &study.id, &looked_up)
         .await
         .map_err(topcoat::Error::from_anyhow)?;
-    let review = reviewed(cx, &study).await?;
+    let review = reviewed_with(&study, &figures);
     let categories: Vec<CategoryLine> = review
         .categories
         .iter()
-        .map(|category| CategoryLine::of(category, &study))
+        .enumerate()
+        .map(|(at, category)| CategoryLine::of(at, category, &study))
         .collect();
-    let parked: Vec<(String, Vec<Place>)> = study
-        .tree
-        .parked
+    let counts = outcome_counts(db, &study.id)
+        .await
+        .map_err(topcoat::Error::from_anyhow)?;
+    let kept: usize = counts
         .iter()
-        .map(|keyword| (keyword.clone(), places(&study, keyword)))
-        .collect();
-    let kept: Vec<KeptLine> = listed
-        .rows
+        .filter(|(outcome, _)| outcome == Tier::Main.as_str() || outcome == Tier::LongTail.as_str())
+        .map(|(_, count)| *count as usize)
+        .sum();
+    let set_aside = looked_up
         .iter()
-        .map(|row| KeptLine {
-            keyword: row.keyword.clone(),
-            volume: figure(row.volume),
-            difficulty: figure(row.difficulty),
-            cpc: row.cpc_usd_cents.map_or_else(
-                || "–".to_owned(),
-                |cents| format!("${}", timada_core::format_amount(cents as u64)),
-            ),
-            stands: if study.tree.category(&row.keyword).is_some() {
-                "tree"
-            } else if study.tree.is_parked(&row.keyword) {
-                "parked"
-            } else {
-                ""
-            },
-            places: places(&study, &row.keyword),
-        })
-        .collect();
+        .filter(|keyword| figures.get(*keyword).is_some_and(|figures| figures.kept))
+        .count();
+    let left_to_choose = kept.saturating_sub(set_aside);
+    let after = query.after.as_deref().and_then(Cursor::parse);
+    let before = query.before.as_deref().and_then(Cursor::parse);
+    let listed = if list == TO_CHOOSE {
+        let taken: HashSet<String> = looked_up.iter().cloned().collect();
+        kept_keywords_without(
+            db,
+            &study.id,
+            &taken,
+            PageFrom::of(after.as_ref(), before.as_ref()),
+            PAGE_SIZE,
+        )
+        .await
+        .map_err(topcoat::Error::from_anyhow)?
+    } else {
+        Default::default()
+    };
+    let lines: Vec<PickLine> = if list == TO_CHOOSE {
+        listed
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(at, row)| {
+                let main = row.outcome == Tier::Main.as_str();
+                PickLine {
+                    keyword: row.keyword.clone(),
+                    menu: format!("under-pick-{at}"),
+                    volume: figure(row.volume),
+                    difficulty: figure(row.difficulty),
+                    cpc: row_click(row.cpc_usd_cents),
+                    stands: if main { "main" } else { "long_tail" },
+                    stands_label: if main { "Main" } else { "Long tail" }.to_owned(),
+                    not_kept: false,
+                    places: places(&study, &row.keyword),
+                }
+            })
+            .collect()
+    } else {
+        let listed = if list == CHOSEN { &chosen } else { refused };
+        listed
+            .iter()
+            .enumerate()
+            .map(|(at, keyword)| {
+                let row = figures.get(keyword);
+                let (stands, stands_label) = match study.tree.category(keyword) {
+                    Some(category) => match &category.parent {
+                        Some(parent) => (
+                            "child",
+                            format!("Under {}", timada_research::category_name(parent)),
+                        ),
+                        None => ("parent", "A parent category".to_owned()),
+                    },
+                    None if list == REFUSED => ("refused", "Refused".to_owned()),
+                    None => ("parked", "Parked for later".to_owned()),
+                };
+                PickLine {
+                    keyword: keyword.clone(),
+                    menu: format!("under-pick-{at}"),
+                    volume: figure(row.and_then(|row| row.volume)),
+                    difficulty: figure(row.and_then(|row| row.difficulty)),
+                    cpc: click(row),
+                    stands,
+                    stands_label,
+                    not_kept: !row.is_some_and(|row| row.kept),
+                    places: places(&study, keyword),
+                }
+            })
+            .collect()
+    };
+    let choosing = list == TO_CHOOSE;
+    // A move comes back to the list as it is shown, whichever row sent it.
+    let shown = Shown {
+        list: Some(list.to_owned()).filter(|list| list != TO_CHOOSE),
+        after: query.after.clone().filter(|_| after.is_some()),
+        before: query.before.clone().filter(|_| before.is_some()),
+    };
     let id = study.id.clone();
     let tabs: Vec<PageTab> = LISTS
         .iter()
         .map(|(key, label)| PageTab {
             label,
-            href: format!("{}#kept", tree_url(cx, &id, Some(key), None, None)),
-            count: Some(
-                counts
-                    .iter()
-                    .find(|(outcome, _)| outcome == key)
-                    .map_or(0, |(_, count)| *count as usize),
+            href: format!(
+                "{}#kept",
+                picker_url(
+                    cx,
+                    &id,
+                    &Shown {
+                        list: Some((*key).to_owned()),
+                        ..Shown::default()
+                    },
+                    None,
+                    None
+                )
             ),
+            count: Some(match *key {
+                TO_CHOOSE => left_to_choose,
+                CHOSEN => chosen.len(),
+                _ => refused.len(),
+            }),
             current: *key == list,
         })
         .collect();
@@ -561,6 +779,13 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
     } else {
         "One a line. Until you say, these are the words every seed keyword shares. A category's name must hold one of them. Leave empty to check no name."
     };
+    let empty_text = match (list, kept) {
+        (TO_CHOOSE, 0) => "The study keeps no keyword yet.",
+        (TO_CHOOSE, _) => "Every keyword the study keeps is chosen or refused.",
+        (CHOSEN, _) => "Nothing is chosen yet: pick a keyword in « To choose ».",
+        _ => "Nothing is refused: refuse a keyword in « To choose » and it is not offered again.",
+    };
+    let listing_refused = list == REFUSED;
     let price_action = href!(price::price, study_id: id.clone()).resolve(cx);
     let place_action = href!(place::place, study_id: id.clone()).resolve(cx);
     let tree_description = "Each category is a keyword: its name and its address are read off it, and its figures are the keyword's. A parent category holds children; a child holds none. The price / CPC is the category's average price over its keyword's cost per click, and a category whose ratio is below what the study's sale needs is kept out of ads.";
@@ -683,12 +908,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
         document(
             title: &title,
             shell: Shell::page("research"),
+            <div data-picker="">
             page_header(
                 title: "Category tree",
                 subtitle: Some(&subtitle),
                 <a class=(LINK) href=(study_url(cx, &id, None, None)) data-back-to-study="">"Back to " (&study.name)</a>
             )
-            notice(error: query.error.as_deref(), message: query.message.as_deref())
+            <div data-picker-notice="">
+                notice(error: query.error.as_deref(), message: query.message.as_deref())
+            </div>
             if let Some(text) = &many_parents {
                 alert(
                     variant: AlertVariant::Warning,
@@ -701,7 +929,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
             section_card(
                 title: Some("The tree"),
                 description: Some(tree_description),
-                attrs: attributes! { id="tree" data-tree=(state) data-tree-categories=(categories.len()) },
+                attrs: attributes! { id="tree" tabindex="-1" data-tree=(state) data-tree-categories=(categories.len()) },
                 table(
                     table_header(
                         table_row(
@@ -717,7 +945,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                     table_body(
                         if categories.is_empty() {
-                            empty_row(colspan: 8, text: "No category yet: place a kept keyword below.")
+                            empty_row(colspan: 8, text: "No category yet: choose a keyword below.")
                         }
                         for line in &categories {
                             table_row(
@@ -752,7 +980,7 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                                 table_cell(attrs: attributes! { class="tabular-nums" data-ratio="" }, (&line.ratio))
                                 table_cell(attrs: attributes! { data-category-ads=(line.ads) }, status_badge(tone: line.ads_tone, (line.ads_label)))
                                 table_cell(
-                                    place_form(action: &place_action, keyword: &line.keyword, list: list, places: &line.places)
+                                    place_buttons(action: &place_action, keyword: &line.keyword, menu: &line.menu, shown: &shown, places: &line.places)
                                     if line.places.is_empty() {
                                         <p class="text-right text-xs text-muted-foreground">"Move its children first"</p>
                                     }
@@ -911,37 +1139,12 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                 }
             )
 
-            if !parked.is_empty() {
-                section_card(
-                    title: Some("Parked for later"),
-                    description: Some("Keywords kept in sight, out of the tree."),
-                    attrs: attributes! { id="parked" },
-                    table(
-                        table_header(
-                            table_row(
-                                table_head("Keyword")
-                                table_head(<span class="sr-only">"Move"</span>)
-                            )
-                        )
-                        table_body(
-                            for (keyword, places) in &parked {
-                                table_row(
-                                    attrs: attributes! { data-parked=(keyword) },
-                                    table_cell(attrs: attributes! { class="font-medium" }, (keyword))
-                                    table_cell(place_form(action: &place_action, keyword: keyword, list: list, places: places))
-                                )
-                            }
-                        )
-                    )
-                )
-            }
-
             section_card(
-                title: Some("Kept keywords"),
-                description: Some("The keywords the score keeps, the most searched first. Only these make categories."),
-                attrs: attributes! { id="kept" },
+                title: Some("Keywords"),
+                description: Some("The keywords the score keeps, the most searched first: only these make categories. None is chosen until you choose it: make it a parent category, put it under one, or park it for later, and it moves from « To choose » to « Chosen ». Refuse one and it moves to « Refused », where it stays out of your way; the score keeps it all the same."),
+                attrs: attributes! { id="kept" tabindex="-1" data-picker-list=(list) },
                 <div class="px-6">
-                    page_tabs(label: "Kept keywords", tabs: &tabs)
+                    page_tabs(label: "Keywords", tabs: &tabs)
                 </div>
                 table(
                     table_header(
@@ -950,29 +1153,39 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                             table_head("Searches a month")
                             table_head("Difficulty")
                             table_head("Cost per click")
-                            table_head("Where it stands")
+                            table_head(if choosing { "Kind" } else { "Where it stands" })
                             table_head(<span class="sr-only">"Move"</span>)
                         )
                     )
                     table_body(
-                        if kept.is_empty() {
-                            empty_row(colspan: 6, text: "No keyword in this list.")
+                        if lines.is_empty() {
+                            empty_row(colspan: 6, text: empty_text)
                         }
-                        for row in &kept {
+                        for row in &lines {
                             table_row(
-                                attrs: attributes! { data-kept=(&row.keyword) data-kept-stands=(row.stands) },
-                                table_cell(attrs: attributes! { class="font-medium" }, (&row.keyword))
+                                attrs: attributes! {
+                                    data-kept=(choosing.then_some(row.keyword.as_str()))
+                                    data-chosen=((list == CHOSEN).then_some(row.keyword.as_str()))
+                                    data-refused=(listing_refused.then_some(row.keyword.as_str()))
+                                    data-stands=(row.stands)
+                                },
+                                table_cell(
+                                    attrs: attributes! { class="font-medium whitespace-normal" },
+                                    (&row.keyword)
+                                    if row.not_kept {
+                                        <p class="mt-1 text-sm font-normal text-destructive-text" data-chosen-not-kept="">"The study no longer keeps this keyword."</p>
+                                    }
+                                )
                                 table_cell(attrs: attributes! { class="tabular-nums" }, (&row.volume))
                                 table_cell(attrs: attributes! { class="tabular-nums" }, (&row.difficulty))
                                 table_cell(attrs: attributes! { class="tabular-nums" }, (&row.cpc))
+                                table_cell((&row.stands_label))
                                 table_cell(
-                                    (match row.stands {
-                                        "tree" => "In the tree",
-                                        "parked" => "Parked",
-                                        _ => "–",
-                                    })
+                                    place_buttons(action: &place_action, keyword: &row.keyword, menu: &row.menu, shown: &shown, places: &row.places, refused: listing_refused)
+                                    if row.places.is_empty() {
+                                        <p class="text-right text-xs text-muted-foreground">"Move its children first"</p>
+                                    }
                                 )
-                                table_cell(place_form(action: &place_action, keyword: &row.keyword, list: list, places: &row.places))
                             )
                         }
                     )
@@ -991,6 +1204,15 @@ pub async fn index(cx: &Cx) -> Result<impl View> {
                     )
                 }
             )
+            </div>
+            // What `picker.js` says of a move, wherever the page is scrolled.
+            <p
+                role="status"
+                hidden=""
+                data-picker-said=""
+                class="fixed bottom-6 left-1/2 z-50 max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-card-foreground shadow-lg data-[error]:border-destructive/40 data-[error]:text-destructive-text"
+            ></p>
+            <script type="module" src=(asset!("./picker.js"))></script>
         )
     })
 }

@@ -8,7 +8,7 @@ use topcoat::{
     },
 };
 
-use super::{PARENT, PARK, REMOVE, UNDER, tree_url};
+use super::{PARENT, PARK, REFUSE, REMOVE, Shown, UNDER, picker_url};
 use crate::app::research::study_id::require_owned;
 use crate::app::research::{error_code, research};
 use crate::db::Db;
@@ -18,21 +18,30 @@ use crate::db::Db;
 pub struct PlaceForm {
     keyword: String,
     /// [`PARENT`], [`UNDER`] followed by a parent category's keyword,
-    /// [`PARK`] or [`REMOVE`].
+    /// [`PARK`], [`REFUSE`] or [`REMOVE`].
     to: String,
-    /// The list of kept keywords the page was on, to come back to.
+    /// The list the page was on, and the page of it, to come back to.
     #[serde(default)]
     list: Option<String>,
+    #[serde(default)]
+    after: Option<String>,
+    #[serde(default)]
+    before: Option<String>,
 }
 
-/// Puts a keyword in the study's category tree, parks it, or takes it out.
+/// Puts a keyword in the study's category tree, parks it, refuses it, or
+/// takes it out.
 /// Only a keyword the score keeps goes in: the read model says which.
 #[route(POST)]
 pub async fn place(cx: &Cx, Form(form): Form<PlaceForm>) -> Result<SeeOther> {
     let (study, user_id) = require_owned(cx).await?;
-    let list = form.list.as_deref();
+    let shown = Shown {
+        list: form.list,
+        after: form.after,
+        before: form.before,
+    };
     let back = |error: Option<&str>, message: Option<&str>| {
-        Ok(see_other(tree_url(cx, &study.id, list, error, message)))
+        Ok(see_other(picker_url(cx, &study.id, &shown, error, message)))
     };
     let research = research(cx);
     let keyword = form.keyword.as_str();
@@ -41,7 +50,7 @@ pub async fn place(cx: &Cx, Form(form): Form<PlaceForm>) -> Result<SeeOther> {
         to => to.strip_prefix(UNDER),
     };
     let entering = form.to == PARENT || parent.is_some();
-    if !entering && form.to != PARK && form.to != REMOVE {
+    if !entering && form.to != PARK && form.to != REFUSE && form.to != REMOVE {
         return back(Some("unknown_parent_category"), None);
     }
     if entering && study.tree.category(keyword).is_none() {
@@ -65,10 +74,19 @@ pub async fn place(cx: &Cx, Form(form): Form<PlaceForm>) -> Result<SeeOther> {
             research.park_category(&user_id, &study.id, keyword).await,
             "Parked for later.",
         )
+    } else if form.to == REFUSE {
+        (
+            research.refuse_category(&user_id, &study.id, keyword).await,
+            "Refused.",
+        )
     } else {
         (
             research.remove_category(&user_id, &study.id, keyword).await,
-            "Taken out.",
+            if study.tree.is_refused(keyword) {
+                "Brought back."
+            } else {
+                "Taken out."
+            },
         )
     };
     match done {

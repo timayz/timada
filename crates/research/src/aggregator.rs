@@ -202,7 +202,15 @@ pub enum Study {
         keyword: String,
         parked_by: String,
     },
-    /// `keyword` is out of the tree and no longer parked.
+    /// The owner refused `keyword` as a category: out of the tree and of
+    /// the parked ones, and out of what is left to choose, so it is not
+    /// read again. The score keeps it all the same.
+    CategoryRefused {
+        keyword: String,
+        refused_by: String,
+    },
+    /// `keyword` is out of the tree, no longer parked and no longer
+    /// refused.
     CategoryRemoved {
         keyword: String,
         removed_by: String,

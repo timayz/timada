@@ -690,6 +690,9 @@ pub fn describe_error(code: &str) -> &'static str {
         }
         "too_many_tree_categories" => "A tree holds at most 200 categories.",
         "too_many_parked_keywords" => "At most 500 keywords are parked.",
+        "too_many_refused_keywords" => {
+            "At most 1,000 keywords are refused: bring one back to refuse another."
+        }
         "keyword_not_in_tree" => "This keyword is not in the tree.",
         "keyword_not_kept" => "Only a keyword the study keeps makes a category.",
         "too_many_niche_words" => "A niche is named by at most 10 words.",

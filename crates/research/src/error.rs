@@ -2,7 +2,7 @@ use evento::WriteError;
 
 use crate::value_object::{
     MAX_CHECKED_KEYWORDS, MAX_HAND_SET, MAX_LISTED_WORDS, MAX_MARKS, MAX_NAME_LEN, MAX_NICHE_WORDS,
-    MAX_PARKED, MAX_SEED_LEN, MAX_SEEDS, MAX_TREE_CATEGORIES, MAX_WORD_LEN,
+    MAX_PARKED, MAX_REFUSED, MAX_SEED_LEN, MAX_SEEDS, MAX_TREE_CATEGORIES, MAX_WORD_LEN,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -63,6 +63,8 @@ pub enum ResearchError {
     TooManyCategories,
     #[error("at most {MAX_PARKED} keywords are parked")]
     TooManyParked,
+    #[error("at most {MAX_REFUSED} keywords are refused")]
+    TooManyRefused,
     #[error("this keyword is not in the tree")]
     NotInTree,
     #[error("a niche is named by at most {MAX_NICHE_WORDS} words")]
@@ -132,6 +134,7 @@ impl ResearchError {
             Self::CategoryHasChildren => "tree_category_has_children",
             Self::TooManyCategories => "too_many_tree_categories",
             Self::TooManyParked => "too_many_parked_keywords",
+            Self::TooManyRefused => "too_many_refused_keywords",
             Self::NotInTree => "keyword_not_in_tree",
             Self::TooManyNicheWords => "too_many_niche_words",
             Self::InvalidShop => "invalid_study_shop",

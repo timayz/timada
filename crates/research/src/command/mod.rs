@@ -36,10 +36,10 @@ use crate::aggregator::{
     CategoryCreated, CategoryNotCreated, CreationFailed, CreationRequested, ShopLinked,
 };
 use crate::aggregator::{
-    CategoryParked, CategoryPlaced, CategoryPriced, CategoryRemoved, Created, Deleted, FetchFailed,
-    FetchRequested, FetchStarted, InputsSet, KeywordDropped, KeywordRestored, KeywordsFetched,
-    KeywordsReused, NicheWordsSet, Renamed, ResultsFailed, ResultsFetched, ResultsRequested,
-    ResultsStarted, SeedAdded, Study,
+    CategoryParked, CategoryPlaced, CategoryPriced, CategoryRefused, CategoryRemoved, Created,
+    Deleted, FetchFailed, FetchRequested, FetchStarted, InputsSet, KeywordDropped, KeywordRestored,
+    KeywordsFetched, KeywordsReused, NicheWordsSet, Renamed, ResultsFailed, ResultsFetched,
+    ResultsRequested, ResultsStarted, SeedAdded, Study,
 };
 use crate::error::ResearchError;
 use crate::score::{Sale, StudyInputs};
@@ -221,6 +221,7 @@ pub fn study_projection<E: Executor>() -> Projection<E, StudyState> {
         .handler(on_results_failed())
         .handler(on_category_placed())
         .handler(on_category_parked())
+        .handler(on_category_refused())
         .handler(on_category_removed())
         .handler(on_category_priced())
         .handler(on_niche_words_set())
@@ -476,6 +477,17 @@ async fn on_category_parked(
 ) -> anyhow::Result<()> {
     study.tree.take_out(&event.data.keyword);
     study.tree.parked.push(event.data.keyword.to_owned());
+    study.updated_at = event.timestamp;
+    Ok(())
+}
+
+#[evento::handler]
+async fn on_category_refused(
+    event: Event<CategoryRefused>,
+    study: &mut StudyState,
+) -> anyhow::Result<()> {
+    study.tree.take_out(&event.data.keyword);
+    study.tree.refused.push(event.data.keyword.to_owned());
     study.updated_at = event.timestamp;
     Ok(())
 }
