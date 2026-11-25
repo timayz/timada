@@ -1,7 +1,11 @@
 //! Queries over `research_keywords`, for a study's page.
 
+use std::collections::HashSet;
+
 use timada_core::db::{Db, FromRow};
 use timada_core::page::{Cursor, Page, PageFrom, Side, read_page};
+
+use crate::score::Tier;
 
 /// One row of `research_keywords`: a keyword as the last fetch of its seed
 /// gave it.
@@ -125,6 +129,78 @@ pub async fn keywords_of_outcome(
             statement,
             (study_id.to_owned(), outcome.to_owned(), at, id, n),
         )
+    };
+    read_page(from, limit, read, cursor_of).await
+}
+
+/// Up to `n` of the keywords of a study the score keeps, main and long-tail
+/// together, on one side of a cursor, in the order that side walks: a seek
+/// for each of the two outcomes, put together here.
+async fn kept_rows(
+    db: &Db,
+    study_id: &str,
+    side: Side,
+    cursor: Option<&Cursor>,
+    n: i64,
+) -> anyhow::Result<Vec<KeywordRecord>> {
+    let statement = outcome_statement(side == Side::Older);
+    let (at, id) = cursor
+        .map(|cursor| (cursor.at, cursor.id.clone()))
+        .unwrap_or((i64::MAX, String::new()));
+    let mut rows = Vec::new();
+    for tier in [Tier::Main, Tier::LongTail] {
+        rows.extend(
+            db.fetch_all::<KeywordRecord>(
+                &statement,
+                (
+                    study_id.to_owned(),
+                    tier.as_str().to_owned(),
+                    at,
+                    id.clone(),
+                    n,
+                ),
+            )
+            .await?,
+        );
+    }
+    rows.sort_by(|a, b| {
+        let order = (a.sort_volume, &a.id).cmp(&(b.sort_volume, &b.id));
+        match side {
+            Side::Older => order.reverse(),
+            Side::Newer => order,
+        }
+    });
+    rows.truncate(n as usize);
+    Ok(rows)
+}
+
+/// A page of the keywords of a study the score keeps, main and long-tail
+/// together, the most searched first, without the ones `taken` names: what
+/// is left to choose from once some stand in the study's tree. `taken` is
+/// the study's to say, not the read model's, so a keyword leaves the list
+/// as soon as it is placed.
+pub async fn kept_keywords_without(
+    db: &Db,
+    study_id: &str,
+    taken: &HashSet<String>,
+    from: PageFrom<'_>,
+    limit: i64,
+) -> anyhow::Result<Page<KeywordRecord>> {
+    let read = |side: Side, mut cursor: Option<Cursor>, n: i64| async move {
+        let mut left: Vec<KeywordRecord> = Vec::new();
+        // Each turn reads `n` rows further on; one that comes back short
+        // was the last.
+        loop {
+            let rows = kept_rows(db, study_id, side, cursor.as_ref(), n).await?;
+            let more = rows.len() as i64 == n;
+            cursor = rows.last().map(cursor_of);
+            left.extend(rows.into_iter().filter(|row| !taken.contains(&row.keyword)));
+            if !more || left.len() as i64 >= n {
+                break;
+            }
+        }
+        left.truncate(n as usize);
+        Ok(left)
     };
     read_page(from, limit, read, cursor_of).await
 }

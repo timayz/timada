@@ -358,12 +358,26 @@ async function sitesListed(page: Page, count: number) {
   }).toPass({ timeout: 20_000 });
 }
 
-/// Sends the keyword of a row of the tree's page where `to` says.
+/// Sends the keyword of a row of the tree's page where `to` says: one of
+/// its buttons, or a parent category of its « Under… » menu. The page
+/// shows what came of it without loading again.
 async function move(page: Page, row: string, to: string, said: string) {
   const form = page.locator(row).locator("[data-place]");
-  await form.getByRole("combobox").selectOption({ label: to });
-  await form.getByRole("button", { name: /^Move/ }).click();
+  if (to.startsWith("Under ")) {
+    await form.getByRole("button", { name: /^Under…/ }).click();
+    await form.getByRole("button", { name: to, exact: true }).click();
+  } else {
+    await form.getByRole("button", { name: new RegExp(`^${to}`) }).click();
+  }
   await expect(page.getByRole("status")).toContainText(said);
+  await expect(page.locator("[data-picker][aria-busy]")).toHaveCount(0);
+}
+
+/// Shows one of the two lists of the tree's page, by its tab.
+async function showList(page: Page, list: "to_choose" | "chosen") {
+  const name = list === "chosen" ? /^Chosen/ : /^To choose/;
+  await page.locator("#kept").getByRole("link", { name }).click();
+  await expect(page.locator("#kept")).toHaveAttribute("data-picker-list", list);
 }
 
 test("the kept keywords of a study become a category tree", async ({ page, browser }) => {
@@ -397,12 +411,20 @@ test("the kept keywords of a study become a category tree", async ({ page, brows
     expect(treeUrl).toBe(`${studyUrl}/tree`);
     await expect(page.locator("[data-tree]")).toHaveAttribute("data-tree", "empty");
     await expect(page.locator("[data-kept]")).toHaveCount(3);
+    await expect(page.locator("[data-chosen]")).toHaveCount(0);
     await expect(page.locator("[data-tree-unpriced]")).toBeVisible();
 
-    // A parent, a child of it, and one parked for later.
-    await move(page, `[data-kept="${seed}"]`, "A parent category", "Placed in the tree.");
+    // A parent, a child of it, and one parked for later: nothing is chosen
+    // until then, each leaves the list as it is, and the page never loads
+    // again.
+    await page.evaluate(() => ((window as any).stayed = true));
+    await move(page, `[data-kept="${seed}"]`, "Parent", "Placed in the tree.");
+    await expect(page.locator("[data-kept]")).toHaveCount(2);
+    await expect(page.locator(`[data-kept="${cheap}"]`)).toHaveAttribute("data-stands", "main");
     await move(page, `[data-kept="${cheap}"]`, `Under ${named(seed)}`, "Placed in the tree.");
-    await move(page, `[data-kept="${best}"]`, "Parked for later", "Parked for later.");
+    await move(page, `[data-kept="${best}"]`, "Park", "Parked for later.");
+    await expect(page.locator("[data-kept]")).toHaveCount(0);
+    await expect(page.locator("#kept")).toContainText("Every keyword the study keeps is chosen.");
     await expect(page.locator("[data-category]")).toHaveCount(2);
     const parent = page.locator(`[data-category="${seed}"]`);
     const child = page.locator(`[data-category="${cheap}"]`);
@@ -413,9 +435,15 @@ test("the kept keywords of a study become a category tree", async ({ page, brows
     await expect(parent.locator("[data-cpc]")).toHaveText("$0.42");
     await expect(child).toHaveAttribute("data-category-level", "child");
     await expect(child).toHaveAttribute("data-category-slug", `gants-moto-${tag}-pas-cher`);
-    await expect(page.locator(`[data-parked="${best}"]`)).toBeVisible();
-    await expect(page.locator(`[data-kept="${seed}"]`)).toHaveAttribute("data-kept-stands", "tree");
-    await expect(page.locator(`[data-kept="${best}"]`)).toHaveAttribute("data-kept-stands", "parked");
+    // The chosen ones have a list of their own, shown without a load too.
+    await showList(page, "chosen");
+    await expect(page.locator("[data-chosen]")).toHaveCount(3);
+    await expect(page.locator("[data-kept]")).toHaveCount(0);
+    await expect(page.locator(`[data-chosen="${seed}"]`)).toHaveAttribute("data-stands", "parent");
+    await expect(page.locator(`[data-chosen="${cheap}"]`)).toHaveAttribute("data-stands", "child");
+    await expect(page.locator(`[data-chosen="${best}"]`)).toHaveAttribute("data-stands", "parked");
+    expect(await page.evaluate(() => (window as any).stayed)).toBe(true);
+    expect(page.url()).toBe(`${treeUrl}?list=chosen#kept`);
     // A parent stays where it is while it has a child.
     await expect(parent.locator("[data-place]")).toHaveCount(0);
     await expect(parent).toContainText("Move its children first");
@@ -464,12 +492,16 @@ test("the kept keywords of a study become a category tree", async ({ page, brows
     await expect(child.locator("[data-category-ads]")).toHaveAttribute("data-category-ads", "ads");
 
     // A parked keyword comes into the tree; a child goes out of it.
-    await move(page, `[data-parked="${best}"]`, "A parent category", "Placed in the tree.");
+    await showList(page, "chosen");
+    await move(page, `[data-chosen="${best}"]`, "Parent", "Placed in the tree.");
     await expect(page.locator('[data-category-level="parent"]')).toHaveCount(2);
-    await expect(page.locator("[data-parked]")).toHaveCount(0);
-    await move(page, `[data-category="${cheap}"]`, "Out of the tree", "Taken out.");
+    await expect(page.locator(`[data-chosen="${best}"]`)).toHaveAttribute("data-stands", "parent");
+    await move(page, `[data-category="${cheap}"]`, "Take out", "Taken out.");
     await expect(page.locator("[data-category]")).toHaveCount(2);
-    await expect(page.locator(`[data-kept="${cheap}"]`)).toHaveAttribute("data-kept-stands", "");
+    await expect(page.locator("[data-chosen]")).toHaveCount(2);
+    await showList(page, "to_choose");
+    await expect(page.locator("[data-kept]")).toHaveCount(1);
+    await expect(page.locator(`[data-kept="${cheap}"]`)).toBeVisible();
 
     // A keyword the study stops keeping is held back where it stands.
     await page.goto(studyUrl);
@@ -481,7 +513,9 @@ test("the kept keywords of a study become a category tree", async ({ page, brows
       await expect(page.locator(`[data-category="${best}"] [data-category-problem="not_kept"]`)).toBeVisible({ timeout: 1000 });
     }).toPass({ timeout: 20_000 });
     await expect(page.locator("[data-tree]")).toHaveAttribute("data-tree", "held_back");
-    await expect(page.locator("[data-kept]")).toHaveCount(2);
+    await expect(page.locator("[data-kept]")).toHaveCount(1);
+    await showList(page, "chosen");
+    await expect(page.locator(`[data-chosen="${best}"] [data-chosen-not-kept]`)).toBeVisible();
 
     // Nothing was fetched for any of it, and the tree is its owner's only.
     expect(source.calls).toHaveLength(calls);
@@ -548,7 +582,7 @@ test("a study's tree is created as draft categories in a shop", async ({ page })
     await page.getByRole("button", { name: "Save and score again" }).click();
     await expect(page.getByRole("status")).toContainText("Saved: the study is scored again.");
     await page.goto(treeUrl);
-    await move(page, `[data-kept="${seed}"]`, "A parent category", "Placed in the tree.");
+    await move(page, `[data-kept="${seed}"]`, "Parent", "Placed in the tree.");
     await move(page, `[data-kept="${cheap}"]`, `Under ${named(seed)}`, "Placed in the tree.");
     await page.getByLabel(`Average price of ${named(cheap)}, in EUR`).fill("70");
     await page.locator(`[data-category="${cheap}"]`).getByRole("button", { name: /^Save/ }).click();
@@ -597,7 +631,7 @@ test("a study's tree is created as draft categories in a shop", async ({ page })
 
     // A keyword placed later is left to create, in the study's shop only.
     await page.goto(treeUrl);
-    await move(page, `[data-kept="${best}"]`, "A parent category", "Placed in the tree.");
+    await move(page, `[data-kept="${best}"]`, "Parent", "Placed in the tree.");
     await expect(page.locator("[data-create]")).toHaveAttribute("data-create", "partial");
     await expect(page.locator(`[data-left="${slugOf(best)}"]`)).toHaveAttribute("data-left-state", "ready");
     await expect(page.locator("[data-create-new]")).toHaveCount(0);
@@ -630,9 +664,9 @@ test("a tree is created in a shop of its owner, where a taken address is said fi
     await expect(page.getByRole("status")).toContainText("Category created.");
     const takenUrl = page.url().split("?")[0];
     await page.goto(otherTreeUrl);
-    await move(page, `[data-kept="${other}"]`, "A parent category", "Placed in the tree.");
+    await move(page, `[data-kept="${other}"]`, "Parent", "Placed in the tree.");
     await move(page, `[data-kept="${other} pas cher"]`, `Under ${named(other)}`, "Placed in the tree.");
-    await move(page, `[data-kept="meilleur ${other}"]`, "A parent category", "Placed in the tree.");
+    await move(page, `[data-kept="meilleur ${other}"]`, "Parent", "Placed in the tree.");
     // The shops offered come from a read model, which trails the shop's
     // creation: the page is read again until it lists the shop (#776).
     await expect(async () => {

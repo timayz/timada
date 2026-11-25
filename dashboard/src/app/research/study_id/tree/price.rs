@@ -27,7 +27,7 @@ pub struct PriceForm {
 pub async fn price(cx: &Cx, Form(form): Form<PriceForm>) -> Result<SeeOther> {
     let (study, user_id) = require_owned(cx).await?;
     let back = |error: Option<&str>, message: Option<&str>| {
-        Ok(see_other(tree_url(cx, &study.id, None, error, message)))
+        Ok(see_other(tree_url(cx, &study.id, error, message)))
     };
     let price_cents = match form.price.trim() {
         "" => None,

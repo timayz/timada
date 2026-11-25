@@ -27,7 +27,7 @@ pub async fn words(cx: &Cx, Form(form): Form<WordsForm>) -> Result<SeeOther> {
     let back = |error: Option<&str>, message: Option<&str>| {
         Ok(see_other(format!(
             "{}#checks",
-            tree_url(cx, &study.id, None, error, message)
+            tree_url(cx, &study.id, error, message)
         )))
     };
     let words: Vec<String> = form.words.lines().map(str::to_owned).collect();

@@ -8,7 +8,7 @@ use topcoat::{
     },
 };
 
-use super::{PARENT, PARK, REMOVE, UNDER, tree_url};
+use super::{PARENT, PARK, REMOVE, Shown, UNDER, picker_url};
 use crate::app::research::study_id::require_owned;
 use crate::app::research::{error_code, research};
 use crate::db::Db;
@@ -20,9 +20,13 @@ pub struct PlaceForm {
     /// [`PARENT`], [`UNDER`] followed by a parent category's keyword,
     /// [`PARK`] or [`REMOVE`].
     to: String,
-    /// The list of kept keywords the page was on, to come back to.
+    /// The list the page was on, and the page of it, to come back to.
     #[serde(default)]
     list: Option<String>,
+    #[serde(default)]
+    after: Option<String>,
+    #[serde(default)]
+    before: Option<String>,
 }
 
 /// Puts a keyword in the study's category tree, parks it, or takes it out.
@@ -30,9 +34,13 @@ pub struct PlaceForm {
 #[route(POST)]
 pub async fn place(cx: &Cx, Form(form): Form<PlaceForm>) -> Result<SeeOther> {
     let (study, user_id) = require_owned(cx).await?;
-    let list = form.list.as_deref();
+    let shown = Shown {
+        list: form.list,
+        after: form.after,
+        before: form.before,
+    };
     let back = |error: Option<&str>, message: Option<&str>| {
-        Ok(see_other(tree_url(cx, &study.id, list, error, message)))
+        Ok(see_other(picker_url(cx, &study.id, &shown, error, message)))
     };
     let research = research(cx);
     let keyword = form.keyword.as_str();
