@@ -326,31 +326,17 @@ Scoring reads every keyword of the study (20,000 at the most) and rewrites the r
 whose outcome changed. A study scored before this existed is scored at its next change.
 The thresholds are the defaults below; nothing sets them yet.
 
-### The export
+### No export
 
-*Export the keywords with their score* gives the study's owner a CSV file of its
-keywords, one line each: the outcome, the keyword it counts under, volume, difficulty,
-cost per click in dollars and in the sale's currency, price / CPC, the channel and the
-intent.
-
-DataForSEO's terms were read for it on 2026-11-23:
-
-- the Terms of Service (updated 12 June 2026) have no clause on redistribution, raw
-  data, exports or what is shown to a product's users. Their one limit on use (7.1) is
-  that data from search engines is not used to compete with those engines;
-- DataForSEO's own answers to legal questions, which are not part of the terms, say
-  that they "do not address or restrict how a customer selects, stores or exports
-  individual records inside their own workspace, including CSV export of derived
-  analysis", and that what needs a separate agreement is "onward distribution of our
-  datasets as an untransformed standalone feed, database dump, public endpoint, or raw
-  API service".
-
-So the export is kept on the allowed side by what it is: one study at a time, to its
-owner only, behind sign-in, each line with the score's own columns, the rows bounded by
-what that user's fetches gave (20 seeds of 1,000). There is no export over several
-studies, no address that serves it without a session, and none must be added without
-reading the terms again. The answers page is DataForSEO's reading, not a contract: a
-written confirmation from them would settle it, and has not been asked for.
+A study's keywords are read on its page and nowhere else: there is no file to download.
+A CSV export of the keywords with their score existed (#680) and was removed on
+2026-11-25, before DataForSEO's binding terms were read in full (#774). What was read
+on 2026-11-23: their Terms of Service (updated 12 June 2026) say nothing of exports,
+and their own answers to legal questions, which are not part of the terms, allow a
+"CSV export of derived analysis" and ask for a separate agreement for "onward
+distribution of our datasets as an untransformed standalone feed, database dump,
+public endpoint, or raw API service". No export, and no address that serves a study's
+keywords without a session, is to be added without reading the terms again.
 
 ## When a call fails
 
