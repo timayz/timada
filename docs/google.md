@@ -49,17 +49,22 @@ merchants.
   count is never reset. Verification of a sensitive scope asks for a home page and a
   privacy policy on a domain verified in Search Console, a justification for each
   scope and a video of the consent flow; Google gives about ten working days.
-- **Which scopes.** Google's public pages do not say whether
-  `webmasters.readonly` is sensitive: the Cloud console shows it when the scope is
-  added (step 2). Google Ads (`adwords`) is **restricted**: verification then also
+- **Which scopes.** Search Console read access (`webmasters.readonly`) is **not
+  sensitive**: the Cloud console lists it under the non-sensitive scopes when it is
+  added (step 2), seen on 2026-11-25. Asked for alone, it needs no verification and
+  is not held to 100 users. Google Ads (`adwords`) is **restricted**: verification then also
   asks for a security assessment by an assessor Google lists, every twelve months.
   Merchant Center (`content`) has to go through verification too; the page does not
   say at which of the two levels.
 - **Brand.** Without brand verification the consent screen shows the application's
   domain rather than its name and logo.
 
-Not confirmed: whether Search Console read access is sensitive, and how long
-verification takes in practice.
+So a platform that only reads Search Console has one thing to do before merchants
+connect: publish the application, so that a grant no longer lapses after seven days.
+Verification comes with Google Ads or Merchant Center.
+
+Not confirmed: how long verification takes in practice, which only an application
+for Google Ads or Merchant Center will tell.
 
 ## What a shop does
 

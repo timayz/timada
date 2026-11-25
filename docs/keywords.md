@@ -78,7 +78,7 @@ records the answer, as a seed's fetch does. Moving to the queue is a change to
 `DataforseoClient::first_results` and to the saga that waits for it.
 
 Since November 2026 DataForSEO answers every organic result under Google's own
-address: `domain` is `google.com` and `url` an opaque `google.com/goto` link, on the
+address, for good: `domain` is `google.com` and `url` an opaque `google.com/goto` link, on the
 advanced endpoint as on the regular one (#791). The site is then read from the start
 of the result's `breadcrumb` (`https://www.jardiland.com › Conseil & idées`), and so
 is its address, down to the site only. A result whose breadcrumb names no site, a
@@ -330,7 +330,8 @@ The thresholds are the defaults below; nothing sets them yet.
 
 A study's keywords are read on its page and nowhere else: there is no file to download.
 A CSV export of the keywords with their score existed (#680) and was removed on
-2026-11-25, before DataForSEO's binding terms were read in full (#774). What was read
+2026-11-25, before DataForSEO's binding terms were read in full (#774); it is not
+wanted back, so the terms were not read further. What was read
 on 2026-11-23: their Terms of Service (updated 12 June 2026) say nothing of exports,
 and their own answers to legal questions, which are not part of the terms, allow a
 "CSV export of derived analysis" and ask for a separate agreement for "onward
@@ -364,7 +365,7 @@ Read on 2026-11-25 with the platform's login, for `arbre à chat` in France in F
   known and record the comparison here. The score's default of 35 for the highest
   difficulty kept waits on it. A first sign that its scale runs lower: `arbre à chat`,
   searched 18,100 times a month, has a difficulty of 5, and most of the fifty keywords
-  searched the most have 0;
+  searched the most have 0. The 35 is kept as it is for now (decided on 2026-11-25);
 - that one search says who holds a keyword: three searches of `arbre à chat` within
   two minutes gave three different first pages, of three to nine organic results. Two pages
   are read since, which says more; whether it says enough is not measured.
