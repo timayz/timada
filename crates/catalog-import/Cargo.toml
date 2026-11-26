@@ -24,3 +24,5 @@ sha2.workspace = true
 bytes.workspace = true
 
 [dev-dependencies]
+# The tests apply migrations that make a full-text index.
+evento = { workspace = true, features = ["turso-fts"] }

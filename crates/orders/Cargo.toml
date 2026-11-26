@@ -24,5 +24,7 @@ tracing.workspace = true
 jiff.workspace = true
 
 [dev-dependencies]
+# The tests apply migrations that make a full-text index.
+evento = { workspace = true, features = ["turso-fts"] }
 tokio.workspace = true
 async-trait.workspace = true
