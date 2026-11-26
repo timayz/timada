@@ -19,4 +19,6 @@ rand.workspace = true
 base64.workspace = true
 
 [dev-dependencies]
+# The tests apply migrations that make a full-text index.
+evento = { workspace = true, features = ["turso-fts"] }
 tokio.workspace = true

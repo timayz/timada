@@ -13,7 +13,8 @@ image.workspace = true
 webp.workspace = true
 bytes.workspace = true
 http-body.workspace = true
-evento.workspace = true
+# Opens the store, full-text indexes included.
+evento = { workspace = true, features = ["turso-fts"] }
 timada-core = { path = "../crates/core", version = "0.1.1" }
 jiff.workspace = true
 serde.workspace = true
@@ -68,6 +69,6 @@ lettre.workspace = true
 topcoat = { version = "=0.12.1", default-features = false, features = ["tailwind", "icon-iconify"] }
 
 [dev-dependencies]
-evento = { workspace = true, features = ["lock"] }
+evento = { workspace = true, features = ["turso-fts", "lock"] }
 timada-storefront = { path = "../crates/storefront" }
 rcgen.workspace = true

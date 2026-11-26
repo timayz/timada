@@ -23,5 +23,7 @@ lol_html.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+# The tests apply migrations that make a full-text index.
+evento = { workspace = true, features = ["turso-fts"] }
 async-trait.workspace = true
 tokio.workspace = true

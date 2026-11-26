@@ -11,7 +11,8 @@ topcoat-core.workspace = true
 topcoat-router.workspace = true
 topcoat-view.workspace = true
 topcoat-view-macro.workspace = true
-evento.workspace = true
+# Opens the store, full-text indexes included.
+evento = { workspace = true, features = ["turso-fts"] }
 timada-core = { path = "../core", version = "0.1.1" }
 tokio.workspace = true
 tokio-rustls.workspace = true

@@ -20,9 +20,12 @@ topcoat-core = { version = "=0.12.1", features = ["anyhow"] }
 topcoat-router = "=0.12.1"
 topcoat-view = "=0.12.1"
 topcoat-view-macro = "=0.12.1"
-# `sqlite` stays while the read models move crate by crate to the store's file
-# (dropped by the last PR of the series); `turso` + `turso-fts` are the store.
-evento = { version = "2.0.0-alpha.43", features = ["turso", "turso-fts", "remote", "cluster"] }
+# `turso` is the store. Its full-text search (`turso-fts`) is not asked for
+# here: a feature named here reaches whoever depends on any crate of the
+# workspace, and nothing on their side turns it off (#796). The crates that
+# open the store ask for it (the dashboard, `timada-storefront`), and so do
+# the tests of the crates whose migrations make a full-text index.
+evento = { version = "2.0.0-alpha.43", features = ["turso", "remote", "cluster"] }
 bitcode = "0.6"
 argon2 = { version = "0.5", features = ["std"] }
 ulid = "3.0"
